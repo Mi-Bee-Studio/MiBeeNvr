@@ -1,0 +1,56 @@
+<script>
+  export let currentPage = 1;
+  export let totalPages = 1;
+  export let onPageChange = () => {};
+
+  $: canGoPrev = currentPage > 1;
+  $: canGoNext = currentPage < totalPages;
+  $: pages = generatePageNumbers(currentPage, totalPages);
+
+  function generatePageNumbers(current, total) {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const pages = [];
+    pages.push(1);
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
+      pages.push(i);
+    }
+    if (total > 1) pages.push(total);
+    return [...new Set(pages)].sort((a, b) => a - b);
+  }
+</script>
+
+<div class="flex items-center justify-between px-4 py-3 border-t border-slate-700">
+  <span class="text-sm text-slate-400">
+    <!-- page info set by parent -->
+  </span>
+  <div class="flex items-center gap-1">
+    <button
+      on:click={() => onPageChange(currentPage - 1)}
+      disabled={!canGoPrev}
+      class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      ←
+    </button>
+    {#each pages as page (page)}
+      {#if page === currentPage}
+        <span class="px-3 py-1 text-sm rounded bg-cyan-600 text-white font-medium">
+          {page}
+        </span>
+      {:else}
+        <button
+          on:click={() => onPageChange(page)}
+          class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700"
+        >
+          {page}
+        </button>
+      {/if}
+    {/each}
+    <button
+      on:click={() => onPageChange(currentPage + 1)}
+      disabled={!canGoNext}
+      class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      →
+    </button>
+  </div>
+</div>

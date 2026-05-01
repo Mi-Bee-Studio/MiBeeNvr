@@ -1,0 +1,14 @@
+[Unit]
+Description=Raspberry Pi Camera Streaming Pipeline
+Wants=mediamtx.service
+After=mediamtx.service
+
+[Service]
+Type=simple
+User=nvr
+ExecStart=/bin/bash -c 'rpicam-vid -n --codec h264 --width 1280 --height 720 --framerate 15 -t 0 -o - | ffmpeg -fflags +genpts -i pipe:0 -c:v copy -f mpegts -flush_packets 0 "udp://127.0.0.1:8555?pkt_size=188"'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
