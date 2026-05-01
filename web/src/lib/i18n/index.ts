@@ -13,6 +13,9 @@ const locales: Record<string, Translations> = { zh, en };
 let currentLang = 'en';
 let listeners: (() => void)[] = [];
 
+// Svelte 5 reactivity: Flag for triggering reactivity in $derived contexts
+let reactiveFlag = 0;
+
 function detectLanguage(): string {
   const saved = localStorage.getItem('mibee_nvr_lang');
   if (saved && locales[saved]) return saved;
@@ -35,7 +38,10 @@ export function setLang(lang: string): void {
   if (!locales[lang]) return;
   currentLang = lang;
   localStorage.setItem('mibee_nvr_lang', lang);
+  // Notify all listeners
   listeners.forEach(l => l());
+  // Increment reactive flag for Svelte 5 reactivity
+  reactiveFlag++;
 }
 
 export function onLangChange(fn: () => void): () => void {
@@ -66,3 +72,10 @@ export function t(key: string, params?: Record<string, string | number>): string
 
   return value;
 }
+
+// Export reactive utilities for advanced Svelte 5 integrations
+export const reactivity = { 
+  get lang() { return currentLang; }, 
+  get flag() { return reactiveFlag; },
+  get listeners() { return listeners.length; }
+};

@@ -638,14 +638,12 @@ func TestLogin_ResponseContentType(t *testing.T) {
 
 // newHandlerWithConfig creates a Handler with a real config for testing.
 func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
-	return NewHandler(db, store, noopAuthMW(), cfg, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, "")
 }
-
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
 	authMW := middleware.NewAuthMiddleware(username, passwordHash)
-	return NewHandler(db, store, authMW, cfg, nil)
+	return NewHandler(db, store, authMW, cfg, nil, "")
 }
-
 func TestGetSettings_NoConfig(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
@@ -1565,7 +1563,7 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, "")
 	return h, camMgr, cfg
 }
 
