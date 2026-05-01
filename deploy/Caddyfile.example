@@ -1,0 +1,9 @@
+# MiBee NVR — HTTP/WebUI/API on port 9090
+# Add this to your existing Caddyfile
+
+:80 {
+    reverse_proxy localhost:9090
+}
+
+# WebDAV is accessible via same port at /dav/
+# FTP runs on port 2121 (cannot be reverse-proxied through Caddy)

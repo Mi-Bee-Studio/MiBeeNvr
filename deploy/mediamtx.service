@@ -1,0 +1,14 @@
+[Unit]
+Description=MediaMTX Streaming Server
+After=network.target
+
+[Service]
+Type=simple
+User=nvr
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
+WorkingDirectory=/etc/mediamtx
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,34 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+
+# Binary outputs
+mibee-nvr
+mibee-nvr-arm64
+
+# Database files
+*.db
+
+# Config files (contain credentials)
+mibee-nvr.yaml
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Legacy / unused directories
+web_embed/
+
+
+# Project management / tooling
+.sisyphus/
+.rtk/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.
+.DS_Store
