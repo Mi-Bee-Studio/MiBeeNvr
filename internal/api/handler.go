@@ -21,17 +21,20 @@ import (
 )
 
 // Handler holds dependencies for the REST API handlers.
+	// Handler holds dependencies for the REST API handlers.
+
 type Handler struct {
-	db     *storage.DB
-	store  *storage.Manager
-	authMW func(http.Handler) http.Handler
-	config *config.Config
-	camMgr *camera.CameraManager
+	db      *storage.DB
+	store   *storage.Manager
+	authMW  func(http.Handler) http.Handler
+	config  *config.Config
+	camMgr  *camera.CameraManager
+	configPath string
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, configPath: configPath}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -604,9 +607,8 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, "")
 }
-
 // --- Test helper exported for handler_test.go ---
 
 // TestHandler creates a Handler with a no-op auth middleware for testing.
@@ -617,9 +619,8 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW := middleware.NewAuthMiddleware(username, passwordHash)
-	return NewHandler(db, store, authMW, nil, nil)
+	return NewHandler(db, store, authMW, nil, nil, "")
 }
-
 // --- Settings endpoints ---
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -679,8 +680,17 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			h.config.Cleanup.CheckInterval = *body.Cleanup.CheckInterval
 		}
+
+
+	// Persist config to disk
+
+	if err := config.Save(h.configPath, h.config); err != nil {
+
+		log.Printf("[api] warning: failed to save config: %v", err)
+
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
 
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	}
+}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { t, getCurrentLang, onLangChange } from '$lib/i18n';
+  import { t, getCurrentLang, onLangChange, setLang } from '$lib/i18n';
 
   let lang = getCurrentLang();
 
@@ -14,7 +14,7 @@
     setLang(target.value);
   }
 
-  $: { void lang; } // reactivity trigger
+
 </script>
 
 <select

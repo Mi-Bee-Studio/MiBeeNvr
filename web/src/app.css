@@ -1,144 +1,425 @@
 @import "tailwindcss";
 
 /*
- * Design System for MiBee NVR Web UI
- * Aesthetic: Industrial/Utilitarian Dark Theme
- * Purpose: Professional surveillance monitoring interface
+ * MiBee NVR Design System — Purple Tech Aesthetic
+ * Dual theme: Dark (default) + Light ([data-theme="light"])
  *
- * Color Palette:
- *   - Primary: Deep slate grays for background
- *   - Accent: Cyan/Blue/Teal for actions and highlights
- *   - Success: Emerald green for status
- *   - Error: Red for warnings
- *   - Warning: Yellow for cautions
+ * All colors, spacing, radii, shadows are tokenized as CSS custom properties.
+ * Components reference only variables — never hardcoded values.
  *
- * Typography:
- *   - Headings: Tight, bold, industrial feel
- *   - Body: Clean sans-serif for readability
- *
- * Spacing: 4px grid system
+ * Purple palette: #8b5cf6 (primary) → #a78bfa (light) → #38bdf8 (accent blue)
+ * Transitions: cubic-bezier(0.16, 1, 0.3, 1) for snappy ease-out
  */
+
+/* ================================================================
+   THEME TOKENS
+   ================================================================ */
+
+:root {
+  /* --- Purple accent system --- */
+  --color-primary: #8b5cf6;
+  --color-primary-light: #a78bfa;
+  --color-primary-dark: #7c3aed;
+  --color-accent: #38bdf8;
+
+  /* --- Semantic colors --- */
+  --color-success: #10b981;
+  --color-success-light: #34d399;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fbbf24;
+  --color-danger: #ef4444;
+  --color-danger-light: #f87171;
+  --color-info: #3b82f6;
+
+  /* --- Surfaces (dark default) --- */
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #141414;
+  --bg-tertiary: #1a1a1a;
+  --bg-elevated: #1e1e1e;
+
+  /* --- Text --- */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+
+  /* --- Borders --- */
+  --border: #2a2a2a;
+  --border-hover: #3a3a3a;
+
+  /* --- Shadows --- */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.3);
+  --shadow-primary-lg: 0 8px 20px rgba(139, 92, 246, 0.35);
+
+  /* --- Radii --- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* --- Transitions --- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 0.2s;
+  --duration-normal: 0.3s;
+
+  /* --- Focus ring --- */
+  --focus-ring: 0 0 0 3px rgba(139, 92, 246, 0.4);
+
+  /* --- Glass --- */
+  --glass-bg: rgba(10, 10, 10, 0.95);
+  --glass-blur: 20px;
+}
+
+/* --- Light theme override --- */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --bg-elevated: #e2e8f0;
+
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-tertiary: #94a3b8;
+
+  --border: #e2e8f0;
+  --border-hover: #cbd5e1;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.2);
+  --shadow-primary-lg: 0 8px 20px rgba(139, 92, 246, 0.2);
+
+  --focus-ring: 0 0 0 3px rgba(139, 92, 246, 0.3);
+
+  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-blur: 20px;
+}
+
+/* ================================================================
+   BASE
+   ================================================================ */
 
 @layer base {
   body {
-    @apply bg-slate-900 text-slate-100 font-sans antialiased;
-    font-family: system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-semibold tracking-tight;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    color: var(--text-primary);
   }
 
-  h1 { @apply text-3xl md:text-4xl lg:text-5xl; }
-  h2 { @apply text-2xl md:text-3xl lg:text-4xl; }
-  h3 { @apply text-xl md:text-2xl lg:text-3xl; }
-  h4 { @apply text-lg md:text-xl lg:text-2xl; }
+  h1 { font-size: 1.875rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.25rem; }
+  h4 { font-size: 1.125rem; }
 
-  /* Focus states for accessibility */
+  @media (min-width: 768px) {
+    h1 { font-size: 2.25rem; }
+    h2 { font-size: 1.875rem; }
+    h3 { font-size: 1.5rem; }
+    h4 { font-size: 1.25rem; }
+  }
+
+  @media (min-width: 1024px) {
+    h1 { font-size: 3rem; }
+    h2 { font-size: 2.25rem; }
+    h3 { font-size: 1.875rem; }
+    h4 { font-size: 1.5rem; }
+  }
+
+  /* Focus ring — purple glow */
   *:focus-visible {
-    @apply outline-none ring-2 ring-cyan-500 ring-offset-2 ring-offset-slate-900;
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
   }
 
-  /* Scrollbar styling */
+  /* Scrollbar — theme-aware */
   ::-webkit-scrollbar {
-    @apply w-2 h-2;
+    width: 8px;
+    height: 8px;
   }
+
   ::-webkit-scrollbar-track {
-    @apply bg-slate-800;
+    background: var(--bg-secondary);
   }
+
   ::-webkit-scrollbar-thumb {
-    @apply bg-slate-600 rounded;
+    background: var(--border-hover);
+    border-radius: var(--radius-sm);
   }
+
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-500;
+    background: var(--text-tertiary);
   }
 }
 
+/* ================================================================
+   COMPONENTS
+   ================================================================ */
+
 @layer components {
-  /* Card component */
+  /* --- Card --- */
   .card {
-    @apply bg-slate-800/90 border border-slate-700/50 backdrop-blur-sm rounded-lg shadow-lg;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    transition: transform var(--duration-normal) var(--ease-out),
+                box-shadow var(--duration-normal) var(--ease-out),
+                border-color var(--duration-normal) var(--ease-out);
   }
 
-  /* Button variants */
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--border-hover);
+  }
+
+  /* --- Buttons --- */
   .btn {
-    @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    transition: all var(--duration-fast) var(--ease-out);
+    cursor: pointer;
+    border: 1px solid transparent;
+    line-height: 1.25rem;
+  }
+
+  .btn:focus-visible {
+    box-shadow: var(--focus-ring);
+  }
+
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .btn-primary {
-    @apply bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:from-cyan-500 hover:to-blue-500 focus:ring-cyan-500 shadow-md hover:shadow-lg;
+    background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+    color: #ffffff;
+    box-shadow: var(--shadow-primary);
+    border: none;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+    box-shadow: var(--shadow-primary-lg);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:focus-visible {
+    box-shadow: var(--focus-ring);
   }
 
   .btn-secondary {
-    @apply bg-slate-700 text-slate-100 hover:bg-slate-600 focus:ring-slate-500;
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--bg-elevated);
+    border-color: var(--border-hover);
   }
 
   .btn-danger {
-    @apply bg-red-600 text-white hover:bg-red-500 focus:ring-red-500;
+    background-color: var(--color-danger);
+    color: #ffffff;
+    border: none;
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background-color: var(--color-danger-light);
   }
 
   .btn-ghost {
-    @apply bg-transparent text-slate-300 hover:bg-slate-700 hover:text-slate-100 focus:ring-slate-500;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
   }
 
-  /* Input fields */
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  /* --- Input --- */
   .input {
-    @apply w-full px-3 py-2 bg-slate-900/80 border border-slate-700/70 rounded-md text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    transition: all var(--duration-fast) var(--ease-out);
+  }
+
+  .input::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: var(--focus-ring);
   }
 
   .input-label {
-    @apply block text-sm font-medium text-slate-300 mb-1;
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
   }
 
-  /* Badge */
+  /* --- Badge --- */
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid transparent;
   }
 
-  .badge-success { @apply bg-emerald-900/50 text-emerald-400 border border-emerald-700; }
-  .badge-warning { @apply bg-yellow-900/50 text-yellow-400 border border-yellow-700; }
-  .badge-error { @apply bg-red-900/50 text-red-400 border border-red-700; }
-  .badge-info { @apply bg-blue-900/50 text-blue-400 border border-blue-700; }
-  .badge-neutral { @apply bg-slate-700/50 text-slate-300 border border-slate-600; }
+  .badge-success {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: var(--color-success-light);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
 
-  /* Table */
+  .badge-warning {
+    background-color: rgba(245, 158, 11, 0.15);
+    color: var(--color-warning-light);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+
+  .badge-error {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: var(--color-danger-light);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+
+  .badge-info {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: var(--color-info);
+    border-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .badge-neutral {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-color: var(--border);
+  }
+
+  /* --- Table --- */
   .table-container {
-    @apply overflow-x-auto border border-slate-700 rounded-lg;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
   }
 
   .table {
-    @apply w-full text-left border-collapse;
+    width: 100%;
+    text-align: left;
+    border-collapse: collapse;
   }
 
   .table th {
-    @apply px-4 py-3 bg-slate-800 text-sm font-semibold text-slate-200 border-b border-slate-700;
+    padding: 0.75rem 1rem;
+    background-color: var(--bg-tertiary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border);
   }
 
   .table td {
-    @apply px-4 py-3 text-sm text-slate-300 border-b border-slate-700/50;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table td:last-child {
+    opacity: 1;
   }
 
   .table tr:last-child td {
-    @apply border-b-0;
+    border-bottom: none;
   }
 
   .table tbody tr:hover {
-    @apply bg-slate-700/30;
+    background-color: var(--bg-tertiary);
   }
 
-  /* Loading spinner */
+  /* --- Spinner --- */
   .spinner {
-    @apply inline-block w-4 h-4 animate-spin rounded-full border-2 border-slate-400 border-t-transparent;
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--text-tertiary);
+    border-top-color: transparent;
+    border-radius: 9999px;
+    animation: spin 0.6s linear infinite;
   }
 
   .spinner-lg {
-    @apply w-8 h-8 border-4;
+    width: 2rem;
+    height: 2rem;
+    border-width: 3px;
   }
 
-  /* Utility classes */
-  .text-accent { @apply text-cyan-500; }
-  .bg-accent-subtle { @apply bg-cyan-500/10; }
-  .border-accent { @apply border-cyan-500; }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* --- Accent utility classes --- */
+  .text-accent {
+    color: var(--color-primary);
+  }
+
+  .bg-accent-subtle {
+    background-color: rgba(139, 92, 246, 0.1);
+  }
+
+  .border-accent {
+    border-color: var(--color-primary);
+  }
+}
+
+/* ================================================================
+   UTILITIES (theme-aware, not Tailwind @layer)
+   ================================================================ */
+
+/* Glassmorphism */
+.glass {
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+}
+
+/* Purple gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa, #38bdf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
