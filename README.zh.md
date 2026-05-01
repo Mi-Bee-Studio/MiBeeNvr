@@ -2,6 +2,8 @@
 
 轻量级网络视频录像机，使用 Go 编写。支持 RTSP (H.264/MJPEG) 和 HTTP JPEG 摄像头，内置 Web 管理界面、WebDAV、FTP 和 MQTT 集成。编译为单文件静态二进制，内嵌前端页面，无需外部依赖。
 
+[**English**](README.md)
+
 <!-- TODO: add screenshots -->
 
 ## 功能特性
@@ -35,11 +37,11 @@ cp config.example.yaml mibee-nvr.yaml
 
 | 文档 | 说明 |
 |------|------|
-| [快速入门](getting-started.md) | 安装、添加第一个摄像头 |
-| [配置说明](configuration.md) | 完整配置参考 |
-| [API 文档](api-reference.md) | REST API 接口文档 |
-| [MediaMTX 指南](mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
-| [部署指南](deployment.md) | systemd、反向代理、交叉编译 |
+| [快速入门](docs/zh/getting-started.md) | 安装、添加第一个摄像头 |
+| [配置说明](docs/zh/configuration.md) | 完整配置参考 |
+| [API 文档](docs/zh/api-reference.md) | REST API 接口文档 |
+| [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
+| [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译 |
 
 ## 编译
 
@@ -79,4 +81,4 @@ docs/                # 文档（中文/英文）
 
 ## 许可证
 
-[MIT License](../../LICENSE) © Mi&Bee Studio
+[MIT License](LICENSE) © Mi&Bee Studio
