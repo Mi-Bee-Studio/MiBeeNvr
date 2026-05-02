@@ -300,8 +300,8 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		now := time.Now()
 		pts := now.Sub(r.segStart)
 		duration := now.Sub(r.lastFrameTime)
-		if duration <= 0 {
-			duration = 33 * time.Millisecond
+		if duration < time.Millisecond {
+			duration = time.Millisecond
 		}
 		r.lastFrameTime = now
 		if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {

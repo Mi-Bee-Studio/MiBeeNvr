@@ -263,16 +263,53 @@ export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
 }
 
-export async function downloadRecording(id: string): Promise<void> {
-  const blob = await apiRequestBlob(`/recordings/${id}/download`);
-  const url = URL.createObjectURL(blob);
+
+export async function downloadRecording(
+  id: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<void> {
+  const url = `/api/recordings/${id}/download`;
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+
+    const authHeader = getAuthHeader();
+    if (authHeader) {
+      xhr.setRequestHeader('Authorization', authHeader);
+    }
+
+    xhr.responseType = 'blob';
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+      } else {
+        reject(new Error(`HTTP ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error'));
+
+    if (onProgress) {
+      xhr.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onProgress(e.loaded, e.total);
+        }
+      };
+    }
+
+    xhr.send();
+  });
+
+  const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `recording_${id}`;
+  a.href = objectUrl;
+  a.download = `recording_${id}.mp4`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(objectUrl);
 }
 
 // Frame endpoints (for MJPEG recordings)

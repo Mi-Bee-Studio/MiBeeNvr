@@ -522,7 +522,7 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 		return err
 	}
 	stscEntries := []mp4.StscEntry{
-		{FirstChunk: 1, SamplesPerChunk: uint32(len(tr.samples))},
+		{FirstChunk: 1, SamplesPerChunk: uint32(len(tr.samples)), SampleDescriptionIndex: 1},
 	}
 	if len(tr.samples) == 0 {
 		stscEntries = nil
