@@ -281,7 +281,7 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 				log.Printf("[h264-recorder %s] create segment: %v", r.cfg.CameraID, err)
 				continue
 			}
-			r.muxer = muxer.NewMP4Muxer(finalPath)
+			r.muxer = muxer.NewMP4Muxer(tempPath)
 			trackID, err := r.muxer.AddH264Track(r.sps, r.pps)
 			if err != nil {
 				log.Printf("[h264-recorder %s] add H264 track: %v", r.cfg.CameraID, err)
@@ -321,6 +321,21 @@ func (r *H264Recorder) closeCurrentSegment() {
 	}
 	if err := r.muxer.Close(); err != nil {
 		log.Printf("[h264-recorder %s] close muxer: %v", r.cfg.CameraID, err)
+		if r.curTempPath != "" {
+			os.Remove(r.curTempPath)
+		}
+		r.muxer = nil
+		r.curTempPath = ""
+		r.curFinalPath = ""
+		r.frameCount = 0
+		return
+	}
+
+	// Atomic rename: temp → final
+	if r.curTempPath != "" && r.curFinalPath != "" {
+		if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
+			log.Printf("[h264-recorder %s] close segment: %v", r.cfg.CameraID, err)
+		}
 	}
 
 	// Insert recording entry into database
@@ -346,11 +361,7 @@ func (r *H264Recorder) closeCurrentSegment() {
 	}
 
 	r.muxer = nil
+	r.curTempPath = ""
 	r.curFinalPath = ""
 	r.frameCount = 0
-	// Remove empty temp file created by CreateSegment (muxer writes to finalPath directly)
-	if r.curTempPath != "" {
-		os.Remove(r.curTempPath)
-		r.curTempPath = ""
-	}
 }
