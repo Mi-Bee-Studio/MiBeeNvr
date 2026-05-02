@@ -25,6 +25,13 @@ web_embed/
 .sisyphus/
 .rtk/
 
+# Test / tooling artifacts
+e2e-tests/
+.playwright-mcp/
+test-results/
+tmp/
+package-lock.json
+
 # IDE / Editor
 .vscode/
 .idea/

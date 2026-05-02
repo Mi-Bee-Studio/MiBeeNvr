@@ -88,6 +88,11 @@ tests/integration_test.go # 7 integration scenarios
 - **DO NOT** add write operations to WebDAV — intentionally read-only for security
 - **DO NOT** forget `t.Helper()` in test helper functions
 - **DO NOT** use `os.O_RDONLY` in bit-flag checks — it's 0, so `flags&os.O_RDONLY != 0` is always false (known FTP bug, fixed)
+- **DO NOT** forget `SampleDescriptionIndex: 1` in mp4.StscEntry — default 0 causes ffmpeg `STSC entry is invalid` error
+- **DO NOT** use `duration <= 0` guard in H264Recorder — sub-millisecond durations also truncate to 0 via `.Milliseconds()`, use `duration < time.Millisecond`
+- **DO NOT** embed credentials in subresource URLs (e.g. `//user:pass@host/path`) — modern browsers block this for `<video>` src and downloads
+- **DO NOT** use `os.ReadFile()+w.Write()` for file downloads — no Content-Length/Accept-Ranges, breaks progress and resume; use `http.ServeFile()`
+- **DO NOT** use `fetch→blob→<a>.click()` for large file downloads — no download progress, entire file loads to memory; use XHR with `onprogress` callback
 
 ## COMMANDS
 
@@ -120,6 +125,11 @@ rtk make install-service    # + systemd service setup
 - **RTP errors**: `"invalid FU-A packet (non-starting)"` from UDP→mediamtx pipeline are non-critical, don't affect recording.
 - **Web UI rebuild**: After `cd web && npm run build`, must `cp -r web/dist/* internal/ui/static/` then rebuild Go binary to embed updated assets.
 - **Cross-compilation**: `GOOS=linux GOARCH=arm64` — target is always Linux ARM64 for RPi.
+- **MP4 container tolerance**: Browser `<video>` 和 VLC 等 player 对 MP4 容器错误有较强容错能力——STSC SampleDescriptionIndex=0 会默认指向第一个 stsd entry，DTS 重复会被忽略。但 ffmpeg 严格模式 (`-f null -`) 会报 warning。生成 MP4 时应严格遵守规范。
+- **MP4 muxer STTS 时间戳**: STTS delta 用 `duration.Milliseconds()` 转 uint32。timescale=1000 时 1ms=1 tick。必须保证每个 sample 的 duration >= 1ms (1 tick)，否则 DTS 不递增。
+- **MP4 muxer segment 关闭顺序**: `MP4Muxer.Close()` 在 `CloseSegment()` (atomic rename) 之前调用。Close() 写 ftyp+moov+mdat 到 tempPath，然后 CloseSegment() 做 temp→final rename。不要改变这个顺序。
+- **前端文件下载架构**: 大文件下载用 XHR (`XMLHttpRequest`) + `responseType: 'blob'` + `onprogress` 回调显示进度，完成后 `URL.createObjectURL` 触发保存。不要用 `fetch()` 因为没有进度回调。小文件 (MJPEG 单帧 JPEG) 用 `fetch→blob` 没问题。
+- **前端视频播放**: `<video>` 的 src 必须用 blob URL（通过 XHR/fetch + Authorization header 获取），不能直接用带嵌入凭证的 HTTP URL（`//user:pass@host`）——现代浏览器会拦截。
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

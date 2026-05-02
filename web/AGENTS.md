@@ -61,6 +61,9 @@ src/
 - **DO NOT** use `localStorage` for sensitive data beyond auth — base64 is NOT encryption
 - **DO NOT** forget to copy `dist/` to `internal/ui/static/` after build — the Go binary serves embedded assets, not live files
 - **DO NOT** create `tailwind.config.js` — TailwindCSS 4 uses CSS-based config, Vite plugin handles everything
+- **DO NOT** embed credentials in URLs (`//user:pass@host/path`) — modern browsers block embedded auth in `<video>` src, `<img>` src, and `<a>` href downloads
+- **DO NOT** use `fetch()` for large file downloads — no progress callback; use XHR (`XMLHttpRequest`) with `onprogress` for download progress UI
+- **DO NOT** use `fetch→blob→URL.createObjectURL→<a>.click()` for MP4 downloads — user sees no progress, entire file loads to RAM; use XHR with `onprogress` callback + progress bar UI
 
 ## COMMANDS
 

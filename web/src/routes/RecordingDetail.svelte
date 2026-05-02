@@ -40,6 +40,8 @@
   // Video blob URL (for MP4 auth)
   let videoBlobUrl = '';
   let videoLoading = false;
+  let downloadProgress = 0;
+  let isDownloading = false;
 
   // Speed options
   const speeds = [1, 2, 5];
@@ -207,9 +209,20 @@
     window.location.hash = '#/recordings';
   }
 
-  function downloadRecording() {
-    if (!recording) return;
-    apiDownloadRecording(recording.id);
+  async function handleDownload() {
+    if (isDownloading || !recording) return;
+    isDownloading = true;
+    downloadProgress = 0;
+    try {
+      await apiDownloadRecording(recording.id, (loaded, total) => {
+        downloadProgress = Math.round((loaded / total) * 100);
+      });
+    } catch (e) {
+      console.error('Download failed:', e);
+    } finally {
+      isDownloading = false;
+      downloadProgress = 0;
+    }
   }
 
   // Lifecycle
@@ -235,7 +248,7 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
         <div class="flex items-center gap-4">
-          <button on:click={goBack} class="text-slate-300 hover:text-slate-100">
+          <button onclick={goBack} class="text-slate-300 hover:text-slate-100">
             {t('detail.back')}
           </button>
           <h1 class="text-xl font-bold text-slate-100">{t('detail.title')}</h1>
@@ -269,7 +282,7 @@
       <div class="card p-8 text-center">
         <div class="text-red-400 mb-4">&#x26A0;&#xFE0F;</div>
         <p class="text-slate-300 mb-4">{error}</p>
-        <button on:click={goBack} class="btn btn-primary">
+        <button onclick={goBack} class="btn btn-primary">
           {t('detail.goBack')}
         </button>
       </div>
@@ -336,7 +349,7 @@
                   <!-- Progress bar -->
                   <div
                     class="relative h-2 bg-slate-700 rounded cursor-pointer group"
-                    on:click={handleProgressClick}
+                    onclick={handleProgressClick}
                     role="progressbar"
                     aria-valuenow={currentFrameIndex}
                     aria-valuemin={0}
@@ -356,7 +369,7 @@
                   <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2">
                       <button
-                        on:click={prevFrame}
+                        onclick={prevFrame}
                         disabled={currentFrameIndex === 0 || frameChanging}
                         class="px-3 py-1.5 rounded text-sm font-medium transition-colors
                           {currentFrameIndex === 0 || frameChanging
@@ -367,7 +380,7 @@
                       </button>
 
                       <button
-                        on:click={togglePlay}
+                        onclick={togglePlay}
                         disabled={frameChanging}
                         class="px-4 py-1.5 rounded text-sm font-medium transition-colors
                           {isPlaying
@@ -379,7 +392,7 @@
                       </button>
 
                       <button
-                        on:click={nextFrame}
+                        onclick={nextFrame}
                         disabled={currentFrameIndex >= frames.length - 1 || frameChanging}
                         class="px-3 py-1.5 rounded text-sm font-medium transition-colors
                           {currentFrameIndex >= frames.length - 1 || frameChanging
@@ -400,7 +413,7 @@
                       <span class="text-slate-400 text-xs mr-1">{t('detail.speed')}</span>
                       {#each speeds as speed}
                         <button
-                          on:click={() => setSpeed(speed)}
+                          onclick={() => setSpeed(speed)}
                           class="px-2 py-1 rounded text-xs font-medium transition-colors
                             {playSpeed === speed
                               ? 'bg-blue-600 text-white'
@@ -475,20 +488,24 @@
 
           <!-- Actions -->
           <div class="flex flex-wrap gap-3 border-t border-slate-700 pt-6">
+            {#if isDownloading}
+                <button disabled class="btn btn-primary opacity-75 flex items-center gap-2">
+                  <div class="spinner spinner-sm"></div>
+                  {downloadProgress}%
+                </button>
+              {:else}
+                <button onclick={handleDownload} class="btn btn-primary">
+                  {t('detail.download')}
+                </button>
+              {/if}
             <button
-              on:click={downloadRecording}
-              class="btn btn-primary"
-            >
-              {t('detail.download')}
-            </button>
-            <button
-              on:click={togglePin}
+              onclick={togglePin}
               class="btn btn-secondary"
             >
               {recording.pinned ? t('detail.unpin') : t('detail.pin')}
             </button>
             <button
-              on:click={() => deleteConfirm = true}
+              onclick={() => deleteConfirm = true}
               class="btn btn-danger"
             >
               {t('detail.delete')}
@@ -509,13 +526,13 @@
         </p>
         <div class="flex gap-3 justify-end">
           <button
-            on:click={() => deleteConfirm = false}
+            onclick={() => deleteConfirm = false}
             class="btn btn-secondary"
           >
             {t('detail.cancel')}
           </button>
           <button
-            on:click={confirmDelete}
+            onclick={confirmDelete}
             class="btn btn-danger"
           >
             {t('detail.deleteConfirm')}
