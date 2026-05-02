@@ -302,22 +302,8 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read file")
-		return
-	}
-
-	contentType := "application/octet-stream"
-	if strings.HasSuffix(filePath, ".jpg") || strings.HasSuffix(filePath, ".jpeg") {
-		contentType = "image/jpeg"
-	} else if strings.HasSuffix(filePath, ".mp4") {
-		contentType = "video/mp4"
-	}
-
-	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(filePath)))
-	w.Write(data)
+	http.ServeFile(w, r, filePath)
 }
 
 func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
