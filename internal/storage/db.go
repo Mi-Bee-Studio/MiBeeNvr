@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 	_ "modernc.org/sqlite"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
+
+var logger = slog.Default().With("component", "storage")
 
 type DB struct {
 	path string
@@ -178,7 +180,7 @@ func scanTime(ns sql.NullString) time.Time {
 	}
 	t, err := parseTime(ns.String)
 	if err != nil {
-		log.Printf("[storage] scanTime: failed to parse %q: %v", ns.String, err)
+		logger.Warn("scanTime: failed to parse time string", "value", ns.String, "error", err)
 		return time.Time{}
 	}
 	return t

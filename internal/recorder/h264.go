@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"os"
 	"runtime"
@@ -18,9 +18,12 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 )
+
+var h264Logger = slog.Default().With("component", "h264-recorder")
 
 // SegmentStore abstracts the storage operations needed by the recorder.
 // *storage.Manager satisfies this interface.
@@ -57,6 +60,7 @@ type H264Config struct {
 type H264Recorder struct {
 	cfg   H264Config
 	store SegmentStore
+	metrics *metrics.Metrics
 
 	mu     sync.Mutex
 	status model.RecorderStatus
@@ -79,9 +83,48 @@ type H264Recorder struct {
 	dropped atomic.Int64
 }
 
+// incActive increments the active recordings gauge if metrics is available.
+func (r *H264Recorder) incActive() {
+	if r.metrics != nil {
+		r.metrics.ActiveRecordings.Inc()
+	}
+}
+
+// decActive decrements the active recordings gauge if metrics is available.
+func (r *H264Recorder) decActive() {
+	if r.metrics != nil {
+		r.metrics.ActiveRecordings.Dec()
+	}
+}
+
+// recordSegmentCreated increments the segments created counter if metrics is available.
+func (r *H264Recorder) recordSegmentCreated() {
+	if r.metrics != nil {
+		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "h264").Inc()
+	}
+}
+
+// recordBytes adds to the recording bytes counter if metrics is available.
+func (r *H264Recorder) recordBytes(bytes int64) {
+	if r.metrics != nil {
+		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "h264").Add(float64(bytes))
+	}
+}
+
+// recordError increments the camera errors counter if metrics is available.
+func (r *H264Recorder) recordError(errorType string) {
+	if r.metrics != nil {
+		r.metrics.CameraErrors.WithLabelValues(r.cfg.CameraID, errorType).Inc()
+	}
+}
+
 var _ model.Recorder = (*H264Recorder)(nil)
 
-func NewH264Recorder(cfg H264Config, store SegmentStore) *H264Recorder {
+func NewH264Recorder(cfg H264Config, store SegmentStore, opts ...*metrics.Metrics) *H264Recorder {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
@@ -95,9 +138,10 @@ func NewH264Recorder(cfg H264Config, store SegmentStore) *H264Recorder {
 		cfg.InitBackoff = DefaultInitBackoff
 	}
 	return &H264Recorder{
-		cfg:    cfg,
-		store:  store,
-		status: model.StatusStopped,
+		cfg:     cfg,
+		store:   store,
+		metrics: m,
+		status:  model.StatusStopped,
 	}
 }
 
@@ -111,6 +155,7 @@ func (r *H264Recorder) Start(ctx context.Context) error {
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
+	r.incActive()
 	go r.run(ctx)
 	return nil
 }
@@ -124,6 +169,7 @@ func (r *H264Recorder) Stop() error {
 	if r.done != nil {
 		<-r.done
 	}
+	r.decActive()
 	return nil
 }
 
@@ -144,7 +190,7 @@ func (r *H264Recorder) run(ctx context.Context) {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
 			buf = buf[:runtime.Stack(buf, false)]
-			log.Printf("[h264-recorder %s] PANIC recovered in run: %v\n%s", r.cfg.CameraID, panicErr, buf)
+			h264Logger.Error("PANIC recovered in run", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
 		}
 	}()
 	defer close(r.done)
@@ -155,7 +201,8 @@ func (r *H264Recorder) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		log.Printf("[h264-recorder %s] connection error: %v, reconnecting in %v", r.cfg.CameraID, err, backoff)
+		h264Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 		select {
 		case <-ctx.Done():
@@ -210,7 +257,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 		au, err := rtpDec.Decode(pkt)
 		if err != nil {
 			if err != rtph264.ErrNonStartingPacketAndNoPrevious && err != rtph264.ErrMorePacketsNeeded {
-				log.Printf("[h264-recorder %s] RTP decode error: %v", r.cfg.CameraID, err)
+					h264Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
 		}
@@ -223,7 +270,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 			default:
 				d := r.dropped.Add(1)
 				if d%100 == 1 {
-					log.Printf("[h264-recorder %s] ring buffer full, dropped %d frames", r.cfg.CameraID, d)
+							h264Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
 				}
 			}
 		}
@@ -259,7 +306,7 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
 			buf = buf[:runtime.Stack(buf, false)]
-			log.Printf("[h264-recorder %s] PANIC recovered in writeFrames: %v\n%s", r.cfg.CameraID, panicErr, buf)
+			h264Logger.Error("PANIC recovered in writeFrames", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
 		}
 	}()
 
@@ -273,13 +320,13 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		switch naluType {
 		case 7:
 			if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-				log.Printf("[h264-recorder %s] SPS change detected, rotating segment", r.cfg.CameraID)
+				h264Logger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
 				r.closeCurrentSegment()
 			}
 			r.sps = append([]byte(nil), nalu...)
 		case 8:
 			if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-				log.Printf("[h264-recorder %s] PPS change detected, rotating segment", r.cfg.CameraID)
+				h264Logger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
 				r.closeCurrentSegment()
 			}
 			r.pps = append([]byte(nil), nalu...)
@@ -294,13 +341,13 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		if r.muxer == nil {
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
 			if err != nil {
-				log.Printf("[h264-recorder %s] create segment: %v", r.cfg.CameraID, err)
+					h264Logger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 				continue
 			}
 			r.muxer = muxer.NewMP4Muxer(tempPath)
 			trackID, err := r.muxer.AddH264Track(r.sps, r.pps)
 			if err != nil {
-				log.Printf("[h264-recorder %s] add H264 track: %v", r.cfg.CameraID, err)
+					h264Logger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
 				r.muxer = nil
 				// Clean up empty temp file on muxer init failure
 				os.Remove(tempPath)
@@ -321,7 +368,7 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		}
 		r.lastFrameTime = now
 		if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
-			log.Printf("[h264-recorder %s] write sample: %v", r.cfg.CameraID, err)
+			h264Logger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
 			continue
 		}
 		r.frameCount++
@@ -336,7 +383,7 @@ func (r *H264Recorder) closeCurrentSegment() {
 		return
 	}
 	if err := r.muxer.Close(); err != nil {
-		log.Printf("[h264-recorder %s] close muxer: %v", r.cfg.CameraID, err)
+		h264Logger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
 		if r.curTempPath != "" {
 			os.Remove(r.curTempPath)
 		}
@@ -350,11 +397,12 @@ func (r *H264Recorder) closeCurrentSegment() {
 	// Atomic rename: temp → final
 	if r.curTempPath != "" && r.curFinalPath != "" {
 		if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
-			log.Printf("[h264-recorder %s] close segment: %v", r.cfg.CameraID, err)
+			h264Logger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}
 
 	// Insert recording entry into database
+	var fileSize int64
 	if r.cfg.DB != nil && r.curFinalPath != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -369,10 +417,19 @@ func (r *H264Recorder) closeCurrentSegment() {
 			FrameCount: r.frameCount,
 		}
 		if info, err := os.Stat(r.curFinalPath); err == nil {
-			rec.FileSize = info.Size()
+			fileSize = info.Size()
+			rec.FileSize = fileSize
 		}
 		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
-			log.Printf("[h264-recorder %s] insert recording: %v", r.cfg.CameraID, err)
+			h264Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
+	}
+
+	// Update metrics for completed segment
+	if r.frameCount > 0 && r.curFinalPath != "" {
+		r.recordSegmentCreated()
+		if fileSize > 0 {
+			r.recordBytes(fileSize)
 		}
 	}
 

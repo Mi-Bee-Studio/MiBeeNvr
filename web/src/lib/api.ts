@@ -89,6 +89,16 @@ export interface LoginResponse {
 export interface ApiError {
   error: string;
 }
+export interface HealthCheck {
+  status: 'ok' | 'warning' | 'error';
+  message?: string;
+}
+
+export interface HealthResponse {
+  status: 'ok' | 'degraded' | 'unhealthy';
+  checks: Record<string, HealthCheck>;
+  uptime: string;
+}
 
 // Auth credentials storage
 const AUTH_KEY = 'mibee_nvr_auth';
@@ -374,7 +384,7 @@ export async function getStatsTrends(days = 7): Promise<DailyStats[]> {
 }
 
 // Health check (no auth required)
-export async function healthCheck(): Promise<{ status: string }> {
+export async function healthCheck(): Promise<HealthResponse> {
   const response = await fetch('/api/health');
   return response.json();
 }

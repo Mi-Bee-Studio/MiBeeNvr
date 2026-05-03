@@ -3,15 +3,18 @@ package camera
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
+
+var logger = slog.Default().With("component", "camera-manager")
 
 // CameraUpdate holds optional fields for updating a camera.
 // Only non-nil fields will be applied.
@@ -30,17 +33,23 @@ type CameraManager struct {
 	db         *storage.DB
 	configPath string
 	recorders  map[string]model.Recorder // camera_id → Recorder
+	metrics    *metrics.Metrics
 	mu         sync.RWMutex
 }
 
 // NewCameraManager creates a new CameraManager.
-func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string) *CameraManager {
+func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...*metrics.Metrics) *CameraManager {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	return &CameraManager{
 		cfg:        cfg,
 		store:      store,
 		db:         db,
 		configPath: configPath,
 		recorders:  make(map[string]model.Recorder),
+		metrics:    m,
 	}
 }
 
@@ -55,14 +64,14 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			SegmentDur: segDur,
 			DB:         cm.db,
 		}
-		return recorder.NewH264Recorder(h264Cfg, cm.store)
+		return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 	case string(model.ProtoRTSPMJPEG):
 		mjpegCfg := recorder.MJPEGConfig{
 			CameraID:   cam.ID,
 			RTSPURL:    cam.URL,
 			SegmentDur: segDur,
 		}
-		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store)
+		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 	default:
 		return nil
 	}
@@ -81,7 +90,10 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		delete(cm.recorders, cam.ID)
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
-	log.Printf("[camera-manager] started recorder for camera %q", cam.ID)
+	if cm.metrics != nil {
+		cm.metrics.ActiveCameras.Inc()
+	}
+	logger.Info("started recorder for camera", "camera_id", cam.ID)
 	return nil
 }
 
@@ -106,13 +118,13 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
-			log.Printf("[camera-manager] failed to insert camera record for %q: %v", cam.ID, err)
+			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
-			log.Printf("[camera-manager] inserted camera record for %q", cam.ID)
+			logger.Info("inserted camera record", "camera_id", cam.ID)
 		}
 
 		if !cam.Enabled {
-			log.Printf("[camera-manager] camera %q (%s) is disabled, skipping", cam.ID, cam.Protocol)
+			logger.Info("camera disabled, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 			continue
 		}
 
@@ -124,9 +136,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				cm.recorders[cam.ID] = rec
 				cm.mu.Unlock()
 				if err := rec.Start(ctx); err != nil {
-					log.Printf("[camera-manager] failed to start H264 recorder for %q: %v", cam.ID, err)
+						logger.Error("failed to start H264 recorder", "camera_id", cam.ID, "error", err)
 				} else {
-					log.Printf("[camera-manager] started H264 recorder for camera %q", cam.ID)
+						logger.Info("started H264 recorder", "camera_id", cam.ID)
 				}
 			}
 
@@ -137,17 +149,17 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				cm.recorders[cam.ID] = rec
 				cm.mu.Unlock()
 				if err := rec.Start(ctx); err != nil {
-					log.Printf("[camera-manager] failed to start MJPEG recorder for %q: %v", cam.ID, err)
+						logger.Error("failed to start MJPEG recorder", "camera_id", cam.ID, "error", err)
 				} else {
-					log.Printf("[camera-manager] started MJPEG recorder for camera %q", cam.ID)
+						logger.Info("started MJPEG recorder", "camera_id", cam.ID)
 				}
 			}
 
 		case string(model.ProtoHTTPJPEG):
-			log.Printf("[camera-manager] camera %q uses http_jpeg protocol, skipping (handled by upload handler)", cam.ID)
+			logger.Info("camera uses http_jpeg protocol, skipping", "camera_id", cam.ID)
 
 		default:
-			log.Printf("[camera-manager] camera %q has unknown protocol %q, skipping", cam.ID, cam.Protocol)
+			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 		}
 	}
 
@@ -228,7 +240,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	// Persist to database
 	if cm.db != nil {
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
-			log.Printf("[camera-manager] failed to upsert camera record for %q: %v", cam.ID, err)
+			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
 
@@ -239,13 +251,13 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 			segDur = recorder.DefaultSegmentDur
 		}
 		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
-			log.Printf("[camera-manager] add camera: %v", err)
+			logger.Error("failed to start recorder", "error", err)
 		}
 	}
 
 	// Persist config to disk
 	if err := cm.persistConfig(); err != nil {
-		log.Printf("[camera-manager] add camera: %v", err)
+		logger.Error("failed to persist config", "error", err)
 	}
 
 	return cam.ID, nil
@@ -272,9 +284,12 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	// Stop and remove recorder if running
 	if rec, ok := cm.recorders[cameraID]; ok {
 		if err := rec.Stop(); err != nil {
-			log.Printf("[camera-manager] failed to stop recorder for %q: %v", cameraID, err)
+			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
 		delete(cm.recorders, cameraID)
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
 	}
 
 	// Remove from config slice
@@ -282,7 +297,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 
 	// Persist config to disk
 	if err := cm.persistConfig(); err != nil {
-		log.Printf("[camera-manager] remove camera: %v", err)
+		logger.Error("failed to persist config", "error", err)
 	}
 
 	return nil
@@ -349,7 +364,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	// Persist to database
 	if cm.db != nil {
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
-			log.Printf("[camera-manager] failed to upsert camera record for %q: %v", cam.ID, err)
+			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
 
@@ -362,7 +377,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if needsRestart {
 		if rec, ok := cm.recorders[cam.ID]; ok {
 			if err := rec.Stop(); err != nil {
-				log.Printf("[camera-manager] failed to stop recorder for %q: %v", cam.ID, err)
+				logger.Warn("failed to stop recorder", "camera_id", cam.ID, "error", err)
 			}
 			delete(cm.recorders, cam.ID)
 		}
@@ -374,7 +389,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			// Only start if we don't already have a recorder (needsRestart cleared it, or was never running)
 			if _, exists := cm.recorders[cam.ID]; !exists {
 				if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
-					log.Printf("[camera-manager] update camera: %v", err)
+					logger.Error("failed to start recorder", "error", err)
 				}
 			}
 		}
@@ -384,15 +399,18 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if !cam.Enabled && enabledChanged {
 		if rec, ok := cm.recorders[cam.ID]; ok {
 			if err := rec.Stop(); err != nil {
-				log.Printf("[camera-manager] failed to stop recorder for %q: %v", cam.ID, err)
+				logger.Warn("failed to stop recorder", "camera_id", cam.ID, "error", err)
 			}
 			delete(cm.recorders, cam.ID)
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
 		}
 	}
 
 	// Persist config to disk
 	if err := cm.persistConfig(); err != nil {
-		log.Printf("[camera-manager] update camera: %v", err)
+		logger.Error("failed to persist config", "error", err)
 	}
 
 	return cam, nil
@@ -422,7 +440,7 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 	// Stop existing recorder
 	if rec, ok := cm.recorders[cameraID]; ok {
 		if err := rec.Stop(); err != nil {
-			log.Printf("[camera-manager] failed to stop recorder for %q: %v", cameraID, err)
+			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
 		delete(cm.recorders, cameraID)
 	}

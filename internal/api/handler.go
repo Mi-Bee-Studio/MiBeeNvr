@@ -1,15 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
-	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +21,23 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
+
+var logger = slog.Default().With("component", "api")
+
+var appStartTime = time.Now()
+
+// HealthCheck represents the result of a single health check.
+type HealthCheck struct {
+	Status  string `json:"status"`  // "ok" | "warning" | "error"
+	Message string `json:"message,omitempty"`
+}
+
+// HealthResponse is the response from /api/health.
+type HealthResponse struct {
+	Status string            `json:"status"` // "ok" | "degraded" | "unhealthy"
+	Checks map[string]HealthCheck `json:"checks"`
+	Uptime string            `json:"uptime"`
+}
 
 // Handler holds dependencies for the REST API handlers.
 	// Handler holds dependencies for the REST API handlers.
@@ -43,6 +62,7 @@ func (h *Handler) Routes() http.Handler {
 
 	// Public routes
 	r.Get("/api/health", h.handleHealth)
+	r.Get("/api/readyz", h.handleReadyz)
 	r.Post("/api/auth/login", h.handleLogin)
 
 	// Protected routes
@@ -82,7 +102,133 @@ func (h *Handler) Routes() http.Handler {
 // --- Public endpoints ---
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	resp := HealthResponse{Checks: make(map[string]HealthCheck)}
+	hasWarning, hasError := false, false
+
+	// Database check
+	if h.db != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		err := h.db.DB().PingContext(ctx)
+		if err != nil {
+			resp.Checks["database"] = HealthCheck{Status: "error", Message: err.Error()}
+			hasError = true
+		} else {
+			resp.Checks["database"] = HealthCheck{Status: "ok"}
+		}
+	} else {
+		resp.Checks["database"] = HealthCheck{Status: "error", Message: "database not configured"}
+		hasError = true
+	}
+
+	// Storage check
+	if h.store != nil {
+		total, used, err := h.store.GetDiskUsage()
+		if err != nil {
+			resp.Checks["storage"] = HealthCheck{Status: "error", Message: err.Error()}
+			hasError = true
+		} else {
+			pct := 0
+			if total > 0 {
+				pct = int(float64(used) / float64(total) * 100)
+			}
+			msg := fmt.Sprintf("%d%% used (%d / %d bytes)", pct, used, total)
+			if pct > 95 {
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg}
+				hasError = true
+			} else if pct > 90 {
+				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg}
+				hasWarning = true
+			} else {
+				resp.Checks["storage"] = HealthCheck{Status: "ok", Message: msg}
+			}
+		}
+	} else {
+		resp.Checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
+		hasError = true
+	}
+
+	// Goroutine check
+	numGoroutines := runtime.NumGoroutine()
+	if numGoroutines > 1000 {
+		resp.Checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: 1000)", numGoroutines)}
+		hasError = true
+	} else {
+		resp.Checks["goroutines"] = HealthCheck{Status: "ok", Message: fmt.Sprintf("%d goroutines", numGoroutines)}
+	}
+
+	// Overall status
+	switch {
+	case hasError:
+		resp.Status = "unhealthy"
+	case hasWarning:
+		resp.Status = "degraded"
+	default:
+		resp.Status = "ok"
+	}
+
+	// Uptime
+	resp.Uptime = formatUptime(time.Since(appStartTime))
+
+	writeJSON(w, http.StatusOK, resp)
+		}
+
+		func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	checks := make(map[string]HealthCheck)
+
+	// Database must be ok
+	allOK := true
+	if h.db == nil {
+		checks["database"] = HealthCheck{Status: "error", Message: "database not configured"}
+		allOK = false
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.db.DB().PingContext(ctx); err != nil {
+			checks["database"] = HealthCheck{Status: "error", Message: err.Error()}
+			allOK = false
+		} else {
+			checks["database"] = HealthCheck{Status: "ok"}
+		}
+	}
+
+	// Storage must be < 95%
+	if h.store == nil {
+		checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
+		allOK = false
+	} else {
+		total, used, err := h.store.GetDiskUsage()
+		if err != nil {
+			checks["storage"] = HealthCheck{Status: "error", Message: err.Error()}
+			allOK = false
+		} else {
+			pct := 0
+			if total > 0 {
+				pct = int(float64(used) / float64(total) * 100)
+			}
+			if pct >= 95 {
+				checks["storage"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d%% used (threshold: 95%%)", pct)}
+				allOK = false
+			} else {
+				checks["storage"] = HealthCheck{Status: "ok"}
+			}
+		}
+	}
+
+	// Goroutines must be < 5000
+	numGoroutines := runtime.NumGoroutine()
+	if numGoroutines >= 5000 {
+		checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: 5000)", numGoroutines)}
+		allOK = false
+	} else {
+		checks["goroutines"] = HealthCheck{Status: "ok"}
+	}
+
+	if allOK {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	} else {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not ready", "checks": checks})
+	}
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +239,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		done <- http.StatusOK
 	})
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusUnauthorized}
+	rec := &middleware.StatusRecorder{ResponseWriter: w, Status: http.StatusUnauthorized}
 	h.authMW(inner).ServeHTTP(rec, r)
 
 	select {
@@ -108,15 +254,6 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (sr *statusRecorder) WriteHeader(code int) {
-	sr.status = code
-	sr.ResponseWriter.WriteHeader(code)
-}
 
 // --- Recording endpoints ---
 
@@ -214,7 +351,7 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 	// Then delete file (non-fatal if fails)
 	if rec.FilePath != "" {
 		if err := h.store.DeleteFile(rec.FilePath); err != nil {
-			log.Printf("warning: failed to delete file %s: %v", rec.FilePath, err)
+			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 		}
 	}
 
@@ -690,7 +827,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if err := config.Save(h.configPath, h.config); err != nil {
 
-		log.Printf("[api] warning: failed to save config: %v", err)
+		logger.Warn("failed to save config", "error", err)
 
 	}
 
@@ -737,4 +874,21 @@ func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		backups = []string{}
 	}
 	writeJSON(w, http.StatusOK, backups)
+}
+
+// formatUptime converts a duration to a human-readable string like "2h 15m 30s".
+func formatUptime(d time.Duration) string {
+	rounded := d.Round(time.Second)
+	h := rounded / time.Hour
+	rounded -= h * time.Hour
+	m := rounded / time.Minute
+	rounded -= m * time.Minute
+	s := rounded / time.Second
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }

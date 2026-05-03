@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getStats, listCameras } from '$lib/api';
-  import type { StorageStats, Camera } from '$lib/api';
+  import { getStats, listCameras, healthCheck } from '$lib/api';
+  import type { StorageStats, Camera, HealthResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { HardDrive, BarChart3, Video, CameraIcon } from 'lucide-svelte';
+  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Server } from 'lucide-svelte';
   import {
     Chart,
     CategoryScale,
@@ -35,6 +35,9 @@
   let trendChart: Chart | null = null;
   let cameraChart: Chart | null = null;
 
+  // Health data
+  let health: HealthResponse | null = null;
+
   function formatPercentage(used: number, total: number): string {
     if (total === 0) return '0%';
     const pct = (used / total) * 100;
@@ -45,6 +48,30 @@
     if (percentage < 50) return 'bg-[var(--color-success)]';
     if (percentage < 80) return 'bg-[var(--color-warning)]';
     return 'th-bg-danger';
+  }
+
+  function getHealthDotColor(status: string): string {
+    if (status === 'ok') return 'bg-[var(--color-success)]';
+    if (status === 'degraded' || status === 'warning') return 'bg-[var(--color-warning)]';
+    return 'bg-[var(--color-danger)]';
+  }
+
+  function getHealthBadgeClass(status: string): string {
+    if (status === 'ok') return 'badge-success';
+    if (status === 'degraded') return 'badge-warning';
+    return 'badge-error';
+  }
+
+  function getHealthLabel(status: string): string {
+    if (status === 'ok') return t('stats.healthy');
+    if (status === 'degraded') return t('stats.degraded');
+    return t('stats.unhealthy');
+  }
+
+  function parseGoroutineCount(msg?: string): string {
+    if (!msg) return '—';
+    const match = msg.match(/(\d+)/);
+    return match ? match[1] : msg;
   }
 
   // Load data
@@ -77,6 +104,14 @@
       }
     } catch (e) {
       console.error('Failed to load trends:', e);
+    }
+  }
+
+  async function loadHealth() {
+    try {
+      health = await healthCheck();
+    } catch (e) {
+      console.error('Failed to load health:', e);
     }
   }
 
@@ -185,12 +220,14 @@
     loadStats();
     loadCameras();
     loadTrends();
+    loadHealth();
 
     // Auto-refresh every 30 seconds
     refreshInterval = window.setInterval(() => {
       loadStats();
       loadCameras();
       loadTrends();
+      loadHealth();
     }, 30000);
 
     // Re-create charts when theme changes
@@ -353,7 +390,6 @@
             {/if}
           </div>
         </div>
-
         <!-- Charts — Storage Trend & Recordings by Camera -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="card p-6 border th-border">
@@ -369,6 +405,87 @@
             </div>
           </div>
         </div>
+        <!-- System Status — Health + Runtime Metrics -->
+        {#if health}
+          <div class="card p-6 border th-border">
+            <h3 class="text-lg font-semibold th-text-primary mb-5">{t('stats.systemStatus')}</h3>
+
+            <!-- Health indicator row -->
+            <div class="flex items-center gap-3 mb-6">
+              <span class="inline-block w-3 h-3 rounded-full {getHealthDotColor(health.status)}"></span>
+              <span class="badge {getHealthBadgeClass(health.status)}">{getHealthLabel(health.status)}</span>
+            </div>
+
+            <!-- Runtime metric cards -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <!-- Uptime -->
+              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
+                <div class="flex items-center gap-2 mb-2">
+                  <Clock size={16} class="th-text-secondary" />
+                  <span class="text-xs font-medium th-text-muted">{t('stats.uptime')}</span>
+                </div>
+                <p class="text-lg font-bold th-text-primary">{health.uptime || '—'}</p>
+              </div>
+
+              <!-- Goroutines -->
+              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
+                <div class="flex items-center gap-2 mb-2">
+                  <Cpu size={16} class="th-text-secondary" />
+                  <span class="text-xs font-medium th-text-muted">{t('stats.goroutines')}</span>
+                </div>
+                <p class="text-lg font-bold th-text-primary">{parseGoroutineCount(health.checks?.goroutines?.message)}</p>
+              </div>
+
+              <!-- Database -->
+              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
+                <div class="flex items-center gap-2 mb-2">
+                  <Server size={16} class="th-text-secondary" />
+                  <span class="text-xs font-medium th-text-muted">{t('stats.checkDatabase')}</span>
+                </div>
+                <p class="text-lg font-bold th-text-primary">
+                  {#if health.checks?.database?.status === 'ok'}
+                    <span class="badge badge-success">OK</span>
+                  {:else}
+                    <span class="badge badge-error">Error</span>
+                  {/if}
+                </p>
+              </div>
+
+              <!-- Storage health -->
+              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
+                <div class="flex items-center gap-2 mb-2">
+                  <Activity size={16} class="th-text-secondary" />
+                  <span class="text-xs font-medium th-text-muted">{t('stats.checkStorage')}</span>
+                </div>
+                <p class="text-lg font-bold th-text-primary">
+                  {#if health.checks?.storage}
+                    <span class="badge {getHealthBadgeClass(health.checks.storage.status)}">
+                      {health.checks.storage.status === 'ok' ? 'OK' : health.checks.storage.status === 'warning' ? 'Warn' : 'Error'}
+                    </span>
+                  {:else}
+                    <span class="th-text-muted">—</span>
+                  {/if}
+                </p>
+              </div>
+            </div>
+
+            <!-- Camera status list -->
+            {#if cameras.length > 0}
+              <div>
+                <h4 class="text-sm font-medium th-text-muted mb-3">{t('stats.cameraStatus')}</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {#each cameras as camera}
+                    <div class="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
+                      <span class="inline-block w-2 h-2 rounded-full {camera.enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-danger)]'}"></span>
+                      <span class="text-sm th-text-primary truncate">{camera.name}</span>
+                      <span class="ml-auto text-xs th-text-muted">{camera.enabled ? t('stats.active') : t('stats.inactive')}</span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
 
         <!-- Loading indicator for refresh -->
         {#if loading}

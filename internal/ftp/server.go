@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +19,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
+
+var logger = slog.Default().With("component", "ftp")
 
 // Server implements an FTP server for camera file uploads using ftpserverlib.
 // It satisfies the ftpserverlib.MainDriver interface for authentication and
@@ -398,7 +400,7 @@ func (u *uploadFileTransfer) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := u.server.db.InsertRecording(ctx, recording); err != nil {
-			log.Printf("[ftp] failed to insert recording for uploaded file %s: %v", u.filePath, err)
+			logger.Error("failed to insert recording for uploaded file", "file_path", u.filePath, "error", err)
 		}
 	}
 
