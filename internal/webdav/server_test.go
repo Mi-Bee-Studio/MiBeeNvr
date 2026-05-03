@@ -241,11 +241,11 @@ func TestAuthMiddlewareAllowsAuthenticated(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestAuthMiddlewareBypassWhenNoPassword(t *testing.T) {
+func TestAuthMiddlewareRejectsWhenNoPassword(t *testing.T) {
 	tmpDir := t.TempDir()
 	createTestFiles(t, tmpDir)
 
-	// Empty password hash = auth bypassed
+	// Empty password hash = auth rejected (security fix)
 	authMW := middleware.NewAuthMiddleware("admin", "")
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
@@ -254,7 +254,7 @@ func TestAuthMiddlewareBypassWhenNoPassword(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestGETNonexistentFile(t *testing.T) {

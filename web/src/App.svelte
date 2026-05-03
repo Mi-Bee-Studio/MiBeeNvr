@@ -8,10 +8,12 @@
   import Settings from './routes/Settings.svelte';
   import Cameras from './routes/Cameras.svelte';
 
-  // Current route
+  import Header from './components/Header.svelte';
+
   // Current route
   let currentRoute = 'login';
   let params: Record<string, string> = {};
+
 
   // Parse hash-based routes
   function parseRoute(hash: string) {
@@ -71,15 +73,18 @@
 </script>
 
 {#if currentRoute === 'login'}
-  <Login />
-{:else if currentRoute === 'recordings'}
-  <Recordings />
-{:else if currentRoute === 'recording-detail'}
-  <RecordingDetail recordingId={params.id} />
-{:else if currentRoute === 'cameras'}
-  <Cameras />
-{:else if currentRoute === 'stats'}
-  <Stats />
-{:else if currentRoute === 'settings'}
-  <Settings />
-{/if}
+    <Login />
+  {:else}
+    <Header showBack={currentRoute === 'recording-detail'} />
+    {#if currentRoute === 'recordings'}
+      <Recordings />
+    {:else if currentRoute === 'recording-detail'}
+      <RecordingDetail recordingId={params.id} />
+    {:else if currentRoute === 'cameras'}
+      <Cameras />
+    {:else if currentRoute === 'stats'}
+      <Stats />
+    {:else if currentRoute === 'settings'}
+      <Settings />
+    {/if}
+  {/if}

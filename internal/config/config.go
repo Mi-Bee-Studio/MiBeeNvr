@@ -5,19 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Cameras  []CameraConfig `yaml:"cameras"`
-	Cleanup  CleanupConfig  `yaml:"cleanup"`
-	Auth     AuthConfig     `yaml:"auth"`
-	FTP      FTPConfig      `yaml:"ftp"`
-	 MQTT     MQTTConfig     `yaml:"mqtt"`
-	WebDAV   WebDAVConfig   `yaml:"webdav"`
+	Server      ServerConfig      `yaml:"server"`
+	Storage     StorageConfig     `yaml:"storage"`
+	Cameras     []CameraConfig    `yaml:"cameras"`
+	Cleanup     CleanupConfig     `yaml:"cleanup"`
+	Auth        AuthConfig        `yaml:"auth"`
+	FTP         FTPConfig         `yaml:"ftp"`
+	MQTT        MQTTConfig        `yaml:"mqtt"`
+	WebDAV      WebDAVConfig      `yaml:"webdav"`
+	Version     string            `yaml:"version"`
 }
 
 type ServerConfig struct {
@@ -26,7 +28,7 @@ type ServerConfig struct {
 
 type StorageConfig struct {
 	RootDir         string `yaml:"root_dir"`        // default "/mnt/data/nvr"
-	SegmentDuration string `yaml:"segment_duration"` // default "10m"
+	SegmentDuration string `yaml:"segment_duration"` // default "30s"
 }
 
 type CameraConfig struct {
@@ -143,13 +145,25 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
 	}
 	// mutex: minimal validation for mqtt ports none; ensure 0-65535 if provided in config persistence (not present)
-	// basic: validate storage segment duration non-empty
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		// ok to be defaulted, handled by defaults
 	}
+	// Validate segment_duration
+	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
+		return fmt.Errorf("storage.segment_duration invalid: %w", err)
+	} else if dur > 5*time.Minute {
+		return fmt.Errorf("storage.segment_duration must be <= 5m on RPi 3B, got %s", cfg.Storage.SegmentDuration)
+	}
+	// Validate retention_days
+	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
+		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", cfg.Cleanup.RetentionDays)
+	}
+	// Validate disk_threshold_percent
+	if cfg.Cleanup.DiskThresholdPercent < 50 || cfg.Cleanup.DiskThresholdPercent > 99 {
+		return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
+	}
 	return nil
 }
-
 func (cfg *Config) applyDefaults() {
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
@@ -160,7 +174,7 @@ func (cfg *Config) applyDefaults() {
 		cfg.Storage.RootDir = "/mnt/data/nvr"
 	}
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
-		cfg.Storage.SegmentDuration = "10m"
+		cfg.Storage.SegmentDuration = "30s"
 	}
 	// Cameras: nothing heavy, but ensure at least enable false
 	// Cleanup
@@ -196,5 +210,9 @@ func (cfg *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(cfg.WebDAV.PathPrefix) == "" {
 		cfg.WebDAV.PathPrefix = "/dav"
+	}
+	// Version
+	if strings.TrimSpace(cfg.Version) == "" {
+		cfg.Version = "1.0"
 	}
 }

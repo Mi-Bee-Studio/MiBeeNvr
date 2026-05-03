@@ -19,27 +19,27 @@
   }
 </script>
 
-<div class="flex items-center justify-between px-4 py-3 border-t border-slate-700">
-  <span class="text-sm text-slate-400">
+<div class="flex items-center justify-between px-4 py-3 border-t border-[var(--border)]">
+  <span class="text-sm text-[var(--text-muted)]">
     <!-- page info set by parent -->
   </span>
   <div class="flex items-center gap-1">
     <button
       on:click={() => onPageChange(currentPage - 1)}
       disabled={!canGoPrev}
-      class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+      class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
       ←
     </button>
     {#each pages as page (page)}
       {#if page === currentPage}
-        <span class="px-3 py-1 text-sm rounded bg-cyan-600 text-white font-medium">
+        <span class="px-3 py-1 text-sm rounded bg-[var(--color-accent)] text-white font-medium">
           {page}
         </span>
       {:else}
         <button
           on:click={() => onPageChange(page)}
-          class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700"
+          class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
         >
           {page}
         </button>
@@ -48,7 +48,7 @@
     <button
       on:click={() => onPageChange(currentPage + 1)}
       disabled={!canGoNext}
-      class="px-3 py-1 text-sm rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+      class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
       →
     </button>

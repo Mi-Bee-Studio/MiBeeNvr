@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +140,13 @@ func (r *H264Recorder) setStatus(s model.RecorderStatus) {
 }
 
 func (r *H264Recorder) run(ctx context.Context) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			buf := make([]byte, 4096)
+			buf = buf[:runtime.Stack(buf, false)]
+			log.Printf("[h264-recorder %s] PANIC recovered in run: %v\n%s", r.cfg.CameraID, panicErr, buf)
+		}
+	}()
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
 	backoff := r.cfg.InitBackoff
@@ -247,6 +255,14 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 }
 
 func (r *H264Recorder) writeFrames(done chan struct{}) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			buf := make([]byte, 4096)
+			buf = buf[:runtime.Stack(buf, false)]
+			log.Printf("[h264-recorder %s] PANIC recovered in writeFrames: %v\n%s", r.cfg.CameraID, panicErr, buf)
+		}
+	}()
+
 	defer close(done)
 	for data := range r.frameCh {
 		if len(data) < 5 {

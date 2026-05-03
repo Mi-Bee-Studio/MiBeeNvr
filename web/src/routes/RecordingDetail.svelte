@@ -1,35 +1,30 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import {
-    getRecording,
-    deleteRecording,
-    pinRecording,
-    unpinRecording,
-    downloadRecording as apiDownloadRecording,
-    listFrames,
-    loadFrameBlob,
-    loadRecordingVideoBlob
-  } from '$lib/api';
+import {
+getRecording,
+deleteRecording,
+pinRecording,
+unpinRecording,
+downloadRecording as apiDownloadRecording,
+listFrames,
+loadFrameBlob,
+loadRecordingVideoBlob
+} from '$lib/api';
   import type { Recording, FrameInfo } from '$lib/api';
-  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
-  import { t, onLangChange, getCurrentLang } from '$lib/i18n';
+  import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
 
-  // Re-render on language change
-  let lang = getCurrentLang();
-  onLangChange(() => { lang = getCurrentLang(); });
-
   // Recording ID passed as prop
-  export let recordingId = '';
-  let recording: Recording | null = null;
-  let loading = true;
-  let error = '';
+  let { recordingId = '' } = $props();
+  let recording = $state<Recording | null>(null);
+  let loading = $state(true);
+  let error = $state('');
   let deleteConfirm = false;
 
   // JPEG frame player state
   let frames: FrameInfo[] = [];
   let currentFrameIndex = 0;
-  let frameBlobUrl = '';
+  let frameBlobUrl = $state('');
   let isPlaying = false;
   let playInterval: ReturnType<typeof setInterval> | null = null;
   let playSpeed = 1; // multiplier: 1x, 2x, 5x
@@ -38,10 +33,10 @@
   let progressDragging = false;
 
   // Video blob URL (for MP4 auth)
-  let videoBlobUrl = '';
-  let videoLoading = false;
-  let downloadProgress = 0;
-  let isDownloading = false;
+  let videoBlobUrl = $state('');
+  let videoLoading = $state(false);
+  let downloadProgress = $state(0);
+  let isDownloading = $state(false);
 
   // Speed options
   const speeds = [1, 2, 5];
@@ -242,34 +237,7 @@
   });
 </script>
 
-<div class="min-h-screen bg-slate-900">
-  <!-- Header -->
-  <header class="bg-slate-800 border-b border-slate-700">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16">
-        <div class="flex items-center gap-4">
-          <button onclick={goBack} class="text-slate-300 hover:text-slate-100">
-            {t('detail.back')}
-          </button>
-          <h1 class="text-xl font-bold text-slate-100">{t('detail.title')}</h1>
-        </div>
-        <nav class="flex gap-4">
-          <a href="#/recordings" class="text-slate-300 hover:text-slate-100 transition-colors">
-            {t('nav.recordings')}
-          </a>
-          <a href="#/stats" class="text-slate-300 hover:text-slate-100 transition-colors">
-            {t('nav.stats')}
-          </a>
-          <a href="#/settings" class="text-slate-300 hover:text-slate-100 transition-colors">
-            {t('nav.settings')}
-          </a>
-        </nav>
-        <div class="flex items-center gap-3">
-          <LanguageSwitcher />
-        </div>
-      </div>
-    </div>
-  </header>
+<div class="min-h-screen th-bg-primary pt-[68px]">
 
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -280,8 +248,8 @@
       </div>
     {:else if error}
       <div class="card p-8 text-center">
-        <div class="text-red-400 mb-4">&#x26A0;&#xFE0F;</div>
-        <p class="text-slate-300 mb-4">{error}</p>
+        <div class="th-color-danger mb-4">&#x26A0;&#xFE0F;</div>
+        <p class="th-text-secondary mb-4">{error}</p>
         <button onclick={goBack} class="btn btn-primary">
           {t('detail.goBack')}
         </button>
@@ -289,7 +257,7 @@
     {:else if recording}
       <div class="space-y-6">
         <!-- Playback section -->
-        <div class="card border border-slate-700/60">
+        <div class="card border th-border">
           {#if recording.format === 'h264'}
             <!-- MP4 video player -->
             <div class="max-w-full bg-black">
@@ -307,7 +275,7 @@
                   {t('detail.videoUnsupported')}
                 </video>
               {:else}
-                <div class="flex items-center justify-center h-64 text-slate-400">
+                <div class="flex items-center justify-center h-64 th-text-muted">
                   {t('detail.failedLoadVideo')}
                 </div>
               {/if}
@@ -318,11 +286,11 @@
               {#if framesLoading}
                 <div class="flex items-center justify-center h-64">
                   <div class="spinner spinner-lg"></div>
-                  <span class="text-slate-400 ml-3">{t('detail.loadingFrames')}</span>
+                  <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
                 </div>
               {:else if frames.length === 0}
                 <div class="flex items-center justify-center h-64">
-                  <div class="text-center text-slate-400">
+                  <div class="text-center th-text-muted">
                     <div class="text-4xl mb-2">{t('detail.noFrames')}</div>
                     <p class="text-sm">{t('detail.downloadFrames')}</p>
                   </div>
@@ -345,10 +313,10 @@
                 </div>
 
                 <!-- Controls bar -->
-                <div class="bg-slate-800/90 px-4 py-3 space-y-2">
+                <div class="th-bg-secondary px-4 py-3 space-y-2">
                   <!-- Progress bar -->
                   <div
-                    class="relative h-2 bg-slate-700 rounded cursor-pointer group"
+                    class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
                     onclick={handleProgressClick}
                     role="progressbar"
                     aria-valuenow={currentFrameIndex}
@@ -356,11 +324,11 @@
                     aria-valuemax={frames.length - 1}
                   >
                     <div
-                      class="absolute top-0 left-0 h-full bg-blue-500 rounded group-hover:bg-blue-400 transition-colors"
+                      class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
                       style="width: {frames.length > 1 ? (currentFrameIndex / (frames.length - 1)) * 100 : 100}%"
                     ></div>
                     <div
-                      class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-blue-400 rounded-full shadow group-hover:bg-blue-300 transition-colors"
+                      class="absolute top-1/2 -translate-y-1/2 w-3 h-3 th-bg-info rounded-full shadow group-hover:th-bg-accent transition-colors"
                       style="left: calc({frames.length > 1 ? (currentFrameIndex / (frames.length - 1)) * 100 : 100}% - 6px)"
                     ></div>
                   </div>
@@ -371,10 +339,8 @@
                       <button
                         onclick={prevFrame}
                         disabled={currentFrameIndex === 0 || frameChanging}
-                        class="px-3 py-1.5 rounded text-sm font-medium transition-colors
-                          {currentFrameIndex === 0 || frameChanging
-                            ? 'text-slate-600 cursor-not-allowed'
-                            : 'text-slate-200 bg-slate-700 hover:bg-slate-600'}"
+                        class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                        style="color: {currentFrameIndex === 0 || frameChanging ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {currentFrameIndex === 0 || frameChanging ? 'transparent' : 'var(--bg-tertiary)'}"
                       >
                         {t('detail.prev')}
                       </button>
@@ -382,42 +348,35 @@
                       <button
                         onclick={togglePlay}
                         disabled={frameChanging}
-                        class="px-4 py-1.5 rounded text-sm font-medium transition-colors
-                          {isPlaying
-                            ? 'bg-red-600 text-white hover:bg-red-500'
-                            : 'bg-blue-600 text-white hover:bg-blue-500'}
-                          {frameChanging ? 'opacity-50 cursor-not-allowed' : ''}"
+                        class="px-4 py-1.5 rounded text-sm font-medium text-white transition-colors"
+                        style="background-color: {isPlaying ? 'var(--color-danger)' : 'var(--color-info)'}"
                       >
                         {isPlaying ? t('detail.pause') : t('detail.play')}
                       </button>
-
                       <button
                         onclick={nextFrame}
                         disabled={currentFrameIndex >= frames.length - 1 || frameChanging}
-                        class="px-3 py-1.5 rounded text-sm font-medium transition-colors
-                          {currentFrameIndex >= frames.length - 1 || frameChanging
-                            ? 'text-slate-600 cursor-not-allowed'
-                            : 'text-slate-200 bg-slate-700 hover:bg-slate-600'}"
+                        class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                        style="color: {currentFrameIndex >= frames.length - 1 || frameChanging ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {!(currentFrameIndex >= frames.length - 1 || frameChanging) ? 'var(--bg-tertiary)' : 'transparent'}"
+                      >
                       >
                         {t('detail.next')}
                       </button>
                     </div>
 
                     <!-- Frame counter -->
-                    <div class="text-slate-300 text-sm font-mono">
+                    <div class="th-text-secondary text-sm font-mono">
                       {t('detail.frameCounter', { current: String(currentFrameIndex + 1), total: String(frames.length) })}
                     </div>
 
                     <!-- Speed control -->
                     <div class="flex items-center gap-1">
-                      <span class="text-slate-400 text-xs mr-1">{t('detail.speed')}</span>
+                      <span class="th-text-tertiary text-xs mr-1">{t('detail.speed')}</span>
                       {#each speeds as speed}
                         <button
                           onclick={() => setSpeed(speed)}
-                          class="px-2 py-1 rounded text-xs font-medium transition-colors
-                            {playSpeed === speed
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}"
+                          class="px-2 py-1 rounded text-xs font-medium transition-colors"
+                          style="background-color: {currentSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {currentSpeed === speed ? 'white' : 'var(--text-secondary)'}"
                         >
                           {speed}x
                         </button>
@@ -430,7 +389,7 @@
           {:else}
             <!-- Unsupported format -->
             <div class="flex items-center justify-center h-64 bg-black">
-              <div class="text-center text-slate-400">
+              <div class="text-center th-text-tertiary">
                 <div class="text-4xl mb-2">&#x2753;</div>
                 <p class="text-lg">{t('detail.unsupportedFormat')}</p>
                 <p class="text-sm mt-2">{t('detail.format')}: {recording.format}</p>
@@ -440,13 +399,13 @@
         </div>
 
         <!-- Recording info -->
-        <div class="card p-6 border border-slate-700/60">
+        <div class="card p-6 border th-border">
           <div class="flex items-start justify-between mb-6">
             <div>
-              <h2 class="text-2xl font-bold text-slate-100 mb-2">
+              <h2 class="text-2xl font-bold th-text-primary mb-2">
                 {recording.camera_id}
               </h2>
-              <p class="text-slate-400">
+              <p class="th-text-tertiary">
                 {formatDate(recording.started_at)}
               </p>
             </div>
@@ -461,33 +420,33 @@
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             <div>
-              <p class="text-sm text-slate-400 mb-1">{t('detail.duration')}</p>
-              <p class="text-lg font-semibold text-slate-200">
+              <p class="text-sm th-text-tertiary mb-1">{t('detail.duration')}</p>
+              <p class="text-lg font-semibold th-text-body">
                 {formatDuration(recording.duration)}
               </p>
             </div>
             <div>
-              <p class="text-sm text-slate-400 mb-1">{t('detail.fileSize')}</p>
-              <p class="text-lg font-semibold text-slate-200">
+              <p class="text-sm th-text-tertiary mb-1">{t('detail.fileSize')}</p>
+              <p class="text-lg font-semibold th-text-body">
                 {formatFileSize(recording.file_size)}
               </p>
             </div>
             <div>
-              <p class="text-sm text-slate-400 mb-1">{t('detail.frames')}</p>
-              <p class="text-lg font-semibold text-slate-200">
+              <p class="text-sm th-text-tertiary mb-1">{t('detail.frames')}</p>
+              <p class="text-lg font-semibold th-text-body">
                 {recording.frame_count.toLocaleString()}
               </p>
             </div>
             <div>
-              <p class="text-sm text-slate-400 mb-1">{t('detail.endTime')}</p>
-              <p class="text-lg font-semibold text-slate-200">
+              <p class="text-sm th-text-tertiary mb-1">{t('detail.endTime')}</p>
+              <p class="text-lg font-semibold th-text-body">
                 {formatDate(recording.ended_at)}
               </p>
             </div>
           </div>
 
           <!-- Actions -->
-          <div class="flex flex-wrap gap-3 border-t border-slate-700 pt-6">
+          <div class="flex flex-wrap gap-3 border-t th-border pt-6">
             {#if isDownloading}
                 <button disabled class="btn btn-primary opacity-75 flex items-center gap-2">
                   <div class="spinner spinner-sm"></div>
@@ -520,8 +479,8 @@
   {#if deleteConfirm && recording}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div class="card max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold text-slate-100 mb-4">{t('detail.deleteTitle')}</h3>
-        <p class="text-slate-300 mb-6">
+        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('detail.deleteTitle')}</h3>
+        <p class="th-text-secondary mb-6">
           {t('detail.deleteMessage', { camera_id: recording.camera_id })}
         </p>
         <div class="flex gap-3 justify-end">

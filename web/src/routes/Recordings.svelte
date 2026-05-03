@@ -5,20 +5,14 @@
     listCameras,
     deleteRecording,
     pinRecording,
-    unpinRecording,
-    logout
+    unpinRecording
   } from '$lib/api';
   import type { Recording, Camera } from '$lib/api';
   import Pagination from '../components/Pagination.svelte';
-  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
-  import { t, onLangChange, getCurrentLang } from '$lib/i18n';
+  import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
+  import { showToast } from '$lib/toast';
 
-  // Re-render on language change
-  let lang = getCurrentLang();
-  const unsubscribe = onLangChange(() => { lang = getCurrentLang(); });
-
-  onDestroy(() => { unsubscribe(); });
 
   // Filter state
   let cameraId = '';
@@ -29,10 +23,10 @@
   let offset = 0;
 
   // Data state
-  let recordings: Recording[] = [];
-  let totalRecordings = 0;
-  let loading = false;
-  let error = '';
+  let recordings = $state<Recording[]>([]);
+  let totalRecordings = $state(0);
+  let loading = $state(false);
+  let error = $state('');
   let deleteConfirm: Recording | null = null;
 
   // Auto-refresh interval
@@ -89,9 +83,10 @@
     try {
       await deleteRecording(deleteConfirm.id);
       recordings = recordings.filter(r => r.id !== deleteConfirm.id);
+      showToast(t('common.recordingDeleted'), 'success');
       deleteConfirm = null;
     } catch (e) {
-      error = e instanceof Error ? e.message : t('common.failedDeleteRecording');
+      showToast(e instanceof Error ? e.message : t('common.failedDeleteRecording'), 'error');
     }
   }
 
@@ -114,14 +109,21 @@
     };
   });
 
-  // Watch filter changes
-  $: loadRecordings();
-  
+  // Watch filter changes — debounce to avoid double-fire with onMount
+  let loadTimeout: number;
+  $effect(() => {
+    // Read all filter variables to track them as dependencies
+    const _ = [cameraId, format, pinned, offset, limit];
+    clearTimeout(loadTimeout);
+    loadTimeout = window.setTimeout(() => loadRecordings(), 100);
+    return () => clearTimeout(loadTimeout);
+  });
+
   // Pagination calculations
-  $: currentPage = Math.floor(offset / limit) + 1;
-  $: totalPages = Math.ceil(totalRecordings / limit);
-  $: startRecordings = offset + 1;
-  $: endRecordings = Math.min(offset + recordings.length, totalRecordings);
+  let currentPage = $derived(Math.floor(offset / limit) + 1);
+  let totalPages = $derived(Math.ceil(totalRecordings / limit));
+  let startRecordings = $derived(offset + 1);
+  let endRecordings = $derived(Math.min(offset + recordings.length, totalRecordings));
   
   // Handle page change
   function handlePageChange(newPage: number) {
@@ -130,37 +132,15 @@
   }
 </script>
 
-  <div class="min-h-screen bg-slate-900">
-  <!-- Header -->
-  <header class="bg-slate-800 border-b border-slate-700">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16">
-        <div class="flex items-center gap-4">
-          <h1 class="text-xl font-bold text-slate-100">MiBee NVR</h1>
-          <nav class="flex gap-4">
-            <a href="#/recordings" class="text-cyan-500 font-medium">{t('nav.recordings')}</a>
-            <a href="#/cameras" class="text-slate-300 hover:text-slate-100 transition-colors">{t('nav.cameras')}</a>
-<a href="#/stats" class="text-slate-300 hover:text-slate-100 transition-colors">{t('nav.stats')}</a>
-<a href="#/settings" class="text-slate-300 hover:text-slate-100 transition-colors">{t('nav.settings')}</a>
-          </nav>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageSwitcher />
-          <button on:click={logout} class="btn btn-ghost">
-            {t('nav.logout')}
-          </button>
-        </div>
-      </div>
-    </div>
-  </header>
+  <div class="min-h-screen th-bg-primary pt-[68px]">
 
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">
-      <h2 class="text-2xl font-bold text-slate-100 mb-4">{t('recordings.title')}</h2>
+      <h2 class="text-2xl font-bold th-text-primary mb-4">{t('recordings.title')}</h2>
 
       <!-- Filters -->
-      <div class="card p-4 mb-4 border border-slate-700/60">
+      <div class="card p-4 mb-4 border th-border">
         <div class="flex flex-wrap gap-4 items-end">
           <div class="flex-1 min-w-[200px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
@@ -193,23 +173,23 @@
 
     <!-- Error message -->
     {#if error}
-      <div class="mb-4 p-4 bg-red-900/30 border border-red-700 rounded-md text-red-300">
+      <div class="mb-4 p-4 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger" aria-live="polite">
         {error}
       </div>
     {/if}
 
     <!-- Recordings table -->
-    <div class="card border border-slate-700/60">
+    <div class="card border th-border">
       {#if loading && recordings.length === 0}
         <div class="p-8 flex justify-center">
           <div class="spinner spinner-lg"></div>
         </div>
       {:else if recordings.length === 0}
-        <div class="p-8 text-center text-slate-400">
+        <div class="p-8 text-center th-text-muted">
           {t('recordings.noRecordings')}
         </div>
       {:else}
-        <div class="table-container border-slate-700/50">
+        <div class="table-container th-border">
           <table class="table">
             <thead>
               <tr>
@@ -225,10 +205,10 @@
             <tbody>
               {#each recordings as recording}
                 <tr>
-                  <td class="font-medium text-slate-200">{recording.camera_id}</td>
+                  <td class="font-medium th-text-primary">{recording.camera_id}</td>
                   <td>
                     <span class="badge badge-neutral">
-                      {recording.format === 'h264' ? 'MP4' : 'JPEG'}
+                      {t(`recording.format.${recording.format}`)}
                     </span>
                   </td>
                   <td>{formatDuration(recording.duration)}</td>
@@ -257,7 +237,7 @@
                       </button>
                       <button
                         on:click={() => deleteConfirm = recording}
-                        class="btn btn-ghost px-3 py-1 text-sm text-red-400 hover:text-red-300"
+                        class="btn btn-ghost px-3 py-1 text-sm th-color-danger hover:th-color-danger"
                         title={t('recordings.delete')}
                       >
                         🗑️
@@ -272,8 +252,8 @@
 
       {#if totalPages > 1}
         <!-- Page info -->
-        <div class="px-4 py-2 border-t border-slate-700">
-          <span class="text-sm text-slate-400">
+        <div class="px-4 py-2 border-t th-border">
+          <span class="text-sm th-text-muted">
             {t('recordings.showing', { start: String(startRecordings), end: String(endRecordings), total: String(totalRecordings) })}
           </span>
         </div>
@@ -288,8 +268,8 @@
 
       <!-- Loading indicator for refresh -->
       {#if loading && recordings.length > 0}
-        <div class="px-4 py-2 bg-slate-800/50 border-t border-slate-700 text-center">
-          <span class="text-sm text-slate-400">{t('recordings.refreshing')}</span>
+        <div class="px-4 py-2 th-bg-secondary border-t th-border text-center">
+          <span class="text-sm th-text-muted">{t('recordings.refreshing')}</span>
         </div>
       {/if}
       {/if}
@@ -300,8 +280,8 @@
   {#if deleteConfirm}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div class="card max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold text-slate-100 mb-4">{t('recordings.deleteTitle')}</h3>
-        <p class="text-slate-300 mb-6">
+        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.deleteTitle')}</h3>
+        <p class="th-text-secondary mb-6">
           {t('recordings.deleteMessage', { camera_id: deleteConfirm.camera_id })}
         </p>
         <div class="flex gap-3 justify-end">

@@ -1,18 +1,15 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
   import { login, isAuthenticated } from '$lib/api';
-  import { t, onLangChange, getCurrentLang } from '$lib/i18n';
+  import ThemeToggle from '../components/ThemeToggle.svelte';
+  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
+  import { t } from '$lib/i18n';
 
   let username = '';
   let password = '';
   let error = '';
   let loading = false;
+  // Force re-render when language changes
 
-  // Re-render on language change
-  let lang = getCurrentLang();
-  const unsubscribe = onLangChange(() => { lang = getCurrentLang(); });
-
-  onDestroy(() => { unsubscribe(); });
 
   // Redirect if already logged in
   if (isAuthenticated()) {
@@ -41,15 +38,18 @@
   }
 </script>
 
-<div class="min-h-screen flex items-center justify-center bg-slate-900 px-4">
-  <div class="card w-full max-w-md p-8 border border-slate-700/60 shadow-2xl">
+<div class="min-h-screen flex items-center justify-center th-bg-primary px-4">
+  <div class="fixed top-4 right-4 flex items-center gap-2 z-50">
+    <ThemeToggle />
+    <LanguageSwitcher />
+  </div>
+    <div class="card w-full max-w-md p-8 border th-border shadow-2xl">
     <div class="text-center mb-8">
       <h1 class="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent mb-2">{t('login.title')}</h1>
-      <p class="text-slate-400">{t('login.subtitle')}</p>
+      <p class="th-text-tertiary">{t('login.subtitle')}</p>
     </div>
-
     {#if error}
-      <div class="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-md text-red-300 text-sm">
+      <div class="mb-4 p-3 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger text-sm">
         {error}
       </div>
     {/if}
@@ -95,8 +95,8 @@
       </button>
     </form>
 
-    <div class="mt-6 text-center text-sm text-slate-400">
-      <p class="border-t border-slate-700/50 pt-6">{t('login.secureNote')}</p>
+    <div class="mt-6 text-center text-sm th-text-tertiary">
+      <p class="border-t th-border pt-6">{t('login.secureNote')}</p>
     </div>
   </div>
 </div>

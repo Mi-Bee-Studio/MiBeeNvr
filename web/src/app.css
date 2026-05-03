@@ -70,6 +70,12 @@
   /* --- Glass --- */
   --glass-bg: rgba(10, 10, 10, 0.95);
   --glass-blur: 20px;
+
+  /* --- Hover state --- */
+  --bg-hover: #222222;
+
+  /* --- Body text (nav links, medium brightness) --- */
+  --text-body: #cbd5e1;
 }
 
 /* --- Light theme override --- */
@@ -85,6 +91,9 @@
 
   --border: #e2e8f0;
   --border-hover: #cbd5e1;
+
+  --bg-hover: #e2e8f0;
+  --text-body: #334155;
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -402,6 +411,34 @@
   .border-accent {
     border-color: var(--color-primary);
   }
+
+  /* --- Theme-aware utility classes (replaces Tailwind bracket syntax) --- */
+  .th-bg-primary { background-color: var(--bg-primary); }
+  .th-bg-secondary { background-color: var(--bg-secondary); }
+  .th-bg-tertiary { background-color: var(--bg-tertiary); }
+  .th-bg-hover { background-color: var(--bg-hover); }
+  .th-bg-elevated { background-color: var(--bg-elevated); }
+  .th-text-primary { color: var(--text-primary); }
+  .th-text-secondary { color: var(--text-secondary); }
+  .th-text-tertiary { color: var(--text-tertiary); }
+  .th-text-body { color: var(--text-body); }
+  .th-text-muted { color: var(--text-tertiary); }
+  .th-border { border-color: var(--border); }
+  .th-border-hover { border-color: var(--border-hover); }
+  .th-color-danger { color: var(--color-danger); }
+  .th-color-success { color: var(--color-success-light); }
+  .th-color-accent { color: var(--color-accent); }
+  .th-color-info { color: var(--color-info); }
+  .th-bg-danger { background-color: var(--color-danger); }
+  .th-bg-danger-light { background-color: var(--color-danger-light); }
+  .th-bg-info { background-color: var(--color-info); }
+  .th-bg-accent { background-color: var(--color-accent); }
+  .hover\:th-bg-danger-light:hover { background-color: var(--color-danger-light); }
+  .hover\:th-bg-accent:hover { background-color: var(--color-accent); }
+  .hover\:th-bg-info:hover { background-color: var(--color-info); }
+  .hover\:th-bg-hover:hover { background-color: var(--bg-hover); }
+  .hover\:th-text-primary:hover { color: var(--text-primary); }
+  .hover\:th-bg-secondary:hover { background-color: var(--bg-secondary); }
 }
 
 /* ================================================================

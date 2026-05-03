@@ -1,5 +1,4 @@
 package recorder
-
 import (
 	"context"
 	"fmt"
@@ -7,7 +6,10 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"runtime"
+
 	"time"
+
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -16,6 +18,9 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
+
+
+
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
 type MJPEGConfig struct {
@@ -216,7 +221,17 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 }
 
 func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
+
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			buf := make([]byte, 4096)
+			buf = buf[:runtime.Stack(buf, false)]
+			log.Printf("[mjpeg-recorder %s] PANIC recovered in writeFrames: %v\n%s", r.cfg.CameraID, panicErr, buf)
+		}
+	}()
+
 	defer close(done)
+
 	for data := range r.frameCh {
 		if len(data) == 0 {
 			continue
