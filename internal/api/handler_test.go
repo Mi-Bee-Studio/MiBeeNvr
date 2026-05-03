@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 // --- Test helpers ---
@@ -114,10 +115,26 @@ func TestHealth(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var body map[string]string
+	var body struct {
+		Status string                       `json:"status"`
+		Checks map[string]map[string]string `json:"checks"`
+		Uptime string                       `json:"uptime"`
+	}
 	parseJSON(t, rr, &body)
-	if body["status"] != "ok" {
-		t.Fatalf("expected status ok, got %s", body["status"])
+	if body.Status != "ok" {
+		t.Fatalf("expected status ok, got %s", body.Status)
+	}
+	if body.Checks["database"]["status"] != "ok" {
+		t.Fatalf("expected database check ok, got %s", body.Checks["database"]["status"])
+	}
+	if body.Checks["storage"]["status"] != "ok" {
+		t.Fatalf("expected storage check ok, got %s", body.Checks["storage"]["status"])
+	}
+	if body.Checks["goroutines"]["status"] != "ok" {
+		t.Fatalf("expected goroutines check ok, got %s", body.Checks["goroutines"]["status"])
+	}
+	if body.Uptime == "" {
+		t.Fatal("expected non-empty uptime")
 	}
 }
 
@@ -1732,4 +1749,78 @@ func TestHandleDeleteCamera_NotFound(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
 	}
+}
+
+// --- Enhanced health and readyz tests ---
+
+func TestHealthEnhanced(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.Equal(t, "ok", body.Status)
+	require.NotEmpty(t, body.Uptime)
+	require.NotNil(t, body.Checks)
+	require.Contains(t, body.Checks, "database")
+	require.Contains(t, body.Checks, "storage")
+	require.Contains(t, body.Checks, "goroutines")
+}
+
+func TestHealthReturnsOkWhenAllChecksPass(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.Equal(t, "ok", body.Status)
+	require.Equal(t, "ok", body.Checks["database"].Status)
+	require.Equal(t, "ok", body.Checks["goroutines"].Status)
+	// Storage check should also be ok (temp dir has plenty of space)
+	require.Equal(t, "ok", body.Checks["storage"].Status)
+}
+
+func TestHealthWithNilDB(t *testing.T) {
+	h := TestHandler(nil, nil)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.Equal(t, "unhealthy", body.Status)
+	require.Equal(t, "error", body.Checks["database"].Status)
+	require.Equal(t, "error", body.Checks["storage"].Status)
+}
+
+func TestReadyzReturns200(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body map[string]string
+	parseJSON(t, rr, &body)
+	require.Equal(t, "ok", body["status"])
+}
+
+func TestReadyzWithNilDB(t *testing.T) {
+	h := TestHandler(nil, nil)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	var body map[string]any
+	parseJSON(t, rr, &body)
+	require.Equal(t, "not ready", body["status"])
 }

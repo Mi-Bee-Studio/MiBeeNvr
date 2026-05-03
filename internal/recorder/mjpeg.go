@@ -2,14 +2,12 @@ package recorder
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
-	"runtime"
-
 	"time"
-
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -17,9 +15,11 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 
+var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
 
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
@@ -36,6 +36,7 @@ type MJPEGConfig struct {
 type MJPEGRecorder struct {
 	cfg   MJPEGConfig
 	store SegmentStore
+	metrics *metrics.Metrics
 
 	mu     sync.Mutex
 	status model.RecorderStatus
@@ -52,10 +53,48 @@ type MJPEGRecorder struct {
 	dropped atomic.Int64
 }
 
+// incActive increments the active recordings gauge if metrics is available.
+func (r *MJPEGRecorder) incActive() {
+	if r.metrics != nil {
+		r.metrics.ActiveRecordings.Inc()
+	}
+}
+
+// decActive decrements the active recordings gauge if metrics is available.
+func (r *MJPEGRecorder) decActive() {
+	if r.metrics != nil {
+		r.metrics.ActiveRecordings.Dec()
+	}
+}
+
+// recordSegmentCreated increments the segments created counter if metrics is available.
+func (r *MJPEGRecorder) recordSegmentCreated() {
+	if r.metrics != nil {
+		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "mjpeg").Inc()
+	}
+}
+
+// recordBytes adds to the recording bytes counter if metrics is available.
+func (r *MJPEGRecorder) recordBytes(bytes int64) {
+	if r.metrics != nil {
+		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "mjpeg").Add(float64(bytes))
+	}
+}
+
+// recordError increments the camera errors counter if metrics is available.
+func (r *MJPEGRecorder) recordError(errorType string) {
+	if r.metrics != nil {
+		r.metrics.CameraErrors.WithLabelValues(r.cfg.CameraID, errorType).Inc()
+	}
+}
+
 var _ model.Recorder = (*MJPEGRecorder)(nil)
 
-// NewMJPEGRecorder creates a new MJPEG recorder.
-func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore) *MJPEGRecorder {
+func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore, opts ...*metrics.Metrics) *MJPEGRecorder {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
@@ -69,9 +108,10 @@ func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore) *MJPEGRecorder {
 		cfg.InitBackoff = DefaultInitBackoff
 	}
 	return &MJPEGRecorder{
-		cfg:    cfg,
-		store:  store,
-		status: model.StatusStopped,
+		cfg:     cfg,
+		store:   store,
+		metrics: m,
+		status:  model.StatusStopped,
 	}
 }
 
@@ -85,6 +125,7 @@ func (r *MJPEGRecorder) Start(ctx context.Context) error {
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
+	r.incActive()
 	go r.run(ctx)
 	return nil
 }
@@ -98,6 +139,7 @@ func (r *MJPEGRecorder) Stop() error {
 	if r.done != nil {
 		<-r.done
 	}
+	r.decActive()
 	return nil
 }
 
@@ -122,7 +164,8 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		log.Printf("[mjpeg-recorder %s] connection error: %v, reconnecting in %v", r.cfg.CameraID, err, backoff)
+		mjpegLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 		select {
 		case <-ctx.Done():
@@ -182,7 +225,7 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		jpeg, err := rtpDec.Decode(pkt)
 		if err != nil {
-			log.Printf("[mjpeg-recorder %s] RTP decode error: %v", r.cfg.CameraID, err)
+				mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			return
 		}
 		select {
@@ -190,7 +233,7 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 		default:
 			d := r.dropped.Add(1)
 			if d%100 == 1 {
-				log.Printf("[mjpeg-recorder %s] ring buffer full, dropped %d frames", r.cfg.CameraID, d)
+					mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
 			}
 		}
 	})
@@ -226,7 +269,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
 			buf = buf[:runtime.Stack(buf, false)]
-			log.Printf("[mjpeg-recorder %s] PANIC recovered in writeFrames: %v\n%s", r.cfg.CameraID, panicErr, buf)
+			mjpegLogger.Error("PANIC recovered in writeFrames", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
 		}
 	}()
 
@@ -246,7 +289,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		if r.curTempPath == "" {
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
 			if err != nil {
-				log.Printf("[mjpeg-recorder %s] create segment: %v", r.cfg.CameraID, err)
+					mjpegLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 				continue
 			}
 			r.curTempPath = tempPath
@@ -256,7 +299,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
-			log.Printf("[mjpeg-recorder %s] write frame: %v", r.cfg.CameraID, err)
+				mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
 			continue
 		}
 		r.frameCount++
@@ -272,8 +315,14 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		return
 	}
 	if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
-		log.Printf("[mjpeg-recorder %s] close segment: %v", r.cfg.CameraID, err)
+		mjpegLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 	}
+
+	// Update metrics for completed segment
+	if r.frameCount > 0 {
+		r.recordSegmentCreated()
+	}
+
 	r.curTempPath = ""
 	r.curFinalPath = ""
 	r.frameCount = 0

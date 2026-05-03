@@ -19,6 +19,7 @@ type Config struct {
 	FTP         FTPConfig         `yaml:"ftp"`
 	MQTT        MQTTConfig        `yaml:"mqtt"`
 	WebDAV      WebDAVConfig      `yaml:"webdav"`
+	Observability ObservabilityConfig `yaml:"observability"`
 	Version     string            `yaml:"version"`
 }
 
@@ -70,6 +71,15 @@ type WebDAVConfig struct {
 	Enabled    *bool  `yaml:"enabled"`     // default true
 	PathPrefix string `yaml:"path_prefix"` // default "/dav"
 }
+
+
+// ObservabilityConfig defines observability settings
+type ObservabilityConfig struct {
+	LogLevel     string `yaml:"log_level"`     // default "info"
+	LogFormat    string `yaml:"log_format"`    // default "text"
+	EnablePprof  bool   `yaml:"enable_pprof"`  // default false
+}
+
 
 // Load reads a YAML config file and returns a Config with defaults applied.
 func Load(path string) (*Config, error) {
@@ -160,7 +170,15 @@ func Validate(cfg *Config) error {
 	}
 	// Validate disk_threshold_percent
 	if cfg.Cleanup.DiskThresholdPercent < 50 || cfg.Cleanup.DiskThresholdPercent > 99 {
-		return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
+	return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
+	}
+	// Validate observability.log_level
+	if cfg.Observability.LogLevel != "debug" && cfg.Observability.LogLevel != "info" && cfg.Observability.LogLevel != "warn" && cfg.Observability.LogLevel != "error" {
+		return fmt.Errorf("observability.log_level invalid: %s (must be debug/info/warn/error)", cfg.Observability.LogLevel)
+	}
+	// Validate observability.log_format
+	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
+		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
 	}
 	return nil
 }
@@ -211,6 +229,14 @@ func (cfg *Config) applyDefaults() {
 	if strings.TrimSpace(cfg.WebDAV.PathPrefix) == "" {
 		cfg.WebDAV.PathPrefix = "/dav"
 	}
+	// Observability
+	if strings.TrimSpace(cfg.Observability.LogLevel) == "" {
+		cfg.Observability.LogLevel = "info"
+	}
+	if strings.TrimSpace(cfg.Observability.LogFormat) == "" {
+		cfg.Observability.LogFormat = "text"
+	}
+	// EnablePprof defaults to false (zero value)
 	// Version
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"

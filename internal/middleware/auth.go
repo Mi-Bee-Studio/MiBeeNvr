@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -9,6 +9,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+var logger = slog.Default().With("component", "auth")
 
 const (
 	authMaxFailures   = 20
@@ -37,14 +39,14 @@ func NewAuthMiddleware(username, passwordHash string) func(http.Handler) http.Ha
 				if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {
 					authFailures.Delete(ip)
 			} else if entry.count >= authMaxFailures {
-					log.Printf("[auth-rate-limiter] blocked request from %s: %d failures in window", ip, entry.count)
+					logger.Info("rate limited request", "ip", ip, "failures", entry.count)
 					w.WriteHeader(http.StatusTooManyRequests)
 					return
 				}
 			}
 
 			if strings.TrimSpace(passwordHash) == "" {
-				log.Printf("[auth] rejected request from %s: no password hash configured", ip)
+			logger.Info("rejected request: no password hash configured", "ip", ip)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}

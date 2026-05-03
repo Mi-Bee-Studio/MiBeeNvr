@@ -1,6 +1,6 @@
 package storage
 
-import (
+	import (
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,24 +8,31 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 // Manager handles file system storage for camera recordings.
 // It provides atomic writes via a .tmp → rename pattern.
 type Manager struct {
 	rootDir string
+	metrics *metrics.Metrics
 	mu      sync.Mutex
 }
 
 // NewManager creates a new storage Manager and ensures the root directory exists.
-func NewManager(rootDir string) (*Manager, error) {
+func NewManager(rootDir string, opts ...*metrics.Metrics) (*Manager, error) {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	if rootDir == "" {
 		return nil, fmt.Errorf("storage: root directory path must not be empty")
 	}
 	if err := os.MkdirAll(rootDir, 0755); err != nil {
 		return nil, fmt.Errorf("storage: failed to create root directory %q: %w", rootDir, err)
 	}
-	return &Manager{rootDir: rootDir}, nil
+	return &Manager{rootDir: rootDir, metrics: m}, nil
 }
 
 // RootDir returns the root directory path.
@@ -217,7 +224,13 @@ func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
 	// Used = total - free
 	used = total - free
 
-	return int64(total), int64(used), nil
+	// Update storage metrics
+	if m.metrics != nil {
+		m.metrics.StorageUsedBytes.Set(float64(used))
+		m.metrics.StorageTotalBytes.Set(float64(total))
+	}
+
+	return total, used, nil
 }
 
 // IsAvailable checks whether the root directory is accessible.

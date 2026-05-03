@@ -2,13 +2,16 @@ package cleanup
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
+
+var logger = slog.Default().With("component", "cleanup")
 
 // CleanupManager handles periodic cleanup of old recordings.
 // It supports two cleanup strategies:
@@ -20,10 +23,15 @@ type CleanupManager struct {
 	retention     time.Duration
 	diskThreshold int // percent
 	interval      time.Duration
+	metrics        *metrics.Metrics
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
-func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.CleanupConfig) (*CleanupManager, error) {
+func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.CleanupConfig, opts ...*metrics.Metrics) (*CleanupManager, error) {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	interval, err := time.ParseDuration(cfg.CheckInterval)
 	if err != nil {
 		return nil, err
@@ -38,9 +46,9 @@ func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.Cleanu
 		retention:     time.Duration(cfg.RetentionDays) * 24 * time.Hour,
 		diskThreshold: cfg.DiskThresholdPercent,
 		interval:      interval,
+		metrics:       m,
 	}, nil
 }
-
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
@@ -62,10 +70,10 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 // RunOnce performs a single cleanup pass: time-based then disk-threshold.
 func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	if err := cm.timeBasedCleanup(ctx); err != nil {
-		log.Printf("[cleanup] time-based cleanup error: %v", err)
+		logger.Error("time-based cleanup error", "error", err)
 	}
 	if err := cm.diskThresholdCleanup(ctx); err != nil {
-		log.Printf("[cleanup] disk-threshold cleanup error: %v", err)
+		logger.Error("disk-threshold cleanup error", "error", err)
 	}
 	return nil
 }
@@ -82,10 +90,13 @@ func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
 
 	for _, rec := range recordings {
 		if err := cm.deleteRecording(ctx, &rec); err != nil {
-			log.Printf("[cleanup] failed to delete recording %s: %v", rec.ID, err)
+			logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
 			continue
 		}
-		log.Printf("[cleanup] time-based: deleted recording %s", rec.ID)
+		logger.Info("deleted recording (time-based)", "recording_id", rec.ID)
+		if cm.metrics != nil {
+			cm.metrics.CleanupDeleted.WithLabelValues("retention").Add(1)
+		}
 	}
 	return nil
 }
@@ -106,7 +117,7 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[cleanup] disk usage %d%% exceeds threshold %d%%, starting cleanup", usagePercent, cm.diskThreshold)
+	logger.Info("disk usage exceeds threshold, starting cleanup", "usage_percent", usagePercent, "threshold_percent", cm.diskThreshold)
 
 	// Fetch recordings in batches until usage drops below threshold
 	for {
@@ -121,10 +132,13 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 		deleted := false
 		for _, rec := range recordings {
 			if err := cm.deleteRecording(ctx, &rec); err != nil {
-				log.Printf("[cleanup] failed to delete recording %s: %v", rec.ID, err)
+				logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
 				continue
 			}
-			log.Printf("[cleanup] disk-threshold: deleted recording %s", rec.ID)
+			logger.Info("deleted recording (disk-threshold)", "recording_id", rec.ID)
+			if cm.metrics != nil {
+				cm.metrics.CleanupDeleted.WithLabelValues("disk_threshold").Add(1)
+			}
 			deleted = true
 		}
 
@@ -153,7 +167,7 @@ func (cm *CleanupManager) deleteRecording(ctx context.Context, rec *model.Record
 		return err
 	}
 	if err := cm.store.DeleteFile(rec.FilePath); err != nil {
-		log.Printf("[cleanup] failed to delete file %s: %v", rec.FilePath, err)
+		logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 	}
 	return nil
 }
