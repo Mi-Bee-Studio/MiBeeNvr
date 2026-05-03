@@ -403,3 +403,60 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	}
 	return &c, nil
 }
+
+// GetRecordingTrends returns daily aggregated recording statistics.
+// Days defaults to 7, clamped to [1, 30].
+func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailyStats, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 30 {
+		days = 30
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).UTC()
+	
+	query := `SELECT DATE(r.started_at) as date, COUNT(*) as recordings, SUM(r.file_size) as total_size, r.camera_id, COALESCE(c.name, r.camera_id) as camera_name
+		FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
+		WHERE r.started_at >= ?
+		GROUP BY DATE(r.started_at), r.camera_id
+		ORDER BY date`
+	
+	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	// Aggregate per-camera rows into per-date stats
+	dateIndex := make(map[string]int) // date -> index into result slice
+	var result []model.DailyStats
+	
+	for rows.Next() {
+		var date string
+		var count int
+		var totalSize int64
+		var cameraID, cameraName string
+		if err := rows.Scan(&date, &count, &totalSize, &cameraID, &cameraName); err != nil {
+			return nil, err
+		}
+		idx, ok := dateIndex[date]
+		if !ok {
+			idx = len(result)
+			dateIndex[date] = idx
+			result = append(result, model.DailyStats{
+				Date:         date,
+				CameraCounts: make(map[string]int),
+			})
+		}
+		result[idx].Recordings += count
+		result[idx].TotalSize += totalSize
+		result[idx].CameraCounts[cameraName] += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []model.DailyStats{}
+	}
+	return result, nil
+}

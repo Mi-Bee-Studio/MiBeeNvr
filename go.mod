@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/abema/go-mp4 v1.5.0
-	github.com/bluenviron/gortsplib/v5 v5.5.1
+	github.com/bluenviron/gortsplib/v5 v5.5.2
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fclairamb/ftpserverlib v0.30.0
 	github.com/go-chi/chi/v5 v5.2.1

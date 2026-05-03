@@ -85,6 +85,14 @@ type StorageStats struct {
 	CameraCount    int   `json:"camera_count"`
 }
 
+// DailyStats represents aggregated recording statistics for a single day.
+type DailyStats struct {
+	Date         string         `json:"date"`
+	Recordings   int            `json:"recordings"`
+	TotalSize    int64          `json:"total_size"`
+	CameraCounts map[string]int `json:"cameras,omitempty"`
+}
+
 type Protocol string
 
 type Format string

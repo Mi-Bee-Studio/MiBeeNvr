@@ -5,8 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MiBee NVR</title>
-    <script type="module" crossorigin src="/assets/index-D4T_Ghtb.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-fr3VtAut.css">
+    <script>
+      (function() {
+        try {
+          var theme = localStorage.getItem('mibee_nvr_prefs_theme');
+          if (theme) {
+            theme = JSON.parse(theme);
+          }
+          if (!theme) {
+            theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch(e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-DhfntrF8.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Cn9fqdRi.css">
   </head>
   <body>
     <div id="app"></div>

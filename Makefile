@@ -1,6 +1,6 @@
 BUILD_TARGET ?= mibee-nvr
 
-RPi_HOST := mickey@192.168.63.31
+RPi_HOST := user@your-rpi-host
 RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
 RPi_SRV  := mibee-nvr
 
@@ -59,4 +59,4 @@ rollback:
 
 deploy-check:
 	@ssh $(RPi_HOST) "sudo systemctl is-active $(RPi_SRV)" && echo "✅ Service active" || echo "❌ Service not active"
-	@curl -sf http://192.168.63.31:9090/api/health && echo "✅ Health check passed" || echo "❌ Health check failed"
+	@curl -sf http://$(RPi_HOST)/api/health && echo "✅ Health check passed" || echo "❌ Health check failed"

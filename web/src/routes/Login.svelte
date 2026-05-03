@@ -43,18 +43,21 @@
     <ThemeToggle />
     <LanguageSwitcher />
   </div>
-    <div class="card w-full max-w-md p-8 border th-border shadow-2xl">
-    <div class="text-center mb-8">
-      <h1 class="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent mb-2">{t('login.title')}</h1>
-      <p class="th-text-tertiary">{t('login.subtitle')}</p>
+
+  <div class="card w-full max-w-md p-10 border th-border shadow-2xl">
+    <div class="text-center mb-10">
+      <div class="text-sm font-semibold tracking-widest uppercase th-text-tertiary mb-3">MiBee</div>
+      <h1 class="text-3xl font-bold bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent mb-3">{t('login.title')}</h1>
+      <p class="th-text-tertiary text-sm">{t('login.subtitle')}</p>
     </div>
+
     {#if error}
-      <div class="mb-4 p-3 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger text-sm">
+      <div class="mb-6 p-3 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-lg th-color-danger text-sm">
         {error}
       </div>
     {/if}
 
-    <form on:submit|preventDefault={handleSubmit} class="space-y-4">
+    <form on:submit|preventDefault={handleSubmit} class="space-y-6">
       <div>
         <label for="username" class="input-label">{t('login.username')}</label>
         <input
@@ -95,7 +98,7 @@
       </button>
     </form>
 
-    <div class="mt-6 text-center text-sm th-text-tertiary">
+    <div class="mt-8 text-center text-sm th-text-tertiary">
       <p class="border-t th-border pt-6">{t('login.secureNote')}</p>
     </div>
   </div>

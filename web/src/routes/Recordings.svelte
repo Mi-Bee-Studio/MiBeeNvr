@@ -12,6 +12,7 @@
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
+  import { Pin, MapPin, Trash2 } from 'lucide-svelte';
 
 
   // Filter state
@@ -140,9 +141,9 @@
       <h2 class="text-2xl font-bold th-text-primary mb-4">{t('recordings.title')}</h2>
 
       <!-- Filters -->
-      <div class="card p-4 mb-4 border th-border">
-        <div class="flex flex-wrap gap-4 items-end">
-          <div class="flex-1 min-w-[200px]">
+      <div class="card p-5 mb-6 border th-border">
+        <div class="flex flex-wrap gap-3 items-end">
+          <div class="flex-1 min-w-[180px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
             <select id="camera" class="input" bind:value={cameraId}>
               <option value="">{t('recordings.allCameras')}</option>
@@ -151,7 +152,7 @@
               {/each}
             </select>
           </div>
-          <div class="flex-1 min-w-[150px]">
+          <div class="flex-1 min-w-[140px]">
             <label for="format" class="input-label">{t('recordings.format')}</label>
             <select id="format" class="input" bind:value={format}>
               <option value="">{t('recordings.allFormats')}</option>
@@ -159,7 +160,7 @@
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
             </select>
           </div>
-          <div class="flex-1 min-w-[150px]">
+          <div class="flex-1 min-w-[140px]">
             <label for="pinned" class="input-label">{t('recordings.status')}</label>
             <select id="pinned" class="input" bind:value={pinned}>
               <option value="">{t('recordings.all')}</option>
@@ -193,54 +194,58 @@
           <table class="table">
             <thead>
               <tr>
-                <th>{t('recordings.tableCamera')}</th>
-                <th>{t('recordings.tableFormat')}</th>
-                <th>{t('recordings.tableDuration')}</th>
-                <th>{t('recordings.tableSize')}</th>
-                <th>{t('recordings.tableDate')}</th>
-                <th>{t('recordings.tableStatus')}</th>
-                <th class="text-right">{t('recordings.tableActions')}</th>
+                <th class="min-w-[100px]">{t('recordings.tableCamera')}</th>
+                <th class="min-w-[80px]">{t('recordings.tableFormat')}</th>
+                <th class="min-w-[80px]">{t('recordings.tableDuration')}</th>
+                <th class="min-w-[80px]">{t('recordings.tableSize')}</th>
+                <th class="min-w-[120px]">{t('recordings.tableDate')}</th>
+                <th class="min-w-[80px]">{t('recordings.tableStatus')}</th>
+                <th class="text-right min-w-[140px]">{t('recordings.tableActions')}</th>
               </tr>
             </thead>
             <tbody>
               {#each recordings as recording}
-                <tr>
+                <tr class="transition-all duration-200 hover:th-bg-hover">
                   <td class="font-medium th-text-primary">{recording.camera_id}</td>
                   <td>
                     <span class="badge badge-neutral">
                       {t(`recording.format.${recording.format}`)}
                     </span>
                   </td>
-                  <td>{formatDuration(recording.duration)}</td>
+                  <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>
                   <td>{formatFileSize(recording.file_size)}</td>
-                  <td>{formatDate(recording.started_at)}</td>
+                  <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
                   <td>
                     {#if recording.pinned}
                       <span class="badge badge-warning">{t('recordings.pinnedBadge')}</span>
                     {/if}
                   </td>
                   <td class="text-right">
-                    <div class="flex justify-end gap-2">
+                    <div class="flex justify-end gap-1">
                       <button
                         on:click={() => viewRecording(recording)}
-                        class="btn btn-ghost px-3 py-1 text-sm"
+                        class="btn btn-ghost px-3 py-1.5 text-sm transition-all duration-200"
                         title={t('recordings.view')}
                       >
                         {t('recordings.view')}
                       </button>
                       <button
                         on:click={() => togglePin(recording)}
-                        class="btn btn-ghost px-3 py-1 text-sm"
+                        class="btn btn-ghost px-2 py-1.5 text-sm transition-all duration-200"
                         title={recording.pinned ? t('recordings.unpin') : t('recordings.pin')}
                       >
-                        {recording.pinned ? '📌' : '📍'}
+                        {#if recording.pinned}
+                          <Pin size={16} />
+                        {:else}
+                          <MapPin size={16} />
+                        {/if}
                       </button>
                       <button
                         on:click={() => deleteConfirm = recording}
-                        class="btn btn-ghost px-3 py-1 text-sm th-color-danger hover:th-color-danger"
+                        class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger transition-all duration-200"
                         title={t('recordings.delete')}
                       >
-                        🗑️
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>

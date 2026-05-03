@@ -105,6 +105,8 @@
   "stats.enabled": "Enabled",
   "stats.disabled": "Disabled",
   "stats.refreshing": "Refreshing...",
+  "stats.storageTrend": "Storage Trend",
+  "stats.recordingsByCamera": "Recordings by Camera",
 
   "common.loading": "Loading...",
   "common.error": "Error",

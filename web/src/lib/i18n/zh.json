@@ -105,6 +105,8 @@
   "stats.enabled": "已启用",
   "stats.disabled": "已禁用",
   "stats.refreshing": "刷新中...",
+  "stats.storageTrend": "存储趋势",
+  "stats.recordingsByCamera": "按摄像头统计录像",
 
   "common.loading": "加载中...",
   "common.error": "错误",

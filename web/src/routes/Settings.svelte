@@ -105,9 +105,9 @@
       <div class="space-y-6">
 
         <!-- Cleanup Policy -->
-        <div class="card p-6 border th-border">
+        <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.cleanup')}</h3>
-          <p class="text-sm th-text-tertiary mb-6">{t('settings.cleanupDesc')}</p>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.cleanupDesc')}</p>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Retention Days -->
@@ -161,9 +161,9 @@
 
 
         <!-- Frontend Preferences -->
-        <div class="card p-6 border th-border">
+        <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.frontendPrefs')}</h3>
-          <p class="text-sm th-text-tertiary mb-6">{t('settings.frontendPrefsDesc')}</p>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.frontendPrefsDesc')}</p>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Items Per Page -->
@@ -190,7 +190,7 @@
         </div>
 
         <!-- Save button -->
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-4 pt-2">
           <button
             on:click={save}
             class="btn btn-primary"

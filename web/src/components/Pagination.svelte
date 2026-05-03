@@ -1,4 +1,5 @@
 <script>
+  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   export let currentPage = 1;
   export let totalPages = 1;
   export let onPageChange = () => {};
@@ -29,7 +30,7 @@
       disabled={!canGoPrev}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
-      ←
+      <ChevronLeft size={16} />
     </button>
     {#each pages as page (page)}
       {#if page === currentPage}
@@ -50,7 +51,7 @@
       disabled={!canGoNext}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
-      →
+      <ChevronRight size={16} />
     </button>
   </div>
 </div>

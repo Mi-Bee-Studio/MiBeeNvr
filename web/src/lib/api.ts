@@ -60,6 +60,13 @@ export interface StorageStats {
   camera_count: number;
 }
 
+export interface DailyStats {
+  date: string;
+  recordings: number;
+  total_size: number;
+  cameras?: Record<string, number>;
+}
+
 export interface CleanupConfig {
   retention_days: number;
   disk_threshold_percent: number;
@@ -360,6 +367,10 @@ export async function deleteCamera(id: string): Promise<void> {
 // Stats endpoint
 export async function getStats(): Promise<StorageStats> {
   return apiRequest<StorageStats>('/stats');
+}
+
+export async function getStatsTrends(days = 7): Promise<DailyStats[]> {
+  return apiRequest<DailyStats[]>(`/stats/trends?days=${days}`);
 }
 
 // Health check (no auth required)
