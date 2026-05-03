@@ -67,16 +67,16 @@ func TestMalformedAuth(t *testing.T) {
 }
 
 func TestEmptyHashBypass(t *testing.T) {
-    mw := NewAuthMiddleware("user", "")
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusOK {
-        t.Fatalf("expected 200 when bypassing, got %d", w.Code)
-    }
+	mw := NewAuthMiddleware("user", "")
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when no password hash configured, got %d", w.Code)
+	}
 }
 
 func TestHashCheckRoundTrip(t *testing.T) {

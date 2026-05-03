@@ -1,6 +1,6 @@
 /**
  * Lightweight i18n module for MiBee NVR
- * No external dependencies - callback-based reactivity
+ * Svelte 5 reactive — state.currentLang is $state, t() reads it directly
  */
 
 import zh from './zh.json';
@@ -10,11 +10,9 @@ type Translations = Record<string, string>;
 
 const locales: Record<string, Translations> = { zh, en };
 
-let currentLang = 'en';
-let listeners: (() => void)[] = [];
-
-// Svelte 5 reactivity: Flag for triggering reactivity in $derived contexts
-let reactiveFlag = 0;
+// $state object — components import and read state.currentLang for reactive tracking
+// t() also reads state.currentLang, so any template calling t() re-evaluates on lang change
+export const state = $state({ currentLang: 'en' });
 
 function detectLanguage(): string {
   const saved = localStorage.getItem('mibee_nvr_lang');
@@ -27,32 +25,19 @@ function detectLanguage(): string {
 }
 
 export function initI18n(): void {
-  currentLang = detectLanguage();
-}
-
-export function getCurrentLang(): string {
-  return currentLang;
+  state.currentLang = detectLanguage();
 }
 
 export function setLang(lang: string): void {
   if (!locales[lang]) return;
-  currentLang = lang;
+  state.currentLang = lang;
   localStorage.setItem('mibee_nvr_lang', lang);
-  // Notify all listeners
-  listeners.forEach(l => l());
-  // Increment reactive flag for Svelte 5 reactivity
-  reactiveFlag++;
-}
-
-export function onLangChange(fn: () => void): () => void {
-  listeners.push(fn);
-  return () => {
-    listeners = listeners.filter(l => l !== fn);
-  };
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
-  const dict = locales[currentLang] || locales['en'];
+  // Read state.currentLang ($state) and USE the value — compiler cannot optimize away
+  const lang = state.currentLang;
+  const dict = locales[lang] || locales['en'];
   let value = dict[key];
 
   if (value === undefined) {
@@ -72,10 +57,3 @@ export function t(key: string, params?: Record<string, string | number>): string
 
   return value;
 }
-
-// Export reactive utilities for advanced Svelte 5 integrations
-export const reactivity = { 
-  get lang() { return currentLang; }, 
-  get flag() { return reactiveFlag; },
-  get listeners() { return listeners.length; }
-};

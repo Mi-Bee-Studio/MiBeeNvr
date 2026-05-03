@@ -71,6 +71,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/settings", h.handleGetSettings)
 		r.Put("/api/settings", h.handleUpdateSettings)
+		r.Post("/api/backup", h.handleBackup)
+		r.Get("/api/backups", h.handleListBackups)
 	})
 
 	return r
@@ -679,4 +681,44 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 	}
+}
+
+// --- Backup endpoints ---
+
+func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create backup directory")
+		return
+	}
+	filename := fmt.Sprintf("nvr-backup-%s.db", time.Now().Format("20060102-150405"))
+	destPath := filepath.Join(backupDir, filename)
+	if err := h.db.Backup(r.Context(), destPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create backup")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "created", "file": filename})
+}
+
+func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+	var backups []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
+			backups = append(backups, e.Name())
+		}
+	}
+	if backups == nil {
+		backups = []string{}
+	}
+	writeJSON(w, http.StatusOK, backups)
 }

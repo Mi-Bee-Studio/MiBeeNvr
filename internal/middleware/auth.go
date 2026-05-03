@@ -1,26 +1,75 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
+const (
+	authMaxFailures   = 20
+	authWindowMinutes = 1
+)
+
+// rateLimitEntry tracks failed auth attempts per IP.
+type rateLimitEntry struct {
+	count    int
+	windowStart time.Time
+}
+
+// authFailures tracks per-IP failed auth attempts.
+var authFailures sync.Map
+
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
-// If passwordHash is empty, authentication is bypassed (per spec for initial setup).
+// If passwordHash is empty, authentication is rejected (not bypassed).
 func NewAuthMiddleware(username, passwordHash string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.TrimSpace(passwordHash) == "" {
-				next.ServeHTTP(w, r)
-				return
+			ip := extractIP(r.RemoteAddr)
+
+			// Rate limit check FIRST — expire stale entries
+			if v, ok := authFailures.Load(ip); ok {
+				entry := v.(rateLimitEntry)
+				if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {
+					authFailures.Delete(ip)
+			} else if entry.count >= authMaxFailures {
+					log.Printf("[auth-rate-limiter] blocked request from %s: %d failures in window", ip, entry.count)
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
 			}
-			user, pass, ok := r.BasicAuth()
-			if !ok || user != username || !CheckPassword(pass, passwordHash) {
+
+			if strings.TrimSpace(passwordHash) == "" {
+				log.Printf("[auth] rejected request from %s: no password hash configured", ip)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
+
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != username || !CheckPassword(pass, passwordHash) {
+				// Increment failure counter
+				if v, ok := authFailures.Load(ip); ok {
+					entry := v.(rateLimitEntry)
+					if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {
+						authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
+					} else {
+						entry.count++
+						authFailures.Store(ip, entry)
+					}
+				} else {
+					authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
+				}
+
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
+			// Successful auth — reset counter
+			authFailures.Delete(ip)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -38,8 +87,29 @@ func HashPassword(password string) (string, error) {
 // CheckPassword compares a plaintext password against a bcrypt hash.
 func CheckPassword(password, hash string) bool {
 	if strings.TrimSpace(hash) == "" {
-		return true
+		return false
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
+}
+
+// extractIP extracts the IP address from a RemoteAddr string (host:port).
+func extractIP(remoteAddr string) string {
+	// Handle IPv6 [::1]:port
+	if idx := strings.LastIndex(remoteAddr, "]"); idx != -1 {
+		return remoteAddr[:idx+1]
+	}
+	// Handle IPv4 host:port or bare host
+	if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
+		return remoteAddr[:idx]
+	}
+	return remoteAddr
+}
+
+// ResetAuthFailures clears all rate limit entries. For testing only.
+func ResetAuthFailures() {
+	authFailures.Range(func(key, _ interface{}) bool {
+		authFailures.Delete(key)
+		return true
+	})
 }

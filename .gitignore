@@ -32,6 +32,11 @@ test-results/
 tmp/
 package-lock.json
 
+# Test screenshots
+/test*.png
+/e2e-*.png
+
+
 # IDE / Editor
 .vscode/
 .idea/

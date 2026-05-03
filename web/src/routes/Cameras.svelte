@@ -1,13 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, logout } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera } from '$lib/api';
   import type { Camera, CreateCameraRequest, UpdateCameraRequest } from '$lib/api';
-  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
-  import { t, onLangChange, getCurrentLang } from '$lib/i18n';
-
-  let lang = getCurrentLang();
-  const unsubscribe = onLangChange(() => { lang = getCurrentLang(); });
-  onDestroy(() => { unsubscribe(); });
+  import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
 
   let cameras: Camera[] = [];
   let loading = true;
@@ -31,9 +27,7 @@
   let deletingCamera: Camera | null = null;
 
   function showFeedback(msg: string, type: 'success' | 'error') {
-    feedback = msg;
-    feedbackType = type;
-    setTimeout(() => { feedback = ''; }, 3000);
+    showToast(t('cameras.cameraAdded'), 'success');
   }
 
   function validate(): boolean {
@@ -120,8 +114,7 @@
         editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
         'error'
       );
-    } finally {
-      saving = false;
+    showToast(t('cameras.cameraUpdated'), 'success');
     }
   }
 
@@ -143,36 +136,12 @@
   });
 </script>
 
-<div class="min-h-screen bg-slate-900">
-  <!-- Header -->
-  <header class="bg-slate-800 border-b border-slate-700">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16">
-        <div class="flex items-center gap-4">
-          <h1 class="text-xl font-bold text-slate-100">MiBee NVR</h1>
-          <nav class="flex gap-4">
-            <a href="#/recordings" class="text-slate-300 hover:text-slate-100 transition-colors">
-              {t('nav.recordings')}
-            </a>
-            <a href="#/cameras" class="text-cyan-500 font-medium">{t('nav.cameras')}</a>
-            <a href="#/stats" class="text-slate-300 hover:text-slate-100 transition-colors">{t('nav.stats')}</a>
-            <a href="#/settings" class="text-slate-300 hover:text-slate-100 transition-colors">{t('nav.settings')}</a>
-          </nav>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageSwitcher />
-          <button on:click={logout} class="btn btn-ghost">
-            {t('nav.logout')}
-          </button>
-        </div>
-      </div>
-    </div>
-  </header>
+<div class="min-h-screen th-bg-primary pt-[68px]">
 
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex items-center justify-between mb-6">
-      <h2 class="text-2xl font-bold text-slate-100">{t('cameras.title')}</h2>
+      <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
       <button on:click={openAddForm} class="btn btn-primary">
         + {t('cameras.addCamera')}
       </button>
@@ -181,15 +150,15 @@
     <!-- Feedback -->
     {#if feedback}
       <div class="mb-4 p-3 rounded-md border {feedbackType === 'success'
-        ? 'bg-emerald-900/30 border-emerald-700 text-emerald-400'
-        : 'bg-red-900/30 border-red-700 text-red-400'}">
+        ? 'bg-[rgba(16,185,129,0.3)] border-[rgba(16,185,129,0.3)] th-color-success'
+        : 'bg-[rgba(239,68,68,0.3)] th-border-danger th-color-danger'}">
         {feedback}
       </div>
     {/if}
 
     <!-- Error -->
     {#if error}
-      <div class="mb-4 p-4 bg-red-900/30 border border-red-700 rounded-md text-red-300">
+      <div class="mb-4 p-4 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger">
         {error}
       </div>
     {/if}
@@ -204,8 +173,8 @@
 
         <!-- Add/Edit Form -->
         {#if showForm}
-          <div class="card p-6 border border-slate-700/60">
-            <h3 class="text-lg font-semibold text-slate-100 mb-4">
+          <div class="card p-6 border th-border">
+            <h3 class="text-lg font-semibold th-text-primary mb-4">
               {editingCamera ? t('cameras.editCamera') : t('cameras.addCamera')}
             </h3>
 
@@ -215,7 +184,7 @@
                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
                 <input id="cam-name" type="text" class="input" bind:value={formName} />
                 {#if validationErrors['name']}
-                  <p class="text-red-400 text-xs mt-1">{validationErrors['name']}</p>
+                  <p class="th-color-danger text-xs mt-1">{validationErrors['name']}</p>
                 {/if}
               </div>
 
@@ -228,7 +197,7 @@
                   <option value="http_jpeg">HTTP JPEG</option>
                 </select>
                 {#if validationErrors['protocol']}
-                  <p class="text-red-400 text-xs mt-1">{validationErrors['protocol']}</p>
+                  <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
                 {/if}
               </div>
 
@@ -237,7 +206,7 @@
                 <label for="cam-url" class="input-label">{t('cameras.url')}</label>
                 <input id="cam-url" type="text" class="input" bind:value={formUrl} />
                 {#if validationErrors['url']}
-                  <p class="text-red-400 text-xs mt-1">{validationErrors['url']}</p>
+                  <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
               </div>
 
@@ -255,8 +224,8 @@
 
               <!-- Enabled -->
               <div class="md:col-span-2 flex items-center gap-2">
-                <input id="cam-enabled" type="checkbox" class="accent-cyan-500" bind:checked={formEnabled} />
-                <label for="cam-enabled" class="text-slate-300 text-sm">{t('cameras.enabledToggle')}</label>
+                <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
+                <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
               </div>
             </div>
 
@@ -276,13 +245,13 @@
 
         <!-- Delete Confirmation -->
         {#if deletingCamera}
-          <div class="card p-6 border border-red-700/60 bg-red-900/20">
-            <h3 class="text-lg font-semibold text-red-300 mb-2">{t('cameras.deleteTitle')}</h3>
-            <p class="text-slate-300 mb-4">
+          <div class="card p-6 border th-border-danger bg-[rgba(239,68,68,0.2)]">
+            <h3 class="text-lg font-semibold th-color-danger mb-2">{t('cameras.deleteTitle')}</h3>
+            <p class="th-text-secondary mb-4">
               {t('cameras.deleteMessage', { name: deletingCamera.name })}
             </p>
             <div class="flex items-center gap-3">
-              <button on:click={handleDelete} class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-md transition-colors">
+              <button on:click={handleDelete} class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors">
                 {t('cameras.deleteConfirm')}
               </button>
               <button on:click={() => deletingCamera = null} class="btn btn-ghost">
@@ -293,45 +262,45 @@
         {/if}
 
         <!-- Camera Table -->
-        <div class="card border border-slate-700/60 overflow-hidden">
+        <div class="card border th-border overflow-hidden">
           {#if cameras.length === 0}
-            <div class="p-8 text-center text-slate-400">
+            <div class="p-8 text-center th-text-muted">
               {t('cameras.noCameras')}
             </div>
           {:else}
             <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-700">
+              <table class="min-w-full divide-y divide-[var(--border)]">
                 <thead>
                   <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">{t('cameras.tableName')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">{t('cameras.tableStatus')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">{t('cameras.tableUrl')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">{t('cameras.tableActions')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableName')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableStatus')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableUrl')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableActions')}</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-700">
+                <tbody class="divide-y divide-[var(--border)]">
                   {#each cameras as camera (camera.id)}
-                    <tr class="hover:bg-slate-800/50 transition-colors">
-                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-100">{camera.name}</td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-300">{camera.protocol}</td>
+                    <tr class="hover:th-bg-hover transition-colors">
+                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium th-text-primary">{camera.name}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {#if camera.enabled}
-                          <span class="text-emerald-400">{t('cameras.enabled')}</span>
+                          <span class="th-color-success">{t('cameras.enabled')}</span>
                         {:else}
-                          <span class="text-slate-500">{t('cameras.disabled')}</span>
+                          <span class="th-text-tertiary">{t('cameras.disabled')}</span>
                         {/if}
                       </td>
-                      <td class="px-6 py-4 text-sm text-slate-300 max-w-xs truncate">{camera.url}</td>
+                      <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2">
                           <button
                             on:click={() => openEditForm(camera)}
-                            class="text-slate-400 hover:text-cyan-400 transition-colors"
+                            class="th-text-muted hover:th-color-accent transition-colors"
                           >{t('cameras.edit')}</button>
                           <button
                             on:click={() => deletingCamera = camera}
-                            class="text-slate-400 hover:text-red-400 transition-colors"
+                            class="th-text-muted hover:th-color-danger transition-colors"
                           >{t('cameras.delete')}</button>
                         </div>
                       </td>

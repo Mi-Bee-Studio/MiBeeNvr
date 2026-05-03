@@ -1,11 +1,11 @@
 package config
 
 import (
-    "os"
-    "path/filepath"
-    "testing"
+	"os"
+	"path/filepath"
+	"testing"
 
-    "github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadValidConfig(t *testing.T) {
@@ -42,7 +42,7 @@ func TestDefaultsApplied(t *testing.T) {
     cfg.applyDefaults()
     require.Equal(t, ":9090", cfg.Server.Listen)
     require.Equal(t, "/mnt/data/nvr", cfg.Storage.RootDir)
-    require.Equal(t, "10m", cfg.Storage.SegmentDuration)
+    require.Equal(t, "30s", cfg.Storage.SegmentDuration)
     require.Equal(t, 30, cfg.Cleanup.RetentionDays)
     require.Equal(t, "1h", cfg.Cleanup.CheckInterval)
     require.Equal(t, 95, cfg.Cleanup.DiskThresholdPercent)

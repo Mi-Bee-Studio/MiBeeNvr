@@ -86,6 +86,10 @@ func (d *DB) Init(ctx context.Context) error {
 	if _, err := d.db.ExecContext(ctx, idx1); err != nil { return err }
 	if _, err := d.db.ExecContext(ctx, idx2); err != nil { return err }
 	if _, err := d.db.ExecContext(ctx, idx3); err != nil { return err }
+	// schema metadata
+	metaSQL := `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+	if _, err := d.db.ExecContext(ctx, metaSQL); err != nil { return err }
+	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '1');")
 	return nil
 }
 
@@ -94,6 +98,12 @@ func (d *DB) Close() error {
 		return nil
 	}
 	return d.db.Close()
+}
+
+// Backup creates a backup of the database using VACUUM INTO.
+func (d *DB) Backup(ctx context.Context, destPath string) error {
+	_, err := d.db.ExecContext(ctx, "VACUUM INTO ?", destPath)
+	return err
 }
 
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
