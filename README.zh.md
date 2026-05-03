@@ -4,13 +4,24 @@
 
 [**English**](README.md)
 
-<!-- TODO: add screenshots -->
+## 截图
+
+![录像列表 - 深色主题](docs/images/recordings-dark.png)
+![录像列表 - 浅色主题](docs/images/recordings-light.png)
+![摄像头管理 - 深色主题](docs/images/cameras-dark.png)
+![统计图表 - 深色主题](docs/images/stats-dark.png)
+![统计图表 - 浅色主题](docs/images/stats-light.png)
+![设置页面 - 深色主题](docs/images/settings-dark.png)
 
 ## 功能特性
 
 - 支持 RTSP (H.264/MJPEG) 和 HTTP JPEG 摄像头
 - 自动将视频流封装为 MP4 片段存储
-- Web 管理界面，查看摄像头状态和录像回放
+- Web 管理界面，支持 **深色/浅色主题**（自动检测系统偏好）
+- **Chart.js** 驱动的存储趋势和单摄像头统计图表
+- **lucide-svelte** 图标贯穿整个界面
+- **i18n** 支持：中英文语言切换
+- **响应式设计**，适配移动端和桌面端
 - WebDAV（只读）和 FTP 文件访问
 - MQTT 消息触发录像，灵活集成智能家居
 - 多摄像头同时录像

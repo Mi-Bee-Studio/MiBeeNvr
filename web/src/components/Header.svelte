@@ -2,10 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { logout } from '$lib/api';
-  import { getTheme } from '$lib/preferences';
+  import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import Toast from './Toast.svelte';
+  import { ArrowLeft, Menu, LogOut } from 'lucide-svelte';
 
   // Props
   let {
@@ -41,9 +42,9 @@
   }
 
   onMount(() => {
-    // Apply theme from preferences on mount
-    const theme = getTheme();
-    document.documentElement.setAttribute('data-theme', theme);
+    // Sync theme — use getEffectiveTheme to handle null (system preference)
+    const effectiveTheme = getEffectiveTheme();
+    document.documentElement.setAttribute('data-theme', effectiveTheme);
 
     // Sync active route from current hash
     handleHashChange();
@@ -76,9 +77,7 @@
     <div class="navbar-left">
       {#if showBack}
         <button class="back-btn" onclick={goBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="back-icon" aria-hidden="true">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
+          <ArrowLeft size={20} />
           <span>{backLabel || t('detail.back')}</span>
         </button>
       {/if}
@@ -105,11 +104,7 @@
         aria-label="Toggle navigation menu"
         aria-expanded={mobileMenuOpen}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hamburger-icon" aria-hidden="true">
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
+        <Menu size={20} />
       </button>
     </div>
     
@@ -133,11 +128,7 @@
       <ThemeToggle />
       <LanguageSwitcher />
       <button class="btn btn-ghost logout-btn" onclick={logout}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="logout-icon" aria-hidden="true">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-          <polyline points="16 17 21 12 16 7" />
-          <line x1="21" y1="12" x2="9" y2="12" />
-        </svg>
+        <LogOut size={20} />
         <span>{t('nav.logout')}</span>
       </button>
     </div>
@@ -244,8 +235,9 @@
   }
 
   .nav-link.active {
-    background: var(--color-primary);
     color: #ffffff;
+    background: var(--color-primary);
+    position: relative;
   }
 
   .navbar-right {
@@ -318,18 +310,19 @@
     max-height: 400px;
     opacity: 1;
     box-shadow: var(--shadow-lg);
+    border-bottom: 1px solid var(--border);
   }
   
   /* Mobile Navigation Links */
   .mobile-nav-links {
     display: flex;
     flex-direction: column;
-    padding: 0.75rem;
-    gap: 0.25rem;
+    padding: 0.5rem;
+    gap: 0.125rem;
   }
   
   .mobile-nav-link {
-    padding: 0.75rem 1rem;
+    padding: 0.625rem 1rem;
     border-radius: var(--radius-sm);
     font-size: 0.875rem;
     font-weight: 500;
@@ -337,6 +330,7 @@
     text-decoration: none;
     transition: all var(--duration-fast) var(--ease-out);
     white-space: nowrap;
+    border-left: 2px solid transparent;
   }
   
   .mobile-nav-link:hover {
@@ -347,6 +341,7 @@
   .mobile-nav-link.active {
     background: var(--color-primary);
     color: #ffffff;
+    border-left-color: transparent;
   }
   
   /* Glass effect for mobile menu */

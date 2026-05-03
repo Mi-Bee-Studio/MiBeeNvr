@@ -16,14 +16,14 @@ export const PREFERENCE_KEYS = {
 export interface Preferences {
   items_per_page: number;
   auto_refresh: string;
-  theme: 'dark' | 'light';
+  theme: 'dark' | 'light' | null;
 }
 
 // Default values
 export const DEFAULT_PREFERENCES: Preferences = {
   items_per_page: 50,
   auto_refresh: '30s',
-  theme: 'dark',
+  theme: null,
 };
 
 // Generic preference functions
@@ -73,12 +73,19 @@ export function setAutoRefresh(val: string): void {
   }
 }
 
-export function getTheme(): 'dark' | 'light' {
+export function getTheme(): 'dark' | 'light' | null {
   return getPreference(PREFERENCE_KEYS.THEME, DEFAULT_PREFERENCES.theme);
 }
 
-export function setTheme(theme: 'dark' | 'light'): void {
+export function setTheme(theme: 'dark' | 'light' | null): void {
   setPreference(PREFERENCE_KEYS.THEME, theme);
+}
+
+// Get effective theme (system preference when theme is null)
+export function getEffectiveTheme(): 'dark' | 'light' {
+  const saved = getTheme();
+  if (saved !== null) return saved;
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 // Utility functions

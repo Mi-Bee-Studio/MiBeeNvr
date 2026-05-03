@@ -4,13 +4,24 @@ A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/M
 
 [**中文**](README.zh.md)
 
-<!-- TODO: add screenshots -->
+## Screenshots
+
+![Recordings - Dark Theme](docs/images/recordings-dark.png)
+![Recordings - Light Theme](docs/images/recordings-light.png)
+![Cameras Management - Dark Theme](docs/images/cameras-dark.png)
+![Statistics - Dark Theme](docs/images/stats-dark.png)
+![Statistics - Light Theme](docs/images/stats-light.png)
+![Settings - Dark Theme](docs/images/settings-dark.png)
 
 ## Features
 
 - RTSP (H.264/MJPEG) and HTTP JPEG camera support
 - Automatic MP4 segment recording
-- Web UI for camera management and recording playback
+- Web UI with **dark/light theme** (auto-detects system preference)
+- **Chart.js-powered** storage trends and per-camera statistics
+- **lucide-svelte** icons throughout the interface
+- **i18n** support: English/Chinese language switching
+- **Responsive design** for mobile and desktop
 - WebDAV (read-only) and FTP file access
 - MQTT trigger-based recording for smart home integration
 - Multi-camera concurrent recording

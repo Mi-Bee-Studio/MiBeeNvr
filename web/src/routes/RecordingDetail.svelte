@@ -11,8 +11,10 @@ loadFrameBlob,
 loadRecordingVideoBlob
 } from '$lib/api';
   import type { Recording, FrameInfo } from '$lib/api';
-  import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
+  import { showToast } from '$lib/toast';
+  import { AlertTriangle, HelpCircle } from 'lucide-svelte';
+  import { t } from '$lib/i18n';
 
   // Recording ID passed as prop
   let { recordingId = '' } = $props();
@@ -248,7 +250,7 @@ loadRecordingVideoBlob
       </div>
     {:else if error}
       <div class="card p-8 text-center">
-        <div class="th-color-danger mb-4">&#x26A0;&#xFE0F;</div>
+        <div class="th-color-danger mb-4 flex justify-center"><AlertTriangle size={48} /></div>
         <p class="th-text-secondary mb-4">{error}</p>
         <button onclick={goBack} class="btn btn-primary">
           {t('detail.goBack')}
@@ -257,10 +259,10 @@ loadRecordingVideoBlob
     {:else if recording}
       <div class="space-y-6">
         <!-- Playback section -->
-        <div class="card border th-border">
+        <div class="card border th-border overflow-hidden">
           {#if recording.format === 'h264'}
             <!-- MP4 video player -->
-            <div class="max-w-full bg-black">
+            <div class="max-w-full bg-black rounded-t-[var(--radius-md)]">
               {#if videoLoading}
                 <div class="flex items-center justify-center h-64">
                   <div class="spinner spinner-lg"></div>
@@ -359,7 +361,6 @@ loadRecordingVideoBlob
                         class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
                         style="color: {currentFrameIndex >= frames.length - 1 || frameChanging ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {!(currentFrameIndex >= frames.length - 1 || frameChanging) ? 'var(--bg-tertiary)' : 'transparent'}"
                       >
-                      >
                         {t('detail.next')}
                       </button>
                     </div>
@@ -376,7 +377,7 @@ loadRecordingVideoBlob
                         <button
                           onclick={() => setSpeed(speed)}
                           class="px-2 py-1 rounded text-xs font-medium transition-colors"
-                          style="background-color: {currentSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {currentSpeed === speed ? 'white' : 'var(--text-secondary)'}"
+                          style="background-color: {playSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {playSpeed === speed ? 'white' : 'var(--text-secondary)'}"
                         >
                           {speed}x
                         </button>
@@ -390,7 +391,7 @@ loadRecordingVideoBlob
             <!-- Unsupported format -->
             <div class="flex items-center justify-center h-64 bg-black">
               <div class="text-center th-text-tertiary">
-                <div class="text-4xl mb-2">&#x2753;</div>
+                <div class="text-4xl mb-2 flex justify-center"><HelpCircle size={48} /></div>
                 <p class="text-lg">{t('detail.unsupportedFormat')}</p>
                 <p class="text-sm mt-2">{t('detail.format')}: {recording.format}</p>
               </div>
@@ -418,7 +419,7 @@ loadRecordingVideoBlob
               </span>
             </div>
           </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
             <div>
               <p class="text-sm th-text-tertiary mb-1">{t('detail.duration')}</p>
               <p class="text-lg font-semibold th-text-body">
@@ -447,7 +448,8 @@ loadRecordingVideoBlob
 
           <!-- Actions -->
           <div class="flex flex-wrap gap-3 border-t th-border pt-6">
-            {#if isDownloading}
+            <div class="flex flex-wrap gap-3">
+              {#if isDownloading}
                 <button disabled class="btn btn-primary opacity-75 flex items-center gap-2">
                   <div class="spinner spinner-sm"></div>
                   {downloadProgress}%
@@ -457,19 +459,22 @@ loadRecordingVideoBlob
                   {t('detail.download')}
                 </button>
               {/if}
-            <button
-              onclick={togglePin}
-              class="btn btn-secondary"
-            >
-              {recording.pinned ? t('detail.unpin') : t('detail.pin')}
-            </button>
-            <button
-              onclick={() => deleteConfirm = true}
-              class="btn btn-danger"
-            >
-              {t('detail.delete')}
-            </button>
-          </div>
+              <button
+                onclick={togglePin}
+                class="btn btn-secondary"
+              >
+                {recording.pinned ? t('detail.unpin') : t('detail.pin')}
+              </button>
+            </div>
+            <div class="flex gap-3 ml-auto">
+              <button
+                onclick={() => deleteConfirm = true}
+                class="btn btn-danger"
+              >
+                {t('detail.delete')}
+              </button>
+            </div>
+        </div>
         </div>
       </div>
     {/if}

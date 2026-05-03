@@ -4,6 +4,26 @@
   import type { StorageStats, Camera } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
+  import { HardDrive, BarChart3, Video, CameraIcon } from 'lucide-svelte';
+  import {
+    Chart,
+    CategoryScale,
+    LinearScale,
+    BarController,
+    BarElement,
+    LineController,
+    LineElement,
+    PointElement, Filler, Tooltip, Legend, Title
+  } from 'chart.js';
+  import { getStatsTrends } from '$lib/api';
+  import { getEffectiveTheme } from '$lib/preferences';
+
+  Chart.register(
+    CategoryScale, LinearScale,
+    BarController, BarElement,
+    LineController, LineElement,
+    PointElement, Filler, Tooltip, Legend, Title
+  );
 
   let stats: StorageStats | null = null;
   let cameras: Camera[] = [];
@@ -12,6 +32,8 @@
 
   // Auto-refresh interval
   let refreshInterval: number;
+  let trendChart: Chart | null = null;
+  let cameraChart: Chart | null = null;
 
   function formatPercentage(used: number, total: number): string {
     if (total === 0) return '0%';
@@ -47,20 +69,150 @@
     }
   }
 
+  async function loadTrends() {
+    try {
+      const trends = await getStatsTrends(7);
+      if (trends && trends.length > 0) {
+        createCharts(trends);
+      }
+    } catch (e) {
+      console.error('Failed to load trends:', e);
+    }
+  }
+
+  function createCharts(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
+    const isDark = getEffectiveTheme() === 'dark';
+    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+    const textColor = isDark ? '#a1a1a1' : '#4b5563';
+    const accentColor = 'rgba(139, 92, 246, 0.8)';
+    const accentFill = 'rgba(139, 92, 246, 0.1)';
+
+    const labels = trends.map(d => d.date.slice(5)); // "MM-DD"
+    const sizes = trends.map(d => +(d.total_size / (1024 * 1024)).toFixed(1)); // MB as number
+
+    // Aggregate camera counts
+    const cameraTotals: Record<string, number> = {};
+    trends.forEach(d => {
+      if (d.cameras) {
+        Object.entries(d.cameras).forEach(([cam, count]) => {
+          cameraTotals[cam] = (cameraTotals[cam] || 0) + count;
+        });
+      }
+    });
+
+    // Destroy existing
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
+
+    // Line chart - Storage Trend
+    const trendCtx = document.getElementById('trendChart') as HTMLCanvasElement;
+    if (trendCtx) {
+      trendChart = new Chart(trendCtx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Storage (MB)',
+            data: sizes,
+            borderColor: accentColor,
+            backgroundColor: accentFill,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 4,
+            pointBackgroundColor: accentColor,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor } },
+            tooltip: { mode: 'index', intersect: false }
+          },
+          scales: {
+            x: { grid: { color: gridColor }, ticks: { color: textColor } },
+            y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Bar chart - Recordings per Camera
+    const cameraCtx = document.getElementById('cameraChart') as HTMLCanvasElement;
+    if (cameraCtx && Object.keys(cameraTotals).length > 0) {
+      const camLabels = Object.keys(cameraTotals);
+      const camData = Object.values(cameraTotals);
+      const barColors = [
+        'rgba(139, 92, 246, 0.7)',
+        'rgba(56, 189, 248, 0.7)',
+        'rgba(16, 185, 129, 0.7)',
+        'rgba(245, 158, 11, 0.7)',
+        'rgba(239, 68, 68, 0.7)',
+        'rgba(168, 85, 247, 0.7)',
+        'rgba(34, 197, 94, 0.7)',
+        'rgba(251, 146, 60, 0.7)',
+      ];
+
+      cameraChart = new Chart(cameraCtx, {
+        type: 'bar',
+        data: {
+          labels: camLabels,
+          datasets: [{
+            label: 'Recordings',
+            data: camData,
+            backgroundColor: barColors.slice(0, camLabels.length),
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { mode: 'index', intersect: false }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: textColor } },
+            y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+          }
+        }
+      });
+    }
+  }
+
   // Lifecycle
   onMount(() => {
     loadStats();
     loadCameras();
+    loadTrends();
 
     // Auto-refresh every 30 seconds
     refreshInterval = window.setInterval(() => {
       loadStats();
       loadCameras();
+      loadTrends();
     }, 30000);
+
+    // Re-create charts when theme changes
+    const observer = new MutationObserver(() => {
+      if (trendChart || cameraChart) {
+        loadTrends();
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
 
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
+      observer.disconnect();
     };
+  });
+
+  onDestroy(() => {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
   });
 </script>
 
@@ -89,21 +241,22 @@
         <!-- Storage stats cards -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <!-- Total storage -->
-          <div class="card p-6">
+          <div class="card p-6 border th-border">
             <div class="flex items-center justify-between mb-4">
               <h3 class="text-sm font-medium th-text-muted">{t('stats.totalStorage')}</h3>
-              <span class="text-2xl">💾</span>
+              <HardDrive size={20} class="th-text-secondary" />
             </div>
             <p class="text-3xl font-bold th-text-primary mb-1">
               {formatFileSize(stats.total_bytes)}
             </p>
-            <p class="text-sm th-text-muted">{t('stats.capacity')}</p>
+            <p class="text-sm th-text-muted mt-1">{t('stats.capacity')}</p>
           </div>
 
           <!-- Used storage -->
-          <div class="card p-6 border th-border bg-gradient-to-br from-[var(--bg-secondary)] to-[rgba(20,20,20,0.8)]">
+          <div class="card p-6 border th-border">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-2xl">📊</span>
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.used')}</h3>
+              <BarChart3 size={20} class="th-text-secondary" />
             </div>
             <p class="text-4xl font-bold th-text-primary mb-1">
               {formatFileSize(stats.used_bytes)}
@@ -114,9 +267,10 @@
           </div>
 
           <!-- Recordings count -->
-          <div class="card p-6 border th-border bg-gradient-to-br from-[var(--bg-secondary)] to-[rgba(20,20,20,0.8)]">
+          <div class="card p-6 border th-border">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-2xl">🎬</span>
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.totalRecordings')}</h3>
+              <Video size={20} class="th-text-secondary" />
             </div>
             <p class="text-4xl font-bold th-text-primary mb-1">
               {stats.recording_count.toLocaleString()}
@@ -125,9 +279,10 @@
           </div>
 
           <!-- Cameras count -->
-          <div class="card p-6 border th-border bg-gradient-to-br from-[var(--bg-secondary)] to-[rgba(20,20,20,0.8)]">
+          <div class="card p-6 border th-border">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-2xl">📷</span>
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.activeCameras')}</h3>
+              <CameraIcon size={20} class="th-text-secondary" />
             </div>
             <p class="text-4xl font-bold th-text-primary mb-1">
               {stats.camera_count}
@@ -178,7 +333,7 @@
                 </thead>
                 <tbody>
                   {#each cameras as camera}
-                    <tr>
+                    <tr class="transition-all duration-200 hover:th-bg-hover">
                       <td class="font-medium th-text-primary">{camera.name}</td>
                       <td class="th-text-muted font-mono text-sm">{camera.id}</td>
                       <td>
@@ -196,6 +351,22 @@
                 </tbody>
               </table>
             {/if}
+          </div>
+        </div>
+
+        <!-- Charts — Storage Trend & Recordings by Camera -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="card p-6 border th-border">
+            <h3 class="text-lg font-medium th-text-primary mb-4">{t('stats.storageTrend')}</h3>
+            <div class="h-64">
+              <canvas id="trendChart"></canvas>
+            </div>
+          </div>
+          <div class="card p-6 border th-border">
+            <h3 class="text-lg font-medium th-text-primary mb-4">{t('stats.recordingsByCamera')}</h3>
+            <div class="h-64">
+              <canvas id="cameraChart"></canvas>
+            </div>
           </div>
         </div>
 

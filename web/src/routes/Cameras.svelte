@@ -27,7 +27,7 @@
   let deletingCamera: Camera | null = null;
 
   function showFeedback(msg: string, type: 'success' | 'error') {
-    showToast(t('cameras.cameraAdded'), 'success');
+    showToast(msg, type);
   }
 
   function validate(): boolean {
@@ -114,7 +114,8 @@
         editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
         'error'
       );
-    showToast(t('cameras.cameraUpdated'), 'success');
+    } finally {
+      saving = false;
     }
   }
 
@@ -178,7 +179,7 @@
               {editingCamera ? t('cameras.editCamera') : t('cameras.addCamera')}
             </h3>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <!-- Name -->
               <div>
                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
@@ -286,9 +287,9 @@
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {#if camera.enabled}
-                          <span class="th-color-success">{t('cameras.enabled')}</span>
+                          <span class="badge badge-success">{t('cameras.enabled')}</span>
                         {:else}
-                          <span class="th-text-tertiary">{t('cameras.disabled')}</span>
+                          <span class="badge badge-error">{t('cameras.disabled')}</span>
                         {/if}
                       </td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
@@ -296,11 +297,11 @@
                         <div class="flex gap-2">
                           <button
                             on:click={() => openEditForm(camera)}
-                            class="th-text-muted hover:th-color-accent transition-colors"
+                            class="btn btn-ghost px-2 py-1 text-sm transition-all duration-200"
                           >{t('cameras.edit')}</button>
                           <button
                             on:click={() => deletingCamera = camera}
-                            class="th-text-muted hover:th-color-danger transition-colors"
+                            class="btn btn-ghost px-2 py-1 text-sm th-color-danger transition-all duration-200"
                           >{t('cameras.delete')}</button>
                         </div>
                       </td>

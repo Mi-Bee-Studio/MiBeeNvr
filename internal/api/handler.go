@@ -69,6 +69,7 @@ func (h *Handler) Routes() http.Handler {
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
+		r.Get("/api/stats/trends", h.handleStatsTrends)
 		r.Get("/api/settings", h.handleGetSettings)
 		r.Put("/api/settings", h.handleUpdateSettings)
 		r.Post("/api/backup", h.handleBackup)
@@ -428,6 +429,21 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		CameraCount:    len(cameras),
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 30 {
+			days = n
+		}
+	}
+	trends, err := h.db.GetRecordingTrends(r.Context(), days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording trends")
+		return
+	}
+	writeJSON(w, http.StatusOK, trends)
 }
 
 // --- Camera CRUD endpoints ---

@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 /*
- * MiBee NVR Design System — Purple Tech Aesthetic
+ * MiBee NVR Design System — Minimalist Black/White Tech
  * Dual theme: Dark (default) + Light ([data-theme="light"])
  *
  * All colors, spacing, radii, shadows are tokenized as CSS custom properties.
  * Components reference only variables — never hardcoded values.
  *
- * Purple palette: #8b5cf6 (primary) → #a78bfa (light) → #38bdf8 (accent blue)
- * Transitions: cubic-bezier(0.16, 1, 0.3, 1) for snappy ease-out
+ * Aesthetic: Pure black/white with purple (#8b5cf6) accent only on interactive elements.
+ * Style: Flat, minimal, large whitespace — inspired by mlsbs.top
  */
 
 /* ================================================================
@@ -33,25 +33,25 @@
 
   /* --- Surfaces (dark default) --- */
   --bg-primary: #0a0a0a;
-  --bg-secondary: #141414;
-  --bg-tertiary: #1a1a1a;
-  --bg-elevated: #1e1e1e;
+  --bg-secondary: #111111;
+  --bg-tertiary: #161616;
+  --bg-elevated: #1a1a1a;
 
   /* --- Text --- */
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
+  --text-primary: #f5f5f5;
+  --text-secondary: #a1a1a1;
+  --text-tertiary: #737373;
 
   /* --- Borders --- */
-  --border: #2a2a2a;
-  --border-hover: #3a3a3a;
+  --border: #262626;
+  --border-hover: #333333;
 
-  /* --- Shadows --- */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
-  --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.3);
-  --shadow-primary-lg: 0 8px 20px rgba(139, 92, 246, 0.35);
+  /* --- Shadows (pure gray, no purple glow) --- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-primary: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-primary-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
 
   /* --- Radii --- */
   --radius-sm: 8px;
@@ -61,50 +61,50 @@
 
   /* --- Transitions --- */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --duration-fast: 0.2s;
-  --duration-normal: 0.3s;
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
 
-  /* --- Focus ring --- */
+  /* --- Focus ring (purple glow — intentional accessibility) --- */
   --focus-ring: 0 0 0 3px rgba(139, 92, 246, 0.4);
 
   /* --- Glass --- */
-  --glass-bg: rgba(10, 10, 10, 0.95);
-  --glass-blur: 20px;
+  --glass-bg: rgba(10, 10, 10, 0.9);
+  --glass-blur: 12px;
 
   /* --- Hover state --- */
-  --bg-hover: #222222;
+  --bg-hover: #1e1e1e;
 
   /* --- Body text (nav links, medium brightness) --- */
-  --text-body: #cbd5e1;
+  --text-body: #d4d4d4;
 }
 
 /* --- Light theme override --- */
 [data-theme="light"] {
   --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #f1f5f9;
-  --bg-elevated: #e2e8f0;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+  --bg-elevated: #f9fafb;
 
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-tertiary: #94a3b8;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-tertiary: #9ca3af;
 
-  --border: #e2e8f0;
-  --border-hover: #cbd5e1;
+  --border: #e5e7eb;
+  --border-hover: #d1d5db;
 
-  --bg-hover: #e2e8f0;
-  --text-body: #334155;
+  --bg-hover: #f3f4f6;
+  --text-body: #374151;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
-  --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.2);
-  --shadow-primary-lg: 0 8px 20px rgba(139, 92, 246, 0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-primary: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-primary-lg: 0 4px 12px rgba(0, 0, 0, 0.1);
 
   --focus-ring: 0 0 0 3px rgba(139, 92, 246, 0.3);
 
-  --glass-bg: rgba(255, 255, 255, 0.8);
-  --glass-blur: 20px;
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-blur: 12px;
 }
 
 /* ================================================================
@@ -189,11 +189,11 @@
   }
 
   .card:hover {
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
     border-color: var(--border-hover);
-  }
 
+  }
   /* --- Buttons --- */
   .btn {
     display: inline-flex;
@@ -218,18 +218,18 @@
   }
 
   .btn-primary {
-    background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+    background: #8b5cf6;
     color: #ffffff;
-    box-shadow: var(--shadow-primary);
+    box-shadow: var(--shadow-sm);
     border: none;
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, #7c3aed, #8b5cf6);
-    box-shadow: var(--shadow-primary-lg);
+    background: #7c3aed;
+    box-shadow: var(--shadow-md);
     transform: translateY(-1px);
-  }
 
+  }
   .btn-primary:focus-visible {
     box-shadow: var(--focus-ring);
   }
@@ -308,29 +308,29 @@
   }
 
   .badge-success {
-    background-color: rgba(16, 185, 129, 0.15);
+    background-color: rgba(16, 185, 129, 0.1);
     color: var(--color-success-light);
-    border-color: rgba(16, 185, 129, 0.3);
-  }
+    border-color: rgba(16, 185, 129, 0.2);
 
+  }
   .badge-warning {
-    background-color: rgba(245, 158, 11, 0.15);
+    background-color: rgba(245, 158, 11, 0.1);
     color: var(--color-warning-light);
-    border-color: rgba(245, 158, 11, 0.3);
-  }
+    border-color: rgba(245, 158, 11, 0.2);
 
+  }
   .badge-error {
-    background-color: rgba(239, 68, 68, 0.15);
+    background-color: rgba(239, 68, 68, 0.1);
     color: var(--color-danger-light);
-    border-color: rgba(239, 68, 68, 0.3);
-  }
+    border-color: rgba(239, 68, 68, 0.2);
 
+  }
   .badge-info {
-    background-color: rgba(59, 130, 246, 0.15);
+    background-color: rgba(59, 130, 246, 0.1);
     color: var(--color-info);
-    border-color: rgba(59, 130, 246, 0.3);
-  }
+    border-color: rgba(59, 130, 246, 0.2);
 
+  }
   .badge-neutral {
     background-color: var(--bg-tertiary);
     color: var(--text-secondary);

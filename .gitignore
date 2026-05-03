@@ -36,6 +36,9 @@ package-lock.json
 /test*.png
 /e2e-*.png
 
+# QA screenshots
+/qa-*.png
+
 
 # IDE / Editor
 .vscode/

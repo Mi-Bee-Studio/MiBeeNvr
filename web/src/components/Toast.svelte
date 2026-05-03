@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { toasts, dismissToast } from '$lib/toast';
 	import { fade, fly } from 'svelte/transition';
+	import { X } from 'lucide-svelte';
 
 	let toastContainer: HTMLElement;
 
@@ -36,7 +37,7 @@
 				class="toast-close"
 				on:click|stopPropagation={() => dismissToast(toast.id)}
 			>
-				✕
+			<X size={16} />
 			</button>
 		</div>
 	{/each}
