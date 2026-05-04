@@ -3,10 +3,13 @@
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
+  import { Eye, EyeOff } from 'lucide-svelte';
 
   let username = '';
   let password = '';
+  let showPassword = false;
   let error = '';
+  let loginErrors = $state({ username: '', password: '' });
   let loading = false;
   // Force re-render when language changes
 
@@ -16,7 +19,30 @@
     window.location.hash = '#/recordings';
   }
 
+  function validateUsername() {
+    if (!username.trim()) {
+      loginErrors.username = t('login.usernameRequired');
+    } else {
+      loginErrors.username = '';
+    }
+  }
+
+  function validatePassword() {
+    if (!password) {
+      loginErrors.password = t('login.passwordRequired');
+    } else {
+      loginErrors.password = '';
+    }
+  }
+
+  function onUsernameInput() { if (loginErrors.username) loginErrors.username = ''; }
+  function onPasswordInput() { if (loginErrors.password) loginErrors.password = ''; }
+
   async function handleSubmit() {
+    validateUsername();
+    validatePassword();
+    if (loginErrors.username || loginErrors.password) return;
+
     error = '';
     loading = true;
 
@@ -63,29 +89,51 @@
         <input
           id="username"
           type="text"
-          class="input"
+          class="input {loginErrors.username ? 'border-red-500' : ''}"
           bind:value={username}
           placeholder={t('login.usernamePlaceholder')}
-          required
           disabled={loading}
           on:keydown={handleKeydown}
+          on:blur={validateUsername}
+          on:input={onUsernameInput}
           autocomplete="username"
         />
+        {#if loginErrors.username}
+          <p class="th-color-danger text-xs mt-1">{loginErrors.username}</p>
+        {/if}
       </div>
 
       <div>
         <label for="password" class="input-label">{t('login.password')}</label>
-        <input
-          id="password"
-          type="password"
-          class="input"
-          bind:value={password}
-          placeholder={t('login.passwordPlaceholder')}
-          required
-          disabled={loading}
-          on:keydown={handleKeydown}
-          autocomplete="current-password"
-        />
+        <div class="relative">
+          <input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            class="input pr-10 {loginErrors.password ? 'border-red-500' : ''}"
+            bind:value={password}
+            placeholder={t('login.passwordPlaceholder')}
+            disabled={loading}
+            on:keydown={handleKeydown}
+            on:blur={validatePassword}
+            on:input={onPasswordInput}
+            autocomplete="current-password"
+          />
+          <button
+            type="button"
+            class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+            on:click={() => showPassword = !showPassword}
+            aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+          >
+            {#if showPassword}
+              <EyeOff class="w-4 h-4" />
+            {:else}
+              <Eye class="w-4 h-4" />
+            {/if}
+          </button>
+        </div>
+        {#if loginErrors.password}
+          <p class="th-color-danger text-xs mt-1">{loginErrors.password}</p>
+        {/if}
       </div>
 
       <button type="submit" class="btn btn-primary w-full" disabled={loading}>

@@ -95,6 +95,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
+			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
@@ -319,6 +320,10 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sorting
+	filter.SortBy = r.URL.Query().Get("sort_by")
+	filter.SortOrder = r.URL.Query().Get("order")
+
 	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list recordings")
@@ -382,6 +387,66 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids must not be empty")
+		return
+	}
+	if len(body.IDs) > 100 {
+		writeError(w, http.StatusBadRequest, "ids must not exceed 100")
+		return
+	}
+	// Fetch file paths before batch delete
+	filePaths := map[string]string{}
+	for _, id := range body.IDs {
+		rec, err := h.db.GetRecording(ctx, id)
+		if err == nil && rec != nil && rec.FilePath != "" {
+			filePaths[id] = rec.FilePath
+		}
+	}
+
+	// Delete DB records (transaction)
+	deleted, err := h.db.DeleteRecordingsBatch(ctx, body.IDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete recordings")
+		return
+	}
+
+	// Attempt file deletion for successfully deleted records (non-fatal)
+	failed := []string{}
+	deletedSet := make(map[string]bool, len(deleted))
+	for _, id := range deleted {
+		deletedSet[id] = true
+		if fp, ok := filePaths[id]; ok {
+			if err := h.store.DeleteFile(fp); err != nil {
+				logger.Warn("batch delete: failed to delete file", "file_path", fp, "error", err)
+			}
+		}
+	}
+	for _, id := range body.IDs {
+		if !deletedSet[id] {
+			failed = append(failed, id)
+		}
+	}
+
+	result := map[string]any{"deleted": deleted}
+	if len(failed) > 0 {
+		result["failed"] = failed
+	} else {
+		result["failed"] = []string{}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) handlePinRecording(w http.ResponseWriter, r *http.Request) {
@@ -561,6 +626,17 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	if cameras == nil {
 		cameras = []storage.CameraRow{}
 	}
+	// Inject recorder status from CameraManager
+	if h.camMgr != nil {
+		statusMap := h.camMgr.Status()
+		for i := range cameras {
+			if s, ok := statusMap[cameras[i].ID]; ok {
+				cameras[i].Status = s
+			} else {
+				cameras[i].Status = model.StatusStopped
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, cameras)
 }
 
@@ -624,12 +700,17 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name     string  `json:"name"`
-		Protocol string  `json:"protocol"`
-		URL      string  `json:"url"`
-		Username string  `json:"username"`
-		Password string  `json:"password"`
-		Enabled  *bool   `json:"enabled"`
+		Name         string  `json:"name"`
+		Protocol     string  `json:"protocol"`
+		URL          string  `json:"url"`
+		Username     string  `json:"username"`
+		Password     string  `json:"password"`
+		Enabled      *bool   `json:"enabled"`
+		Description  string  `json:"description"`
+		Location     string  `json:"location"`
+		Brand        string  `json:"brand"`
+		Model        string  `json:"model"`
+		SerialNumber string  `json:"serial_number"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -670,8 +751,23 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add camera: %v", err))
 		return
 	}
-	cam.ID = id
-	writeJSON(w, http.StatusCreated, cam)
+	// Persist DB-only metadata fields
+	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
+		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber); err != nil {
+			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
+		}
+	}
+	// Return CameraRow with status
+	row, err := h.db.GetCamera(r.Context(), id)
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+	}
+	if row != nil {
+		writeJSON(w, http.StatusCreated, row)
+	} else {
+		cam.ID = id
+		writeJSON(w, http.StatusCreated, cam)
+	}
 }
 
 func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
@@ -685,6 +781,10 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
+	// Inject recorder status
+	if h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+	}
 	writeJSON(w, http.StatusOK, row)
 }
 
@@ -696,12 +796,17 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body struct {
-		Name     *string `json:"name"`
-		URL      *string `json:"url"`
-		Protocol *string `json:"protocol"`
-		Username *string `json:"username"`
-		Password *string `json:"password"`
-		Enabled  *bool   `json:"enabled"`
+		Name         *string `json:"name"`
+		URL          *string `json:"url"`
+		Protocol     *string `json:"protocol"`
+		Username     *string `json:"username"`
+		Password     *string `json:"password"`
+		Enabled      *bool   `json:"enabled"`
+		Description  *string `json:"description"`
+		Location     *string `json:"location"`
+		Brand        *string `json:"brand"`
+		Model        *string `json:"model"`
+		SerialNumber *string `json:"serial_number"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -709,15 +814,20 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := camera.CameraUpdate{
-		Name:     body.Name,
-		URL:      body.URL,
-		Protocol: body.Protocol,
-		Username: body.Username,
-		Password: body.Password,
-		Enabled:  body.Enabled,
+		Name:         body.Name,
+		URL:          body.URL,
+		Protocol:     body.Protocol,
+		Username:     body.Username,
+		Password:     body.Password,
+		Enabled:      body.Enabled,
+		Description:  body.Description,
+		Location:     body.Location,
+		Brand:        body.Brand,
+		Model:        body.Model,
+		SerialNumber: body.SerialNumber,
 	}
 
-	updated, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
+	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, "camera not found")
@@ -726,7 +836,20 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	// Return updated CameraRow with status
+	row, err := h.db.GetCamera(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		return
+	}
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+	}
+	if row != nil {
+		writeJSON(w, http.StatusOK, row)
+	} else {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	}
 }
 
 func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {

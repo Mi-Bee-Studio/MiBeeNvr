@@ -74,6 +74,8 @@ type RecordingFilter struct {
 	Pinned    *bool // nil = all, true = pinned only, false = unpinned only
 	Limit     int
 	Offset    int
+	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
+	SortOrder string // asc, desc; default: desc
 }
 
 type RecorderStatus string
