@@ -39,6 +39,31 @@ type HealthResponse struct {
 	Uptime string            `json:"uptime"`
 }
 
+// SystemStats is the response from /api/stats/system.
+type SystemStats struct {
+	CPU     CPUStats     `json:"cpu"`
+	Memory  MemoryStats  `json:"memory"`
+	Network NetworkStats `json:"network"`
+	Uptime  string       `json:"uptime"`
+	Timestamp int64       `json:"timestamp"`
+}
+
+type CPUStats struct {
+	Total uint64 `json:"total"` // cumulative total jiffies
+	Idle  uint64 `json:"idle"`  // cumulative idle jiffies
+}
+
+type MemoryStats struct {
+	Total      uint64 `json:"total"`       // MemTotal bytes
+	Available  uint64 `json:"available"`   // MemAvailable bytes
+	ProcessRSS uint64 `json:"process_rss"` // NVR process RSS bytes
+}
+
+type NetworkStats struct {
+	BytesSent uint64 `json:"bytes_sent"`
+	BytesRecv uint64 `json:"bytes_recv"`
+}
+
 // Handler holds dependencies for the REST API handlers.
 	// Handler holds dependencies for the REST API handlers.
 
@@ -89,6 +114,7 @@ func (h *Handler) Routes() http.Handler {
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
+		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
 		r.Get("/api/settings", h.handleGetSettings)
 		r.Put("/api/settings", h.handleUpdateSettings)
@@ -891,4 +917,121 @@ func formatUptime(d time.Duration) string {
 		return fmt.Sprintf("%dm %ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// --- System stats helpers (Linux /proc) ---
+
+func readCPURaw() (total, idle uint64, err error) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 {
+		return 0, 0, fmt.Errorf("empty /proc/stat")
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) < 5 {
+		return 0, 0, fmt.Errorf("unexpected /proc/stat format")
+	}
+	for i := 1; i < len(fields); i++ {
+		v, _ := strconv.ParseUint(fields[i], 10, 64)
+		total += v
+	}
+	idle, _ = strconv.ParseUint(fields[4], 10, 64)
+	return
+}
+
+func readMemoryInfo() (total, available uint64, err error) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		v, _ := strconv.ParseUint(fields[1], 10, 64)
+		switch fields[0] {
+		case "MemTotal:":
+			total = v * 1024
+		case "MemAvailable:":
+			available = v * 1024
+		}
+	}
+	return
+}
+
+func readNetworkInfo() (bytesSent, bytesRecv uint64, err error) {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return 0, 0, err
+	}
+	// Try eth0 or wlan0 first
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "eth0:") && !strings.HasPrefix(trimmed, "wlan0:") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 10 {
+			continue
+		}
+		bytesRecv, _ = strconv.ParseUint(fields[0], 10, 64)
+		bytesSent, _ = strconv.ParseUint(fields[8], 10, 64)
+		return
+	}
+	// Fallback: sum all interfaces
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, ":") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 10 {
+			continue
+		}
+		r, _ := strconv.ParseUint(fields[0], 10, 64)
+		s, _ := strconv.ParseUint(fields[8], 10, 64)
+		bytesRecv += r
+		bytesSent += s
+	}
+	return
+}
+
+func readProcessRSS() uint64 {
+	data, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0
+	}
+	rssPages, _ := strconv.ParseUint(fields[1], 10, 64)
+	return rssPages * uint64(os.Getpagesize())
+}
+
+func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
+	cpuTotal, cpuIdle, _ := readCPURaw()
+	memTotal, memAvailable, _ := readMemoryInfo()
+	netSent, netRecv, _ := readNetworkInfo()
+	processRSS := readProcessRSS()
+
+	writeJSON(w, http.StatusOK, SystemStats{
+		CPU:     CPUStats{Total: cpuTotal, Idle: cpuIdle},
+		Memory:  MemoryStats{Total: memTotal, Available: memAvailable, ProcessRSS: processRSS},
+		Network: NetworkStats{BytesSent: netSent, BytesRecv: netRecv},
+		Uptime:  formatUptime(time.Since(appStartTime)),
+		Timestamp: time.Now().Unix(),
+	})
 }

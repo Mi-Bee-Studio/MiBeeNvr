@@ -120,6 +120,12 @@
   "stats.checkStorage": "Storage",
   "stats.active": "Active",
   "stats.inactive": "Inactive",
+  "stats.cpu": "CPU",
+  "stats.memory": "Memory",
+  "stats.network": "Network",
+  "stats.processMemory": "NVR Process",
+  "stats.totalUpload": "Total Upload",
+  "stats.totalDownload": "Total Download",
 
   "common.loading": "Loading...",
   "common.error": "Error",
