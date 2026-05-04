@@ -7,7 +7,7 @@ require (
 	github.com/bluenviron/gortsplib/v5 v5.5.2
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fclairamb/ftpserverlib v0.30.0
-	github.com/go-chi/chi/v5 v5.2.1
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
