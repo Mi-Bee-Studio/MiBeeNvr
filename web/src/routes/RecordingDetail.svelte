@@ -1,19 +1,20 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
 import {
-getRecording,
-deleteRecording,
-pinRecording,
-unpinRecording,
-downloadRecording as apiDownloadRecording,
-listFrames,
-loadFrameBlob,
-loadRecordingVideoBlob
+  getRecording,
+  deleteRecording,
+  pinRecording,
+  unpinRecording,
+  downloadRecording as apiDownloadRecording,
+  listFrames,
+  loadFrameBlob,
+  loadRecordingVideoBlob,
+  listRecordings
 } from '$lib/api';
   import type { Recording, FrameInfo } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { AlertTriangle, HelpCircle } from 'lucide-svelte';
+  import { AlertTriangle, HelpCircle, SkipBack, SkipForward, Loader2, RefreshCw } from 'lucide-svelte';
   import { t } from '$lib/i18n';
 
   // Recording ID passed as prop
@@ -49,6 +50,18 @@ loadRecordingVideoBlob
   let downloadProgress = $state(0);
   let isDownloading = $state(false);
 
+  // Playlist / continuous playback
+  let nextRecordingId = $state<string | null>(null);
+  let nextBlobUrl = $state<string | null>(null);
+  let isTransitioning = $state(false);
+
+  // MJPEG lazy loading
+  const LAZY_BATCH_SIZE = 50;
+  const LAZY_WINDOW = 20;
+  let loadedFrameRange = $state({ start: 0, end: 0 });
+  let moreFramesAvailable = $state(true);
+
+
   // Speed options
   const speeds = [1, 2, 5];
 
@@ -56,6 +69,10 @@ loadRecordingVideoBlob
   async function loadRecording() {
     loading = true;
     error = '';
+    // Reset prefetch state for new recording
+    if (nextBlobUrl) { URL.revokeObjectURL(nextBlobUrl); }
+    nextRecordingId = null;
+    nextBlobUrl = null;
 
     try {
       recording = await getRecording(recordingId);
@@ -93,20 +110,35 @@ loadRecordingVideoBlob
     framesLoading = false;
   }
 
-  // Preload all frame images into memory for flicker-free playback
+  // Lazy load: only load first batch of frames
   async function preloadAllFrames() {
     framesLoading = false;
     preloading = true;
     preloadProgress = 0;
     preloadedImages = new Array(frames.length).fill(null);
 
+    const end = Math.min(LAZY_BATCH_SIZE, frames.length);
+    await loadFrameBatch(0, end);
+    loadedFrameRange = { start: 0, end };
+    moreFramesAvailable = end < frames.length;
+    preloading = false;
+
+    if (preloadedImages[0]) {
+      await tick();
+      renderFrame(0);
+      currentFrameIndex = 0;
+    }
+  }
+
+  async function loadFrameBatch(start: number, end: number) {
     const batchSize = 5;
     let loaded = 0;
+    const total = end - start;
 
-    for (let i = 0; i < frames.length; i += batchSize) {
-      const batch = frames.slice(i, i + batchSize);
+    for (let i = start; i < end; i += batchSize) {
+      const batch = frames.slice(i, Math.min(i + batchSize, end));
       const results = await Promise.all(
-        batch.map(async (frame, j) => {
+        batch.map(async (frame) => {
           try {
             const blobUrl = await loadFrameBlob(recordingId, frame.index);
             const img = new Image();
@@ -125,20 +157,27 @@ loadRecordingVideoBlob
       for (let j = 0; j < results.length; j++) {
         preloadedImages[i + j] = results[j];
       }
-      loaded += batch.length;
-      preloadProgress = Math.round((loaded / frames.length) * 100);
+      loaded += results.length;
+      preloadProgress = Math.round((loaded / total) * 100);
+    }
+  }
+
+  function ensureFramesLoaded(index: number) {
+    if (index >= loadedFrameRange.end - 10 && moreFramesAvailable) {
+      const newEnd = Math.min(loadedFrameRange.end + LAZY_BATCH_SIZE, frames.length);
+      loadFrameBatch(loadedFrameRange.end, newEnd);
+      loadedFrameRange = { ...loadedFrameRange, end: newEnd };
+      moreFramesAvailable = newEnd < frames.length;
     }
 
-    preloading = false;
-
-    if (preloadedImages.some((img) => img !== null)) {
-      await tick();
-      // Render first available frame
-      const firstValid = preloadedImages.findIndex((img) => img !== null);
-      if (firstValid >= 0) {
-        renderFrame(firstValid);
-        currentFrameIndex = firstValid;
-      }
+    // Unload frames far from current position
+    const keepStart = Math.max(0, index - LAZY_WINDOW);
+    const keepEnd = Math.min(frames.length, index + LAZY_WINDOW + 1);
+    for (let i = 0; i < keepStart; i++) {
+      preloadedImages[i] = null;
+    }
+    for (let i = keepEnd; i < frames.length; i++) {
+      preloadedImages[i] = null;
     }
   }
 
@@ -191,6 +230,7 @@ loadRecordingVideoBlob
     _playbackFrame = newIdx;
     renderFrame(newIdx);
     updatePlaybackUI(newIdx);
+    ensureFramesLoaded(newIdx);
   }
 
   function togglePlay() {
@@ -215,6 +255,7 @@ loadRecordingVideoBlob
       _playbackFrame = next;
       renderFrame(next);
       updatePlaybackUI(next);
+      ensureFramesLoaded(next);
     }, 1000 / fps);
   }
 
@@ -247,6 +288,67 @@ loadRecordingVideoBlob
     _playbackFrame = index;
     renderFrame(index);
     updatePlaybackUI(index);
+    ensureFramesLoaded(index);
+  }
+
+  // --- Continuous playback helpers (H.264) ---
+
+  async function loadNextRecording() {
+    if (!recording) return null;
+    try {
+      const resp = await listRecordings({
+        camera_id: recording.camera_id,
+        format: recording.format,
+        start: recording.ended_at ? new Date(recording.ended_at).toISOString() : undefined,
+        sort_by: 'started_at',
+        order: 'asc',
+        limit: 1,
+        offset: 0,
+      });
+      return resp.recordings.length > 0 ? resp.recordings[0] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleVideoEnded() {
+    const next = await loadNextRecording();
+    if (next) {
+      isTransitioning = true;
+      recordingId = next.id;
+      await loadRecording();
+      isTransitioning = false;
+    }
+  }
+
+  function handleTimeUpdate(e: Event) {
+    const video = e.target as HTMLVideoElement;
+    if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) {
+      prefetchNextRecording();
+    }
+  }
+
+  async function prefetchNextRecording() {
+    if (nextRecordingId || !recording) return;
+    const next = await loadNextRecording();
+    if (next) {
+      nextRecordingId = next.id;
+      try {
+        nextBlobUrl = await loadRecordingVideoBlob(next.id);
+      } catch {
+        nextRecordingId = null;
+      }
+    }
+  }
+
+  async function navigateToNext() {
+    const next = await loadNextRecording();
+    if (next) {
+      isTransitioning = true;
+      recordingId = next.id;
+      await loadRecording();
+      isTransitioning = false;
+    }
   }
 
   // Video player initialization (MP4 with auth)
@@ -311,21 +413,70 @@ loadRecordingVideoBlob
     }
   }
 
-  // Lifecycle
-  onMount(() => {
-    if (!recordingId) {
-      error = t('detail.recordingIdRequired');
-      loading = false;
-      return;
-    }
-    loadRecording();
-  });
+  // Keyboard shortcuts
+  function handleKeydown(e: KeyboardEvent) {
+    // Don't capture when typing in inputs
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-  onDestroy(() => {
-    stopPlaying();
-    if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
+    switch (e.key) {
+      case ' ':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') {
+          togglePlay();
+        } else if (recording?.format === 'h264') {
+          // Toggle native video play/pause
+          const video = document.querySelector('video');
+          if (video) {
+            if (video.paused) video.play(); else video.pause();
+          }
+        }
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') {
+          prevFrame();
+        } else {
+          const video = document.querySelector('video');
+          if (video) video.currentTime = Math.max(0, video.currentTime - 5);
+        }
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') {
+          nextFrame();
+        } else {
+          const video = document.querySelector('video');
+          if (video) video.currentTime = Math.min(video.duration, video.currentTime + 5);
+        }
+        break;
+      case 'Escape':
+        goBack();
+        break;
+    }
+  }
+  // Lifecycle
+onMount(() => {
+if (!recordingId) {
+error = t('detail.recordingIdRequired');
+loading = false;
+return;
+}
+    loadRecording();
+
+    // Add keyboard event listener
+    window.addEventListener('keydown', handleKeydown);
+});
+
+onDestroy(() => {
+stopPlaying();
+if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
+if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
     preloadedImages = [];
-  });
+
+    // Remove keyboard event listener
+    window.removeEventListener('keydown', handleKeydown);
+});
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
@@ -340,10 +491,17 @@ loadRecordingVideoBlob
     {:else if error}
       <div class="card p-8 text-center">
         <div class="th-color-danger mb-4 flex justify-center"><AlertTriangle size={48} /></div>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
-        <button onclick={goBack} class="btn btn-primary">
-          {t('detail.goBack')}
-        </button>
+        <div class="flex justify-center gap-3">
+          <button onclick={loadRecording} class="btn btn-primary btn-sm flex items-center gap-1">
+            <RefreshCw size={14} />
+            {t('common.retry')}
+          </button>
+          <button onclick={goBack} class="btn btn-secondary btn-sm">
+            {t('detail.goBack')}
+          </button>
+        </div>
       </div>
     {:else if recording}
       <div class="space-y-6">
@@ -351,7 +509,12 @@ loadRecordingVideoBlob
         <div class="card border th-border overflow-hidden">
           {#if recording.format === 'h264'}
             <!-- MP4 video player -->
-            <div class="max-w-full bg-black rounded-t-[var(--radius-md)]">
+            <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
+              {#if isTransitioning}
+                <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
+                  <Loader2 size={32} class="animate-spin th-text-secondary" />
+                </div>
+              {/if}
               {#if videoLoading}
                 <div class="flex items-center justify-center h-64">
                   <div class="spinner spinner-lg"></div>
@@ -362,6 +525,8 @@ loadRecordingVideoBlob
                   preload="auto"
                   class="w-full max-h-[80vh]"
                   src={videoBlobUrl}
+                  onended={handleVideoEnded}
+                  ontimeupdate={handleTimeUpdate}
                 >
                   {t('detail.videoUnsupported')}
                 </video>
@@ -370,6 +535,26 @@ loadRecordingVideoBlob
                   {t('detail.failedLoadVideo')}
                 </div>
               {/if}
+            </div>
+            <!-- Playback navigation -->
+            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary">
+              <span class="text-sm th-text-muted">
+                {t('detail.playing')}
+                <span class="font-mono th-text-primary">{recording.camera_id}</span>
+              </span>
+              <div class="flex gap-2">
+                <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
+                  <SkipBack size={16} />
+                  {t('detail.prev')}
+                </button>
+                <button
+                  onclick={navigateToNext}
+                  class="btn btn-ghost btn-sm flex items-center gap-1"
+                >
+                  {t('detail.nextRecording')}
+                  <SkipForward size={16} />
+                </button>
+              </div>
             </div>
           {:else if recording.format === 'mjpeg'}
             <!-- JPEG frame player (canvas-based) -->
@@ -477,6 +662,13 @@ loadRecordingVideoBlob
                       {/each}
                     </div>
                   </div>
+                </div>
+
+                <!-- Keyboard shortcuts hint -->
+                <div class="px-4 py-2 th-bg-tertiary">
+                  <p class="text-xs text-center th-text-muted">
+                    {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | {t('detail.escapeBack')}
+                  </p>
                 </div>
               {/if}
             </div>

@@ -32,6 +32,12 @@ export interface Camera {
   protocol: string;
   url: string;
   enabled: boolean;
+  description?: string;
+  location?: string;
+  brand?: string;
+  model?: string;
+  serial_number?: string;
+  recorder_status?: string;
 }
 
 export interface CreateCameraRequest {
@@ -41,6 +47,11 @@ export interface CreateCameraRequest {
   username?: string;
   password?: string;
   enabled?: boolean;
+  description?: string;
+  location?: string;
+  brand?: string;
+  model?: string;
+  serial_number?: string;
 }
 
 export interface UpdateCameraRequest {
@@ -50,6 +61,11 @@ export interface UpdateCameraRequest {
   username?: string;
   password?: string;
   enabled?: boolean;
+  description?: string;
+  location?: string;
+  brand?: string;
+  model?: string;
+  serial_number?: string;
 }
 
 
@@ -255,6 +271,8 @@ export async function listRecordings(params: {
   limit?: number;
   start?: string;
   end?: string;
+  sort_by?: string;
+  order?: string;
 } = {}): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
 
@@ -265,6 +283,8 @@ export async function listRecordings(params: {
   if (params.limit !== undefined) queryParams.set('limit', String(params.limit));
   if (params.start) queryParams.set('start', params.start);
   if (params.end) queryParams.set('end', params.end);
+  if (params.sort_by) queryParams.set('sort_by', params.sort_by);
+  if (params.order) queryParams.set('order', params.order);
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';
@@ -279,6 +299,13 @@ export async function getRecording(id: string): Promise<Recording> {
 export async function deleteRecording(id: string): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/recordings/${id}`, {
     method: 'DELETE',
+  });
+}
+
+export async function batchDeleteRecordings(ids: string[]): Promise<void> {
+  await apiRequest<void>('/recordings/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   });
 }
 

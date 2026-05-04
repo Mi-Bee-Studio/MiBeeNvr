@@ -19,12 +19,17 @@ var logger = slog.Default().With("component", "camera-manager")
 // CameraUpdate holds optional fields for updating a camera.
 // Only non-nil fields will be applied.
 type CameraUpdate struct {
-	Name     *string
-	URL      *string
-	Protocol *string
-	Username *string
-	Password *string
-	Enabled  *bool
+	Name         *string
+	URL          *string
+	Protocol     *string
+	Username     *string
+	Password     *string
+	Enabled      *bool
+	Description  *string
+	Location     *string
+	Brand        *string
+	Model        *string
+	SerialNumber *string
 }
 
 type CameraManager struct {
@@ -387,6 +392,17 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
+		// Persist DB-only metadata fields
+		if updates.Description != nil || updates.Location != nil || updates.Brand != nil || updates.Model != nil || updates.SerialNumber != nil {
+			desc := strPtrOrEmpty(updates.Description)
+			loc := strPtrOrEmpty(updates.Location)
+			br := strPtrOrEmpty(updates.Brand)
+			mo := strPtrOrEmpty(updates.Model)
+			sn := strPtrOrEmpty(updates.SerialNumber)
+			if err := cm.db.UpdateCameraMetadata(ctx, cam.ID, desc, loc, br, mo, sn); err != nil {
+				logger.Error("failed to update camera metadata", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
@@ -472,4 +488,12 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		segDur = recorder.DefaultSegmentDur
 	}
 	return cm.startRecorder(ctx, *cam, segDur)
+}
+
+// strPtrOrEmpty returns the string value of a *string pointer, or empty string if nil.
+func strPtrOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
