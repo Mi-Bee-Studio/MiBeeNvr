@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -28,6 +30,7 @@ type MJPEGConfig struct {
 	RTSPURL        string
 	SegmentDur     time.Duration
 	SampleInterval int // if >1, only save every Nth frame
+	DB             RecordingDB
 	MaxBackoff     time.Duration
 	InitBackoff    time.Duration
 }
@@ -185,9 +188,11 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err)
 	}
+	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme: u.Scheme,
-		Host:   u.Host,
+		Scheme:   u.Scheme,
+		Host:     u.Host,
+		Protocol: &tcp,
 	}
 	if err := client.Start(); err != nil {
 		return fmt.Errorf("client start: %w", err)
@@ -316,6 +321,35 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	}
 	if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
 		mjpegLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
+	}
+
+	// Insert recording entry into database
+	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
+		now := time.Now()
+		duration := now.Sub(r.segStart).Seconds()
+		rec := &model.Recording{
+			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			CameraID:   r.cfg.CameraID,
+			FilePath:   r.curFinalPath,
+			Format:     model.FormatMJPEG,
+			StartedAt:  r.segStart,
+			EndedAt:    now,
+			Duration:   duration,
+			FrameCount: r.frameCount,
+		}
+		// Get file size from disk
+		// For MJPEG, the finalPath is a directory; calculate total size
+		var totalSize int64
+		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				totalSize += info.Size()
+			}
+			return nil
+		})
+		rec.FileSize = totalSize
+		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
+			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
 	}
 
 	// Update metrics for completed segment
