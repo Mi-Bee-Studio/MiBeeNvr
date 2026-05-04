@@ -100,6 +100,24 @@ export interface HealthResponse {
   uptime: string;
 }
 
+export interface SystemStats {
+  cpu: {
+    total: number;
+    idle: number;
+  };
+  memory: {
+    total: number;
+    available: number;
+    process_rss: number;
+  };
+  network: {
+    bytes_sent: number;
+    bytes_recv: number;
+  };
+  uptime: string;
+  timestamp: number;
+}
+
 // Auth credentials storage
 const AUTH_KEY = 'mibee_nvr_auth';
 
@@ -389,6 +407,10 @@ export async function healthCheck(): Promise<HealthResponse> {
   return response.json();
 }
 
+// System stats endpoint
+export async function getSystemStats(): Promise<SystemStats> {
+  return apiRequest<SystemStats>('/stats/system');
+}
 // Settings endpoints
 export async function getSettings(): Promise<SettingsConfig> {
   return apiRequest<SettingsConfig>('/settings');

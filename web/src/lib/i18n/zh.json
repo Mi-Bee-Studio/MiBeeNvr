@@ -120,6 +120,12 @@
   "stats.checkStorage": "存储",
   "stats.active": "活跃",
   "stats.inactive": "未启用",
+  "stats.cpu": "CPU",
+  "stats.memory": "内存",
+  "stats.network": "网络",
+  "stats.processMemory": "NVR 进程",
+  "stats.totalUpload": "总上传",
+  "stats.totalDownload": "总下载",
 
   "common.loading": "加载中...",
   "common.error": "错误",

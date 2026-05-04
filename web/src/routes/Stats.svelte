@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getStats, listCameras, healthCheck } from '$lib/api';
-  import type { StorageStats, Camera, HealthResponse } from '$lib/api';
+  import { getStats, listCameras, healthCheck, getSystemStats } from '$lib/api';
+  import type { StorageStats, Camera, HealthResponse, SystemStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Server } from 'lucide-svelte';
+  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi } from 'lucide-svelte';
   import {
     Chart,
     CategoryScale,
@@ -37,6 +37,14 @@
 
   // Health data
   let health: HealthResponse | null = null;
+
+  // System resource data
+  let prevSystemStats: SystemStats | null = null;
+  let currentSystemStats: SystemStats | null = null;
+  let cpuPercent = $state<string | null>(null);
+  let memoryPercent = $state<string | null>(null);
+  let netRateUp = $state<string | null>(null);
+  let netRateDown = $state<string | null>(null);
 
   function formatPercentage(used: number, total: number): string {
     if (total === 0) return '0%';
@@ -112,6 +120,34 @@
       health = await healthCheck();
     } catch (e) {
       console.error('Failed to load health:', e);
+    }
+  }
+
+  async function loadSystemStats() {
+    try {
+      const s = await getSystemStats();
+      currentSystemStats = s;
+
+      if (prevSystemStats) {
+        const dt = s.timestamp - prevSystemStats.timestamp;
+        if (dt > 0) {
+          const totalDelta = s.cpu.total - prevSystemStats.cpu.total;
+          const idleDelta = s.cpu.idle - prevSystemStats.cpu.idle;
+          if (totalDelta > 0) {
+            cpuPercent = ((totalDelta - idleDelta) / totalDelta * 100).toFixed(1) + '%';
+          }
+          netRateUp = formatFileSize((s.network.bytes_sent - prevSystemStats.network.bytes_sent) / dt) + '/s';
+          netRateDown = formatFileSize((s.network.bytes_recv - prevSystemStats.network.bytes_recv) / dt) + '/s';
+        }
+      }
+
+      if (s.memory.total > 0) {
+        memoryPercent = ((s.memory.total - s.memory.available) / s.memory.total * 100).toFixed(1) + '%';
+      }
+
+      prevSystemStats = s;
+    } catch (e) {
+      console.error('Failed to load system stats:', e);
     }
   }
 
@@ -221,6 +257,7 @@
     loadCameras();
     loadTrends();
     loadHealth();
+    loadSystemStats();
 
     // Auto-refresh every 30 seconds
     refreshInterval = window.setInterval(() => {
@@ -228,6 +265,7 @@
       loadCameras();
       loadTrends();
       loadHealth();
+      loadSystemStats();
     }, 30000);
 
     // Re-create charts when theme changes
@@ -275,82 +313,184 @@
       </div>
     {:else if stats}
       <div class="space-y-6">
-        <!-- Storage stats cards -->
+        <!-- Row 1: Summary cards -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <!-- Total storage -->
-          <div class="card p-6 border th-border">
-            <div class="flex items-center justify-between mb-4">
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-medium th-text-muted">{t('stats.totalStorage')}</h3>
-              <HardDrive size={20} class="th-text-secondary" />
+              <HardDrive size={18} class="th-text-secondary" />
             </div>
-            <p class="text-3xl font-bold th-text-primary mb-1">
+            <p class="text-2xl font-bold th-text-primary">
               {formatFileSize(stats.total_bytes)}
             </p>
-            <p class="text-sm th-text-muted mt-1">{t('stats.capacity')}</p>
           </div>
 
           <!-- Used storage -->
-          <div class="card p-6 border th-border">
-            <div class="flex items-center justify-between mb-4">
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-medium th-text-muted">{t('stats.used')}</h3>
-              <BarChart3 size={20} class="th-text-secondary" />
+              <BarChart3 size={18} class="th-text-secondary" />
             </div>
-            <p class="text-4xl font-bold th-text-primary mb-1">
-              {formatFileSize(stats.used_bytes)}
-            </p>
-            <p class="text-sm th-text-muted">
-              {formatPercentage(stats.used_bytes, stats.total_bytes)} {t('stats.used')}
+            <p class="text-2xl font-bold th-text-primary">
+              {formatFileSize(stats.used_bytes)} <span class="text-sm font-normal th-text-muted">{formatPercentage(stats.used_bytes, stats.total_bytes)}</span>
             </p>
           </div>
 
           <!-- Recordings count -->
-          <div class="card p-6 border th-border">
-            <div class="flex items-center justify-between mb-4">
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-medium th-text-muted">{t('stats.totalRecordings')}</h3>
-              <Video size={20} class="th-text-secondary" />
+              <Video size={18} class="th-text-secondary" />
             </div>
-            <p class="text-4xl font-bold th-text-primary mb-1">
+            <p class="text-2xl font-bold th-text-primary">
               {stats.recording_count.toLocaleString()}
             </p>
-            <p class="text-sm th-text-muted">{t('stats.totalRecordings')}</p>
           </div>
 
           <!-- Cameras count -->
-          <div class="card p-6 border th-border">
-            <div class="flex items-center justify-between mb-4">
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-medium th-text-muted">{t('stats.activeCameras')}</h3>
-              <CameraIcon size={20} class="th-text-secondary" />
+              <CameraIcon size={18} class="th-text-secondary" />
             </div>
-            <p class="text-4xl font-bold th-text-primary mb-1">
-              {stats.camera_count}
+            <p class="text-2xl font-bold th-text-primary">
+              {cameras.filter(c => c.enabled).length}/{cameras.length}
             </p>
-            <p class="text-sm th-text-muted">{t('stats.activeCameras')}</p>
           </div>
         </div>
 
-        <!-- Storage usage bar -->
-        <div class="card p-6 border th-border">
-          <h3 class="text-lg font-semibold th-text-primary mb-4">{t('stats.storageUsage')}</h3>
-          <div class="mb-2">
-            <div class="flex justify-between text-sm mb-2">
-              <span class="th-text-muted">{t('stats.usedOf', { used: formatFileSize(stats.used_bytes) })}</span>
-              <span class="th-text-muted">{t('stats.freeOf', { free: formatFileSize(stats.total_bytes - stats.used_bytes) })}</span>
+        <!-- Row 2: Storage bar + System Health -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <!-- Storage usage bar -->
+          <div class="card p-5 border th-border lg:col-span-2">
+            <h3 class="text-lg font-semibold th-text-primary mb-4">{t('stats.storageUsage')}</h3>
+            <div class="mb-2">
+              <div class="flex justify-between text-sm mb-2">
+                <span class="th-text-muted">{t('stats.usedOf', { used: formatFileSize(stats.used_bytes) })}</span>
+                <span class="th-text-muted">{t('stats.freeOf', { free: formatFileSize(stats.total_bytes - stats.used_bytes) })}</span>
+              </div>
+              <div class="w-full th-bg-tertiary rounded-full h-4 overflow-hidden">
+                <div
+                  class="h-full {getUsageColor((stats.used_bytes / stats.total_bytes) * 100)} transition-all duration-500"
+                  style="width: {formatPercentage(stats.used_bytes, stats.total_bytes)}"
+                ></div>
+              </div>
             </div>
-            <div class="w-full th-bg-tertiary rounded-full h-4 overflow-hidden">
-              <div
-                class="h-full {getUsageColor((stats.used_bytes / stats.total_bytes) * 100)} transition-all duration-500"
-                style="width: {formatPercentage(stats.used_bytes, stats.total_bytes)}"
-              ></div>
-            </div>
+            <p class="text-sm th-text-muted mt-2">
+              {t('stats.ofStorageUsed', { percentage: formatPercentage(stats.used_bytes, stats.total_bytes) })}
+            </p>
           </div>
-          <p class="text-sm th-text-muted mt-2">
-            {t('stats.ofStorageUsed', { percentage: formatPercentage(stats.used_bytes, stats.total_bytes) })}
-          </p>
+
+          <!-- Compact system health -->
+          {#if health}
+            <div class="card p-5 border th-border lg:col-span-1">
+              <h3 class="text-lg font-semibold th-text-primary mb-4">{t('stats.systemStatus')}</h3>
+              <!-- Health dot + badge + uptime -->
+              <div class="flex items-center gap-2 mb-4">
+                <span class="inline-block w-2.5 h-2.5 rounded-full {getHealthDotColor(health.status)}"></span>
+                <span class="badge {getHealthBadgeClass(health.status)}">{getHealthLabel(health.status)}</span>
+                {#if health.uptime}
+                  <span class="ml-auto text-xs th-text-muted">{health.uptime}</span>
+                {/if}
+              </div>
+              <!-- Compact indicators -->
+              <div class="space-y-2 text-sm">
+                <div class="flex items-center justify-between">
+                  <span class="th-text-muted">{t('stats.goroutines')}</span>
+                  <span class="font-medium th-text-primary">{parseGoroutineCount(health.checks?.goroutines?.message)}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="th-text-muted">{t('stats.checkDatabase')}</span>
+                  {#if health.checks?.database?.status === 'ok'}
+                    <span class="text-[var(--color-success)]">✓</span>
+                  {:else}
+                    <span class="text-[var(--color-danger)]">✗</span>
+                  {/if}
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="th-text-muted">{t('stats.checkStorage')}</span>
+                  {#if health.checks?.storage}
+                    {#if health.checks.storage.status === 'ok'}
+                      <span class="text-[var(--color-success)]">✓</span>
+                    {:else if health.checks.storage.status === 'warning'}
+                      <span class="text-[var(--color-warning)]">⚠</span>
+                    {:else}
+                      <span class="text-[var(--color-danger)]">✗</span>
+                    {/if}
+                  {:else}
+                    <span class="th-text-muted">—</span>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
 
-        <!-- Camera list -->
+        <!-- Row 2.5: System Resources (CPU, Memory, Network) -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- CPU -->
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.cpu')}</h3>
+              <Cpu size={18} class="th-text-secondary" />
+            </div>
+            <p class="text-2xl font-bold th-text-primary">
+              {cpuPercent ?? '--'}
+            </p>
+            <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
+              {#if cpuPercent}
+                <div
+                  class="h-full {getUsageColor(parseFloat(cpuPercent))} transition-all duration-500"
+                  style="width: {cpuPercent}"
+                ></div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Memory -->
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.memory')}</h3>
+              <MemoryStick size={18} class="th-text-secondary" />
+            </div>
+            <p class="text-2xl font-bold th-text-primary">
+              {currentSystemStats ? formatFileSize(currentSystemStats.memory.total - currentSystemStats.memory.available) : '--'}
+              <span class="text-sm font-normal th-text-muted">{memoryPercent}</span>
+            </p>
+            <p class="text-xs th-text-muted mt-1">
+              {t('stats.processMemory')}: {currentSystemStats ? formatFileSize(currentSystemStats.memory.process_rss) : '--'}
+            </p>
+            <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
+              {#if memoryPercent}
+                <div
+                  class="h-full {getUsageColor(parseFloat(memoryPercent))} transition-all duration-500"
+                  style="width: {memoryPercent}"
+                ></div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Network -->
+          <div class="card p-5 border th-border">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium th-text-muted">{t('stats.network')}</h3>
+              <Wifi size={18} class="th-text-secondary" />
+            </div>
+            <p class="text-2xl font-bold th-text-primary">
+              <span class="text-base font-medium">↑</span> {netRateUp ?? '--'}
+              <span class="text-base font-medium ml-2">↓</span> {netRateDown ?? '--'}
+            </p>
+            <p class="text-xs th-text-muted mt-1">
+              {t('stats.totalUpload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_sent) : '--'}
+              · {t('stats.totalDownload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_recv) : '--'}
+            </p>
+          </div>
+        </div>
+
+        <!-- Row 3: Camera table -->
         <div class="card border th-border">
-          <div class="p-6 border-b th-border">
+          <div class="p-5 border-b th-border">
             <h3 class="text-lg font-semibold th-text-primary">{t('stats.cameras')}</h3>
           </div>
           <div class="table-container border-0 rounded-none">
@@ -371,7 +511,10 @@
                 <tbody>
                   {#each cameras as camera}
                     <tr class="transition-all duration-200 hover:th-bg-hover">
-                      <td class="font-medium th-text-primary">{camera.name}</td>
+                      <td class="font-medium th-text-primary">
+                        <span class="inline-block w-2 h-2 rounded-full mr-2 {camera.enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-danger)]'}"></span>
+                        {camera.name}
+                      </td>
                       <td class="th-text-muted font-mono text-sm">{camera.id}</td>
                       <td>
                         <span class="badge badge-neutral">{camera.protocol}</span>
@@ -405,87 +548,6 @@
             </div>
           </div>
         </div>
-        <!-- System Status — Health + Runtime Metrics -->
-        {#if health}
-          <div class="card p-6 border th-border">
-            <h3 class="text-lg font-semibold th-text-primary mb-5">{t('stats.systemStatus')}</h3>
-
-            <!-- Health indicator row -->
-            <div class="flex items-center gap-3 mb-6">
-              <span class="inline-block w-3 h-3 rounded-full {getHealthDotColor(health.status)}"></span>
-              <span class="badge {getHealthBadgeClass(health.status)}">{getHealthLabel(health.status)}</span>
-            </div>
-
-            <!-- Runtime metric cards -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <!-- Uptime -->
-              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
-                <div class="flex items-center gap-2 mb-2">
-                  <Clock size={16} class="th-text-secondary" />
-                  <span class="text-xs font-medium th-text-muted">{t('stats.uptime')}</span>
-                </div>
-                <p class="text-lg font-bold th-text-primary">{health.uptime || '—'}</p>
-              </div>
-
-              <!-- Goroutines -->
-              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
-                <div class="flex items-center gap-2 mb-2">
-                  <Cpu size={16} class="th-text-secondary" />
-                  <span class="text-xs font-medium th-text-muted">{t('stats.goroutines')}</span>
-                </div>
-                <p class="text-lg font-bold th-text-primary">{parseGoroutineCount(health.checks?.goroutines?.message)}</p>
-              </div>
-
-              <!-- Database -->
-              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
-                <div class="flex items-center gap-2 mb-2">
-                  <Server size={16} class="th-text-secondary" />
-                  <span class="text-xs font-medium th-text-muted">{t('stats.checkDatabase')}</span>
-                </div>
-                <p class="text-lg font-bold th-text-primary">
-                  {#if health.checks?.database?.status === 'ok'}
-                    <span class="badge badge-success">OK</span>
-                  {:else}
-                    <span class="badge badge-error">Error</span>
-                  {/if}
-                </p>
-              </div>
-
-              <!-- Storage health -->
-              <div class="p-4 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
-                <div class="flex items-center gap-2 mb-2">
-                  <Activity size={16} class="th-text-secondary" />
-                  <span class="text-xs font-medium th-text-muted">{t('stats.checkStorage')}</span>
-                </div>
-                <p class="text-lg font-bold th-text-primary">
-                  {#if health.checks?.storage}
-                    <span class="badge {getHealthBadgeClass(health.checks.storage.status)}">
-                      {health.checks.storage.status === 'ok' ? 'OK' : health.checks.storage.status === 'warning' ? 'Warn' : 'Error'}
-                    </span>
-                  {:else}
-                    <span class="th-text-muted">—</span>
-                  {/if}
-                </p>
-              </div>
-            </div>
-
-            <!-- Camera status list -->
-            {#if cameras.length > 0}
-              <div>
-                <h4 class="text-sm font-medium th-text-muted mb-3">{t('stats.cameraStatus')}</h4>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {#each cameras as camera}
-                    <div class="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)] th-bg-secondary border th-border">
-                      <span class="inline-block w-2 h-2 rounded-full {camera.enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-danger)]'}"></span>
-                      <span class="text-sm th-text-primary truncate">{camera.name}</span>
-                      <span class="ml-auto text-xs th-text-muted">{camera.enabled ? t('stats.active') : t('stats.inactive')}</span>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/if}
 
         <!-- Loading indicator for refresh -->
         {#if loading}
