@@ -6,28 +6,28 @@
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
-  let cameras: Camera[] = [];
-  let loading = true;
-  let error = '';
-  let feedback = '';
-  let feedbackType: 'success' | 'error' = 'success';
+  let cameras = $state<Camera[]>([]);
+  let loading = $state(true);
+  let error = $state('');
+  let feedback = $state('');
+  let feedbackType = $state<'success' | 'error'>('success');
 
   // Form state
-  let showForm = false;
-  let editingCamera: Camera | null = null;
-  let formName = '';
-  let formProtocol = 'rtsp_h264';
-  let formUrl = '';
-  let formUsername = '';
-  let formPassword = '';
-  let showPassword = false;
-  let formEnabled = true;
-  let saving = false;
-  let formDescription = '';
-  let formLocation = '';
-  let formBrand = '';
-  let formModel = '';
-  let formSerialNumber = '';
+  let showForm = $state(false);
+  let editingCamera = $state<Camera | null>(null);
+  let formName = $state('');
+  let formProtocol = $state('rtsp_h264');
+  let formUrl = $state('');
+  let formUsername = $state('');
+  let formPassword = $state('');
+  let showPassword = $state(false);
+  let formEnabled = $state(true);
+  let saving = $state(false);
+  let formDescription = $state('');
+  let formLocation = $state('');
+  let formBrand = $state('');
+  let formModel = $state('');
+  let formSerialNumber = $state('');
 
   // Inline name edit
   let editingNameId = $state<string | null>(null);
@@ -35,7 +35,7 @@
   let validationErrors = $state<Record<string, string>>({});
 
   // Delete confirmation
-  let deletingCamera: Camera | null = null;
+  let deletingCamera = $state<Camera | null>(null);
 
   function showFeedback(msg: string, type: 'success' | 'error') {
     showToast(msg, type);
