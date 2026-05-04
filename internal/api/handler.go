@@ -730,19 +730,26 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	// Try removing from camera manager (handles config + recorder)
+	// This may fail for orphaned DB-only cameras, which is expected.
+	removedFromConfig := true
+	if h.camMgr != nil {
+		if err := h.camMgr.RemoveCamera(ctx, id); err != nil {
+			removedFromConfig = false
+		}
+	}
+
+	// Always delete from DB to handle both "camera in config" and "camera only in DB" cases.
+	dbErr := h.db.DeleteCamera(ctx, id)
+	if !removedFromConfig && dbErr != nil {
+		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
-	id := chi.URLParam(r, "id")
-
-	if err := h.camMgr.RemoveCamera(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "camera not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete camera: %v", err))
-		return
+	if dbErr != nil {
+		logger.Warn("failed to delete camera from DB", "camera_id", id, "error", dbErr)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

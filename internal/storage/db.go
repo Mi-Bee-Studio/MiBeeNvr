@@ -406,6 +406,20 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	return &c, nil
 }
 
+// DeleteCamera removes a camera record from the database.
+// Returns an error if the camera does not exist.
+func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM cameras WHERE id = ?;`, cameraID)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // GetRecordingTrends returns daily aggregated recording statistics.
 // Days defaults to 7, clamped to [1, 30].
 func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailyStats, error) {
