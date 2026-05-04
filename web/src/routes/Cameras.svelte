@@ -32,7 +32,7 @@
   // Inline name edit
   let editingNameId = $state<string | null>(null);
   let inlineName = $state('');
-  let validationErrors: Record<string, string> = {};
+  let validationErrors = $state<Record<string, string>>({});
 
   // Delete confirmation
   let deletingCamera: Camera | null = null;

@@ -977,22 +977,16 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			h.config.Cleanup.CheckInterval = *body.Cleanup.CheckInterval
 		}
-
+	}
 
 	// Persist config to disk
-
 	if err := config.Save(h.configPath, h.config); err != nil {
-
 		logger.Warn("failed to save config", "error", err)
-
 	}
-
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-	}
 }
 
-// --- Backup endpoints ---
 
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
@@ -1012,7 +1006,6 @@ func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "created", "file": filename})
 }
-
 func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
 	entries, err := os.ReadDir(backupDir)

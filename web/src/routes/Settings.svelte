@@ -23,7 +23,7 @@ let itemsPerPage = getItemsPerPage();
   let originalRetentionDays = 30;
 
   // Validation
-  let validationErrors: Record<string, string> = {};
+  let validationErrors = $state<Record<string, string>>({});
 
 
   // Confirmation dialog
