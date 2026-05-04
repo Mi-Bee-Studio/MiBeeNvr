@@ -222,9 +222,11 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err)
 	}
+	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme: u.Scheme,
-		Host:   u.Host,
+		Scheme:   u.Scheme,
+		Host:     u.Host,
+		Protocol: &tcp,
 	}
 	if err := client.Start(); err != nil {
 		return fmt.Errorf("client start: %w", err)
