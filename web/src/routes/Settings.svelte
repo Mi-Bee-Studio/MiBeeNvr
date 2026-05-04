@@ -7,27 +7,27 @@
   import { AlertCircle, Settings as SettingsIcon } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
-  let settings: SettingsConfig | null = null;
-  let loading = true;
-  let error = '';
-  let saving = false;
+  let settings = $state<SettingsConfig | null>(null);
+  let loading = $state(true);
+  let error = $state('');
+  let saving = $state(false);
 
 // Form state
-let retentionDays = 30;
-let diskThresholdPercent = 90;
-let checkInterval = '1h';
-let itemsPerPage = getItemsPerPage();
-  let autoRefresh = getAutoRefresh();
+let retentionDays = $state(30);
+let diskThresholdPercent = $state(90);
+let checkInterval = $state('1h');
+let itemsPerPage = $state(getItemsPerPage());
+  let autoRefresh = $state(getAutoRefresh());
   
   // Original values for change tracking
-  let originalRetentionDays = 30;
+  let originalRetentionDays = $state(30);
 
   // Validation
   let validationErrors = $state<Record<string, string>>({});
 
 
   // Confirmation dialog
-  let showConfirmDialog = false;
+  let showConfirmDialog = $state(false);
   function validateField(field: string, value: string) {
     const val = parseInt(value);
     if (field === 'retention_days') {
