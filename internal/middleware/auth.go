@@ -15,6 +15,7 @@ var logger = slog.Default().With("component", "auth")
 const (
 	authMaxFailures   = 20
 	authWindowMinutes = 1
+	authCacheTTL      = 5 * time.Minute
 )
 
 // rateLimitEntry tracks failed auth attempts per IP.
@@ -86,12 +87,40 @@ func HashPassword(password string) (string, error) {
 	return string(b), nil
 }
 
+// authCacheEntry stores a successful bcrypt verification result.
+type authCacheEntry struct {
+	hash      string // the bcrypt hash that was verified
+	verifiedAt time.Time
+}
+
+// authCache caches successful bcrypt verifications keyed by username+password.
+// This avoids repeating the expensive (~430ms on ARM) bcrypt verify on every request.
+var authCache sync.Map
+
 // CheckPassword compares a plaintext password against a bcrypt hash.
+// Results are cached for authCacheTTL to avoid repeated bcrypt overhead.
 func CheckPassword(password, hash string) bool {
 	if strings.TrimSpace(hash) == "" {
 		return false
 	}
+
+	cacheKey := password + "\x00" + hash
+
+	// Check cache first
+	if v, ok := authCache.Load(cacheKey); ok {
+		entry := v.(authCacheEntry)
+		if entry.hash == hash && time.Since(entry.verifiedAt) < authCacheTTL {
+			return true // cache hit
+		}
+		// Cache expired or hash changed, remove stale entry
+		authCache.Delete(cacheKey)
+	}
+
+	// Cache miss — do expensive bcrypt verify
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	if err == nil {
+		authCache.Store(cacheKey, authCacheEntry{hash: hash, verifiedAt: time.Now()})
+	}
 	return err == nil
 }
 

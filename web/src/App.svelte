@@ -10,12 +10,7 @@
 
   import Header from './components/Header.svelte';
 
-  // Current route
-  let currentRoute = 'login';
-  let params: Record<string, string> = {};
-
-
-  // Parse hash-based routes
+  // Parse hash-based routes (hoisted — function declarations are available before this line)
   function parseRoute(hash: string) {
     const path = hash.slice(1); // Remove #
 
@@ -32,7 +27,6 @@
 
     if (segments[0] === 'recordings') {
       if (segments[1]) {
-        // /recordings/:id
         return { route: 'recording-detail', params: { id: segments[1] } };
       }
       return { route: 'recordings', params: {} };
@@ -53,6 +47,13 @@
     // Default to login for unknown routes
     return { route: 'login', params: {} };
   }
+
+  // Current route — initialize from hash synchronously to prevent
+  // Login component from redirecting to recordings before onMount runs
+  const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
+  let currentRoute = initialRoute.route;
+  let params: Record<string, string> = initialRoute.params;
+
 
   function updateRoute() {
     const hash = window.location.hash;
