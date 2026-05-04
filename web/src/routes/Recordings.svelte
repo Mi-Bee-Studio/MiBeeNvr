@@ -1,27 +1,42 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+import { onMount, onDestroy } from 'svelte';
   import {
     listRecordings,
     listCameras,
     deleteRecording,
+    batchDeleteRecordings,
     pinRecording,
     unpinRecording
   } from '$lib/api';
+  import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
+
   import type { Recording, Camera } from '$lib/api';
   import Pagination from '../components/Pagination.svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Pin, MapPin, Trash2 } from 'lucide-svelte';
+  import { Pin, MapPin, Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle } from 'lucide-svelte';
+
+  // Helper function to get camera name by ID
+  function getCameraName(cameraId: string): string {
+    const camera = cameras.find(c => c.id === cameraId);
+    return camera ? camera.name : cameraId; // Fallback to camera_id if camera not found
+  }
 
 
   // Filter state
-  let cameraId = '';
-  let format = '';
-  let pinned = '';
+  let cameraId = $state('');
+  let format = $state('');
+  let searchQuery = $state('');
+  let startDate = $state('');
+  let endDate = $state('');
   let cameras: Camera[] = [];
-  let limit = 50;
+  let limit = getItemsPerPage();
   let offset = 0;
+  let sortBy = $state('started_at');
+  let sortOrder = $state<'asc' | 'desc'>('desc');
+  let selectedIds = $state<Set<string>>(new Set());
+  let showBatchDeleteConfirm = $state(false);
 
   // Data state
   let recordings = $state<Recording[]>([]);
@@ -29,10 +44,62 @@
   let loading = $state(false);
   let error = $state('');
   let deleteConfirm: Recording | null = null;
+  let showBackToTop = $state(false);
+
+  function toggleSelectAll() {
+    if (selectedIds.size === filteredRecordings.length) {
+      selectedIds = new Set();
+    } else {
+      selectedIds = new Set(filteredRecordings.map(r => r.id));
+    }
+  }
+
+  function toggleSelect(id: string) {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    selectedIds = newSet;
+  }
+
+  async function confirmBatchDelete() {
+    try {
+      await batchDeleteRecordings(Array.from(selectedIds));
+      showToast(t('recordings.batchDeleteSuccess', { count: String(selectedIds.size) }), 'success');
+      selectedIds = new Set();
+      showBatchDeleteConfirm = false;
+      loadRecordings();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
+    }
+  }
+  let filteredRecordings = $derived.by<Recording[]>(() => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return recordings.filter(r => getCameraName(r.camera_id).toLowerCase().includes(q));
+    }
+    return recordings;
+  });
+
+  function handleSort(field: string) {
+    if (sortBy === field) {
+      sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortBy = field;
+      sortOrder = 'asc';
+    }
+  }
 
   // Auto-refresh interval
   let refreshInterval: number;
 
+
+  // Get the current auto-refresh preference
+  function getRefreshInterval(): number {
+    return parseRefreshInterval(getAutoRefresh());
+  }
   // Load data
   async function loadRecordings() {
     loading = true;
@@ -42,9 +109,12 @@
       const response = await listRecordings({
         camera_id: cameraId || undefined,
         format: format || undefined,
-        pinned: pinned === 'true' ? true : pinned === 'false' ? false : undefined,
+        start: startDate ? new Date(startDate).toISOString() : undefined,
+        end: endDate ? new Date(endDate).toISOString() : undefined,
         offset,
-        limit
+        limit,
+        sort_by: sortBy,
+        order: sortOrder
       });
       recordings = response.recordings;
       totalRecordings = response.total || 0;
@@ -91,6 +161,23 @@
     }
   }
 
+  function setPresetRange(preset: string) {
+    const now = new Date();
+    const durations: Record<string, number> = { '1h': 3600000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
+    const ms = durations[preset] || 0;
+    const start = new Date(now.getTime() - ms);
+    startDate = start.toISOString().slice(0, 16);
+    endDate = now.toISOString().slice(0, 16);
+  }
+
+  function clearFilters() {
+    searchQuery = '';
+    cameraId = '';
+    format = '';
+    startDate = '';
+    endDate = '';
+  }
+
   function viewRecording(recording: Recording) {
     window.location.hash = `#/recordings/${recording.id}`;
   }
@@ -100,13 +187,20 @@
     loadCameras();
     loadRecordings();
 
-    // Auto-refresh every 30 seconds
+    // Auto-refresh using preference
     refreshInterval = window.setInterval(() => {
       loadRecordings();
-    }, 30000);
+    }, getRefreshInterval());
+
+    // Scroll listener for back to top button
+    const handleScroll = () => {
+      showBackToTop = window.scrollY > 300;
+    };
+    window.addEventListener('scroll', handleScroll);
 
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
+      window.removeEventListener('scroll', handleScroll);
     };
   });
 
@@ -114,10 +208,30 @@
   let loadTimeout: number;
   $effect(() => {
     // Read all filter variables to track them as dependencies
-    const _ = [cameraId, format, pinned, offset, limit];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
+  });
+
+  // Handle preference changes
+  $effect(() => {
+    // Update refresh interval when auto-refresh preference changes
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+    }
+    refreshInterval = window.setInterval(() => {
+      loadRecordings();
+    }, getRefreshInterval());
+    
+    // Update limit when items per page preference changes
+    limit = getItemsPerPage();
+    
+    return () => {
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+      }
+    };
   });
 
   // Pagination calculations
@@ -160,53 +274,172 @@
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
             </select>
           </div>
-          <div class="flex-1 min-w-[140px]">
-            <label for="pinned" class="input-label">{t('recordings.status')}</label>
-            <select id="pinned" class="input" bind:value={pinned}>
-              <option value="">{t('recordings.all')}</option>
-              <option value="true">{t('recordings.pinned')}</option>
-              <option value="false">{t('recordings.notPinned')}</option>
-            </select>
-          </div>
+          <div class="flex-1 min-w-[220px]">
+            <label class="input-label">{t('recordings.search')}</label>
+            <div class="relative">
+              <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
+              <input
+                type="text"
+                class="input pl-9"
+                placeholder={t('recordings.search')}
+                bind:value={searchQuery}
+              />
+            </div>
         </div>
+          <div class="flex-1 min-w-[280px]">
+            <label class="input-label">{t('recordings.startDate')}</label>
+            <div class="flex gap-2 items-center">
+              <input type="datetime-local" class="input flex-1" bind:value={startDate} />
+              <span class="th-text-tertiary">~</span>
+              <input type="datetime-local" class="input flex-1" bind:value={endDate} />
+            </div>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="input-label">&nbsp;</label>
+            <div class="flex gap-1 flex-wrap">
+              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('1h')}>{t('recordings.last1h')}</button>
+              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('24h')}>{t('recordings.last24h')}</button>
+              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('7d')}>{t('recordings.last7d')}</button>
+              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('30d')}>{t('recordings.last30d')}</button>
+            </div>
+          </div>
+          <div class="flex-none">
+            <label class="input-label">&nbsp;</label>
+              <button class="btn btn-secondary btn-sm" on:click={clearFilters}>{t('recordings.clearFilters')}</button>
+          </div>
       </div>
     </div>
 
     <!-- Error message -->
     {#if error}
-      <div class="mb-4 p-4 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger" aria-live="polite">
-        {error}
+      <div class="card border th-border-danger p-8 text-center">
+        <div class="flex justify-center mb-4 th-color-danger">
+          <AlertCircle size={48} />
+        </div>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
+        <p class="th-text-secondary mb-4">{error}</p>
+        <button on:click={loadRecordings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
       </div>
     {/if}
 
     <!-- Recordings table -->
     <div class="card border th-border">
       {#if loading && recordings.length === 0}
-        <div class="p-8 flex justify-center">
-          <div class="spinner spinner-lg"></div>
+        <div class="p-6 space-y-4">
+          <!-- Skeleton header -->
+          <div class="flex justify-between items-center">
+            <div class="h-8 w-48 th-bg-tertiary rounded animate-pulse"></div>
+            <div class="h-8 w-24 th-bg-tertiary rounded animate-pulse"></div>
+          </div>
+          <!-- Skeleton filter bar -->
+          <div class="h-12 th-bg-tertiary rounded animate-pulse"></div>
+          <!-- Skeleton table -->
+          <div class="space-y-3">
+            {#each Array(5) as _}
+              <div class="flex gap-4 items-center">
+                <div class="h-4 w-4 th-bg-tertiary rounded animate-pulse"></div>
+                <div class="h-4 w-32 th-bg-tertiary rounded animate-pulse"></div>
+                <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
+                <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
+                <div class="h-4 w-20 th-bg-tertiary rounded animate-pulse"></div>
+                <div class="h-4 w-24 th-bg-tertiary rounded animate-pulse ml-auto"></div>
+              </div>
+            {/each}
+          </div>
         </div>
       {:else if recordings.length === 0}
-        <div class="p-8 text-center th-text-muted">
-          {t('recordings.noRecordings')}
+        <div class="p-12 text-center">
+          <div class="flex justify-center mb-4 th-text-muted">
+            <Video size={48} />
+          </div>
+          <h3 class="text-lg font-medium th-text-primary mb-2">{t('recordings.noRecordings')}</h3>
+          <p class="text-sm th-text-muted mb-4">{t('recordings.noRecordingsHint')}</p>
+          <button on:click={clearFilters} class="btn btn-primary btn-sm">{t('recordings.clearFilters')}</button>
         </div>
       {:else}
         <div class="table-container th-border">
           <table class="table">
             <thead>
               <tr>
-                <th class="min-w-[100px]">{t('recordings.tableCamera')}</th>
+                <th class="w-10">
+                  <button on:click={toggleSelectAll} class="th-text-secondary hover:th-text-primary transition-colors">
+                    {#if selectedIds.size === filteredRecordings.length && filteredRecordings.length > 0}
+                      <CheckSquare size={18} />
+                    {:else}
+                      <Square size={18} />
+                    {/if}
+                  </button>
+                </th>
+                <th class="min-w-[100px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('camera_id')}>
+                  <span class="inline-flex items-center gap-1">
+                    {t('recordings.tableCamera')}
+                    {#if sortBy === 'camera_id'}
+                      {#if sortOrder === 'asc'}
+                        <ChevronUp size={14} />
+                      {:else}
+                        <ChevronDown size={14} />
+                      {/if}
+                    {/if}
+                  </span>
+                </th>
                 <th class="min-w-[80px]">{t('recordings.tableFormat')}</th>
-                <th class="min-w-[80px]">{t('recordings.tableDuration')}</th>
-                <th class="min-w-[80px]">{t('recordings.tableSize')}</th>
-                <th class="min-w-[120px]">{t('recordings.tableDate')}</th>
+                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('duration')}>
+                  <span class="inline-flex items-center gap-1">
+                    {t('recordings.tableDuration')}
+                    {#if sortBy === 'duration'}
+                      {#if sortOrder === 'asc'}
+                        <ChevronUp size={14} />
+                      {:else}
+                        <ChevronDown size={14} />
+                      {/if}
+                    {/if}
+                  </span>
+                </th>
+                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('file_size')}>
+                  <span class="inline-flex items-center gap-1">
+                    {t('recordings.tableSize')}
+                    {#if sortBy === 'file_size'}
+                      {#if sortOrder === 'asc'}
+                        <ChevronUp size={14} />
+                      {:else}
+                        <ChevronDown size={14} />
+                      {/if}
+                    {/if}
+                  </span>
+                </th>
+                <th class="min-w-[120px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('started_at')}>
+                  <span class="inline-flex items-center gap-1">
+                    {t('recordings.tableDate')}
+                    {#if sortBy === 'started_at'}
+                      {#if sortOrder === 'asc'}
+                        <ChevronUp size={14} />
+                      {:else}
+                        <ChevronDown size={14} />
+                      {/if}
+                    {/if}
+                  </span>
+                </th>
                 <th class="min-w-[80px]">{t('recordings.tableStatus')}</th>
                 <th class="text-right min-w-[140px]">{t('recordings.tableActions')}</th>
               </tr>
             </thead>
             <tbody>
-              {#each recordings as recording}
+              {#each filteredRecordings as recording}
                 <tr class="transition-all duration-200 hover:th-bg-hover">
-                  <td class="font-medium th-text-primary">{recording.camera_id}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(recording.id)}
+                      on:change={() => toggleSelect(recording.id)}
+                      class="w-4 h-4 rounded cursor-pointer"
+                    />
+                  </td>
+                  <td>
+                    <div class="flex flex-col">
+                      <span class="font-medium th-text-primary">{getCameraName(recording.camera_id)}</span>
+                      <span class="text-xs th-text-tertiary">{recording.camera_id}</span>
+                    </div>
+                  </td>
                   <td>
                     <span class="badge badge-neutral">
                       {t(`recording.format.${recording.format}`)}
@@ -281,6 +514,48 @@
     </div>
   </main>
 
+
+  <!-- Floating batch action bar -->
+  {#if selectedIds.size > 0}
+    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-lg shadow-lg border th-border th-bg-primary">
+      <span class="text-sm font-medium th-text-primary">
+        {t('recordings.selected', { count: String(selectedIds.size) })}
+      </span>
+      <button
+        on:click={() => showBatchDeleteConfirm = true}
+        class="btn btn-danger btn-sm"
+      >
+        {t('recordings.deleteSelected')}
+      </button>
+      <button
+        on:click={() => selectedIds = new Set()}
+        class="btn btn-ghost btn-sm"
+      >
+        {t('recordings.cancel')}
+      </button>
+    </div>
+  {/if}
+
+  <!-- Batch delete confirmation modal -->
+  {#if showBatchDeleteConfirm}
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div class="card max-w-md w-full p-6">
+        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.batchDeleteTitle')}</h3>
+        <p class="th-text-secondary mb-6">
+          {t('recordings.batchDeleteMessage', { count: String(selectedIds.size) })}
+        </p>
+        <div class="flex gap-3 justify-end">
+          <button on:click={() => showBatchDeleteConfirm = false} class="btn btn-secondary">
+            {t('recordings.cancel')}
+          </button>
+          <button on:click={confirmBatchDelete} class="btn btn-danger">
+            {t('recordings.deleteConfirm')}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Delete confirmation modal -->
   {#if deleteConfirm}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -307,3 +582,13 @@
     </div>
   {/if}
 </div>
+  <!-- Back to top button -->
+  {#if showBackToTop}
+    <button
+      on:click={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      class="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-all duration-300"
+      title={t('recordings.backToTop')}
+    >
+      <ArrowUp size={20} />
+    </button>
+  {/if}

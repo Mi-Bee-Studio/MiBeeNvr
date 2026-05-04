@@ -3,6 +3,7 @@
   import { listCameras, createCamera, updateCamera, deleteCamera } from '$lib/api';
   import type { Camera, CreateCameraRequest, UpdateCameraRequest } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   let cameras: Camera[] = [];
@@ -19,8 +20,18 @@
   let formUrl = '';
   let formUsername = '';
   let formPassword = '';
+  let showPassword = false;
   let formEnabled = true;
   let saving = false;
+  let formDescription = '';
+  let formLocation = '';
+  let formBrand = '';
+  let formModel = '';
+  let formSerialNumber = '';
+
+  // Inline name edit
+  let editingNameId = $state<string | null>(null);
+  let inlineName = $state('');
   let validationErrors: Record<string, string> = {};
 
   // Delete confirmation
@@ -28,6 +39,16 @@
 
   function showFeedback(msg: string, type: 'success' | 'error') {
     showToast(msg, type);
+  }
+
+  function validateField(field: string, value: string) {
+    if (field === 'name' && !value.trim()) {
+      validationErrors['name'] = t('cameras.nameRequired');
+    } else if (field === 'url' && !value.trim()) {
+      validationErrors['url'] = t('cameras.urlRequired');
+    } else {
+      delete validationErrors[field];
+    }
   }
 
   function validate(): boolean {
@@ -46,7 +67,14 @@
     formUrl = '';
     formUsername = '';
     formPassword = '';
+    showPassword = false;
+    formPassword = '';
     formEnabled = true;
+    formDescription = '';
+    formLocation = '';
+    formBrand = '';
+    formModel = '';
+    formSerialNumber = '';
     validationErrors = {};
   }
 
@@ -62,7 +90,14 @@
     formUrl = camera.url;
     formUsername = '';
     formPassword = '';
+    showPassword = false;
+    formPassword = '';
     formEnabled = camera.enabled;
+    formDescription = camera.description || '';
+    formLocation = camera.location || '';
+    formBrand = camera.brand || '';
+    formModel = camera.model || '';
+    formSerialNumber = camera.serial_number || '';
     validationErrors = {};
     showForm = true;
   }
@@ -90,6 +125,11 @@
           protocol: formProtocol,
           url: formUrl,
           enabled: formEnabled,
+          description: formDescription || undefined,
+          location: formLocation || undefined,
+          brand: formBrand || undefined,
+          model: formModel || undefined,
+          serial_number: formSerialNumber || undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -101,6 +141,11 @@
           protocol: formProtocol,
           url: formUrl,
           enabled: formEnabled,
+          description: formDescription || undefined,
+          location: formLocation || undefined,
+          brand: formBrand || undefined,
+          model: formModel || undefined,
+          serial_number: formSerialNumber || undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -132,6 +177,27 @@
     }
   }
 
+  function startInlineEdit(camera: Camera) {
+    editingNameId = camera.id;
+    inlineName = camera.name;
+  }
+
+  async function saveInlineEdit(camera: Camera) {
+    if (!inlineName.trim()) { editingNameId = null; return; }
+    try {
+      await updateCamera(camera.id, { name: inlineName.trim() });
+      camera.name = inlineName.trim();
+      showToast(t('cameras.nameUpdated'), 'success');
+    } catch (e) {
+      showToast(t('cameras.failedUpdate'), 'error');
+    }
+    editingNameId = null;
+  }
+
+  function cancelInlineEdit() {
+    editingNameId = null;
+  }
+
   onMount(() => {
     loadCameras();
   });
@@ -159,15 +225,29 @@
 
     <!-- Error -->
     {#if error}
-      <div class="mb-4 p-4 bg-[rgba(239,68,68,0.3)] border th-border-danger rounded-md th-color-danger">
-        {error}
+      <div class="card border th-border-danger p-8 text-center">
+        <div class="flex justify-center mb-4 th-color-danger">
+          <AlertCircle size={48} />
+        </div>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
+        <p class="th-text-secondary mb-4">{error}</p>
+        <button on:click={loadCameras} class="btn btn-primary btn-sm">{t('common.retry')}</button>
       </div>
     {/if}
 
     <!-- Loading -->
     {#if loading}
-      <div class="flex justify-center items-center h-64">
-        <div class="spinner spinner-lg"></div>
+      <div class="card border th-border">
+        <div class="p-6 space-y-4">
+          {#each Array(3) as _}
+            <div class="flex gap-4 items-center">
+              <div class="h-4 w-32 th-bg-tertiary rounded animate-pulse"></div>
+              <div class="h-4 w-20 th-bg-tertiary rounded animate-pulse"></div>
+              <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
+              <div class="h-4 w-40 th-bg-tertiary rounded animate-pulse"></div>
+            </div>
+          {/each}
+        </div>
       </div>
     {:else}
       <div class="space-y-6">
@@ -183,7 +263,7 @@
               <!-- Name -->
               <div>
                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
-                <input id="cam-name" type="text" class="input" bind:value={formName} />
+                <input id="cam-name" type="text" class="input {validationErrors['name'] ? 'border-red-500' : ''}" bind:value={formName} on:blur={() => validateField('name', formName)} on:input={() => { if (validationErrors['name']) delete validationErrors['name']; }} />
                 {#if validationErrors['name']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['name']}</p>
                 {/if}
@@ -205,7 +285,7 @@
               <!-- URL -->
               <div class="md:col-span-2">
                 <label for="cam-url" class="input-label">{t('cameras.url')}</label>
-                <input id="cam-url" type="text" class="input" bind:value={formUrl} />
+                <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl} on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
@@ -220,13 +300,62 @@
               <!-- Password -->
               <div>
                 <label for="cam-pass" class="input-label">{t('cameras.password')}</label>
-                <input id="cam-pass" type="password" class="input" bind:value={formPassword} />
+                <div class="relative">
+                  <input
+                    id="cam-pass"
+                    type={showPassword ? 'text' : 'password'}
+                    class="input pr-10"
+                    bind:value={formPassword}
+                  />
+                  <button
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+                    on:click={() => showPassword = !showPassword}
+                    aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+                  >
+                    {#if showPassword}
+                      <EyeOff class="w-4 h-4" />
+                    {:else}
+                      <Eye class="w-4 h-4" />
+                    {/if}
+                  </button>
+                </div>
               </div>
 
               <!-- Enabled -->
               <div class="md:col-span-2 flex items-center gap-2">
                 <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
                 <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
+              </div>
+
+              <!-- Description -->
+              <div class="md:col-span-2">
+                <label for="cam-desc" class="input-label">{t('cameras.description')}</label>
+                <textarea id="cam-desc" class="input" rows="2" bind:value={formDescription} placeholder={t('cameras.descriptionPlaceholder')}></textarea>
+              </div>
+
+              <!-- Location -->
+              <div>
+                <label for="cam-location" class="input-label">{t('cameras.location')}</label>
+                <input id="cam-location" type="text" class="input" bind:value={formLocation} placeholder={t('cameras.locationPlaceholder')} />
+              </div>
+
+              <!-- Brand -->
+              <div>
+                <label for="cam-brand" class="input-label">{t('cameras.brand')}</label>
+                <input id="cam-brand" type="text" class="input" bind:value={formBrand} />
+              </div>
+
+              <!-- Model -->
+              <div>
+                <label for="cam-model" class="input-label">{t('cameras.model')}</label>
+                <input id="cam-model" type="text" class="input" bind:value={formModel} />
+              </div>
+
+              <!-- Serial Number -->
+              <div>
+                <label for="cam-serial" class="input-label">{t('cameras.serialNumber')}</label>
+                <input id="cam-serial" type="text" class="input" bind:value={formSerialNumber} />
               </div>
             </div>
 
@@ -265,8 +394,13 @@
         <!-- Camera Table -->
         <div class="card border th-border overflow-hidden">
           {#if cameras.length === 0}
-            <div class="p-8 text-center th-text-muted">
-              {t('cameras.noCameras')}
+            <div class="p-12 text-center">
+              <div class="flex justify-center mb-4 th-text-muted">
+                <CameraIcon size={48} />
+              </div>
+              <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.noCameras')}</h3>
+              <p class="text-sm th-text-muted mb-4">{t('cameras.noCamerasHint')}</p>
+              <button on:click={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
             </div>
           {:else}
             <div class="overflow-x-auto">
@@ -274,8 +408,9 @@
                 <thead>
                   <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableName')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableDescription')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableStatus')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableUrl')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableActions')}</th>
                   </tr>
@@ -283,13 +418,41 @@
                 <tbody class="divide-y divide-[var(--border)]">
                   {#each cameras as camera (camera.id)}
                     <tr class="hover:th-bg-hover transition-colors">
-                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium th-text-primary">{camera.name}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        {#if editingNameId === camera.id}
+                          <input
+                            type="text"
+                            class="input py-0.5 px-2 text-sm w-40"
+                            bind:value={inlineName}
+                            on:keydown={(e) => {
+                              if (e.key === 'Enter') saveInlineEdit(camera);
+                              if (e.key === 'Escape') cancelInlineEdit();
+                            }}
+                            on:blur={() => saveInlineEdit(camera)}
+                            focus
+                          />
+                        {:else}
+                          <button
+                            class="font-medium th-text-primary hover:underline cursor-pointer flex items-center gap-1"
+                            on:click={() => startInlineEdit(camera)}
+                            title={t('cameras.editName')}
+                          >
+                            {camera.name}
+                            <Pencil size={12} class="th-text-tertiary" />
+                          </button>
+                        {/if}
+                      </td>
+                      <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.description || '-'}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        {#if camera.enabled}
-                          <span class="badge badge-success">{t('cameras.enabled')}</span>
+                        {#if camera.recorder_status === 'recording'}
+                          <span class="badge badge-success">{t('cameras.statusRecording')}</span>
+                        {:else if camera.recorder_status === 'error'}
+                          <span class="badge badge-error">{t('cameras.statusError')}</span>
+                        {:else if camera.recorder_status === 'reconnecting'}
+                          <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
                         {:else}
-                          <span class="badge badge-error">{t('cameras.disabled')}</span>
+                          <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
                         {/if}
                       </td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>

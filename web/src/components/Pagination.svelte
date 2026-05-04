@@ -53,5 +53,24 @@
     >
       <ChevronRight size={16} />
     </button>
+    <div class="flex items-center gap-2 text-sm text-[var(--text-secondary)] ml-2">
+      <span>Go to page</span>
+      <input
+        type="number"
+        min="1"
+        max={totalPages}
+        value={currentPage}
+        on:keydown={(e) => {
+          if (e.key === 'Enter') {
+            const page = parseInt(e.target.value);
+            if (page >= 1 && page <= totalPages) {
+              onPageChange(page);
+            }
+          }
+        }}
+        class="w-16 text-center py-1 px-2 border border-[var(--border)] rounded focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] text-sm"
+      />
+      <span>/ {totalPages}</span>
+    </div>
   </div>
 </div>
