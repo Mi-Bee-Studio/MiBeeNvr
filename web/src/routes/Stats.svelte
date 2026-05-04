@@ -25,10 +25,10 @@
     PointElement, Filler, Tooltip, Legend, Title
   );
 
-  let stats: StorageStats | null = null;
-  let cameras: Camera[] = [];
-  let loading = true;
-  let error = '';
+  let stats = $state<StorageStats | null>(null);
+  let cameras = $state<Camera[]>([]);
+  let loading = $state(true);
+  let error = $state('');
 
   // Auto-refresh interval
   let refreshInterval: number;
@@ -36,11 +36,11 @@
   let cameraChart: Chart | null = null;
 
   // Health data
-  let health: HealthResponse | null = null;
+  let health = $state<HealthResponse | null>(null);
 
   // System resource data
-  let prevSystemStats: SystemStats | null = null;
-  let currentSystemStats: SystemStats | null = null;
+  let prevSystemStats = $state<SystemStats | null>(null);
+  let currentSystemStats = $state<SystemStats | null>(null);
   let cpuPercent = $state<string | null>(null);
   let memoryPercent = $state<string | null>(null);
   let netRateUp = $state<string | null>(null);
