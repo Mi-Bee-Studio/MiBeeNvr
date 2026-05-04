@@ -54,7 +54,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 }
 
 // createRecorder creates a recorder for the given camera config.
-// Returns nil for protocols that don't support recording (http_jpeg, unknown).
+// Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
 	switch cam.Protocol {
 	case string(model.ProtoRTSPH264):
@@ -70,14 +70,25 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			CameraID:   cam.ID,
 			RTSPURL:    cam.URL,
 			SegmentDur: segDur,
+			DB:         cm.db,
 		}
 		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
+	case string(model.ProtoHTTPJPEG):
+		httpJpegCfg := recorder.HTTPJPEGConfig{
+			CameraID:   cam.ID,
+			URL:        cam.URL,
+			SegmentDur: segDur,
+			Username:   cam.Username,
+			Password:   cam.Password,
+			DB:         cm.db,
+		}
+		return recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	default:
 		return nil
 	}
 }
 
-// startRecorder creates and starts a recorder for the given camera.
+// startRecorder creates and starts a recorder for the given camera config.
 // The caller must hold cm.mu (or at least a write lock) if cm.recorders is being modified.
 // If the recorder is created, it will be registered in cm.recorders.
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
@@ -156,7 +167,17 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			}
 
 		case string(model.ProtoHTTPJPEG):
-			logger.Info("camera uses http_jpeg protocol, skipping", "camera_id", cam.ID)
+			rec := cm.createRecorder(cam, segDur)
+			if rec != nil {
+				cm.mu.Lock()
+				cm.recorders[cam.ID] = rec
+				cm.mu.Unlock()
+				if err := rec.Start(ctx); err != nil {
+						logger.Error("failed to start HTTP JPEG recorder", "camera_id", cam.ID, "error", err)
+				} else {
+						logger.Info("started HTTP JPEG recorder", "camera_id", cam.ID)
+				}
+			}
 
 		default:
 			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)

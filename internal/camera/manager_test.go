@@ -104,12 +104,12 @@ func TestStart_EnabledCameras(t *testing.T) {
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
 
-	// Should have created recorders for h264 and mjpeg cameras only
-	// (disabled and http_jpeg are skipped)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	// Should have created recorders for h264, mjpeg, and http_jpeg cameras
+	// (disabled camera is skipped)
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	statuses := mgr.Status()
-	assert.Len(t, statuses, 2)
+	assert.Len(t, statuses, 3)
 	_, hasH264 := statuses["cam-h264"]
 	_, hasMJPEG := statuses["cam-mjpeg"]
 	assert.True(t, hasH264, "should have h264 recorder")
@@ -117,7 +117,7 @@ func TestStart_EnabledCameras(t *testing.T) {
 	_, hasDisabled := statuses["cam-disabled"]
 	assert.False(t, hasDisabled, "should not have disabled recorder")
 	_, hasJPEG := statuses["cam-jpeg"]
-	assert.False(t, hasJPEG, "should not have http_jpeg recorder")
+	assert.True(t, hasJPEG, "should have http_jpeg recorder")
 }
 
 func TestStart_DisabledCamerasSkipped(t *testing.T) {
@@ -158,7 +158,7 @@ func TestStart_DisabledCamerasSkipped(t *testing.T) {
 	assert.Equal(t, 0, mgr.RecorderCount())
 }
 
-func TestStart_HTTPJPEGSkipped(t *testing.T) {
+func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
@@ -193,7 +193,9 @@ func TestStart_HTTPJPEGSkipped(t *testing.T) {
 	mgr := NewCameraManager(cfg, store, db, "")
 	err = mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 0, mgr.RecorderCount())
+	assert.Equal(t, 1, mgr.RecorderCount())
+	_, hasJPEG := mgr.Status()["cam-1"]
+	assert.True(t, hasJPEG, "should have http_jpeg recorder")
 }
 
 func TestStart_InvalidSegmentDuration(t *testing.T) {
@@ -242,7 +244,7 @@ func TestStop(t *testing.T) {
 
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Give recorders a moment to start their goroutines
 	time.Sleep(100 * time.Millisecond)
@@ -251,7 +253,7 @@ func TestStop(t *testing.T) {
 	require.NoError(t, err)
 
 	// After stop, recorders should still be in the map (not removed)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Status should be stopped
 	statuses := mgr.Status()
@@ -265,7 +267,7 @@ func TestStop(t *testing.T) {
 	require.NoError(t, err)
 
 	// After stop, recorders should still be in the map (not removed)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Status should be stopped
 }
@@ -339,7 +341,7 @@ func TestGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Let recorders run briefly
 	time.Sleep(100 * time.Millisecond)
@@ -509,8 +511,10 @@ func TestAddCamera_HTTPJPEG(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cam-new-jpeg", id)
 
-	// No recorder for http_jpeg
-	assert.Equal(t, 0, mgr.RecorderCount())
+	// Recorder should be created for http_jpeg
+	_, ok := mgr.recorders["cam-new-jpeg"]
+	assert.True(t, ok, "recorder should be created for http_jpeg camera")
+	assert.Equal(t, 1, mgr.RecorderCount())
 }
 
 func TestAddCamera_DuplicateID(t *testing.T) {
@@ -582,14 +586,14 @@ func TestRemoveCamera_WithRecorder(t *testing.T) {
 	// Start the manager to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Remove a camera that has a recorder
 	err = mgr.RemoveCamera(ctx, "cam-h264")
 	require.NoError(t, err)
 
 	// Recorder should be removed
-	assert.Equal(t, 1, mgr.RecorderCount())
+	assert.Equal(t, 2, mgr.RecorderCount())
 	_, ok := mgr.recorders["cam-h264"]
 	assert.False(t, ok)
 
@@ -645,7 +649,7 @@ func TestUpdateCamera_URL(t *testing.T) {
 	// Start to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	newURL := "rtsp://127.0.0.1:2/new-stream"
 	updated, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{URL: &newURL})
@@ -653,7 +657,7 @@ func TestUpdateCamera_URL(t *testing.T) {
 	assert.Equal(t, newURL, updated.URL)
 
 	// Recorder should still exist (restarted)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 }
 
 func TestUpdateCamera_Disable(t *testing.T) {
@@ -664,7 +668,7 @@ func TestUpdateCamera_Disable(t *testing.T) {
 	// Start to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	disabled := false
 	updated, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{Enabled: &disabled})
@@ -672,7 +676,7 @@ func TestUpdateCamera_Disable(t *testing.T) {
 	assert.False(t, updated.Enabled)
 
 	// Recorder should be stopped and removed
-	assert.Equal(t, 1, mgr.RecorderCount())
+	assert.Equal(t, 2, mgr.RecorderCount())
 	_, ok := mgr.recorders["cam-h264"]
 	assert.False(t, ok)
 }
@@ -715,14 +719,14 @@ func TestRestartRecorder(t *testing.T) {
 	// Start to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 
 	// Restart a recorder
 	err = mgr.RestartRecorder(ctx, "cam-h264")
 	require.NoError(t, err)
 
 	// Recorder should still be there
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 	_, ok := mgr.recorders["cam-h264"]
 	assert.True(t, ok)
 }
