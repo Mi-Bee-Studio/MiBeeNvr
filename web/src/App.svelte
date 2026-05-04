@@ -15,13 +15,17 @@
     const path = hash.slice(1); // Remove #
 
     if (!path || path === '/') {
-      // Default to login or recordings based on auth status
       return isAuthenticated() ? { route: 'recordings', params: {} } : { route: 'login', params: {} };
     }
 
     const segments = path.split('/').filter(Boolean);
 
     if (segments[0] === 'login') {
+      return { route: 'login', params: {} };
+    }
+
+    // All routes below require authentication
+    if (!isAuthenticated()) {
       return { route: 'login', params: {} };
     }
 

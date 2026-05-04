@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
 import {
 getRecording,
 deleteRecording,
@@ -21,18 +21,27 @@ loadRecordingVideoBlob
   let recording = $state<Recording | null>(null);
   let loading = $state(true);
   let error = $state('');
-  let deleteConfirm = false;
+  let deleteConfirm = $state(false);
 
   // JPEG frame player state
-  let frames: FrameInfo[] = [];
-  let currentFrameIndex = 0;
-  let frameBlobUrl = $state('');
-  let isPlaying = false;
+  let frames = $state<FrameInfo[]>([]);
+  let currentFrameIndex = $state(0);
+  let isPlaying = $state(false);
   let playInterval: ReturnType<typeof setInterval> | null = null;
-  let playSpeed = 1; // multiplier: 1x, 2x, 5x
-  let framesLoading = false;
-  let frameChanging = false;
-  let progressDragging = false;
+  let playSpeed = $state(1); // multiplier: 1x, 2x, 5x
+  let framesLoading = $state(false);
+  let preloading = $state(false);
+  let preloadProgress = $state(0);
+
+  // Non-reactive internals for smooth playback
+  let preloadedImages: (HTMLImageElement | null)[] = [];
+  let _playbackFrame = 0;
+
+  // DOM refs for direct manipulation (avoids reactive state on hot path)
+  let canvasEl: HTMLCanvasElement | undefined = $state();
+  let progressFillEl: HTMLDivElement | undefined = $state();
+  let progressThumbEl: HTMLDivElement | undefined = $state();
+  let frameCounterEl: HTMLSpanElement | undefined = $state();
 
   // Video blob URL (for MP4 auth)
   let videoBlobUrl = $state('');
@@ -72,44 +81,116 @@ loadRecordingVideoBlob
     try {
       const resp = await listFrames(recordingId);
       frames = resp.frames;
-      if (frames.length > 0) {
-        await showFrame(0);
-      }
     } catch (e) {
       console.error(t('common.failedLoadRecording'), e);
-    } finally {
       framesLoading = false;
+      return;
+    }
+
+    if (frames.length > 0) {
+      await preloadAllFrames();
+    }
+    framesLoading = false;
+  }
+
+  // Preload all frame images into memory for flicker-free playback
+  async function preloadAllFrames() {
+    framesLoading = false;
+    preloading = true;
+    preloadProgress = 0;
+    preloadedImages = new Array(frames.length).fill(null);
+
+    const batchSize = 5;
+    let loaded = 0;
+
+    for (let i = 0; i < frames.length; i += batchSize) {
+      const batch = frames.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map(async (frame, j) => {
+          try {
+            const blobUrl = await loadFrameBlob(recordingId, frame.index);
+            const img = new Image();
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve();
+              img.onerror = () => reject(new Error(`Failed to load frame ${frame.index}`));
+              img.src = blobUrl;
+            });
+            URL.revokeObjectURL(blobUrl);
+            return img;
+          } catch {
+            return null;
+          }
+        })
+      );
+      for (let j = 0; j < results.length; j++) {
+        preloadedImages[i + j] = results[j];
+      }
+      loaded += batch.length;
+      preloadProgress = Math.round((loaded / frames.length) * 100);
+    }
+
+    preloading = false;
+
+    if (preloadedImages.some((img) => img !== null)) {
+      await tick();
+      // Render first available frame
+      const firstValid = preloadedImages.findIndex((img) => img !== null);
+      if (firstValid >= 0) {
+        renderFrame(firstValid);
+        currentFrameIndex = firstValid;
+      }
     }
   }
 
-  async function showFrame(index: number) {
-    if (index < 0 || index >= frames.length) return;
-    frameChanging = true;
-    // Revoke old blob URL
-    if (frameBlobUrl) {
-      URL.revokeObjectURL(frameBlobUrl);
-      frameBlobUrl = '';
+  // Draw a frame onto the canvas — no DOM/reactive changes
+  function renderFrame(index: number) {
+    if (!canvasEl || index < 0 || index >= preloadedImages.length) return;
+    const img = preloadedImages[index];
+    if (!img) return;
+    if (canvasEl.width !== img.naturalWidth || canvasEl.height !== img.naturalHeight) {
+      canvasEl.width = img.naturalWidth;
+      canvasEl.height = img.naturalHeight;
     }
-    try {
-      frameBlobUrl = await loadFrameBlob(recordingId, frames[index].index);
-      currentFrameIndex = index;
-    } catch (e) {
-      console.error(t('common.failedLoadRecording'), e);
-    } finally {
-      frameChanging = false;
+    const ctx = canvasEl.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+  }
+
+  // Direct DOM updates for playback UI — bypasses Svelte reactivity
+  function updatePlaybackUI(index: number) {
+    const total = frames.length;
+    const progress = total > 1 ? (index / (total - 1)) * 100 : 100;
+    if (progressFillEl) {
+      progressFillEl.style.width = `${progress}%`;
+    }
+    if (progressThumbEl) {
+      progressThumbEl.style.left = `calc(${progress}% - 6px)`;
+    }
+    if (frameCounterEl) {
+      frameCounterEl.textContent = t('detail.frameCounter', {
+        current: String(index + 1),
+        total: String(total)
+      });
     }
   }
 
   function prevFrame() {
-    if (currentFrameIndex > 0) {
-      showFrame(currentFrameIndex - 1);
-    }
+    const idx = isPlaying ? _playbackFrame : currentFrameIndex;
+    if (idx <= 0) return;
+    const newIdx = idx - 1;
+    currentFrameIndex = newIdx;
+    _playbackFrame = newIdx;
+    renderFrame(newIdx);
+    updatePlaybackUI(newIdx);
   }
 
   function nextFrame() {
-    if (currentFrameIndex < frames.length - 1) {
-      showFrame(currentFrameIndex + 1);
-    }
+    const idx = isPlaying ? _playbackFrame : currentFrameIndex;
+    if (idx >= frames.length - 1) return;
+    const newIdx = idx + 1;
+    currentFrameIndex = newIdx;
+    _playbackFrame = newIdx;
+    renderFrame(newIdx);
+    updatePlaybackUI(newIdx);
   }
 
   function togglePlay() {
@@ -121,16 +202,19 @@ loadRecordingVideoBlob
   }
 
   function startPlaying() {
-    if (frames.length === 0) return;
+    if (frames.length === 0 || preloadedImages.length === 0) return;
     isPlaying = true;
+    _playbackFrame = currentFrameIndex;
     const fps = 3 * playSpeed;
     playInterval = setInterval(() => {
-      const next = currentFrameIndex + 1;
+      const next = _playbackFrame + 1;
       if (next >= frames.length) {
         stopPlaying();
         return;
       }
-      showFrame(next);
+      _playbackFrame = next;
+      renderFrame(next);
+      updatePlaybackUI(next);
     }, 1000 / fps);
   }
 
@@ -140,6 +224,8 @@ loadRecordingVideoBlob
       clearInterval(playInterval);
       playInterval = null;
     }
+    // Sync playback position back to reactive state
+    currentFrameIndex = _playbackFrame;
   }
 
   function setSpeed(speed: number) {
@@ -156,8 +242,11 @@ loadRecordingVideoBlob
     const rect = target.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const ratio = x / rect.width;
-    const index = Math.round(ratio * (frames.length - 1));
-    showFrame(Math.max(0, Math.min(index, frames.length - 1)));
+    const index = Math.max(0, Math.min(Math.round(ratio * (frames.length - 1)), frames.length - 1));
+    currentFrameIndex = index;
+    _playbackFrame = index;
+    renderFrame(index);
+    updatePlaybackUI(index);
   }
 
   // Video player initialization (MP4 with auth)
@@ -234,8 +323,8 @@ loadRecordingVideoBlob
 
   onDestroy(() => {
     stopPlaying();
-    if (frameBlobUrl) URL.revokeObjectURL(frameBlobUrl);
     if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
+    preloadedImages = [];
   });
 </script>
 
@@ -283,12 +372,23 @@ loadRecordingVideoBlob
               {/if}
             </div>
           {:else if recording.format === 'mjpeg'}
-            <!-- JPEG frame player -->
+            <!-- JPEG frame player (canvas-based) -->
             <div class="bg-black">
               {#if framesLoading}
                 <div class="flex items-center justify-center h-64">
                   <div class="spinner spinner-lg"></div>
                   <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
+                </div>
+              {:else if preloading}
+                <div class="flex flex-col items-center justify-center h-64 gap-3">
+                  <div class="spinner spinner-lg"></div>
+                  <span class="th-text-muted text-sm">{t('detail.loadingFrames')} {preloadProgress}%</span>
+                  <div class="w-48 h-1.5 th-bg-tertiary rounded-full overflow-hidden">
+                    <div
+                      class="h-full th-bg-info rounded-full transition-all duration-150"
+                      style="width: {preloadProgress}%"
+                    ></div>
+                  </div>
                 </div>
               {:else if frames.length === 0}
                 <div class="flex items-center justify-center h-64">
@@ -298,20 +398,12 @@ loadRecordingVideoBlob
                   </div>
                 </div>
               {:else}
-                <!-- Frame display -->
-                <div class="relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
-                  {#if frameChanging}
-                    <div class="absolute inset-0 flex items-center justify-center bg-black/40 z-10">
-                      <div class="spinner spinner-lg"></div>
-                    </div>
-                  {/if}
-                  {#if frameBlobUrl}
-                    <img
-                      src={frameBlobUrl}
-                      alt="Frame {currentFrameIndex + 1}"
-                      class="max-w-full max-h-[75vh] object-contain"
-                    />
-                  {/if}
+                <!-- Canvas frame display — no reactive state changes during playback -->
+                <div class="max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
+                  <canvas
+                    bind:this={canvasEl}
+                    class="max-w-full max-h-[75vh]"
+                  ></canvas>
                 </div>
 
                 <!-- Controls bar -->
@@ -326,10 +418,12 @@ loadRecordingVideoBlob
                     aria-valuemax={frames.length - 1}
                   >
                     <div
+                      bind:this={progressFillEl}
                       class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
                       style="width: {frames.length > 1 ? (currentFrameIndex / (frames.length - 1)) * 100 : 100}%"
                     ></div>
                     <div
+                      bind:this={progressThumbEl}
                       class="absolute top-1/2 -translate-y-1/2 w-3 h-3 th-bg-info rounded-full shadow group-hover:th-bg-accent transition-colors"
                       style="left: calc({frames.length > 1 ? (currentFrameIndex / (frames.length - 1)) * 100 : 100}% - 6px)"
                     ></div>
@@ -340,16 +434,15 @@ loadRecordingVideoBlob
                     <div class="flex items-center gap-2">
                       <button
                         onclick={prevFrame}
-                        disabled={currentFrameIndex === 0 || frameChanging}
+                        disabled={currentFrameIndex === 0 || isPlaying}
                         class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                        style="color: {currentFrameIndex === 0 || frameChanging ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {currentFrameIndex === 0 || frameChanging ? 'transparent' : 'var(--bg-tertiary)'}"
+                        style="color: {currentFrameIndex === 0 || isPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {currentFrameIndex === 0 || isPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
                       >
                         {t('detail.prev')}
                       </button>
 
                       <button
                         onclick={togglePlay}
-                        disabled={frameChanging}
                         class="px-4 py-1.5 rounded text-sm font-medium text-white transition-colors"
                         style="background-color: {isPlaying ? 'var(--color-danger)' : 'var(--color-info)'}"
                       >
@@ -357,18 +450,18 @@ loadRecordingVideoBlob
                       </button>
                       <button
                         onclick={nextFrame}
-                        disabled={currentFrameIndex >= frames.length - 1 || frameChanging}
+                        disabled={currentFrameIndex >= frames.length - 1 || isPlaying}
                         class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                        style="color: {currentFrameIndex >= frames.length - 1 || frameChanging ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {!(currentFrameIndex >= frames.length - 1 || frameChanging) ? 'var(--bg-tertiary)' : 'transparent'}"
+                        style="color: {currentFrameIndex >= frames.length - 1 || isPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {!(currentFrameIndex >= frames.length - 1 || isPlaying) ? 'var(--bg-tertiary)' : 'transparent'}"
                       >
                         {t('detail.next')}
                       </button>
                     </div>
 
-                    <!-- Frame counter -->
-                    <div class="th-text-secondary text-sm font-mono">
+                    <!-- Frame counter (direct DOM update during playback) -->
+                    <span bind:this={frameCounterEl} class="th-text-secondary text-sm font-mono">
                       {t('detail.frameCounter', { current: String(currentFrameIndex + 1), total: String(frames.length) })}
-                    </div>
+                    </span>
 
                     <!-- Speed control -->
                     <div class="flex items-center gap-1">
