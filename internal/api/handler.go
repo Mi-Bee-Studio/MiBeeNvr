@@ -932,6 +932,11 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"check_interval":         h.config.Cleanup.CheckInterval,
 			"disk_threshold_percent": h.config.Cleanup.DiskThresholdPercent,
 		},
+		"webdav": map[string]any{
+			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
+			"path_prefix": h.config.WebDAV.PathPrefix,
+			"read_write":  h.config.WebDAV.ReadWrite,
+		},
 	})
 	}
 
@@ -947,6 +952,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			DiskThresholdPercent *int    `json:"disk_threshold_percent"`
 			CheckInterval        *string `json:"check_interval"`
 		} `json:"cleanup"`
+		WebDAV *struct {
+			Enabled    *bool   `json:"enabled"`
+			PathPrefix *string `json:"path_prefix"`
+			ReadWrite  *bool   `json:"read_write"`
+		} `json:"webdav"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -976,6 +986,22 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.config.Cleanup.CheckInterval = *body.Cleanup.CheckInterval
+		}
+	}
+
+	// Update webdav settings
+	if body.WebDAV != nil {
+		if body.WebDAV.Enabled != nil {
+			if h.config.WebDAV.Enabled == nil {
+				h.config.WebDAV.Enabled = new(bool)
+			}
+			*h.config.WebDAV.Enabled = *body.WebDAV.Enabled
+		}
+		if body.WebDAV.PathPrefix != nil {
+			h.config.WebDAV.PathPrefix = *body.WebDAV.PathPrefix
+		}
+		if body.WebDAV.ReadWrite != nil {
+			h.config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
 		}
 	}
 

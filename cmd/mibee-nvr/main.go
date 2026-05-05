@@ -126,7 +126,7 @@ func main() {
 	// WebDAV
 	var davHandler http.Handler
 	if cfg.WebDAV.Enabled != nil && *cfg.WebDAV.Enabled {
-		davSrv := webdav.NewServer(store, cfg.WebDAV.PathPrefix, authMW)
+		davSrv := webdav.NewServer(store, cfg.WebDAV.PathPrefix, authMW, db, cfg.WebDAV.ReadWrite)
 		davHandler = davSrv.Handler()
 	}
 
