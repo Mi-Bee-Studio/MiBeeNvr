@@ -28,11 +28,13 @@ import { onMount, onDestroy } from 'svelte';
   let cameraId = $state('');
   let format = $state('');
   let searchQuery = $state('');
-  let startDate = $state('');
-  let endDate = $state('');
-  let cameras: Camera[] = [];
-  let limit = getItemsPerPage();
-  let offset = 0;
+  const pad = (n) => String(n).padStart(2, '0');
+  const toLocalDT = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  let startDate = $state(toLocalDT(new Date(Date.now() - 3600000)));
+  let endDate = $state(toLocalDT(new Date()));
+  let cameras = $state<Camera[]>([]);
+  let limit = $state(getItemsPerPage());
+  let offset = $state(0);
   let sortBy = $state('started_at');
   let sortOrder = $state<'asc' | 'desc'>('desc');
   let selectedIds = $state<Set<string>>(new Set());
@@ -43,7 +45,7 @@ import { onMount, onDestroy } from 'svelte';
   let totalRecordings = $state(0);
   let loading = $state(false);
   let error = $state('');
-  let deleteConfirm: Recording | null = null;
+  let deleteConfirm = $state<Recording | null>(null);
   let showBackToTop = $state(false);
 
   function toggleSelectAll() {
@@ -166,8 +168,8 @@ import { onMount, onDestroy } from 'svelte';
     const durations: Record<string, number> = { '1h': 3600000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
     const ms = durations[preset] || 0;
     const start = new Date(now.getTime() - ms);
-    startDate = start.toISOString().slice(0, 16);
-    endDate = now.toISOString().slice(0, 16);
+    startDate = toLocalDT(start);
+    endDate = toLocalDT(now);
   }
 
   function clearFilters() {
@@ -255,9 +257,9 @@ import { onMount, onDestroy } from 'svelte';
       <h2 class="text-2xl font-bold th-text-primary mb-4">{t('recordings.title')}</h2>
 
       <!-- Filters -->
-      <div class="card p-5 mb-6 border th-border">
+      <div class="card p-5 mb-6 border th-border space-y-3">
         <div class="flex flex-wrap gap-3 items-end">
-          <div class="flex-1 min-w-[180px]">
+          <div class="flex-1 min-w-[160px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
             <select id="camera" class="input" bind:value={cameraId}>
               <option value="">{t('recordings.allCameras')}</option>
@@ -266,7 +268,7 @@ import { onMount, onDestroy } from 'svelte';
               {/each}
             </select>
           </div>
-          <div class="flex-1 min-w-[140px]">
+          <div class="flex-1 min-w-[120px]">
             <label for="format" class="input-label">{t('recordings.format')}</label>
             <select id="format" class="input" bind:value={format}>
               <option value="">{t('recordings.allFormats')}</option>
@@ -274,7 +276,7 @@ import { onMount, onDestroy } from 'svelte';
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
             </select>
           </div>
-          <div class="flex-1 min-w-[220px]">
+          <div class="flex-1 min-w-[180px]">
             <label class="input-label">{t('recordings.search')}</label>
             <div class="relative">
               <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
@@ -285,30 +287,28 @@ import { onMount, onDestroy } from 'svelte';
                 bind:value={searchQuery}
               />
             </div>
+          </div>
         </div>
-          <div class="flex-1 min-w-[280px]">
+        <!-- Time range row -->
+        <div class="flex flex-wrap gap-3 items-end">
+          <div class="flex-1 min-w-[240px]">
             <label class="input-label">{t('recordings.startDate')}</label>
             <div class="flex gap-2 items-center">
               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
-              <span class="th-text-tertiary">~</span>
+              <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
             </div>
           </div>
-          <div class="flex-1 min-w-[200px]">
-            <label class="input-label">&nbsp;</label>
-            <div class="flex gap-1 flex-wrap">
-              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('1h')}>{t('recordings.last1h')}</button>
-              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('24h')}>{t('recordings.last24h')}</button>
-              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('7d')}>{t('recordings.last7d')}</button>
-              <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('30d')}>{t('recordings.last30d')}</button>
-            </div>
+          <div class="flex gap-2 flex-wrap items-center">
+            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('1h')}>{t('recordings.last1h')}</button>
+            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('24h')}>{t('recordings.last24h')}</button>
+            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('7d')}>{t('recordings.last7d')}</button>
+            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('30d')}>{t('recordings.last30d')}</button>
+            <button class="btn btn-secondary btn-sm" on:click={clearFilters}>{t('recordings.clearFilters')}</button>
           </div>
-          <div class="flex-none">
-            <label class="input-label">&nbsp;</label>
-              <button class="btn btn-secondary btn-sm" on:click={clearFilters}>{t('recordings.clearFilters')}</button>
-          </div>
+        </div>
       </div>
-    </div>
+      </div>
 
     <!-- Error message -->
     {#if error}
@@ -513,6 +513,7 @@ import { onMount, onDestroy } from 'svelte';
       {/if}
     </div>
   </main>
+  </div>
 
 
   <!-- Floating batch action bar -->
@@ -581,7 +582,6 @@ import { onMount, onDestroy } from 'svelte';
       </div>
     </div>
   {/if}
-</div>
   <!-- Back to top button -->
   {#if showBackToTop}
     <button
