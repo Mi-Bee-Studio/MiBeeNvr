@@ -258,6 +258,8 @@
     loadTrends();
     loadHealth();
     loadSystemStats();
+    // Quick second sample after 2s so CPU/network show without waiting 30s
+    const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
 
     // Auto-refresh every 30 seconds
     refreshInterval = window.setInterval(() => {
@@ -281,6 +283,7 @@
 
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
+      clearTimeout(quickSample);
       observer.disconnect();
     };
   });
