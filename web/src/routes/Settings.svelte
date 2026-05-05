@@ -120,9 +120,8 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     showConfirmDialog = false;
   }
 
-  function handleItemsPerPageChange(event: Event) {
-    const select = event.target as HTMLSelectElement;
-    setItemsPerPage(parseInt(select.value));
+  function handleItemsPerPageChange() {
+    setItemsPerPage(itemsPerPage);
   }
 
   function handleAutoRefreshChange(event: Event) {
@@ -218,16 +217,6 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                 on:blur={() => validateField('disk_threshold', String(diskThresholdPercent))}
                 on:input={() => { if (validationErrors['disk_threshold']) delete validationErrors['disk_threshold']; }}
               />
-              <div class="flex justify-between text-xs th-text-tertiary mt-1">
-                <span>0%</span>
-                <span>50%</span>
-                <span>100%</span>
-              </div>
-              <div class="flex justify-between text-xs th-text-tertiary mt-1">
-                <span>0%</span>
-                <span>50%</span>
-                <span>100%</span>
-              </div>
               {#if validationErrors['disk_threshold']}
                 <p class="th-color-danger text-xs mt-1" aria-live="polite">{validationErrors['disk_threshold']}</p>
               {/if}
@@ -256,9 +245,9 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
             <div>
               <label for="itemsPerPage" class="input-label">{t('settings.itemsPerPage')}</label>
               <select id="itemsPerPage" class="input" bind:value={itemsPerPage} on:change={handleItemsPerPageChange}>
-                <option value="20">20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
               </select>
             </div>
 

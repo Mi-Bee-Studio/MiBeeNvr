@@ -443,7 +443,6 @@
                         {/if}
                       </td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.description || '-'}</td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {#if camera.recorder_status === 'recording'}
                           <span class="badge badge-success">{t('cameras.statusRecording')}</span>
@@ -455,6 +454,7 @@
                           <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
                         {/if}
                       </td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2">

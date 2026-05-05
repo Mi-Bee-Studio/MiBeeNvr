@@ -19,6 +19,8 @@ import {
 
   // Recording ID passed as prop
   let { recordingId = '' } = $props();
+  // Internal navigation ID — allows seamless transitions without page teardown
+  let currentId = $state('');
   let recording = $state<Recording | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -65,7 +67,6 @@ import {
   // Speed options
   const speeds = [1, 2, 5];
 
-  // Load recording data
   async function loadRecording() {
     loading = true;
     error = '';
@@ -75,7 +76,7 @@ import {
     nextBlobUrl = null;
 
     try {
-      recording = await getRecording(recordingId);
+      recording = await getRecording(currentId);
       // After loading recording, init media
       if (recording) {
         if (recording.format === 'mjpeg') {
@@ -96,7 +97,7 @@ import {
   async function initFramePlayer() {
     framesLoading = true;
     try {
-      const resp = await listFrames(recordingId);
+      const resp = await listFrames(currentId);
       frames = resp.frames;
     } catch (e) {
       console.error(t('common.failedLoadRecording'), e);
@@ -140,7 +141,7 @@ import {
       const results = await Promise.all(
         batch.map(async (frame) => {
           try {
-            const blobUrl = await loadFrameBlob(recordingId, frame.index);
+            const blobUrl = await loadFrameBlob(currentId, frame.index);
             const img = new Image();
             await new Promise<void>((resolve, reject) => {
               img.onload = () => resolve();
@@ -315,7 +316,7 @@ import {
     const next = await loadNextRecording();
     if (next) {
       isTransitioning = true;
-      recordingId = next.id;
+      currentId = next.id;
       await loadRecording();
       isTransitioning = false;
     }
@@ -345,17 +346,17 @@ import {
     const next = await loadNextRecording();
     if (next) {
       isTransitioning = true;
-      recordingId = next.id;
+      currentId = next.id;
       await loadRecording();
       isTransitioning = false;
     }
   }
 
-  // Video player initialization (MP4 with auth)
   async function initVideoPlayer() {
     videoLoading = true;
+    if (videoBlobUrl) { URL.revokeObjectURL(videoBlobUrl); videoBlobUrl = ''; }
     try {
-      videoBlobUrl = await loadRecordingVideoBlob(recordingId);
+      videoBlobUrl = await loadRecordingVideoBlob(currentId);
     } catch (e) {
       console.error(t('detail.failedLoadVideo'), e);
       error = t('detail.failedLoadVideo');
@@ -457,16 +458,18 @@ import {
   }
   // Lifecycle
 onMount(() => {
-if (!recordingId) {
-error = t('detail.recordingIdRequired');
-loading = false;
-return;
-}
+  currentId = recordingId;
+  if (!currentId) {
+    error = t('detail.recordingIdRequired');
+    loading = false;
+    return;
+  }
     loadRecording();
 
     // Add keyboard event listener
     window.addEventListener('keydown', handleKeydown);
 });
+
 
 onDestroy(() => {
 stopPlaying();
@@ -543,10 +546,6 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
                 <span class="font-mono th-text-primary">{recording.camera_id}</span>
               </span>
               <div class="flex gap-2">
-                <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
-                  <SkipBack size={16} />
-                  {t('detail.prev')}
-                </button>
                 <button
                   onclick={navigateToNext}
                   class="btn btn-ghost btn-sm flex items-center gap-1"
