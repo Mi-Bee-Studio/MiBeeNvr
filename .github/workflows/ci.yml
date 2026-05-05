@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Lint
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -v
+
+      - name: Build frontend
+        run: cd web && npm ci && npm run build
+
+      - name: Build
+        run: |
+          cp -r web/dist/* internal/ui/static/
+          CGO_ENABLED=0 go build ./cmd/mibee-nvr/
