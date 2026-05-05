@@ -52,6 +52,7 @@
   "recordings.last24h": "最近24小时",
   "recordings.last7d": "最近7天",
   "recordings.last30d": "最近30天",
+  "recordings.quickRange": "快速选择",
   "recordings.clearFilters": "清除筛选",
   "recordings.sortAsc": "升序",
   "recordings.sortDesc": "降序",
@@ -273,5 +274,15 @@
   },
   "backToTop": {
     "common.backToTop": "回到顶部"
-  }
+  },
+  "settings.webdav": "WebDAV 配置",
+  "settings.webdavDesc": "配置 WebDAV 文件访问和上传服务。",
+  "settings.webdavEnabled": "启用 WebDAV",
+  "settings.webdavEnabledOn": "已启用",
+  "settings.webdavEnabledOff": "已禁用",
+  "settings.webdavPathPrefix": "路径前缀",
+  "settings.webdavReadWrite": "读写模式",
+  "settings.webdavReadWriteOn": "读写",
+  "settings.webdavReadWriteOff": "只读",
+  "settings.webdavReadWriteHint": "开启后允许摄像头通过 WebDAV 上传录像文件。"
 }

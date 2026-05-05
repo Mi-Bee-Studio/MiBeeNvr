@@ -52,6 +52,7 @@
   "recordings.last24h": "Last 24h",
   "recordings.last7d": "Last 7 days",
   "recordings.last30d": "Last 30 days",
+  "recordings.quickRange": "Quick Range",
   "recordings.clearFilters": "Clear Filters",
   "recordings.sortAsc": "Ascending",
   "recordings.sortDesc": "Descending",
@@ -273,5 +274,15 @@
   },
   "backToTop": {
     "common.backToTop": "Back to top"
-  }
+  },
+  "settings.webdav": "WebDAV Settings",
+  "settings.webdavDesc": "Configure WebDAV file access and upload service.",
+  "settings.webdavEnabled": "Enable WebDAV",
+  "settings.webdavEnabledOn": "Enabled",
+  "settings.webdavEnabledOff": "Disabled",
+  "settings.webdavPathPrefix": "Path Prefix",
+  "settings.webdavReadWrite": "Read-Write Mode",
+  "settings.webdavReadWriteOn": "Read-Write",
+  "settings.webdavReadWriteOff": "Read-Only",
+  "settings.webdavReadWriteHint": "Allow cameras to upload recordings via WebDAV."
 }
