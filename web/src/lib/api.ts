@@ -89,8 +89,15 @@ export interface CleanupConfig {
   check_interval: string;
 }
 
+export interface WebDAVConfig {
+  enabled: boolean;
+  path_prefix: string;
+  read_write: boolean;
+}
+
 export interface SettingsConfig {
   cleanup: CleanupConfig;
+  webdav: WebDAVConfig;
 }
 
 export interface RecordingListResponse {

@@ -18,6 +18,9 @@ let diskThresholdPercent = $state(90);
 let checkInterval = $state('1h');
 let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
+let webdavEnabled = $state(false);
+let webdavPathPrefix = $state('/dav');
+let webdavReadWrite = $state(false);
   
   // Original values for change tracking
   let originalRetentionDays = $state(30);
@@ -69,6 +72,9 @@ retentionDays = settings.cleanup.retention_days;
 diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       checkInterval = settings.cleanup.check_interval;
       originalRetentionDays = settings.cleanup.retention_days;
+      webdavEnabled = settings.webdav?.enabled ?? false;
+      webdavPathPrefix = settings.webdav?.path_prefix ?? '/dav';
+      webdavReadWrite = settings.webdav?.read_write ?? false;
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedLoadSettings');
     } finally {
@@ -97,6 +103,11 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
           retention_days: retentionDays,
           disk_threshold_percent: diskThresholdPercent,
           check_interval: checkInterval,
+        },
+        webdav: {
+          enabled: webdavEnabled,
+          path_prefix: webdavPathPrefix,
+          read_write: webdavReadWrite,
         },
       };
 
@@ -149,7 +160,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
         </div>
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
-        <button on:click={loadSettings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+        <button onclick={loadSettings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
       </div>
     {/if}
 
@@ -196,8 +207,8 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                 class="input {validationErrors['retention_days'] ? 'border-red-500' : ''}"
                 bind:value={retentionDays}
                 min="1"
-                on:blur={() => validateField('retention_days', String(retentionDays))}
-                on:input={() => { if (validationErrors['retention_days']) delete validationErrors['retention_days']; }}
+                onblur={() => validateField('retention_days', String(retentionDays))}
+                oninput={() => { if (validationErrors['retention_days']) delete validationErrors['retention_days']; }}
               />
               {#if validationErrors['retention_days']}
                 <p class="th-color-danger text-xs mt-1" aria-live="polite">{validationErrors['retention_days']}</p>
@@ -214,8 +225,8 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                 bind:value={diskThresholdPercent}
                 min="0"
                 max="100"
-                on:blur={() => validateField('disk_threshold', String(diskThresholdPercent))}
-                on:input={() => { if (validationErrors['disk_threshold']) delete validationErrors['disk_threshold']; }}
+                onblur={() => validateField('disk_threshold', String(diskThresholdPercent))}
+                oninput={() => { if (validationErrors['disk_threshold']) delete validationErrors['disk_threshold']; }}
               />
               {#if validationErrors['disk_threshold']}
                 <p class="th-color-danger text-xs mt-1" aria-live="polite">{validationErrors['disk_threshold']}</p>
@@ -235,6 +246,61 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
           </div>
         </div>
 
+        <!-- WebDAV Settings -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.webdav')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.webdavDesc')}</p>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Enable WebDAV -->
+            <div>
+              <label class="input-label">{t('settings.webdavEnabled')}</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { webdavEnabled = !webdavEnabled; }}
+                  role="switch"
+                  aria-checked={webdavEnabled}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{webdavEnabled ? t('settings.webdavEnabledOn') : t('settings.webdavEnabledOff')}</span>
+              </div>
+            </div>
+
+            <!-- Path Prefix -->
+            <div>
+              <label for="webdavPrefix" class="input-label">{t('settings.webdavPathPrefix')}</label>
+              <input
+                id="webdavPrefix"
+                type="text"
+                class="input"
+                bind:value={webdavPathPrefix}
+                placeholder="/dav"
+              />
+            </div>
+
+            <!-- Read-Write Mode -->
+            <div>
+              <label class="input-label">{t('settings.webdavReadWrite')}</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { webdavReadWrite = !webdavReadWrite; }}
+                  role="switch"
+                  aria-checked={webdavReadWrite}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavReadWrite ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{webdavReadWrite ? t('settings.webdavReadWriteOn') : t('settings.webdavReadWriteOff')}</span>
+              </div>
+              <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Frontend Preferences -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.frontendPrefs')}</h3>
@@ -244,7 +310,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
             <!-- Items Per Page -->
             <div>
               <label for="itemsPerPage" class="input-label">{t('settings.itemsPerPage')}</label>
-              <select id="itemsPerPage" class="input" bind:value={itemsPerPage} on:change={handleItemsPerPageChange}>
+              <select id="itemsPerPage" class="input" bind:value={itemsPerPage} onchange={handleItemsPerPageChange}>
                 <option value={20}>20</option>
                 <option value={50}>50</option>
                 <option value={100}>100</option>
@@ -254,7 +320,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
             <!-- Auto Refresh -->
             <div>
               <label for="autoRefresh" class="input-label">{t('settings.autoRefresh')}</label>
-              <select id="autoRefresh" class="input" bind:value={autoRefresh} on:change={handleAutoRefreshChange}>
+              <select id="autoRefresh" class="input" bind:value={autoRefresh} onchange={handleAutoRefreshChange}>
                 <option value="10s">{t('settings.every10s')}</option>
                 <option value="30s">{t('settings.every30s')}</option>
                 <option value="60s">{t('settings.every60s')}</option>
@@ -267,7 +333,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
         <!-- Save button -->
         <div class="flex items-center gap-4 pt-2">
           <button
-            on:click={save}
+            onclick={save}
             class="btn btn-primary"
             disabled={saving}
           >
@@ -293,13 +359,13 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
         </p>
         <div class="flex gap-3 justify-end">
           <button
-            on:click={cancelSave}
+            onclick={cancelSave}
             class="btn btn-secondary"
           >
             {t('recordings.cancel')}
           </button>
           <button
-            on:click={confirmSave}
+            onclick={confirmSave}
             class="btn btn-danger"
           >
             {t('settings.save')}
