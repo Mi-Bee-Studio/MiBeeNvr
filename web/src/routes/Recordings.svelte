@@ -15,7 +15,7 @@ import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Pin, MapPin, Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle } from 'lucide-svelte';
+  import { Pin, MapPin, Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye } from 'lucide-svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -290,22 +290,24 @@ import { onMount, onDestroy } from 'svelte';
           </div>
         </div>
         <!-- Time range row -->
-        <div class="flex flex-wrap gap-3 items-end">
-          <div class="flex-1 min-w-[240px]">
+        <div class="flex flex-wrap gap-4 sm:gap-3 items-stretch sm:items-end mt-1">
+          <div class="flex-1 min-w-0">
             <label class="input-label">{t('recordings.startDate')}</label>
-            <div class="flex gap-2 items-center">
+            <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
               <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
             </div>
           </div>
-          <div class="flex gap-2 flex-wrap items-center">
-            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('1h')}>{t('recordings.last1h')}</button>
-            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('24h')}>{t('recordings.last24h')}</button>
-            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('7d')}>{t('recordings.last7d')}</button>
-            <button class="btn btn-sm btn-ghost" on:click={() => setPresetRange('30d')}>{t('recordings.last30d')}</button>
-            <button class="btn btn-secondary btn-sm" on:click={clearFilters}>{t('recordings.clearFilters')}</button>
-          </div>
+          <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center shrink-0">
+            <select class="input !py-1.5 text-sm w-full sm:w-auto" onchange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v) setPresetRange(v); }}>
+              <option value="">{t('recordings.quickRange')}</option>
+              <option value="1h">{t('recordings.last1h')}</option>
+              <option value="24h">{t('recordings.last24h')}</option>
+              <option value="7d">{t('recordings.last7d')}</option>
+              <option value="30d">{t('recordings.last30d')}</option>
+            </select>
+            <button class="btn btn-secondary btn-sm !px-3 !py-1" onclick={clearFilters}>{t('recordings.clearFilters')}</button>
         </div>
       </div>
       </div>
@@ -318,7 +320,7 @@ import { onMount, onDestroy } from 'svelte';
         </div>
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
-        <button on:click={loadRecordings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+        <button onclick={loadRecordings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
       </div>
     {/if}
 
@@ -354,7 +356,7 @@ import { onMount, onDestroy } from 'svelte';
           </div>
           <h3 class="text-lg font-medium th-text-primary mb-2">{t('recordings.noRecordings')}</h3>
           <p class="text-sm th-text-muted mb-4">{t('recordings.noRecordingsHint')}</p>
-          <button on:click={clearFilters} class="btn btn-primary btn-sm">{t('recordings.clearFilters')}</button>
+          <button onclick={clearFilters} class="btn btn-primary btn-sm">{t('recordings.clearFilters')}</button>
         </div>
       {:else}
         <div class="table-container th-border">
@@ -362,7 +364,7 @@ import { onMount, onDestroy } from 'svelte';
             <thead>
               <tr>
                 <th class="w-10">
-                  <button on:click={toggleSelectAll} class="th-text-secondary hover:th-text-primary transition-colors">
+                  <button onclick={toggleSelectAll} class="th-text-secondary hover:th-text-primary transition-colors">
                     {#if selectedIds.size === filteredRecordings.length && filteredRecordings.length > 0}
                       <CheckSquare size={18} />
                     {:else}
@@ -370,7 +372,7 @@ import { onMount, onDestroy } from 'svelte';
                     {/if}
                   </button>
                 </th>
-                <th class="min-w-[100px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('camera_id')}>
+                <th class="min-w-[80px] sm:min-w-[100px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('camera_id')}>
                   <span class="inline-flex items-center gap-1">
                     {t('recordings.tableCamera')}
                     {#if sortBy === 'camera_id'}
@@ -383,7 +385,7 @@ import { onMount, onDestroy } from 'svelte';
                   </span>
                 </th>
                 <th class="min-w-[80px]">{t('recordings.tableFormat')}</th>
-                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('duration')}>
+                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('duration')}>
                   <span class="inline-flex items-center gap-1">
                     {t('recordings.tableDuration')}
                     {#if sortBy === 'duration'}
@@ -395,7 +397,7 @@ import { onMount, onDestroy } from 'svelte';
                     {/if}
                   </span>
                 </th>
-                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('file_size')}>
+                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('file_size')}>
                   <span class="inline-flex items-center gap-1">
                     {t('recordings.tableSize')}
                     {#if sortBy === 'file_size'}
@@ -407,7 +409,7 @@ import { onMount, onDestroy } from 'svelte';
                     {/if}
                   </span>
                 </th>
-                <th class="min-w-[120px] cursor-pointer hover:th-bg-tertiary select-none" on:click={() => handleSort('started_at')}>
+                <th class="min-w-[100px] sm:min-w-[120px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('started_at')}>
                   <span class="inline-flex items-center gap-1">
                     {t('recordings.tableDate')}
                     {#if sortBy === 'started_at'}
@@ -419,8 +421,8 @@ import { onMount, onDestroy } from 'svelte';
                     {/if}
                   </span>
                 </th>
-                <th class="min-w-[80px]">{t('recordings.tableStatus')}</th>
-                <th class="text-right min-w-[140px]">{t('recordings.tableActions')}</th>
+                <th class="hidden sm:table-cell min-w-[80px]">{t('recordings.tableStatus')}</th>
+                <th class="text-right min-w-[100px] sm:min-w-[140px]">{t('recordings.tableActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -430,25 +432,25 @@ import { onMount, onDestroy } from 'svelte';
                     <input
                       type="checkbox"
                       checked={selectedIds.has(recording.id)}
-                      on:change={() => toggleSelect(recording.id)}
+                      onchange={() => toggleSelect(recording.id)}
                       class="w-4 h-4 rounded cursor-pointer"
                     />
                   </td>
                   <td>
                     <div class="flex flex-col">
                       <span class="font-medium th-text-primary">{getCameraName(recording.camera_id)}</span>
-                      <span class="text-xs th-text-tertiary">{recording.camera_id}</span>
+                      <span class="text-xs th-text-tertiary hidden sm:inline">{recording.camera_id}</span>
                     </div>
                   </td>
                   <td>
-                    <span class="badge badge-neutral">
-                      {t(`recording.format.${recording.format}`)}
+                    <span class="badge badge-neutral text-xs">
+                      {recording.format === 'h264' ? 'MP4' : 'JPEG'}
                     </span>
                   </td>
                   <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>
                   <td>{formatFileSize(recording.file_size)}</td>
                   <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
-                  <td>
+                  <td class="hidden sm:table-cell">
                     {#if recording.pinned}
                       <span class="badge badge-warning">{t('recordings.pinnedBadge')}</span>
                     {/if}
@@ -456,14 +458,15 @@ import { onMount, onDestroy } from 'svelte';
                   <td class="text-right">
                     <div class="flex justify-end gap-1">
                       <button
-                        on:click={() => viewRecording(recording)}
-                        class="btn btn-ghost px-3 py-1.5 text-sm transition-all duration-200"
+                        onclick={() => viewRecording(recording)}
+                        class="btn btn-ghost px-2 sm:px-3 py-1.5 text-sm transition-all duration-200"
                         title={t('recordings.view')}
                       >
-                        {t('recordings.view')}
+                        <span class="hidden sm:inline">{t('recordings.view')}</span>
+                        <Eye size={16} class="sm:hidden" />
                       </button>
                       <button
-                        on:click={() => togglePin(recording)}
+                        onclick={() => togglePin(recording)}
                         class="btn btn-ghost px-2 py-1.5 text-sm transition-all duration-200"
                         title={recording.pinned ? t('recordings.unpin') : t('recordings.pin')}
                       >
@@ -474,7 +477,7 @@ import { onMount, onDestroy } from 'svelte';
                         {/if}
                       </button>
                       <button
-                        on:click={() => deleteConfirm = recording}
+                        onclick={() => deleteConfirm = recording}
                         class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger transition-all duration-200"
                         title={t('recordings.delete')}
                       >
@@ -523,13 +526,13 @@ import { onMount, onDestroy } from 'svelte';
         {t('recordings.selected', { count: String(selectedIds.size) })}
       </span>
       <button
-        on:click={() => showBatchDeleteConfirm = true}
+        onclick={() => showBatchDeleteConfirm = true}
         class="btn btn-danger btn-sm"
       >
         {t('recordings.deleteSelected')}
       </button>
       <button
-        on:click={() => selectedIds = new Set()}
+        onclick={() => selectedIds = new Set()}
         class="btn btn-ghost btn-sm"
       >
         {t('recordings.cancel')}
@@ -546,10 +549,10 @@ import { onMount, onDestroy } from 'svelte';
           {t('recordings.batchDeleteMessage', { count: String(selectedIds.size) })}
         </p>
         <div class="flex gap-3 justify-end">
-          <button on:click={() => showBatchDeleteConfirm = false} class="btn btn-secondary">
+          <button onclick={() => showBatchDeleteConfirm = false} class="btn btn-secondary">
             {t('recordings.cancel')}
           </button>
-          <button on:click={confirmBatchDelete} class="btn btn-danger">
+          <button onclick={confirmBatchDelete} class="btn btn-danger">
             {t('recordings.deleteConfirm')}
           </button>
         </div>
@@ -567,13 +570,13 @@ import { onMount, onDestroy } from 'svelte';
         </p>
         <div class="flex gap-3 justify-end">
           <button
-            on:click={() => deleteConfirm = null}
+            onclick={() => deleteConfirm = null}
             class="btn btn-secondary"
           >
             {t('recordings.cancel')}
           </button>
           <button
-            on:click={confirmDelete}
+            onclick={confirmDelete}
             class="btn btn-danger"
           >
             {t('recordings.deleteConfirm')}
@@ -585,7 +588,7 @@ import { onMount, onDestroy } from 'svelte';
   <!-- Back to top button -->
   {#if showBackToTop}
     <button
-      on:click={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      onclick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
       class="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-all duration-300"
       title={t('recordings.backToTop')}
     >
