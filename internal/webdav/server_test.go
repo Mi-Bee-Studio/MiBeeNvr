@@ -20,7 +20,7 @@ func setupTestServer(t *testing.T, rootDir string, authMW func(http.Handler) htt
 	store, err := storage.NewManager(rootDir)
 	require.NoError(t, err)
 
-	srv := NewServer(store, "/dav", authMW)
+	srv := NewServer(store, "/dav", authMW, nil, false)
 	return httptest.NewServer(srv.Handler())
 }
 
@@ -275,6 +275,6 @@ func TestNewServerDefaultPrefix(t *testing.T) {
 	store, err := storage.NewManager(t.TempDir())
 	require.NoError(t, err)
 
-	srv := NewServer(store, "", nil)
+	srv := NewServer(store, "", nil, nil, false)
 	assert.Equal(t, "/dav", srv.pathPrefix)
 }

@@ -70,6 +70,7 @@ type MQTTConfig struct {
 type WebDAVConfig struct {
 	Enabled    *bool  `yaml:"enabled"`     // default true
 	PathPrefix string `yaml:"path_prefix"` // default "/dav"
+	ReadWrite  bool   `yaml:"read_write"`  // default false
 }
 
 
