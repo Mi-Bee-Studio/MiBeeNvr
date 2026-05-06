@@ -163,14 +163,6 @@ import { onMount, onDestroy } from 'svelte';
     }
   }
 
-  function setPresetRange(preset: string) {
-    const now = new Date();
-    const durations: Record<string, number> = { '1h': 3600000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
-    const ms = durations[preset] || 0;
-    const start = new Date(now.getTime() - ms);
-    startDate = toLocalDT(start);
-    endDate = toLocalDT(now);
-  }
 
   function clearFilters() {
     searchQuery = '';
@@ -298,19 +290,11 @@ import { onMount, onDestroy } from 'svelte';
               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
               <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
-            </div>
           </div>
           <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center shrink-0">
-            <select class="input !py-1.5 text-sm w-full sm:w-auto" onchange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v) setPresetRange(v); }}>
-              <option value="">{t('recordings.quickRange')}</option>
-              <option value="1h">{t('recordings.last1h')}</option>
-              <option value="24h">{t('recordings.last24h')}</option>
-              <option value="7d">{t('recordings.last7d')}</option>
-              <option value="30d">{t('recordings.last30d')}</option>
-            </select>
             <button class="btn btn-secondary btn-sm !px-3 !py-1" onclick={clearFilters}>{t('recordings.clearFilters')}</button>
+          </div>
         </div>
-      </div>
       </div>
 
     <!-- Error message -->
