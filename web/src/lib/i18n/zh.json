@@ -49,11 +49,6 @@
   "recordings.search": "搜索录像...",
   "recordings.startDate": "开始日期",
   "recordings.endDate": "结束日期",
-  "recordings.last1h": "最近1小时",
-  "recordings.last24h": "最近24小时",
-  "recordings.last7d": "最近7天",
-  "recordings.last30d": "最近30天",
-  "recordings.quickRange": "快速选择",
   "recordings.clearFilters": "清除筛选",
   "recordings.sortAsc": "升序",
   "recordings.sortDesc": "降序",
@@ -287,5 +282,26 @@
   "settings.webdavReadWrite": "读写模式",
   "settings.webdavReadWriteOn": "读写",
   "settings.webdavReadWriteOff": "只读",
-  "settings.webdavReadWriteHint": "开启后允许摄像头通过 WebDAV 上传录像文件。"
+  "settings.webdavReadWriteHint": "开启后允许摄像头通过 WebDAV 上传录像文件。",
+
+"stats.filterCameras": "筛选摄像头",
+"stats.selectAll": "全选",
+"stats.deselectAll": "取消全选",
+
+"cameras.live": "实时",
+"cameras.lastSeen": "最近录制",
+"cameras.active": "活跃",
+"cameras.neverRecorded": "从未录制",
+"cameras.minutesAgo": "分钟前",
+"cameras.hoursAgo": "小时前",
+"cameras.retentionDays": "保存天数",
+"cameras.retentionDaysHint": "0 = 使用全局设置",
+
+"live.title": "实时播放",
+"live.notSupported": "不支持实时播放",
+"live.notSupportedDesc": "实时播放仅支持 H.264/H.265 摄像头。",
+"live.loading": "加载中...",
+"live.error": "流错误",
+"live.backToCameras": "返回摄像头",
+"live.fullscreen": "全屏"
 }
