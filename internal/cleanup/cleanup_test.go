@@ -34,6 +34,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	store, err := storage.NewManager(storeDir)
 	require.NoError(t, err)
 
+	// Insert default test camera so per-camera cleanup can find it
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Test Camera", "rtsp", "rtsp://localhost/test", "", "", true))
+
 	return &testEnv{db: db, store: store, dir: dir}
 }
 
@@ -194,7 +197,7 @@ func TestRunOnce_TimeBasedCleanup_Ordering(t *testing.T) {
 	defer env.close(t)
 
 	cfg := defaultCleanupConfig()
-	cfg.RetentionDays = 0
+	cfg.RetentionDays = 1
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
@@ -203,7 +206,7 @@ func TestRunOnce_TimeBasedCleanup_Ordering(t *testing.T) {
 	// Insert multiple expired recordings
 	env.insertTestRecording(t, "exp-1", "cam1", "/exp1.mp4", now.Add(-72*time.Hour), false)
 	env.insertTestRecording(t, "exp-2", "cam1", "/exp2.mp4", now.Add(-48*time.Hour), false)
-	env.insertTestRecording(t, "exp-3", "cam1", "/exp3.mp4", now.Add(-24*time.Hour), false)
+	env.insertTestRecording(t, "exp-3", "cam1", "/exp3.mp4", now.Add(-25*time.Hour), false)
 
 	err = cm.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -296,7 +299,7 @@ func TestRunOnce_FileMissingFromDisk(t *testing.T) {
 	defer env.close(t)
 
 	cfg := defaultCleanupConfig()
-	cfg.RetentionDays = 0
+	cfg.RetentionDays = 1
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
