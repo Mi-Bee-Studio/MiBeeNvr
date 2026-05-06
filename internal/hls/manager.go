@@ -17,7 +17,7 @@ var hlsLogger = slog.Default().With("component", "hls-manager")
 
 const (
 	defaultIdleTimeout = 60 * time.Second
-	defaultMaxStreams  = 2
+	defaultMaxStreams  = 4
 )
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
@@ -55,18 +55,19 @@ func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
 	defer m.mu.Unlock()
 
 	// Check max streams
+	// Evict oldest stream if at capacity
 	if len(m.streams) >= m.maxStreams {
-		// Try to stop an idle stream first
-		stopped := false
+		var oldestID string
+		var oldestTime time.Time
 		for id, entry := range m.streams {
-			if time.Since(entry.lastUsed) > m.idleTimeout {
-				m.stopStreamLocked(id)
-				stopped = true
-				break
+			if oldestID == "" || entry.lastUsed.Before(oldestTime) {
+				oldestID = id
+				oldestTime = entry.lastUsed
 			}
 		}
-		if !stopped {
-			return ErrMaxStreamsReached
+		if oldestID != "" {
+			hlsLogger.Info("evicting oldest HLS stream for new request", "evicted_id", oldestID, "new_id", cameraID)
+			m.stopStreamLocked(oldestID)
 		}
 	}
 
@@ -123,17 +124,19 @@ func (m *Manager) StartStreamH265(cameraID string, vps, sps, pps []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Evict oldest stream if at capacity
 	if len(m.streams) >= m.maxStreams {
-		stopped := false
+		var oldestID string
+		var oldestTime time.Time
 		for id, entry := range m.streams {
-			if time.Since(entry.lastUsed) > m.idleTimeout {
-				m.stopStreamLocked(id)
-				stopped = true
-				break
+			if oldestID == "" || entry.lastUsed.Before(oldestTime) {
+				oldestID = id
+				oldestTime = entry.lastUsed
 			}
 		}
-		if !stopped {
-			return ErrMaxStreamsReached
+		if oldestID != "" {
+			hlsLogger.Info("evicting oldest HLS stream for new request", "evicted_id", oldestID, "new_id", cameraID)
+			m.stopStreamLocked(oldestID)
 		}
 	}
 
