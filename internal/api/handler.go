@@ -991,34 +991,55 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Type-assert to H264Recorder to get SPS/PPS and set callback
-		h264Rec, ok := rec.(*recorder.H264Recorder)
-		if !ok {
+		// Try H264 recorder first
+		if h264Rec, ok := rec.(*recorder.H264Recorder); ok {
+			sps := h264Rec.SPS()
+			pps := h264Rec.PPS()
+			if sps == nil || pps == nil {
+				writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
+				return
+			}
+
+			err := h.hlsMgr.StartStream(id, sps, pps)
+			if err != nil {
+				if err == hls.ErrMaxStreamsReached {
+					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				} else {
+					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
+				return
+			}
+
+			h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+				_ = h.hlsMgr.WriteH264(id, pts, au)
+			}
+		} else if h265Rec, ok := rec.(*recorder.H265Recorder); ok {
+			vps := h265Rec.VPS()
+			sps := h265Rec.SPS()
+			pps := h265Rec.PPS()
+			if vps == nil || sps == nil || pps == nil {
+				writeError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
+				return
+			}
+
+			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps)
+			if err != nil {
+				if err == hls.ErrMaxStreamsReached {
+					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				} else {
+					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
+				return
+			}
+
+			h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+				_ = h.hlsMgr.WriteH265(id, pts, au)
+			}
+		} else {
 			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
 			return
-		}
-
-		sps := h264Rec.SPS()
-		pps := h264Rec.PPS()
-		if sps == nil || pps == nil {
-			writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
-			return
-		}
-
-		err := h.hlsMgr.StartStream(id, sps, pps)
-		if err != nil {
-			if err == hls.ErrMaxStreamsReached {
-				writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
-			} else {
-				logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-			}
-			return
-		}
-
-		// Set callback to feed frames into HLS muxer (non-blocking)
-		h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-			_ = h.hlsMgr.WriteH264(id, pts, au)
 		}
 	}
 
