@@ -827,17 +827,18 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body struct {
-		Name         *string `json:"name"`
-		URL          *string `json:"url"`
-		Protocol     *string `json:"protocol"`
-		Username     *string `json:"username"`
-		Password     *string `json:"password"`
-		Enabled      *bool   `json:"enabled"`
-		Description  *string `json:"description"`
-		Location     *string `json:"location"`
-		Brand        *string `json:"brand"`
-		Model        *string `json:"model"`
-		SerialNumber *string `json:"serial_number"`
+		Name          *string `json:"name"`
+		URL           *string `json:"url"`
+		Protocol      *string `json:"protocol"`
+		Username      *string `json:"username"`
+		Password      *string `json:"password"`
+		Enabled       *bool   `json:"enabled"`
+		Description   *string `json:"description"`
+		Location      *string `json:"location"`
+		Brand         *string `json:"brand"`
+		Model         *string `json:"model"`
+		SerialNumber  *string `json:"serial_number"`
+		RetentionDays *int    `json:"retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -845,17 +846,18 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := camera.CameraUpdate{
-		Name:         body.Name,
-		URL:          body.URL,
-		Protocol:     body.Protocol,
-		Username:     body.Username,
-		Password:     body.Password,
-		Enabled:      body.Enabled,
-		Description:  body.Description,
-		Location:     body.Location,
-		Brand:        body.Brand,
-		Model:        body.Model,
-		SerialNumber: body.SerialNumber,
+		Name:          body.Name,
+		URL:           body.URL,
+		Protocol:      body.Protocol,
+		Username:      body.Username,
+		Password:      body.Password,
+		Enabled:       body.Enabled,
+		Description:   body.Description,
+		Location:      body.Location,
+		Brand:         body.Brand,
+		Model:         body.Model,
+		SerialNumber:  body.SerialNumber,
+		RetentionDays: body.RetentionDays,
 	}
 
 	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
