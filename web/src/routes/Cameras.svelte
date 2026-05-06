@@ -6,6 +6,26 @@
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
+  function formatTimeAgo(lastSeen: string | null | undefined): { text: string; color: string } {
+    if (!lastSeen) return { text: t('cameras.neverRecorded') || '从未录制', color: 'badge-neutral' };
+    const now = Date.now();
+    const then = new Date(lastSeen).getTime();
+    if (isNaN(then)) return { text: t('cameras.neverRecorded') || '从未录制', color: 'badge-neutral' };
+    const diffMs = now - then;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 5) {
+      return { text: (t('cameras.active') || '活跃') + ' ' + diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-success' };
+    } else if (diffMin < 30) {
+      return { text: diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-warning' };
+    } else {
+      const diffHours = Math.floor(diffMin / 60);
+      if (diffHours < 1) {
+        return { text: diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-error' };
+      }
+      return { text: diffHours + (t('cameras.hoursAgo') || 'h前'), color: 'badge-error' };
+    }
+  }
+
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
@@ -28,6 +48,7 @@
   let formBrand = $state('');
   let formModel = $state('');
   let formSerialNumber = $state('');
+  let formRetentionDays = $state(0);
 
   // Inline name edit
   let editingNameId = $state<string | null>(null);
@@ -75,6 +96,7 @@
     formBrand = '';
     formModel = '';
     formSerialNumber = '';
+    formRetentionDays = 0;
     validationErrors = {};
   }
 
@@ -98,6 +120,7 @@
     formBrand = camera.brand || '';
     formModel = camera.model || '';
     formSerialNumber = camera.serial_number || '';
+    formRetentionDays = camera.retention_days || 0;
     validationErrors = {};
     showForm = true;
   }
@@ -130,9 +153,9 @@
           brand: formBrand || undefined,
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
+          retention_days: formRetentionDays,
         };
         if (formUsername) data.username = formUsername;
-        if (formPassword) data.password = formPassword;
         await updateCamera(editingCamera.id, data);
         showFeedback(t('cameras.cameraUpdated'), 'success');
       } else {
@@ -358,6 +381,13 @@
                 <label for="cam-serial" class="input-label">{t('cameras.serialNumber')}</label>
                 <input id="cam-serial" type="text" class="input" bind:value={formSerialNumber} />
               </div>
+
+              <!-- Retention Days -->
+              <div>
+                <label for="cam-retention" class="input-label">{t('cameras.retentionDays') || '保存天数'}</label>
+                <input id="cam-retention" type="number" min="0" class="input" bind:value={formRetentionDays} />
+                <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint') || '0 = 使用全局设置'}</p>
+              </div>
             </div>
 
             <div class="flex items-center gap-3 mt-6">
@@ -445,20 +475,25 @@
                       </td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.description || '-'}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        {#if camera.recorder_status === 'recording'}
-                          <span class="badge badge-success">{t('cameras.statusRecording')}</span>
-                        {:else if camera.recorder_status === 'error'}
-                          <span class="badge badge-error">{t('cameras.statusError')}</span>
-                        {:else if camera.recorder_status === 'reconnecting'}
-                          <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
-                        {:else}
-                          <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
+                        <span class="badge {formatTimeAgo(camera.last_seen).color}">{formatTimeAgo(camera.last_seen).text}</span>
+                        {#if camera.recorder_status}
+                          <div class="text-xs th-text-muted mt-0.5">{camera.recorder_status}</div>
                         {/if}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        <div class="flex gap-2">
+                        <div class="flex gap-2 items-center">
+                          {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265'}
+                            <a
+                              href="#/live/{camera.id}"
+                              class="btn btn-primary px-2 py-1 text-sm flex items-center gap-1"
+                              title={t('cameras.live') || 'Live'}
+                            >
+                              <Eye size={14} />
+                              {t('cameras.live') || '实时'}
+                            </a>
+                          {/if}
                           <button
                             on:click={() => openEditForm(camera)}
                             class="btn btn-ghost px-2 py-1 text-sm transition-all duration-200"
