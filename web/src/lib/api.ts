@@ -38,6 +38,8 @@ export interface Camera {
   model?: string;
   serial_number?: string;
   recorder_status?: string;
+  last_seen?: string;
+  retention_days?: number;
 }
 
 export interface CreateCameraRequest {
@@ -66,8 +68,8 @@ export interface UpdateCameraRequest {
   brand?: string;
   model?: string;
   serial_number?: string;
+  retention_days?: number;
 }
-
 
 export interface StorageStats {
   total_bytes: number;
