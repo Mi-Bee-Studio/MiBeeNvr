@@ -42,11 +42,6 @@
 
     const url = getStreamUrl();
 
-    // Native HLS support (Safari)
-    if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      videoEl.src = url;
-      return;
-    }
 
     // hls.js
     import('hls.js').then((HlsModule) => {
@@ -57,9 +52,13 @@
       }
 
       hls = new Hls({
-        xhrSetup: (xhr: XMLHttpRequest) => {
+        enableWorker: false,
+        xhrSetup: (xhr: XMLHttpRequest, url: string) => {
           const creds = getCredentials();
           if (creds) {
+            if (!xhr.readyState) {
+              xhr.open('GET', url, true);
+            }
             xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
           }
         },
