@@ -40,7 +40,7 @@ Retrieve a paginated list of recordings with optional filtering.
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
 | `camera_id` | string | No | Filter by camera ID | `cam1` |
-| `format` | string | No | Filter by format (h264 or mjpeg) | `h264` |
+|| `format` | string | No | Filter by format (h264, h265, or mjpeg) | `h264`
 | `pinned` | boolean | No | Filter by pin status | `true` |
 | `start` | string | No | Start time (RFC3339 format) | `2024-01-01T00:00:00Z` |
 | `end` | string | No | End time (RFC3339 format) | `2024-01-02T00:00:00Z` |
@@ -242,17 +242,22 @@ curl -u username:password \
     "name": "Front Door Camera",
     "protocol": "rtsp_h264",
     "url": "rtsp://192.168.1.100:554/stream",
-    "enabled": true
+    "enabled": true,
+    "status": "recording",
+    "last_seen": "2024-01-01T10:15:00Z",
+    "retention_days": 30
   },
   {
     "id": "cam2",
     "name": "Backyard Camera",
     "protocol": "http_jpeg",
     "url": "http://192.168.1.101:8080/cam.jpg",
-    "enabled": false
+    "enabled": false,
+    "status": "stopped",
+    "last_seen": "2024-01-01T09:30:00Z",
+    "retention_days": 7
   }
-]
-```
+]```
 
 ### Create Camera
 
@@ -265,12 +270,26 @@ Add a new camera configuration.
 {
   "name": "Garage Camera",
   "protocol": "rtsp_mjpeg",
+  # Supported protocols: rtsp_h264, rtsp_h265, rtsp_mjpeg, http_jpeg
   "url": "rtsp://192.168.1.102:554/mjpeg_stream",
   "username": "admin",
   "password": "secret",
   "enabled": true
-}
 ```
+
+**Request Body:**
+```json
+{
+  "name": "Garage Camera",
+  "protocol": "rtsp_mjpeg",
+  "url": "rtsp://192.168.1.102:554/mjpeg_stream",
+  "username": "admin",
+  "password": "secret",
+  "enabled": true,
+  "retention_days": 15
+  
+  # Note: retention_days is optional, defaults to global setting
+}```
 
 **Request:**
 ```bash
@@ -318,9 +337,11 @@ curl -u username:password \
   "name": "Front Door Camera",
   "protocol": "rtsp_h264",
   "url": "rtsp://192.168.1.100:554/stream",
-  "enabled": true
-}
-```
+  "enabled": true,
+  "status": "recording",
+  "last_seen": "2024-01-01T10:15:00Z",
+  "retention_days": 30
+}```
 
 ### Update Camera
 
@@ -333,9 +354,11 @@ Update camera configuration. All fields are optional for partial updates.
 {
   "name": "Updated Front Door Camera",
   "url": "rtsp://192.168.1.100:554/new_stream",
-  "enabled": false
-}
-```
+  "enabled": false,
+  "retention_days": 7
+  
+  # Note: retention_days is optional, updates per-camera retention
+}```
 
 **Request:**
 ```bash
@@ -382,6 +405,38 @@ curl -u username:password \
 ```
 
 ## Stats & Settings API
+
+### Live Stream (HLS)
+
+**Endpoint:** `GET /api/cameras/:id/stream/*path`
+
+Provide on-demand HLS live streaming for H.264 and H.265 cameras. Click "实时" button in Web UI to start streaming. Auto-stops after 60s idle. Max 4 concurrent streams.
+
+**Path Parameters:**
+- `:id` - Camera ID
+- `*path` - HLS segment path (m3u8, ts, m4s)
+
+**Query Parameters:**
+- `format` - Video format: `h264`, `h265`, `mjpeg`
+
+**Status Codes:**
+- `200` - HLS segment delivered
+- `404` - Camera or segment not found
+- `503` - Maximum concurrent streams reached
+
+**Request (HLS playlist):**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/cam1/stream/stream.m3u8"
+```
+
+**Request (HLS segment):**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/cam1/stream/segment_001.ts"
+```
+
+**Response:** HLS playlist or segment file content
 
 ### Get System Stats
 
