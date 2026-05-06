@@ -450,7 +450,9 @@ type CameraRow struct {
 	SerialNumber string               `json:"serial_number"`
 	RetentionDays int                 `json:"retention_days"`
 	Status       model.RecorderStatus `json:"status"`
-}
+	LastSeen     *time.Time           `json:"last_seen,omitempty"`
+	}
+
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days FROM cameras ORDER BY id;`)
@@ -574,6 +576,43 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailySta
 	}
 	if result == nil {
 		result = []model.DailyStats{}
+	}
+	return result, nil
+}
+
+// GetLastRecordingTime returns the most recent ended_at for a camera.
+func (d *DB) GetLastRecordingTime(ctx context.Context, cameraID string) (*time.Time, error) {
+	var endedAtStr sql.NullString
+	err := d.db.QueryRowContext(ctx, "SELECT MAX(ended_at) FROM recordings WHERE camera_id=? AND ended_at IS NOT NULL", cameraID).Scan(&endedAtStr)
+	if err != nil {
+		return nil, err
+	}
+	if !endedAtStr.Valid || endedAtStr.String == "" {
+		return nil, nil
+	}
+	t := scanTime(endedAtStr)
+	return &t, nil
+}
+
+// GetAllLastRecordingTimes returns the last recording time for each camera.
+func (d *DB) GetAllLastRecordingTimes(ctx context.Context) (map[string]*time.Time, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT camera_id, MAX(ended_at) as last_ended FROM recordings WHERE ended_at IS NOT NULL GROUP BY camera_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]*time.Time)
+	for rows.Next() {
+		var cameraID string
+		var endedAtStr sql.NullString
+		if err := rows.Scan(&cameraID, &endedAtStr); err != nil {
+			return nil, err
+		}
+		if endedAtStr.Valid && endedAtStr.String != "" {
+			t := scanTime(endedAtStr)
+			result[cameraID] = &t
+		}
 	}
 	return result, nil
 }
