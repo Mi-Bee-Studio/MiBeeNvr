@@ -30,6 +30,7 @@ type CameraUpdate struct {
 	Brand        *string
 	Model        *string
 	SerialNumber *string
+	RetentionDays *int
 }
 
 type CameraManager struct {
@@ -414,13 +415,14 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
-		if updates.Description != nil || updates.Location != nil || updates.Brand != nil || updates.Model != nil || updates.SerialNumber != nil {
+		if updates.Description != nil || updates.Location != nil || updates.Brand != nil || updates.Model != nil || updates.SerialNumber != nil || updates.RetentionDays != nil {
 			desc := strPtrOrEmpty(updates.Description)
 			loc := strPtrOrEmpty(updates.Location)
 			br := strPtrOrEmpty(updates.Brand)
 			mo := strPtrOrEmpty(updates.Model)
 			sn := strPtrOrEmpty(updates.SerialNumber)
-			if err := cm.db.UpdateCameraMetadata(ctx, cam.ID, desc, loc, br, mo, sn); err != nil {
+		rd := intPtrOrZero(updates.RetentionDays)
+			if err := cm.db.UpdateCameraMetadata(ctx, cam.ID, desc, loc, br, mo, sn, rd); err != nil {
 				logger.Error("failed to update camera metadata", "camera_id", cam.ID, "error", err)
 			}
 		}
@@ -517,4 +519,12 @@ func strPtrOrEmpty(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// intPtrOrZero returns the int value of a *int pointer, or 0 if nil.
+func intPtrOrZero(i *int) int {
+	if i == nil {
+		return 0
+	}
+	return *i
 }
