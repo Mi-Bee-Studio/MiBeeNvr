@@ -7,6 +7,7 @@
   import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
   import Cameras from './routes/Cameras.svelte';
+  import LiveView from './routes/LiveView.svelte';
 
   import Header from './components/Header.svelte';
 
@@ -37,6 +38,16 @@
     }
 
     if (segments[0] === 'cameras') {
+      if (segments[1]) {
+        return { route: 'cameras-detail', params: { id: segments[1] } };
+      }
+      return { route: 'cameras', params: {} };
+    }
+
+    if (segments[0] === 'live') {
+      if (segments[1]) {
+        return { route: 'live', params: { id: segments[1] } };
+      }
       return { route: 'cameras', params: {} };
     }
 
@@ -80,13 +91,17 @@
 {#if currentRoute === 'login'}
     <Login />
   {:else}
-    <Header showBack={currentRoute === 'recording-detail'} />
+    <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
     {#if currentRoute === 'recordings'}
       <Recordings />
     {:else if currentRoute === 'recording-detail'}
       <RecordingDetail recordingId={params.id} />
     {:else if currentRoute === 'cameras'}
       <Cameras />
+    {:else if currentRoute === 'cameras-detail'}
+      <Cameras />
+    {:else if currentRoute === 'live'}
+      <LiveView cameraId={params.id} />
     {:else if currentRoute === 'stats'}
       <Stats />
     {:else if currentRoute === 'settings'}
