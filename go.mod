@@ -20,7 +20,10 @@ require (
 )
 
 require (
+	github.com/asticode/go-astikit v0.30.0 // indirect
+	github.com/asticode/go-astits v1.15.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bluenviron/gohlslib/v2 v2.3.1 // indirect
 	github.com/bluenviron/mediacommon/v2 v2.8.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

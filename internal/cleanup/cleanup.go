@@ -78,24 +78,42 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	return nil
 }
 
-// timeBasedCleanup deletes recordings where:
+// timeBasedCleanup deletes recordings per-camera where:
 // - pinned = false
 // - ended_at < NOW() - retention
+// Each camera uses its own retention_days (0 = fallback to global).
 func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
-	retentionDays := int(cm.retention.Hours() / 24)
-	recordings, err := cm.db.ListExpiredRecordings(ctx, retentionDays)
+	globalRetentionDays := int(cm.retention.Hours() / 24)
+
+	cameras, err := cm.db.ListCameras(ctx)
 	if err != nil {
 		return err
 	}
 
-	for _, rec := range recordings {
-		if err := cm.deleteRecording(ctx, &rec); err != nil {
-			logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
+	for _, cam := range cameras {
+		retentionDays := cam.RetentionDays
+		if retentionDays <= 0 {
+			retentionDays = globalRetentionDays
+		}
+		if retentionDays <= 0 {
 			continue
 		}
-		logger.Info("deleted recording (time-based)", "recording_id", rec.ID)
-		if cm.metrics != nil {
-			cm.metrics.CleanupDeleted.WithLabelValues("retention").Add(1)
+
+		recordings, err := cm.db.ListExpiredRecordingsByCamera(ctx, cam.ID, retentionDays)
+		if err != nil {
+			logger.Warn("failed to list expired recordings for camera", "camera_id", cam.ID, "error", err)
+			continue
+		}
+
+		for _, rec := range recordings {
+			if err := cm.deleteRecording(ctx, &rec); err != nil {
+				logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
+				continue
+			}
+			logger.Info("deleted recording (time-based)", "recording_id", rec.ID, "camera_id", cam.ID)
+			if cm.metrics != nil {
+				cm.metrics.CleanupDeleted.WithLabelValues("retention").Add(1)
+			}
 		}
 	}
 	return nil
