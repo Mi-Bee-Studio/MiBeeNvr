@@ -49,11 +49,6 @@
   "recordings.search": "Search recordings...",
   "recordings.startDate": "Start Date",
   "recordings.endDate": "End Date",
-  "recordings.last1h": "Last 1h",
-  "recordings.last24h": "Last 24h",
-  "recordings.last7d": "Last 7 days",
-  "recordings.last30d": "Last 30 days",
-  "recordings.quickRange": "Quick Range",
   "recordings.clearFilters": "Clear Filters",
   "recordings.sortAsc": "Ascending",
   "recordings.sortDesc": "Descending",
@@ -287,5 +282,26 @@
   "settings.webdavReadWrite": "Read-Write Mode",
   "settings.webdavReadWriteOn": "Read-Write",
   "settings.webdavReadWriteOff": "Read-Only",
-  "settings.webdavReadWriteHint": "Allow cameras to upload recordings via WebDAV."
+  "settings.webdavReadWriteHint": "Allow cameras to upload recordings via WebDAV.",
+
+"stats.filterCameras": "Filter Cameras",
+"stats.selectAll": "Select All",
+"stats.deselectAll": "Deselect All",
+
+"cameras.live": "Live",
+"cameras.lastSeen": "Last seen",
+"cameras.active": "Active",
+"cameras.neverRecorded": "Never recorded",
+"cameras.minutesAgo": "m ago",
+"cameras.hoursAgo": "h ago",
+"cameras.retentionDays": "Retention Days",
+"cameras.retentionDaysHint": "0 = Use global settings",
+
+"live.title": "Live View",
+"live.notSupported": "Live streaming is not supported",
+"live.notSupportedDesc": "Live streaming is only available for H.264/H.265 cameras.",
+"live.loading": "Loading stream...",
+"live.error": "Stream error",
+"live.backToCameras": "Back to Cameras",
+"live.fullscreen": "Fullscreen"
 }
