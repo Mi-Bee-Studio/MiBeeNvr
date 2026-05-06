@@ -147,7 +147,7 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(c.URL) == "" {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
-		if c.Protocol != "rtsp_h264" && c.Protocol != "rtsp_mjpeg" && c.Protocol != "http_jpeg" {
+		if c.Protocol != "rtsp_h264" && c.Protocol != "rtsp_mjpeg" && c.Protocol != "http_jpeg" && c.Protocol != "rtsp_h265" {
 			return fmt.Errorf("camera[%d].protocol invalid: %s", i, c.Protocol)
 		}
 	}

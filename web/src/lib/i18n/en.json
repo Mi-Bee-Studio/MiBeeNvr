@@ -27,6 +27,7 @@
   "recordings.allFormats": "All Formats",
   "recordings.h264": "H.264 (MP4)",
   "recordings.mjpeg": "MJPEG (JPEG)",
+  "recordings.h265": "H.265 (HEVC)",
   "recordings.status": "Status",
   "recordings.all": "All",
   "recordings.pinned": "Pinned",
@@ -266,6 +267,8 @@
   "camera.protocol.rtsp_h264": "RTSP H.264",
   "camera.protocol.rtsp_mjpeg": "RTSP MJPEG",
   "camera.protocol.http_jpeg": "HTTP JPEG",
+  "camera.protocol.rtsp_h265": "RTSP H.265",
+  "recording.format.h265": "MP4 (HEVC)",
   "recording.format.h264": "MP4",
   "recording.format.mjpeg": "JPEG",
   "pagination": {

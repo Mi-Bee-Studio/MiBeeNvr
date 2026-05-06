@@ -274,6 +274,7 @@
                 <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
                 <select id="cam-protocol" class="input" bind:value={formProtocol}>
                   <option value="rtsp_h264">RTSP H.264</option>
+                  <option value="rtsp_h265">RTSP H.265</option>
                   <option value="rtsp_mjpeg">RTSP MJPEG</option>
                   <option value="http_jpeg">HTTP JPEG</option>
                 </select>
