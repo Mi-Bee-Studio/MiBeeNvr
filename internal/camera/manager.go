@@ -264,6 +264,13 @@ func (cm *CameraManager) RecorderCount() int {
 	return len(cm.recorders)
 }
 
+// GetRecorder returns the recorder for the given camera ID, or nil if not found.
+func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.recorders[cameraID]
+}
+
 // AddCamera adds a new camera to the manager and starts its recorder if enabled.
 // If cam.ID is empty, a new ID is generated automatically.
 // Returns the camera ID.
