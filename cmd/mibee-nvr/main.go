@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 )
 
@@ -120,8 +121,12 @@ func main() {
 	// Camera manager
 	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m)
 
+	// HLS manager
+	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
+	hlsMgr := hls.NewManager(hlsDataDir)
+ 
 	// API handler — Routes() already includes /api prefix
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, *configPath)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath)
 
 	// WebDAV
 	var davHandler http.Handler
@@ -241,7 +246,8 @@ func main() {
 
 	done := make(chan struct{})
 	go func() {
-		_ = camMgr.Stop()
+	_ = camMgr.Stop()
+	hlsMgr.StopAll()
 		srv.Shutdown(shutdownCtx)
 		close(done)
 	}()
