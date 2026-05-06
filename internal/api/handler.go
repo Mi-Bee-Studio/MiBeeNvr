@@ -19,6 +19,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -73,12 +75,13 @@ type Handler struct {
 	authMW  func(http.Handler) http.Handler
 	config  *config.Config
 	camMgr  *camera.CameraManager
+	hlsMgr  *hls.Manager
 	configPath string
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, configPath: configPath}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -112,6 +115,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/", h.handleGetCamera)
 				r.Put("/", h.handleUpdateCamera)
 				r.Delete("/", h.handleDeleteCamera)
+			r.Get("/stream/*", h.handleHLSStream)
+			r.Delete("/stream", h.handleStopHLSStream)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -636,9 +641,19 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				cameras[i].Status = model.StatusStopped
 			}
 		}
+	// Inject last_seen from DB
+	lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
+	if err == nil {
+		for i := range cameras {
+			if t, ok := lastSeenMap[cameras[i].ID]; ok {
+				cameras[i].LastSeen = t
+			}
+		}
+	}
 	}
 	writeJSON(w, http.StatusOK, cameras)
 }
+
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -754,7 +769,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	// Persist DB-only metadata fields
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
-		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber); err != nil {
+		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
 			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
 		}
 	}
@@ -762,8 +777,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	row, err := h.db.GetCamera(r.Context(), id)
 	if row != nil && h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+		// Inject last_seen from DB
+		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		if err == nil {
+			row.LastSeen = lastSeen
+		}
 	}
-	if row != nil {
 		writeJSON(w, http.StatusCreated, row)
 	} else {
 		cam.ID = id
@@ -785,6 +806,15 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	// Inject recorder status
 	if h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	}
+	// Inject recorder status
+	if h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+	}
+	// Inject last_seen from DB
+	lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+	if err == nil {
+		row.LastSeen = lastSeen
 	}
 	writeJSON(w, http.StatusOK, row)
 }
@@ -845,8 +875,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if row != nil && h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+		// Inject last_seen from DB
+		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		if err == nil {
+			row.LastSeen = lastSeen
+		}
 	}
-	if row != nil {
 		writeJSON(w, http.StatusOK, row)
 	} else {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -905,7 +941,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, "")
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "")
 }
 // --- Test helper exported for handler_test.go ---
 
@@ -917,8 +953,120 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW := middleware.NewAuthMiddleware(username, passwordHash)
-	return NewHandler(db, store, authMW, nil, nil, "")
+	return NewHandler(db, store, authMW, nil, nil, nil, "")
 }
+
+// --- HLS streaming endpoints ---
+
+func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	if h.hlsMgr == nil || h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "HLS not available")
+		return
+	}
+
+	// Get camera to check protocol
+	cam, err := h.db.GetCamera(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		return
+	}
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	// Only H.264/H.265 cameras support HLS
+	if cam.Protocol != string(model.ProtoRTSPH264) && cam.Protocol != string(model.ProtoRTSPH265) {
+		writeError(w, http.StatusBadRequest, "camera protocol does not support HLS streaming")
+		return
+	}
+
+	// If stream not active, start it
+	if !h.hlsMgr.IsActive(id) {
+		rec := h.camMgr.GetRecorder(id)
+		if rec == nil {
+			writeError(w, http.StatusBadRequest, "camera recorder not running")
+			return
+		}
+
+		// Try H264 recorder first
+		if h264Rec, ok := rec.(*recorder.H264Recorder); ok {
+			sps := h264Rec.SPS()
+			pps := h264Rec.PPS()
+			if sps == nil || pps == nil {
+				writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
+				return
+			}
+
+			err := h.hlsMgr.StartStream(id, sps, pps)
+			if err != nil {
+				if err == hls.ErrMaxStreamsReached {
+					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				} else {
+					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
+				return
+			}
+
+			h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+				_ = h.hlsMgr.WriteH264(id, pts, au)
+			}
+		} else if h265Rec, ok := rec.(*recorder.H265Recorder); ok {
+			vps := h265Rec.VPS()
+			sps := h265Rec.SPS()
+			pps := h265Rec.PPS()
+			if vps == nil || sps == nil || pps == nil {
+				writeError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
+				return
+			}
+
+			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps)
+			if err != nil {
+				if err == hls.ErrMaxStreamsReached {
+					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				} else {
+					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
+				return
+			}
+
+			h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+				_ = h.hlsMgr.WriteH265(id, pts, au)
+			}
+		} else {
+			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
+			return
+		}
+	}
+
+	// Proxy to muxer handler
+	if !h.hlsMgr.Handle(id, w, r) {
+		writeError(w, http.StatusServiceUnavailable, "HLS stream not available")
+		return
+	}
+}
+
+func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	if h.hlsMgr == nil {
+		writeError(w, http.StatusInternalServerError, "HLS not available")
+		return
+	}
+
+	if !h.hlsMgr.IsActive(id) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "not active"})
+		return
+	}
+
+	h.hlsMgr.StopStream(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
 // --- Settings endpoints ---
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {

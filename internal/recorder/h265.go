@@ -59,10 +59,20 @@ type H265Recorder struct {
 	vps []byte
 	sps []byte
 	pps []byte
+	OnHLSFrame func(pts int64, au [][]byte) // Called for each H265 access unit (non-blocking)
 
 	frameCh chan []byte
 	dropped atomic.Int64
 }
+
+// VPS returns the current H265 Video Parameter Set NAL unit (without start bytes).
+func (r *H265Recorder) VPS() []byte { return r.vps }
+
+// SPS returns the current H265 Sequence Parameter Set NAL unit (without start bytes).
+func (r *H265Recorder) SPS() []byte { return r.sps }
+
+// PPS returns the current H265 Picture Parameter Set NAL unit (without start bytes).
+func (r *H265Recorder) PPS() []byte { return r.pps }
 
 // incActive increments the active recordings gauge if metrics is available.
 func (r *H265Recorder) incActive() {
@@ -254,6 +264,10 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) error {
 				h265Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
+		}
+		// Branch to HLS if callback is set
+		if r.OnHLSFrame != nil {
+			r.OnHLSFrame(int64(pkt.Timestamp), au)
 		}
 		for _, nalu := range au {
 			data := make([]byte, 4+len(nalu))

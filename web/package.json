@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "chart.js": "^4.5.1",
+    "hls.js": "^1.6.16",
     "lucide-svelte": "^1.0.1"
   }
 }
