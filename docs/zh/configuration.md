@@ -128,7 +128,19 @@ cameras:
      enabled: true
    ```
 
-2. **RTSP MJPEG** (`rtsp_mjpeg`)
+2. **RTSP H.265/HEVC** (`rtsp_h265`)
+   ```yaml
+   - id: "cam1"
+     name: "H.265 摄像头"
+     protocol: "rtsp_h265"
+     url: "rtsp://192.168.1.100:554/h265/main"
+     username: "admin"
+     password: "password123"
+     enabled: true
+   ```
+   注意：H.265/HEVC 提供比 H.264 更好的压缩率，但需要更多的 CPU 处理能力。
+
+3. **RTSP MJPEG** (`rtsp_mjpeg`)
    ```yaml
    - id: "cam2"
      name: "后院摄像头"
@@ -137,7 +149,7 @@ cameras:
      enabled: true
    ```
 
-3. **HTTP JPEG** (`http_jpeg`)
+4. **HTTP JPEG** (`http_jpeg`)
    ```yaml
    - id: "cam3"
      name: "室内摄像头"
@@ -157,15 +169,12 @@ cameras:
     username: "admin"
     password: "password123"
     enabled: true
-    recording: true
-    segment_prefix: "front_door"
     
   - id: "back-yard"
     name: "后院"
     protocol: "rtsp_mjpeg"
     url: "rtsp://192.168.1.101:554/live"
     enabled: true
-    recording: true
     
   - id: "garage"
     name: "车库"
@@ -174,7 +183,14 @@ cameras:
     username: "admin"
     password: "garage123"
     enabled: true
-    recording: true
+    
+  - id: "h265-camera"
+    name: "H.265 摄像头"
+    protocol: "rtsp_h265"
+    url: "rtsp://192.168.1.103:554/stream"
+    username: "admin"
+    password: "password123"
+    enabled: true
 ```
 
 ### cleanup 清理配置
@@ -186,19 +202,16 @@ cleanup:
   retention_days: 30            # 录像保留天数（0=未配置，默认30天）
   check_interval: "1h"         # 清理检查间隔
   disk_threshold_percent: 95    # 磁盘使用率阈值（百分比）
-  max_files_per_camera: 10000   # 每个摄像头最大文件数
-  delete_interval: "6h"        # 删除操作间隔
 ```
 
 **默认值**:
 - `retention_days: 30`
-- `check_interval: "1h"`
+- `check_interval: "1h"
 - `disk_threshold_percent: 95`
-- `max_files_per_camera: 10000`
-- `delete_interval: "6h"`
 
 **重要提示**:
 - `retention_days: 0` 会被视为"未配置"，系统会使用默认值 30 天
+- **按摄像头保留天数**：每个摄像头可以通过 Web 界面或 API 设置自己的 `retention_days` 来覆盖全局设置
 - 清理策略包括：按时间清理和磁盘空间清理两种方式
 
 ### FTP 服务器配置
@@ -257,19 +270,19 @@ WebDAV 服务器配置提供只读文件访问功能。
 webdav:
   enabled: true                 # 是否启用 WebDAV
   path_prefix: "/dav"         # WebDAV 路径前缀
-  max_upload_size: "1GB"       # 最大上传大小
-  cache_control: "max-age=3600" # 缓存控制头
+  read_write: false             # 是否启用读写模式（默认只读）
 ```
 
 **默认值**:
 - `enabled: true`
 - `path_prefix: "/dav"`
-- `max_upload_size: "1GB"`
-- `cache_control: "max-age=3600"`
+- `read_write: false`
 
 **重要提示**:
-- WebDAV 服务器是**只读**的，所有写入操作都会返回 403 状态码
+- WebDAV 服务器默认为**只读**模式，所有写入操作都会返回 403 状态码
+- 启用 `read_write: true` 后，可以通过 WebDAV PUT 请求自动注册新摄像头
 - 访问路径格式：`http://server:9090/dav/recordings/`
+- 启用读写模式前请考虑安全影响
 
 ## 配置文件示例
 

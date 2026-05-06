@@ -112,8 +112,8 @@ cameras:
 - **Type**: string
 - **Required**: Yes
 - **Description**: Camera protocol type
-- **Options**: `"rtsp_h264"`, `"rtsp_mjpeg"`, `"http_jpeg"`
-- **Example**: `"rtsp_h264"`
+- **Options**: `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`
+- **Note**: H.265/HEVC provides better compression than H.264 but requires more CPU processing
 
 ### `cameras[].url`
 - **Type**: string
@@ -172,6 +172,18 @@ cameras:
   enabled: true
 ```
 
+### RTSP H.265 Camera
+
+```yaml
+- id: "cam4"
+  name: "H.265 Security Camera"
+  protocol: "rtsp_h265"
+  url: "rtsp://192.168.1.103:554/stream"
+  username: "admin"
+  password: "camera-password"
+  enabled: true
+```
+
 ## Cleanup Configuration
 
 ### `cleanup.retention_days`
@@ -179,6 +191,7 @@ cameras:
 - **Default**: `30` (when not set or `0`)
 - **Description**: Number of days to keep recordings
 - **Important**: A value of `0` is treated as "unconfigured" and defaults to 30 days
+- **Per-camera retention**: Individual cameras can override this setting via the Web UI or API with their own `retention_days` field
 - **Example**: `30`, `90`, `365`
 
 ### `cleanup.check_interval`
@@ -248,17 +261,26 @@ cameras:
 - **Description**: Whether WebDAV server is enabled
 
 ### `webdav.path_prefix`
+
 - **Type**: string
 - **Default**: `"/dav"`
 - **Description**: URL path prefix for WebDAV access
-- **Important**: WebDAV is read-only - all write operations return 403
 - **Example**: `"/dav"`, `"/recordings"`
+
+### `webdav.read_write`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Whether WebDAV server allows write operations
+- **Important**: When enabled, new cameras can be auto-registered via WebDAV PUT requests
+- **Security**: Consider security implications before enabling write access
+- **Example**: `false`, `true`
 
 ## Important Notes
 
 ### Security Considerations
 - FTP credentials use the same username/password as the web interface
-- WebDAV is intentionally read-only for security
+- WebDAV supports optional read-only/read-write mode (read-only by default for security)
 - Authentication is required for all web UI and FTP access
 
 ### Memory Management

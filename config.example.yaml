@@ -27,6 +27,13 @@ cameras:
     protocol: "http_jpeg"
     url: "http://192.168.1.X/capture"
     enabled: true
+  - id: "h265-cam1"
+    name: "H.265 Camera"
+    protocol: "rtsp_h265"
+    url: "rtsp://192.168.1.X:554/stream"
+    username: "admin"
+    password: "your-password-here"
+    enabled: true
 
 cleanup:
   retention_days: 30
@@ -47,3 +54,4 @@ mqtt:
 webdav:
   enabled: true
   path_prefix: "/dav"
+  read_write: false

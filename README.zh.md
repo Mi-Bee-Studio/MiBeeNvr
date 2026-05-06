@@ -1,6 +1,6 @@
 # MiBee NVR
 
-轻量级网络视频录像机，使用 Go 编写。支持 RTSP (H.264/MJPEG) 和 HTTP JPEG 摄像头，内置 Web 管理界面、WebDAV、FTP 和 MQTT 集成。编译为单文件静态二进制，内嵌前端页面，无需外部依赖。
+轻量级网络视频录像机，使用 Go 编写。支持 RTSP (H.264/H.265/MJPEG) 和 HTTP JPEG 摄像头，内置 Web 管理界面、WebDAV、FTP 和 MQTT 集成。编译为单文件静态二进制，内嵌前端页面，无需外部依赖。
 
 [**English**](README.md)
 
@@ -15,20 +15,21 @@
 
 ## 功能特性
 
-- 支持 RTSP (H.264/MJPEG) 和 HTTP JPEG 摄像头
+- 支持 RTSP (H.264/H.265/MJPEG) 和 HTTP JPEG 摄像头
 - 自动将视频流封装为 MP4 片段存储
 - Web 管理界面，支持 **深色/浅色主题**（自动检测系统偏好）
 - **Chart.js** 驱动的存储趋势和单摄像头统计图表
+- **实时直播 (HLS流)** - 通过 Web UI 按需 H.264/H.265 直播流
 - **lucide-svelte** 图标贯穿整个界面
 - **i18n** 支持：中英文语言切换
 - **响应式设计**，适配移动端和桌面端
-- WebDAV（只读）和 FTP 文件访问
+- WebDAV（可配置只读/读写）和 FTP 文件访问
 - MQTT 消息触发录像，灵活集成智能家居
 - 多摄像头同时录像
+- **按摄像头保留天数** - 每个摄像头可以有自己的保留策略
 - 自动清理过期录像，支持磁盘空间阈值
 - SQLite 存储元数据
 - 单文件部署，无外部依赖 (`CGO_ENABLED=0`)
-
 ## 快速开始
 
 ```bash
@@ -70,13 +71,14 @@ cmd/mibee-nvr/       # 程序入口
 internal/            # 核心模块
   api/               # REST API
   camera/            # 摄像头管理
-  recorder/          # H.264/MJPEG 录像引擎
+  recorder/          # H.264/H.265/MJPEG 录像引擎
+  hls/               # HLS 直播管理器
   storage/           # SQLite 数据库 + 文件管理
   config/            # YAML 配置
   middleware/        # 认证中间件
   muxer/             # MP4 封装器
   ftp/               # FTP 服务
-  webdav/            # WebDAV 服务（只读）
+  webdav/            # WebDAV 服务（可配置只读/读写）
   mqtt/              # MQTT 客户端
   ui/                # 内嵌 Web UI
 web/                 # Svelte 5 前端
