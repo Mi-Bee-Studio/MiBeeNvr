@@ -636,8 +636,17 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				cameras[i].Status = model.StatusStopped
 			}
 		}
+	// Inject last_seen from DB
+	lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
+	if err == nil {
+		for i := range cameras {
+			if t, ok := lastSeenMap[cameras[i].ID]; ok {
+				cameras[i].LastSeen = t
+			}
+		}
 	}
-	writeJSON(w, http.StatusOK, cameras)
+}
+
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -762,8 +771,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	row, err := h.db.GetCamera(r.Context(), id)
 	if row != nil && h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+		// Inject last_seen from DB
+		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		if err == nil {
+			row.LastSeen = lastSeen
+		}
 	}
-	if row != nil {
 		writeJSON(w, http.StatusCreated, row)
 	} else {
 		cam.ID = id
@@ -785,6 +800,15 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	// Inject recorder status
 	if h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	}
+	// Inject recorder status
+	if h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+	}
+	// Inject last_seen from DB
+	lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+	if err == nil {
+		row.LastSeen = lastSeen
 	}
 	writeJSON(w, http.StatusOK, row)
 }
@@ -845,8 +869,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if row != nil && h.camMgr != nil {
 		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil && h.camMgr != nil {
+		row.Status = h.camMgr.CameraStatus(id)
+		// Inject last_seen from DB
+		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
+		if err == nil {
+			row.LastSeen = lastSeen
+		}
 	}
-	if row != nil {
 		writeJSON(w, http.StatusOK, row)
 	} else {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
