@@ -63,10 +63,9 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	uuid := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	switch strings.ToLower(format) {
-	case "h264":
+	case "h264", "h265":
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
-	finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
-
+		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)

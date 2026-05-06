@@ -112,10 +112,12 @@ const (
 	ProtoRTSPH264  Protocol = "rtsp_h264"
 	ProtoRTSPMJPEG Protocol = "rtsp_mjpeg"
 	ProtoHTTPJPEG  Protocol = "http_jpeg"
+	ProtoRTSPH265 Protocol = "rtsp_h265"
 )
 
 // Formats used for recordings/segments
 const (
 	FormatH264  Format = "h264"
 	FormatMJPEG Format = "mjpeg"
+	FormatH265  Format = "h265"
 )

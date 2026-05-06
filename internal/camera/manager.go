@@ -70,6 +70,14 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			DB:         cm.db,
 		}
 		return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+	case string(model.ProtoRTSPH265):
+		h265Cfg := recorder.H265Config{
+			CameraID:   cam.ID,
+			RTSPURL:    cam.URL,
+			SegmentDur: segDur,
+			DB:         cm.db,
+		}
+		return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 	case string(model.ProtoRTSPMJPEG):
 		mjpegCfg := recorder.MJPEGConfig{
 			CameraID:   cam.ID,
@@ -168,6 +176,19 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 						logger.Error("failed to start MJPEG recorder", "camera_id", cam.ID, "error", err)
 				} else {
 						logger.Info("started MJPEG recorder", "camera_id", cam.ID)
+				}
+			}
+
+		case string(model.ProtoRTSPH265):
+			rec := cm.createRecorder(cam, segDur)
+			if rec != nil {
+				cm.mu.Lock()
+				cm.recorders[cam.ID] = rec
+				cm.mu.Unlock()
+				if err := rec.Start(ctx); err != nil {
+						logger.Error("failed to start H265 recorder", "camera_id", cam.ID, "error", err)
+				} else {
+						logger.Info("started H265 recorder", "camera_id", cam.ID)
 				}
 			}
 

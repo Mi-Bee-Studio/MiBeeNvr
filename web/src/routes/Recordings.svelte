@@ -274,6 +274,7 @@ import { onMount, onDestroy } from 'svelte';
               <option value="">{t('recordings.allFormats')}</option>
               <option value="h264">{t('recordings.h264')}</option>
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
+              <option value="h265">H.265 (HEVC)</option>
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">
@@ -444,7 +445,7 @@ import { onMount, onDestroy } from 'svelte';
                   </td>
                   <td>
                     <span class="badge badge-neutral text-xs">
-                      {recording.format === 'h264' ? 'MP4' : 'JPEG'}
+                      {(recording.format === 'h264' || recording.format === 'h265') ? 'MP4' : 'JPEG'}
                     </span>
                   </td>
                   <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>

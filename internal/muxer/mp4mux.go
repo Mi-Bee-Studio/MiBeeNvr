@@ -16,11 +16,13 @@ const defaultTimescale = 1000
 
 // track holds per-track state for the MP4 muxer.
 type track struct {
-	id      int
-	sps     []byte
-	pps     []byte
-	width   int
-	height  int
+	id     int
+	sps    []byte
+	pps    []byte
+	vps    []byte
+	isH265 bool
+	width  int
+	height int
 	samples []sample
 }
 
@@ -78,6 +80,37 @@ func (m *MP4Muxer) AddH264Track(sps, pps []byte) (int, error) {
 		pps:   ppsCopy,
 	}
 	t.width, t.height = parseSPSResolution(spsCopy)
+
+	m.tracks = append(m.tracks, t)
+	m.nextTrackID++
+	return t.id, nil
+}
+
+// AddH265Track adds an H.265/HEVC video track with the given VPS, SPS, and PPS codec config.
+// Returns the track ID (1-based) or an error.
+func (m *MP4Muxer) AddH265Track(vps, sps, pps []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return 0, errors.New("muxer is closed")
+	}
+
+	vpsCopy := make([]byte, len(vps))
+	copy(vpsCopy, vps)
+	spsCopy := make([]byte, len(sps))
+	copy(spsCopy, sps)
+	ppsCopy := make([]byte, len(pps))
+	copy(ppsCopy, pps)
+
+	t := &track{
+		id:     m.nextTrackID,
+		sps:    spsCopy,
+		pps:   ppsCopy,
+		vps:   vpsCopy,
+		isH265: true,
+	}
+	t.width, t.height = parseHEVCSPSResolution(spsCopy)
 
 	m.tracks = append(m.tracks, t)
 	m.nextTrackID++
@@ -156,7 +189,7 @@ func (m *MP4Muxer) Close() error {
 
 	// Step 2: Write ftyp to the real file.
 	w := mp4.NewWriter(f)
-	ftypSize, err := writeFtyp(w)
+	ftypSize, err := writeFtyp(w, m.tracks)
 	if err != nil {
 		return fmt.Errorf("write ftyp: %w", err)
 	}
@@ -189,22 +222,39 @@ func (m *MP4Muxer) Close() error {
 
 // --- Box writing functions ---
 
-func writeFtyp(w *mp4.Writer) (int64, error) {
+func writeFtyp(w *mp4.Writer, tracks []*track) (int64, error) {
 	start, _ := w.Seek(0, 1)
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("ftyp")})
 	if err != nil {
 		return 0, err
 	}
 
+	compatibleBrands := []mp4.CompatibleBrandElem{
+		{CompatibleBrand: [4]byte{'i', 's', 'o', 'm'}},
+		{CompatibleBrand: [4]byte{'i', 's', 'o', '2'}},
+		{CompatibleBrand: [4]byte{'m', 'p', '4', '1'}},
+	}
+	// Add codec-specific brands
+	hasH264 := false
+	hasH265 := false
+	for _, tr := range tracks {
+		if tr.isH265 {
+			hasH265 = true
+		} else {
+			hasH264 = true
+		}
+	}
+	if hasH264 {
+		compatibleBrands = append(compatibleBrands, mp4.CompatibleBrandElem{CompatibleBrand: [4]byte{'a', 'v', 'c', '1'}})
+	}
+	if hasH265 {
+		compatibleBrands = append(compatibleBrands, mp4.CompatibleBrandElem{CompatibleBrand: [4]byte{'h', 'e', 'v', '1'}})
+	}
+
 	ftyp := &mp4.Ftyp{
-		MajorBrand:   [4]byte{'i', 's', 'o', 'm'},
-		MinorVersion: 0,
-		CompatibleBrands: []mp4.CompatibleBrandElem{
-			{CompatibleBrand: [4]byte{'i', 's', 'o', 'm'}},
-			{CompatibleBrand: [4]byte{'i', 's', 'o', '2'}},
-			{CompatibleBrand: [4]byte{'a', 'v', 'c', '1'}},
-			{CompatibleBrand: [4]byte{'m', 'p', '4', '1'}},
-		},
+		MajorBrand:       [4]byte{'i', 's', 'o', 'm'},
+		MinorVersion:     0,
+		CompatibleBrands: compatibleBrands,
 	}
 	if _, err := mp4.Marshal(w, ftyp, mp4.Context{}); err != nil {
 		return 0, err
@@ -431,7 +481,7 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 		return err
 	}
 
-	// stsd > avc1 > avcC
+	// stsd > hvc1 > hvcC (HEVC) or avc1 > avcC (H.264)
 	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsd")})
 	if err != nil {
 		return err
@@ -439,58 +489,15 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	if _, err := mp4.Marshal(w, &mp4.Stsd{EntryCount: 1}, mp4.Context{}); err != nil {
 		return err
 	}
-	// avc1
-	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avc1")})
-	if err != nil {
-		return err
+	if tr.isH265 {
+		if err := writeH265SampleEntry(w, tr); err != nil {
+			return err
+		}
+	} else {
+		if err := writeH264SampleEntry(w, tr); err != nil {
+			return err
+		}
 	}
-	avc1 := &mp4.VisualSampleEntry{
-		SampleEntry: mp4.SampleEntry{
-			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("avc1")},
-			DataReferenceIndex: 1,
-		},
-		Width:           uint16(tr.width),
-		Height:          uint16(tr.height),
-		Horizresolution: 0x00480000,
-		Vertresolution:  0x00480000,
-		FrameCount:      1,
-		Depth:           0x0018,
-	}
-	if _, err := mp4.Marshal(w, avc1, mp4.Context{}); err != nil {
-		return err
-	}
-	// avcC
-	bi4, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avcC")})
-	if err != nil {
-		return err
-	}
-	avcC := &mp4.AVCDecoderConfiguration{
-		AnyTypeBox:                 mp4.AnyTypeBox{Type: mp4.StrToBoxType("avcC")},
-		ConfigurationVersion:       1,
-		Profile:                    tr.sps[1],
-		ProfileCompatibility:       tr.sps[2],
-		Level:                      tr.sps[3],
-		LengthSizeMinusOne:         3,
-		NumOfSequenceParameterSets: 1,
-		SequenceParameterSets: []mp4.AVCParameterSet{
-			{Length: uint16(len(tr.sps)), NALUnit: tr.sps},
-		},
-		NumOfPictureParameterSets: 1,
-		PictureParameterSets: []mp4.AVCParameterSet{
-			{Length: uint16(len(tr.pps)), NALUnit: tr.pps},
-		},
-	}
-	if _, err := mp4.Marshal(w, avcC, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi4
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi3
 	if _, err := w.EndBox(); err != nil {
 		return err
 	}
@@ -574,7 +581,144 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	_ = bi
 	return err
 }
+// writeH264SampleEntry writes avc1 + avcC boxes for H.264 tracks.
+func writeH264SampleEntry(w *mp4.Writer, tr *track) error {
+	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avc1")})
+	if err != nil {
+		return err
+	}
+	avc1 := &mp4.VisualSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("avc1")},
+			DataReferenceIndex: 1,
+		},
+		Width:           uint16(tr.width),
+		Height:          uint16(tr.height),
+		Horizresolution: 0x00480000,
+		Vertresolution:  0x00480000,
+		FrameCount:      1,
+		Depth:           0x0018,
+	}
+	if _, err := mp4.Marshal(w, avc1, mp4.Context{}); err != nil {
+		return err
+	}
+	// avcC
+	bi4, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avcC")})
+	if err != nil {
+		return err
+	}
+	avcC := &mp4.AVCDecoderConfiguration{
+		AnyTypeBox:                 mp4.AnyTypeBox{Type: mp4.StrToBoxType("avcC")},
+		ConfigurationVersion:       1,
+		Profile:                    tr.sps[1],
+		ProfileCompatibility:       tr.sps[2],
+		Level:                      tr.sps[3],
+		LengthSizeMinusOne:         3,
+		NumOfSequenceParameterSets: 1,
+		SequenceParameterSets: []mp4.AVCParameterSet{
+			{Length: uint16(len(tr.sps)), NALUnit: tr.sps},
+		},
+		NumOfPictureParameterSets: 1,
+		PictureParameterSets: []mp4.AVCParameterSet{
+			{Length: uint16(len(tr.pps)), NALUnit: tr.pps},
+		},
+	}
+	if _, err := mp4.Marshal(w, avcC, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi4
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi3
+	return nil
+}
 
+// writeH265SampleEntry writes hvc1 + hvcC boxes for H.265/HEVC tracks.
+func writeH265SampleEntry(w *mp4.Writer, tr *track) error {
+	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("hvc1")})
+	if err != nil {
+		return err
+	}
+	hvc1 := &mp4.VisualSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("hvc1")},
+			DataReferenceIndex: 1,
+		},
+		Width:           uint16(tr.width),
+		Height:          uint16(tr.height),
+		Horizresolution: 0x00480000,
+		Vertresolution:  0x00480000,
+		FrameCount:      1,
+		Depth:           0x0018,
+	}
+	if _, err := mp4.Marshal(w, hvc1, mp4.Context{}); err != nil {
+		return err
+	}
+	// hvcC
+	bi4, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("hvcC")})
+	if err != nil {
+		return err
+	}
+	hvcC := buildHvcC(tr.vps, tr.sps, tr.pps)
+	if _, err := mp4.Marshal(w, hvcC, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi4
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi3
+	return nil
+}
+
+// buildHvcC constructs an HvcC (HEVCDecoderConfigurationRecord) from VPS, SPS, PPS.
+func buildHvcC(vps, sps, pps []byte) *mp4.HvcC {
+	profile := uint8(0)
+	if len(sps) > 1 {
+		profile = sps[1]
+	}
+	level := uint8(0)
+	if len(sps) > 12 {
+		level = sps[12]
+	}
+	return &mp4.HvcC{
+		ConfigurationVersion:        1,
+		GeneralProfileSpace:         0,
+		GeneralTierFlag:             false,
+		GeneralProfileIdc:           profile,
+		GeneralProfileCompatibility: [32]bool{}, // zeroed
+		GeneralConstraintIndicator:  [6]uint8{},
+		GeneralLevelIdc:             level,
+		Reserved1:                   15,
+		MinSpatialSegmentationIdc:   0,
+		Reserved2:                   63,
+		ParallelismType:             0,
+		Reserved3:                   63,
+		ChromaFormatIdc:             1,
+		Reserved4:                   31,
+		BitDepthLumaMinus8:          0,
+		Reserved5:                   31,
+		BitDepthChromaMinus8:        0,
+		AvgFrameRate:                0,
+		ConstantFrameRate:           0,
+		NumTemporalLayers:           1,
+		TemporalIdNested:            1,
+		LengthSizeMinusOne:          3,
+		NumOfNaluArrays:             3,
+		NaluArrays: []mp4.HEVCNaluArray{
+			{Completeness: true, NaluType: 32, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(vps)), NALUnit: vps}}},
+			{Completeness: true, NaluType: 33, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(sps)), NALUnit: sps}}},
+			{Completeness: true, NaluType: 34, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(pps)), NALUnit: pps}}},
+		},
+	}
+}
 // --- Helpers ---
 
 func trackDurationMs(tr *track) uint32 {
@@ -829,6 +973,63 @@ func parseSPSResolution(sps []byte) (width, height int) {
 	width = picWidthInMbs*16 - cropLeft - cropRight
 	height = (2-frameMbsOnly)*picHeightInMapUnits*16 - cropTop - cropBottom
 
+	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
+		return 0, 0
+	}
+	return width, height
+}
+
+// parseHEVCSPSResolution extracts width and height from an HEVC SPS NAL unit.
+// HEVC SPS has a 2-byte NAL header, then: sps_video_parameter_set_id(4),
+// sps_max_sub_layers_minus1(3), sps_temporal_id_nesting_flag(1),
+// profile_tier_level(88+ bits for max_sub_layers=1),
+// sps_seq_parameter_set_id(UE), chroma_format_idc(UE),
+// pic_width_in_luma_samples(UE), pic_height_in_luma_samples(UE).
+// Returns (0, 0) if parsing fails.
+func parseHEVCSPSResolution(sps []byte) (width, height int) {
+	if len(sps) < 8 {
+		return 0, 0
+	}
+	rbsp := removeEmulationPrevention(sps[2:]) // skip 2-byte NAL header
+	if len(rbsp) < 13 {
+		return 0, 0
+	}
+	r := &bitReader{data: rbsp}
+	// sps_video_parameter_set_id (4 bits)
+	r.readBits(4)
+	// sps_max_sub_layers_minus1 (3 bits)
+	maxSubLayersMinus1 := r.readBits(3)
+	// sps_temporal_id_nesting_flag (1 bit)
+	r.readBit()
+	// profile_tier_level: skip general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5)
+	r.readBits(8)
+	// general_profile_compatibility_flag[32]: 32 bits
+	r.readBits(32)
+	// general constraint indicator flags: 48 bits
+	r.readBits(48)
+	// general_level_idc: 8 bits
+	r.readBits(8)
+	// sub-layer profile_present/level_present flags: 2 bits per sub-layer (skip)
+	for i := 0; i < maxSubLayersMinus1; i++ {
+		r.readBits(2)
+	}
+	if maxSubLayersMinus1 > 0 {
+		// sub_layer_level_present_flag: 1 bit per sub-layer
+		for i := 0; i < maxSubLayersMinus1; i++ {
+			r.readBit()
+		}
+	}
+	// sps_seq_parameter_set_id (UE)
+	r.readUE()
+	// chroma_format_idc (UE)
+	chromaFormatIDC := r.readUE()
+	if chromaFormatIDC == 3 {
+		r.readBit() // separate_colour_plane_flag
+	}
+	// pic_width_in_luma_samples (UE)
+	width = r.readUE()
+	// pic_height_in_luma_samples (UE)
+	height = r.readUE()
 	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
 		return 0, 0
 	}

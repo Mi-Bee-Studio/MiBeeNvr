@@ -81,7 +81,7 @@ import {
       if (recording) {
         if (recording.format === 'mjpeg') {
           initFramePlayer();
-        } else if (recording.format === 'h264') {
+        } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
         }
       }
@@ -425,7 +425,7 @@ import {
         e.preventDefault();
         if (recording?.format === 'mjpeg') {
           togglePlay();
-        } else if (recording?.format === 'h264') {
+        } else if (recording?.format === 'h264' || recording?.format === 'h265') {
           // Toggle native video play/pause
           const video = document.querySelector('video');
           if (video) {
@@ -510,7 +510,7 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-          {#if recording.format === 'h264'}
+          {#if recording.format === 'h264' || recording.format === 'h265'}
             <!-- MP4 video player -->
             <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
               {#if isTransitioning}
@@ -699,7 +699,7 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
                 <span class="badge badge-warning">{t('detail.pinnedBadge')}</span>
               {/if}
               <span class="badge badge-neutral">
-                {recording.format === 'h264' ? 'MP4' : 'JPEG'}
+                {(recording.format === 'h264' || recording.format === 'h265') ? 'MP4' : 'JPEG'}
               </span>
             </div>
           </div>

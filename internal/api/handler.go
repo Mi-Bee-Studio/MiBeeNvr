@@ -688,9 +688,10 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 // --- Camera CRUD endpoints ---
 
 var validProtocols = map[string]bool{
-	"rtsp_h264": true,
+	"rtsp_h264":  true,
 	"rtsp_mjpeg": true,
-	"http_jpeg": true,
+	"http_jpeg":  true,
+	"rtsp_h265":  true,
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
