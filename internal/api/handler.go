@@ -115,7 +115,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/", h.handleGetCamera)
 				r.Put("/", h.handleUpdateCamera)
 				r.Delete("/", h.handleDeleteCamera)
-			r.Get("/stream", h.handleHLSStream)
+			r.Get("/stream/*", h.handleHLSStream)
 			r.Delete("/stream", h.handleStopHLSStream)
 			})
 		})
