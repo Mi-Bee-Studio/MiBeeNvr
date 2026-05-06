@@ -18,7 +18,14 @@ var hlsLogger = slog.Default().With("component", "hls-manager")
 const (
 	defaultIdleTimeout = 60 * time.Second
 	defaultMaxStreams  = 4
+	writeBufSize      = 120 // buffered frames per stream (~6s at 20fps)
 )
+
+// hlsFrame is an async write request for the HLS muxer.
+type hlsFrame struct {
+	pts int64
+	au  [][]byte
+}
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
@@ -27,6 +34,8 @@ type streamEntry struct {
 	dirPath  string
 	lastUsed time.Time
 	cancel   context.CancelFunc
+	frameCh  chan hlsFrame // async write buffer
+	isH265   bool
 }
 
 // Manager manages on-demand HLS streams for cameras.
@@ -51,10 +60,18 @@ func NewManager(dataDir string) *Manager {
 // StartStream creates and starts an HLS muxer for the given camera.
 // The caller must provide the H264 SPS and PPS NAL units (without start bytes).
 func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
+	return m.startStream(cameraID, false, sps, pps, nil)
+}
+
+// StartStreamH265 creates and starts an HLS muxer for an H265 camera.
+func (m *Manager) StartStreamH265(cameraID string, vps, sps, pps []byte) error {
+	return m.startStream(cameraID, true, sps, pps, vps)
+}
+
+func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check max streams
 	// Evict oldest stream if at capacity
 	if len(m.streams) >= m.maxStreams {
 		var oldestID string
@@ -71,7 +88,7 @@ func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
 		}
 	}
 
-	// Already active
+	// Already active — just update lastUsed
 	if entry, ok := m.streams[cameraID]; ok {
 		entry.lastUsed = time.Now()
 		return nil
@@ -80,26 +97,43 @@ func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
 	// Create per-camera directory
 	dirPath := filepath.Join(m.dataDir, cameraID)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
-	return err
+		return err
 	}
 
-	track := &gohlslib.Track{
-		Codec:     &codecs.H264{SPS: sps, PPS: pps},
-		ClockRate: 90000,
-	}
+	var track *gohlslib.Track
+	var mux *gohlslib.Muxer
 
-	mux := &gohlslib.Muxer{
-		Tracks:             []*gohlslib.Track{track},
-		Variant:            gohlslib.MuxerVariantMPEGTS,
-		SegmentCount:       3,
-		SegmentMinDuration: 2 * time.Second,
-		SegmentMaxSize:     50 * 1024 * 1024,
-		Directory:          dirPath,
+	if isH265 {
+		track = &gohlslib.Track{
+			Codec:     &codecs.H265{VPS: vps, SPS: sps, PPS: pps},
+			ClockRate: 90000,
+		}
+		mux = &gohlslib.Muxer{
+			Tracks:             []*gohlslib.Track{track},
+			Variant:            gohlslib.MuxerVariantFMP4,
+			SegmentCount:       3,
+			SegmentMinDuration: 2 * time.Second,
+			SegmentMaxSize:     50 * 1024 * 1024,
+			Directory:          dirPath,
+		}
+	} else {
+		track = &gohlslib.Track{
+			Codec:     &codecs.H264{SPS: sps, PPS: pps},
+			ClockRate: 90000,
+		}
+		mux = &gohlslib.Muxer{
+			Tracks:             []*gohlslib.Track{track},
+			Variant:            gohlslib.MuxerVariantMPEGTS,
+			SegmentCount:       3,
+			SegmentMinDuration: 2 * time.Second,
+			SegmentMaxSize:     50 * 1024 * 1024,
+			Directory:          dirPath,
+		}
 	}
 
 	if err := mux.Start(); err != nil {
 		os.RemoveAll(dirPath)
-	return err
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -109,80 +143,44 @@ func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
 		dirPath:  dirPath,
 		lastUsed: time.Now(),
 		cancel:   cancel,
+		frameCh:  make(chan hlsFrame, writeBufSize),
+		isH265:   isH265,
 	}
 	m.streams[cameraID] = entry
+
+	// Start async writer goroutine for this stream
+	go m.writeLoop(ctx, cameraID, entry)
 
 	// Start idle watchdog
 	go m.idleWatchdog(ctx, cameraID)
 
-	hlsLogger.Info("HLS stream started", "camera_id", cameraID)
+	codecStr := "H264"
+	if isH265 {
+		codecStr = "H265"
+	}
+	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr)
 	return nil
 }
 
-// StartStreamH265 creates and starts an HLS muxer for an H265 camera.
-func (m *Manager) StartStreamH265(cameraID string, vps, sps, pps []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Evict oldest stream if at capacity
-	if len(m.streams) >= m.maxStreams {
-		var oldestID string
-		var oldestTime time.Time
-		for id, entry := range m.streams {
-			if oldestID == "" || entry.lastUsed.Before(oldestTime) {
-				oldestID = id
-				oldestTime = entry.lastUsed
+// writeLoop drains frames from the async buffer and writes them to the muxer.
+// This ensures RTP receive path is never blocked by HLS disk I/O.
+func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamEntry) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame := <-entry.frameCh:
+			var err error
+			if entry.isH265 {
+				err = entry.mux.WriteH265(entry.track, time.Now(), frame.pts, frame.au)
+			} else {
+				err = entry.mux.WriteH264(entry.track, time.Now(), frame.pts, frame.au)
+			}
+			if err != nil {
+				hlsLogger.Error("HLS write error", "camera_id", cameraID, "error", err)
 			}
 		}
-		if oldestID != "" {
-			hlsLogger.Info("evicting oldest HLS stream for new request", "evicted_id", oldestID, "new_id", cameraID)
-			m.stopStreamLocked(oldestID)
-		}
 	}
-
-	if entry, ok := m.streams[cameraID]; ok {
-		entry.lastUsed = time.Now()
-		return nil
-	}
-
-	dirPath := filepath.Join(m.dataDir, cameraID)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		return err
-	}
-
-	track := &gohlslib.Track{
-		Codec:     &codecs.H265{VPS: vps, SPS: sps, PPS: pps},
-		ClockRate: 90000,
-	}
-
-	mux := &gohlslib.Muxer{
-		Tracks:             []*gohlslib.Track{track},
-		Variant:            gohlslib.MuxerVariantFMP4,
-		SegmentCount:       3,
-		SegmentMinDuration: 2 * time.Second,
-		SegmentMaxSize:     50 * 1024 * 1024,
-		Directory:          dirPath,
-	}
-
-	if err := mux.Start(); err != nil {
-		os.RemoveAll(dirPath)
-		return err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	entry := &streamEntry{
-		mux:      mux,
-		track:    track,
-		dirPath:  dirPath,
-		lastUsed: time.Now(),
-		cancel:   cancel,
-	}
-	m.streams[cameraID] = entry
-
-	go m.idleWatchdog(ctx, cameraID)
-
-	hlsLogger.Info("HLS H265 stream started", "camera_id", cameraID)
-	return nil
 }
 
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
@@ -209,9 +207,20 @@ func (m *Manager) stopStreamLocked(cameraID string) {
 	hlsLogger.Info("HLS stream stopped", "camera_id", cameraID)
 }
 
-// WriteH264 writes an H264 access unit to the active stream for the given camera.
-// This is safe to call from the RTP receive path — it acquires a read lock only briefly.
+// WriteH264 queues an H264 access unit for async writing to the HLS stream.
+// This is non-blocking — it acquires a read lock only briefly and never blocks on disk I/O.
+// If the write buffer is full, the frame is silently dropped to protect the recording pipeline.
 func (m *Manager) WriteH264(cameraID string, pts int64, au [][]byte) error {
+	return m.writeFrame(cameraID, pts, au)
+}
+
+// WriteH265 queues an H265 access unit for async writing to the HLS stream.
+// Same non-blocking semantics as WriteH264.
+func (m *Manager) WriteH265(cameraID string, pts int64, au [][]byte) error {
+	return m.writeFrame(cameraID, pts, au)
+}
+
+func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
 	m.mu.RUnlock()
@@ -221,21 +230,15 @@ func (m *Manager) WriteH264(cameraID string, pts int64, au [][]byte) error {
 	}
 
 	entry.lastUsed = time.Now()
-	return entry.mux.WriteH264(entry.track, time.Now(), pts, au)
-}
 
-// WriteH265 writes an H265 access unit to the active stream for the given camera.
-func (m *Manager) WriteH265(cameraID string, pts int64, au [][]byte) error {
-	m.mu.RLock()
-	entry, ok := m.streams[cameraID]
-	m.mu.RUnlock()
-
-	if !ok {
-		return nil
+	// Non-blocking send — drop frame if buffer full to protect recording pipeline
+	select {
+	case entry.frameCh <- hlsFrame{pts: pts, au: au}:
+	default:
+		// Buffer full, drop frame. Live view tolerates dropped frames.
 	}
 
-	entry.lastUsed = time.Now()
-	return entry.mux.WriteH265(entry.track, time.Now(), pts, au)
+	return nil
 }
 
 // IsActive returns true if an HLS stream is active for the given camera.
