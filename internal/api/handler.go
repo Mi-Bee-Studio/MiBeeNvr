@@ -650,9 +650,10 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	}
+	writeJSON(w, http.StatusOK, cameras)
 }
 
-}
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -1016,9 +1017,9 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Set callback to feed frames into HLS muxer (non-blocking)
-			h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-				_ = h.hlsMgr.WriteH264(id, pts, au)
-			}
+		h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+			_ = h.hlsMgr.WriteH264(id, pts, au)
+		}
 	}
 
 	// Proxy to muxer handler
