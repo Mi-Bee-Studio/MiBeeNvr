@@ -4,7 +4,7 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi } from 'lucide-svelte';
+  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi, ChevronDown, ChevronUp } from 'lucide-svelte';
   import {
     Chart,
     CategoryScale,
@@ -34,6 +34,22 @@
   let refreshInterval: number;
   let trendChart: Chart | null = null;
   let cameraChart: Chart | null = null;
+
+  // Camera filter state
+  let selectedCameras = $state<Set<string>>(new Set());
+  let cameraChartCollapsed = $state(false);
+  let lastCameraTotals: Record<string, number> = {};
+  let allCameraNames = $state<string[]>([]);
+  const BAR_COLORS = [
+    'rgba(139, 92, 246, 0.7)',
+    'rgba(56, 189, 248, 0.7)',
+    'rgba(16, 185, 129, 0.7)',
+    'rgba(245, 158, 11, 0.7)',
+    'rgba(239, 68, 68, 0.7)',
+    'rgba(168, 85, 247, 0.7)',
+    'rgba(34, 197, 94, 0.7)',
+    'rgba(251, 146, 60, 0.7)',
+  ];
 
   // Health data
   let health = $state<HealthResponse | null>(null);
@@ -171,6 +187,13 @@
       }
     });
 
+    // Store for filter rebuilds
+    lastCameraTotals = cameraTotals;
+    allCameraNames = Object.keys(cameraTotals);
+    if (selectedCameras.size === 0 && allCameraNames.length > 0) {
+      selectedCameras = new Set(allCameraNames);
+    }
+
     // Destroy existing
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
@@ -209,46 +232,71 @@
     }
 
     // Bar chart - Recordings per Camera
-    const cameraCtx = document.getElementById('cameraChart') as HTMLCanvasElement;
-    if (cameraCtx && Object.keys(cameraTotals).length > 0) {
-      const camLabels = Object.keys(cameraTotals);
-      const camData = Object.values(cameraTotals);
-      const barColors = [
-        'rgba(139, 92, 246, 0.7)',
-        'rgba(56, 189, 248, 0.7)',
-        'rgba(16, 185, 129, 0.7)',
-        'rgba(245, 158, 11, 0.7)',
-        'rgba(239, 68, 68, 0.7)',
-        'rgba(168, 85, 247, 0.7)',
-        'rgba(34, 197, 94, 0.7)',
-        'rgba(251, 146, 60, 0.7)',
-      ];
+    buildCameraChart(cameraTotals, textColor, gridColor);
+  }
 
-      cameraChart = new Chart(cameraCtx, {
-        type: 'bar',
-        data: {
-          labels: camLabels,
-          datasets: [{
-            label: 'Recordings',
-            data: camData,
-            backgroundColor: barColors.slice(0, camLabels.length),
-            borderRadius: 6,
-          }]
+  function buildCameraChart(cameraTotals: Record<string, number>, textColor: string, gridColor: string) {
+    if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
+    const cameraCtx = document.getElementById('cameraChart') as HTMLCanvasElement;
+    if (!cameraCtx || Object.keys(cameraTotals).length === 0) return;
+
+    const camLabels = Object.keys(cameraTotals).filter(name => selectedCameras.has(name));
+    const camData = camLabels.map(name => cameraTotals[name]);
+    if (camLabels.length === 0) return;
+
+    const camBarColors = camLabels.map(name => {
+      const idx = allCameraNames.indexOf(name) % BAR_COLORS.length;
+      return BAR_COLORS[idx];
+    });
+
+    cameraChart = new Chart(cameraCtx, {
+      type: 'bar',
+      data: {
+        labels: camLabels,
+        datasets: [{
+          label: 'Recordings',
+          data: camData,
+          backgroundColor: camBarColors,
+          borderRadius: 6,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: 'index', intersect: false }
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: { mode: 'index', intersect: false }
-          },
-          scales: {
-            x: { grid: { display: false }, ticks: { color: textColor } },
-            y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
-          }
+        scales: {
+          x: { grid: { display: false }, ticks: { color: textColor } },
+          y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
         }
-      });
-    }
+      }
+    });
+  }
+
+  function toggleCameraFilter(name: string) {
+    const newSet = new Set(selectedCameras);
+    if (newSet.has(name)) { newSet.delete(name); } else { newSet.add(name); }
+    selectedCameras = newSet;
+    rebuildCameraChart();
+  }
+
+  function selectAllCameras() {
+    selectedCameras = new Set(allCameraNames);
+    rebuildCameraChart();
+  }
+
+  function deselectAllCameras() {
+    selectedCameras = new Set();
+    rebuildCameraChart();
+  }
+
+  function rebuildCameraChart() {
+    const isDark = getEffectiveTheme() === 'dark';
+    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+    const textColor = isDark ? '#a1a1a1' : '#4b5563';
+    buildCameraChart(lastCameraTotals, textColor, gridColor);
   }
 
   // Lifecycle
@@ -544,11 +592,63 @@
               <canvas id="trendChart"></canvas>
             </div>
           </div>
-          <div class="card p-6 border th-border">
-            <h3 class="text-lg font-medium th-text-primary mb-4">{t('stats.recordingsByCamera')}</h3>
-            <div class="h-64">
-              <canvas id="cameraChart"></canvas>
-            </div>
+          <div class="card border th-border overflow-hidden">
+            <button
+              class="w-full p-5 flex items-center justify-between hover:th-bg-hover transition-colors cursor-pointer"
+              onclick={() => {
+                cameraChartCollapsed = !cameraChartCollapsed;
+                if (!cameraChartCollapsed) {
+                  setTimeout(() => rebuildCameraChart(), 50);
+                }
+              }}
+            >
+              <h3 class="text-lg font-medium th-text-primary">{t('stats.recordingsByCamera')}</h3>
+              {#if cameraChartCollapsed}
+                <ChevronDown size={20} class="th-text-muted" />
+              {:else}
+                <ChevronUp size={20} class="th-text-muted" />
+              {/if}
+            </button>
+
+            {#if !cameraChartCollapsed}
+              {#if allCameraNames.length > 1}
+                <div class="px-5 pb-3 border-b th-border">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xs font-medium th-text-muted">{t('stats.filterCameras')}</span>
+                    <button
+                      class="text-xs text-[var(--color-primary)] hover:underline cursor-pointer"
+                      onclick={() => selectAllCameras()}
+                    >
+                      {t('stats.selectAll')}
+                    </button>
+                    <span class="text-xs th-text-muted">/</span>
+                    <button
+                      class="text-xs text-[var(--color-primary)] hover:underline cursor-pointer"
+                      onclick={() => deselectAllCameras()}
+                    >
+                      {t('stats.deselectAll')}
+                    </button>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    {#each allCameraNames as name, i}
+                      {@const isSelected = selectedCameras.has(name)}
+                      <button
+                        class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all duration-200 cursor-pointer"
+                        style="background-color: {isSelected ? BAR_COLORS[i % BAR_COLORS.length] : 'var(--bg-tertiary)'}; color: {isSelected ? 'white' : 'var(--text-tertiary)'};"
+                        onclick={() => toggleCameraFilter(name)}
+                      >
+                        {name}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              <div class="p-5">
+                <div class="h-64">
+                  <canvas id="cameraChart"></canvas>
+                </div>
+              </div>
+            {/if}
           </div>
         </div>
 
