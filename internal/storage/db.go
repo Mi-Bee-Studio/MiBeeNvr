@@ -112,6 +112,11 @@ func (d *DB) Init(ctx context.Context) error {
 		}
 		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='2' WHERE key='schema_version'")
 	}
+	// Migration v2 → v3: add per-camera retention_days
+	if version == "2" {
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN retention_days INTEGER DEFAULT 0")
+		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='3' WHERE key='schema_version'")
+	}
 	return nil
 }
 
@@ -389,6 +394,28 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 	return res, nil
 }
 
+// ListExpiredRecordingsByCamera returns expired recordings for a specific camera
+func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE pinned=0 AND ended_at IS NOT NULL AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+			return nil, err
+		}
+		r.StartedAt = scanTime(startedAtStr)
+		r.EndedAt = scanTime(endedAtStr)
+		res = append(res, r)
+	}
+	return res, nil
+}
+
 func (d *DB) ListOldestUnpinnedRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
 	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE pinned=0 AND ended_at IS NOT NULL ORDER BY ended_at ASC LIMIT ?;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, limit)
@@ -421,11 +448,12 @@ type CameraRow struct {
 	Brand        string               `json:"brand"`
 	Model        string               `json:"model"`
 	SerialNumber string               `json:"serial_number"`
+	RetentionDays int                 `json:"retention_days"`
 	Status       model.RecorderStatus `json:"status"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number FROM cameras ORDER BY id;`)
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days FROM cameras ORDER BY id;`)
 	if err != nil {
 		return nil, err
 	}
@@ -433,7 +461,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	var res []CameraRow
 	for rows.Next() {
 		var c CameraRow
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays); err != nil {
 			return nil, err
 		}
 		res = append(res, c)
@@ -462,7 +490,7 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, url, username
 
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number FROM cameras WHERE id = ?`, cameraID).Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber)
+	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days FROM cameras WHERE id = ?`, cameraID).Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -487,9 +515,9 @@ func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
 }
 
 // UpdateCameraMetadata updates DB-only metadata fields for a camera.
-func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string) error {
-	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=? WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, id)
+func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error {
+	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`
+	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
 	return err
 }
 
