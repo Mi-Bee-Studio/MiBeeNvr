@@ -1,0 +1,12 @@
+FROM scratch
+
+ENV NVR_DATA_DIR=/data
+
+COPY .build-tmp/mibee-nvr /usr/local/bin/mibee-nvr
+
+VOLUME ["/data"]
+
+EXPOSE 9090
+
+ENTRYPOINT ["mibee-nvr"]
+CMD ["-config", "/data/mibee-nvr.yaml"]

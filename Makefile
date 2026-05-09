@@ -4,25 +4,30 @@ RPi_HOST := user@your-rpi-host
 RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
 RPi_SRV  := mibee-nvr
 
+# Docker image registry
+DOCKER_REGISTRY ?= registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr
+VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+
 frontend:
 	cd web && npm run build
 	cp -r web/dist/* internal/ui/static/
 
 build: frontend
-	CGO_ENABLED=0 go build -o $(BUILD_TARGET) ./cmd/mibee-nvr/
+	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BUILD_TARGET) ./cmd/mibee-nvr/
 
 test:
 	go test ./... -v
 
 cross: frontend
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o mibee-nvr-arm64 ./cmd/mibee-nvr/
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
 
 lint:
 	go vet ./...
 
 clean:
 	rm -f mibee-nvr mibee-nvr-arm64
-	rm -rf web/dist
+	rm -rf web/dist .build-tmp
 
 install: build
 	mkdir -p /mnt/data/nvr/bin
@@ -38,6 +43,38 @@ uninstall-service:
 	systemctl disable mibee-nvr || true
 	rm -f /etc/systemd/system/mibee-nvr.service
 	systemctl daemon-reload
+
+# ---- Docker / Container Image ----
+
+# Build native-arch container image (multi-stage, requires network for base image pulls)
+docker-build:
+	$(CONTAINER_RUNTIME) build -t $(DOCKER_REGISTRY):$(VERSION) .
+
+# Build arm64 container image using host cross-compilation (no QEMU needed)
+# Uses scratch base image — Go binary is statically linked, no runtime deps
+docker-build-arm64: cross
+	@mkdir -p .build-tmp
+	cp mibee-nvr-arm64 .build-tmp/mibee-nvr
+	$(CONTAINER_RUNTIME) build --platform linux/arm64 -f Dockerfile.arm64 \
+		-t $(DOCKER_REGISTRY):$(VERSION)-arm64 .
+	@rm -rf .build-tmp
+
+# Build both amd64 and arm64 images
+docker-build-all: docker-build docker-build-arm64
+
+# Push images to registry
+docker-push:
+	$(CONTAINER_RUNTIME) push $(DOCKER_REGISTRY):$(VERSION)
+
+docker-push-arm64:
+	$(CONTAINER_RUNTIME) push $(DOCKER_REGISTRY):$(VERSION)-arm64
+
+docker-push-all: docker-push docker-push-arm64
+
+# Build and push in one shot
+docker-release: docker-build-all docker-push-all
+
+# ---- Deploy to RPi ----
 
 deploy: cross
 	@echo "=== Deploying to $(RPi_HOST) ==="
