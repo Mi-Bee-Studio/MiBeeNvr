@@ -30,6 +30,7 @@ import (
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 )
 
@@ -195,12 +196,24 @@ func main() {
 		}
 	}()
 
+	// Merge manager
+	mergeMgr := merge.NewMergeManager(db, store, cfg.Merge, func() []config.CameraConfig {
+		return cfg.Cameras
+	})
+
 	// Cleanup manager
 	cleanupMgr, err := cleanup.NewCleanupManager(db, store, cfg.Cleanup, m)
 	if err != nil {
 		slog.Error("cleanup", "error", err)
 		os.Exit(1)
 	}
+
+	go func() {
+		if cfg.Merge.Enabled {
+			mergeMgr.Run(ctx)
+			slog.Info("merge-manager stopped")
+		}
+	}()
 	go cleanupMgr.Run(ctx)
 
 	// MQTT
