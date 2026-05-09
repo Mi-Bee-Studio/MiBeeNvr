@@ -3,7 +3,8 @@
   import { getDashboardCameras, getCredentials } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff } from 'lucide-svelte';
+  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X } from 'lucide-svelte';
+  import PtzControl from '../components/PtzControl.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -14,6 +15,8 @@
   let hlsInstances: Record<string, any> = {};
   let playerErrors = $state<Record<string, string>>({});
   let playerReady = $state<Record<string, boolean>>({});
+
+  let ptzOpenIndex = $state(-1);  // which camera cell has PTZ overlay open
 
   function getStreamUrl(cameraId: string): string {
     return `/api/cameras/${cameraId}/stream/index.m3u8`;
@@ -139,6 +142,17 @@
     }
   }
 
+  function handleCellClick(index: number, camera: Camera) {
+    // Only toggle PTZ for ONVIF cameras
+    if (camera.protocol === 'onvif') {
+      ptzOpenIndex = ptzOpenIndex === index ? -1 : index;
+    }
+  }
+
+  function closePtz() {
+    ptzOpenIndex = -1;
+  }
+
   onMount(async () => {
     try {
       cameras = (await getDashboardCameras()).slice(0, 4);
@@ -223,9 +237,12 @@
           {@const status = getStatusBadge(camera)}
           {@const hasError = playerErrors[camera.id]}
           {@const isReady = playerReady[camera.id]}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="relative bg-black rounded-lg overflow-hidden group {getCellClass(index, cameras.length)}"
             style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
+            onclick={() => handleCellClick(index, camera)}
           >
             {#if isHlsSupported(camera)}
               <!-- HLS Player -->
@@ -293,6 +310,24 @@
                 <div class="flex items-center gap-2">
                   <span class="badge badge-neutral text-[10px] px-1.5 py-0.5">●</span>
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
+                </div>
+              </div>
+            {/if}
+            <!-- PTZ Overlay for ONVIF cameras -->
+            {#if ptzOpenIndex === index && camera.protocol === 'onvif'}
+              <div
+                class="absolute top-2 left-2 z-10"
+                onclick={(e: MouseEvent) => { e.stopPropagation(); }}
+              >
+                <div class="relative">
+                  <button
+                    class="absolute -top-1.5 -right-1.5 z-20 p-0.5 rounded-full bg-black/70 text-white/80 hover:text-white hover:bg-black/90 transition-all"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); closePtz(); }}
+                    aria-label={t('common.close')}
+                  >
+                    <X size={12} />
+                  </button>
+                  <PtzControl cameraId={camera.id} enabled={true} />
                 </div>
               </div>
             {/if}

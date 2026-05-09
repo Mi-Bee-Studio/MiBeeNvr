@@ -522,7 +522,7 @@ export interface PTZStatus {
 
 // Functions
 export function getDashboardCameras(): Promise<Camera[]> {
-  return apiRequest('/dashboard/cameras');
+  return apiRequest('/cameras');
 }
 export async function discoverONVIFDevices(timeout: number = 5000): Promise<DiscoveredDevice[]> {
   return apiRequest<DiscoveredDevice[]>(`/onvif/discover?timeout=${timeout}`);
