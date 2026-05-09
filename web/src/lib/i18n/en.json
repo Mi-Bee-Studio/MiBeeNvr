@@ -329,5 +329,8 @@
   "dashboard.configure": "Configure",
   "dashboard.selectCameras": "Select Cameras",
   "dashboard.maxCameras": "Up to 4 cameras",
-  "dashboard.apply": "Apply"
+  "dashboard.apply": "Apply",
+  "dashboard.clickToLive": "Click for live view",
+  "dashboard.backToGrid": "Back to grid",
+  "dashboard.snapshotError": "Snapshot unavailable"
 }

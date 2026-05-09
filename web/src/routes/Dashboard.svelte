@@ -3,27 +3,35 @@
   import { getDashboardCameras, getCredentials } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings } from 'lucide-svelte';
+  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
-  let expandedIndex = $state(-1);
+  let expandedCameraId = $state<string | null>(null);
 
   let videoEls: Record<string, HTMLVideoElement> = {};
   let hlsInstances: Record<string, any> = {};
   let playerErrors = $state<Record<string, string>>({});
   let playerReady = $state<Record<string, boolean>>({});
 
-  let ptzOpenIndex = $state(-1);  // which camera cell has PTZ overlay open
+  let ptzOpenIndex = $state(-1);
 
   let allCameras = $state<Camera[]>([]);
   let configOpen = $state(false);
   let selectedCameraIds = $state<string[]>([]);
   let pendingCameraIds = $state<string[]>([]);
 
+  // Snapshot state
+  let snapshotUrls = $state<Record<string, string>>({});
+  let snapshotLoading = $state<Record<string, boolean>>({});
+  let snapshotTransientErrors = $state<Record<string, boolean>>({});
+  let noSnapshotCameras: Set<string> = new Set();
+  let snapshotIntervals: Record<string, ReturnType<typeof setInterval>> = {};
+
   const STORAGE_KEY = 'dashboard-selected-cameras';
+  const SNAPSHOT_INTERVAL_MS = 3000;
 
   function loadSavedCameraIds(): string[] {
     try {
@@ -51,7 +59,6 @@
   function applyCameraSelection() {
     selectedCameraIds = [...pendingCameraIds];
     saveCameraIds(selectedCameraIds);
-    // Filter allCameras by selected IDs, preserving order
     const available = new Map(allCameras.map(c => [c.id, c]));
     const filtered = selectedCameraIds
       .map(id => available.get(id))
@@ -71,13 +78,12 @@
     return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;';
   }
 
-  function getCellClass(index: number, count: number): string {
-    if (expandedIndex >= 0) {
-      return index === expandedIndex
+  function getCellClass(camera: Camera, index: number, count: number): string {
+    if (expandedCameraId) {
+      return camera.id === expandedCameraId
         ? 'col-span-2 row-span-2'
         : 'hidden';
     }
-    // 3 cameras: first one spans 2 columns
     if (count === 3 && index === 0) {
       return 'col-span-2';
     }
@@ -99,6 +105,72 @@
     return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265';
   }
 
+  type CameraMode = 'snapshot' | 'hls-expanded' | 'hls-fallback' | 'unsupported';
+
+  function getCameraMode(camera: Camera): CameraMode {
+    if (expandedCameraId === camera.id) return 'hls-expanded';
+    if (noSnapshotCameras.has(camera.id) && isHlsSupported(camera)) return 'hls-fallback';
+    if (noSnapshotCameras.has(camera.id) && !isHlsSupported(camera)) return 'unsupported';
+    return 'snapshot';
+  }
+
+  // --- Snapshot management ---
+
+  async function fetchSnapshot(cameraId: string): Promise<void> {
+    const creds = getCredentials();
+    const headers: HeadersInit = {};
+    if (creds) {
+      headers['Authorization'] = 'Basic ' + btoa(`${creds.username}:${creds.password}`);
+    }
+
+    try {
+      const response = await fetch(`/api/cameras/${cameraId}/snapshot?_=${Date.now()}`, { headers });
+      if (response.status === 404) {
+        // Camera doesn't support snapshots — permanent fallback
+        if (!noSnapshotCameras.has(cameraId)) {
+          noSnapshotCameras = new Set([...noSnapshotCameras, cameraId]);
+        }
+        return;
+      }
+      if (!response.ok) {
+        snapshotTransientErrors[cameraId] = true;
+        return;
+      }
+
+      const blob = await response.blob();
+      if (snapshotUrls[cameraId]) {
+        URL.revokeObjectURL(snapshotUrls[cameraId]);
+      }
+      snapshotUrls[cameraId] = URL.createObjectURL(blob);
+      delete snapshotTransientErrors[cameraId];
+      snapshotLoading[cameraId] = false;
+    } catch {
+      snapshotTransientErrors[cameraId] = true;
+      snapshotLoading[cameraId] = false;
+    }
+  }
+
+  function startSnapshotRefresh(cameraId: string) {
+    snapshotLoading[cameraId] = true;
+    fetchSnapshot(cameraId);
+    snapshotIntervals[cameraId] = setInterval(() => fetchSnapshot(cameraId), SNAPSHOT_INTERVAL_MS);
+  }
+
+  function stopSnapshotRefresh(cameraId: string) {
+    if (snapshotIntervals[cameraId]) {
+      clearInterval(snapshotIntervals[cameraId]);
+      delete snapshotIntervals[cameraId];
+    }
+    if (snapshotUrls[cameraId]) {
+      URL.revokeObjectURL(snapshotUrls[cameraId]);
+      delete snapshotUrls[cameraId];
+    }
+    delete snapshotLoading[cameraId];
+    delete snapshotTransientErrors[cameraId];
+  }
+
+  // --- HLS player ---
+
   function initPlayer(cameraId: string) {
     const videoEl = videoEls[cameraId];
     if (!videoEl) return;
@@ -112,7 +184,6 @@
         return;
       }
 
-      // Destroy existing instance if any
       const existing = hlsInstances[cameraId];
       if (existing) {
         existing.destroy();
@@ -174,20 +245,51 @@
     delete playerReady[cameraId];
   }
 
-  function toggleExpand(index: number) {
-    expandedIndex = expandedIndex === index ? -1 : index;
+  // --- Expand / shrink ---
+
+  function expandToHls(cameraId: string) {
+    expandedCameraId = cameraId;
+  }
+
+  function shrinkToSnapshot() {
+    const prevId = expandedCameraId;
+    expandedCameraId = null;
+    if (prevId) {
+      destroyPlayer(prevId);
+      if (!noSnapshotCameras.has(prevId)) {
+        startSnapshotRefresh(prevId);
+      }
+    }
   }
 
   function handleFullscreenChange() {
     if (!document.fullscreenElement) {
-      expandedIndex = -1;
+      shrinkToSnapshot();
     }
   }
 
-  function handleCellClick(index: number, camera: Camera) {
-    // Only toggle PTZ for ONVIF cameras
+  function handleCellClick(camera: Camera, index: number) {
+    const mode = getCameraMode(camera);
+
+    if (mode === 'snapshot') {
+      // Click snapshot → expand to HLS live view
+      if (isHlsSupported(camera)) {
+        expandToHls(camera.id);
+      } else if (camera.protocol === 'onvif') {
+        ptzOpenIndex = ptzOpenIndex === index ? -1 : index;
+      }
+      return;
+    }
+
+    // In HLS mode: toggle PTZ for ONVIF cameras
     if (camera.protocol === 'onvif') {
       ptzOpenIndex = ptzOpenIndex === index ? -1 : index;
+    }
+  }
+
+  function handleCellDblClick(camera: Camera) {
+    if (expandedCameraId === camera.id) {
+      shrinkToSnapshot();
     }
   }
 
@@ -195,13 +297,14 @@
     ptzOpenIndex = -1;
   }
 
+  // --- Lifecycle ---
+
   onMount(async () => {
     try {
       const fetched = await getDashboardCameras();
       allCameras = fetched;
       const savedIds = loadSavedCameraIds();
       if (savedIds.length > 0) {
-        // Filter by saved IDs, skip cameras that no longer exist
         const available = new Map(fetched.map(c => [c.id, c]));
         const filtered = savedIds
           .map(id => available.get(id))
@@ -209,7 +312,6 @@
         selectedCameraIds = filtered.map(c => c.id);
         cameras = filtered;
       } else {
-        // Default: first 4 cameras
         cameras = fetched.slice(0, 4);
         selectedCameraIds = cameras.map(c => c.id);
       }
@@ -226,29 +328,50 @@
     for (const id of Object.keys(hlsInstances)) {
       destroyPlayer(id);
     }
+    for (const id of Object.keys(snapshotIntervals)) {
+      stopSnapshotRefresh(id);
+    }
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
   });
 
-  // Initialize HLS players when cameras load
+  // React to camera list and mode changes
   $effect(() => {
     const _cameras = cameras;
-    const _expanded = expandedIndex;
     const _loading = loading;
     if (_loading || _cameras.length === 0) return;
 
-    // Cleanup players for cameras no longer visible
-    for (const id of Object.keys(hlsInstances)) {
-      const cam = _cameras.find(c => c.id === id);
-      if (!cam || !isHlsSupported(cam)) {
+    const visibleIds = new Set(_cameras.map(c => c.id));
+
+    // Cleanup removed cameras
+    for (const id of [...Object.keys(snapshotIntervals), ...Object.keys(hlsInstances)]) {
+      if (!visibleIds.has(id)) {
+        stopSnapshotRefresh(id);
         destroyPlayer(id);
       }
     }
 
-    // Initialize players for visible HLS cameras
+    // Manage each camera's mode
     for (const cam of _cameras) {
-      if (isHlsSupported(cam)) {
-        // Small delay to ensure video element is mounted
-        setTimeout(() => initPlayer(cam.id), 50);
+      const mode = getCameraMode(cam);
+
+      if (mode === 'hls-expanded' || mode === 'hls-fallback') {
+        // Stop snapshot, start HLS
+        stopSnapshotRefresh(cam.id);
+        if (!hlsInstances[cam.id] && isHlsSupported(cam)) {
+          setTimeout(() => initPlayer(cam.id), 50);
+        }
+      } else if (mode === 'unsupported') {
+        // No snapshot, no HLS — stop everything
+        stopSnapshotRefresh(cam.id);
+        destroyPlayer(cam.id);
+      } else {
+        // Snapshot mode — stop HLS, start snapshot refresh
+        if (hlsInstances[cam.id]) {
+          destroyPlayer(cam.id);
+        }
+        if (!snapshotIntervals[cam.id]) {
+          startSnapshotRefresh(cam.id);
+        }
       }
     }
   });
@@ -337,16 +460,70 @@
       >
         {#each cameras as camera, index}
           {@const status = getStatusBadge(camera)}
-          {@const hasError = playerErrors[camera.id]}
-          {@const isReady = playerReady[camera.id]}
+          {@const mode = getCameraMode(camera)}
+          {@const hasPlayerError = playerErrors[camera.id]}
+          {@const isPlayerReady = playerReady[camera.id]}
+          {@const isExpanded = expandedCameraId === camera.id}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="relative bg-black rounded-lg overflow-hidden group {getCellClass(index, cameras.length)}"
+            class="relative bg-black rounded-lg overflow-hidden group {getCellClass(camera, index, cameras.length)}"
             style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
-            onclick={() => handleCellClick(index, camera)}
+            onclick={() => handleCellClick(camera, index)}
+            ondblclick={() => handleCellDblClick(camera)}
           >
-            {#if isHlsSupported(camera)}
+            {#if mode === 'snapshot'}
+              <!-- Snapshot thumbnail mode -->
+              {#if snapshotLoading[camera.id] && !snapshotUrls[camera.id]}
+                <!-- Initial loading -->
+                <div class="absolute inset-0 flex items-center justify-center bg-black/40">
+                  <div class="flex flex-col items-center gap-2">
+                    <Loader2 size={24} class="text-white animate-spin" />
+                    <span class="text-white/70 text-xs">{t('common.loading')}</span>
+                  </div>
+                </div>
+              {:else if snapshotUrls[camera.id]}
+                <!-- Snapshot image -->
+                <img
+                  src={snapshotUrls[camera.id]}
+                  alt={camera.name || camera.id}
+                  class="w-full h-full object-contain"
+                />
+                <!-- Transient error overlay (keeps last good image visible) -->
+                {#if snapshotTransientErrors[camera.id]}
+                  <div class="absolute inset-0 bg-black/30 flex items-center justify-center pointer-events-none">
+                    <span class="text-white/50 text-xs">{t('dashboard.snapshotError')}</span>
+                  </div>
+                {/if}
+              {:else if snapshotTransientErrors[camera.id]}
+                <!-- Error with no previous image -->
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <div class="flex flex-col items-center gap-2">
+                    <ImageOff size={24} class="text-white/40" />
+                    <span class="text-white/50 text-xs">{t('dashboard.snapshotError')}</span>
+                  </div>
+                </div>
+              {/if}
+
+              <!-- "Click for live" hint overlay (shows on hover for HLS-capable cameras) -->
+              {#if isHlsSupported(camera)}
+                <div class="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors pointer-events-none">
+                  <div class="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1">
+                    <Maximize size={20} class="text-white/80" />
+                    <span class="text-white/80 text-xs">{t('dashboard.clickToLive')}</span>
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Camera name + status overlay -->
+              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <span class="badge {status.class} text-[10px] px-1.5 py-0.5">{status.label}</span>
+                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
+                </div>
+              </div>
+
+            {:else if mode === 'hls-expanded' || mode === 'hls-fallback'}
               <!-- HLS Player -->
               <!-- svelte-ignore binding_property_non_reactive -->
               <video
@@ -359,7 +536,7 @@
               </video>
 
               <!-- Loading overlay -->
-              {#if !isReady && !hasError}
+              {#if !isPlayerReady && !hasPlayerError}
                 <div class="absolute inset-0 flex items-center justify-center bg-black/40">
                   <div class="flex flex-col items-center gap-2">
                     <Loader2 size={24} class="text-white animate-spin" />
@@ -369,16 +546,16 @@
               {/if}
 
               <!-- Error overlay -->
-              {#if hasError}
+              {#if hasPlayerError}
                 <div class="absolute inset-0 flex items-center justify-center bg-black/60">
                   <div class="flex flex-col items-center gap-2">
                     <AlertCircle size={24} class="text-red-400" />
-                    <span class="text-white/70 text-xs">{hasError}</span>
+                    <span class="text-white/70 text-xs">{hasPlayerError}</span>
                   </div>
                 </div>
               {/if}
 
-              <!-- Camera name + status overlay (bottom) -->
+              <!-- Camera name + status overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
                   <span class="badge {status.class} text-[10px] px-1.5 py-0.5">{status.label}</span>
@@ -386,20 +563,29 @@
                 </div>
               </div>
 
-              <!-- Expand button (top-right) -->
-              <button
-                onclick={() => toggleExpand(index)}
-                class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all opacity-0 group-hover:opacity-100"
-                title={expandedIndex === index ? t('dashboard.exitFullscreen') : t('dashboard.fullscreen')}
-              >
-                {#if expandedIndex === index}
+              <!-- Control buttons (top-right) -->
+              {#if isExpanded}
+                <!-- Shrink / back to grid button -->
+                <button
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); shrinkToSnapshot(); }}
+                  class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all"
+                  title={t('dashboard.backToGrid')}
+                >
                   <Minimize size={16} />
-                {:else}
+                </button>
+              {:else}
+                <!-- Expand button for fallback HLS cameras -->
+                <button
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); expandToHls(camera.id); }}
+                  class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all opacity-0 group-hover:opacity-100"
+                  title={t('dashboard.fullscreen')}
+                >
                   <Maximize size={16} />
-                {/if}
-              </button>
+                </button>
+              {/if}
+
             {:else}
-              <!-- Unsupported protocol -->
+              <!-- Unsupported protocol (no snapshot, no HLS) -->
               <div class="absolute inset-0 flex items-center justify-center">
                 <div class="flex flex-col items-center gap-2 text-center px-4">
                   <VideoOff size={24} class="text-white/40" />
@@ -415,6 +601,7 @@
                 </div>
               </div>
             {/if}
+
             <!-- PTZ Overlay for ONVIF cameras -->
             {#if ptzOpenIndex === index && camera.protocol === 'onvif'}
               <div

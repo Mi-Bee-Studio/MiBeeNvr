@@ -82,7 +82,7 @@
           <span>{backLabel || t('detail.back')}</span>
         </button>
       {/if}
-      <a href="#/recordings" class="logo">MiBee NVR</a>
+      <a href="#/dashboard" class="logo">MiBee NVR</a>
       
       <!-- Desktop Navigation -->
       <nav class="nav-links">
@@ -206,6 +206,10 @@
     letter-spacing: -0.025em;
     text-decoration: none;
     white-space: nowrap;
+    background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 40%, #38bdf8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .nav-links {

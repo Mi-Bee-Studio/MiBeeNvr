@@ -329,5 +329,8 @@
   "dashboard.configure": "配置",
   "dashboard.selectCameras": "选择摄像头",
   "dashboard.maxCameras": "最多选择 4 个摄像头",
-  "dashboard.apply": "应用"
+  "dashboard.apply": "应用",
+  "dashboard.clickToLive": "点击查看实时画面",
+  "dashboard.backToGrid": "返回网格",
+  "dashboard.snapshotError": "快照不可用"
 }
