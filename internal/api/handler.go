@@ -118,6 +118,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/", h.handleDeleteCamera)
 			r.Get("/stream/*", h.handleHLSStream)
 			r.Delete("/stream", h.handleStopHLSStream)
+				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -714,11 +715,6 @@ var validProtocols = map[string]bool{
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
-	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
-		return
-	}
-
 	var body struct {
 		Name         string  `json:"name"`
 		Protocol     string  `json:"protocol"`
@@ -731,6 +727,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Brand        string  `json:"brand"`
 		Model        string  `json:"model"`
 		SerialNumber string  `json:"serial_number"`
+		ONVIFEndpoint string  `json:"onvif_endpoint"`
+		ProfileToken  string  `json:"profile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -748,17 +746,24 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp_h264, rtsp_mjpeg, http_jpeg", body.Protocol))
 		return
 	}
-	if body.URL == "" {
+	// ONVIF cameras require onvif_endpoint instead of url
+	if body.Protocol == "onvif" {
+		if body.ONVIFEndpoint == "" {
+			writeError(w, http.StatusBadRequest, "onvif_endpoint is required for ONVIF cameras")
+			return
+		}
+	} else if body.URL == "" {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
 
 	cam := config.CameraConfig{
-		Name:     body.Name,
-		Protocol: body.Protocol,
-		URL:      body.URL,
-		Username: body.Username,
-		Password: body.Password,
+		Name:          body.Name,
+		Protocol:      body.Protocol,
+		URL:           body.URL,
+		Username:      body.Username,
+		Password:      body.Password,
+		ONVIFEndpoint: body.ONVIFEndpoint,
 	}
 	if body.Enabled != nil {
 		cam.Enabled = *body.Enabled
@@ -766,6 +771,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		cam.Enabled = true
 	}
 
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
 	id, err := h.camMgr.AddCamera(r.Context(), cam)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add camera: %v", err))
@@ -920,6 +929,22 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+
+// --- ONVIF camera management endpoints ---
+
+func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera ID is required")
+		return
+	}
+
+	// For now, return empty profiles (actual implementation needs ONVIF client)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"profiles":     []interface{}{},
+		"capabilities": map[string]bool{"ptz": false, "streaming": false},
+	})
+}
 
 // --- ONVIF discovery endpoints ---
 

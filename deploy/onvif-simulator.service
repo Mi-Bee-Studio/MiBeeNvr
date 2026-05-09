@@ -1,0 +1,13 @@
+[Unit]
+Description=ONVIF Virtual Camera Simulator
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/onvif-simulator/onvif-simulator
+Environment=ONVIF_PORT=8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
