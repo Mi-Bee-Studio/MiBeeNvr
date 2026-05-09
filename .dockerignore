@@ -1,0 +1,53 @@
+# Build artifacts
+mibee-nvr
+mibee-nvr-arm64
+*.exe
+*.test
+*.out
+
+# Database
+*.db
+
+# Config (contains credentials)
+mibee-nvr.yaml
+
+# Frontend build output (rebuilt inside Docker)
+web/dist/
+web/node_modules/
+
+# Go test cache
+*.test
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Tooling artifacts
+.sisyphus/
+.rtk/
+.playwright-mcp/
+test-results/
+e2e-tests/
+tmp/
+.build-tmp/
+package-lock.json
+
+# Git
+.git/
+.github/
+
+# Misc
+docs/
+deploy/
+LICENSE
+README.md
+README.zh.md
+AGENTS.md
+.gitignore
+Makefile
+Dockerfile.arm64

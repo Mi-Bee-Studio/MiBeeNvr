@@ -55,14 +55,45 @@ Open `http://localhost:9090` to access the Web UI.
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
 | [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile |
 
-## Build
+```bash
+make build              # Local build (current architecture)
+make cross              # Cross-compile ARM64 binary
+make test               # Run tests
+make lint               # Run linter
+```
+
+## Docker Container Images
+
+Two build methods are available:
+
+- **Multi-stage build** (`Dockerfile`): Compiles frontend + backend inside the container. Requires network to pull base images.
+- **Cross-compile build** (`Dockerfile.arm64`): Cross-compiles on the host, packages with `scratch` base image. No QEMU needed.
 
 ```bash
-make build        # Local build
-make cross        # Cross-compile for ARM64
-make test         # Run tests
-make lint         # Run linter
+# Build amd64 image (multi-stage)
+make docker-build
+
+# Build arm64 image (host cross-compile + scratch packaging)
+make docker-build-arm64
+
+# Build all architectures
+make docker-build-all
+
+# Push to registry (requires docker/podman login first)
+make docker-push              # Push amd64
+make docker-push-arm64        # Push arm64
+make docker-push-all          # Push all
+
+# Build and push in one shot
+make docker-release
 ```
+
+Image version is derived from git short SHA (e.g. `0c7e0eb`):
+
+| Image | Architecture | Base Image |
+|-------|-------------|------------|
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>` | amd64 | distroless |
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>-arm64` | arm64 | scratch |
 
 ## Project Structure
 

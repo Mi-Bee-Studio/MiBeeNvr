@@ -55,14 +55,45 @@ cp config.example.yaml mibee-nvr.yaml
 | [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
 | [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译 |
 
-## 编译
+```bash
+make build              # 本机编译（当前架构）
+make cross              # 交叉编译 ARM64 二进制
+make test               # 运行测试
+make lint               # 代码检查
+```
+
+## Docker 容器镜像
+
+支持两种构建方式：
+
+- **多阶段构建**（`Dockerfile`）：在容器内完成前端+后端编译，需要网络拉取基础镜像
+- **交叉编译构建**（`Dockerfile.arm64`）：在宿主机交叉编译后打包，无需 QEMU，使用 `scratch` 基础镜像
 
 ```bash
-make build        # 本机编译
-make cross        # 交叉编译 ARM64
-make test         # 运行测试
-make lint         # 代码检查
+# 构建 amd64 镜像（多阶段构建）
+make docker-build
+
+# 构建 arm64 镜像（宿主交叉编译 + scratch 打包）
+make docker-build-arm64
+
+# 构建全部架构
+make docker-build-all
+
+# 推送到镜像仓库（需先 docker/podman login）
+make docker-push              # 推送 amd64
+make docker-push-arm64        # 推送 arm64
+make docker-push-all          # 推送全部
+
+# 一键构建并推送
+make docker-release
 ```
+
+镜像版本号取自 git short SHA（如 `0c7e0eb`）：
+
+| 镜像 | 架构 | 基础镜像 |
+|------|------|----------|
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>` | amd64 | distroless |
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>-arm64` | arm64 | scratch |
 
 ## 项目结构
 

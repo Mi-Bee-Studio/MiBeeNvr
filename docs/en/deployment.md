@@ -26,6 +26,46 @@ make cross
 
 This creates `./mibee-nvr-arm64` binary for Linux ARM64.
 
+### Docker Container Images
+
+Build container images for deployment:
+
+```bash
+# Build amd64 image (multi-stage, compiles everything inside container)
+make docker-build
+
+# Build arm64 image (host cross-compile + scratch, no QEMU needed)
+make docker-build-arm64
+
+# Build all architectures
+make docker-build-all
+
+# Push to registry (login first: docker login <registry>)
+make docker-push-all
+
+# One-shot: build + push
+make docker-release
+```
+
+Images are tagged with git short SHA. For example, on commit `0c7e0eb`:
+
+| Image | Arch | Base |
+|-------|------|------|
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb` | amd64 | distroless |
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64` | arm64 | scratch |
+
+#### Running with Docker/Podman
+
+```bash
+docker run -d \
+  --name mibee-nvr \
+  -p 9090:9090 \
+  -v /mnt/data/nvr:/data \
+  registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64
+```
+
+The config file is expected at `/data/mibee-nvr.yaml` (mount it via volume).
+
 ### Build and Test
 
 Run the test suite to ensure everything works:

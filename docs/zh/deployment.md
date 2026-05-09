@@ -194,124 +194,51 @@ sudo journalctl -u mibee-nvr -f
 
 ## Docker 部署
 
-### 创建 Dockerfile
+### 构建容器镜像
 
-```dockerfile
-# Dockerfile
-FROM golang:1.22-alpine AS builder
+项目提供两种 Dockerfile：
 
-# 安装构建依赖
-RUN apk add --no-cache git make
-
-WORKDIR /app
-
-# 复制源码
-COPY . .
-
-# 编译
-RUN make build
-
-# 运行时镜像
-FROM alpine:3.19
-
-# 安装运行时依赖
-RUN apk add --no-cache ca-certificates tzdata
-
-# 创建用户
-RUN addgroup -g 1000 mibee && \
-    adduser -u 1000 -G mibee -s /bin/sh -D mibee
-
-# 创建目录
-RUN mkdir -p /opt/mibee-nvr /mnt/data/nvr /var/log/mibee-nvr
-RUN chown -R mibee:mibee /opt/mibee-nvr /mnt/data/nvr /var/log/mibee-nvr
-
-# 从构建器复制二进制文件
-COPY --from=builder /app/mibee-nvr /opt/mibee-nvr/mibee-nvr
-
-# 复制配置文件
-COPY --chown=mibee:mibee config.example.yaml /opt/mibee-nvr/config.yaml
-
-# 切换用户
-USER mibee
-
-# 工作目录
-WORKDIR /opt/mibee-nvr
-
-# 暴露端口
-EXPOSE 9090
-
-# 启动命令
-CMD ["./mibee-nvr", "--config", "config.yaml"]
-```
-
-### 构建和运行 Docker 镜像
+- **`Dockerfile`**：多阶段构建，在容器内编译前端+后端，适用于 amd64 架构
+- **`Dockerfile.arm64`**：宿主交叉编译 + scratch 打包，无需 QEMU，适用于 ARM64 架构（树莓派等）
 
 ```bash
-# 构建镜像
-docker build -t mibee-nvr:latest .
+# 构建 amd64 镜像（多阶段构建）
+make docker-build
 
-# 运行容器
+# 构建 arm64 镜像（宿主交叉编译 + scratch 打包）
+make docker-build-arm64
+
+# 构建全部架构
+make docker-build-all
+
+# 推送到镜像仓库（需先 docker/podman login）
+make docker-push              # 推送 amd64
+make docker-push-arm64        # 推送 arm64
+make docker-push-all          # 推送全部
+
+# 一键构建并推送
+make docker-release
+```
+
+镜像版本号取自 git short SHA。例如当前提交为 `0c7e0eb`：
+
+| 镜像 | 架构 | 基础镜像 |
+|------|------|----------|
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb` | amd64 | distroless |
+| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64` | arm64 | scratch |
+
+### 运行容器
+
+```bash
 docker run -d \
   --name mibee-nvr \
   -p 9090:9090 \
-  -v /mnt/data/nvr:/mnt/data/nvr \
-  -v /etc/mibee-nvr/config.yaml:/opt/mibee-nvr/config.yaml \
+  -v /mnt/data/nvr:/data \
   --restart unless-stopped \
-  mibee-nvr:latest
+  registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64
 ```
 
-### 使用 Docker Compose
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  mibee-nvr:
-    image: mibee-nvr:latest
-    container_name: mibee-nvr
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    volumes:
-      - /mnt/data/nvr:/mnt/data/nvr
-      - ./config.yaml:/opt/mibee-nvr/config.yaml
-      - ./logs:/var/log/mibee-nvr
-    environment:
-      - GOMAXPROCS=2
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - mibee-network
-
-volumes:
-  nvr-storage:
-    driver: local
-
-networks:
-  mibee-network:
-    driver: bridge
-```
-
-### 启动 Docker 服务
-
-```bash
-# 使用 Docker Compose
-docker-compose up -d
-
-# 查看状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-```
+配置文件通过卷挂载到 `/data/mibee-nvr.yaml`。
 
 ## 反向代理配置
 
