@@ -15,6 +15,7 @@ type Config struct {
 	Storage     StorageConfig     `yaml:"storage"`
 	Cameras     []CameraConfig    `yaml:"cameras"`
 	Cleanup     CleanupConfig     `yaml:"cleanup"`
+	Merge       MergeConfig        `yaml:"merge"`
 	Auth        AuthConfig        `yaml:"auth"`
 	FTP         FTPConfig         `yaml:"ftp"`
 	MQTT        MQTTConfig        `yaml:"mqtt"`
@@ -41,12 +42,25 @@ type CameraConfig struct {
 	Password string `yaml:"password"`
   ONVIFEndpoint string `yaml:"onvif_endpoint"`
 	Enabled  bool   `yaml:"enabled"`
+	SubStreamURL   string `yaml:"sub_stream_url"`
+	SnapshotURL    string `yaml:"snapshot_url"`
+	SampleInterval int    `yaml:"sample_interval"`
+	HLSMaxFPS      int    `yaml:"hls_max_fps"`
 }
 
 type CleanupConfig struct {
 	RetentionDays       int    `yaml:"retention_days"`        // default 30
 	CheckInterval       string `yaml:"check_interval"`         // default "1h"
 	DiskThresholdPercent int   `yaml:"disk_threshold_percent"` // default 95
+}
+
+type MergeConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	CheckInterval      string `yaml:"check_interval"`
+	WindowSize         string `yaml:"window_size"`
+	BatchLimit         int    `yaml:"batch_limit"`
+	MinSegmentAge      string `yaml:"min_segment_age"`
+	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
 }
 
 type AuthConfig struct {
@@ -156,10 +170,6 @@ func Validate(cfg *Config) error {
 	if cfg.FTP.Port < 0 || cfg.FTP.Port > 65535 {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
 	}
-	// mutex: minimal validation for mqtt ports none; ensure 0-65535 if provided in config persistence (not present)
-	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
-		// ok to be defaulted, handled by defaults
-	}
 	// Validate segment_duration
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("storage.segment_duration invalid: %w", err)
@@ -181,6 +191,23 @@ func Validate(cfg *Config) error {
 	// Validate observability.log_format
 	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
 		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
+	}
+	if cfg.Merge.Enabled {
+		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
+			return fmt.Errorf("invalid merge check_interval: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.Merge.WindowSize); err != nil {
+			return fmt.Errorf("invalid merge window_size: %w", err)
+		}
+		if cfg.Merge.BatchLimit <= 0 {
+			return fmt.Errorf("merge batch_limit must be positive")
+		}
+		if _, err := time.ParseDuration(cfg.Merge.MinSegmentAge); err != nil {
+			return fmt.Errorf("invalid merge min_segment_age: %w", err)
+		}
+		if cfg.Merge.MinSegmentsToMerge < 2 {
+			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
+		}
 	}
 	return nil
 }
@@ -242,5 +269,21 @@ func (cfg *Config) applyDefaults() {
 	// Version
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"
+	}
+	// Merge defaults
+	if cfg.Merge.BatchLimit <= 0 {
+		cfg.Merge.BatchLimit = 200
+	}
+	if cfg.Merge.CheckInterval == "" {
+		cfg.Merge.CheckInterval = "1h"
+	}
+	if cfg.Merge.WindowSize == "" {
+		cfg.Merge.WindowSize = "1h"
+	}
+	if cfg.Merge.MinSegmentAge == "" {
+		cfg.Merge.MinSegmentAge = "10m"
+	}
+	if cfg.Merge.MinSegmentsToMerge <= 0 {
+		cfg.Merge.MinSegmentsToMerge = 3
 	}
 }
