@@ -67,6 +67,8 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		h264Cfg := recorder.H264Config{
 			CameraID:   cam.ID,
 			RTSPURL:    cam.URL,
+			Username:   cam.Username,
+			Password:   cam.Password,
 			SegmentDur: segDur,
 			DB:         cm.db,
 		}
@@ -75,16 +77,19 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		h265Cfg := recorder.H265Config{
 			CameraID:   cam.ID,
 			RTSPURL:    cam.URL,
+			Username:   cam.Username,
+			Password:   cam.Password,
 			SegmentDur: segDur,
 			DB:         cm.db,
 		}
 		return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 	case string(model.ProtoRTSPMJPEG):
 		mjpegCfg := recorder.MJPEGConfig{
-			CameraID:   cam.ID,
-			RTSPURL:    cam.URL,
-			SegmentDur: segDur,
-			DB:         cm.db,
+			CameraID:       cam.ID,
+			RTSPURL:        cam.URL,
+			SegmentDur:     segDur,
+			SampleInterval: cam.SampleInterval,
+			DB:             cm.db,
 		}
 		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoHTTPJPEG):
@@ -273,6 +278,18 @@ func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	return cm.recorders[cameraID]
+}
+
+// GetCameraConfig returns the config for the given camera ID, or nil if not found.
+func (cm *CameraManager) GetCameraConfig(cameraID string) *config.CameraConfig {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			return &cm.cfg.Cameras[i]
+		}
+	}
+	return nil
 }
 
 // AddCamera adds a new camera to the manager and starts its recorder if enabled.
