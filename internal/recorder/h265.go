@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"net/url"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -29,6 +30,8 @@ var h265Logger = slog.Default().With("component", "h265-recorder")
 type H265Config struct {
 	CameraID    string
 	RTSPURL     string
+	Username    string
+	Password    string
 	SegmentDur  time.Duration
 	RingBufCap  int
 	MaxBackoff  time.Duration
@@ -213,6 +216,10 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err)
 	}
+	// Inject credentials from config if URL doesn't have them.
+	if u.User == nil && r.cfg.Username != "" {
+		u.User = url.UserPassword(r.cfg.Username, r.cfg.Password)
+	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
 		Scheme:   u.Scheme,
@@ -353,6 +360,13 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 			continue
 		}
 		if r.vps == nil || r.sps == nil || r.pps == nil {
+			continue
+		}
+		// Wait for an IDR frame before starting a new segment.
+		// Without this, segments may start with P-frames that have no reference,
+		// causing black/gray output until the first IDR appears.
+		// HEVC IDR types: 19 (IDR_W_RADL), 20 (IDR_N_LP).
+		if r.muxer == nil && naluType != 19 && naluType != 20 {
 			continue
 		}
 		if r.muxer == nil {

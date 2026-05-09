@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"net/url"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -49,6 +50,8 @@ const (
 type H264Config struct {
 	CameraID    string
 	RTSPURL     string
+	Username    string
+	Password    string
 	SegmentDur  time.Duration
 	RingBufCap  int
 	MaxBackoff  time.Duration
@@ -230,6 +233,10 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err)
 	}
+	// Inject credentials from config if URL doesn't have them.
+	if u.User == nil && r.cfg.Username != "" {
+		u.User = url.UserPassword(r.cfg.Username, r.cfg.Password)
+	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
 		Scheme:   u.Scheme,
@@ -345,11 +352,17 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 			}
 			r.pps = append([]byte(nil), nalu...)
 		}
-		// Only create muxer and write video frames (IDR=5, non-IDR=1)
+		// Only write video frames (IDR=5, non-IDR=1)
 		if naluType != 5 && naluType != 1 {
 			continue
 		}
 		if r.sps == nil || r.pps == nil {
+			continue
+		}
+		// Wait for an IDR frame before starting a new segment.
+		// Without this, segments may start with P-frames that have no reference,
+		// causing black/gray output until the first IDR appears.
+		if r.muxer == nil && naluType != 5 {
 			continue
 		}
 		if r.muxer == nil {
