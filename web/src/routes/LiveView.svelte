@@ -3,6 +3,7 @@
   import { getCamera, getCredentials } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import PtzControl from '../components/PtzControl.svelte';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
 
@@ -238,6 +239,7 @@
               </div>
             </div>
           </div>
+          <PtzControl {cameraId} enabled={true} />
         {:else}
           <!-- Unsupported protocol -->
           <div class="card p-12 text-center">

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -57,6 +57,13 @@
 
   // Delete confirmation
   let deletingCamera = $state<Camera | null>(null);
+
+  // ONVIF discovery
+  let scanning = $state(false);
+  let scanDone = $state(false);
+  let scanError = $state('');
+  let discoveredDevices = $state<DiscoveredDevice[]>([]);
+  let addingDeviceId = $state<string | null>(null);
 
   function showFeedback(msg: string, type: 'success' | 'error') {
     showToast(msg, type);
@@ -221,6 +228,45 @@
     editingNameId = null;
   }
 
+  async function scanONVIF() {
+    scanning = true;
+    scanError = '';
+    discoveredDevices = [];
+    scanDone = false;
+    try {
+      discoveredDevices = await discoverONVIFDevices(5);
+    } catch (e) {
+      scanError = e instanceof Error ? e.message : String(e);
+    } finally {
+      scanning = false;
+      scanDone = true;
+    }
+  }
+
+  async function addDiscoveredDevice(device: DiscoveredDevice) {
+    addingDeviceId = device.id;
+    try {
+      await createCamera({
+        name: device.name,
+        protocol: device.protocol || 'rtsp_h264',
+        url: device.url,
+        enabled: true,
+        description: device.description || undefined,
+        location: device.location || undefined,
+        brand: device.brand || undefined,
+        model: device.model || undefined,
+        serial_number: device.serial_number || undefined,
+      });
+      showToast(t('cameras.cameraAdded'), 'success');
+      discoveredDevices = discoveredDevices.filter(d => d.id !== device.id);
+      await loadCameras();
+    } catch (e) {
+      showToast(t('cameras.failedAdd'), 'error');
+    } finally {
+      addingDeviceId = null;
+    }
+  }
+
   onMount(() => {
     loadCameras();
   });
@@ -232,9 +278,18 @@
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex items-center justify-between mb-6">
       <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
-      <button on:click={openAddForm} class="btn btn-primary">
-        + {t('cameras.addCamera')}
-      </button>
+      <div class="flex gap-3">
+        <button on:click={scanONVIF} class="btn btn-ghost" disabled={scanning}>
+          {#if scanning}
+            <span class="spinner mr-2"></span>{t('onvif.discovering')}
+          {:else}
+            {t('onvif.discover')}
+          {/if}
+        </button>
+        <button on:click={openAddForm} class="btn btn-primary">
+          + {t('cameras.addCamera')}
+        </button>
+      </div>
     </div>
 
     <!-- Feedback -->
@@ -274,6 +329,59 @@
       </div>
     {:else}
       <div class="space-y-6">
+
+        <!-- ONVIF Discovery Panel -->
+        {#if scanning || scanDone}
+          <div class="card p-6 border th-border">
+            <h3 class="text-lg font-semibold th-text-primary mb-4">
+              {t('onvif.discover')}
+            </h3>
+            {#if scanning}
+              <div class="flex items-center gap-3 th-text-secondary py-4">
+                <span class="spinner"></span>
+                <span>{t('onvif.discovering')}</span>
+              </div>
+            {:else if scanError}
+              <div class="th-color-danger text-sm py-2">{scanError}</div>
+            {:else if discoveredDevices.length === 0}
+              <p class="th-text-secondary text-sm py-2">{t('onvif.noDevices')}</p>
+            {:else}
+              <div class="space-y-3">
+                {#each discoveredDevices as device (device.id)}
+                  <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
+                    <div class="min-w-0 flex-1 mr-4">
+                      <div class="font-medium th-text-primary truncate">{device.name || t('onvif.deviceName')}</div>
+                      <div class="text-sm th-text-secondary truncate">{device.url}</div>
+                      {#if device.brand || device.model}
+                        <div class="text-xs th-text-muted mt-0.5">{[device.brand, device.model].filter(Boolean).join(' ')}</div>
+                      {/if}
+                      {#if device.description}
+                        <div class="text-xs th-text-muted mt-0.5">{device.description}</div>
+                      {/if}
+                    </div>
+                    <button
+                      on:click={() => addDiscoveredDevice(device)}
+                      class="btn btn-primary btn-sm shrink-0"
+                      disabled={addingDeviceId === device.id}
+                    >
+                      {#if addingDeviceId === device.id}
+                        <span class="spinner mr-1"></span>
+                      {/if}
+                      {t('onvif.addCamera')}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            {#if !scanning && scanDone}
+              <div class="mt-4 flex justify-end">
+                <button on:click={scanONVIF} class="btn btn-ghost btn-sm">
+                  {t('onvif.discover')}
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
 
         <!-- Add/Edit Form -->
         {#if showForm}
