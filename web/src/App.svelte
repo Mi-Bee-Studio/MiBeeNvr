@@ -59,6 +59,10 @@
       return { route: 'settings', params: {} };
     }
 
+    if (segments[0] === 'dashboard') {
+      return { route: 'dashboard', params: {} };
+    }
+
     // Default to login for unknown routes
     return { route: 'login', params: {} };
   }
@@ -106,5 +110,7 @@
       <Stats />
     {:else if currentRoute === 'settings'}
       <Settings />
+    {:else if currentRoute === 'dashboard'}
+      <p>Dashboard coming soon</p>
     {/if}
   {/if}

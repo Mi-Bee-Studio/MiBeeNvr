@@ -20,6 +20,7 @@ require (
 )
 
 require (
+	github.com/0x524a/onvif-go v1.1.4 // indirect
 	github.com/asticode/go-astikit v0.30.0 // indirect
 	github.com/asticode/go-astits v1.15.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
