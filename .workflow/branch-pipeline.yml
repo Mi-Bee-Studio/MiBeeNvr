@@ -1,0 +1,53 @@
+version: '1.0'
+name: branch-pipeline
+displayName: Branch 构建
+stages:
+  - stage:
+      name: compile
+      displayName: 编译验证
+      steps:
+        - step: build@node
+          name: build_check
+          displayName: 前端+Go编译验证
+          nodeVersion: 22
+          commands: |
+            set -e
+
+            # ---- 安装 Go 1.26 ----
+            export GO_VERSION=1.26.4
+            export GO_TARBALL=go${GO_VERSION}.linux-amd64.tar.gz
+            wget -q https://go.dev/dl/${GO_TARBALL} -O /tmp/${GO_TARBALL}
+            tar -C /usr/local -xzf /tmp/${GO_TARBALL}
+            export PATH=/usr/local/go/bin:$PATH
+            export GOPROXY=https://goproxy.cn,direct
+            go version
+
+            # ---- 构建前端 ----
+            cd web
+            npm ci
+            npm run build
+            cp -r dist/* ../internal/ui/static/
+            cd ..
+
+            # ---- 编译验证 ----
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o mibee-nvr-linux-amd64 ./cmd/mibee-nvr/
+          artifacts:
+            - name: BUILD_ARTIFACT
+              path:
+                - ./mibee-nvr-linux-amd64
+
+        - step: publish@general_artifacts
+          name: publish_artifacts
+          displayName: 上传制品
+          dependArtifact: BUILD_ARTIFACT
+          artifactName: output
+          dependsOn: build_check
+
+triggers:
+  push:
+    branches:
+      include:
+        - .*
+      exclude:
+        - master
+        - main
