@@ -97,6 +97,8 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			DB:         cm.db,
 		}
 		return recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
+	case string(model.ProtoONVIF):
+		return nil
 	default:
 		return nil
 	}
@@ -206,6 +208,8 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				}
 			}
 
+		case string(model.ProtoONVIF):
+			logger.Info("camera has ONVIF protocol, managed via ONVIF discovery", "camera_id", cam.ID)
 		default:
 			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 		}

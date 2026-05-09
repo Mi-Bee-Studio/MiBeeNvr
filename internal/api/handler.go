@@ -707,6 +707,7 @@ var validProtocols = map[string]bool{
 	"rtsp_mjpeg": true,
 	"http_jpeg":  true,
 	"rtsp_h265":  true,
+	"onvif":     true,
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
