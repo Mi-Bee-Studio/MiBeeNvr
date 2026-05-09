@@ -1824,3 +1824,154 @@ func TestReadyzWithNilDB(t *testing.T) {
 	parseJSON(t, rr, &body)
 	require.Equal(t, "not ready", body["status"])
 }
+
+// --- Snapshot endpoint tests ---
+
+// newSnapshotTestHandler creates a Handler with a config that has a snapshot-enabled camera.
+func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, cameraID string) *Handler {
+	t.Helper()
+	db, store := setupTestDB(t)
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		Cameras: []config.CameraConfig{
+			{
+				ID:          cameraID,
+				Name:        "SnapCam",
+				Protocol:    "http_jpeg",
+				URL:         snapshotServer.URL + "/stream",
+				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
+				Enabled:     true,
+			},
+		},
+	}
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+}
+
+func TestHandleSnapshot_NoURL(t *testing.T) {
+	db, store := setupTestDB(t)
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{
+			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
+		},
+	}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/snapshot", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "Snapshot URL not configured")
+}
+
+func TestHandleSnapshot_CameraNotFound(t *testing.T) {
+	db, store := setupTestDB(t)
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{},
+	}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/snapshot", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestHandleSnapshot_Success(t *testing.T) {
+	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46} // fake JPEG header
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpegData)
+	}))
+	defer snapshotServer.Close()
+
+	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "image/jpeg", rr.Header().Get("Content-Type"))
+	body, err := io.ReadAll(rr.Body)
+	require.NoError(t, err)
+	require.Equal(t, jpegData, body)
+}
+
+func TestHandleSnapshot_CacheHit(t *testing.T) {
+	requestCount := 0
+	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpegData)
+	}))
+	defer snapshotServer.Close()
+
+	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
+
+	// First request — should fetch from server
+	rr1 := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr1.Code)
+	require.Equal(t, 1, requestCount, "first request should hit the server")
+
+	// Second request — should be served from cache (10s TTL)
+	rr2 := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr2.Code)
+	require.Equal(t, 1, requestCount, "second request should be served from cache, not hit server")
+}
+
+func TestHandleSnapshot_StaleFallback(t *testing.T) {
+	requestCount := 0
+	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpegData)
+	}))
+
+	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
+
+	// First request — populate cache
+	rr1 := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr1.Code)
+	require.Equal(t, 1, requestCount)
+
+	// Make cache stale by backdating the timestamp
+	h.snapshotMu.Lock()
+	if cached, ok := h.snapshots["cam-snap"]; ok {
+		h.snapshots["cam-snap"] = &snapshotCache{
+			data:      cached.data,
+			timestamp: time.Now().Add(-11 * time.Second),
+		}
+	}
+	h.snapshotMu.Unlock()
+
+	// Close the server to cause a connection error (stale fallback only triggers on err != nil)
+	snapshotServer.Close()
+
+	// Second request — cache is stale, fetch fails with connection error, should return stale cache
+	rr2 := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr2.Code)
+	require.Equal(t, "stale", rr2.Header().Get("X-Cache"), "should indicate stale cache")
+	require.Equal(t, "image/jpeg", rr2.Header().Get("Content-Type"))
+	body, err := io.ReadAll(rr2.Body)
+	require.NoError(t, err)
+	require.Equal(t, jpegData, body, "should return cached JPEG data")
+}
+
+func TestHandleSnapshot_CameraError(t *testing.T) {
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("camera error"))
+	}))
+	defer snapshotServer.Close()
+
+	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+}
+
+func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
+	snapshotServer.Close()
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+}

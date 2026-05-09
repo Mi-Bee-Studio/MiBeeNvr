@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -67,8 +69,12 @@ type NetworkStats struct {
 	BytesRecv uint64 `json:"bytes_recv"`
 }
 
+type snapshotCache struct {
+	data      []byte
+	timestamp time.Time
+}
+
 // Handler holds dependencies for the REST API handlers.
-	// Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
 	db      *storage.DB
@@ -78,11 +84,13 @@ type Handler struct {
 	camMgr  *camera.CameraManager
 	hlsMgr  *hls.Manager
 	configPath string
+	snapshotMu    sync.RWMutex
+	snapshots     map[string]*snapshotCache // cameraID -> cached snapshot
 }
 
 // NewHandler creates a new API handler.
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath}
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache)}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -122,6 +130,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ptz/move", h.handlePTZMove)
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
+				r.Get("/snapshot", h.handleSnapshot)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -791,16 +800,15 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return CameraRow with status
 	row, err := h.db.GetCamera(r.Context(), id)
-	if row != nil && h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
-	if row != nil && h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil {
+		if h.camMgr != nil {
+			row.Status = h.camMgr.CameraStatus(id)
+		}
 		// Inject last_seen from DB
 		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
-	}
 		writeJSON(w, http.StatusCreated, row)
 	} else {
 		cam.ID = id
@@ -818,10 +826,6 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if row == nil {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
-	}
-	// Inject recorder status
-	if h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
 	}
 	// Inject recorder status
 	if h.camMgr != nil {
@@ -891,16 +895,15 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
-	if row != nil && h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
-	if row != nil && h.camMgr != nil {
-		row.Status = h.camMgr.CameraStatus(id)
+	if row != nil {
+		if h.camMgr != nil {
+			row.Status = h.camMgr.CameraStatus(id)
+		}
 		// Inject last_seen from DB
 		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
-	}
 		writeJSON(w, http.StatusOK, row)
 	} else {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -1031,6 +1034,77 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Snapshot endpoint ---
+
+func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+
+	// Find camera config to get SnapshotURL
+	var snapshotURL string
+	if h.config != nil {
+		for _, cam := range h.config.Cameras {
+			if cam.ID == cameraID {
+				snapshotURL = cam.SnapshotURL
+				break
+			}
+		}
+	}
+	if snapshotURL == "" {
+		http.Error(w, "Snapshot URL not configured", http.StatusNotFound)
+		return
+	}
+
+	// Check cache (10 second TTL)
+	const cacheTTL = 10 * time.Second
+	h.snapshotMu.RLock()
+	cached, ok := h.snapshots[cameraID]
+	h.snapshotMu.RUnlock()
+
+	if ok && time.Since(cached.timestamp) < cacheTTL {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "max-age=5")
+		w.Write(cached.data)
+		return
+	}
+
+	// Fetch from camera
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(snapshotURL)
+	if err != nil {
+		// Return stale cache if available
+		if ok {
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("X-Cache", "stale")
+			w.Write(cached.data)
+			return
+		}
+		logger.Warn("failed to fetch snapshot", "camera_id", cameraID, "error", err)
+		http.Error(w, "Failed to fetch snapshot", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Camera returned error", http.StatusBadGateway)
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB max
+	if err != nil || len(data) == 0 {
+		http.Error(w, "Failed to read snapshot", http.StatusBadGateway)
+		return
+	}
+
+	// Update cache
+	h.snapshotMu.Lock()
+	h.snapshots[cameraID] = &snapshotCache{data: data, timestamp: time.Now()}
+	h.snapshotMu.Unlock()
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "max-age=5")
+	w.Write(data)
+}
+
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -1108,6 +1182,13 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Get camera config for HLS options
+		camCfg := h.camMgr.GetCameraConfig(id)
+		hlsMaxFPS := 0
+		if camCfg != nil {
+			hlsMaxFPS = camCfg.HLSMaxFPS
+		}
+
 		// Try H264 recorder first
 		if h264Rec, ok := rec.(*recorder.H264Recorder); ok {
 			sps := h264Rec.SPS()
@@ -1117,7 +1198,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			err := h.hlsMgr.StartStream(id, sps, pps)
+			err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
 			if err != nil {
 				if err == hls.ErrMaxStreamsReached {
 					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
@@ -1128,8 +1209,20 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-				_ = h.hlsMgr.WriteH264(id, pts, au)
+			// Check if sub-stream URL is configured
+			if camCfg != nil && camCfg.SubStreamURL != "" {
+				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, false); subErr != nil {
+					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
+					// Fall back to main stream OnHLSFrame
+					h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+						_ = h.hlsMgr.WriteH264(id, pts, au)
+					}
+				}
+				// Sub-stream reader is running — do NOT set OnHLSFrame on recorder
+			} else {
+				h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+					_ = h.hlsMgr.WriteH264(id, pts, au)
+				}
 			}
 		} else if h265Rec, ok := rec.(*recorder.H265Recorder); ok {
 			vps := h265Rec.VPS()
@@ -1140,7 +1233,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps)
+			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
 			if err != nil {
 				if err == hls.ErrMaxStreamsReached {
 					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
@@ -1151,8 +1244,19 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-				_ = h.hlsMgr.WriteH265(id, pts, au)
+			// Check if sub-stream URL is configured
+			if camCfg != nil && camCfg.SubStreamURL != "" {
+				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, true); subErr != nil {
+					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
+					// Fall back to main stream OnHLSFrame
+					h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+						_ = h.hlsMgr.WriteH265(id, pts, au)
+					}
+				}
+			} else {
+				h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+					_ = h.hlsMgr.WriteH265(id, pts, au)
+				}
 			}
 		} else {
 			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
