@@ -616,3 +616,59 @@ func (d *DB) GetAllLastRecordingTimes(ctx context.Context) (map[string]*time.Tim
 	}
 	return result, nil
 }
+
+// MergeWindow represents a group of consecutive recordings eligible for merging.
+type MergeWindow struct {
+	StartTime    time.Time `json:"start_time"`
+	EndTime      time.Time `json:"end_time"`
+	SegmentCount int      `json:"segment_count"`
+	Format       string   `json:"format"`
+}
+
+// ListMergeableSegments returns recordings for a camera within a time window,
+// excluding pinned and incomplete segments.
+func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE camera_id = ? AND pinned = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
+		cameraID, formatTime(windowStart), formatTime(windowEnd))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+			return nil, err
+		}
+		r.StartedAt = scanTime(startedAtStr)
+		r.EndedAt = scanTime(endedAtStr)
+		res = append(res, &r)
+	}
+	return res, nil
+}
+
+// ListCameraMergeWindows returns hourly merge windows for a camera with 2+ segments.
+// Only includes recordings older than minAge.
+func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge time.Duration) ([]MergeWindow, error) {
+	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
+	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND pinned = 0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
+	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []MergeWindow
+	for rows.Next() {
+		var w MergeWindow
+		var hourStr, minStart, maxEnd sql.NullString
+		if err := rows.Scan(&hourStr, &minStart, &maxEnd, &w.SegmentCount, &w.Format); err != nil {
+			return nil, err
+		}
+		w.StartTime = scanTime(minStart)
+		w.EndTime = scanTime(maxEnd)
+		res = append(res, w)
+	}
+	return res, nil
+}
