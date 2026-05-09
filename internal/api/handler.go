@@ -20,6 +20,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -126,6 +127,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Put("/api/settings", h.handleUpdateSettings)
 		r.Post("/api/backup", h.handleBackup)
 		r.Get("/api/backups", h.handleListBackups)
+		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
+		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 	})
 
 	return r
@@ -915,6 +918,47 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("failed to delete camera from DB", "camera_id", id, "error", dbErr)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+
+// --- ONVIF discovery endpoints ---
+
+func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Timeout int `json:"timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Timeout = 5
+	}
+	if req.Timeout <= 0 {
+		req.Timeout = 5
+	}
+	if req.Timeout > 30 {
+		writeError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.Timeout)*time.Second)
+	defer cancel()
+
+	devices, err := onvif.Discover(ctx, time.Duration(req.Timeout)*time.Second)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("discovery failed: %v", err))
+		return
+	}
+	if devices == nil {
+		devices = []onvif.DiscoveredDevice{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": devices})
+}
+
+func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request) {
+	ip := chi.URLParam(r, "ip")
+	if ip == "" {
+		writeError(w, http.StatusBadRequest, "IP address is required")
+		return
+	}
+	writeError(w, http.StatusNotImplemented, "device detail lookup not yet implemented")
 }
 
 // --- Helpers ---
