@@ -40,6 +40,8 @@ package-lock.json
 # QA screenshots
 /qa-*.png
 
+# Private documentation (not committed to remote)
+docs/private/
 
 # IDE / Editor
 .vscode/
