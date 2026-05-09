@@ -551,3 +551,8 @@ export async function getPTZStatus(cameraId: string): Promise<PTZStatus> {
 export async function getCameraCapabilities(cameraId: string): Promise<ONVIFProfile> {
   return apiRequest<ONVIFProfile>(`/cameras/${cameraId}/capabilities`);
 }
+
+// Snapshot URL helper (returns JPEG from camera snapshot endpoint)
+export function getSnapshotUrl(cameraId: string): string {
+  return `/api/cameras/${cameraId}/snapshot`;
+}
