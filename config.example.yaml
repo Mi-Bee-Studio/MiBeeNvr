@@ -40,6 +40,14 @@ cleanup:
   check_interval: "1h"
   disk_threshold_percent: 95
 
+merge:
+  enabled: false
+  check_interval: "1h"
+  window_size: "1h"
+  batch_limit: 200
+  min_segment_age: "10m"
+  min_segments_to_merge: 3
+
 ftp:
   enabled: true
   port: 2121

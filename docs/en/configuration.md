@@ -19,10 +19,21 @@ cameras:
     protocol: "rtsp_h264"
     url: "rtsp://..."
     enabled: true
+    # sub_stream_url: "rtsp://..."   # Sub-stream for live preview
+    # snapshot_url: "http://..."      # JPEG snapshot for thumbnails
+    # sample_interval: 1              # MJPEG frame sampling
+    # hls_max_fps: 0                  # HLS frame rate limit
 cleanup:
   retention_days: 30
   check_interval: "1h"
   disk_threshold_percent: 95
+merge:
+  enabled: false
+  check_interval: "1h"
+  window_size: "1h"
+  batch_limit: 200
+  min_segment_age: "10m"
+  min_segments_to_merge: 3
 ftp:
   enabled: true
   port: 2121
@@ -141,6 +152,34 @@ cameras:
 - **Description**: Whether the camera recording is enabled
 - **Example**: `true` or `false`
 
+### `cameras[].sub_stream_url`
+- **Type**: string
+- **Optional**
+- **Description**: RTSP URL of a lower-resolution sub-stream for live HLS preview. When configured, the Dashboard uses this stream instead of the main stream, reducing bandwidth usage.
+- **Note**: Sub-stream must use the same codec (H.264/H.265) as the main stream
+- **Example**: `"rtsp://192.168.1.100:554/stream2"`
+
+### `cameras[].snapshot_url`
+- **Type**: string
+- **Optional**
+- **Description**: HTTP URL returning a JPEG snapshot image. When configured, the Dashboard displays snapshot thumbnails instead of live HLS streams, significantly reducing bandwidth.
+- **Behavior**: Snapshots are cached for 10 seconds; stale cache is served when the camera is temporarily unreachable
+- **Example**: `"http://192.168.1.100/snapshot"`, `"http://192.168.1.100/cgi-bin/snapshot.cgi"`
+
+### `cameras[].sample_interval`
+- **Type**: integer
+- **Default**: `1`
+- **Description**: Frame sampling interval for MJPEG cameras. Only every Nth frame is saved to disk.
+- **Use Case**: Reduce storage and bandwidth for low-priority MJPEG cameras
+- **Example**: `1` (every frame), `3` (every 3rd frame), `5` (every 5th frame)
+
+### `cameras[].hls_max_fps`
+- **Type**: integer
+- **Default**: `0` (unlimited)
+- **Description**: Maximum frame rate for HLS live preview. Excess frames are dropped to reduce bandwidth.
+- **Important**: Only affects live HLS preview — recording is NOT affected
+- **Example**: `10`, `15`, `24`
+
 ## Protocol Examples
 
 ### RTSP H.264 Camera
@@ -207,6 +246,57 @@ cameras:
 - **Description**: Disk usage percentage threshold for cleanup
 - **Behavior**: Cleanup runs when disk usage exceeds this threshold
 - **Example**: `80`, `90`, `95`
+
+## Merge Configuration
+
+The merge feature automatically combines small video segments into larger files, reducing file count and improving storage efficiency. This is a background task that runs periodically, similar to cleanup.
+
+### `merge.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable or disable the background merge task
+- **Note**: When disabled, segments remain as individual files
+
+### `merge.check_interval`
+- **Type**: string
+- **Default**: `"1h"`
+- **Description**: How often the merge task runs
+- **Format**: Go duration string
+- **Examples**: `"30m"`, `"1h"`, `"2h"`
+
+### `merge.window_size`
+- **Type**: string
+- **Default**: `"1h"`
+- **Description**: Time window for grouping segments. Segments within the same window (same camera, same hour) are merged together.
+- **Format**: Go duration string
+- **Example**: `"1h"` (merge all segments within each hour)
+
+### `merge.batch_limit`
+- **Type**: integer
+- **Default**: `200`
+- **Description**: Maximum number of segments to process in a single merge run. Prevents excessive resource usage.
+- **Example**: `100`, `200`, `500`
+
+### `merge.min_segment_age`
+- **Type**: string
+- **Default**: `"10m"`
+- **Description**: Minimum age of segments before they are considered for merging. Ensures recently created segments are not merged while still being written.
+- **Format**: Go duration string
+- **Example**: `"5m"`, `"10m"`, `"30m"`
+
+### `merge.min_segments_to_merge`
+- **Type**: integer
+- **Default**: `3`
+- **Description**: Minimum number of segments required in a group before merging. Groups with fewer segments are skipped.
+- **Example**: `2`, `3`, `5`
+
+### Merge Behavior
+- **H.264/H.265**: Segments are concatenated without re-encoding (fast, zero quality loss). Only segments with identical codec parameters (SPS/PPS) are merged.
+- **MJPEG**: JPEG files are moved into a single directory (no re-encoding).
+- **Pinned recordings**: Pinned recordings are never merged and split merge groups at their boundaries.
+- **Disk space**: Merging is skipped if available disk space is less than 110% of the estimated merged file size.
+- **Atomic**: Merged files use atomic rename (temp file → final) to prevent corruption.
+- **Originals**: Source segments are deleted from disk and database after successful merge.
 
 ## FTP Configuration
 

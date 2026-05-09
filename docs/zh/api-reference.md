@@ -33,6 +33,7 @@ Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=
 | `/api/cameras/:id` | GET | 获取摄像头详情 | 是 |
 | `/api/cameras/:id` | PUT | 更新摄像头 | 是 |
 | `/api/cameras/:id` | DELETE | 删除摄像头 | 是 |
+| `/api/cameras/:id/snapshot` | GET | 摄像头快照 | 是 |
 | `/api/stats` | GET | 获取系统统计 | 是 |
 | `/api/settings` | GET | 获取系统设置 | 是 |
 | `/api/settings` | PUT | 更新系统设置 | 是 |
@@ -464,6 +465,33 @@ curl -X DELETE "http://localhost:9090/api/cameras/cam1" \
   -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
 ```
 
+
+### 摄像头快照
+
+**端点**: `GET /api/cameras/{id}/snapshot`
+
+获取摄像头的 JPEG 快照图像。需要摄像头配置了 `snapshot_url`。
+
+**路径参数:**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `id` | 字符串 | 是 | 摄像头 ID |
+
+**响应:**
+- `200 OK` — JPEG 图像，`Content-Type: image/jpeg`，`Cache-Control: max-age=5`
+- `404 Not Found` — 摄像头不存在或未配置快照 URL
+- `502 Bad Gateway` — 快照 URL 不可达且无缓存图像
+
+**缓存行为:**
+- 快照在服务端缓存 10 秒
+- 摄像头暂时不可达时，返回过期缓存并附带 `X-Cache: stale` 头
+- 客户端缓存: 5 秒（`Cache-Control: max-age=5`）
+
+**请求示例:**
+```bash
+curl -u admin:admin http://localhost:9090/api/cameras/cam1/snapshot -o snapshot.jpg
+```
 ## 系统管理接口
 
 ### 健康检查

@@ -5,6 +5,7 @@
 - [Authentication](#authentication)
 - [Recordings API](#recordings-api)
 - [Cameras API](#cameras-api)
+  - [Camera Snapshot](#camera-snapshot)
 - [Stats & Settings API](#stats--settings-api)
 - [Upload API](#upload-api)
 - [Error Responses](#error-responses)
@@ -404,6 +405,32 @@ curl -u username:password \
 }
 ```
 
+### Camera Snapshot
+
+**Endpoint:** `GET /api/cameras/{id}/snapshot`
+
+Get a JPEG snapshot image from a camera. Requires `snapshot_url` to be configured for the camera.
+
+**Path Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Camera ID |
+
+**Response:**
+- `200 OK` — JPEG image with `Content-Type: image/jpeg` and `Cache-Control: max-age=5`
+- `404 Not Found` — Camera not found or no snapshot URL configured
+- `502 Bad Gateway` — Snapshot URL unreachable and no cached image available
+
+**Cache Behavior:**
+- Snapshots are cached for 10 seconds (server-side)
+- When the camera is temporarily unreachable, stale cached snapshots are served with `X-Cache: stale` header
+- Client-side cache: 5 seconds (`Cache-Control: max-age=5`)
+
+**Request:**
+```bash
+curl -u admin:admin http://localhost:9090/api/cameras/cam1/snapshot -o snapshot.jpg
+```
 ## Stats & Settings API
 
 ### Live Stream (HLS)

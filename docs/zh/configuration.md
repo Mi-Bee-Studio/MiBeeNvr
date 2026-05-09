@@ -111,10 +111,14 @@ cameras:
     protocol: "rtsp_h264"       # 协议类型
     url: "rtsp://192.168.1.100:554/h264/main"
     enabled: true               # 是否启用
-    recording: true             # 是否录制
-    username: "admin"           # 认证用户名（可选）
-    password: "password123"     # 认证密码（可选）
-    segment_prefix: "cam1"      # 分段文件前缀（可选，默认为 id）
+recording: true             # 是否录制
+username: "admin"           # 认证用户名（可选）
+password: "password123"     # 认证密码（可选）
+segment_prefix: "cam1"      # 分段文件前缀（可选，默认为 id）
+# sub_stream_url: "rtsp://..."   # 子码流（用于直播预览，节省带宽）
+# snapshot_url: "http://..."      # JPEG 快照 URL（用于缩略图）
+# sample_interval: 1              # MJPEG 帧采样间隔
+# hls_max_fps: 0                  # HLS 直播最大帧率
 ```
 
 #### 支持的协议类型
@@ -192,6 +196,33 @@ cameras:
     password: "password123"
     enabled: true
 ```
+### `cameras[].sub_stream_url`
+- **类型**: 字符串
+- **可选**
+- **描述**: 低分辨率子码流的 RTSP 地址。配置后，Dashboard 直播预览使用子码流而非主码流，降低带宽占用。
+- **注意**: 子码流必须与主码流使用相同的编码格式（H.264/H.265）
+- **示例**: `"rtsp://192.168.1.100:554/stream2"`
+
+### `cameras[].snapshot_url`
+- **类型**: 字符串
+- **可选**
+- **描述**: 返回 JPEG 快照图像的 HTTP 地址。配置后，Dashboard 显示快照缩略图而非 HLS 直播流，大幅降低带宽。
+- **行为**: 快照缓存 10 秒；摄像头暂时不可达时返回过期缓存
+- **示例**: `"http://192.168.1.100/snapshot"`，`"http://192.168.1.100/cgi-bin/snapshot.cgi"`
+
+### `cameras[].sample_interval`
+- **类型**: 整数
+- **默认值**: `1`
+- **描述**: MJPEG 摄像头的帧采样间隔。仅保存每第 N 帧。
+- **用途**: 降低低优先级 MJPEG 摄像头的存储和带宽占用
+- **示例**: `1`（每帧），`3`（每 3 帧），`5`（每 5 帧）
+
+### `cameras[].hls_max_fps`
+- **类型**: 整数
+- **默认值**: `0`（不限制）
+- **描述**: HLS 直播预览的最大帧率。超出帧率的帧会被丢弃以降低带宽。
+- **重要**: 仅影响 HLS 直播预览，不影响录像
+- **示例**: `10`、`15`、`24`
 
 ### cleanup 清理配置
 
@@ -341,10 +372,20 @@ cameras:
     recording: true
 
 cleanup:
-  retention_days: 30
-  check_interval: "1h"
-  disk_threshold_percent: 95
-  max_files_per_camera: 10000
+retention_days: 30
+check_interval: "1h"
+disk_threshold_percent: 95
+max_files_per_camera: 10000
+delete_interval: "6h"
+merge:
+enabled: false
+check_interval: "1h"
+window_size: "1h"
+batch_limit: 200
+min_segment_age: "10m"
+min_segments_to_merge: 3
+
+ftp:
   delete_interval: "6h"
 
 ftp:
@@ -370,6 +411,57 @@ webdav:
   max_upload_size: "1GB"
   cache_control: "max-age=3600"
 ```
+
+## 合并配置
+
+合并功能自动将小视频段合并为更大的文件，减少文件数量并提高存储效率。这是一个类似清理功能的周期性后台任务。
+
+### `merge.enabled`
+- **类型**: 布尔值
+- **默认值**: `false`
+- **描述**: 启用或禁用后台合并任务
+- **注意**: 禁用时，录像段保持为独立文件
+
+### `merge.check_interval`
+- **类型**: 字符串
+- **默认值**: `"1h"`
+- **描述**: 合并任务的运行间隔
+- **格式**: Go 时间格式
+- **示例**: `"30m"`、`"1h"`、`"2h"`
+
+### `merge.window_size`
+- **类型**: 字符串
+- **默认值**: `"1h"`
+- **描述**: 分段时间窗口。同一窗口内（同一摄像头、同一小时）的段会被合并。
+- **格式**: Go 时间格式
+- **示例**: `"1h"`（每小时合并所有段）
+
+### `merge.batch_limit`
+- **类型**: 整数
+- **默认值**: `200`
+- **描述**: 单次合并运行中处理的最大段数。防止资源过度占用。
+- **示例**: `100`、`200`、`500`
+
+### `merge.min_segment_age`
+- **类型**: 字符串
+- **默认值**: `"10m"`
+- **描述**: 段被纳入合并的最小年龄。确保正在写入的段不会被合并。
+- **格式**: Go 时间格式
+- **示例**: `"5m"`、`"10m"`、`"30m"`
+
+### `merge.min_segments_to_merge`
+- **类型**: 整数
+- **默认值**: `3`
+- **描述**: 触发合并所需的最小段数。段数不足的组会被跳过。
+- **示例**: `2`、`3`、`5`
+
+### 合并行为
+- **H.264/H.265**: 段以原始编码直接拼接（快速、无损）。仅编码参数相同（SPS/PPS）的段会被合并。
+- **MJPEG**: JPEG 文件移动到同一目录（无重编码）。
+- **置顶录像**: 置顶的录像永远不会被合并，并在其边界处拆分合并组。
+- **磁盘空间**: 如果可用磁盘空间不足合并文件大小的 110%，合并会被跳过。
+- **原子操作**: 合并文件使用原子重命名（临时文件 → 最终文件）防止数据损坏。
+- **原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
 
 ### 最小配置示例
 
