@@ -186,3 +186,10 @@ func TestSaveOverwrite(t *testing.T) {
     require.Equal(t, ":3333", loaded.Server.Listen)
     require.Equal(t, "/new", loaded.Storage.RootDir)
 }
+func TestValidateOnvifProtocol(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", URL: "http://192.168.1.100/onvif/device_service", Protocol: "onvif"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+

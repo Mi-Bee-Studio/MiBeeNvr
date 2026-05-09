@@ -113,6 +113,7 @@ const (
 	ProtoRTSPMJPEG Protocol = "rtsp_mjpeg"
 	ProtoHTTPJPEG  Protocol = "http_jpeg"
 	ProtoRTSPH265 Protocol = "rtsp_h265"
+	ProtoONVIF    Protocol = "onvif"
 )
 
 // Formats used for recordings/segments
