@@ -1,0 +1,75 @@
+# Gitee Go 配置文件：对标 GitHub Actions 自动构建+发布Release
+# 存放路径：.gitee/.gitee-ci.yml
+
+# 1. 触发条件（和你GitHub完全一致：推送v开头的标签）
+trigger:
+  tags:
+    # 仅当推送 v1.0.0 这类标签时自动运行
+    - "v*"
+
+# 2. 全局配置
+vars:
+  # 项目名称（自动发布用）
+  PROJECT_NAME: MiBeeNvr
+  # 构建配置
+  BUILD_CONFIG: Release
+  # .NET 版本（和你GitHub保持一致）
+  DOTNET_VERSION: 8.0.x
+
+# 3. 流水线阶段（构建 → 打包 → 发布Release）
+stages:
+  - stage: Build_And_Release
+    display_name: 构建并发布MiBeeNvr
+    # 使用Gitee官方Ubuntu构建机
+    image: ubuntu-latest
+    steps:
+      # --------------------------
+      # 步骤1：检出代码（对标GitHub actions/checkout）
+      # --------------------------
+      - name: 检出代码
+        uses: gitee-ci/checkout@v2
+
+      # --------------------------
+      # 步骤2：安装.NET SDK（对标GitHub actions/setup-dotnet）
+      # --------------------------
+      - name: 安装 .NET SDK
+        uses: gitee-ci/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION }}
+
+      # --------------------------
+      # 步骤3：还原依赖 + 构建项目
+      # --------------------------
+      - name: 编译项目
+        run: |
+          dotnet restore
+          dotnet build --configuration ${{ vars.BUILD_CONFIG }} --no-restore
+
+      # --------------------------
+      # 步骤4：发布项目（生成可执行文件）
+      # --------------------------
+      - name: 发布项目
+        run: |
+          dotnet publish MiBeeNvr/MiBeeNvr.csproj --configuration ${{ vars.BUILD_CONFIG }} --output publish/MiBeeNvr
+
+      # --------------------------
+      # 步骤5：压缩发布包（和GitHub产物格式一致）
+      # --------------------------
+      - name: 打包制品
+        run: |
+          cd publish
+          zip -r ${{ vars.PROJECT_NAME }}-${GIT_TAG_NAME#v}.zip MiBeeNvr/
+
+      # --------------------------
+      # 步骤6：自动创建Gitee Release + 上传压缩包
+      # 对标 GitHub actions/create-release + upload-release-asset
+      # --------------------------
+      - name: 发布到Gitee Release
+        uses: gitee-ci/release@v1
+        with:
+          # 版本名称
+          name: ${{ vars.PROJECT_NAME }} ${{ GIT_TAG_NAME }}
+          # 版本描述
+          body: 自动构建发布 ${{ vars.PROJECT_NAME }} ${{ GIT_TAG_NAME }}
+          # 制品路径（上传zip包）
+          assets: publish/${{ vars.PROJECT_NAME }}-${GIT_TAG_NAME#v}.zip
