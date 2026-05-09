@@ -1,75 +1,90 @@
-# Gitee Go 配置文件：对标 GitHub Actions 自动构建+发布Release
-# 存放路径：.gitee/.gitee-ci.yml
+# Gitee Go CI 流水线配置
+# 触发条件：推送 v 开头的标签（如 v1.0.0）
+version: '1.0'
+name: release-pipeline
+displayName: 构建并发布MiBeeNvr
 
-# 1. 触发条件（和你GitHub完全一致：推送v开头的标签）
-trigger:
-  tags:
-    # 仅当推送 v1.0.0 这类标签时自动运行
-    - "v*"
+triggers:
+  push:
+    tags:
+      include:
+        - "v*"
 
-# 2. 全局配置
-vars:
-  # 项目名称（自动发布用）
-  PROJECT_NAME: MiBeeNvr
-  # 构建配置
-  BUILD_CONFIG: Release
-  # .NET 版本（和你GitHub保持一致）
-  DOTNET_VERSION: 8.0.x
-
-# 3. 流水线阶段（构建 → 打包 → 发布Release）
 stages:
-  - stage: Build_And_Release
-    display_name: 构建并发布MiBeeNvr
-    # 使用Gitee官方Ubuntu构建机
-    image: ubuntu-latest
-    steps:
-      # --------------------------
-      # 步骤1：检出代码（对标GitHub actions/checkout）
-      # --------------------------
-      - name: 检出代码
-        uses: gitee-ci/checkout@v2
+  - stage:
+      name: build
+      displayName: 构建
+      steps:
+        # ---- 前端构建 ----
+        - step: build@node
+          name: build_frontend
+          displayName: 构建前端
+          nodeVersion: 22
+          commands:
+            - set -e
+            - cd web
+            - npm ci
+            - npm run build
+            - cp -r dist/* ../internal/ui/static/
+          artifacts:
+            - name: FRONTEND_ARTIFACT
+              path:
+                - ./internal/ui/static
 
-      # --------------------------
-      # 步骤2：安装.NET SDK（对标GitHub actions/setup-dotnet）
-      # --------------------------
-      - name: 安装 .NET SDK
-        uses: gitee-ci/setup-dotnet@v1
-        with:
-          dotnet-version: ${{ vars.DOTNET_VERSION }}
+        # ---- Go 交叉编译 ----
+        - step: build@golang
+          name: build_amd64
+          displayName: 编译 amd64
+          golangVersion: 1.26
+          commands:
+            - set -e
+            - export GOPROXY=https://goproxy.cn,direct
+            - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o mibee-nvr-linux-amd64 ./cmd/mibee-nvr/
+          artifacts:
+            - name: AMD64_ARTIFACT
+              path:
+                - ./mibee-nvr-linux-amd64
+          dependsOn: build_frontend
 
-      # --------------------------
-      # 步骤3：还原依赖 + 构建项目
-      # --------------------------
-      - name: 编译项目
-        run: |
-          dotnet restore
-          dotnet build --configuration ${{ vars.BUILD_CONFIG }} --no-restore
+        - step: build@golang
+          name: build_arm64
+          displayName: 编译 arm64
+          golangVersion: 1.26
+          commands:
+            - set -e
+            - export GOPROXY=https://goproxy.cn,direct
+            - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o mibee-nvr-linux-arm64 ./cmd/mibee-nvr/
+          artifacts:
+            - name: ARM64_ARTIFACT
+              path:
+                - ./mibee-nvr-linux-arm64
+          dependsOn: build_frontend
 
-      # --------------------------
-      # 步骤4：发布项目（生成可执行文件）
-      # --------------------------
-      - name: 发布项目
-        run: |
-          dotnet publish MiBeeNvr/MiBeeNvr.csproj --configuration ${{ vars.BUILD_CONFIG }} --output publish/MiBeeNvr
+  - stage:
+      name: package
+      displayName: 打包
+      steps:
+        - step: publish@general_artifacts
+          name: upload_amd64
+          displayName: 上传 amd64 制品
+          dependArtifact: AMD64_ARTIFACT
+          artifactName: mibee-nvr-amd64
+          dependsOn: build_amd64
 
-      # --------------------------
-      # 步骤5：压缩发布包（和GitHub产物格式一致）
-      # --------------------------
-      - name: 打包制品
-        run: |
-          cd publish
-          zip -r ${{ vars.PROJECT_NAME }}-${GIT_TAG_NAME#v}.zip MiBeeNvr/
+        - step: publish@general_artifacts
+          name: upload_arm64
+          displayName: 上传 arm64 制品
+          dependArtifact: ARM64_ARTIFACT
+          artifactName: mibee-nvr-arm64
+          dependsOn: build_arm64
 
-      # --------------------------
-      # 步骤6：自动创建Gitee Release + 上传压缩包
-      # 对标 GitHub actions/create-release + upload-release-asset
-      # --------------------------
-      - name: 发布到Gitee Release
-        uses: gitee-ci/release@v1
-        with:
-          # 版本名称
-          name: ${{ vars.PROJECT_NAME }} ${{ GIT_TAG_NAME }}
-          # 版本描述
-          body: 自动构建发布 ${{ vars.PROJECT_NAME }} ${{ GIT_TAG_NAME }}
-          # 制品路径（上传zip包）
-          assets: publish/${{ vars.PROJECT_NAME }}-${GIT_TAG_NAME#v}.zip
+  - stage:
+      name: release
+      displayName: 发布Release
+      steps:
+        - step: publish@release_artifacts
+          name: publish_release
+          displayName: 发布到Release
+          dependArtifact: mibee-nvr-amd64
+          version: '${GITEE_TAG}'
+          autoIncrement: false
