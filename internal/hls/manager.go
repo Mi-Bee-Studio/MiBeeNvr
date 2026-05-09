@@ -2,6 +2,7 @@ package hls
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,13 @@ import (
 
 	"github.com/bluenviron/gohlslib/v2"
 	"github.com/bluenviron/gohlslib/v2/pkg/codecs"
+	"github.com/bluenviron/gortsplib/v5"
+	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
+	"github.com/pion/rtp"
 )
 
 var hlsLogger = slog.Default().With("component", "hls-manager")
@@ -29,13 +37,16 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
-	mux      *gohlslib.Muxer
-	track    *gohlslib.Track
-	dirPath  string
-	lastUsed time.Time
-	cancel   context.CancelFunc
-	frameCh  chan hlsFrame // async write buffer
-	isH265   bool
+	mux             *gohlslib.Muxer
+	track           *gohlslib.Track
+	dirPath         string
+	lastUsed        time.Time
+	cancel          context.CancelFunc
+	frameCh         chan hlsFrame // async write buffer
+	isH265          bool
+	subStreamCancel context.CancelFunc // cancels the sub-stream RTSP reader goroutine
+	maxFPS          int
+	lastFrameTime time.Time
 }
 
 // Manager manages on-demand HLS streams for cameras.
@@ -59,16 +70,16 @@ func NewManager(dataDir string) *Manager {
 
 // StartStream creates and starts an HLS muxer for the given camera.
 // The caller must provide the H264 SPS and PPS NAL units (without start bytes).
-func (m *Manager) StartStream(cameraID string, sps, pps []byte) error {
-	return m.startStream(cameraID, false, sps, pps, nil)
+func (m *Manager) StartStream(cameraID string, sps, pps []byte, maxFPS int) error {
+	return m.startStream(cameraID, false, sps, pps, nil, maxFPS)
 }
 
 // StartStreamH265 creates and starts an HLS muxer for an H265 camera.
-func (m *Manager) StartStreamH265(cameraID string, vps, sps, pps []byte) error {
-	return m.startStream(cameraID, true, sps, pps, vps)
+func (m *Manager) StartStreamH265(cameraID string, vps, sps, pps []byte, maxFPS int) error {
+	return m.startStream(cameraID, true, sps, pps, vps, maxFPS)
 }
 
-func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte) error {
+func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte, maxFPS int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -145,6 +156,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		cancel:   cancel,
 		frameCh:  make(chan hlsFrame, writeBufSize),
 		isH265:   isH265,
+		maxFPS:   maxFPS,
 	}
 	m.streams[cameraID] = entry
 
@@ -160,6 +172,176 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	}
 	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr)
 	return nil
+}
+
+// StartSubStreamReader starts a separate RTSP connection to a sub-stream URL for HLS.
+// It connects to subStreamURL, extracts codec parameters (SPS/PPS for H264, VPS/SPS/PPS for H265),
+// and feeds frames to the HLS muxer for the given camera.
+// If the sub-stream connection fails, it logs a warning and returns — the caller should fall back to main stream.
+func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool) error {
+	m.mu.RLock()
+	entry, ok := m.streams[cameraID]
+	m.mu.RUnlock()
+
+	if !ok {
+		return ErrStreamNotActive
+	}
+	if entry.subStreamCancel != nil {
+		return nil // already running
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	entry.subStreamCancel = cancel
+
+	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry)
+
+	hlsLogger.Info("HLS sub-stream reader started", "camera_id", cameraID, "sub_stream_url", subStreamURL)
+	return nil
+}
+
+func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, isH265 bool, entry *streamEntry) {
+	var err error
+	defer func() {
+		m.mu.Lock()
+		if e, ok := m.streams[cameraID]; ok {
+			e.subStreamCancel = nil
+		}
+		m.mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			hlsLogger.Warn("HLS sub-stream reader exited, falling back to main stream", "camera_id", cameraID, "error", err)
+		}
+	}()
+
+	u, parseErr := base.ParseURL(rtspURL)
+	if parseErr != nil {
+		err = fmt.Errorf("invalid sub-stream RTSP URL: %w", parseErr)
+		return
+	}
+
+	tcp := gortsplib.ProtocolTCP
+	client := &gortsplib.Client{
+		Scheme:   u.Scheme,
+		Host:     u.Host,
+		Protocol: &tcp,
+	}
+
+	if dialErr := client.Start(); dialErr != nil {
+		err = fmt.Errorf("sub-stream client start: %w", dialErr)
+		return
+	}
+	defer client.Close()
+
+	desc, _, descErr := client.Describe(u)
+	if descErr != nil {
+		err = fmt.Errorf("sub-stream DESCRIBE: %w", descErr)
+		return
+	}
+
+	if isH265 {
+		err = m.readSubStreamH265(ctx, client, desc, cameraID, entry)
+	} else {
+		err = m.readSubStreamH264(ctx, client, desc, cameraID, entry)
+	}
+}
+
+func (m *Manager) readSubStreamH264(ctx context.Context, client *gortsplib.Client, desc *description.Session, cameraID string, entry *streamEntry) error {
+	var forma *format.H264
+	medi := desc.FindFormat(&forma)
+	if medi == nil {
+		return fmt.Errorf("H264 media not found in sub-stream")
+	}
+
+	rtpDec, err := forma.CreateDecoder()
+	if err != nil {
+		return fmt.Errorf("sub-stream create RTP decoder: %w", err)
+	}
+
+	if _, err := client.Setup(desc.BaseURL, medi, 0, 0); err != nil {
+		return fmt.Errorf("sub-stream SETUP: %w", err)
+	}
+
+	errCh := make(chan error, 1)
+
+	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		aus, decErr := rtpDec.Decode(pkt)
+		if decErr != nil {
+			if decErr != rtph264.ErrNonStartingPacketAndNoPrevious && decErr != rtph264.ErrMorePacketsNeeded {
+				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
+			}
+			return
+		}
+		_ = m.WriteH264(cameraID, int64(pkt.Timestamp), aus)
+	})
+
+	if _, playErr := client.Play(nil); playErr != nil {
+		return fmt.Errorf("sub-stream PLAY: %w", playErr)
+	}
+
+	go func() { errCh <- client.Wait() }()
+
+	select {
+	case <-ctx.Done():
+		client.Close()
+		return nil
+	case err = <-errCh:
+		return err
+	}
+}
+
+func (m *Manager) readSubStreamH265(ctx context.Context, client *gortsplib.Client, desc *description.Session, cameraID string, entry *streamEntry) error {
+	var forma *format.H265
+	medi := desc.FindFormat(&forma)
+	if medi == nil {
+		return fmt.Errorf("H265 media not found in sub-stream")
+	}
+
+	rtpDec, err := forma.CreateDecoder()
+	if err != nil {
+		return fmt.Errorf("sub-stream create RTP decoder: %w", err)
+	}
+
+	if _, err := client.Setup(desc.BaseURL, medi, 0, 0); err != nil {
+		return fmt.Errorf("sub-stream SETUP: %w", err)
+	}
+
+	errCh := make(chan error, 1)
+
+	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		aus, decErr := rtpDec.Decode(pkt)
+		if decErr != nil {
+			if decErr != rtph265.ErrNonStartingPacketAndNoPrevious && decErr != rtph265.ErrMorePacketsNeeded {
+				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
+			}
+			return
+		}
+		_ = m.WriteH265(cameraID, int64(pkt.Timestamp), aus)
+	})
+
+	if _, playErr := client.Play(nil); playErr != nil {
+		return fmt.Errorf("sub-stream PLAY: %w", playErr)
+	}
+
+	go func() { errCh <- client.Wait() }()
+
+	select {
+	case <-ctx.Done():
+		client.Close()
+		return nil
+	case err = <-errCh:
+		return err
+	}
 }
 
 // writeLoop drains frames from the async buffer and writes them to the muxer.
@@ -198,6 +380,10 @@ func (m *Manager) stopStreamLocked(cameraID string) {
 	}
 
 	entry.cancel()
+	if entry.subStreamCancel != nil {
+		entry.subStreamCancel()
+		entry.subStreamCancel = nil
+	}
 	entry.mux.Close()
 
 	// Clean up segment directory
@@ -230,6 +416,15 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	}
 
 	entry.lastUsed = time.Now()
+
+	// Frame rate limiting for live preview bandwidth optimization
+	if entry.maxFPS > 0 {
+		minInterval := time.Second / time.Duration(entry.maxFPS)
+		if time.Since(entry.lastFrameTime) < minInterval {
+			return nil // drop frame to stay within target FPS
+		}
+		entry.lastFrameTime = time.Now()
+	}
 
 	// Non-blocking send — drop frame if buffer full to protect recording pipeline
 	select {
