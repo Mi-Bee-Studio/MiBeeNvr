@@ -3,7 +3,7 @@
   import { getDashboardCameras, getCredentials } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X } from 'lucide-svelte';
+  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -17,6 +17,48 @@
   let playerReady = $state<Record<string, boolean>>({});
 
   let ptzOpenIndex = $state(-1);  // which camera cell has PTZ overlay open
+
+  let allCameras = $state<Camera[]>([]);
+  let configOpen = $state(false);
+  let selectedCameraIds = $state<string[]>([]);
+  let pendingCameraIds = $state<string[]>([]);
+
+  const STORAGE_KEY = 'dashboard-selected-cameras';
+
+  function loadSavedCameraIds(): string[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const ids: string[] = JSON.parse(raw);
+        if (Array.isArray(ids)) return ids;
+      }
+    } catch {}
+    return [];
+  }
+
+  function saveCameraIds(ids: string[]) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+  }
+
+  function toggleCameraSelection(cameraId: string) {
+    if (pendingCameraIds.includes(cameraId)) {
+      pendingCameraIds = pendingCameraIds.filter(id => id !== cameraId);
+    } else if (pendingCameraIds.length < 4) {
+      pendingCameraIds = [...pendingCameraIds, cameraId];
+    }
+  }
+
+  function applyCameraSelection() {
+    selectedCameraIds = [...pendingCameraIds];
+    saveCameraIds(selectedCameraIds);
+    // Filter allCameras by selected IDs, preserving order
+    const available = new Map(allCameras.map(c => [c.id, c]));
+    const filtered = selectedCameraIds
+      .map(id => available.get(id))
+      .filter((c): c is Camera => c !== undefined);
+    cameras = filtered;
+    configOpen = false;
+  }
 
   function getStreamUrl(cameraId: string): string {
     return `/api/cameras/${cameraId}/stream/index.m3u8`;
@@ -155,7 +197,23 @@
 
   onMount(async () => {
     try {
-      cameras = (await getDashboardCameras()).slice(0, 4);
+      const fetched = await getDashboardCameras();
+      allCameras = fetched;
+      const savedIds = loadSavedCameraIds();
+      if (savedIds.length > 0) {
+        // Filter by saved IDs, skip cameras that no longer exist
+        const available = new Map(fetched.map(c => [c.id, c]));
+        const filtered = savedIds
+          .map(id => available.get(id))
+          .filter((c): c is Camera => c !== undefined);
+        selectedCameraIds = filtered.map(c => c.id);
+        cameras = filtered;
+      } else {
+        // Default: first 4 cameras
+        cameras = fetched.slice(0, 4);
+        selectedCameraIds = cameras.map(c => c.id);
+      }
+      pendingCameraIds = [...selectedCameraIds];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -204,7 +262,51 @@
         <Video size={20} class="text-accent" />
         {t('dashboard.title')}
       </h1>
+      <button
+        class="btn btn-ghost p-2"
+        onclick={() => { configOpen = !configOpen; pendingCameraIds = [...selectedCameraIds]; }}
+        title={t('dashboard.configure')}
+      >
+        <Settings size={18} />
+      </button>
     </div>
+
+    <!-- Camera configuration panel -->
+    {#if configOpen}
+      <div class="card p-4 mb-4">
+        <h3 class="text-sm font-semibold th-text-primary mb-3">{t('dashboard.selectCameras')}</h3>
+        <p class="text-xs th-text-secondary mb-3">{t('dashboard.maxCameras')}</p>
+        <div class="space-y-1 max-h-48 overflow-y-auto mb-4">
+          {#each allCameras as camera}
+            <label class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[var(--bg-tertiary)] cursor-pointer transition-colors">
+              <input
+                type="checkbox"
+                checked={pendingCameraIds.includes(camera.id)}
+                onchange={() => toggleCameraSelection(camera.id)}
+                disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= 4}
+                class="accent-[var(--color-primary)]"
+              />
+              <span class="text-sm th-text-primary">{camera.name || camera.id}</span>
+              <span class="text-xs th-text-muted ml-auto">{camera.protocol}</span>
+            </label>
+          {/each}
+        </div>
+        <div class="flex justify-end gap-2">
+          <button
+            class="btn btn-ghost text-sm px-3 py-1.5"
+            onclick={() => configOpen = false}
+          >
+            {t('common.dismiss')}
+          </button>
+          <button
+            class="btn btn-primary text-sm px-3 py-1.5"
+            onclick={applyCameraSelection}
+          >
+            {t('dashboard.apply')}
+          </button>
+        </div>
+      </div>
+    {/if}
 
     <!-- Loading state -->
     {#if loading}

@@ -16,7 +16,7 @@
   "settings.invalidRetentionDays": "必须为非负数",
   "settings.invalidDiskThreshold": "必须在 0 到 100 之间",
   "nav.recordings": "录像",
-  "nav.stats": "统计",
+  "nav.stats": "仪表盘",
   "nav.logout": "退出登录",
   "nav.settings": "设置",
   "nav.cameras": "摄像头",
@@ -325,5 +325,9 @@
   "ptz.zoomIn": "放大",
   "ptz.zoomOut": "缩小",
   "ptz.stop": "停止",
-  "ptz.notSupported": "此摄像头不支持云台控制"
+  "ptz.notSupported": "此摄像头不支持云台控制",
+  "dashboard.configure": "配置",
+  "dashboard.selectCameras": "选择摄像头",
+  "dashboard.maxCameras": "最多选择 4 个摄像头",
+  "dashboard.apply": "应用"
 }

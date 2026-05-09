@@ -16,7 +16,7 @@
   "settings.invalidRetentionDays": "Must be a non-negative number",
   "settings.invalidDiskThreshold": "Must be between 0 and 100",
   "nav.recordings": "Recordings",
-  "nav.stats": "Stats",
+  "nav.stats": "Dashboard",
   "nav.logout": "Logout",
   "nav.settings": "Settings",
   "nav.cameras": "Cameras",
@@ -325,5 +325,9 @@
   "ptz.zoomIn": "Zoom In",
   "ptz.zoomOut": "Zoom Out",
   "ptz.stop": "Stop",
-  "ptz.notSupported": "This camera does not support PTZ"
+  "ptz.notSupported": "This camera does not support PTZ",
+  "dashboard.configure": "Configure",
+  "dashboard.selectCameras": "Select Cameras",
+  "dashboard.maxCameras": "Up to 4 cameras",
+  "dashboard.apply": "Apply"
 }
