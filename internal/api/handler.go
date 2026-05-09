@@ -119,6 +119,9 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/stream/*", h.handleHLSStream)
 			r.Delete("/stream", h.handleStopHLSStream)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+				r.Post("/ptz/move", h.handlePTZMove)
+				r.Post("/ptz/stop", h.handlePTZStop)
+				r.Get("/ptz/status", h.handlePTZStatus)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -984,6 +987,48 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeError(w, http.StatusNotImplemented, "device detail lookup not yet implemented")
+}
+
+// --- PTZ control endpoints ---
+
+func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req struct {
+		Mode  string  `json:"mode"`
+		Pan   float64 `json:"pan"`
+		Tilt  float64 `json:"tilt"`
+		Zoom  float64 `json:"zoom"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Mode != "continuous" && req.Mode != "absolute" && req.Mode != "relative" {
+		writeError(w, http.StatusBadRequest, "mode must be continuous, absolute, or relative")
+		return
+	}
+	_ = cameraID
+	// TODO: Actual PTZ control via ONVIF client
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	_ = cameraID
+	// TODO: Actual PTZ stop via ONVIF client
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	_ = cameraID
+	// TODO: Actual PTZ status via ONVIF client
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"pan":    0.0,
+		"tilt":   0.0,
+		"zoom":   0.0,
+		"moving": false,
+	})
 }
 
 // --- Helpers ---

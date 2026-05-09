@@ -8,6 +8,7 @@
   import Settings from './routes/Settings.svelte';
   import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
+  import Dashboard from './routes/Dashboard.svelte';
 
   import Header from './components/Header.svelte';
 
@@ -111,6 +112,6 @@
     {:else if currentRoute === 'settings'}
       <Settings />
     {:else if currentRoute === 'dashboard'}
-      <p>Dashboard coming soon</p>
+      <Dashboard />
     {/if}
   {/if}
