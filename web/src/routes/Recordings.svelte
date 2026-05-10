@@ -47,12 +47,13 @@ import { onMount, onDestroy } from 'svelte';
   let error = $state('');
   let deleteConfirm = $state<Recording | null>(null);
   let showBackToTop = $state(false);
+  let abortController: AbortController | null = null;
 
   function toggleSelectAll() {
-    if (selectedIds.size === filteredRecordings.length) {
+    if (selectedIds.size === recordings.length) {
       selectedIds = new Set();
     } else {
-      selectedIds = new Set(filteredRecordings.map(r => r.id));
+      selectedIds = new Set(recordings.map(r => r.id));
     }
   }
 
@@ -77,13 +78,6 @@ import { onMount, onDestroy } from 'svelte';
       showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
     }
   }
-  let filteredRecordings = $derived.by<Recording[]>(() => {
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return recordings.filter(r => getCameraName(r.camera_id).toLowerCase().includes(q));
-    }
-    return recordings;
-  });
 
   function handleSort(field: string) {
     if (sortBy === field) {
@@ -104,6 +98,12 @@ import { onMount, onDestroy } from 'svelte';
   }
   // Load data
   async function loadRecordings() {
+    // Abort previous in-flight request
+    if (abortController) {
+      abortController.abort();
+    }
+    abortController = new AbortController();
+
     loading = true;
     error = '';
 
@@ -111,16 +111,21 @@ import { onMount, onDestroy } from 'svelte';
       const response = await listRecordings({
         camera_id: cameraId || undefined,
         format: format || undefined,
+        search: searchQuery || undefined,
         start: startDate ? new Date(startDate).toISOString() : undefined,
         end: endDate ? new Date(endDate).toISOString() : undefined,
         offset,
         limit,
         sort_by: sortBy,
-        order: sortOrder
+        order: sortOrder,
+        signal: abortController.signal
       });
       recordings = response.recordings;
       totalRecordings = response.total || 0;
     } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return;
+      }
       error = e instanceof Error ? e.message : t('common.failedLoadRecordings');
     } finally {
       loading = false;
@@ -202,7 +207,7 @@ import { onMount, onDestroy } from 'svelte';
   let loadTimeout: number;
   $effect(() => {
     // Read all filter variables to track them as dependencies
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
@@ -350,7 +355,7 @@ import { onMount, onDestroy } from 'svelte';
               <tr>
                 <th class="w-10">
                   <button onclick={toggleSelectAll} class="th-text-secondary hover:th-text-primary transition-colors">
-                    {#if selectedIds.size === filteredRecordings.length && filteredRecordings.length > 0}
+                    {#if selectedIds.size === recordings.length && recordings.length > 0}
                       <CheckSquare size={18} />
                     {:else}
                       <Square size={18} />
@@ -411,7 +416,7 @@ import { onMount, onDestroy } from 'svelte';
               </tr>
             </thead>
             <tbody>
-              {#each filteredRecordings as recording}
+              {#each recordings as recording}
                 <tr class="transition-all duration-200 hover:th-bg-hover">
                   <td>
                     <input
