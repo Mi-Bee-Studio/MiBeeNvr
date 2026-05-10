@@ -8,7 +8,7 @@ export interface Recording {
   id: string;
   camera_id: string;
   file_path: string;
-  format: 'h264' | 'mjpeg';
+  format: 'h264' | 'mjpeg' | 'h265';
   started_at: string;
   ended_at: string;
   duration: number;
@@ -282,6 +282,8 @@ export async function listRecordings(params: {
   end?: string;
   sort_by?: string;
   order?: string;
+  search?: string;
+  signal?: AbortSignal;
 } = {}): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
 
@@ -294,11 +296,13 @@ export async function listRecordings(params: {
   if (params.end) queryParams.set('end', params.end);
   if (params.sort_by) queryParams.set('sort_by', params.sort_by);
   if (params.order) queryParams.set('order', params.order);
+  if (params.search) queryParams.set('search', params.search);
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';
 
-  return apiRequest<RecordingListResponse>(endpoint);
+  const { signal } = params;
+  return apiRequest<RecordingListResponse>(endpoint, { signal });
 }
 
 export async function getRecording(id: string): Promise<Recording> {
