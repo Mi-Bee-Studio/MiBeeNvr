@@ -178,6 +178,7 @@ import { onMount, onDestroy } from 'svelte';
     pinnedFilter = '';
     startDate = toLocalDT(new Date(Date.now() - 3600000));
     endDate = toLocalDT(new Date());
+    offset = 0;
   }
 
   function viewRecording(recording: Recording) {
@@ -206,10 +207,19 @@ import { onMount, onDestroy } from 'svelte';
     };
   });
 
-  // Watch filter changes — debounce to avoid double-fire with onMount
+  // When filters change, track previous values to detect changes
+  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${pinnedFilter}`;
+  $effect(() => {
+    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${pinnedFilter}`;
+    if (current !== prevFilters) {
+      prevFilters = current;
+      offset = 0;
+    }
+  });
+
+  // Watch all filter + pagination changes — debounce to avoid double-fire with onMount
   let loadTimeout: number;
   $effect(() => {
-    // Read all filter variables to track them as dependencies
     const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, pinnedFilter];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
@@ -306,9 +316,6 @@ import { onMount, onDestroy } from 'svelte';
               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
               <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
-          </div>
-          <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center shrink-0">
-            <button class="btn btn-secondary btn-sm !px-3 !py-1" onclick={clearFilters}>{t('recordings.clearFilters')}</button>
           </div>
         </div>
       </div>
