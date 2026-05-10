@@ -22,6 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -86,11 +87,11 @@ type Handler struct {
 	configPath string
 	snapshotMu    sync.RWMutex
 	snapshots     map[string]*snapshotCache // cameraID -> cached snapshot
+	mergeMgr      *merge.MergeManager
 }
-
 // NewHandler creates a new API handler.
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache)}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -111,8 +112,6 @@ func (h *Handler) Routes() http.Handler {
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
-				r.Post("/pin", h.handlePinRecording)
-				r.Post("/unpin", h.handleUnpinRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
 			})
@@ -131,6 +130,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
 				r.Get("/snapshot", h.handleSnapshot)
+				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
+				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -138,10 +139,14 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats/trends", h.handleStatsTrends)
 		r.Get("/api/settings", h.handleGetSettings)
 		r.Put("/api/settings", h.handleUpdateSettings)
+		r.Get("/api/settings/merge", h.handleGetMergeSettings)
+		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Post("/api/backup", h.handleBackup)
 		r.Get("/api/backups", h.handleListBackups)
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
+		r.Get("/api/merge/status", h.handleMergeStatus)
+		r.Get("/api/merge/pending", h.handleMergePending)
 	})
 
 	return r
@@ -312,9 +317,9 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		Format:   model.Format(r.URL.Query().Get("format")),
 	}
 
-	if v := r.URL.Query().Get("pinned"); v != "" {
-		pinned := v == "true" || v == "1"
-		filter.Pinned = &pinned
+	if v := r.URL.Query().Get("merged"); v != "" {
+		merged := v == "true" || v == "1"
+		filter.Merged = &merged
 	}
 
 	if v := r.URL.Query().Get("start"); v != "" {
@@ -472,23 +477,6 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) handlePinRecording(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := h.db.SetPinned(r.Context(), id, true); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to pin recording")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "pinned"})
-}
-
-func (h *Handler) handleUnpinRecording(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if err := h.db.SetPinned(r.Context(), id, false); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to unpin recording")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "unpinned"})
-}
 
 func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -867,12 +855,22 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Harden credential updates: empty string from frontend means "don't update"
+	username := body.Username
+	if username != nil && *username == "" {
+		username = nil
+	}
+	password := body.Password
+	if password != nil && *password == "" {
+		password = nil
+	}
+
 	updates := camera.CameraUpdate{
 		Name:          body.Name,
 		URL:           body.URL,
 		Protocol:      body.Protocol,
-		Username:      body.Username,
-		Password:      body.Password,
+		Username:      username,
+		Password:      password,
 		Enabled:       body.Enabled,
 		Description:   body.Description,
 		Location:      body.Location,
@@ -994,6 +992,20 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 	writeError(w, http.StatusNotImplemented, "device detail lookup not yet implemented")
 }
 
+func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
+	cameraID := chi.URLParam(r, "id")
+	camera, err := h.db.GetCamera(r.Context(), cameraID)
+	if err != nil || camera == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return false
+	}
+	if camera.Protocol != "onvif" {
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF cameras")
+		return false
+	}
+	return true
+}
+
 // --- PTZ control endpoints ---
 
 func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
@@ -1012,6 +1024,9 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode must be continuous, absolute, or relative")
 		return
 	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
 	_ = cameraID
 	// TODO: Actual PTZ control via ONVIF client
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1019,6 +1034,9 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
 	_ = cameraID
 	// TODO: Actual PTZ stop via ONVIF client
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
@@ -1026,6 +1044,9 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
 	_ = cameraID
 	// TODO: Actual PTZ status via ONVIF client
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -1134,7 +1155,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "")
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil)
 }
 // --- Test helper exported for handler_test.go ---
 
@@ -1146,7 +1167,7 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW := middleware.NewAuthMiddleware(username, passwordHash)
-	return NewHandler(db, store, authMW, nil, nil, nil, "")
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil)
 }
 
 // --- HLS streaming endpoints ---
@@ -1383,6 +1404,203 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// --- Merge settings endpoints ---
+
+func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":              h.config.Merge.Enabled,
+		"check_interval":        h.config.Merge.CheckInterval,
+		"window_size":           h.config.Merge.WindowSize,
+		"batch_limit":           h.config.Merge.BatchLimit,
+		"min_segment_age":       h.config.Merge.MinSegmentAge,
+		"min_segments_to_merge": h.config.Merge.MinSegmentsToMerge,
+	})
+}
+
+func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	var body struct {
+		Enabled            *bool   `json:"enabled"`
+		CheckInterval      *string `json:"check_interval"`
+		WindowSize         *string `json:"window_size"`
+		BatchLimit         *int    `json:"batch_limit"`
+		MinSegmentAge      *string `json:"min_segment_age"`
+		MinSegmentsToMerge *int    `json:"min_segments_to_merge"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.Enabled != nil {
+		h.config.Merge.Enabled = *body.Enabled
+	}
+	if body.CheckInterval != nil {
+		if _, err := time.ParseDuration(*body.CheckInterval); err != nil {
+			writeError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
+			return
+		}
+		h.config.Merge.CheckInterval = *body.CheckInterval
+	}
+	if body.WindowSize != nil {
+		if _, err := time.ParseDuration(*body.WindowSize); err != nil {
+			writeError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
+			return
+		}
+		h.config.Merge.WindowSize = *body.WindowSize
+	}
+	if body.BatchLimit != nil {
+		if *body.BatchLimit < 1 {
+			writeError(w, http.StatusBadRequest, "batch_limit must be >= 1")
+			return
+		}
+		h.config.Merge.BatchLimit = *body.BatchLimit
+	}
+	if body.MinSegmentAge != nil {
+		if _, err := time.ParseDuration(*body.MinSegmentAge); err != nil {
+			writeError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
+			return
+		}
+		h.config.Merge.MinSegmentAge = *body.MinSegmentAge
+	}
+	if body.MinSegmentsToMerge != nil {
+		if *body.MinSegmentsToMerge < 1 {
+			writeError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
+			return
+		}
+		h.config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
+	}
+
+	// Persist config to disk
+	if err := config.Save(h.configPath, h.config); err != nil {
+		logger.Warn("failed to save config", "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera ID is required")
+		return
+	}
+
+	var body struct {
+		Enabled            *bool   `json:"enabled"`
+		CheckInterval      *string `json:"check_interval"`
+		WindowSize         *string `json:"window_size"`
+		BatchLimit         *int    `json:"batch_limit"`
+		MinSegmentAge      *string `json:"min_segment_age"`
+		MinSegmentsToMerge *int    `json:"min_segments_to_merge"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate duration fields
+	for _, d := range []*string{body.CheckInterval, body.WindowSize, body.MinSegmentAge} {
+		if d != nil {
+			if _, err := time.ParseDuration(*d); err != nil {
+				writeError(w, http.StatusBadRequest, "duration fields must be valid (e.g., \"30m\", \"1h\")")
+				return
+			}
+		}
+	}
+	if body.BatchLimit != nil && *body.BatchLimit < 1 {
+		writeError(w, http.StatusBadRequest, "batch_limit must be >= 1")
+		return
+	}
+	if body.MinSegmentsToMerge != nil && *body.MinSegmentsToMerge < 1 {
+		writeError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
+		return
+	}
+
+	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
+			body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
+			body.BatchLimit, body.MinSegmentsToMerge); err != nil {
+		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
+		writeError(w, http.StatusInternalServerError, "failed to update merge config")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera ID is required")
+		return
+	}
+
+	// Pass all nil to clear (revert to global defaults)
+	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
+			nil, nil, nil, nil, nil, nil); err != nil {
+		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
+		writeError(w, http.StatusInternalServerError, "failed to clear merge config")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
+// --- Merge status endpoints ---
+
+func (h *Handler) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
+	if h.mergeMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+		})
+		return
+	}
+	status := h.mergeMgr.Status()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":         true,
+		"last_run_time":   status.LastRunTime,
+		"segments_merged": status.SegmentsMerged,
+		"files_created":   status.FilesCreated,
+		"error_count":     status.ErrorCount,
+	})
+}
+
+func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
+	if h.mergeMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"pending": map[string]int{},
+		})
+		return
+	}
+	counts := h.mergeMgr.PendingCounts(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"pending": counts,
+	})
 }
 
 
