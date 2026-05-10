@@ -28,6 +28,7 @@ import { onMount, onDestroy } from 'svelte';
   let cameraId = $state('');
   let format = $state('');
   let searchQuery = $state('');
+  let pinnedFilter = $state('');
   const pad = (n) => String(n).padStart(2, '0');
   const toLocalDT = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   let startDate = $state(toLocalDT(new Date(Date.now() - 3600000)));
@@ -112,6 +113,7 @@ import { onMount, onDestroy } from 'svelte';
         camera_id: cameraId || undefined,
         format: format || undefined,
         search: searchQuery || undefined,
+        pinned: pinnedFilter === 'true' ? true : pinnedFilter === 'false' ? false : undefined,
         start: startDate ? new Date(startDate).toISOString() : undefined,
         end: endDate ? new Date(endDate).toISOString() : undefined,
         offset,
@@ -173,8 +175,9 @@ import { onMount, onDestroy } from 'svelte';
     searchQuery = '';
     cameraId = '';
     format = '';
-    startDate = '';
-    endDate = '';
+    pinnedFilter = '';
+    startDate = toLocalDT(new Date(Date.now() - 3600000));
+    endDate = toLocalDT(new Date());
   }
 
   function viewRecording(recording: Recording) {
@@ -207,7 +210,7 @@ import { onMount, onDestroy } from 'svelte';
   let loadTimeout: number;
   $effect(() => {
     // Read all filter variables to track them as dependencies
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, pinnedFilter];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
@@ -272,6 +275,14 @@ import { onMount, onDestroy } from 'svelte';
               <option value="h264">{t('recordings.h264')}</option>
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
               <option value="h265">H.265 (HEVC)</option>
+            </select>
+          </div>
+          <div class="flex-1 min-w-[120px]">
+            <label for="pinned" class="input-label">{t('recordings.allStatus')}</label>
+            <select id="pinned" class="input" bind:value={pinnedFilter}>
+              <option value="">{t('recordings.allStatus')}</option>
+              <option value="true">{t('recordings.pinnedOnly')}</option>
+              <option value="false">{t('recordings.unpinnedOnly')}</option>
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">
