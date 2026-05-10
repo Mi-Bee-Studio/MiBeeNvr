@@ -72,6 +72,7 @@ type RecordingFilter struct {
 	EndTime   time.Time
 	Format    Format
 	Pinned    *bool // nil = all, true = pinned only, false = unpinned only
+	Search    string
 	Limit     int
 	Offset    int
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at

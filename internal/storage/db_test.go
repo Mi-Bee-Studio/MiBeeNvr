@@ -487,3 +487,122 @@ func TestParseTimeLegacyFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestListRecordings_SearchByCameraID(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_camid.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "camAlpha", FilePath: "/a1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "camBeta", FilePath: "/b1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+	r3 := &model.Recording{ID: "r3", CameraID: "other", FilePath: "/c1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r3)
+
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: "cam"})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	ids := map[string]bool{list[0].ID: true, list[1].ID: true}
+	require.True(t, ids["r1"])
+	require.True(t, ids["r2"])
+}
+
+func TestListRecordings_SearchByFormat(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_format.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "cam1", FilePath: "/a1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "cam2", FilePath: "/b1.jpg", Format: model.FormatMJPEG, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: "h264"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "r1", list[0].ID)
+}
+
+func TestListRecordings_SearchByFilePath(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_path.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "cam1", FilePath: "/recordings/cam1/seg1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "cam2", FilePath: "/recordings/cam2/seg1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: "cam1/seg"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "r1", list[0].ID)
+}
+
+func TestListRecordings_SearchEmpty(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_empty.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "camA", FilePath: "/a1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "camB", FilePath: "/b1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: ""})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+}
+
+func TestListRecordings_SearchWithOtherFilters(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_combo.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "cam1", FilePath: "/a1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "cam2", FilePath: "/cam1_b.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+	r3 := &model.Recording{ID: "r3", CameraID: "cam1", FilePath: "/c1.mp4", Format: model.FormatMJPEG, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r3)
+
+	// Search "cam1" AND camera_id="cam1" — only r1 and r3 match camera_id, and both match search
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: "cam1", CameraID: "cam1"})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	ids := map[string]bool{list[0].ID: true, list[1].ID: true}
+	require.True(t, ids["r1"])
+	require.True(t, ids["r3"])
+}
+
+func TestListRecordings_SearchLikeWildcardEscape(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_search_wildcard.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	r1 := &model.Recording{ID: "r1", CameraID: "cam_percent%", FilePath: "/a1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r1)
+	r2 := &model.Recording{ID: "r2", CameraID: "cam_normal", FilePath: "/b1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r2)
+	r3 := &model.Recording{ID: "r3", CameraID: "cam_other", FilePath: "/c1.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	_ = db.InsertRecording(ctx, r3)
+
+	// Searching for literal "%" should only match r1 (which contains the literal %)
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{Search: "%"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "r1", list[0].ID)
+}

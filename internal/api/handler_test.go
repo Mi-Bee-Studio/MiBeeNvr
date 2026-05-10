@@ -1975,3 +1975,24 @@ func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
 	require.Equal(t, http.StatusBadGateway, rr.Code)
 }
+
+func TestListRecordings_SearchQuery(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	seedRecording(t, db, makeRecording("rec-1", "cam-front", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-2", "cam-back", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-3", "door", "h264", now, false))
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?search=cam", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var resp recordingsResponse
+	parseJSON(t, rr, &resp)
+	if len(resp.Recordings) != 2 {
+		t.Fatalf("expected 2 recordings, got %d", len(resp.Recordings))
+	}
+}
