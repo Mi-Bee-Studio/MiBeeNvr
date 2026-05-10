@@ -28,6 +28,7 @@ A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/H
 - Multi-camera concurrent recording
 - **Per-camera retention_days** - Each camera can have its own retention policy
 - Automatic cleanup with retention and disk threshold policies
+- **Segment merging** — Configurable auto-merge with global + per-camera settings, dashboard monitoring
 - SQLite metadata storage
 - Single static binary, no external dependencies (`CGO_ENABLED=0`)
 ## Quick Start
