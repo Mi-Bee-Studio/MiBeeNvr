@@ -14,7 +14,7 @@ export interface Recording {
   duration: number;
   file_size: number;
   frame_count: number;
-  pinned: boolean;
+  merged: boolean;
 }
 
 export interface FrameInfo {
@@ -31,13 +31,15 @@ export interface Camera {
   name: string;
   protocol: string;
   url: string;
+  username?: string;
+  has_password?: boolean;
   enabled: boolean;
   description?: string;
   location?: string;
   brand?: string;
   model?: string;
   serial_number?: string;
-  recorder_status?: string;
+  status?: string;
   last_seen?: string;
   retention_days?: number;
 }
@@ -69,6 +71,15 @@ export interface UpdateCameraRequest {
   model?: string;
   serial_number?: string;
   retention_days?: number;
+}
+
+export interface MergeConfig {
+  enabled?: boolean;
+  check_interval?: string;
+  window_size?: string;
+  batch_limit?: number;
+  min_segment_age?: string;
+  min_segments_to_merge?: number;
 }
 
 export interface StorageStats {
@@ -275,7 +286,7 @@ export function logout(): void {
 export async function listRecordings(params: {
   camera_id?: string;
   format?: string;
-  pinned?: boolean;
+  merged?: boolean;
   offset?: number;
   limit?: number;
   start?: string;
@@ -289,7 +300,7 @@ export async function listRecordings(params: {
 
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
   if (params.format) queryParams.set('format', params.format);
-  if (params.pinned !== undefined) queryParams.set('pinned', String(params.pinned));
+  if (params.merged !== undefined) queryParams.set('merged', String(params.merged));
   if (params.offset !== undefined) queryParams.set('offset', String(params.offset));
   if (params.limit !== undefined) queryParams.set('limit', String(params.limit));
   if (params.start) queryParams.set('start', params.start);
@@ -322,17 +333,6 @@ export async function batchDeleteRecordings(ids: string[]): Promise<void> {
   });
 }
 
-export async function pinRecording(id: string): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/recordings/${id}/pin`, {
-    method: 'POST',
-  });
-}
-
-export async function unpinRecording(id: string): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/recordings/${id}/unpin`, {
-    method: 'POST',
-  });
-}
 
 export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
@@ -559,4 +559,60 @@ export async function getCameraCapabilities(cameraId: string): Promise<ONVIFProf
 // Snapshot URL helper (returns JPEG from camera snapshot endpoint)
 export function getSnapshotUrl(cameraId: string): string {
   return `/api/cameras/${cameraId}/snapshot`;
+}
+
+// Per-camera merge config
+export async function getMergeConfig(cameraId: string): Promise<MergeConfig | null> {
+  try {
+    return await apiRequest<MergeConfig>(`/cameras/${cameraId}/merge-config`);
+  } catch {
+    return null;
+  }
+}
+
+export async function updateMergeConfig(cameraId: string, config: MergeConfig): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function deleteCameraMergeConfig(cameraId: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
+    method: 'DELETE',
+  });
+}
+
+// Global merge settings
+export async function getMergeSettings(): Promise<MergeConfig> {
+  return apiRequest<MergeConfig>('/settings/merge');
+}
+
+export async function updateMergeSettings(config: MergeConfig): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>('/settings/merge', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+// Merge status & pending
+export interface MergeStatus {
+  enabled: boolean;
+  last_run_time: string;
+  segments_merged: number;
+  files_created: number;
+  error_count: number;
+}
+
+export interface MergePending {
+  enabled: boolean;
+  pending: Record<string, number>;
+}
+
+export async function getMergeStatus(): Promise<MergeStatus> {
+  return apiRequest<MergeStatus>('/merge/status');
+}
+
+export async function getMergePending(): Promise<MergePending> {
+  return apiRequest<MergePending>('/merge/pending');
 }
