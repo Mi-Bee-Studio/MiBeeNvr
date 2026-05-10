@@ -77,11 +77,15 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 		Duration:   endedAt.Sub(startedAt).Seconds(),
 		FileSize:   fi.Size(),
 		FrameCount: 2,
-		Pinned:     false,
+		Merged:     false,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 
 	return finalPath
+}
+// newTestMergeManager creates a MergeManager with the given config for testing.
+func newTestMergeManager(db *storage.DB, store *storage.Manager, cfg config.MergeConfig, cameras []config.CameraConfig) *MergeManager {
+	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras })
 }
 
 func TestRunOnce_NoCameras(t *testing.T) {
@@ -96,9 +100,7 @@ func TestRunOnce_NoCameras(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		return nil
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, nil)
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -124,9 +126,7 @@ func TestRunOnce_MergeDisabled(t *testing.T) {
 	env.insertMergeableRecording(t, "rec1", cameraID, now.Add(-2*time.Hour), now.Add(-time.Hour))
 	env.insertMergeableRecording(t, "rec2", cameraID, now.Add(-time.Hour), now)
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		return []config.CameraConfig{{ID: cameraID, Enabled: true}}
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -165,9 +165,7 @@ func TestRunOnce_Integration(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		return []config.CameraConfig{{ID: cameraID, Enabled: true}}
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
 
 	err = mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -212,9 +210,7 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		return []config.CameraConfig{{ID: cameraID, Enabled: true}}
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -246,10 +242,7 @@ func TestRunOnce_DisabledCamera(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		// Camera is disabled
-		return []config.CameraConfig{{ID: cameraID, Enabled: false}}
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: false}})
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -272,13 +265,164 @@ func TestRunOnce_ContextCancelled(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := NewMergeManager(env.db, env.store, cfg, func() []config.CameraConfig {
-		return []config.CameraConfig{{ID: "cam1", Enabled: true}}
-	})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: "cam1", Enabled: true}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
 	err := mgr.RunOnce(ctx)
 	require.NoError(t, err)
+}
+
+func TestStatus_Initial(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, nil)
+
+	status := mgr.Status()
+	require.True(t, status.LastRunTime.IsZero())
+	require.Equal(t, 0, status.SegmentsMerged)
+	require.Equal(t, 0, status.FilesCreated)
+	require.Equal(t, 0, status.ErrorCount)
+}
+
+func TestStatus_AfterRunOnce(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "rtsp://localhost/test", "", "", true))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	require.NoError(t, mgr.RunOnce(ctx))
+
+	status := mgr.Status()
+	require.False(t, status.LastRunTime.IsZero())
+	require.Equal(t, 2, status.SegmentsMerged)
+	require.Equal(t, 1, status.FilesCreated)
+	require.Equal(t, 0, status.ErrorCount)
+}
+
+func TestPendingCounts(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "rtsp://localhost/test", "", "", true))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+
+	counts := mgr.PendingCounts(ctx)
+	require.Equal(t, 2, counts[cameraID])
+}
+
+func TestPendingCounts_MergeDisabled(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "rtsp://localhost/test", "", "", true))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            false,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+
+	counts := mgr.PendingCounts(ctx)
+	// Merge disabled — camera should not appear in counts.
+	_, ok := counts[cameraID]
+	require.False(t, ok)
+}
+
+func TestHotReload_PerCameraConfig(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "rtsp://localhost/test", "", "", true))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	// Start with merge disabled globally.
+	cfg := config.MergeConfig{
+		Enabled:            false,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+	perCamCfg := &config.MergeConfig{Enabled: true}
+
+	mgr := NewMergeManager(env.db, env.store,
+		func() config.MergeConfig { return cfg },
+		func(cid string) *config.MergeConfig {
+			if cid == cameraID {
+				return perCamCfg
+			}
+			return nil
+		},
+		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID, Enabled: true}} },
+	)
+
+	// Per-camera override enables merge even when global is disabled.
+	err := mgr.RunOnce(ctx)
+	require.NoError(t, err)
+
+	// After merge: old recordings should be deleted, new merged recording should exist.
+	recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	require.Len(t, recsAfter, 1)
+	require.True(t, recsAfter[0].Merged)
 }
