@@ -310,10 +310,46 @@ cameras:
 ### 合并行为
 - **H.264/H.265**: 段以原始编码直接拼接（快速、无损）。仅编码参数相同（SPS/PPS）的段会被合并。
 - **MJPEG**: JPEG 文件移动到同一目录（无重编码）。
-- **置顶录像**: 置顶的录像永远不会被合并，并在其边界处拆分合并组。
 - **磁盘空间**: 如果可用磁盘空间不足合并文件大小的 110%，合并会被跳过。
 - **原子操作**: 合并文件使用原子重命名（临时文件 → 最终文件）防止数据损坏。
-- **原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
+#BK|- **原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
+#JS|
+#VY|### 每摄像头合并配置
+#RK|
+#NK|单个摄像头可以通过 API 或 Web UI 覆盖全局合并设置。这允许不同摄像头根据其录制模式和存储需求采用不同的合并策略。
+#JY|
+#PX|**API 接口**:
+#HK|- `GET /api/cameras/:id/merge-config` - 获取摄像头合并覆盖设置
+#HK|- `PUT /api/cameras/:id/merge-config` - 设置摄像头合并覆盖设置
+#HK|- `DELETE /api/cameras/:id/merge-config` - 重置为全局默认值
+#JS|
+#VY|**摄像头合并参数**:
+#WK|配置摄像头合并设置时，可以覆盖所有 6 个全局参数：
+#NJ|
+#RK|- `enabled` - 启用/禁用此摄像头的合并功能
+#VK|- `check_interval` - 检查可合并段的频率
+#BY|- `window_size` - 分段组合的时间窗口
+#NP|- `batch_limit` - 单次合并运行的最大段数
+#JR|- `min_segment_age` - 段可合并的最小年龄
+#PV|- `min_segments_to_merge` - 触发合并所需的最小段数
+#JS|
+#VY|**覆盖示例**:
+#YP|```yaml
+cameras:
+  - id: "front-door"
+    name: "前门"
+    protocol: "rtsp_h264"
+    url: "rtsp://192.168.1.100:554/live"
+    # 摄像头合并设置
+    merge_config:
+      enabled: true
+      check_interval: "30m"
+      batch_limit: 100  # 低于全局值 200
+      min_segments_to_merge: 2  # 低于全局值 3
+```
+#JS|
+#MX|## FTP 配置
+#BV|
 
 ## FTP 配置
 
