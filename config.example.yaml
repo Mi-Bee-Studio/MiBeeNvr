@@ -3,7 +3,7 @@ server:
 
 storage:
   root_dir: "/mnt/data/nvr"
-  segment_duration: "10m"
+  segment_duration: "30s"
 
 auth:
   username: "admin"

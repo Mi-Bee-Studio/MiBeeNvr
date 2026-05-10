@@ -6,7 +6,7 @@ MiBee NVR 是一个用 Go 语言编写的轻量级家用网络视频录像机。
 
 ### 主要特性
 
-- 支持多种摄像头协议：RTSP H.264、RTSP MJPEG、HTTP JPEG
+- 支持多种摄像头协议：RTSP H.264、RTSP H.265、RTSP MJPEG、HTTP JPEG
 - 实时录制为 MP4 片段，自动分段管理
 - Web 管理界面，支持摄像头配置和录像管理
 - WebDAV 只读访问，支持文件浏览器播放
@@ -26,7 +26,7 @@ MiBee NVR 是一个用 Go 语言编写的轻量级家用网络视频录像机。
 
 ### 软件要求
 
-- **Go 1.22+**: 用于编译和运行
+- **Go 1.26+**: 用于编译和运行
 - **存储设备**: 推荐使用 SSD 或高性能 SD 卡
 
 ### 硬件要求
@@ -67,7 +67,7 @@ make cross
 复制示例配置文件：
 
 ```bash
-cp config.example.yaml config.yaml
+cp config.example.yaml mibee-nvr.yaml
 ```
 
 编辑 `config.yaml` 文件，配置服务器、存储和摄像头设置。
@@ -103,7 +103,18 @@ cameras:
     password: "password123"
     enabled: true
 ```
+```
 
+### RTSP H.265 摄像头
+
+```yaml
+cameras:
+  - id: "cam4"
+    name: "H.265 摄像头"
+    protocol: "rtsp_h265"
+    url: "rtsp://192.168.1.103:554/stream"
+    enabled: true
+```
 ### RTSP MJPEG 摄像头
 
 ```yaml
@@ -176,18 +187,13 @@ curl http://localhost:9090/api/health
 ```json
 {
   "status": "ok",
-  "version": "1.0.0",
   "uptime": "2h30m",
-  "cameras": {
-    "total": 3,
-    "active": 2,
-    "inactive": 1
+  "checks": {
+    "database": {"status": "ok"},
+    "storage": {"status": "ok", "message": "20% used (10737418240 / 53687091200 bytes)"},
+    "goroutines": {"status": "ok", "message": "42 goroutines"}
   },
-  "storage": {
-    "total_gb": 500,
-    "used_gb": 120,
-    "available_gb": 380
-  }
+  "version": "0.1.0-dev"
 }
 ```
 
