@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getStats, listCameras, healthCheck, getSystemStats } from '$lib/api';
-  import type { StorageStats, Camera, HealthResponse, SystemStats } from '$lib/api';
+  import { getStats, listCameras, healthCheck, getSystemStats, getMergeStatus, getMergePending } from '$lib/api';
+  import type { StorageStats, Camera, HealthResponse, SystemStats, MergeStatus, MergePending } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi, ChevronDown, ChevronUp } from 'lucide-svelte';
+  import { formatDate } from '$lib/format';
+
+  import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi, ChevronDown, ChevronUp, GitMerge } from 'lucide-svelte';
   import {
     Chart,
     CategoryScale,
@@ -29,6 +31,11 @@
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
+
+  // Merge monitoring state
+  let mergeStatus = $state<MergeStatus | null>(null);
+  let mergePending = $state<MergePending | null>(null);
+  let mergeCollapsed = $state(false);
 
   // Auto-refresh interval
   let refreshInterval: number;
@@ -166,6 +173,20 @@
       console.error('Failed to load system stats:', e);
     }
   }
+
+  async function loadMergeData() {
+    try {
+      const [status, pending] = await Promise.all([
+        getMergeStatus(),
+        getMergePending(),
+      ]);
+      mergeStatus = status;
+      mergePending = pending;
+    } catch {
+      // silently ignore
+    }
+  }
+
 
   function createCharts(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
     const isDark = getEffectiveTheme() === 'dark';
@@ -306,6 +327,7 @@
     loadTrends();
     loadHealth();
     loadSystemStats();
+    loadMergeData();
     // Quick second sample after 2s so CPU/network show without waiting 30s
     const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
 
@@ -316,6 +338,7 @@
       loadTrends();
       loadHealth();
       loadSystemStats();
+      loadMergeData();
     }, 30000);
 
     // Re-create charts when theme changes
@@ -584,6 +607,78 @@
             {/if}
           </div>
         </div>
+        <!-- Merge monitoring card -->
+        {#if mergeStatus}
+          <div class="card border th-border overflow-hidden">
+            <button
+              class="w-full p-5 flex items-center justify-between hover:th-bg-hover transition-colors cursor-pointer"
+              onclick={() => mergeCollapsed = !mergeCollapsed}
+            >
+              <div class="flex items-center gap-2">
+                <GitMerge size={18} class="text-accent" />
+                <h3 class="text-lg font-semibold th-text-primary">合并状态</h3>
+                <span class="badge {mergeStatus.enabled ? 'badge-success' : 'badge-neutral'} text-xs">
+                  {mergeStatus.enabled ? '启用' : '关闭'}
+                </span>
+                {#if mergePending && mergePending.pending && Object.keys(mergePending.pending).length > 0}
+                  {@const total = Object.values(mergePending.pending).reduce((a, b) => a + b, 0)}
+                  <span class="badge badge-warning text-xs">待合并 {total}</span>
+                {/if}
+              </div>
+              {#if mergeCollapsed}
+                <ChevronDown size={18} class="th-text-muted" />
+              {:else}
+                <ChevronUp size={18} class="th-text-muted" />
+              {/if}
+            </button>
+
+            {#if !mergeCollapsed}
+              <div class="px-5 pb-5 border-t th-border pt-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <div>
+                    <p class="text-xs th-text-muted mb-1">上次运行</p>
+                    <p class="text-sm font-medium th-text-primary">
+                      {mergeStatus.last_run_time && mergeStatus.last_run_time !== '0001-01-01T00:00:00Z'
+                        ? formatDate(mergeStatus.last_run_time)
+                        : '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-xs th-text-muted mb-1">合并段数</p>
+                    <p class="text-sm font-medium th-text-primary">{mergeStatus.segments_merged}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs th-text-muted mb-1">新建文件</p>
+                    <p class="text-sm font-medium th-text-primary">{mergeStatus.files_created}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs th-text-muted mb-1">错误数</p>
+                    <p class="text-sm font-medium th-text-primary {mergeStatus.error_count > 0 ? 'text-[var(--color-danger)]' : ''}">
+                      {mergeStatus.error_count}
+                    </p>
+                  </div>
+                </div>
+
+                {#if mergePending && mergePending.pending && Object.keys(mergePending.pending).length > 0}
+                  <div>
+                    <p class="text-xs th-text-muted mb-2">待合并</p>
+                    <div class="flex flex-wrap gap-2">
+                      {#each Object.entries(mergePending.pending) as [camId, count]}
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs th-bg-tertiary th-text-secondary">
+                          <span class="font-mono">{camId}</span>
+                          <span class="font-semibold th-text-primary">{count}</span>
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {:else}
+                  <p class="text-xs th-text-muted">暂无待合并</p>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Charts — Storage Trend & Recordings by Camera -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="card p-6 border th-border">
