@@ -11,6 +11,7 @@ CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 
 
 frontend:
 	cd web && npm run build
+	rm -rf internal/ui/static/assets
 	cp -r web/dist/* internal/ui/static/
 
 build: frontend
