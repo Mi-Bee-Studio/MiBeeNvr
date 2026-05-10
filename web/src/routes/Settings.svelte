@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import type { SettingsConfig } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -21,6 +21,14 @@ let itemsPerPage = $state(getItemsPerPage());
 let webdavEnabled = $state(false);
 let webdavPathPrefix = $state('/dav');
 let webdavReadWrite = $state(false);
+
+// Merge settings state
+let mergeEnabled = $state(true);
+let mergeCheckInterval = $state('1h');
+let mergeWindowSize = $state('1h');
+let mergeMinSegments = $state(3);
+let mergeMinSegmentAge = $state('10m');
+let mergeBatchLimit = $state(100);
   
   // Original values for change tracking
   let originalRetentionDays = $state(30);
@@ -75,6 +83,15 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       webdavEnabled = settings.webdav?.enabled ?? false;
       webdavPathPrefix = settings.webdav?.path_prefix ?? '/dav';
       webdavReadWrite = settings.webdav?.read_write ?? false;
+
+      // Load merge settings
+      const mergeSettings = await getMergeSettings();
+      mergeEnabled = mergeSettings.enabled ?? true;
+      mergeCheckInterval = mergeSettings.check_interval ?? '1h';
+      mergeWindowSize = mergeSettings.window_size ?? '1h';
+      mergeMinSegments = mergeSettings.min_segments_to_merge ?? 3;
+      mergeMinSegmentAge = mergeSettings.min_segment_age ?? '10m';
+      mergeBatchLimit = mergeSettings.batch_limit ?? 100;
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedLoadSettings');
     } finally {
@@ -112,6 +129,17 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       };
 
       const result = await updateSettings(payload);
+
+      // Save merge settings
+      await updateMergeSettings({
+        enabled: mergeEnabled,
+        check_interval: mergeCheckInterval,
+        window_size: mergeWindowSize,
+        min_segments_to_merge: mergeMinSegments,
+        min_segment_age: mergeMinSegmentAge,
+        batch_limit: mergeBatchLimit,
+      });
+
       settings = await getSettings();
       originalRetentionDays = settings.cleanup.retention_days;
       showToast(t('settings.saved'), 'success');
@@ -297,6 +325,89 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                 <span class="text-sm th-text-secondary">{webdavReadWrite ? t('settings.webdavReadWriteOn') : t('settings.webdavReadWriteOff')}</span>
               </div>
               <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Merge Strategy -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">合并策略</h3>
+          <p class="text-sm th-text-tertiary mb-8">配置录制段的自动合并策略，减少碎片文件数量</p>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Enable Merge -->
+            <div>
+              <label class="input-label">启用合并</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {mergeEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { mergeEnabled = !mergeEnabled; }}
+                  role="switch"
+                  aria-checked={mergeEnabled}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {mergeEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{mergeEnabled ? '已启用' : '已禁用'}</span>
+              </div>
+            </div>
+
+            <!-- Check Interval -->
+            <div>
+              <label for="mergeInterval" class="input-label">检查间隔</label>
+              <select id="mergeInterval" class="input" bind:value={mergeCheckInterval}>
+                <option value="30m">30 分钟</option>
+                <option value="1h">1 小时</option>
+                <option value="2h">2 小时</option>
+                <option value="6h">6 小时</option>
+              </select>
+            </div>
+
+            <!-- Window Size -->
+            <div>
+              <label for="mergeWindow" class="input-label">合并窗口</label>
+              <select id="mergeWindow" class="input" bind:value={mergeWindowSize}>
+                <option value="30m">30 分钟</option>
+                <option value="1h">1 小时</option>
+                <option value="2h">2 小时</option>
+              </select>
+            </div>
+
+            <!-- Min Segments -->
+            <div>
+              <label for="mergeMinSegs" class="input-label">最小段数</label>
+              <input
+                id="mergeMinSegs"
+                type="number"
+                class="input"
+                bind:value={mergeMinSegments}
+                min="2"
+                max="50"
+              />
+            </div>
+
+            <!-- Min Segment Age -->
+            <div>
+              <label for="mergeMinAge" class="input-label">最小段年龄</label>
+              <select id="mergeMinAge" class="input" bind:value={mergeMinSegmentAge}>
+                <option value="5m">5 分钟</option>
+                <option value="10m">10 分钟</option>
+                <option value="30m">30 分钟</option>
+                <option value="1h">1 小时</option>
+              </select>
+            </div>
+
+            <!-- Batch Limit -->
+            <div>
+              <label for="mergeBatch" class="input-label">批量限制</label>
+              <input
+                id="mergeBatch"
+                type="number"
+                class="input"
+                bind:value={mergeBatchLimit}
+                min="10"
+                max="1000"
+              />
             </div>
           </div>
         </div>
