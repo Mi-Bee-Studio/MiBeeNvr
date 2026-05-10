@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, MergeConfig } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -65,6 +65,11 @@
   let discoveredDevices = $state<DiscoveredDevice[]>([]);
   let addingDeviceId = $state<string | null>(null);
 
+  // Merge config (per-camera)
+  let mergeConfig = $state<MergeConfig | null>(null);
+  let mergeConfigLoading = $state(false);
+
+
   function showFeedback(msg: string, type: 'success' | 'error') {
     showToast(msg, type);
   }
@@ -96,7 +101,6 @@
     formUsername = '';
     formPassword = '';
     showPassword = false;
-    formPassword = '';
     formEnabled = true;
     formDescription = '';
     formLocation = '';
@@ -105,6 +109,8 @@
     formSerialNumber = '';
     formRetentionDays = 0;
     validationErrors = {};
+    mergeConfig = null;
+    mergeConfigLoading = false;
   }
 
   function openAddForm() {
@@ -112,15 +118,14 @@
     showForm = true;
   }
 
-  function openEditForm(camera: Camera) {
+  async function openEditForm(camera: Camera) {
     editingCamera = camera;
     formName = camera.name;
     formProtocol = camera.protocol;
     formUrl = camera.url;
-    formUsername = '';
+    formUsername = camera.username || '';
     formPassword = '';
     showPassword = false;
-    formPassword = '';
     formEnabled = camera.enabled;
     formDescription = camera.description || '';
     formLocation = camera.location || '';
@@ -130,6 +135,17 @@
     formRetentionDays = camera.retention_days || 0;
     validationErrors = {};
     showForm = true;
+
+    // Load per-camera merge config
+    mergeConfig = null;
+    mergeConfigLoading = true;
+    try {
+      mergeConfig = await getMergeConfig(camera.id);
+    } catch {
+      mergeConfig = null;
+    } finally {
+      mergeConfigLoading = false;
+    }
   }
 
   async function loadCameras() {
@@ -162,9 +178,25 @@
           serial_number: formSerialNumber || undefined,
           retention_days: formRetentionDays,
         };
-        if (formUsername) data.username = formUsername;
+        // Only send username if changed from original
+        if (formUsername && formUsername !== editingCamera.username) {
+          data.username = formUsername;
+        }
+        // Only send password if user typed a new one
+        if (formPassword) {
+          if (!data.username && formUsername === editingCamera.username) {
+            data.username = formUsername;
+          }
+          data.password = formPassword;
+        }
         await updateCamera(editingCamera.id, data);
-        showFeedback(t('cameras.cameraUpdated'), 'success');
+
+        // Save per-camera merge config if editing
+        if (mergeConfig) {
+          try {
+            await updateMergeConfig(editingCamera.id, mergeConfig);
+          } catch { /* ignore merge config save errors */ }
+        }
       } else {
         const data: CreateCameraRequest = {
           name: formName,
@@ -426,7 +458,7 @@
               <!-- Username -->
               <div>
                 <label for="cam-user" class="input-label">{t('cameras.username')}</label>
-                <input id="cam-user" type="text" class="input" bind:value={formUsername} />
+                <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || '未设置') : ''} />
               </div>
 
               <!-- Password -->
@@ -438,6 +470,7 @@
                     type={showPassword ? 'text' : 'password'}
                     class="input pr-10"
                     bind:value={formPassword}
+                    placeholder={editingCamera ? (editingCamera.has_password ? '已设置' : '未设置') : ''}
                   />
                   <button
                     type="button"
@@ -497,6 +530,158 @@
                 <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint') || '0 = 使用全局设置'}</p>
               </div>
             </div>
+
+            <!-- Merge Config (edit mode only) -->
+            {#if editingCamera}
+              <details class="mt-6 border th-border rounded-lg"
+                open={mergeConfig ? true : undefined}
+              >
+                <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+                  合并策略
+                  {#if mergeConfig}
+                    <span class="text-xs th-text-muted ml-2">(已自定义)</span>
+                  {:else}
+                    <span class="text-xs th-text-muted ml-2">(使用全局默认)</span>
+                  {/if}
+                </summary>
+
+                <div class="px-4 pb-4 pt-2">
+                  {#if mergeConfigLoading}
+                    <div class="flex items-center gap-2 py-4 th-text-muted">
+                      <span class="spinner"></span>
+                      <span class="text-sm">加载中...</span>
+                    </div>
+                  {:else}
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <!-- Enabled -->
+                      <div class="flex items-center gap-2">
+                        <input
+                          id="merge-enabled"
+                          type="checkbox"
+                          class="accent-[var(--color-accent)]"
+                          checked={mergeConfig?.enabled !== false}
+                          on:change={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.enabled = (e.target as HTMLInputElement).checked;
+                          }}
+                        />
+                        <label for="merge-enabled" class="th-text-secondary text-sm">启用合并</label>
+                      </div>
+
+                      <!-- Check Interval -->
+                      <div>
+                        <label for="merge-check-interval" class="input-label">检查间隔</label>
+                        <select
+                          id="merge-check-interval"
+                          class="input"
+                          value={mergeConfig?.check_interval || '1h'}
+                          on:change={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.check_interval = (e.target as HTMLSelectElement).value;
+                          }}
+                        >
+                          <option value="30m">30 分钟</option>
+                          <option value="1h">1 小时</option>
+                          <option value="2h">2 小时</option>
+                          <option value="6h">6 小时</option>
+                        </select>
+                      </div>
+
+                      <!-- Window Size -->
+                      <div>
+                        <label for="merge-window" class="input-label">合并窗口</label>
+                        <select
+                          id="merge-window"
+                          class="input"
+                          value={mergeConfig?.window_size || '30m'}
+                          on:change={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.window_size = (e.target as HTMLSelectElement).value;
+                          }}
+                        >
+                          <option value="30m">30 分钟</option>
+                          <option value="1h">1 小时</option>
+                          <option value="2h">2 小时</option>
+                        </select>
+                      </div>
+
+                      <!-- Batch Limit -->
+                      <div>
+                        <label for="merge-batch" class="input-label">批处理上限</label>
+                        <input
+                          id="merge-batch"
+                          type="number"
+                          class="input"
+                          min="10"
+                          max="1000"
+                          value={mergeConfig?.batch_limit || 100}
+                          on:input={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.batch_limit = Number((e.target as HTMLInputElement).value);
+                          }}
+                        />
+                      </div>
+
+                      <!-- Min Segment Age -->
+                      <div>
+                        <label for="merge-age" class="input-label">最小片段年龄</label>
+                        <select
+                          id="merge-age"
+                          class="input"
+                          value={mergeConfig?.min_segment_age || '5m'}
+                          on:change={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.min_segment_age = (e.target as HTMLSelectElement).value;
+                          }}
+                        >
+                          <option value="5m">5 分钟</option>
+                          <option value="10m">10 分钟</option>
+                          <option value="30m">30 分钟</option>
+                          <option value="1h">1 小时</option>
+                        </select>
+                      </div>
+
+                      <!-- Min Segments to Merge -->
+                      <div>
+                        <label for="merge-min-segments" class="input-label">最小合并数</label>
+                        <input
+                          id="merge-min-segments"
+                          type="number"
+                          class="input"
+                          min="2"
+                          max="50"
+                          value={mergeConfig?.min_segments_to_merge || 3}
+                          on:input={(e) => {
+                            if (!mergeConfig) mergeConfig = {};
+                            mergeConfig.min_segments_to_merge = Number((e.target as HTMLInputElement).value);
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <!-- Clear override button -->
+                    <div class="mt-4 flex justify-end">
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-sm"
+                        on:click={async () => {
+                          if (!editingCamera) return;
+                          try {
+                            await deleteCameraMergeConfig(editingCamera.id);
+                            mergeConfig = null;
+                            showToast('已恢复全局默认设置', 'success');
+                          } catch {
+                            showToast('操作失败', 'error');
+                          }
+                        }}
+                      >
+                        使用全局默认
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              </details>
+            {/if}
 
             <div class="flex items-center gap-3 mt-6">
               <button on:click={handleSubmit} class="btn btn-primary" disabled={saving}>
@@ -584,8 +769,8 @@
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.description || '-'}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <span class="badge {formatTimeAgo(camera.last_seen).color}">{formatTimeAgo(camera.last_seen).text}</span>
-                        {#if camera.recorder_status}
-                          <div class="text-xs th-text-muted mt-0.5">{camera.recorder_status}</div>
+                        {#if camera.status}
+                          <div class="text-xs th-text-muted mt-0.5">{camera.status}</div>
                         {/if}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
