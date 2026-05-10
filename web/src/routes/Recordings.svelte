@@ -4,9 +4,7 @@ import { onMount, onDestroy } from 'svelte';
     listRecordings,
     listCameras,
     deleteRecording,
-    batchDeleteRecordings,
-    pinRecording,
-    unpinRecording
+    batchDeleteRecordings
   } from '$lib/api';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
@@ -15,7 +13,7 @@ import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Pin, MapPin, Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye } from 'lucide-svelte';
+  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, GitMerge } from 'lucide-svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -28,7 +26,7 @@ import { onMount, onDestroy } from 'svelte';
   let cameraId = $state('');
   let format = $state('');
   let searchQuery = $state('');
-  let pinnedFilter = $state('');
+  let mergedFilter = $state('');
   const pad = (n) => String(n).padStart(2, '0');
   const toLocalDT = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   let startDate = $state(toLocalDT(new Date(Date.now() - 3600000)));
@@ -113,7 +111,7 @@ import { onMount, onDestroy } from 'svelte';
         camera_id: cameraId || undefined,
         format: format || undefined,
         search: searchQuery || undefined,
-        pinned: pinnedFilter === 'true' ? true : pinnedFilter === 'false' ? false : undefined,
+        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
         start: startDate ? new Date(startDate).toISOString() : undefined,
         end: endDate ? new Date(endDate).toISOString() : undefined,
         offset,
@@ -143,19 +141,6 @@ import { onMount, onDestroy } from 'svelte';
   }
 
   // Actions
-  async function togglePin(recording: Recording) {
-    try {
-      if (recording.pinned) {
-        await unpinRecording(recording.id);
-        recording.pinned = false;
-      } else {
-        await pinRecording(recording.id);
-        recording.pinned = true;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : t('common.failedUpdatePin');
-    }
-  }
 
   async function confirmDelete() {
     if (!deleteConfirm) return;
@@ -175,7 +160,7 @@ import { onMount, onDestroy } from 'svelte';
     searchQuery = '';
     cameraId = '';
     format = '';
-    pinnedFilter = '';
+    mergedFilter = '';
     startDate = toLocalDT(new Date(Date.now() - 3600000));
     endDate = toLocalDT(new Date());
     offset = 0;
@@ -208,9 +193,9 @@ import { onMount, onDestroy } from 'svelte';
   });
 
   // When filters change, track previous values to detect changes
-  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${pinnedFilter}`;
+  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}`;
   $effect(() => {
-    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${pinnedFilter}`;
+    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}`;
     if (current !== prevFilters) {
       prevFilters = current;
       offset = 0;
@@ -220,7 +205,7 @@ import { onMount, onDestroy } from 'svelte';
   // Watch all filter + pagination changes — debounce to avoid double-fire with onMount
   let loadTimeout: number;
   $effect(() => {
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, pinnedFilter];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
@@ -288,11 +273,11 @@ import { onMount, onDestroy } from 'svelte';
             </select>
           </div>
           <div class="flex-1 min-w-[120px]">
-            <label for="pinned" class="input-label">{t('recordings.allStatus')}</label>
-            <select id="pinned" class="input" bind:value={pinnedFilter}>
-              <option value="">{t('recordings.allStatus')}</option>
-              <option value="true">{t('recordings.pinnedOnly')}</option>
-              <option value="false">{t('recordings.unpinnedOnly')}</option>
+            <label for="merged" class="input-label">全部</label>
+            <select id="merged" class="input" bind:value={mergedFilter}>
+              <option value="">全部</option>
+              <option value="true">已合并</option>
+              <option value="false">未合并</option>
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">
@@ -459,8 +444,10 @@ import { onMount, onDestroy } from 'svelte';
                   <td>{formatFileSize(recording.file_size)}</td>
                   <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
                   <td class="hidden sm:table-cell">
-                    {#if recording.pinned}
-                      <span class="badge badge-warning">{t('recordings.pinnedBadge')}</span>
+                    {#if recording.merged}
+                      <span class="badge badge-success">已合并</span>
+                    {:else}
+                      <span class="badge badge-neutral">原始段</span>
                     {/if}
                   </td>
                   <td class="text-right">
@@ -472,17 +459,6 @@ import { onMount, onDestroy } from 'svelte';
                       >
                         <span class="hidden sm:inline">{t('recordings.view')}</span>
                         <Eye size={16} class="sm:hidden" />
-                      </button>
-                      <button
-                        onclick={() => togglePin(recording)}
-                        class="btn btn-ghost px-2 py-1.5 text-sm transition-all duration-200"
-                        title={recording.pinned ? t('recordings.unpin') : t('recordings.pin')}
-                      >
-                        {#if recording.pinned}
-                          <Pin size={16} />
-                        {:else}
-                          <MapPin size={16} />
-                        {/if}
                       </button>
                       <button
                         onclick={() => deleteConfirm = recording}

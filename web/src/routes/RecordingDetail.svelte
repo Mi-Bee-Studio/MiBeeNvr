@@ -3,8 +3,6 @@
 import {
   getRecording,
   deleteRecording,
-  pinRecording,
-  unpinRecording,
   downloadRecording as apiDownloadRecording,
   listFrames,
   loadFrameBlob,
@@ -366,21 +364,6 @@ import {
   }
 
   // Actions
-  async function togglePin() {
-    if (!recording) return;
-
-    try {
-      if (recording.pinned) {
-        await unpinRecording(recording.id);
-        recording.pinned = false;
-      } else {
-        await pinRecording(recording.id);
-        recording.pinned = true;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : t('common.failedUpdatePin');
-    }
-  }
 
   async function confirmDelete() {
     if (!recording) return;
@@ -695,8 +678,10 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
               </p>
             </div>
             <div class="flex gap-2">
-              {#if recording.pinned}
-                <span class="badge badge-warning">{t('detail.pinnedBadge')}</span>
+              {#if recording.merged}
+                <span class="badge badge-success">已合并</span>
+              {:else}
+                <span class="badge badge-neutral">原始段</span>
               {/if}
               <span class="badge badge-neutral">
                 {(recording.format === 'h264' || recording.format === 'h265') ? 'MP4' : 'JPEG'}
@@ -743,12 +728,6 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
                   {t('detail.download')}
                 </button>
               {/if}
-              <button
-                onclick={togglePin}
-                class="btn btn-secondary"
-              >
-                {recording.pinned ? t('detail.unpin') : t('detail.pin')}
-              </button>
             </div>
             <div class="flex gap-3 ml-auto">
               <button
