@@ -152,7 +152,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 		Duration:   0,
 		FileSize:   info.Size(),
 		FrameCount: 1,
-		Pinned:     false,
+		Merged:     false,
 	}
 
 	if err := s.db.InsertRecording(ctx, recording); err != nil {

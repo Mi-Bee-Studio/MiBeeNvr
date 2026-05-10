@@ -46,7 +46,7 @@ func (e *testEnv) close(t *testing.T) {
 }
 
 // insertTestRecording inserts a recording with full control over fields.
-func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, filePath string, endedAt time.Time, pinned bool) {
+func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, filePath string, endedAt time.Time, merged bool) {
 	t.Helper()
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), filePath)
@@ -59,7 +59,7 @@ func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, 
 		EndedAt:   endedAt,
 		Duration:  3600.0,
 		FileSize:  1024,
-		Pinned:    pinned,
+		Merged:    merged,
 	}
 	err := e.db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func (e *testEnv) insertRecordingWithNullEnded(t *testing.T, id string) {
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), "still_recording.mp4")
 	_, err := e.db.DB().ExecContext(ctx,
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
+	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
 		id, "cam1", fullPath, model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	require.NoError(t, err)
@@ -117,14 +117,14 @@ func TestRunOnce_TimeBasedCleanup(t *testing.T) {
 
 	now := time.Now()
 
-	// Old + unpinned → should be deleted
-	env.insertTestRecording(t, "old-unpinned", "cam1", "/old_unpinned.mp4", now.Add(-48*time.Hour), false)
+	// Old recording → should be deleted
+	env.insertTestRecording(t, "old-rec", "cam1", "/old_rec.mp4", now.Add(-48*time.Hour), false)
 
-	// Old + pinned → should be KEPT
-	env.insertTestRecording(t, "old-pinned", "cam1", "/old_pinned.mp4", now.Add(-48*time.Hour), true)
+	// Old merged recording → should ALSO be deleted (merged does NOT protect)
+	env.insertTestRecording(t, "old-merged", "cam1", "/old_merged.mp4", now.Add(-48*time.Hour), true)
 
-	// Recent + unpinned → should be KEPT
-	env.insertTestRecording(t, "recent-unpinned", "cam1", "/recent_unpinned.mp4", now.Add(-1*time.Hour), false)
+	// Recent recording → should be KEPT
+	env.insertTestRecording(t, "recent-rec", "cam1", "/recent_rec.mp4", now.Add(-1*time.Hour), false)
 
 	// Still recording (ended_at IS NULL) → should be KEPT
 	env.insertRecordingWithNullEnded(t, "still-recording")
@@ -132,18 +132,18 @@ func TestRunOnce_TimeBasedCleanup(t *testing.T) {
 	err = cm.RunOnce(context.Background())
 	require.NoError(t, err)
 
-	// Verify: old-unpinned deleted
-	got, err := env.db.GetRecording(context.Background(), "old-unpinned")
+	// Verify: old-rec deleted
+	got, err := env.db.GetRecording(context.Background(), "old-rec")
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	// Verify: old-pinned kept
-	got, err = env.db.GetRecording(context.Background(), "old-pinned")
+	// Verify: old-merged also deleted (merged doesn't protect)
+	got, err = env.db.GetRecording(context.Background(), "old-merged")
 	require.NoError(t, err)
-	require.NotNil(t, got)
+	require.Nil(t, got)
 
-	// Verify: recent-unpinned kept
-	got, err = env.db.GetRecording(context.Background(), "recent-unpinned")
+	// Verify: recent-rec kept
+	got, err = env.db.GetRecording(context.Background(), "recent-rec")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -152,13 +152,13 @@ func TestRunOnce_TimeBasedCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
-	// Verify: file deleted for old-unpinned
-	_, err = os.Stat(filepath.Join(env.store.RootDir(), "/old_unpinned.mp4"))
+	// Verify: file deleted for old-rec
+	_, err = os.Stat(filepath.Join(env.store.RootDir(), "/old_rec.mp4"))
 	require.True(t, os.IsNotExist(err))
 
-	// Verify: file still exists for old-pinned
-	_, err = os.Stat(filepath.Join(env.store.RootDir(), "/old_pinned.mp4"))
-	require.NoError(t, err)
+	// Verify: file also deleted for old-merged
+	_, err = os.Stat(filepath.Join(env.store.RootDir(), "/old_merged.mp4"))
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestRunOnce_WithRetentionDays(t *testing.T) {
@@ -172,10 +172,10 @@ func TestRunOnce_WithRetentionDays(t *testing.T) {
 
 	now := time.Now()
 
-	// 10 days old, unpinned → expired (> 7 days)
+	// 10 days old → expired (> 7 days)
 	env.insertTestRecording(t, "expired-10d", "cam1", "/expired_10d.mp4", now.Add(-10*24*time.Hour), false)
 
-	// 5 days old, unpinned → within retention
+	// 5 days old → within retention
 	env.insertTestRecording(t, "within-5d", "cam1", "/within_5d.mp4", now.Add(-5*24*time.Hour), false)
 
 	err = cm.RunOnce(context.Background())
@@ -236,24 +236,23 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 	env.insertTestRecording(t, "disk-oldest", "cam1", "/disk_oldest.mp4", now.Add(-100*time.Hour), false)
 	env.insertTestRecording(t, "disk-middle", "cam1", "/disk_middle.mp4", now.Add(-50*time.Hour), false)
 	env.insertTestRecording(t, "disk-newest", "cam1", "/disk_newest.mp4", now.Add(-1*time.Hour), false)
-	env.insertTestRecording(t, "disk-pinned", "cam1", "/disk_pinned.mp4", now.Add(-200*time.Hour), true) // pinned, should be kept
+	env.insertTestRecording(t, "disk-merged", "cam1", "/disk_merged.mp4", now.Add(-200*time.Hour), true) // merged, NOT protected
 
 	err = cm.RunOnce(context.Background())
 	require.NoError(t, err)
 
-	// Pinned should be kept
-	got, err := env.db.GetRecording(context.Background(), "disk-pinned")
+	// Merged recording is NOT protected from disk cleanup anymore
+	got, err := env.db.GetRecording(context.Background(), "disk-merged")
 	require.NoError(t, err)
-	require.NotNil(t, got)
+	require.Nil(t, got, "merged recording should be deletable by disk cleanup")
 
-	// Since threshold is 0%, disk cleanup should delete oldest unpinned recordings
+	// Since threshold is 0%, disk cleanup should delete oldest recordings
 	// At least the oldest one should be gone (disk usage check will stop when below threshold,
-	// but with 0% it will keep trying until all unpinned are gone or it can't go lower)
-	// On most systems, deleting one file won't bring usage to 0%, so expect multiple deletions.
+	// but with 0% it will keep trying until all are gone or it can't go lower)
 	// We verify the ordering: disk-oldest should be gone, disk-newest might survive.
 	got, err = env.db.GetRecording(context.Background(), "disk-oldest")
 	require.NoError(t, err)
-	require.Nil(t, got, "oldest unpinned should be deleted by disk cleanup")
+	require.Nil(t, got, "oldest recording should be deleted by disk cleanup")
 }
 
 func TestRunOnce_NoExpiredRecordings(t *testing.T) {
@@ -316,7 +315,7 @@ func TestRunOnce_FileMissingFromDisk(t *testing.T) {
 		EndedAt:   now.Add(-47 * time.Hour),
 		Duration:  3600.0,
 		FileSize:  1024,
-		Pinned:    false,
+		Merged:    false,
 	}
 	require.NoError(t, env.db.InsertRecording(ctx, rec))
 

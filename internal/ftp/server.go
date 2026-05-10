@@ -393,7 +393,7 @@ func (u *uploadFileTransfer) Close() error {
 		EndedAt:   endedAt,
 		Duration:  endedAt.Sub(u.startedAt).Seconds(),
 		FileSize:  u.size,
-		Pinned:    false,
+		Merged:    false,
 	}
 
 	if u.server.db != nil {
