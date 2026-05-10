@@ -20,8 +20,6 @@ type StorageProvider interface {
 	ListRecordings(filter RecordingFilter) ([]Recording, error)
 	GetRecording(id string) (*Recording, error)
 	DeleteRecording(id string) error
-	PinRecording(id string) error
-	UnpinRecording(id string) error
 	GetStats() (StorageStats, error)
 }
 
@@ -48,7 +46,7 @@ type Recording struct {
 	Duration   float64   `json:"duration"`
 	FileSize   int64     `json:"file_size"`
 	FrameCount int       `json:"frame_count"`
-	Pinned     bool      `json:"pinned"`
+	Merged     bool      `json:"merged"`
 }
 
 type Segment struct {
@@ -71,7 +69,7 @@ type RecordingFilter struct {
 	StartTime time.Time
 	EndTime   time.Time
 	Format    Format
-	Pinned    *bool // nil = all, true = pinned only, false = unpinned only
+	Merged    *bool // nil = all, true = merged only, false = unmerged only
 	Search    string
 	Limit     int
 	Offset    int

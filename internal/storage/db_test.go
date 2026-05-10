@@ -56,7 +56,7 @@ func TestInsertAndGetRecording(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Pinned:     false,
+		Merged:     false,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -99,8 +99,8 @@ func TestListRecordingsWithFilter(t *testing.T) {
 	require.Len(t, list, 1)
 	require.Equal(t, "r1", list[0].ID)
 
-	pinned := true
-	list2, err := db.ListRecordings(ctx, model.RecordingFilter{Pinned: &pinned})
+	merged := true
+	list2, err := db.ListRecordings(ctx, model.RecordingFilter{Merged: &merged})
 	require.NoError(t, err)
 	require.Len(t, list2, 0)
 }
@@ -123,29 +123,29 @@ func TestDeleteRecording(t *testing.T) {
 	require.Nil(t, got)
 }
 
-func TestSetPinned(t *testing.T) {
+func TestSetMerged(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test7.db")
 	db, _ := New(dbPath)
 	ctx := context.Background()
 	_ = db.Init(ctx)
 
-	rec := &model.Recording{ID: "pin-1", CameraID: "camP", FilePath: "/p.mp4", Format: model.FormatH264, StartedAt: time.Now()}
+	rec := &model.Recording{ID: "merge-1", CameraID: "camM", FilePath: "/m.mp4", Format: model.FormatH264, StartedAt: time.Now()}
 	_ = db.InsertRecording(ctx, rec)
 
-	err := db.SetPinned(ctx, rec.ID, true)
+	err := db.SetMerged(ctx, rec.ID, true)
 	require.NoError(t, err)
 
 	got, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.True(t, got.Pinned)
+	require.True(t, got.Merged)
 
-	err = db.SetPinned(ctx, rec.ID, false)
+	err = db.SetMerged(ctx, rec.ID, false)
 	require.NoError(t, err)
 	got2, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
-	require.False(t, got2.Pinned)
+	require.False(t, got2.Merged)
 }
 
 func TestCleanupIncomplete(t *testing.T) {
@@ -157,7 +157,7 @@ func TestCleanupIncomplete(t *testing.T) {
 
 	// Insert directly with NULL ended_at to test cleanup (InsertRecording serializes zero time as 0001-01-01, not NULL)
 	_, err := db.db.ExecContext(ctx,
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
 		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	err = db.CleanupIncomplete(ctx)
@@ -230,6 +230,8 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "rtsp://localhost:554/stream", cameras[0].URL)
 
 	require.True(t, cameras[0].Enabled)
+	require.Equal(t, "user", cameras[0].Username)
+	require.True(t, cameras[0].HasPassword)
 
 
 
@@ -258,6 +260,8 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "rtsp://localhost:555/stream", cameras2[0].URL)
 
 	require.False(t, cameras2[0].Enabled)
+	require.Equal(t, "newuser", cameras2[0].Username)
+	require.True(t, cameras2[0].HasPassword)
 
 
 
@@ -286,6 +290,8 @@ func TestGetCamera(t *testing.T) {
 	require.Equal(t, "rtsp_h264", cam.Protocol)
 	require.Equal(t, "rtsp://localhost:554/stream", cam.URL)
 	require.True(t, cam.Enabled)
+	require.Equal(t, "user", cam.Username)
+	require.True(t, cam.HasPassword)
 }
 
 func TestGetCamera_NotFound(t *testing.T) {
@@ -299,6 +305,67 @@ func TestGetCamera_NotFound(t *testing.T) {
 	cam, err := db.GetCamera(ctx, "nonexistent")
 	require.NoError(t, err)
 	require.Nil(t, cam)
+}
+
+func TestListCameras_CredentialMetadata(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_cred_meta.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Camera with username and password
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "With Creds", "rtsp_h264", "rtsp://host/stream", "admin", "secret", true))
+	// Camera with username only (no password)
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Password", "rtsp_h264", "rtsp://host/stream2", "viewer", "", true))
+	// Camera with no credentials
+	require.NoError(t, db.UpsertCamera(ctx, "cam3", "No Creds", "rtsp_h264", "rtsp://host/stream3", "", "", true))
+
+	cameras, err := db.ListCameras(ctx)
+	require.NoError(t, err)
+	require.Len(t, cameras, 3)
+
+	// cam1: has both username and password
+	require.Equal(t, "admin", cameras[0].Username)
+	require.True(t, cameras[0].HasPassword)
+
+	// cam2: has username but no password
+	require.Equal(t, "viewer", cameras[1].Username)
+	require.False(t, cameras[1].HasPassword)
+
+	// cam3: no credentials
+	require.Equal(t, "", cameras[2].Username)
+	require.False(t, cameras[2].HasPassword)
+}
+
+func TestGetCamera_CredentialMetadata(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_get_cred.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Camera with credentials
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cred Cam", "rtsp_h264", "rtsp://host/stream", "user1", "pass1", true))
+
+	cam, err := db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.NotNil(t, cam)
+	require.Equal(t, "user1", cam.Username)
+	require.True(t, cam.HasPassword)
+
+	// Camera without password
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Pass", "rtsp_h264", "rtsp://host/stream2", "", "", true))
+
+	cam2, err := db.GetCamera(ctx, "cam2")
+	require.NoError(t, err)
+	require.NotNil(t, cam2)
+	require.Equal(t, "", cam2.Username)
+	require.False(t, cam2.HasPassword)
 }
 
 func TestTimestampRoundTrip(t *testing.T) {
@@ -321,7 +388,7 @@ func TestTimestampRoundTrip(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Pinned:     false,
+		Merged:     false,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -435,26 +502,24 @@ func TestListExpiredRecordings(t *testing.T) {
 	}
 	require.NoError(t, db.InsertRecording(ctx, recentRec))
 
-	// 3. Pinned old recording — should NOT be found even if old
-	pinnedRec := &model.Recording{
-		ID:        "exp-pinned",
+	// 3. Old recording (no special protection now — merged doesn't protect from cleanup)
+	oldRec2 := &model.Recording{
+		ID:        "exp-old2",
 		CameraID:  "cam1",
-		FilePath:  "/pinned.mp4",
+		FilePath:  "/old2.mp4",
 		Format:    model.FormatH264,
 		StartedAt: oldEnded.Add(-time.Hour),
 		EndedAt:   oldEnded,
-		Pinned:    true,
+		Merged:    true,
 	}
-	require.NoError(t, db.InsertRecording(ctx, pinnedRec))
+	require.NoError(t, db.InsertRecording(ctx, oldRec2))
 
 	// Query with 30-day retention
 	expired, err := db.ListExpiredRecordings(ctx, 30)
 	require.NoError(t, err)
 
-	// Only the old unpinned recording should be found
-	require.Len(t, expired, 1)
-	require.Equal(t, "exp-old", expired[0].ID)
-
+	// Both old recordings should be found (merged does NOT protect from cleanup)
+	require.Len(t, expired, 2)
 }
 func TestParseTimeLegacyFormat(t *testing.T) {
 	// Verify parseTime handles the old time.Time.String() format with monotonic clock
@@ -605,4 +670,132 @@ func TestListRecordings_SearchLikeWildcardEscape(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "r1", list[0].ID)
+}
+
+func TestUpsertCameraMerge_RoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_config.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Insert a camera first
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Merge Cam", "rtsp_h264", "rtsp://host/stream", "", "", true))
+
+	// Set per-camera merge config
+	mergeEnabled := true
+	checkInterval := "30m"
+	windowSize := "2h"
+	batchLimit := 50
+	minSegmentAge := "5m"
+	minSegments := 5
+	err := db.UpsertCameraMerge(ctx, "cam1",
+		&mergeEnabled, &checkInterval, &windowSize, &minSegmentAge, &batchLimit, &minSegments)
+	require.NoError(t, err)
+
+	// Read back and verify
+	cam, err := db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.NotNil(t, cam)
+	require.NotNil(t, cam.MergeEnabled)
+	require.True(t, *cam.MergeEnabled)
+	require.NotNil(t, cam.MergeCheckInterval)
+	require.Equal(t, "30m", *cam.MergeCheckInterval)
+	require.NotNil(t, cam.MergeWindowSize)
+	require.Equal(t, "2h", *cam.MergeWindowSize)
+	require.NotNil(t, cam.MergeBatchLimit)
+	require.Equal(t, 50, *cam.MergeBatchLimit)
+	require.NotNil(t, cam.MergeMinSegmentAge)
+	require.Equal(t, "5m", *cam.MergeMinSegmentAge)
+	require.NotNil(t, cam.MergeMinSegmentsToMerge)
+	require.Equal(t, 5, *cam.MergeMinSegmentsToMerge)
+}
+
+func TestUpsertCameraMerge_NilKeepsExisting(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_nil.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Nil Cam", "rtsp_h264", "rtsp://host/stream", "", "", true))
+
+	// Set merge config
+	mergeEnabled := false
+	checkInterval := "15m"
+	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, &checkInterval, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	// Update with all nil — should keep existing values
+	err = db.UpsertCameraMerge(ctx, "cam1", nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	cam, err := db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.NotNil(t, cam)
+	require.NotNil(t, cam.MergeEnabled)
+	require.False(t, *cam.MergeEnabled)
+	require.NotNil(t, cam.MergeCheckInterval)
+	require.Equal(t, "15m", *cam.MergeCheckInterval)
+	// Fields not set remain nil
+	require.Nil(t, cam.MergeWindowSize)
+	require.Nil(t, cam.MergeBatchLimit)
+}
+
+func TestListCameras_WithMergeConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_list_merge.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Camera with no merge config
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "No Merge", "rtsp_h264", "rtsp://host/stream", "", "", true))
+	// Camera with merge config
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp_h264", "rtsp://host/stream2", "", "", true))
+	mergeEnabled := true
+	batchLimit := 100
+	require.NoError(t, db.UpsertCameraMerge(ctx, "cam2", &mergeEnabled, nil, nil, nil, &batchLimit, nil))
+
+	cameras, err := db.ListCameras(ctx)
+	require.NoError(t, err)
+	require.Len(t, cameras, 2)
+
+	// cam1: all merge fields nil
+	require.Nil(t, cameras[0].MergeEnabled)
+	require.Nil(t, cameras[0].MergeBatchLimit)
+
+	// cam2: merge fields set
+	require.NotNil(t, cameras[1].MergeEnabled)
+	require.True(t, *cameras[1].MergeEnabled)
+	require.NotNil(t, cameras[1].MergeBatchLimit)
+	require.Equal(t, 100, *cameras[1].MergeBatchLimit)
+}
+
+func TestUpsertCameraMerge_AllFalseValues(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_false.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "False Cam", "rtsp_h264", "rtsp://host/stream", "", "", true))
+
+	// Set merge_enabled to false — must not be confused with nil
+	mergeEnabled := false
+	err := db.UpsertCameraMerge(ctx, "cam1", &mergeEnabled, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	cam, err := db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.NotNil(t, cam.MergeEnabled)
+	require.False(t, *cam.MergeEnabled)
 }
