@@ -5,7 +5,7 @@
 MiBee NVR is a lightweight Network Video Recorder (NVR) written in Go that records video feeds from IP cameras to MP4 segments on disk. It provides a simple web interface for viewing recordings, managing cameras, and accessing recorded footage through various protocols.
 
 **Key Features:**
-- Records RTSP (H.264 and MJPEG) and HTTP JPEG cameras to MP4 segments
+- Records RTSP (H.264, H.265 and MJPEG) and HTTP JPEG cameras to MP4 segments
 - Web UI for camera management and recording playback
 - WebDAV (read-only) access to recordings
 - FTP server access for recording downloads
@@ -17,7 +17,7 @@ MiBee NVR is a lightweight Network Video Recorder (NVR) written in Go that recor
 
 Before using MiBee NVR, ensure you have:
 
-- **Go 1.22+** for building from source
+- **Go 1.26+** for building from source
 - **Linux** (AMD64 or ARM64 architecture)
 - **Storage device** with sufficient disk space for recordings
 - **IP cameras** with RTSP or HTTP JPEG streaming capabilities
@@ -48,7 +48,7 @@ storage:
   segment_duration: "30s"
 auth:
   username: "admin"
-  password_hash: ""  # Generate hash using Go code
+  password_hash: ""  # Generate hash using `mibee-nvr hash-password <password>`
 cameras:
   - id: "front-door"
     name: "Front Door Camera"
@@ -71,7 +71,7 @@ After starting, the web interface will be available at `http://localhost:9090`.
 
 ## Adding Your First Camera
 
-MiBee NVR supports three camera protocols. Here are examples for each:
+MiBee NVR supports five camera protocols. Here are examples for each:
 
 ### RTSP H.264 Camera
 
@@ -92,6 +92,17 @@ cameras:
     name: "Back Yard"
     protocol: "rtsp_mjpeg"
     url: "rtsp://192.168.1.101:554/stream"
+    enabled: true
+```
+
+### RTSP H.265 Camera
+
+```yaml
+cameras:
+  - id: "cam4"
+    name: "H.265 Camera"
+    protocol: "rtsp_h265"
+    url: "rtsp://192.168.1.103:554/stream"
     enabled: true
 ```
 

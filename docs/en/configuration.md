@@ -88,9 +88,9 @@ webdav:
 - **Type**: string
 - **Required**: Yes (for web UI and FTP)
 - **Description**: bcrypt hashed password
-- **Important**: The `mibee-nvr hash-password` CLI command is NOT yet implemented
-- **Temporary Solution**: Use Go code to generate the hash
-- **Example**: `"hashed_password_here"`
+- **Description**: bcrypt hashed password. Use `mibee-nvr hash-password <password>` CLI command to generate.
+- **Note**: Alternatively, set `auth.password` with a plaintext password and the server will auto-generate the hash on startup.
+- **Example**: `$2a$10$N9qo8uLOickgx2ZMRZoMy...`
 
 ## Camera Configuration
 
