@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
@@ -46,6 +47,11 @@ func setupEnv(t *testing.T) (*storage.DB, *storage.Manager) {
 // newAPI creates a test API handler with no-op auth.
 func newAPI(db *storage.DB, store *storage.Manager) *api.Handler {
 	return api.TestHandler(db, store)
+}
+
+// newAPIWithConfig creates a test API handler with a config (for settings endpoints).
+func newAPIWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config, configPath string) *api.Handler {
+	return api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, cfg, nil, nil, configPath, nil)
 }
 
 // do is a convenience for making requests against the API handler.
@@ -82,7 +88,7 @@ func generateTestJPEG() []byte {
 }
 
 // seedRecording inserts a recording into the DB with a real file on disk.
-func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cameraID, format string, pinned bool) *model.Recording {
+func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cameraID, format string, merged bool) *model.Recording {
 	t.Helper()
 	data := []byte("test-data-" + id)
 	cameraDir := filepath.Join(store.RootDir(), cameraID)
@@ -100,7 +106,7 @@ func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cam
 		Duration:   300.0,
 		FileSize:   int64(len(data)),
 		FrameCount: 150,
-		Pinned:     pinned,
+		Merged:     merged,
 	}
 	require.NoError(t, db.InsertRecording(context.Background(), rec))
 	return rec
@@ -165,20 +171,12 @@ func TestFullFlow(t *testing.T) {
 	require.Equal(t, rec.ID, got.ID)
 	require.Equal(t, rec.CameraID, got.CameraID)
 
-	// 5. Pin recording
-	rr = do(t, h.Routes(), "POST", "/api/recordings/full-1/pin", nil)
+	// 5. List recordings
+	rr = do(t, h.Routes(), "GET", "/api/recordings", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
-	gotRec, err := db.GetRecording(context.Background(), "full-1")
-	require.NoError(t, err)
-	require.True(t, gotRec.Pinned)
-
-	// 6. Unpin recording
-	rr = do(t, h.Routes(), "POST", "/api/recordings/full-1/unpin", nil)
-	require.Equal(t, http.StatusOK, rr.Code)
-	gotRec, err = db.GetRecording(context.Background(), "full-1")
-	require.NoError(t, err)
-	require.False(t, gotRec.Pinned)
-
+	var listResp recordingsResponse
+	parseJSON(t, rr, &listResp)
+	require.Len(t, listResp.Recordings, 1)
 	// 7. Stats
 	rr = do(t, h.Routes(), "GET", "/api/stats", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -190,7 +188,7 @@ func TestFullFlow(t *testing.T) {
 	// 8. Delete recording
 	rr = do(t, h.Routes(), "DELETE", "/api/recordings/full-1", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
-	gotRec, err = db.GetRecording(context.Background(), "full-1")
+	gotRec, err := db.GetRecording(context.Background(), "full-1")
 	require.NoError(t, err)
 	require.Nil(t, gotRec)
 	_, err = os.Stat(rec.FilePath)
@@ -266,7 +264,7 @@ func TestCrashRecovery(t *testing.T) {
 	// Note: Go's zero time.Time marshals as "0001-01-01T00:00:00Z", not SQL NULL.
 	// We must use raw SQL to insert NULL ended_at to simulate a crash.
 	_, err = db.DB().Exec(
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
+	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
 		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, 0,
 	)
 	require.NoError(t, err)
@@ -587,4 +585,283 @@ func TestMJPEGSegmentRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	require.Equal(t, final, files[0])
+}
+
+// ============================================================================
+// Test 8: Recording Merged Field
+// ============================================================================
+
+func TestRecordingMergedField(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// Seed two recordings: one merged, one not
+	seedRecording(t, db, store, "rec-merged", "cam-m", "h264", true)
+	seedRecording(t, db, store, "rec-unmerged", "cam-m", "h264", false)
+
+	// List recordings and verify merged field
+	rr := do(t, h.Routes(), "GET", "/api/recordings", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp recordingsResponse
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp.Recordings, 2)
+
+	// Find each recording by ID
+	byID := map[string]model.Recording{}
+	for _, r := range resp.Recordings {
+		byID[r.ID] = r
+	}
+	require.Contains(t, byID, "rec-merged")
+	require.Contains(t, byID, "rec-unmerged")
+	require.True(t, byID["rec-merged"].Merged, "rec-merged should have merged=true")
+	require.False(t, byID["rec-unmerged"].Merged, "rec-unmerged should have merged=false")
+
+	// Filter by merged=true
+	rr = do(t, h.Routes(), "GET", "/api/recordings?merged=true", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var mergedResp recordingsResponse
+	parseJSON(t, rr, &mergedResp)
+	require.Len(t, mergedResp.Recordings, 1)
+	require.Equal(t, "rec-merged", mergedResp.Recordings[0].ID)
+
+	// Filter by merged=false
+	rr = do(t, h.Routes(), "GET", "/api/recordings?merged=false", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var unmergedResp recordingsResponse
+	parseJSON(t, rr, &unmergedResp)
+	require.Len(t, unmergedResp.Recordings, 1)
+	require.Equal(t, "rec-unmerged", unmergedResp.Recordings[0].ID)
+}
+
+// ============================================================================
+// Test 9: Camera Credential Display (username + has_password)
+// ============================================================================
+
+func TestCameraCredentialDisplay(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// Insert camera with credentials
+	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264",
+		"rtsp://192.168.1.1/stream", "admin", "secret123", true)
+	require.NoError(t, err)
+
+	// Insert camera without credentials
+	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg",
+		"http://192.168.1.2/stream", "", "", true)
+	require.NoError(t, err)
+
+	// List cameras
+	rr := do(t, h.Routes(), "GET", "/api/cameras", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var cameras []storage.CameraRow
+	parseJSON(t, rr, &cameras)
+	require.Len(t, cameras, 2)
+
+	byID := map[string]storage.CameraRow{}
+	for _, c := range cameras {
+		byID[c.ID] = c
+	}
+
+	// Camera with credentials
+	require.Equal(t, "admin", byID["cam-cred"].Username)
+	require.True(t, byID["cam-cred"].HasPassword)
+
+	// Camera without credentials
+	require.Equal(t, "", byID["cam-nocred"].Username)
+	require.False(t, byID["cam-nocred"].HasPassword)
+}
+
+// ============================================================================
+// Test 10: PTZ Protocol Rejection for Non-ONVIF Cameras
+// ============================================================================
+
+func TestPTZProtocolRejection(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// Insert a non-ONVIF camera
+	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264",
+		"rtsp://192.168.1.1/stream", "", "", true)
+	require.NoError(t, err)
+
+	// PTZ move should be rejected with 400 for non-ONVIF camera
+	ptzBody := `{"mode":"absolute","pan":0,"tilt":0,"zoom":0}`
+	rr := do(t, h.Routes(), "POST", "/api/cameras/cam-h264/ptz/move", strings.NewReader(ptzBody))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	var errResp map[string]string
+	parseJSON(t, rr, &errResp)
+	require.Contains(t, errResp["error"], "ONVIF")
+
+	// PTZ stop should also be rejected
+	rr = do(t, h.Routes(), "POST", "/api/cameras/cam-h264/ptz/stop", nil)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// PTZ status should also be rejected
+	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-h264/ptz/status", nil)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// ============================================================================
+// Test 11: Merge Status API (nil mergeMgr)
+// ============================================================================
+
+func TestMergeStatusNilManager(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store) // mergeMgr is nil
+
+	// GET /api/merge/status should return {"enabled": false}
+	rr := do(t, h.Routes(), "GET", "/api/merge/status", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var statusResp map[string]interface{}
+	parseJSON(t, rr, &statusResp)
+	require.Equal(t, false, statusResp["enabled"])
+
+	// GET /api/merge/pending should return {"enabled": false, "pending": {}}
+	rr = do(t, h.Routes(), "GET", "/api/merge/pending", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var pendingResp map[string]interface{}
+	parseJSON(t, rr, &pendingResp)
+	require.Equal(t, false, pendingResp["enabled"])
+	pending, ok := pendingResp["pending"].(map[string]interface{})
+	require.True(t, ok, "pending should be a map")
+	require.Empty(t, pending)
+}
+
+// ============================================================================
+// Test 12: Merge Settings API (GET + PUT)
+// ============================================================================
+
+func TestMergeSettingsAPI(t *testing.T) {
+	db, store := setupEnv(t)
+	configPath := filepath.Join(t.TempDir(), "test-config.yaml")
+	cfg := &config.Config{
+		Merge: config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "30m",
+			WindowSize:         "24h",
+			BatchLimit:         10,
+			MinSegmentAge:      "2h",
+			MinSegmentsToMerge: 3,
+		},
+	}
+	h := newAPIWithConfig(db, store, cfg, configPath)
+
+	// GET /api/settings/merge returns current config
+	rr := do(t, h.Routes(), "GET", "/api/settings/merge", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var mergeResp map[string]interface{}
+	parseJSON(t, rr, &mergeResp)
+	require.Equal(t, true, mergeResp["enabled"])
+	require.Equal(t, "30m", mergeResp["check_interval"])
+	require.Equal(t, "24h", mergeResp["window_size"])
+	require.Equal(t, float64(10), mergeResp["batch_limit"])
+	require.Equal(t, "2h", mergeResp["min_segment_age"])
+	require.Equal(t, float64(3), mergeResp["min_segments_to_merge"])
+
+	// PUT /api/settings/merge updates config
+	updateBody := `{"enabled":false,"check_interval":"1h","window_size":"48h","batch_limit":20,"min_segment_age":"6h","min_segments_to_merge":5}`
+	rr = do(t, h.Routes(), "PUT", "/api/settings/merge", strings.NewReader(updateBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var updateResp map[string]string
+	parseJSON(t, rr, &updateResp)
+	require.Equal(t, "updated", updateResp["status"])
+
+	// Verify the config was updated in memory
+	rr = do(t, h.Routes(), "GET", "/api/settings/merge", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var updatedResp map[string]interface{}
+	parseJSON(t, rr, &updatedResp)
+	require.Equal(t, false, updatedResp["enabled"])
+	require.Equal(t, "1h", updatedResp["check_interval"])
+	require.Equal(t, "48h", updatedResp["window_size"])
+	require.Equal(t, float64(20), updatedResp["batch_limit"])
+	require.Equal(t, "6h", updatedResp["min_segment_age"])
+	require.Equal(t, float64(5), updatedResp["min_segments_to_merge"])
+
+	// PUT with invalid duration should fail
+	invalidBody := `{"check_interval":"not-a-duration"}`
+	rr = do(t, h.Routes(), "PUT", "/api/settings/merge", strings.NewReader(invalidBody))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// PUT with invalid batch_limit should fail
+	invalidBatch := `{"batch_limit":0}`
+	rr = do(t, h.Routes(), "PUT", "/api/settings/merge", strings.NewReader(invalidBatch))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// ============================================================================
+// Test 13: Per-Camera Merge Config (PUT + DELETE)
+// ============================================================================
+
+func TestPerCameraMergeConfig(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// Insert a camera
+	cameraID := "cam-merge-test"
+	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264",
+		"rtsp://192.168.1.1/stream", "", "", true)
+	require.NoError(t, err)
+
+	// PUT /api/cameras/{id}/merge-config — set per-camera override
+	mergeBody := `{"enabled":true,"check_interval":"15m","window_size":"12h","batch_limit":5,"min_segment_age":"1h","min_segments_to_merge":2}`
+	rr := do(t, h.Routes(), "PUT", "/api/cameras/"+cameraID+"/merge-config", strings.NewReader(mergeBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var putResp map[string]string
+	parseJSON(t, rr, &putResp)
+	require.Equal(t, "updated", putResp["status"])
+
+	// Verify merge config is stored in DB via camera detail
+	rr = do(t, h.Routes(), "GET", "/api/cameras/"+cameraID, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var camRow storage.CameraRow
+	parseJSON(t, rr, &camRow)
+	require.NotNil(t, camRow.MergeEnabled)
+	require.True(t, *camRow.MergeEnabled)
+	require.NotNil(t, camRow.MergeCheckInterval)
+	require.Equal(t, "15m", *camRow.MergeCheckInterval)
+	require.NotNil(t, camRow.MergeWindowSize)
+	require.Equal(t, "12h", *camRow.MergeWindowSize)
+	require.NotNil(t, camRow.MergeBatchLimit)
+	require.Equal(t, 5, *camRow.MergeBatchLimit)
+	require.NotNil(t, camRow.MergeMinSegmentAge)
+	require.Equal(t, "1h", *camRow.MergeMinSegmentAge)
+	require.NotNil(t, camRow.MergeMinSegmentsToMerge)
+	require.Equal(t, 2, *camRow.MergeMinSegmentsToMerge)
+
+	// DELETE /api/cameras/{id}/merge-config — clear override
+	rr = do(t, h.Routes(), "DELETE", "/api/cameras/"+cameraID+"/merge-config", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var delResp map[string]string
+	parseJSON(t, rr, &delResp)
+	require.Equal(t, "cleared", delResp["status"])
+
+	// PUT with invalid duration should fail
+	invalidBody := `{"check_interval":"xyz"}`
+	rr = do(t, h.Routes(), "PUT", "/api/cameras/"+cameraID+"/merge-config", strings.NewReader(invalidBody))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// PUT with invalid batch_limit should fail
+	invalidBatch := `{"batch_limit":0}`
+	rr = do(t, h.Routes(), "PUT", "/api/cameras/"+cameraID+"/merge-config", strings.NewReader(invalidBatch))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// ============================================================================
+// Test 14: Merge Settings Without Config Returns 500
+// ============================================================================
+
+func TestMergeSettingsNoConfig(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store) // config is nil
+
+	// GET /api/settings/merge should return 500 when config is nil
+	rr := do(t, h.Routes(), "GET", "/api/settings/merge", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	// PUT /api/settings/merge should return 500 when config is nil
+	updateBody := `{"enabled":false}`
+	rr = do(t, h.Routes(), "PUT", "/api/settings/merge", strings.NewReader(updateBody))
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
 }
