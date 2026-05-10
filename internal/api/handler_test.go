@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,7 +90,7 @@ type recordingsResponse struct {
 }
 
 
-func makeRecording(id, cameraID, format string, startedAt time.Time, pinned bool) *model.Recording {
+func makeRecording(id, cameraID, format string, startedAt time.Time, merged bool) *model.Recording {
 	return &model.Recording{
 		ID:        id,
 		CameraID:  cameraID,
@@ -100,7 +101,7 @@ func makeRecording(id, cameraID, format string, startedAt time.Time, pinned bool
 		Duration:  300.0,
 		FileSize:  1024,
 		FrameCount: 150,
-		Pinned:    pinned,
+		Merged:    merged,
 	}
 }
 
@@ -263,7 +264,7 @@ func TestListRecordings_FilterByFormat(t *testing.T) {
 	}
 }
 
-func TestListRecordings_FilterByPinned(t *testing.T) {
+func TestListRecordings_FilterByMerged(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -272,7 +273,7 @@ func TestListRecordings_FilterByPinned(t *testing.T) {
 	seedRecording(t, db, makeRecording("rec-1", "cam-1", "h264", now, true))
 	seedRecording(t, db, makeRecording("rec-2", "cam-1", "h264", now, false))
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?pinned=true", nil, "", "")
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?merged=true", nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -281,8 +282,8 @@ func TestListRecordings_FilterByPinned(t *testing.T) {
 	if len(resp.Recordings) != 1 {
 		t.Fatalf("expected 1 recording, got %d", len(resp.Recordings))
 	}
-	if !resp.Recordings[0].Pinned {
-		t.Fatal("expected recording to be pinned")
+	if !resp.Recordings[0].Merged {
+		t.Fatal("expected recording to be merged")
 	}
 }
 
@@ -411,51 +412,7 @@ func TestDeleteRecording_NotFound(t *testing.T) {
 	}
 }
 
-// --- Pin/Unpin tests ---
-
-func TestPinRecording(t *testing.T) {
-	db, store := setupTestDB(t)
-	defer db.Close()
-	h := TestHandler(db, store)
-
-	now := time.Now().UTC().Truncate(time.Second)
-	seedRecording(t, db, makeRecording("rec-pin", "cam-1", "h264", now, false))
-
-	rr := doRequest(t, h.Routes(), "POST", "/api/recordings/rec-pin/pin", nil, "", "")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-
-	rec, err := db.GetRecording(context.Background(), "rec-pin")
-	if err != nil {
-		t.Fatalf("failed to get recording: %v", err)
-	}
-	if !rec.Pinned {
-		t.Fatal("expected recording to be pinned")
-	}
-}
-
-func TestUnpinRecording(t *testing.T) {
-	db, store := setupTestDB(t)
-	defer db.Close()
-	h := TestHandler(db, store)
-
-	now := time.Now().UTC().Truncate(time.Second)
-	seedRecording(t, db, makeRecording("rec-unpin", "cam-1", "h264", now, true))
-
-	rr := doRequest(t, h.Routes(), "POST", "/api/recordings/rec-unpin/unpin", nil, "", "")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-
-	rec, err := db.GetRecording(context.Background(), "rec-unpin")
-	if err != nil {
-		t.Fatalf("failed to get recording: %v", err)
-	}
-	if rec.Pinned {
-		t.Fatal("expected recording to be unpinned")
-	}
-}
+// --- Download tests ---
 
 // --- Download tests ---
 
@@ -574,7 +531,7 @@ func TestProtectedEndpoints_NoAuth(t *testing.T) {
 		"GET /api/recordings",
 		"GET /api/recordings/rec-1",
 		"DELETE /api/recordings/rec-1",
-		"POST /api/recordings/rec-1/pin",
+		"POST /api/recordings/rec-1/download",
 		"GET /api/cameras",
 		"GET /api/stats",
 	}
@@ -655,11 +612,11 @@ func TestLogin_ResponseContentType(t *testing.T) {
 
 // newHandlerWithConfig creates a Handler with a real config for testing.
 func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 }
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
 	authMW := middleware.NewAuthMiddleware(username, passwordHash)
-	return NewHandler(db, store, authMW, cfg, nil, nil, "")
+	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil)
 }
 func TestGetSettings_NoConfig(t *testing.T) {
 	db, store := setupTestDB(t)
@@ -1161,19 +1118,19 @@ func TestListRecordings_CameraIDAndFormat(t *testing.T) {
 	}
 }
 
-func TestListRecordings_PinnedAndTimeRange(t *testing.T) {
+func TestListRecordings_MergedAndTimeRange(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	seedRecording(t, db, makeRecording("rec-old-pinned", "cam-1", "h264", now.Add(-48*time.Hour), true))
-	seedRecording(t, db, makeRecording("rec-new-pinned", "cam-1", "h264", now.Add(-1*time.Hour), true))
-	seedRecording(t, db, makeRecording("rec-new-unpinned", "cam-1", "h264", now.Add(-1*time.Hour), false))
+	seedRecording(t, db, makeRecording("rec-old-merged", "cam-1", "h264", now.Add(-48*time.Hour), true))
+	seedRecording(t, db, makeRecording("rec-new-merged", "cam-1", "h264", now.Add(-1*time.Hour), true))
+	seedRecording(t, db, makeRecording("rec-new-unmerged", "cam-1", "h264", now.Add(-1*time.Hour), false))
 
 	start := now.Add(-24 * time.Hour).Format(time.RFC3339)
 	end := now.Format(time.RFC3339)
-	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?pinned=true&start="+start+"&end="+end, nil, "", "")
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?merged=true&start="+start+"&end="+end, nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -1182,8 +1139,8 @@ func TestListRecordings_PinnedAndTimeRange(t *testing.T) {
 	if len(resp.Recordings) != 1 {
 		t.Fatalf("expected 1 recording, got %d", len(resp.Recordings))
 	}
-	if resp.Recordings[0].ID != "rec-new-pinned" {
-		t.Fatalf("expected rec-new-pinned, got %s", resp.Recordings[0].ID)
+	if resp.Recordings[0].ID != "rec-new-merged" {
+		t.Fatalf("expected rec-new-merged, got %s", resp.Recordings[0].ID)
 	}
 }
 
@@ -1196,12 +1153,12 @@ func TestListRecordings_AllFilters(t *testing.T) {
 	seedRecording(t, db, makeRecording("rec-match", "cam-1", "mjpeg", now.Add(-1*time.Hour), true))
 	seedRecording(t, db, makeRecording("rec-diff-camera", "cam-2", "mjpeg", now.Add(-1*time.Hour), true))
 	seedRecording(t, db, makeRecording("rec-diff-format", "cam-1", "h264", now.Add(-1*time.Hour), true))
-	seedRecording(t, db, makeRecording("rec-diff-pinned", "cam-1", "mjpeg", now.Add(-1*time.Hour), false))
+	seedRecording(t, db, makeRecording("rec-diff-merged", "cam-1", "mjpeg", now.Add(-1*time.Hour), false))
 	seedRecording(t, db, makeRecording("rec-diff-time", "cam-1", "mjpeg", now.Add(-48*time.Hour), true))
 
 	start := now.Add(-24 * time.Hour).Format(time.RFC3339)
 	end := now.Format(time.RFC3339)
-	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?camera_id=cam-1&format=mjpeg&pinned=true&start="+start+"&end="+end, nil, "", "")
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?camera_id=cam-1&format=mjpeg&merged=true&start="+start+"&end="+end, nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -1298,24 +1255,24 @@ func TestListRecordings_InvalidTimeFormat(t *testing.T) {
 	}
 }
 
-func TestListRecordings_PinnedFalse(t *testing.T) {
+func TestListRecordings_MergedFalse(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	seedRecording(t, db, makeRecording("rec-pinned", "cam-1", "h264", now, true))
-	seedRecording(t, db, makeRecording("rec-unpinned", "cam-1", "h264", now, false))
-	seedRecording(t, db, makeRecording("rec-unpinned2", "cam-1", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-merged", "cam-1", "h264", now, true))
+	seedRecording(t, db, makeRecording("rec-unmerged", "cam-1", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-unmerged2", "cam-1", "h264", now, false))
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?pinned=false", nil, "", "")
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings?merged=false", nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	var resp recordingsResponse
 	parseJSON(t, rr, &resp)
 	if len(resp.Recordings) != 2 {
-		t.Fatalf("expected 2 unpinned recordings, got %d", len(resp.Recordings))
+		t.Fatalf("expected 2 unmerged recordings, got %d", len(resp.Recordings))
 	}
 }
 
@@ -1355,18 +1312,6 @@ func TestDeleteRecording_InvalidID(t *testing.T) {
 	}
 }
 
-func TestPinRecording_InvalidID(t *testing.T) {
-	db, store := setupTestDB(t)
-	defer db.Close()
-	h := TestHandler(db, store)
-
-	// Pin non-existent recording — DB may return error or silently succeed
-	rr := doRequest(t, h.Routes(), "POST", "/api/recordings/does-not-exist/pin", nil, "", "")
-	// Accept 200 or 500 depending on DB behavior
-	if rr.Code != http.StatusOK && rr.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 200 or 500, got %d", rr.Code)
-	}
-}
 
 func TestDownloadRecording_MissingFile(t *testing.T) {
 	db, store := setupTestDB(t)
@@ -1580,7 +1525,7 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "")
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil)
 	return h, camMgr, cfg
 }
 
@@ -1844,7 +1789,7 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 			},
 		},
 	}
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 }
 
 func TestHandleSnapshot_NoURL(t *testing.T) {
@@ -1855,7 +1800,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
 		},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -1868,7 +1813,7 @@ func TestHandleSnapshot_CameraNotFound(t *testing.T) {
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "")
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -1995,4 +1940,324 @@ func TestListRecordings_SearchQuery(t *testing.T) {
 	if len(resp.Recordings) != 2 {
 		t.Fatalf("expected 2 recordings, got %d", len(resp.Recordings))
 	}
+}
+
+// --- Merge settings tests ---
+
+func TestGetMergeSettings_NoConfig(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // nil config
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+	var body map[string]string
+	parseJSON(t, rr, &body)
+	if body["error"] != "config not available" {
+		t.Fatalf("expected 'config not available', got %s", body["error"])
+	}
+}
+
+func TestGetMergeSettings_WithConfig(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{
+		Merge: config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "30m",
+			WindowSize:         "24h",
+			BatchLimit:         50,
+			MinSegmentAge:      "1h",
+			MinSegmentsToMerge: 5,
+		},
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	parseJSON(t, rr, &body)
+
+	if body["enabled"] != true {
+		t.Fatalf("expected enabled=true, got %v", body["enabled"])
+	}
+	if body["check_interval"] != "30m" {
+		t.Fatalf("expected check_interval=30m, got %v", body["check_interval"])
+	}
+	if body["window_size"] != "24h" {
+		t.Fatalf("expected window_size=24h, got %v", body["window_size"])
+	}
+	if body["batch_limit"] != float64(50) {
+		t.Fatalf("expected batch_limit=50, got %v", body["batch_limit"])
+	}
+	if body["min_segment_age"] != "1h" {
+		t.Fatalf("expected min_segment_age=1h, got %v", body["min_segment_age"])
+	}
+	if body["min_segments_to_merge"] != float64(5) {
+		t.Fatalf("expected min_segments_to_merge=5, got %v", body["min_segments_to_merge"])
+	}
+}
+
+func TestUpdateMergeSettings_NoConfig(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // nil config
+
+	body := strings.NewReader(`{"enabled":true}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+}
+
+func TestUpdateMergeSettings_InvalidBody(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := strings.NewReader(`{invalid json`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestUpdateMergeSettings_InvalidCheckInterval(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := strings.NewReader(`{"check_interval":"not-a-duration"}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["error"] != "check_interval must be a valid duration (e.g., \"30m\", \"1h\")" {
+		t.Fatalf("unexpected error: %s", resp["error"])
+	}
+}
+
+func TestUpdateMergeSettings_InvalidBatchLimit(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := strings.NewReader(`{"batch_limit":0}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestUpdateMergeSettings_Success(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{
+		Merge: config.MergeConfig{Enabled: false, CheckInterval: "1h"},
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := strings.NewReader(`{"enabled":true,"batch_limit":100}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/merge", body, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "updated" {
+		t.Fatalf("expected status=updated, got %s", resp["status"])
+	}
+	// Verify in-memory config was updated
+	if !cfg.Merge.Enabled {
+		t.Fatal("expected enabled=true")
+	}
+	if cfg.Merge.BatchLimit != 100 {
+		t.Fatalf("expected batch_limit=100, got %d", cfg.Merge.BatchLimit)
+	}
+}
+
+// --- Camera merge config tests ---
+
+func TestUpdateCameraMergeConfig_Success(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	body := strings.NewReader(`{"enabled":true,"batch_limit":20}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "updated" {
+		t.Fatalf("expected status=updated, got %s", resp["status"])
+	}
+}
+
+func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	body := strings.NewReader(`{"check_interval":"bad"}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestUpdateCameraMergeConfig_CameraNotFound(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := strings.NewReader(`{"enabled":true}`)
+	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/nonexistent/merge-config", body, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 (no-op on nonexistent camera), got %d", rr.Code)
+	}
+}
+
+func TestDeleteCameraMergeConfig_Success(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam1/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "cleared" {
+		t.Fatalf("expected status=cleared, got %s", resp["status"])
+	}
+}
+
+func TestDeleteCameraMergeConfig_CameraNotFound(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/nonexistent/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 (no-op on nonexistent camera), got %d", rr.Code)
+	}
+}
+
+// --- Merge status API tests ---
+
+func TestHandleMergeStatus_NilManager(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, false, resp["enabled"])
+}
+
+func TestHandleMergePending_NilManager(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, false, resp["enabled"])
+}
+
+func TestHandleMergeStatus_WithManager(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{},
+	}
+	mergeMgr := merge.NewMergeManager(
+		db, store,
+		func() config.MergeConfig { return cfg.Merge },
+		func(cameraID string) *config.MergeConfig { return nil },
+		func() []config.CameraConfig { return cfg.Cameras },
+	)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, true, resp["enabled"])
+	require.NotNil(t, resp["last_run_time"])
+}
+
+func TestHandleMergePending_WithManager(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{
+			{ID: "cam-1", Name: "Test", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
+		},
+	}
+	mergeMgr := merge.NewMergeManager(
+		db, store,
+		func() config.MergeConfig { return cfg.Merge },
+		func(cameraID string) *config.MergeConfig { return nil },
+		func() []config.CameraConfig { return cfg.Cameras },
+	)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, true, resp["enabled"])
+	// No recordings → empty pending map
+	pending, ok := resp["pending"].(map[string]any)
+	require.True(t, ok)
+	require.Empty(t, pending)
+	require.True(t, ok)
 }

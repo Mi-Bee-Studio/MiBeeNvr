@@ -1,19 +1,39 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
+func setupPTZTestDB(t *testing.T) (*storage.DB, *storage.Manager) {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := storage.New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	store, err := storage.NewManager(filepath.Join(dir, "storage"))
+	require.NoError(t, err)
+	return db, store
+}
+
 func TestPTZMoveEndpoint(t *testing.T) {
-	h := TestHandler(nil, nil)
+	db, store := setupPTZTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "onvif://host/stream", "admin", "pass", true))
+
+	h := TestHandler(db, store)
 	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`
-	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/onvif-cam/ptz/move", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
@@ -25,10 +45,44 @@ func TestPTZMoveEndpoint(t *testing.T) {
 	require.Equal(t, "ok", resp["status"])
 }
 
+func TestPTZMoveNonOnvifRejected(t *testing.T) {
+	db, store := setupPTZTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "rtsp://host/stream", "", "", true))
+
+	h := TestHandler(db, store)
+	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/rtsp-cam/ptz/move", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestPTZMoveCameraNotFound(t *testing.T) {
+	db, store := setupPTZTestDB(t)
+
+	h := TestHandler(db, store)
+	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/nonexistent/ptz/move", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
 func TestPTZMoveInvalidMode(t *testing.T) {
-	h := TestHandler(nil, nil)
+	db, store := setupPTZTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "onvif://host/stream", "", "", true))
+
+	h := TestHandler(db, store)
 	body := `{"mode": "invalid", "pan": 0.5}`
-	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/onvif-cam/ptz/move", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
@@ -38,8 +92,12 @@ func TestPTZMoveInvalidMode(t *testing.T) {
 }
 
 func TestPTZStopEndpoint(t *testing.T) {
-	h := TestHandler(nil, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/stop", nil)
+	db, store := setupPTZTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "onvif://host/stream", "", "", true))
+
+	h := TestHandler(db, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/onvif-cam/ptz/stop", nil)
 
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
@@ -51,8 +109,12 @@ func TestPTZStopEndpoint(t *testing.T) {
 }
 
 func TestPTZStatusEndpoint(t *testing.T) {
-	h := TestHandler(nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/ptz/status", nil)
+	db, store := setupPTZTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "onvif://host/stream", "", "", true))
+
+	h := TestHandler(db, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/onvif-cam/ptz/status", nil)
 
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
