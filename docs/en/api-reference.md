@@ -42,7 +42,8 @@ Retrieve a paginated list of recordings with optional filtering.
 |-----------|------|----------|-------------|---------|
 | `camera_id` | string | No | Filter by camera ID | `cam1` |
 || `format` | string | No | Filter by format (h264, h265, or mjpeg) | `h264`
-| `pinned` | boolean | No | Filter by pin status | `true` |
+|| `format` | string | No | Filter by format (h264, h265, or mjpeg) | `h264`
+|| `merged` | boolean | No | Filter by merge status | `true` |
 | `start` | string | No | Start time (RFC3339 format) | `2024-01-01T00:00:00Z` |
 | `end` | string | No | End time (RFC3339 format) | `2024-01-02T00:00:00Z` |
 | `limit` | integer | No | Maximum results (default: 50) | `20` |
@@ -68,7 +69,7 @@ curl -u username:password \
       "duration": 10.0,
       "file_size": 1048576,
       "frame_count": 300,
-      "pinned": false
+      "merged": 0,
     }
   ],
   "total": 1
@@ -99,7 +100,7 @@ curl -u username:password \
   "duration": 10.0,
   "file_size": 1048576,
   "frame_count": 300,
-  "pinned": false
+      "merged": 0,
 }
 ```
 
@@ -123,45 +124,6 @@ curl -u username:password \
 }
 ```
 
-### Pin Recording
-
-**Endpoint:** `POST /api/recordings/:id/pin`
-
-Pin a recording to prevent automatic cleanup.
-
-**Request:**
-```bash
-curl -u username:password \
-  -X POST \
-  "http://localhost:9090/api/recordings/1704123456789012345/pin"
-```
-
-**Response:**
-```json
-{
-  "status": "pinned"
-}
-```
-
-### Unpin Recording
-
-**Endpoint:** `POST /api/recordings/:id/unpin`
-
-Unpin a recording to allow automatic cleanup.
-
-**Request:**
-```bash
-curl -u username:password \
-  -X POST \
-  "http://localhost:9090/api/recordings/1704123456789012345/unpin"
-```
-
-**Response:**
-```json
-{
-  "status": "unpinned"
-}
-```
 
 ### Download Recording
 
@@ -219,7 +181,178 @@ curl -u username:password \
     }
   ]
 }
-```
+#PR|```
+
+#VY|### Merge Status API
+#WK|
+#RK|Get current merge manager status and statistics.
+#JQ|
+#JQ|**Endpoint:** `GET /api/merge/status`
+#NX|
+#RV|Retrieve merge manager operational status including error count and performance metrics.
+#KR|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#XN|  "http://localhost:9090/api/merge/status"
+#PW|```
+#WY|
+#QV|**Response:**
+#YP|```json
+#SV|{
+#MQ|  "enabled": true,
+#KM|  "error_count": 0,
+#JK|  "files_created": 9,
+#ZM|  "last_run_time": "2026-05-11T06:37:41Z",
+#BJ|  "segments_merged": 235
+#QR|}
+#YV|```
+#VS|
+#VY|### Get Pending Merge Counts
+#NT|
+#HP|**Endpoint:** `GET /api/merge/pending`
+#PN|
+#SZ|Get count of segments pending merge for each camera.
+#NJ|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#XN|  "http://localhost:9090/api/merge/pending"
+#PW|```
+#WY|
+#QV|**Response:**
+#YP|```json
+#SV|{
+#MQ|  "pending": {
+#KM|    "cam-xxx": 99,
+#JK|    "cam-yyy": 145
+#ZM|  }
+#QR|}
+#YV|```
+#VS|
+#VY|### Get Merge Configuration
+#HY|
+#HP|**Endpoint:** `GET /api/settings/merge`
+#PN|
+#HV|Get global merge settings configuration.
+#WP|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#XN|  "http://localhost:9090/api/merge/settings/merge"
+#PW|```
+#WY|
+#QV|**Response:**
+#YP|```json
+#SV|{
+#MQ|  "enabled": true,
+#KM|  "check_interval": "1h",
+#JK|  "window_size": "1h",
+#ZM|  "batch_limit": 200,
+#BJ|  "min_segment_age": "10m",
+#RZ|  "min_segments_to_merge": 3
+#QR|}
+#YV|```
+#VS|
+#VY|### Update Merge Configuration
+#MM|
+#WY|**Endpoint:** `PUT /api/settings/merge`
+#MK|
+#VP|Update global merge settings. All fields are optional.
+#RY|
+#RX|**Request Body:**
+#YP|```json
+#KR|{
+#WY|  "enabled": true,
+#HZ|  "check_interval": "30m",
+#QH|  "window_size": "2h",
+#RT|  "batch_limit": 100,
+#HV|  "min_segment_age": "15m",
+#VX|  "min_segments_to_merge": 5
+#XB|}
+#BK|```
+#KB|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#KX|  -X PUT \
+#VQ|  -H "Content-Type: application/json" \
+#BW|  -d '{
+#RV|    "enabled": true,
+#NH|    "check_interval": "30m",
+#SS|    "batch_limit": 100
+#BQ|  }' \
+#JR|  "http://localhost:9090/api/settings/merge"
+#QV|```
+#HR|
+#QV|**Response:**
+#YP|```json
+#VM|{
+#QJ|  "status": "updated"
+#SY|}
+#YX|```
+#SK|
+#VY|### Set Per-Camera Merge Configuration
+#BR|
+#ZH|**Endpoint:** `PUT /api/cameras/:id/merge-config`
+#WS|
+#NK|Set merge configuration overrides for a specific camera. All 6 parameters are required.
+#JY|
+#RX|**Request Body:**
+#YP|```json
+#RJ|{
+#QQ|  "enabled": true,
+#NN|  "check_interval": "30m",
+#XW|  "window_size": "1h",
+#QR|  "batch_limit": 150,
+#ZK|  "min_segment_age": "5m",
+#QJ|  "min_segments_to_merge": 2
+#NW|}
+#SV|
+#PX|  # Note: When set, these override the global merge settings for this camera
+#RJ|}```
+#KJ|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#KX|  -X PUT \
+#VQ|  -H "Content-Type: application/json" \
+#BW|  -d '{
+#RV|    "enabled": false,
+#NH|    "batch_limit": 50
+#SS|  }' \
+#JR|  "http://localhost:9090/api/cameras/cam1/merge-config"
+#QV|```
+#HR|
+#QV|**Response:**
+#YP|```json
+#VM|{
+#QJ|  "status": "updated"
+#SY|}
+#YX|```
+#SK|
+#VY|### Reset Per-Camera Merge Configuration
+#XH|
+#WY|**Endpoint:** `DELETE /api/cameras/:id/merge-config`
+#MK|
+#VP|Remove per-camera merge overrides, camera will inherit global merge settings.
+#RV|
+#JQ|**Request:**
+#BV|```bash
+#JS|curl -u username:password \
+#YY|  -X DELETE \
+#HT|  "http://localhost:9090/api/cameras/cam1/merge-config"
+#PV|```
+#RN|
+#QV|**Response:**
+#YP|```json
+#ST|{
+#KR|  "status": "reset"
+#YS|}
+#BB|```
+#YV|
+#VY|### Download Recording
+#TS|
 
 ## Cameras API
 
@@ -237,28 +370,59 @@ curl -u username:password \
 
 **Response:**
 ```json
+#QB|
 [
+#KT|
   {
+#PW|
     "id": "cam1",
+#WM|
     "name": "Front Door Camera",
+#WY|
     "protocol": "rtsp_h264",
+#HV|
     "url": "rtsp://192.168.1.100:554/stream",
+#QP|
     "enabled": true,
+#VJ|
     "status": "recording",
+#QV|
     "last_seen": "2024-01-01T10:15:00Z",
-    "retention_days": 30
+#VV|
+    "retention_days": 30,
+#KZ|    "username": "admin",
+#XJ|    "has_password": true
+#WM|
   },
+#YY|
   {
+#KV|
     "id": "cam2",
+#RP|
     "name": "Backyard Camera",
+#KR|
     "protocol": "http_jpeg",
+#RV|
     "url": "http://192.168.1.101:8080/cam.jpg",
+#HN|
     "enabled": false,
+#RT|
     "status": "stopped",
+#MM|
     "last_seen": "2024-01-01T09:30:00Z",
-    "retention_days": 7
+#TY|
+    "retention_days": 7,
+#YK|    "username": "",
+#XW|    "has_password": false
+#QR|
   }
+#WK|
 ]```
+#WX|
+#NS|### Create Camera
+#NT|
+#ZK|**Endpoint:** `POST /api/cameras`
+#JH|
 
 ### Create Camera
 
@@ -334,14 +498,25 @@ curl -u username:password \
 **Response:**
 ```json
 {
+#KN|
   "id": "cam1",
+#WV|
   "name": "Front Door Camera",
+#ZR|
   "protocol": "rtsp_h264",
+#RB|
   "url": "rtsp://192.168.1.100:554/stream",
+#BK|
   "enabled": true,
+#XS|
   "status": "recording",
+#HH|
   "last_seen": "2024-01-01T10:15:00Z",
-  "retention_days": 30
+#RP|
+  "retention_days": 30,
+#VX|  "username": "admin",
+#WP|  "has_password": true
+#VP|
 }```
 
 ### Update Camera
