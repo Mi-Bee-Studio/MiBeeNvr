@@ -239,7 +239,6 @@
               </div>
             </div>
           </div>
-          <PtzControl {cameraId} enabled={true} />
         {:else}
           <!-- Unsupported protocol -->
           <div class="card p-12 text-center">
@@ -252,6 +251,13 @@
             <button onclick={goBack} class="btn btn-secondary btn-sm">
               Back to Cameras
             </button>
+          </div>
+        {/if}
+        
+        <!-- PTZ Control for ONVIF cameras -->
+        {#if camera.protocol === 'onvif'}
+          <div class="card">
+            <PtzControl {cameraId} enabled={true} />
           </div>
         {/if}
       </div>

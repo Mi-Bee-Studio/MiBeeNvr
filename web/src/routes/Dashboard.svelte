@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
+  import { formatDate } from '$lib/format';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -32,6 +33,7 @@
 
   const STORAGE_KEY = 'dashboard-selected-cameras';
   const SNAPSHOT_INTERVAL_MS = 3000;
+
 
   function loadSavedCameraIds(): string[] {
     try {
@@ -91,7 +93,7 @@
   }
 
   function getStatusBadge(camera: Camera): { class: string; label: string } {
-    const status = camera.recorder_status?.toLowerCase() || '';
+    const status = camera.status?.toLowerCase() || '';
     if (status === 'recording' || status === 'active') {
       return { class: 'badge-success', label: '●' };
     }
@@ -297,6 +299,7 @@
     ptzOpenIndex = -1;
   }
 
+
   // --- Lifecycle ---
 
   onMount(async () => {
@@ -322,6 +325,7 @@
       loading = false;
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+
   });
 
   onDestroy(() => {
@@ -333,6 +337,7 @@
     }
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
   });
+
 
   // React to camera list and mode changes
   $effect(() => {
@@ -624,5 +629,6 @@
         {/each}
       </div>
     {/if}
+
   </main>
 </div>
