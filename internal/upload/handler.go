@@ -101,7 +101,7 @@ func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 		Duration:   0,
 		FileSize:   int64(len(data)),
 		FrameCount: 1,
-		Pinned:     false,
+		Merged:     false,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
@@ -191,7 +191,7 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 		Duration:   0,
 		FileSize:   totalSize,
 		FrameCount: len(files),
-		Pinned:     false,
+		Merged:     false,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
@@ -267,7 +267,7 @@ func (h *Handler) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		Duration:   0,
 		FileSize:   int64(len(data)),
 		FrameCount: 1,
-		Pinned:     false,
+		Merged:     false,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {

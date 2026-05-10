@@ -16,7 +16,7 @@ var logger = slog.Default().With("component", "cleanup")
 // CleanupManager handles periodic cleanup of old recordings.
 // It supports two cleanup strategies:
 //   - Time-based: delete recordings older than retention period
-//   - Disk-threshold: delete oldest unpinned recordings when disk usage exceeds threshold
+//   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
 	db            *storage.DB
 	store         *storage.Manager
@@ -79,7 +79,7 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 }
 
 // timeBasedCleanup deletes recordings per-camera where:
-// - pinned = false
+// - ended_at < NOW() - retention
 // - ended_at < NOW() - retention
 // Each camera uses its own retention_days (0 = fallback to global).
 func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
@@ -119,7 +119,7 @@ func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
 	return nil
 }
 
-// diskThresholdCleanup deletes oldest unpinned recordings when disk usage exceeds threshold.
+// diskThresholdCleanup deletes oldest recordings when disk usage exceeds threshold.
 func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 	total, used, err := cm.store.GetDiskUsage()
 	if err != nil {
@@ -139,7 +139,7 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 
 	// Fetch recordings in batches until usage drops below threshold
 	for {
-		recordings, err := cm.db.ListOldestUnpinnedRecordings(ctx, 50)
+		recordings, err := cm.db.ListOldestRecordings(ctx, 50)
 		if err != nil {
 			return err
 		}

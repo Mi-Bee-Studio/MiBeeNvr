@@ -126,8 +126,24 @@ func main() {
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
 	hlsMgr := hls.NewManager(hlsDataDir)
  
+	// Merge manager
+	mergeMgr := merge.NewMergeManager(
+		db, store,
+		func() config.MergeConfig { return cfg.Merge },
+		func(cameraID string) *config.MergeConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Merge
+				}
+			}
+			return nil
+		},
+		func() []config.CameraConfig { return cfg.Cameras },
+	)
+
 	// API handler — Routes() already includes /api prefix
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath)
+	// API handler — Routes() already includes /api prefix
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr)
 
 	// WebDAV
 	var davHandler http.Handler
@@ -196,10 +212,6 @@ func main() {
 		}
 	}()
 
-	// Merge manager
-	mergeMgr := merge.NewMergeManager(db, store, cfg.Merge, func() []config.CameraConfig {
-		return cfg.Cameras
-	})
 
 	// Cleanup manager
 	cleanupMgr, err := cleanup.NewCleanupManager(db, store, cfg.Cleanup, m)
