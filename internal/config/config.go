@@ -46,6 +46,7 @@ type CameraConfig struct {
 	SnapshotURL    string `yaml:"snapshot_url"`
 	SampleInterval int    `yaml:"sample_interval"`
 	HLSMaxFPS      int    `yaml:"hls_max_fps"`
+	Merge         *MergeConfig `yaml:"merge"`
 }
 
 type CleanupConfig struct {
@@ -286,4 +287,33 @@ func (cfg *Config) applyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
+}
+
+// ResolveMergeConfig returns the effective MergeConfig for a camera.
+// If perCamera is nil, the global config is returned unchanged.
+// If perCamera is non-nil, only non-zero fields override the global config.
+func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig {
+	if perCamera == nil {
+		return global
+	}
+	result := global
+	if perCamera.Enabled {
+		result.Enabled = true
+	}
+	if perCamera.CheckInterval != "" {
+		result.CheckInterval = perCamera.CheckInterval
+	}
+	if perCamera.WindowSize != "" {
+		result.WindowSize = perCamera.WindowSize
+	}
+	if perCamera.BatchLimit > 0 {
+		result.BatchLimit = perCamera.BatchLimit
+	}
+	if perCamera.MinSegmentAge != "" {
+		result.MinSegmentAge = perCamera.MinSegmentAge
+	}
+	if perCamera.MinSegmentsToMerge > 0 {
+		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	return result
 }

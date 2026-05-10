@@ -76,7 +76,7 @@ func (d *DB) Init(ctx context.Context) error {
         duration REAL,
         file_size INTEGER DEFAULT 0,
         frame_count INTEGER DEFAULT 0,
-        pinned INTEGER DEFAULT 0,
+        merged INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
@@ -89,10 +89,9 @@ func (d *DB) Init(ctx context.Context) error {
 	// indices
 	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
 	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`
-	idx3 := `CREATE INDEX IF NOT EXISTS idx_recordings_pinned ON recordings(pinned);`
+	// idx3 created after migration (merged column may not exist in older DBs)
 	if _, err := d.db.ExecContext(ctx, idx1); err != nil { return err }
 	if _, err := d.db.ExecContext(ctx, idx2); err != nil { return err }
-	if _, err := d.db.ExecContext(ctx, idx3); err != nil { return err }
 	// schema metadata
 	metaSQL := `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
 	if _, err := d.db.ExecContext(ctx, metaSQL); err != nil { return err }
@@ -117,9 +116,47 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN retention_days INTEGER DEFAULT 0")
 		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='3' WHERE key='schema_version'")
 	}
-	return nil
-}
+	// Migration v3 → v4: pinned → merged
+	if version == "3" || version == "2" {
+		// Check if pinned column exists
+		var pinnedExists int
+		_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='pinned'`).Scan(&pinnedExists)
+		if pinnedExists > 0 {
+			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN merged INTEGER DEFAULT 0")
+			_, _ = d.db.ExecContext(ctx, "UPDATE recordings SET merged = pinned")
+			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings DROP COLUMN pinned")
+			_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_pinned")
+			_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
+		} else {
+			// Fresh install or already migrated — just ensure merged column exists
+			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN merged INTEGER DEFAULT 0")
+			_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
+		}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='4' WHERE key='schema_version'")
+	}
+	// Migration v4 → v5: add per-camera merge config columns
+	var mergeColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_enabled'`).Scan(&mergeColExists)
+	if mergeColExists == 0 {
+		mergeColumns := []string{
+			`ALTER TABLE cameras ADD COLUMN merge_enabled INTEGER`,
+			`ALTER TABLE cameras ADD COLUMN merge_check_interval TEXT`,
+			`ALTER TABLE cameras ADD COLUMN merge_window_size TEXT`,
+			`ALTER TABLE cameras ADD COLUMN merge_batch_limit INTEGER`,
+			`ALTER TABLE cameras ADD COLUMN merge_min_segment_age TEXT`,
+			`ALTER TABLE cameras ADD COLUMN merge_min_segments_to_merge INTEGER`,
+		}
+		for _, col := range mergeColumns {
+			_, _ = d.db.ExecContext(ctx, col)
+		}
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='5' WHERE key='schema_version'")
+	// Create merged index after migrations have ensured the column exists
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
 
+	return nil
+
+}
 func (d *DB) Close() error {
 	if d == nil || d.db == nil {
 		return nil
@@ -212,22 +249,22 @@ func scanTime(ns sql.NullString) time.Time {
 }
 
 func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned) VALUES(?,?,?,?,?,?,?,?,?,?);`
-	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Pinned)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,?,?,?,?,?);`
+	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged)
 	return err
 }
 
 func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
-	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, pinned=? WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Pinned, r.ID)
+	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=? WHERE id=?;`
+	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.ID)
 	return err
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE id=?;`, id)
+	row := d.db.QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings WHERE id=?;`, id)
 	var r model.Recording
 	var startedAtStr, endedAtStr sql.NullString
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -244,8 +281,8 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	if filter.CameraID != "" {
 		where = append(where, "camera_id=?"); args = append(args, filter.CameraID)
 	}
-	if filter.Pinned != nil {
-		where = append(where, "pinned=?"); args = append(args, *filter.Pinned)
+	if filter.Merged != nil {
+		where = append(where, "merged=?"); args = append(args, *filter.Merged)
 	}
 	if !filter.StartTime.IsZero() {
 		where = append(where, "started_at>=?"); args = append(args, formatTime(filter.StartTime))
@@ -264,7 +301,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
 	}
-	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings"
+	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -295,7 +332,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	for rows.Next() {
 		var r model.Recording
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -311,8 +348,8 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 	if filter.CameraID != "" {
 		where = append(where, "camera_id=?"); args = append(args, filter.CameraID)
 	}
-	if filter.Pinned != nil {
-		where = append(where, "pinned=?"); args = append(args, *filter.Pinned)
+	if filter.Merged != nil {
+		where = append(where, "merged=?"); args = append(args, *filter.Merged)
 	}
 	if !filter.StartTime.IsZero() {
 		where = append(where, "started_at>=?"); args = append(args, formatTime(filter.StartTime))
@@ -375,12 +412,12 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 	return deleted, nil
 }
 
-func (d *DB) SetPinned(ctx context.Context, id string, pinned bool) error {
+func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
 	val := 0
-	if pinned {
+	if merged {
 		val = 1
 	}
-	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET pinned=? WHERE id=?;`, val, id)
+	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET merged=? WHERE id=?;`, val, id)
 	return err
 }
 
@@ -390,7 +427,7 @@ func (d *DB) CleanupIncomplete(ctx context.Context) error {
 }
 
 func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE pinned=0 AND ended_at IS NOT NULL AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings WHERE ended_at IS NOT NULL AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, retentionDays)
 	if err != nil {
 		return nil, err
@@ -400,7 +437,7 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 	for rows.Next() {
 		var r model.Recording
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -412,7 +449,7 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 
 // ListExpiredRecordingsByCamera returns expired recordings for a specific camera
 func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE pinned=0 AND ended_at IS NOT NULL AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings WHERE ended_at IS NOT NULL AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
 	if err != nil {
 		return nil, err
@@ -422,7 +459,7 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 	for rows.Next() {
 		var r model.Recording
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -432,8 +469,8 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 	return res, nil
 }
 
-func (d *DB) ListOldestUnpinnedRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE pinned=0 AND ended_at IS NOT NULL ORDER BY ended_at ASC LIMIT ?;`
+func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings WHERE ended_at IS NOT NULL ORDER BY ended_at ASC LIMIT ?;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, limit)
 	if err != nil {
 		return nil, err
@@ -443,7 +480,7 @@ func (d *DB) ListOldestUnpinnedRecordings(ctx context.Context, limit int) ([]mod
 	for rows.Next() {
 		var r model.Recording
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -467,11 +504,22 @@ type CameraRow struct {
 	RetentionDays int                 `json:"retention_days"`
 	Status       model.RecorderStatus `json:"status"`
 	LastSeen     *time.Time           `json:"last_seen,omitempty"`
-	}
+	Username    string               `json:"username"`
+	HasPassword bool                 `json:"has_password"`
+	// Per-camera merge config (nil = use global)
+	MergeEnabled         *bool   `json:"merge_enabled,omitempty"`
+	MergeCheckInterval   *string `json:"merge_check_interval,omitempty"`
+	MergeWindowSize      *string `json:"merge_window_size,omitempty"`
+	MergeBatchLimit      *int    `json:"merge_batch_limit,omitempty"`
+	MergeMinSegmentAge   *string `json:"merge_min_segment_age,omitempty"`
+	MergeMinSegmentsToMerge *int `json:"merge_min_segments_to_merge,omitempty"`
+}
 
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days FROM cameras ORDER BY id;`)
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge
+		FROM cameras ORDER BY id;`)
 	if err != nil {
 		return nil, err
 	}
@@ -479,9 +527,19 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	var res []CameraRow
 	for rows.Next() {
 		var c CameraRow
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays); err != nil {
+		var mergeEnabled sql.NullBool
+		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge); err != nil {
 			return nil, err
 		}
+		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
+		c.MergeCheckInterval = nullStringToPtr(mergeCheckInterval)
+		c.MergeWindowSize = nullStringToPtr(mergeWindowSize)
+		c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
+		c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
+		c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
 		res = append(res, c)
 	}
 	return res, nil
@@ -508,13 +566,26 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, url, username
 
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days FROM cameras WHERE id = ?`, cameraID).Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays)
+	var mergeEnabled sql.NullBool
+	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
+	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge
+		FROM cameras WHERE id = ?`, cameraID).Scan(
+		&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	c.MergeEnabled = nullBoolToPtr(mergeEnabled)
+	c.MergeCheckInterval = nullStringToPtr(mergeCheckInterval)
+	c.MergeWindowSize = nullStringToPtr(mergeWindowSize)
+	c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
+	c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
+	c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
 	return &c, nil
 }
 
@@ -538,6 +609,29 @@ func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location
 	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
 	return err
 }
+
+// UpsertCameraMerge writes per-camera merge config columns.
+// Pass nil pointers to leave fields unchanged (keep existing values).
+func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnabled *bool, mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge *string, mergeBatchLimit, mergeMinSegmentsToMerge *int) error {
+	q := `UPDATE cameras SET
+		merge_enabled = COALESCE(?, merge_enabled),
+		merge_check_interval = COALESCE(?, merge_check_interval),
+		merge_window_size = COALESCE(?, merge_window_size),
+		merge_batch_limit = COALESCE(?, merge_batch_limit),
+		merge_min_segment_age = COALESCE(?, merge_min_segment_age),
+		merge_min_segments_to_merge = COALESCE(?, merge_min_segments_to_merge)
+		WHERE id = ?;`
+	_, err := d.db.ExecContext(ctx, q,
+		ptrToNullBool(mergeEnabled),
+		ptrToNullString(mergeCheckInterval),
+		ptrToNullString(mergeWindowSize),
+		ptrToNullInt64(mergeBatchLimit),
+		ptrToNullString(mergeMinSegmentAge),
+		ptrToNullInt64(mergeMinSegmentsToMerge),
+		cameraID)
+	return err
+}
+
 
 // GetRecordingTrends returns daily aggregated recording statistics.
 // Days defaults to 7, clamped to [1, 30].
@@ -642,10 +736,10 @@ type MergeWindow struct {
 }
 
 // ListMergeableSegments returns recordings for a camera within a time window,
-// excluding pinned and incomplete segments.
+// excluding merged and incomplete segments.
 func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings WHERE camera_id = ? AND pinned = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
+		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged FROM recordings WHERE camera_id = ? AND merged = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
 		cameraID, formatTime(windowStart), formatTime(windowEnd))
 	if err != nil {
 		return nil, err
@@ -655,7 +749,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 	for rows.Next() {
 		var r model.Recording
 		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Pinned); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -669,7 +763,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 // Only includes recordings older than minAge.
 func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge time.Duration) ([]MergeWindow, error) {
 	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
-	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND pinned = 0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
+	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merged = 0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
 	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {
 		return nil, err
@@ -687,4 +781,50 @@ func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge
 		res = append(res, w)
 	}
 	return res, nil
+}
+
+// Nullable helper functions for per-camera merge config.
+
+func nullBoolToPtr(v sql.NullBool) *bool {
+	if !v.Valid {
+		return nil
+	}
+	b := v.Bool
+	return &b
+}
+
+func nullStringToPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	return &v.String
+}
+
+func nullInt64ToPtr(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	i := int(v.Int64)
+	return &i
+}
+
+func ptrToNullBool(v *bool) sql.NullBool {
+	if v == nil {
+		return sql.NullBool{}
+	}
+	return sql.NullBool{Valid: true, Bool: *v}
+}
+
+func ptrToNullString(v *string) sql.NullString {
+	if v == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{Valid: true, String: *v}
+}
+
+func ptrToNullInt64(v *int) sql.NullInt64 {
+	if v == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Valid: true, Int64: int64(*v)}
 }

@@ -193,3 +193,66 @@ func TestValidateOnvifProtocol(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestResolveMergeConfig_NilReturnsGlobal(t *testing.T) {
+	global := MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		WindowSize:         "1h",
+		BatchLimit:         200,
+		MinSegmentAge:      "10m",
+		MinSegmentsToMerge: 3,
+	}
+	result := ResolveMergeConfig(global, nil)
+	require.Equal(t, global, result)
+}
+
+func TestResolveMergeConfig_OverridesNonZeroFields(t *testing.T) {
+	global := MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		WindowSize:         "1h",
+		BatchLimit:         200,
+		MinSegmentAge:      "10m",
+		MinSegmentsToMerge: 3,
+	}
+	perCamera := &MergeConfig{
+		CheckInterval:      "30m",
+		BatchLimit:         50,
+	}
+	result := ResolveMergeConfig(global, perCamera)
+	// Enabled stays true (global)
+	require.True(t, result.Enabled)
+	// Overridden fields
+	require.Equal(t, "30m", result.CheckInterval)
+	require.Equal(t, 50, result.BatchLimit)
+	// Non-overridden fields stay global
+	require.Equal(t, "1h", result.WindowSize)
+	require.Equal(t, "10m", result.MinSegmentAge)
+	require.Equal(t, 3, result.MinSegmentsToMerge)
+}
+
+func TestResolveMergeConfig_AllFieldsOverridden(t *testing.T) {
+	global := MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		WindowSize:         "1h",
+		BatchLimit:         200,
+		MinSegmentAge:      "10m",
+		MinSegmentsToMerge: 3,
+	}
+	perCamera := &MergeConfig{
+		Enabled:            false,
+		CheckInterval:      "5m",
+		WindowSize:         "30m",
+		BatchLimit:         10,
+		MinSegmentAge:      "2m",
+		MinSegmentsToMerge: 2,
+	}
+	result := ResolveMergeConfig(global, perCamera)
+	require.True(t, result.Enabled) // perCamera.Enabled=false is not >0/!="", so global stays
+	require.Equal(t, "5m", result.CheckInterval)
+	require.Equal(t, "30m", result.WindowSize)
+	require.Equal(t, 10, result.BatchLimit)
+	require.Equal(t, "2m", result.MinSegmentAge)
+	require.Equal(t, 2, result.MinSegmentsToMerge)
+}
