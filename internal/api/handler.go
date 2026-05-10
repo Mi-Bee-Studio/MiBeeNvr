@@ -345,6 +345,8 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
+	filter.Search = r.URL.Query().Get("search")
+
 	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list recordings")

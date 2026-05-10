@@ -256,6 +256,14 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	if filter.Format != "" {
 		where = append(where, "format=?"); args = append(args, filter.Format)
 	}
+	if filter.Search != "" {
+		escaped := strings.ReplaceAll(filter.Search, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "%", "\\%")
+		escaped = strings.ReplaceAll(escaped, "_", "\\_")
+		pattern := "%" + escaped + "%"
+		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
+		args = append(args, pattern, pattern, pattern)
+	}
 	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, pinned FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
@@ -314,6 +322,14 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 	}
 	if filter.Format != "" {
 		where = append(where, "format=?"); args = append(args, filter.Format)
+	}
+	if filter.Search != "" {
+		escaped := strings.ReplaceAll(filter.Search, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "%", "\\%")
+		escaped = strings.ReplaceAll(escaped, "_", "\\_")
+		pattern := "%" + escaped + "%"
+		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
+		args = append(args, pattern, pattern, pattern)
 	}
 	sqlstr := "SELECT COUNT(*) FROM recordings"
 	if len(where) > 0 {
