@@ -293,10 +293,46 @@ The merge feature automatically combines small video segments into larger files,
 ### Merge Behavior
 - **H.264/H.265**: Segments are concatenated without re-encoding (fast, zero quality loss). Only segments with identical codec parameters (SPS/PPS) are merged.
 - **MJPEG**: JPEG files are moved into a single directory (no re-encoding).
-- **Pinned recordings**: Pinned recordings are never merged and split merge groups at their boundaries.
 - **Disk space**: Merging is skipped if available disk space is less than 110% of the estimated merged file size.
 - **Atomic**: Merged files use atomic rename (temp file → final) to prevent corruption.
-- **Originals**: Source segments are deleted from disk and database after successful merge.
+#HM|- **Originals**: Source segments are deleted from disk and database after successful merge.
+#NX|
+#VY|### Per-Camera Merge Configuration
+#RK|
+#NK|Individual cameras can override the global merge settings using the API or Web UI. This allows different cameras to have different merge strategies based on their recording patterns and storage requirements.
+#JY|
+#PX|**API Endpoints**:
+#HK|- `GET /api/cameras/:id/merge-config` - Get per-camera merge overrides
+#HK|- `PUT /api/cameras/:id/merge-config` - Set per-camera merge overrides
+#HK|- `DELETE /api/cameras/:id/merge-config` - Reset to global defaults
+#NX|
+#VY|**Per-Camera Parameters**:
+#WK|When configuring per-camera merge settings, all 6 global parameters can be overridden:
+#NJ|
+#RK|- `enabled` - Enable/disable merging for this specific camera
+#VK|- `check_interval` - How often to check for mergeable segments
+#BY|- `window_size` - Time window for grouping segments
+#NP|- `batch_limit` - Maximum segments per merge run
+#JR|- `min_segment_age` - Minimum age before segments can be merged
+#PV|- `min_segments_to_merge` - Minimum segments required to trigger merge
+#XN|
+#VY|**Example Override**:
+#YP|```yaml
+cameras:
+  - id: "cam1"
+    name: "Front Door"
+    protocol: "rtsp_h264"
+    url: "rtsp://192.168.1.100:554/live"
+    # Per-camera merge settings
+    merge_config:
+      enabled: true
+      check_interval: "30m"
+      batch_limit: 100  # Lower than global 200
+      min_segments_to_merge: 2  # Lower than global 3
+```
+#NX|
+#YJ|## FTP Configuration
+#RM|
 
 ## FTP Configuration
 
