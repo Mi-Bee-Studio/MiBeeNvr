@@ -1,201 +1,175 @@
 # MiBee NVR 配置参考文档
 
+MiBee NVR 使用 YAML 格式的配置文件来控制所有功能模块。以下是所有可用选项的完整参考，包含默认值和使用示例。
+
 ## 配置文件结构
 
-MiBee NVR 使用 YAML 格式的配置文件，文件名为 `config.yaml`。配置文件包含多个章节，每个章节负责不同的功能模块。
-
-### 基本格式
-
 ```yaml
-# 注释以 # 开头
 server:
   listen: ":9090"
 storage:
   root_dir: "/mnt/data/nvr"
-```
-
-## 完整配置参考
-
-### server 服务器配置
-
-服务器配置控制 MiBee NVR 的网络监听设置。
-
-```yaml
-server:
-  listen: ":9090"          # 监听地址和端口，格式 "host:port"
-  read_timeout: 30s        # HTTP 读取超时时间
-  write_timeout: 30s       # HTTP 写入超时时间
-  idle_timeout: 60s       # 空闲连接超时时间
-  max_upload_size: 100MB   # 文件上传大小限制
-```
-
-**默认值**:
-- `listen: ":9090"`
-- `read_timeout: "30s"`
-- `write_timeout: "30s"`  
-- `idle_timeout: "60s"`
-- `max_upload_size: "100MB"`
-
-### storage 存储配置
-
-存储配置控制录像文件的存储位置和分段设置。
-
-```yaml
-storage:
-  root_dir: "/mnt/data/nvr"      # 录像存储根目录
-  segment_duration: "10m"        # 录像分段时长
-  max_segments: 1000             # 每个摄像头的最大分段数
-  temp_dir: "/tmp/mibee-nvr"     # 临时文件目录
-  cleanup_interval: "1h"        # 清理检查间隔
-```
-
-**默认值**:
-- `root_dir: "./recordings"`
-- `segment_duration: "10m"`
-- `max_segments: 1000`
-- `temp_dir: "/tmp/mibee-nvr"`
-- `cleanup_interval: "1h"`
-
-**重要提示**:
-- 低内存设备建议 `segment_duration` 设置为 `"30s"`
-- 每个分段在关闭前会保存在内存中，30秒分段约占用 15-20MB 内存
-- `root_dir` 必须存在且有写权限
-
-### auth 认证配置
-
-认证配置控制 Web 界面的访问权限。
-
-```yaml
+  segment_duration: "30s"
 auth:
-  username: "admin"              # 用户名
-  password_hash: ""             # bcrypt 加密的密码哈希
-  session_timeout: "24h"         # 会话超时时间
-  enable_https: false            # 是否启用 HTTPS
-  cert_file: ""                 # SSL 证书文件路径
-  key_file: ""                  # SSL 私钥文件路径
-```
-
-**默认值**:
-- `username: "admin"`
-- `password_hash: ""`
-- `session_timeout: "24h"`
-- `enable_https: false`
-- `cert_file: ""`
-- `key_file: ""`
-
-**密码哈希**:
-
-使用 bcrypt 生成密码哈希（注意：此命令尚未实现）：
-
-```bash
-# 生成密码哈希（此命令尚未在版本中实现）
-mibee-nvr hash-password your-password
-```
-
-或者使用其他工具生成：
-
-```bash
-echo "your-password" | htpasswd -n -B admin
-```
-
-### cameras 摄像头配置
-
-摄像头配置是系统的核心，定义了所有连接的摄像头。
-
-#### 基本摄像头配置
-
-```yaml
+  username: "admin"
+  password_hash: ""
+  password: ""
 cameras:
-  - id: "cam1"                  # 摄像头唯一标识符
-    name: "前门摄像头"          # 显示名称
-    protocol: "rtsp_h264"       # 协议类型
-    url: "rtsp://192.168.1.100:554/h264/main"
-    enabled: true               # 是否启用
-recording: true             # 是否录制
-username: "admin"           # 认证用户名（可选）
-password: "password123"     # 认证密码（可选）
-segment_prefix: "cam1"      # 分段文件前缀（可选，默认为 id）
-# sub_stream_url: "rtsp://..."   # 子码流（用于直播预览，节省带宽）
-# snapshot_url: "http://..."      # JPEG 快照 URL（用于缩略图）
-# sample_interval: 1              # MJPEG 帧采样间隔
-# hls_max_fps: 0                  # HLS 直播最大帧率
-```
-
-#### 支持的协议类型
-
-1. **RTSP H.264** (`rtsp_h264`)
-   ```yaml
-   - id: "cam1"
-     name: "前门摄像头"
-     protocol: "rtsp_h264"
-     url: "rtsp://192.168.1.100:554/h264/main"
-     enabled: true
-   ```
-
-2. **RTSP H.265/HEVC** (`rtsp_h265`)
-   ```yaml
-   - id: "cam1"
-     name: "H.265 摄像头"
-     protocol: "rtsp_h265"
-     url: "rtsp://192.168.1.100:554/h265/main"
-     username: "admin"
-     password: "password123"
-     enabled: true
-   ```
-   注意：H.265/HEVC 提供比 H.264 更好的压缩率，但需要更多的 CPU 处理能力。
-
-3. **RTSP MJPEG** (`rtsp_mjpeg`)
-   ```yaml
-   - id: "cam2"
-     name: "后院摄像头"
-     protocol: "rtsp_mjpeg"
-     url: "rtsp://192.168.1.101:554/mjpeg"
-     enabled: true
-   ```
-
-4. **HTTP JPEG** (`http_jpeg`)
-   ```yaml
-   - id: "cam3"
-     name: "室内摄像头"
-     protocol: "http_jpeg"
-     url: "http://192.168.1.102:8080/snapshot"
-     enabled: true
-   ```
-
-#### 完整摄像头配置示例
-
-```yaml
-cameras:
-  - id: "front-door"
-    name: "前门"
+  - id: "cam1"
+    name: "摄像头名称"
     protocol: "rtsp_h264"
-    url: "rtsp://192.168.1.100:554/stream"
-    username: "admin"
-    password: "password123"
+    url: "rtsp://..."
     enabled: true
-    
-  - id: "back-yard"
-    name: "后院"
-    protocol: "rtsp_mjpeg"
-    url: "rtsp://192.168.1.101:554/live"
-    enabled: true
-    
-  - id: "garage"
-    name: "车库"
-    protocol: "http_jpeg"
-    url: "http://192.168.1.102/capture"
-    username: "admin"
-    password: "garage123"
-    enabled: true
-    
-  - id: "h265-camera"
-    name: "H.265 摄像头"
-    protocol: "rtsp_h265"
-    url: "rtsp://192.168.1.103:554/stream"
-    username: "admin"
-    password: "password123"
+    sub_stream_url: "rtsp://..."
+    snapshot_url: "http://..."
+    sample_interval: 1
+    hls_max_fps: 0
+cleanup:
+  retention_days: 30
+  check_interval: "1h"
+  disk_threshold_percent: 95
+merge:
+  enabled: false
+  check_interval: "1h"
+  window_size: "1h"
+  batch_limit: 200
+  min_segment_age: "10m"
+  min_segments_to_merge: 3
+ftp:
+  enabled: true
+  port: 2121
+  passive_port_range: "2122-2140"
+mqtt:
+  enabled: false
+  broker: "tcp://localhost:1883"
+  topic: "mibeenr/trigger"
+  client_id: "mibee-nvr"
+webdav:
+  enabled: true
+  path_prefix: "/dav"
+  read_write: false
+observability:
+  log_level: "info"
+  log_format: "text"
+  enable_pprof: false
+version: "1.0"
+```
+
+## 服务器配置
+
+### `server.listen`
+- **类型**: 字符串
+- **默认值**: `":9090"`
+- **描述**: Web 服务器监听的地址和端口
+- **示例**: `":8080"` 或 `"192.168.1.100:9090"`
+
+## 存储配置
+
+### `storage.root_dir`
+- **类型**: 字符串
+- **必需**: 是
+- **描述**: 录像文件的存储根目录
+- **示例**: `"/mnt/data/nvr"` 或 `"/var/lib/mibee-nvr"`
+
+### `storage.segment_duration`
+- **类型**: 字符串
+- **默认值**: `"30s"`
+- **描述**: 视频分段时长（内存密集型）
+- **重要提示**: 每个分段在完成前会保存在内存中
+- **内存使用**:
+  - 30秒分段: ~15-20MB 每个分段
+  - 60秒分段: ~30-40MB 每个分段
+  - 120秒分段: ~60-80MB 每个分段
+- **建议**: 低内存系统使用 30 秒
+- **示例**: `"30s"`, `"1m"`, `"5m"`
+
+## 认证配置
+
+### `auth.username`
+- **类型**: 字符串
+- **必需**: 是（Web UI 和 FTP 使用）
+- **描述**: 认证用户名
+- **示例**: `"admin"`
+
+### `auth.password_hash`
+- **类型**: 字符串
+- **必需**: 是（Web UI 和 FTP 使用）
+- **描述**: bcrypt 哈希密码。使用 `mibee-nvr hash-password <password>` 命令生成。
+- **注意**: 也可以设置 `auth.password` 为明文密码，服务器会在启动时自动生成哈希。
+- **示例**: `$2a$10$N9qo8uLOickgx2ZMRZoMy...`
+
+### `auth.password`
+- **类型**: 字符串
+- **可选**
+- **描述**: 明文密码（用于方便配置）。服务器启动时会自动生成 `password_hash`。
+- **示例**: `"admin123"`
+
+## 摄像头配置
+
+### 摄像头结构
+每个摄像头配置需要这些基本字段：
+
+```yaml
+cameras:
+  - id: "cam1"
+    name: "摄像头名称"
+    protocol: "rtsp_h264"
+    url: "摄像头地址"
     enabled: true
 ```
+
+### `cameras[].id`
+- **类型**: 字符串
+- **必需**: 是
+- **描述**: 摄像头的唯一标识符
+- **格式**: 8 字符字母数字（使用 crypto/rand 自动生成）
+- **示例**: `"front-door"`, `"cam-01"`
+
+### `cameras[].name`
+- **类型**: 字符串
+- **必需**: 是
+- **描述**: 人类可读的摄像头名称
+- **示例**: `"前门摄像头"`, `"后院"`
+
+### `cameras[].protocol`
+- **类型**: 字符串
+- **必需**: 是
+- **描述**: 摄像头协议类型
+- **选项**: `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`, `"onvif"`
+- **注意**: H.265/HEVC 提供比 H.264 更好的压缩率，但需要更多的 CPU 处理
+
+### `cameras[].url`
+- **类型**: 字符串
+- **必需**: 是
+- **描述**: 摄像头 URL 或流端点
+- **示例**:
+  - RTSP: `"rtsp://192.168.1.100:554/stream"`
+  - HTTP: `"http://192.168.1.101/capture"`
+
+### `cameras[].username`
+- **类型**: 字符串
+- **可选**
+- **描述**: 摄像头认证用户名
+- **示例**: `"admin"`
+
+### `cameras[].password`
+- **类型**: 字符串
+- **可选**
+- **描述**: 摄像头认证密码
+- **示例**: `"摄像头密码"`
+
+### `cameras[].onvif_endpoint`
+- **类型**: 字符串
+- **可选**
+- **描述**: ONVIF 设备端点地址（仅当 protocol="onvif" 时使用）
+- **示例**: `"http://192.168.1.100/onvif"`
+
+### `cameras[].enabled`
+- **类型**: 布尔值
+- **默认值**: `true`
+- **描述**: 是否启用摄像头录制
+- **示例**: `true` 或 `false`
+
 ### `cameras[].sub_stream_url`
 - **类型**: 字符串
 - **可选**
@@ -208,7 +182,7 @@ cameras:
 - **可选**
 - **描述**: 返回 JPEG 快照图像的 HTTP 地址。配置后，Dashboard 显示快照缩略图而非 HLS 直播流，大幅降低带宽。
 - **行为**: 快照缓存 10 秒；摄像头暂时不可达时返回过期缓存
-- **示例**: `"http://192.168.1.100/snapshot"`，`"http://192.168.1.100/cgi-bin/snapshot.cgi"`
+- **示例**: `"http://192.168.1.100/snapshot"`, `"http://192.168.1.100/cgi-bin/snapshot.cgi"`
 
 ### `cameras[].sample_interval`
 - **类型**: 整数
@@ -222,195 +196,73 @@ cameras:
 - **默认值**: `0`（不限制）
 - **描述**: HLS 直播预览的最大帧率。超出帧率的帧会被丢弃以降低带宽。
 - **重要**: 仅影响 HLS 直播预览，不影响录像
-- **示例**: `10`、`15`、`24`
+- **示例**: `10`, `15`, `24`
 
-### cleanup 清理配置
+## 协议示例
 
-清理配置控制录像文件的自动清理策略。
-
+### RTSP H.264 摄像头
 ```yaml
-cleanup:
-  retention_days: 30            # 录像保留天数（0=未配置，默认30天）
-  check_interval: "1h"         # 清理检查间隔
-  disk_threshold_percent: 95    # 磁盘使用率阈值（百分比）
-```
-
-**默认值**:
-- `retention_days: 30`
-- `check_interval: "1h"
-- `disk_threshold_percent: 95`
-
-**重要提示**:
-- `retention_days: 0` 会被视为"未配置"，系统会使用默认值 30 天
-- **按摄像头保留天数**：每个摄像头可以通过 Web 界面或 API 设置自己的 `retention_days` 来覆盖全局设置
-- 清理策略包括：按时间清理和磁盘空间清理两种方式
-
-### FTP 服务器配置
-
-FTP 服务器配置控制 FTP 访问功能。
-
-```yaml
-ftp:
-  enabled: true                 # 是否启用 FTP 服务器
-  port: 2121                   # FTP 端口
-  passive_port_range: "2122-2140"  # 被动模式端口范围
-  max_connections: 10          # 最大连接数
-  timeout: "30s"               # 连接超时时间
-```
-
-**默认值**:
-- `enabled: true`
-- `port: 2121`
-- `passive_port_range: "2122-2140"`
-- `max_connections: 10`
-- `timeout: "30s"`
-
-**匿名访问**: FTP 服务器拒绝所有匿名访问，必须使用配置文件中的认证凭据。
-
-### MQTT 客户端配置
-
-MQTT 客户端配置支持远程触发和通知功能。
-
-```yaml
-mqtt:
-  enabled: false                # 是否启用 MQTT
-  broker: "tcp://localhost:1883" # MQTT 服务器地址
-  topic: "mibeenr/trigger"     # 触发主题
-  client_id: "mibee-nvr"       # 客户端 ID
-  username: ""                 # MQTT 用户名（可选）
-  password: ""                 # MQTT 密码（可选）
-  qos: 1                       # QoS 级别（0,1,2）
-  retain: false                # 是否保留消息
-```
-
-**默认值**:
-- `enabled: false`
-- `broker: "tcp://localhost:1883"`
-- `topic: "mibeenr/trigger"`
-- `client_id: "mibee-nvr"`
-- `username: ""`
-- `password: ""`
-- `qos: 1`
-- `retain: false`
-
-### WebDAV 服务器配置
-
-WebDAV 服务器配置提供只读文件访问功能。
-
-```yaml
-webdav:
-  enabled: true                 # 是否启用 WebDAV
-  path_prefix: "/dav"         # WebDAV 路径前缀
-  read_write: false             # 是否启用读写模式（默认只读）
-```
-
-**默认值**:
-- `enabled: true`
-- `path_prefix: "/dav"`
-- `read_write: false`
-
-**重要提示**:
-- WebDAV 服务器默认为**只读**模式，所有写入操作都会返回 403 状态码
-- 启用 `read_write: true` 后，可以通过 WebDAV PUT 请求自动注册新摄像头
-- 访问路径格式：`http://server:9090/dav/recordings/`
-- 启用读写模式前请考虑安全影响
-
-## 配置文件示例
-
-### 完整配置示例
-
-```yaml
-# MiBee NVR 完整配置文件示例
-
-server:
-  listen: ":9090"
-  read_timeout: "30s"
-  write_timeout: "30s"
-  idle_timeout: "60s"
-  max_upload_size: "100MB"
-
-storage:
-  root_dir: "/mnt/data/nvr"
-  segment_duration: "10m"
-  max_segments: 1000
-  temp_dir: "/tmp/mibee-nvr"
-  cleanup_interval: "1h"
-
-auth:
+- id: "front-door"
+  name: "前门"
+  protocol: "rtsp_h264"
+  url: "rtsp://192.168.1.100:554/live"
   username: "admin"
-  password_hash: "$2a$10$N9qo8uLOickgx2ZMRZoMy..."
-  session_timeout: "24h"
-  enable_https: false
-  cert_file: ""
-  key_file: ""
-
-cameras:
-  - id: "front-door"
-    name: "前门"
-    protocol: "rtsp_h264"
-    url: "rtsp://192.168.1.100:554/stream"
-    username: "admin"
-    password: "password123"
-    enabled: true
-    recording: true
-    segment_prefix: "front_door"
-    
-  - id: "back-yard"
-    name: "后院"
-    protocol: "rtsp_mjpeg"
-    url: "rtsp://192.168.1.101:554/live"
-    enabled: true
-    recording: true
-    
-  - id: "garage"
-    name: "车库"
-    protocol: "http_jpeg"
-    url: "http://192.168.1.102/capture"
-    username: "admin"
-    password: "garage123"
-    enabled: true
-    recording: true
-
-cleanup:
-retention_days: 30
-check_interval: "1h"
-disk_threshold_percent: 95
-max_files_per_camera: 10000
-delete_interval: "6h"
-merge:
-enabled: false
-check_interval: "1h"
-window_size: "1h"
-batch_limit: 200
-min_segment_age: "10m"
-min_segments_to_merge: 3
-
-ftp:
-  delete_interval: "6h"
-
-ftp:
+  password: "password123"
   enabled: true
-  port: 2121
-  passive_port_range: "2122-2140"
-  max_connections: 10
-  timeout: "30s"
-
-mqtt:
-  enabled: false
-  broker: "tcp://localhost:1883"
-  topic: "mibeenr/trigger"
-  client_id: "mibee-nvr"
-  username: ""
-  password: ""
-  qos: 1
-  retain: false
-
-webdav:
-  enabled: true
-  path_prefix: "/dav"
-  max_upload_size: "1GB"
-  cache_control: "max-age=3600"
 ```
+
+### RTSP H.265 摄像头
+```yaml
+- id: "h265-camera"
+  name: "H.265 摄像头"
+  protocol: "rtsp_h265"
+  url: "rtsp://192.168.1.100:554/live"
+  username: "admin"
+  password: "password123"
+  enabled: true
+```
+
+### RTSP MJPEG 摄像头
+```yaml
+- id: "back-yard"
+  name: "后院"
+  protocol: "rtsp_mjpeg"
+  url: "rtsp://192.168.1.101:554/stream"
+  enabled: true
+```
+
+### HTTP JPEG 摄像头
+```yaml
+- id: "garage"
+  name: "车库"
+  protocol: "http_jpeg"
+  url: "http://192.168.1.102/capture"
+  enabled: true
+```
+
+## 清理配置
+
+### `cleanup.retention_days`
+- **类型**: 整数
+- **默认值**: `30`（未设置或 `0` 时）
+- **描述**: 保留录像的天数
+- **重要提示**: 值为 `0` 会被视为"未配置"，默认为 30 天
+- **按摄像头保留**: 单个摄像头可以通过 Web UI 或 API 设置自己的 `retention_days` 来覆盖全局设置
+- **示例**: `30`, `90`, `365`
+
+### `cleanup.check_interval`
+- **类型**: 字符串
+- **默认值**: `"1h"`
+- **描述**: 检查过期录像的频率
+- **格式**: Go 时间格式
+- **示例**: `"30m"`, `"2h"`, `"24h"`
+
+### `cleanup.disk_threshold_percent`
+- **类型**: 整数
+- **默认值**: `95`
+- **描述**: 清理的磁盘使用率阈值
+- **行为**: 当磁盘使用率超过此阈值时运行清理
+- **示例**: `80`, `90`, `95`
 
 ## 合并配置
 
@@ -427,7 +279,7 @@ webdav:
 - **默认值**: `"1h"`
 - **描述**: 合并任务的运行间隔
 - **格式**: Go 时间格式
-- **示例**: `"30m"`、`"1h"`、`"2h"`
+- **示例**: `"30m"`, `"1h"`, `"2h"`
 
 ### `merge.window_size`
 - **类型**: 字符串
@@ -440,20 +292,20 @@ webdav:
 - **类型**: 整数
 - **默认值**: `200`
 - **描述**: 单次合并运行中处理的最大段数。防止资源过度占用。
-- **示例**: `100`、`200`、`500`
+- **示例**: `100`, `200`, `500`
 
 ### `merge.min_segment_age`
 - **类型**: 字符串
 - **默认值**: `"10m"`
 - **描述**: 段被纳入合并的最小年龄。确保正在写入的段不会被合并。
 - **格式**: Go 时间格式
-- **示例**: `"5m"`、`"10m"`、`"30m"`
+- **示例**: `"5m"`, `"10m"`, `"30m"`
 
 ### `merge.min_segments_to_merge`
 - **类型**: 整数
 - **默认值**: `3`
 - **描述**: 触发合并所需的最小段数。段数不足的组会被跳过。
-- **示例**: `2`、`3`、`5`
+- **示例**: `2`, `3`, `5`
 
 ### 合并行为
 - **H.264/H.265**: 段以原始编码直接拼接（快速、无损）。仅编码参数相同（SPS/PPS）的段会被合并。
@@ -463,94 +315,134 @@ webdav:
 - **原子操作**: 合并文件使用原子重命名（临时文件 → 最终文件）防止数据损坏。
 - **原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
 
-### 最小配置示例
+## FTP 配置
 
-```yaml
-server:
-  listen: ":9090"
+### `ftp.enabled`
+- **类型**: 布尔值
+- **默认值**: `true`
+- **描述**: 是否启用 FTP 服务器
 
-storage:
-  root_dir: "/mnt/data/nvr"
+### `ftp.port`
+- **类型**: 整数
+- **默认值**: `2121`
+- **描述**: FTP 服务器端口
+- **注意**: FTP 无法反向代理
 
-auth:
-  username: "admin"
-  password_hash: "$2a$10$N9qo8uLOickgx2ZMRZoMy..."
+### `ftp.passive_port_range`
+- **类型**: 字符串
+- **默认值**: `"2122-2140"`
+- **描述**: 被动模式 FTP 连接的端口范围
+- **格式**: `"起始-结束"`
+- **示例**: `"30000-30100"`
 
-cameras:
-  - id: "cam1"
-    name: "摄像头1"
-    protocol: "http_jpeg"
-    url: "http://192.168.1.100/capture"
-    enabled: true
-    recording: true
-```
+**匿名访问**: FTP 服务器拒绝所有匿名访问，必须使用配置文件中的认证凭据。
 
-## 配置验证
+## MQTT 配置
 
-启动时 MiBee NVR 会验证配置文件：
+### `mqtt.enabled`
+- **类型**: 布尔值
+- **默认值**: `false`
+- **描述**: 是否启用 MQTT 集成
+
+### `mqtt.broker`
+- **类型**: 字符串
+- **必需**: 启用时必需
+- **描述**: MQTT 代理服务器地址
+- **示例**: `"tcp://localhost:1883"` 或 `"mqtt://192.168.1.100:1883"`
+
+### `mqtt.topic`
+- **类型**: 字符串
+- **必需**: 启用时必需
+- **描述**: 用于触发事件的订阅主题
+- **示例**: `"mibeenr/trigger"`
+
+### `mqtt.client_id`
+- **类型**: 字符串
+- **必需**: 启用时必需
+- **描述**: MQTT 客户端 ID
+- **示例**: `"mibee-nvr"`
+
+## WebDAV 配置
+
+### `webdav.enabled`
+- **类型**: 布尔值
+- **默认值**: `true`
+- **描述**: 是否启用 WebDAV 服务器
+
+### `webdav.path_prefix`
+- **类型**: 字符串
+- **默认值**: `"/dav"`
+- **描述**: WebDAV 访问的 URL 路径前缀
+- **示例**: `"/dav"`, `"/recordings"`
+
+### `webdav.read_write`
+- **类型**: 布尔值
+- **默认值**: `false`
+- **描述**: WebDAV 服务器是否允许写入操作
+- **重要**: 启用后，可以通过 WebDAV PUT 请求自动注册新摄像头
+- **安全考虑**: 启用写入访问前请考虑安全影响
+- **示例**: `false`, `true`
+
+## 可观测性配置
+
+### `observability.log_level`
+- **类型**: 字符串
+- **默认值**: `"info"`
+- **描述**: 日志级别
+- **选项**: `"debug"`, `"info"`, `"warn"`, `"error"`
+- **示例**: `"debug"`, `"info"`
+
+### `observability.log_format`
+- **类型**: 字符串
+- **默认值**: `"text"`
+- **描述**: 日志格式
+- **选项**: `"json"`, `"text"`
+- **示例**: `"json"`, `"text"`
+
+### `observability.enable_pprof`
+- **类型**: 布尔值
+- **默认值**: `false`
+- **描述**: 是否启用性能分析（pprof）
+- **示例**: `false`, `true`
+
+### `version`
+- **类型**: 字符串
+- **默认值**: `"1.0"`
+- **描述**: 配置文件版本
+
+## 重要提示
+
+### 安全考虑
+- FTP 凭据使用与 Web 界面相同的用户名/密码
+- WebDAV 支持可选的只读/读写模式（默认只读，出于安全考虑）
+- 所有 Web UI 和 FTP 访问都需要认证
+
+### 内存管理
+- 分段时长直接影响内存使用
+- 较长的分段 = 更多 RAM 使用
+- 监控系统内存并相应调整分段时长
+
+### 磁盘空间
+- 录像以 MP4 分段形式存储
+- 清理按计划运行，并在达到磁盘阈值时运行
+- `retention_days: 0` 默认为 30 天（不是"永久保留"）
+
+### 文件存储
+- 分段首先写入临时文件
+- 最终分段使用原子文件操作防止损坏
+- 数据库以 UTC 格式存储录像元数据和时间戳
+
+### 密码哈希生成
+使用以下命令生成 bcrypt 密码哈希：
 
 ```bash
-# 检查配置文件语法
-./mibee-nvr --config config.yaml --validate
-
-# 启动并显示配置
-./mibee-nvr --config config.yaml --dry-run
+mibee-nvr hash-password your-password
 ```
 
-## 配置热重载
-
-修改配置文件后，可以通过以下方式重载：
-
-```bash
-# 向进程发送 SIGHUP 信号
-kill -HUP $(pgrep mibee-nvr)
-```
-
-## 配置文件权限
-
+### 文件权限
 确保配置文件权限适当：
 
 ```bash
 chmod 600 config.yaml  # 仅所有者可读写
 chown mibee:nvr config.yaml  # 设置合适的所有权
 ```
-
-## 故障排除
-
-### 常见配置错误
-
-1. **YAML 语法错误**
-   - 检查缩进（使用空格，不要用制表符）
-   - 检查冒号和引号的使用
-
-2. **端口被占用**
-   ```bash
-   netstat -tlnp | grep :9090
-   ```
-
-3. **存储权限问题**
-   ```bash
-   ls -la /mnt/data/nvr
-   touch /mnt/data/nvr/test.txt
-   ```
-
-4. **摄像头连接失败**
-   - 使用 `ffmpeg` 测试连接：
-   ```bash
-   ffmpeg -rtsp_transport tcp -i "rtsp://192.168.1.100:554/stream" -t 5 -f null -
-   ```
-
-### 日志配置
-
-配置文件中可以通过 `logging` 部分控制日志输出：
-
-```yaml
-logging:
-  level: "info"                 # 日志级别：debug, info, warn, error
-  file: "/var/log/mibee-nvr.log"  # 日志文件路径
-  max_size: "100MB"            # 最大文件大小
-  max_backups: 5              # 最大备份文件数
-  compress: true               # 是否压缩旧日志
-```
-
-默认日志级别为 `info`，调试时可以设置为 `debug`。
