@@ -709,11 +709,15 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 // --- Camera CRUD endpoints ---
 
 var validProtocols = map[string]bool{
+	// New transport-only protocols
+	"rtsp":  true,
+	"http":  true,
+	"onvif": true,
+	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
+	"rtsp_h265":  true,
 	"rtsp_mjpeg": true,
 	"http_jpeg":  true,
-	"rtsp_h265":  true,
-	"onvif":     true,
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
@@ -732,6 +736,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint  string  `json:"onvif_endpoint"`
 		ProfileToken   string  `json:"profile_token"`
 		StreamEncoding string  `json:"stream_encoding"`
+		Encoding        string  `json:"encoding"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -746,7 +751,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp_h264, rtsp_mjpeg, http_jpeg", body.Protocol))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif", body.Protocol))
 		return
 	}
 	// ONVIF cameras require onvif_endpoint instead of url
@@ -769,10 +774,34 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
+	// Normalize protocol — handle legacy combined formats
+	proto := body.Protocol
+	enc := body.Encoding
+	if strings.Contains(proto, "_") {
+		parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q", proto))
+			return
+		}
+		proto = parsedProto
+		if enc == "" {
+			enc = parsedEnc
+		}
+	}
+	// Set default encoding if still empty
+	if enc == "" {
+		switch proto {
+		case "rtsp":
+			enc = "h264"
+		case "http":
+			enc = "jpeg"
+		}
+	}
 
-  cam := config.CameraConfig{
+	cam := config.CameraConfig{
     Name:          body.Name,
-    Protocol:      body.Protocol,
+    Protocol:      proto,
+    Encoding:      enc,
     URL:           body.URL,
     Username:      body.Username,
     Password:      body.Password,
@@ -1276,7 +1305,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only H.264/H.265/ONVIF cameras support HLS
-	if cam.Protocol != string(model.ProtoRTSPH264) && cam.Protocol != string(model.ProtoRTSPH265) && cam.Protocol != string(model.ProtoONVIF) {
+	if cam.Protocol != string(model.ProtoRTSP) && cam.Protocol != string(model.ProtoONVIF) {
 		writeError(w, http.StatusBadRequest, "camera protocol does not support HLS streaming")
 		return
 	}
