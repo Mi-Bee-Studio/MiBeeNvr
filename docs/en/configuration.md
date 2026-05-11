@@ -16,7 +16,7 @@ auth:
 cameras:
   - id: "cam1"
     name: "Camera Name"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
     url: "rtsp://..."
     enabled: true
     # sub_stream_url: "rtsp://..."   # Sub-stream for live preview
@@ -120,20 +120,32 @@ cameras:
 - **Example**: `"Front Door Camera"`, `"Back Yard"`
 
 ### `cameras[].protocol`
+
 - **Type**: string
 - **Required**: Yes
-- **Description**: Camera protocol type
-- **Options**: `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`
-- **Note**: H.265/HEVC provides better compression than H.264 but requires more CPU processing
+- **Description**: Camera transport protocol
+- **Options**: `"rtsp"`, `"http"`, `"onvif"` (new format) or `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` (legacy format)
+- **Note**: Legacy format is automatically parsed to the new protocol+encoding format
+- **Compatibility**: Both formats are supported for backward compatibility
+### `cameras[].encoding`
+
+- **Type**: string
+- **Optional**: Yes (auto-detected from legacy protocol or defaults based on protocol)
+- **Description**: Video encoding format
+- **Options**: `"h264"`, `"h265"`, `"mjpeg"`, `"jpeg"`
+- **Valid Combinations**:
+  - `protocol: "rtsp"` → `encoding: "h264"`, `"h265"`, or `"mjpeg"`
+  - `protocol: "http"` → `encoding: "jpeg"`
+  - `protocol: "onvif"` → `encoding: "h264"` or `"h265"` (auto-detect if not specified)
 
 ### `cameras[].url`
+
 - **Type**: string
 - **Required**: Yes
 - **Description**: Camera URL or stream endpoint
-- **Examples**:
+  - **Examples**:
   - RTSP: `"rtsp://192.168.1.100:554/stream"`
   - HTTP: `"http://192.168.1.101/capture"`
-
 ### `cameras[].username`
 - **Type**: string
 - **Optional**
@@ -182,7 +194,26 @@ cameras:
 
 ## Protocol Examples
 
+**New Format (Protocol + Encoding)**:
+
+**Legacy Format (Protocol only)**:
+
+
 ### RTSP H.264 Camera
+
+**New Format**:
+```yaml
+- id: "cam1"
+  name: "Front Door"
+  protocol: "rtsp"
+  encoding: "h264"
+  url: "rtsp://192.168.1.100:554/live"
+  username: "admin"
+  password: "password123"
+  enabled: true
+```
+
+**Legacy Format**:
 ```yaml
 - id: "cam1"
   name: "Front Door"
@@ -194,6 +225,18 @@ cameras:
 ```
 
 ### RTSP MJPEG Camera
+
+**New Format**:
+```yaml
+- id: "cam2"
+  name: "Back Yard"
+  protocol: "rtsp"
+  encoding: "mjpeg"
+  url: "rtsp://192.168.1.101:554/stream"
+  enabled: true
+```
+
+**Legacy Format**:
 ```yaml
 - id: "cam2"
   name: "Back Yard"
@@ -203,6 +246,18 @@ cameras:
 ```
 
 ### HTTP JPEG Camera
+
+**New Format**:
+```yaml
+- id: "cam3"
+  name: "Garage"
+  protocol: "http"
+  encoding: "jpeg"
+  url: "http://192.168.1.102/capture"
+  enabled: true
+```
+
+**Legacy Format**:
 ```yaml
 - id: "cam3"
   name: "Garage"
@@ -213,6 +268,40 @@ cameras:
 
 ### RTSP H.265 Camera
 
+**New Format**:
+```yaml
+- id: "cam4"
+  name: "H.265 Security Camera"
+  protocol: "rtsp"
+  encoding: "h265"
+  url: "rtsp://192.168.1.103:554/stream"
+  username: "admin"
+  password: "camera-password"
+  enabled: true
+### ONVIF Camera
+
+**New Format (using url field)**:
+```yaml
+- id: "cam5"
+  name: "ONVIF Security Camera"
+  protocol: "onvif"
+  encoding: "h264"
+  url: "rtsp://192.168.1.104:554/stream"
+  enabled: true
+```
+
+**Alternative Format (using onvif_endpoint field)**:
+```yaml
+- id: "cam5"
+  name: "ONVIF Security Camera"
+  protocol: "onvif"
+  encoding: "h265"
+  onvif_endpoint: "http://192.168.1.104/onvif"
+  profile_token: "profile_1"
+  enabled: true
+```
+
+**Legacy Format**:
 ```yaml
 - id: "cam4"
   name: "H.265 Security Camera"
@@ -295,33 +384,35 @@ The merge feature automatically combines small video segments into larger files,
 - **MJPEG**: JPEG files are moved into a single directory (no re-encoding).
 - **Disk space**: Merging is skipped if available disk space is less than 110% of the estimated merged file size.
 - **Atomic**: Merged files use atomic rename (temp file → final) to prevent corruption.
-#HM|- **Originals**: Source segments are deleted from disk and database after successful merge.
-#NX|
-#VY|### Per-Camera Merge Configuration
-#RK|
-#NK|Individual cameras can override the global merge settings using the API or Web UI. This allows different cameras to have different merge strategies based on their recording patterns and storage requirements.
-#JY|
-#PX|**API Endpoints**:
-#HK|- `GET /api/cameras/:id/merge-config` - Get per-camera merge overrides
-#HK|- `PUT /api/cameras/:id/merge-config` - Set per-camera merge overrides
-#HK|- `DELETE /api/cameras/:id/merge-config` - Reset to global defaults
-#NX|
-#VY|**Per-Camera Parameters**:
-#WK|When configuring per-camera merge settings, all 6 global parameters can be overridden:
-#NJ|
-#RK|- `enabled` - Enable/disable merging for this specific camera
-#VK|- `check_interval` - How often to check for mergeable segments
-#BY|- `window_size` - Time window for grouping segments
-#NP|- `batch_limit` - Maximum segments per merge run
-#JR|- `min_segment_age` - Minimum age before segments can be merged
-#PV|- `min_segments_to_merge` - Minimum segments required to trigger merge
-#XN|
-#VY|**Example Override**:
-#YP|```yaml
+- **Originals**: Source segments are deleted from disk and database after successful merge.
+- **Originals**: Source segments are deleted from disk and database after successful merge.
+
+### Per-Camera Merge Configuration
+
+Individual cameras can override the global merge settings using the API or Web UI. This allows different cameras to have different merge strategies based on their recording patterns and storage requirements.
+
+**API Endpoints**:
+- `GET /api/cameras/:id/merge-config` - Get per-camera merge overrides
+- `PUT /api/cameras/:id/merge-config` - Set per-camera merge overrides
+- `DELETE /api/cameras/:id/merge-config` - Reset to global defaults
+
+**Per-Camera Parameters**:
+When configuring per-camera merge settings, all 6 global parameters can be overridden:
+
+- `enabled` - Enable/disable merging for this specific camera
+- `check_interval` - How often to check for mergeable segments
+- `window_size` - Time window for grouping segments
+- `batch_limit` - Maximum segments per merge run
+- `min_segment_age` - Minimum age before segments can be merged
+- `min_segments_to_merge` - Minimum segments required to trigger merge
+
+**Example Override**:
+```yaml
 cameras:
   - id: "cam1"
     name: "Front Door"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://192.168.1.100:554/live"
     # Per-camera merge settings
     merge_config:
@@ -330,9 +421,6 @@ cameras:
       batch_limit: 100  # Lower than global 200
       min_segments_to_merge: 2  # Lower than global 3
 ```
-#NX|
-#YJ|## FTP Configuration
-#RM|
 
 ## FTP Configuration
 

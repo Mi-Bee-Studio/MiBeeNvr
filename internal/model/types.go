@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type Camera struct {
 	ID       string
 	Name     string
 	Protocol Protocol
+	Encoding Format
 	URL      string
 	Username string
 	Password string
@@ -115,9 +117,64 @@ const (
 	ProtoONVIF    Protocol = "onvif"
 )
 
+// Transport-only protocol constants
+const (
+	ProtoRTSP Protocol = "rtsp"
+	ProtoHTTP Protocol = "http"
+)
+
+// Encoding constants
+const (
+	EncJPEG Format = "jpeg"
+)
+
 // Formats used for recordings/segments
 const (
 	FormatH264  Format = "h264"
 	FormatMJPEG Format = "mjpeg"
 	FormatH265  Format = "h265"
 )
+
+// ValidEncodingsForProtocol maps transport protocol to supported encodings
+var ValidEncodingsForProtocol = map[string][]string{
+	string(ProtoRTSP):  {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
+	string(ProtoHTTP):  {string(EncJPEG)},
+	string(ProtoONVIF): {string(FormatH264), string(FormatH265)},
+}
+
+// ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
+func ParseLegacyProtocol(old string) (protocol, encoding string, err error) {
+	switch old {
+	case "rtsp_h264":
+		return "rtsp", "h264", nil
+	case "rtsp_h265":
+		return "rtsp", "h265", nil
+	case "rtsp_mjpeg":
+		return "rtsp", "mjpeg", nil
+	case "http_jpeg":
+		return "http", "jpeg", nil
+	case "onvif":
+		return "onvif", "", nil
+	default:
+		return "", "", fmt.Errorf("unknown legacy protocol: %s", old)
+	}
+}
+
+// ValidateProtocolEncoding checks if the protocol+encoding combination is valid.
+// Empty encoding is allowed for ONVIF (auto-detect).
+func ValidateProtocolEncoding(protocol, encoding string) error {
+	encodings, ok := ValidEncodingsForProtocol[protocol]
+	if !ok {
+		return fmt.Errorf("unknown protocol: %s", protocol)
+	}
+	// ONVIF allows empty encoding (auto-detect)
+	if protocol == string(ProtoONVIF) && encoding == "" {
+		return nil
+	}
+	for _, e := range encodings {
+		if e == encoding {
+			return nil
+		}
+	}
+	return fmt.Errorf("encoding %q not valid for protocol %q", encoding, protocol)
+}

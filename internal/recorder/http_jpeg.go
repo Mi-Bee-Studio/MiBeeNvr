@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -45,8 +46,11 @@ type HTTPJPEGRecorder struct {
 	mu     sync.Mutex
 	status model.RecorderStatus
 	cancel context.CancelFunc
-	done   chan struct{}
+	cancelStream context.CancelFunc
+	done         chan struct{}
+	watchdogDone chan struct{}
 
+	lastFrameTime atomic.Int64 // Unix timestamp of last received frame
 	curTempPath  string
 	curFinalPath string
 	segStart     time.Time
@@ -127,9 +131,11 @@ func (r *HTTPJPEGRecorder) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	r.done = make(chan struct{})
+	r.watchdogDone = make(chan struct{})
 	r.status = model.StatusRecording
 	r.incActive()
 	go r.run(ctx)
+	go r.idleWatchdog(ctx)
 	return nil
 }
 
@@ -141,6 +147,9 @@ func (r *HTTPJPEGRecorder) Stop() error {
 	r.mu.Unlock()
 	if r.done != nil {
 		<-r.done
+	}
+	if r.watchdogDone != nil {
+		<-r.watchdogDone
 	}
 	r.decActive()
 	return nil
@@ -165,7 +174,16 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 
 	backoff := r.cfg.InitBackoff
 	for {
-		err := r.connectAndStream(ctx)
+		streamCtx, streamCancel := context.WithCancel(ctx)
+		r.mu.Lock()
+		r.cancelStream = streamCancel
+		r.mu.Unlock()
+		err := r.connectAndStream(streamCtx)
+		r.mu.Lock()
+		r.cancelStream = nil
+		r.mu.Unlock()
+		streamCancel()
+
 		if ctx.Err() != nil {
 			return
 		}
@@ -182,6 +200,35 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		backoff = backoff*2 + jitter
 		if backoff > r.cfg.MaxBackoff {
 			backoff = r.cfg.MaxBackoff
+		}
+	}
+}
+
+func (r *HTTPJPEGRecorder) idleWatchdog(ctx context.Context) {
+	defer close(r.watchdogDone)
+	const idleTimeout = 60 // seconds
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lastFrame := r.lastFrameTime.Load()
+			if lastFrame > 0 && time.Now().Unix()-lastFrame > idleTimeout {
+				httpJpegLogger.Warn("no frames received, triggering reconnect",
+					"camera_id", r.cfg.CameraID,
+					"idle_seconds", time.Now().Unix()-lastFrame)
+				r.recordError("idle_timeout")
+				r.setStatus(model.StatusReconnecting)
+				r.mu.Lock()
+				if r.cancelStream != nil {
+					r.cancelStream()
+				}
+				r.mu.Unlock()
+				return
+			}
 		}
 	}
 }
@@ -280,8 +327,9 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("write frame: %w", err)
 		}
-		r.frameCount++
-		r.recordBytes(int64(n))
+	r.frameCount++
+	r.recordBytes(int64(n))
+	r.lastFrameTime.Store(time.Now().Unix())
 
 		// Check if segment duration elapsed
 		if time.Since(r.segStart) >= r.cfg.SegmentDur {

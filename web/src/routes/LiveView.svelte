@@ -41,7 +41,7 @@
     if (!videoEl || !camera) return;
 
     const protocol = camera.protocol;
-    if (protocol !== 'rtsp_h264' && protocol !== 'rtsp_h265') {
+    if (protocol !== 'rtsp_h264' && protocol !== 'rtsp_h265' && protocol !== 'onvif' && protocol !== 'rtsp') {
       return; // Handled in template
     }
 
@@ -154,11 +154,12 @@
   });
 
   // Initialize player after camera loads
+  let playerInitialized = false;
   $effect(() => {
-    if (camera && !loading && !error && videoEl) {
+    if (camera && !loading && !error && videoEl && !playerInitialized) {
       const protocol = camera.protocol;
-      if (protocol === 'rtsp_h264' || protocol === 'rtsp_h265') {
-        // Small delay to ensure video element is mounted
+      if (protocol === 'rtsp_h264' || protocol === 'rtsp_h265' || protocol === 'onvif' || protocol === 'rtsp') {
+        playerInitialized = true;
         setTimeout(() => initPlayer(), 50);
       }
     }
@@ -201,7 +202,7 @@
           <span class="badge badge-neutral">{camera.protocol}</span>
         </div>
 
-        {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265'}
+        {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif' || camera.protocol === 'rtsp'}
           <!-- HLS Player -->
           <div class="card border th-border overflow-hidden">
             <div class="relative bg-black">

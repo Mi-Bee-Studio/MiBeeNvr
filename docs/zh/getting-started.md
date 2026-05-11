@@ -9,7 +9,7 @@ MiBee NVR 是一个用 Go 语言编写的轻量级家用网络视频录像机。
 - 支持多种摄像头协议：RTSP H.264、RTSP H.265、RTSP MJPEG、HTTP JPEG
 - 实时录制为 MP4 片段，自动分段管理
 - Web 管理界面，支持摄像头配置和录像管理
-- WebDAV 只读访问，支持文件浏览器播放
+- WebDAV（可配置只读/读写）访问，支持文件浏览器播放
 - FTP 服务器，便于第三方工具访问
 - MQTT 集成，支持远程触发
 - 轻量级设计，低内存占用
@@ -103,7 +103,6 @@ cameras:
     password: "password123"
     enabled: true
 ```
-```
 
 ### RTSP H.265 摄像头
 
@@ -115,7 +114,9 @@ cameras:
     url: "rtsp://192.168.1.103:554/stream"
     enabled: true
 ```
+
 ### RTSP MJPEG 摄像头
+
 
 ```yaml
 cameras:

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 type Config struct {
@@ -38,6 +40,7 @@ type CameraConfig struct {
 	ID       string `yaml:"id"`
 	Name     string `yaml:"name"`
 	Protocol string `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding       string `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
 	URL      string `yaml:"url"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -170,11 +173,27 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
-		if c.Protocol == "onvif" && strings.TrimSpace(c.ONVIFEndpoint) == "" {
-			return fmt.Errorf("camera[%d].onvif_endpoint is required for ONVIF cameras", i)
+		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) == "" {
+			return fmt.Errorf("camera[%d].url or onvif_endpoint is required for ONVIF cameras", i)
 		}
-		if c.Protocol != "rtsp_h264" && c.Protocol != "rtsp_mjpeg" && c.Protocol != "http_jpeg" && c.Protocol != "rtsp_h265" && c.Protocol != "onvif" {
-			return fmt.Errorf("camera[%d].protocol invalid: %s", i, c.Protocol)
+		// Auto-populate: if url is set but onvif_endpoint is empty, copy url to onvif_endpoint
+		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) != "" {
+			c.ONVIFEndpoint = c.URL
+		}
+		// Accept both old combined format and new separate format
+		proto := c.Protocol
+		enc := c.Encoding
+		if strings.Contains(proto, "_") {
+			// Old combined format like "rtsp_h264" — parse and validate
+			parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
+			if err != nil {
+				return fmt.Errorf("camera[%d].protocol invalid: %s", i, proto)
+			}
+			proto = parsedProto
+			enc = parsedEnc
+		}
+		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
+			return fmt.Errorf("camera[%d].%w", i, err)
 		}
 	}
 	// port ranges
@@ -222,6 +241,7 @@ func Validate(cfg *Config) error {
 	}
 	return nil
 }
+
 func (cfg *Config) applyDefaults() {
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
@@ -303,6 +323,29 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
+	}
+	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
+	for i := range cfg.Cameras {
+		cam := &cfg.Cameras[i]
+		// If encoding is empty but protocol looks like old combined format (e.g. "rtsp_h264")
+		if cam.Encoding == "" && strings.Contains(cam.Protocol, "_") {
+			proto, enc, err := model.ParseLegacyProtocol(cam.Protocol)
+			if err == nil {
+				cam.Protocol = proto
+				cam.Encoding = enc
+			}
+		}
+		// If encoding is still empty for known transport-only protocols, set sensible defaults
+		if cam.Encoding == "" {
+			switch cam.Protocol {
+			case "rtsp":
+				cam.Encoding = "h264"
+			case "http":
+				cam.Encoding = "jpeg"
+			case "onvif":
+				cam.Encoding = "" // ONVIF auto-detects
+			}
+		}
 	}
 }
 
