@@ -65,7 +65,7 @@ export function getAutoRefresh(): string {
 }
 
 export function setAutoRefresh(val: string): void {
-  const validValues = ['10s', '30s', '60s', 'off'];
+  const validValues = ['30s', '60s', '120s', 'off'];
   if (validValues.includes(val)) {
     setPreference(PREFERENCE_KEYS.AUTO_REFRESH, val);
   } else {

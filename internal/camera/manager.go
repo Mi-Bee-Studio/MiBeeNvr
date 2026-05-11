@@ -23,6 +23,7 @@ type CameraUpdate struct {
 	Name         *string
 	URL          *string
 	Protocol     *string
+	Encoding     *string
 	Username     *string
 	Password     *string
 	Enabled      *bool
@@ -67,36 +68,44 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
 	switch cam.Protocol {
-	case string(model.ProtoRTSPH264):
-		h264Cfg := recorder.H264Config{
-			CameraID:   cam.ID,
-			RTSPURL:    cam.URL,
-			Username:   cam.Username,
-			Password:   cam.Password,
-			SegmentDur: segDur,
-			DB:         cm.db,
+	case string(model.ProtoRTSP):
+		switch cam.Encoding {
+		case string(model.FormatH264):
+			h264Cfg := recorder.H264Config{
+				CameraID:   cam.ID,
+				RTSPURL:    cam.URL,
+				Username:   cam.Username,
+				Password:   cam.Password,
+				SegmentDur: segDur,
+				DB:         cm.db,
+			}
+			return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+		case string(model.FormatH265):
+			h265Cfg := recorder.H265Config{
+				CameraID:   cam.ID,
+				RTSPURL:    cam.URL,
+				Username:   cam.Username,
+				Password:   cam.Password,
+				SegmentDur: segDur,
+				DB:         cm.db,
+			}
+			return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+		case string(model.FormatMJPEG):
+			mjpegCfg := recorder.MJPEGConfig{
+				CameraID:       cam.ID,
+				RTSPURL:        cam.URL,
+				SegmentDur:     segDur,
+				SampleInterval: cam.SampleInterval,
+				DB:             cm.db,
+			}
+			return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
+		default:
+			return nil
 		}
-		return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
-	case string(model.ProtoRTSPH265):
-		h265Cfg := recorder.H265Config{
-			CameraID:   cam.ID,
-			RTSPURL:    cam.URL,
-			Username:   cam.Username,
-			Password:   cam.Password,
-			SegmentDur: segDur,
-			DB:         cm.db,
+	case string(model.ProtoHTTP):
+		if cam.Encoding != string(model.EncJPEG) {
+			return nil
 		}
-		return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
-	case string(model.ProtoRTSPMJPEG):
-		mjpegCfg := recorder.MJPEGConfig{
-			CameraID:       cam.ID,
-			RTSPURL:        cam.URL,
-			SegmentDur:     segDur,
-			SampleInterval: cam.SampleInterval,
-			DB:             cm.db,
-		}
-		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
-	case string(model.ProtoHTTPJPEG):
 		httpJpegCfg := recorder.HTTPJPEGConfig{
 			CameraID:   cam.ID,
 			URL:        cam.URL,
@@ -113,7 +122,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		}
 		onvifClient := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 		onvifCfg := recorder.ONVIFConfig{
-			CameraID:     cam.ID,
+			CameraID:       cam.ID,
 			ProfileToken:   cam.ProfileToken,
 			StreamEncoding: cam.StreamEncoding,
 			Username:       cam.Username,
@@ -170,7 +179,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", "", ""); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
@@ -182,60 +191,24 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 		}
 
 		switch cam.Protocol {
-		case string(model.ProtoRTSPH264):
+		case string(model.ProtoRTSP), string(model.ProtoHTTP):
 			rec := cm.createRecorder(cam, segDur)
 			if rec != nil {
 				cm.mu.Lock()
 				cm.recorders[cam.ID] = rec
 				cm.mu.Unlock()
 				if err := rec.Start(ctx); err != nil {
-						logger.Error("failed to start H264 recorder", "camera_id", cam.ID, "error", err)
+					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
 				} else {
-						logger.Info("started H264 recorder", "camera_id", cam.ID)
+					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
 				}
 			}
-
-		case string(model.ProtoRTSPMJPEG):
-			rec := cm.createRecorder(cam, segDur)
-			if rec != nil {
-				cm.mu.Lock()
-				cm.recorders[cam.ID] = rec
-				cm.mu.Unlock()
-				if err := rec.Start(ctx); err != nil {
-						logger.Error("failed to start MJPEG recorder", "camera_id", cam.ID, "error", err)
-				} else {
-						logger.Info("started MJPEG recorder", "camera_id", cam.ID)
-				}
-			}
-
-		case string(model.ProtoRTSPH265):
-			rec := cm.createRecorder(cam, segDur)
-			if rec != nil {
-				cm.mu.Lock()
-				cm.recorders[cam.ID] = rec
-				cm.mu.Unlock()
-				if err := rec.Start(ctx); err != nil {
-						logger.Error("failed to start H265 recorder", "camera_id", cam.ID, "error", err)
-				} else {
-						logger.Info("started H265 recorder", "camera_id", cam.ID)
-				}
-			}
-
-		case string(model.ProtoHTTPJPEG):
-			rec := cm.createRecorder(cam, segDur)
-			if rec != nil {
-				cm.mu.Lock()
-				cm.recorders[cam.ID] = rec
-				cm.mu.Unlock()
-				if err := rec.Start(ctx); err != nil {
-						logger.Error("failed to start HTTP JPEG recorder", "camera_id", cam.ID, "error", err)
-				} else {
-						logger.Info("started HTTP JPEG recorder", "camera_id", cam.ID)
-				}
-			}
-
 		case string(model.ProtoONVIF):
-			logger.Info("camera has ONVIF protocol, managed via ONVIF discovery", "camera_id", cam.ID)
+			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+				logger.Error("failed to start ONVIF recorder", "camera_id", cam.ID, "error", err)
+			} else {
+				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
+			}
 		default:
 			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 		}
@@ -336,7 +309,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 	// Persist to database
 	if cm.db != nil {
-	if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+	if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
@@ -445,6 +418,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.Protocol != nil {
 		cam.Protocol = *updates.Protocol
 	}
+	if updates.Encoding != nil {
+		if *updates.Encoding != cam.Encoding {
+			needsRestart = true
+		}
+		cam.Encoding = *updates.Encoding
+	}
 	if updates.Username != nil {
 		cam.Username = *updates.Username
 	}
@@ -472,7 +451,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields

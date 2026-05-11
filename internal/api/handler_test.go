@@ -1543,8 +1543,8 @@ func TestHandleCreateCamera(t *testing.T) {
 	if cam.Name != "Front Door" {
 		t.Fatalf("expected name 'Front Door', got %s", cam.Name)
 	}
-	if cam.Protocol != "rtsp_h264" {
-		t.Fatalf("expected protocol 'rtsp_h264', got %s", cam.Protocol)
+	if cam.Protocol != "rtsp" {
+		t.Fatalf("expected protocol 'rtsp', got %s", cam.Protocol)
 	}
 	if cam.ID == "" {
 		t.Fatal("expected non-empty camera ID")

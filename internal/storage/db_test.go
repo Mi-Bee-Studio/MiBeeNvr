@@ -207,7 +207,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	// Test insert new camera
 
-	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "rtsp://localhost:554/stream", "user", "pass", true, "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", true, "", "", "")
 
 	require.NoError(t, err)
 
@@ -237,7 +237,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	// Test update existing camera
 
-	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "rtsp://localhost:555/stream", "newuser", "newpass", false, "", "", "")
+	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", false, "", "", "")
 
 	require.NoError(t, err)
 
@@ -278,7 +278,7 @@ func TestGetCamera(t *testing.T) {
 	defer db.Close()
 
 	// Insert a camera first
-	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "rtsp://localhost:554/stream", "user", "pass", true, "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", true, "", "", "")
 	require.NoError(t, err)
 
 	// Get the camera
@@ -317,11 +317,11 @@ func TestListCameras_CredentialMetadata(t *testing.T) {
 	defer db.Close()
 
 	// Camera with username and password
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "With Creds", "rtsp_h264", "rtsp://host/stream", "admin", "secret", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "With Creds", "rtsp_h264", "", "rtsp://host/stream", "admin", "secret", true, "", "", ""))
 	// Camera with username only (no password)
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Password", "rtsp_h264", "rtsp://host/stream2", "viewer", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Password", "rtsp_h264", "", "rtsp://host/stream2", "viewer", "", true, "", "", ""))
 	// Camera with no credentials
-	require.NoError(t, db.UpsertCamera(ctx, "cam3", "No Creds", "rtsp_h264", "rtsp://host/stream3", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam3", "No Creds", "rtsp_h264", "", "rtsp://host/stream3", "", "", true, "", "", ""))
 
 	cameras, err := db.ListCameras(ctx)
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestGetCamera_CredentialMetadata(t *testing.T) {
 	defer db.Close()
 
 	// Camera with credentials
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cred Cam", "rtsp_h264", "rtsp://host/stream", "user1", "pass1", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cred Cam", "rtsp_h264", "", "rtsp://host/stream", "user1", "pass1", true, "", "", ""))
 
 	cam, err := db.GetCamera(ctx, "cam1")
 	require.NoError(t, err)
@@ -359,7 +359,7 @@ func TestGetCamera_CredentialMetadata(t *testing.T) {
 	require.True(t, cam.HasPassword)
 
 	// Camera without password
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Pass", "rtsp_h264", "rtsp://host/stream2", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Pass", "rtsp_h264", "", "rtsp://host/stream2", "", "", true, "", "", ""))
 
 	cam2, err := db.GetCamera(ctx, "cam2")
 	require.NoError(t, err)
@@ -682,7 +682,7 @@ func TestUpsertCameraMerge_RoundTrip(t *testing.T) {
 	defer db.Close()
 
 	// Insert a camera first
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Merge Cam", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Merge Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
 
 	// Set per-camera merge config
 	mergeEnabled := true
@@ -722,7 +722,7 @@ func TestUpsertCameraMerge_NilKeepsExisting(t *testing.T) {
 	_ = db.Init(ctx)
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Nil Cam", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Nil Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
 
 	// Set merge config
 	mergeEnabled := false
@@ -756,9 +756,9 @@ func TestListCameras_WithMergeConfig(t *testing.T) {
 	defer db.Close()
 
 	// Camera with no merge config
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "No Merge", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "No Merge", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
 	// Camera with merge config
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp_h264", "rtsp://host/stream2", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp_h264", "", "rtsp://host/stream2", "", "", true, "", "", ""))
 	mergeEnabled := true
 	batchLimit := 100
 	require.NoError(t, db.UpsertCameraMerge(ctx, "cam2", &mergeEnabled, nil, nil, nil, &batchLimit, nil))
@@ -787,7 +787,7 @@ func TestUpsertCameraMerge_AllFalseValues(t *testing.T) {
 	_ = db.Init(ctx)
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "False Cam", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "False Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
 
 	// Set merge_enabled to false — must not be confused with nil
 	mergeEnabled := false
@@ -810,7 +810,7 @@ func TestUpsertCamera_OnvifFields(t *testing.T) {
 	defer db.Close()
 
 	// Insert camera with ONVIF fields
-	err := db.UpsertCamera(ctx, "cam1", "ONVIF Cam", "onvif", "rtsp://host/stream", "admin", "pass", true, "http://host/onvif/device_service", "profile_1", "")
+	err := db.UpsertCamera(ctx, "cam1", "ONVIF Cam", "onvif", "", "rtsp://host/stream", "admin", "pass", true, "http://host/onvif/device_service", "profile_1", "")
 	require.NoError(t, err)
 
 	// Verify via GetCamera
@@ -838,7 +838,7 @@ func TestUpsertCamera_OnvifFieldsEmptyDefaults(t *testing.T) {
 	defer db.Close()
 
 	// Insert camera without ONVIF fields (backward compat)
-	err := db.UpsertCamera(ctx, "cam1", "No ONVIF", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "No ONVIF", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	cam, err := db.GetCamera(ctx, "cam1")
@@ -858,10 +858,10 @@ func TestUpsertCamera_OnvifUpdateExisting(t *testing.T) {
 	defer db.Close()
 
 	// Insert without ONVIF
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cam", "rtsp_h264", "rtsp://host/stream", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
 
 	// Update with ONVIF fields
-	err := db.UpsertCamera(ctx, "cam1", "Cam Updated", "onvif", "rtsp://host/stream2", "admin", "pass", true, "http://host/onvif", "prof_2", "")
+	err := db.UpsertCamera(ctx, "cam1", "Cam Updated", "onvif", "", "rtsp://host/stream2", "admin", "pass", true, "http://host/onvif", "prof_2", "")
 	require.NoError(t, err)
 
 	cam, err := db.GetCamera(ctx, "cam1")

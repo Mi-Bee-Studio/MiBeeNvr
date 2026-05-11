@@ -24,8 +24,6 @@ Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=
 | `/api/recordings` | GET | 获取录像列表 | 是 |
 | `/api/recordings/:id` | GET | 获取录像详情 | 是 |
 | `/api/recordings/:id` | DELETE | 删除录像 | 是 |
-|| `/api/recordings/:id` | DELETE | 删除录像 | 是 |
-|| `/api/recordings/:id/download` | GET | 下载录像 | 是 |
 | `/api/recordings/:id/download` | GET | 下载录像 | 是 |
 | `/api/recordings/:id/frames` | GET | 获取 MJPEG 帧列表 | 是 |
 | `/api/cameras` | GET | 获取摄像头列表 | 是 |
@@ -252,6 +250,7 @@ curl -X GET "http://localhost:9090/api/recordings/1704110400000000000/frames" \
       "id": "cam1",
       "name": "前门摄像头",
       "protocol": "rtsp_h264",
+  "encoding": "h264",
       "url": "rtsp://192.168.1.100:554/stream",
       "enabled": true,
       "status": "recording",
@@ -268,6 +267,7 @@ curl -X GET "http://localhost:9090/api/recordings/1704110400000000000/frames" \
       "id": "cam2",
       "name": "后院摄像头",
       "protocol": "rtsp_mjpeg",
+  "encoding": "mjpeg",
       "url": "rtsp://192.168.1.101:554/live",
       "enabled": true,
       "status": "stopped",
@@ -299,6 +299,7 @@ curl -X GET "http://localhost:9090/api/cameras" \
 {
   "name": "新增摄像头",
   "protocol": "rtsp_h264",
+  "encoding": "h264",
   "url": "rtsp://192.168.1.102:554/stream",
   "enabled": true,
   "username": "admin",
@@ -316,6 +317,7 @@ curl -X GET "http://localhost:9090/api/cameras" \
     "id": "cam3",
     "name": "新增摄像头",
     "protocol": "rtsp_h264",
+  "encoding": "h264",
     "url": "rtsp://192.168.1.102:554/stream",
     "enabled": true,
     "status": "initializing",
@@ -335,6 +337,7 @@ curl -X POST "http://localhost:9090/api/cameras" \
   -d '{
     "name": "新增摄像头",
     "protocol": "rtsp_h264",
+  "encoding": "h264",
     "url": "rtsp://192.168.1.102:554/stream",
     "enabled": true,
     "recording": true,
@@ -356,6 +359,7 @@ curl -X POST "http://localhost:9090/api/cameras" \
       "id": "cam1",
       "name": "前门摄像头",
       "protocol": "rtsp_h264",
+  "encoding": "h264",
       "url": "rtsp://192.168.1.100:554/stream",
       "enabled": true,
       "status": "recording",
@@ -417,6 +421,7 @@ curl -X GET "http://localhost:9090/api/cameras/cam1" \
     "id": "cam1",
     "name": "前门摄像头（更新）",
     "protocol": "rtsp_h264",
+  "encoding": "h264",
     "url": "rtsp://192.168.1.100:554/stream_updated",
     "enabled": true,
     "recording": true,
@@ -579,177 +584,177 @@ curl -X GET "http://localhost:9090/api/health"
 ```bash
 curl -X GET "http://localhost:9090/api/stats" \
   -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
-#WN|```
-#YV|
-#VY|### 合并状态 API
-#WK|
-#RK|获取合并管理器状态和统计信息。
-#JQ|
-#JQ|**接口**: `GET /api/merge/status`
-#NX|
-#RV|获取合并管理器操作状态，包括错误计数和性能指标。
-#KR|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X GET "http://localhost:9090/api/merge/status" \
-#WK|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
-#QV|```
-#WY|
-#QV|**响应**:
-#YP|```json
-#SV|{
-#MQ|  "enabled": true,
-#KM|  "error_count": 0,
-#JK|  "files_created": 9,
-#ZM|  "last_run_time": "2026-05-11T06:37:41Z",
-#BJ|  "segments_merged": 235
-#QR|}
-#YV|```
-#VS|
-#VY|### 获取待处理合并数量
-#NT|
-#HP|**接口**: `GET /api/merge/pending`
-#PN|
-#SZ|获取每个摄像头待处理的合并段数量。
-#NJ|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X GET "http://localhost:9090/api/merge/pending" \
-#WK|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
-#QV|```
-#WY|
-#QV|**响应**:
-#YP|```json
-#SV|{
-#MQ|  "pending": {
-#KM|    "cam-xxx": 99,
-#JK|    "cam-yyy": 145
-#ZM|  }
-#QR|}
-#YV|```
-#VS|
-#VY|### 获取合并配置
-#HY|
-#HP|**接口**: `GET /api/settings/merge`
-#PN|
-#HV|获取全局合并设置配置。
-#WP|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X GET "http://localhost:9090/api/settings/merge" \
-#WK|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
-#QV|```
-#WY|
-#QV|**响应**:
-#YP|```json
-#SV|{
-#MQ|  "enabled": true,
-#KM|  "check_interval": "1h",
-#JK|  "window_size": "1h",
-#ZM|  "batch_limit": 200,
-#BJ|  "min_segment_age": "10m",
-#RZ|  "min_segments_to_merge": 3
-#QR|}
-#YV|```
-#VS|
-#VY|### 更新合并配置
-#MM|
-#WY|**接口**: `PUT /api/settings/merge`
-#MK|
-#VP|更新全局合并设置。所有字段都是可选的。
-#RY|
-#RX|**请求体**: 
-#YP|```json
-#KR|{
-#WY|  "enabled": true,
-#HZ|  "check_interval": "30m",
-#QH|  "window_size": "2h",
-#RT|  "batch_limit": 100,
-#HV|  "min_segment_age": "15m",
-#VX|  "min_segments_to_merge": 5
-#XB|}
-#BK|```
-#KB|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X PUT "http://localhost:9090/api/settings/merge" \
-#SS|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=" \\
-#VQ|  -H "Content-Type: application/json" \\
-#BW|  -d '{
-#RV|    "enabled": true,
-#NH|    "check_interval": "30m",
-#SS|    "batch_limit": 100
-#BQ|  }' \
-#JR|  "http://localhost:9090/api/settings/merge"
-#QV|```
-#HR|
-#QV|**响应**:
-#YP|```json
-#VM|{
-#QJ|  "status": "updated"
-#SY|}
-#YX|```
-#SK|
-#VY|### 设置摄像头合并配置
-#BR|
-#ZH|**接口**: `PUT /api/cameras/:id/merge-config`
-#WS|
-#NK|为特定摄像头设置合并配置覆盖。所有6个参数都是必需的。
-#JY|
-#RX|**请求体**: 
-#YP|```json
-#RJ|{
-#QQ|  "enabled": true,
-#NN|  "check_interval": "30m",
-#XW|  "window_size": "1h",
-#QR|  "batch_limit": 150,
-#ZK|  "min_segment_age": "5m",
-#QJ|  "min_segments_to_merge": 2
-#NW|}
-#SV|
-#PX|  # 注意：设置后，这些配置会覆盖该摄像头的全局合并设置
-#RJ|}```
-#KJ|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X PUT "http://localhost:9090/api/cameras/cam1/merge-config" \
-#SS|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=" \\
-#VQ|  -H "Content-Type: application/json" \\
-#BW|  -d '{
-#RV|    "enabled": false,
-#NH|    "batch_limit": 50
-#SS|  }' \
-#JR|  "http://localhost:9090/api/cameras/cam1/merge-config"
-#QV|```
-#HR|
-#QV|**响应**:
-#YP|```json
-#VM|{
-#QJ|  "status": "updated"
-#SY|}
-#YX|```
-#SK|
-#VY|### 重置摄像头合并配置
-#XH|
-#WY|**接口**: `DELETE /api/cameras/:id/merge-config`
-#MK|
-#VP|移除摄像头合并配置覆盖，摄像头将继承全局合并设置。
-#RV|
-#JQ|**请求**: 
-#BV|```bash
-#JS|curl -X DELETE "http://localhost:9090/api/cameras/cam1/merge-config" \
-#WK|  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
-#QV|```
-#RN|
-#QV|**响应**:
-#YP|```json
-#ST|{
-#KR|  "status": "reset"
-#YS|}
-#BB|```
-#YV|
-#VY|### 获取系统设置
-#QY|
+```
+
+### 合并状态 API
+
+获取合并管理器状态和统计信息。
+
+**接口**: `GET /api/merge/status`
+
+获取合并管理器操作状态，包括错误计数和性能指标。
+
+**请求**: 
+```bash
+curl -X GET "http://localhost:9090/api/merge/status" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
+```
+
+**响应**:
+```json
+{
+  "enabled": true,
+  "error_count": 0,
+  "files_created": 9,
+  "last_run_time": "2026-05-11T06:37:41Z",
+  "segments_merged": 235
+}
+```
+
+### 获取待处理合并数量
+
+**接口**: `GET /api/merge/pending`
+
+获取每个摄像头待处理的合并段数量。
+
+**请求**: 
+```bash
+curl -X GET "http://localhost:9090/api/merge/pending" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
+```
+
+**响应**:
+```json
+{
+  "pending": {
+    "cam-xxx": 99,
+    "cam-yyy": 145
+  }
+}
+```
+
+### 获取合并配置
+
+**接口**: `GET /api/settings/merge`
+
+获取全局合并设置配置。
+
+**请求**: 
+```bash
+curl -X GET "http://localhost:9090/api/settings/merge" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
+```
+
+**响应**:
+```json
+{
+  "enabled": true,
+  "check_interval": "1h",
+  "window_size": "1h",
+  "batch_limit": 200,
+  "min_segment_age": "10m",
+  "min_segments_to_merge": 3
+}
+```
+
+### 更新合并配置
+
+**接口**: `PUT /api/settings/merge`
+
+更新全局合并设置。所有字段都是可选的。
+
+**请求体**: 
+```json
+{
+  "enabled": true,
+  "check_interval": "30m",
+  "window_size": "2h",
+  "batch_limit": 100,
+  "min_segment_age": "15m",
+  "min_segments_to_merge": 5
+}
+```
+
+**请求**: 
+```bash
+curl -X PUT "http://localhost:9090/api/settings/merge" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "enabled": true,
+    "check_interval": "30m",
+    "batch_limit": 100
+  }' \
+  "http://localhost:9090/api/settings/merge"
+```
+
+**响应**:
+```json
+{
+  "status": "updated"
+}
+```
+
+### 设置摄像头合并配置
+
+**接口**: `PUT /api/cameras/:id/merge-config`
+
+为特定摄像头设置合并配置覆盖。所有6个参数都是必需的。
+
+**请求体**: 
+```json
+{
+  "enabled": true,
+  "check_interval": "30m",
+  "window_size": "1h",
+  "batch_limit": 150,
+  "min_segment_age": "5m",
+  "min_segments_to_merge": 2
+}
+
+  # 注意：设置后，这些配置会覆盖该摄像头的全局合并设置
+}```
+
+**请求**: 
+```bash
+curl -X PUT "http://localhost:9090/api/cameras/cam1/merge-config" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "enabled": false,
+    "batch_limit": 50
+  }' \
+  "http://localhost:9090/api/cameras/cam1/merge-config"
+```
+
+**响应**:
+```json
+{
+  "status": "updated"
+}
+```
+
+### 重置摄像头合并配置
+
+**接口**: `DELETE /api/cameras/:id/merge-config`
+
+移除摄像头合并配置覆盖，摄像头将继承全局合并设置。
+
+**请求**: 
+```bash
+curl -X DELETE "http://localhost:9090/api/cameras/cam1/merge-config" \
+  -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
+```
+
+**响应**:
+```json
+{
+  "status": "reset"
+}
+```
+
+### 获取系统设置
+
 
 ### 获取系统设置
 
@@ -957,6 +962,7 @@ curl -X POST "$BASE_URL/api/cameras" \
   -d '{
     "name": "测试摄像头",
     "protocol": "http_jpeg",
+  "encoding": "jpeg",
     "url": "http://192.168.1.100:8080/snapshot",
     "enabled": true,
     "recording": true
@@ -1026,6 +1032,7 @@ if __name__ == "__main__":
     new_camera = {
         "name": "Python 测试摄像头",
         "protocol": "http_jpeg",
+  "encoding": "jpeg",
         "url": "http://192.168.1.100:8080/snapshot",
         "enabled": True,
         "recording": True
