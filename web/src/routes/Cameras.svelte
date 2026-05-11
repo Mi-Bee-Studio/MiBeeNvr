@@ -49,6 +49,7 @@
   let formModel = $state('');
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
+  let formStreamEncoding = $state('');  // For ONVIF cameras: '' = auto, 'H264', 'H265'
 
   // Inline name edit
   let editingNameId = $state<string | null>(null);
@@ -129,7 +130,7 @@
     editingCamera = camera;
     formName = camera.name;
     formProtocol = camera.protocol;
-    formUrl = camera.url;
+    formUrl = camera.url || (camera as any).onvif_endpoint || '';
     formUsername = camera.username || '';
     formPassword = '';
     showPassword = false;
@@ -140,6 +141,7 @@
     formModel = camera.model || '';
     formSerialNumber = camera.serial_number || '';
     formRetentionDays = camera.retention_days || 0;
+    formStreamEncoding = (camera as any).stream_encoding || '';
     validationErrors = {};
     showForm = true;
 
@@ -176,7 +178,8 @@
         const data: UpdateCameraRequest = {
           name: formName,
           protocol: formProtocol,
-          url: formUrl,
+          url: formProtocol === 'onvif' ? undefined : formUrl,
+          onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
           enabled: formEnabled,
           description: formDescription || undefined,
           location: formLocation || undefined,
@@ -184,6 +187,7 @@
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
           retention_days: formRetentionDays,
+          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined
         };
         // Only send username if changed from original
         if (formUsername && formUsername !== editingCamera.username) {
@@ -196,7 +200,6 @@
           }
           data.password = formPassword;
         }
-        await updateCamera(editingCamera.id, data);
 
         // Save per-camera merge config if editing
         if (mergeConfig) {
@@ -208,13 +211,15 @@
         const data: CreateCameraRequest = {
           name: formName,
           protocol: formProtocol,
-          url: formUrl,
+          url: formProtocol === 'onvif' ? undefined : formUrl,
+          onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
           enabled: formEnabled,
           description: formDescription || undefined,
           location: formLocation || undefined,
           brand: formBrand || undefined,
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
+          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -273,7 +278,15 @@
     discoveredDevices = [];
     scanDone = false;
     try {
-      discoveredDevices = await discoverONVIFDevices(5);
+      const results = await discoverONVIFDevices(5);
+      // Filter out devices that are already added as ONVIF cameras
+      const existingEndpoints = new Set(
+        cameras.filter(c => c.protocol === 'onvif' && (c as any).onvif_endpoint).map(c => (c as any).onvif_endpoint)
+      );
+      discoveredDevices = results.filter(d => {
+        const ep = d.endpoint || (d.xaddrs.length > 0 ? d.xaddrs[0] : '');
+        return !existingEndpoints.has(ep);
+      });
     } catch (e) {
       scanError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -288,9 +301,8 @@
       await createCamera({
         name: device.name || t('onvif.deviceName'),
         protocol: 'onvif',
-        url: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
+        onvif_endpoint: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
         enabled: true,
-        description: device.hardware || undefined,
         username: onvifUsername || undefined,
         password: onvifPassword || undefined,
       });
@@ -392,6 +404,20 @@
             <h3 class="text-lg font-semibold th-text-primary mb-4">
               {t('onvif.discover')}
             </h3>
+            <!-- ONVIF Credentials -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 items-end">
+              <div>
+                <label class="input-label text-xs">{t('onvif.username')}</label>
+                <input type="text" class="input py-1 text-sm" bind:value={onvifUsername} placeholder="admin" />
+              </div>
+              <div>
+                <label class="input-label text-xs">{t('onvif.password')}</label>
+                <input type="password" class="input py-1 text-sm" bind:value={onvifPassword} placeholder="******" />
+              </div>
+              <div class="flex items-center">
+                <span class="text-xs th-text-muted">{t('onvif.credentialsHint')}</span>
+              </div>
+            </div>
             {#if scanning}
               <div class="flex items-center gap-3 th-text-secondary py-4">
                 <span class="spinner"></span>
@@ -403,24 +429,21 @@
               <p class="th-text-secondary text-sm py-2">{t('onvif.noDevices')}</p>
             {:else}
               <div class="space-y-3">
-                {#each discoveredDevices as device (device.id)}
+                {#each discoveredDevices as device (device.uuid)}
                   <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
                     <div class="min-w-0 flex-1 mr-4">
                       <div class="font-medium th-text-primary truncate">{device.name || t('onvif.deviceName')}</div>
-                      <div class="text-sm th-text-secondary truncate">{device.url}</div>
-                      {#if device.brand || device.model}
-                        <div class="text-xs th-text-muted mt-0.5">{[device.brand, device.model].filter(Boolean).join(' ')}</div>
-                      {/if}
-                      {#if device.description}
-                        <div class="text-xs th-text-muted mt-0.5">{device.description}</div>
+                      <div class="text-sm th-text-secondary truncate">{device.endpoint}</div>
+                      {#if device.hardware}
+                        <div class="text-xs th-text-muted mt-0.5">{device.hardware}</div>
                       {/if}
                     </div>
                     <button
                       on:click={() => addDiscoveredDevice(device)}
                       class="btn btn-primary btn-sm shrink-0"
-                      disabled={addingDeviceId === device.id}
+                      disabled={addingDeviceId === device.uuid}
                     >
-                      {#if addingDeviceId === device.id}
+                      {#if addingDeviceId === device.uuid}
                         <span class="spinner mr-1"></span>
                       {/if}
                       {t('onvif.addCamera')}
@@ -472,7 +495,7 @@
 
               <!-- URL -->
               <div class="md:col-span-2">
-                <label for="cam-url" class="input-label">{t('cameras.url')}</label>
+                <label for="cam-url" class="input-label">{formProtocol === 'onvif' ? 'ONVIF Endpoint' : t('cameras.url')}</label>
                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl} on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
@@ -516,6 +539,20 @@
                 <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
                 <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
               </div>
+
+              {#if formProtocol === 'onvif'}
+              <!-- Stream Encoding (ONVIF only) -->
+              <div>
+                <label for="cam-encoding" class="input-label">Stream Encoding</label>
+                <select id="cam-encoding" class="input" bind:value={formStreamEncoding}>
+                  <option value="">Auto-detect</option>
+                  <option value="H264">H.264</option>
+                  <option value="H265">H.265</option>
+                </select>
+              </div>
+              {/if}
+
+              <!-- Description -->
 
               <!-- Description -->
               <div class="md:col-span-2">

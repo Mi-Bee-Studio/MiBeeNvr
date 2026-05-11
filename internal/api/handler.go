@@ -729,8 +729,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Brand        string  `json:"brand"`
 		Model        string  `json:"model"`
 		SerialNumber string  `json:"serial_number"`
-		ONVIFEndpoint string  `json:"onvif_endpoint"`
-		ProfileToken  string  `json:"profile_token"`
+		ONVIFEndpoint  string  `json:"onvif_endpoint"`
+		ProfileToken   string  `json:"profile_token"`
+		StreamEncoding string  `json:"stream_encoding"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -754,19 +755,31 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "onvif_endpoint is required for ONVIF cameras")
 			return
 		}
+		// Check for duplicate ONVIF endpoint
+		if h.db != nil {
+			existingCams, _ := h.db.ListCameras(r.Context())
+			for _, ec := range existingCams {
+				if ec.Protocol == "onvif" && ec.ONVIFEndpoint == body.ONVIFEndpoint {
+					writeError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists")
+					return
+				}
+			}
+		}
 	} else if body.URL == "" {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
 
-	cam := config.CameraConfig{
-		Name:          body.Name,
-		Protocol:      body.Protocol,
-		URL:           body.URL,
-		Username:      body.Username,
-		Password:      body.Password,
-		ONVIFEndpoint: body.ONVIFEndpoint,
-	}
+  cam := config.CameraConfig{
+    Name:          body.Name,
+    Protocol:      body.Protocol,
+    URL:           body.URL,
+    Username:      body.Username,
+    Password:      body.Password,
+    ONVIFEndpoint:  body.ONVIFEndpoint,
+    ProfileToken:   body.ProfileToken,
+    StreamEncoding: body.StreamEncoding,
+  }
 	if body.Enabled != nil {
 		cam.Enabled = *body.Enabled
 	} else {
@@ -849,6 +862,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Model         *string `json:"model"`
 		SerialNumber  *string `json:"serial_number"`
 		RetentionDays *int    `json:"retention_days"`
+		ONVIFEndpoint  *string `json:"onvif_endpoint"`
+		ProfileToken   *string `json:"profile_token"`
+		StreamEncoding *string `json:"stream_encoding"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -878,6 +894,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Model:         body.Model,
 		SerialNumber:  body.SerialNumber,
 		RetentionDays: body.RetentionDays,
+		ONVIFEndpoint:  body.ONVIFEndpoint,
+		ProfileToken:   body.ProfileToken,
+		StreamEncoding: body.StreamEncoding,
 	}
 
 	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
@@ -1256,8 +1275,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only H.264/H.265 cameras support HLS
-	if cam.Protocol != string(model.ProtoRTSPH264) && cam.Protocol != string(model.ProtoRTSPH265) {
+	// Only H.264/H.265/ONVIF cameras support HLS
+	if cam.Protocol != string(model.ProtoRTSPH264) && cam.Protocol != string(model.ProtoRTSPH265) && cam.Protocol != string(model.ProtoONVIF) {
 		writeError(w, http.StatusBadRequest, "camera protocol does not support HLS streaming")
 		return
 	}
@@ -1346,12 +1365,62 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					_ = h.hlsMgr.WriteH265(id, pts, au)
 				}
 			}
+		} else if onvifRec, ok := rec.(*recorder.ONVIFRecorder); ok {
+			// ONVIF recorder delegates to H264/H265 internally
+			delegate := onvifRec.Delegate()
+			if delegate == nil {
+				writeError(w, http.StatusServiceUnavailable, "ONVIF recorder delegate not available yet")
+				return
+			}
+			// Unwrap the delegate and handle as H264/H265
+			if h264Rec, ok := delegate.(*recorder.H264Recorder); ok {
+				sps := h264Rec.SPS()
+				pps := h264Rec.PPS()
+				if sps == nil || pps == nil {
+					writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
+					return
+				}
+				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
+				if err != nil {
+					if err == hls.ErrMaxStreamsReached {
+						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+					} else {
+						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					}
+					return
+				}
+				h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+					_ = h.hlsMgr.WriteH264(id, pts, au)
+				}
+			} else if h265Rec, ok := delegate.(*recorder.H265Recorder); ok {
+				vps := h265Rec.VPS()
+				sps := h265Rec.SPS()
+				pps := h265Rec.PPS()
+				if vps == nil || sps == nil || pps == nil {
+					writeError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
+					return
+				}
+				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
+				if err != nil {
+					if err == hls.ErrMaxStreamsReached {
+						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+					} else {
+						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					}
+					return
+				}
+				h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
+					_ = h.hlsMgr.WriteH265(id, pts, au)
+				}
+			} else {
+				writeError(w, http.StatusBadRequest, "ONVIF recorder delegate type does not support HLS")
+				return
+			}
 		} else {
 			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
 			return
 		}
 	}
-
 	// Proxy to muxer handler
 	if !h.hlsMgr.Handle(id, w, r) {
 		writeError(w, http.StatusServiceUnavailable, "HLS stream not available")

@@ -30,8 +30,11 @@ type CameraUpdate struct {
 	Location     *string
 	Brand        *string
 	Model        *string
-	SerialNumber *string
+	SerialNumber   *string
 	RetentionDays *int
+	ONVIFEndpoint  *string
+	ProfileToken   *string
+	StreamEncoding *string
 }
 
 type CameraManager struct {
@@ -110,11 +113,13 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		}
 		onvifClient := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 		onvifCfg := recorder.ONVIFConfig{
-			CameraID:   cam.ID,
-			Username:   cam.Username,
-			Password:   cam.Password,
-			SegmentDur: segDur,
-			DB:         cm.db,
+			CameraID:     cam.ID,
+			ProfileToken:   cam.ProfileToken,
+			StreamEncoding: cam.StreamEncoding,
+			Username:       cam.Username,
+			Password:       cam.Password,
+			SegmentDur:     segDur,
+			DB:             cm.db,
 		}
 		return recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	default:
@@ -131,6 +136,9 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
 	}
 	cm.recorders[cam.ID] = rec
+	// Recorders derive their run context from context.Background() internally,
+	// so their lifecycle is independent of this ctx (e.g. HTTP request context).
+	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
 	if err := rec.Start(ctx); err != nil {
 		delete(cm.recorders, cam.ID)
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
@@ -162,7 +170,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", "", ""); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
@@ -328,7 +336,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
+	if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
@@ -443,6 +451,18 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.Password != nil {
 		cam.Password = *updates.Password
 	}
+	if updates.ONVIFEndpoint != nil {
+		cam.ONVIFEndpoint = *updates.ONVIFEndpoint
+	}
+	if updates.ProfileToken != nil {
+		cam.ProfileToken = *updates.ProfileToken
+	}
+	if updates.StreamEncoding != nil {
+		if *updates.StreamEncoding != cam.StreamEncoding {
+			needsRestart = true
+		}
+		cam.StreamEncoding = *updates.StreamEncoding
+	}
 
 	// Handle enabled state changes
 	enabledChanged := updates.Enabled != nil && *updates.Enabled != cam.Enabled
@@ -452,7 +472,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
