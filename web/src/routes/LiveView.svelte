@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, getCredentials } from '$lib/api';
+  import { getCamera } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
+  import { createHlsConfig } from '$lib/hls-config';
+  import { setupHlsErrorHandling, checkStreamAvailable } from '$lib/hls-errors';
+  import type { StreamState } from '$lib/hls-errors';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
 
@@ -15,6 +18,7 @@
 
   let videoEl: HTMLVideoElement | undefined = $state();
   let hls: any = null;
+  let streamState = $state<StreamState>('buffering');
 
   function getStreamUrl(): string {
     return `/api/cameras/${cameraId}/stream/index.m3u8`;
@@ -42,55 +46,51 @@
     }
 
     const url = getStreamUrl();
+    streamState = 'buffering';
 
-
-    // hls.js
-    import('hls.js').then((HlsModule) => {
-      const Hls = HlsModule.default;
-      if (!Hls.isSupported()) {
-        error = 'HLS is not supported in this browser';
+    // Check if stream endpoint is available (not 429)
+    checkStreamAvailable(url).then((available) => {
+      if (!available) {
+        streamState = 'error';
+        error = 'Maximum concurrent streams reached. Try again later.';
         return;
       }
 
-      hls = new Hls({
-        enableWorker: false,
-        xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-          const creds = getCredentials();
-          if (creds) {
-            if (!xhr.readyState) {
-              xhr.open('GET', url, true);
-            }
-            xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
-          }
-        },
-      });
-
-      hls.loadSource(url);
-      hls.attachMedia(videoEl);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        videoEl?.play();
-      });
-
-      hls.on(Hls.Events.ERROR, (_event: string, data: any) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              hls.recoverMediaError();
-              break;
-            default:
-              error = 'HLS stream error';
-              hls.destroy();
-              hls = null;
-              break;
-          }
+      import('hls.js').then((HlsModule) => {
+        const Hls = HlsModule.default;
+        if (!Hls.isSupported()) {
+          error = 'HLS is not supported in this browser';
+          return;
         }
+
+        hls = new Hls(createHlsConfig());
+
+        setupHlsErrorHandling(hls, Hls, {
+          cameraId,
+          maxRetries: 3,
+          retryDelays: [2000, 4000, 8000],
+          onStateChange: (_id, state) => {
+            streamState = state;
+            if (state === 'error') {
+              error = 'Stream error after retries. Click Retry to reconnect.';
+            }
+          },
+          onFallbackToSnapshot: () => {
+            streamState = 'error';
+            error = 'Stream unavailable. Click Retry to reconnect.';
+          },
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(videoEl);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoEl?.play();
+        });
+      }).catch(() => {
+        error = 'Failed to load HLS player';
+        streamState = 'error';
       });
-    }).catch((e) => {
-      error = 'Failed to load HLS player';
     });
   }
 
@@ -217,6 +217,16 @@
                 Your browser does not support video playback.
               </video>
 
+              <!-- Stream state indicator -->
+              {#if streamState === 'playing'}
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-green-500 rounded-full" title="Live"></span>
+              {:else if streamState === 'buffering'}
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-yellow-500 rounded-full animate-pulse" title="Buffering"></span>
+              {:else if streamState === 'error'}
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-red-500 rounded-full" title="Error"></span>
+              {:else if streamState === 'snapshot'}
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-gray-400 rounded-full" title="Snapshot mode"></span>
+              {/if}
               <!-- Custom controls overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
                 <div class="flex items-center gap-3">

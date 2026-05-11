@@ -10,6 +10,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -103,7 +104,19 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		}
 		return recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):
-		return nil
+		onvifEndpoint := cam.ONVIFEndpoint
+		if onvifEndpoint == "" {
+			onvifEndpoint = cam.URL
+		}
+		onvifClient := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
+		onvifCfg := recorder.ONVIFConfig{
+			CameraID:   cam.ID,
+			Username:   cam.Username,
+			Password:   cam.Password,
+			SegmentDur: segDur,
+			DB:         cm.db,
+		}
+		return recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	default:
 		return nil
 	}
@@ -149,7 +162,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
@@ -315,7 +328,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
@@ -439,7 +452,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.URL, cam.Username, cam.Password, cam.Enabled, "", ""); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
@@ -539,6 +552,36 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		segDur = recorder.DefaultSegmentDur
 	}
 	return cm.startRecorder(ctx, *cam, segDur)
+}
+
+// GetONVIFPTZController returns a PTZController for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
+	cm.mu.RLock()
+	cam := cm.GetCameraConfig(cameraID)
+	cm.mu.RUnlock()
+	if cam == nil {
+		return nil, fmt.Errorf("camera %q not found", cameraID)
+	}
+	if cam.Protocol != string(model.ProtoONVIF) {
+		return nil, fmt.Errorf("camera %q is not an ONVIF camera", cameraID)
+	}
+	endpoint := cam.ONVIFEndpoint
+	if endpoint == "" {
+		endpoint = cam.URL
+	}
+	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
+	if err := client.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connect to ONVIF camera %q: %w", cameraID, err)
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("no media profiles found for camera %q", cameraID)
+	}
+	return client.NewPTZController(profiles[0].Token), nil
 }
 
 // strPtrOrEmpty returns the string value of a *string pointer, or empty string if nil.

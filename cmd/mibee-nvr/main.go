@@ -124,7 +124,7 @@ func main() {
 
 	// HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
-	hlsMgr := hls.NewManager(hlsDataDir)
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024)
  
 	// Merge manager
 	mergeMgr := merge.NewMergeManager(

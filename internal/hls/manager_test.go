@@ -2,6 +2,7 @@ package hls
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func newTestManager(t *testing.T) *Manager {
 // The frameCh is buffered so frames accumulate for counting.
 func newTestStreamEntry(maxFPS int) *streamEntry {
 	return &streamEntry{
-		frameCh:       make(chan hlsFrame, 120),
+		frameCh:       make(chan hlsFrame, defaultWriteBufSize),
 		maxFPS:        maxFPS,
 		lastUsed:      time.Now(),
 		lastFrameTime: time.Time{}, // zero value means "never written"
@@ -151,7 +152,7 @@ func TestStartSubStreamReader_Dedup(t *testing.T) {
 	mgr.mu.Lock()
 	_, cancel := context.WithCancel(context.Background())
 	entry := &streamEntry{
-		frameCh:        make(chan hlsFrame, 120),
+		frameCh:        make(chan hlsFrame, defaultWriteBufSize),
 		maxFPS:         0,
 		subStreamCancel: cancel,
 		cancel:         cancel,
@@ -182,7 +183,7 @@ func TestIsActive_StreamExists(t *testing.T) {
 
 	mgr.mu.Lock()
 	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, 120),
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
 		lastUsed: time.Now(),
 	}
 	mgr.mu.Unlock()
@@ -235,6 +236,24 @@ func TestNewManager(t *testing.T) {
 	require.Empty(t, mgr.streams)
 	require.Equal(t, defaultIdleTimeout, mgr.idleTimeout)
 	require.Equal(t, defaultMaxStreams, mgr.maxStreams)
+	require.Equal(t, defaultWriteBufSize, mgr.writeBufSize)
+	require.Equal(t, defaultSegmentMaxSize, mgr.segmentMaxSize)
+}
+
+// --- NewManagerWithOpts Tests ---
+
+func TestNewManagerWithOpts_CustomValues(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), 80, 20*1024*1024)
+	require.NotNil(t, mgr)
+	require.Equal(t, 80, mgr.writeBufSize)
+	require.Equal(t, 20*1024*1024, mgr.segmentMaxSize)
+}
+
+func TestNewManagerWithOpts_ZeroValuesUseDefaults(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), 0, 0)
+	require.NotNil(t, mgr)
+	require.Equal(t, defaultWriteBufSize, mgr.writeBufSize)
+	require.Equal(t, defaultSegmentMaxSize, mgr.segmentMaxSize)
 }
 
 // --- Thread Safety Tests ---
@@ -245,7 +264,7 @@ func TestConcurrentWrites(t *testing.T) {
 
 	mgr.mu.Lock()
 	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, 120),
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
 		maxFPS:   0,
 		lastUsed: time.Now(),
 	}
@@ -264,11 +283,11 @@ func TestConcurrentWrites(t *testing.T) {
 	}
 
 	wg.Wait()
-	// Channel buffer is 120, so at most 120 frames fit (rest dropped by non-blocking send).
+	// Channel buffer is defaultWriteBufSize, so at most that many frames fit (rest dropped by non-blocking send).
 	mgr.mu.RLock()
 	chLen := len(mgr.streams[cameraID].frameCh)
 	mgr.mu.RUnlock()
-	require.Equal(t, 120, chLen, "channel should be full at buffer capacity")
+	require.Equal(t, defaultWriteBufSize, chLen, "channel should be full at buffer capacity")
 }
 
 func TestConcurrentWritesAndIsActive(t *testing.T) {
@@ -277,7 +296,7 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 
 	mgr.mu.Lock()
 	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, 120),
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
 		maxFPS:   0,
 		lastUsed: time.Now(),
 	}
@@ -306,4 +325,242 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 	wg.Wait()
 	// No panic = success
 	require.True(t, mgr.IsActive(cameraID))
+}
+
+// --- ErrMaxStreamsReached Tests ---
+
+func TestStartStream_AtCapacity_ReturnsErrMaxStreamsReached(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	cameraID := "test-cam"
+
+	// Fill streams to maxStreams capacity
+	mgr.mu.Lock()
+	for i := 0; i < defaultMaxStreams; i++ {
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: time.Now(),
+			cancel:   cancel,
+		}
+	}
+	mgr.mu.Unlock()
+
+	// Next start should return ErrMaxStreamsReached
+	err := mgr.StartStream(cameraID, []byte{0x67, 0x42}, []byte{0x68, 0xce}, 0)
+	require.ErrorIs(t, err, ErrMaxStreamsReached)
+	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+}
+
+// --- EvictStream Tests ---
+
+func TestEvictStream_Active(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	_, cancel := context.WithCancel(context.Background())
+	mgr.streams[cameraID] = &streamEntry{
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+		lastUsed: time.Now(),
+		cancel:   cancel,
+	}
+	mgr.mu.Unlock()
+
+	require.Equal(t, 1, mgr.GetActiveStreamCount())
+	err := mgr.EvictStream(cameraID)
+	require.NoError(t, err)
+	require.Equal(t, 0, mgr.GetActiveStreamCount())
+	require.False(t, mgr.IsActive(cameraID))
+}
+
+func TestEvictStream_NotActive(t *testing.T) {
+	mgr := newTestManager(t)
+	err := mgr.EvictStream("nonexistent")
+	require.ErrorIs(t, err, ErrStreamNotActive)
+}
+
+// --- GetActiveStreamCount Tests ---
+
+func TestGetActiveStreamCount_Empty(t *testing.T) {
+	mgr := newTestManager(t)
+	require.Equal(t, 0, mgr.GetActiveStreamCount())
+}
+
+func TestGetActiveStreamCount_WithStreams(t *testing.T) {
+	mgr := newTestManager(t)
+
+	mgr.mu.Lock()
+	for i := 0; i < 3; i++ {
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: time.Now(),
+			cancel:   cancel,
+		}
+	}
+	mgr.mu.Unlock()
+
+	require.Equal(t, 3, mgr.GetActiveStreamCount())
+}
+
+// --- GetStreamStatus Tests ---
+
+func TestGetStreamStatus_Active(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	mgr.streams[cameraID] = &streamEntry{
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+		lastUsed: time.Now(),
+	}
+	mgr.mu.Unlock()
+
+	require.True(t, mgr.GetStreamStatus(cameraID))
+}
+
+func TestGetStreamStatus_NotActive(t *testing.T) {
+	mgr := newTestManager(t)
+	require.False(t, mgr.GetStreamStatus("nonexistent"))
+}
+
+func TestGetStreamStatus_ConcurrentReads(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	mgr.streams[cameraID] = &streamEntry{
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+		lastUsed: time.Now(),
+	}
+	mgr.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.True(t, mgr.GetStreamStatus(cameraID))
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.False(t, mgr.GetStreamStatus("nonexistent"))
+		}()
+	}
+	wg.Wait()
+}
+
+// --- Concurrent Stream Start/Stop Tests ---
+
+func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+
+	var wg sync.WaitGroup
+	// Start 4 streams concurrently (at maxStreams limit)
+	for i := 0; i < defaultMaxStreams; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Use minimal valid SPS/PPS for H264 (Baseline profile, 16x16)
+			sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+			pps := []byte{0x68, 0xce, 0x38, 0x80}
+			err := mgr.StartStream(fmt.Sprintf("cam-%d", idx), sps, pps, 0)
+			require.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+
+	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+	mgr.StopAll()
+}
+
+func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+
+	// Pre-fill to max capacity
+	for i := 0; i < defaultMaxStreams; i++ {
+		mgr.mu.Lock()
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: time.Now(),
+			cancel:   cancel,
+		}
+		mgr.mu.Unlock()
+	}
+
+	// Multiple goroutines try to start a 5th stream — all should get ErrMaxStreamsReached
+	var wg sync.WaitGroup
+	errors := make([]error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+			pps := []byte{0x68, 0xce, 0x38, 0x80}
+			errors[idx] = mgr.StartStream("overflow", sps, pps, 0)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errors {
+		require.ErrorIs(t, err, ErrMaxStreamsReached, "goroutine %d should get ErrMaxStreamsReached", i)
+	}
+	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+}
+
+func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+
+	// Pre-fill streams
+	for i := 0; i < defaultMaxStreams; i++ {
+		mgr.mu.Lock()
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: time.Now(),
+			cancel:   cancel,
+		}
+		mgr.mu.Unlock()
+	}
+
+	// Stop all streams concurrently
+	var wg sync.WaitGroup
+	for i := 0; i < defaultMaxStreams; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			mgr.StopStream(fmt.Sprintf("cam-%d", idx))
+		}(i)
+	}
+	wg.Wait()
+
+	require.Equal(t, 0, mgr.GetActiveStreamCount())
+}
+
+func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+
+	var wg sync.WaitGroup
+	// Interleave starts and stops
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func(idx int) {
+			defer wg.Done()
+			camID := fmt.Sprintf("cam-%d", idx)
+			err := mgr.StartStream(camID,
+				[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
+				[]byte{0x68, 0xce, 0x38, 0x80}, 0)
+			_ = err // may succeed or fail due to contention
+		}(i)
+		go func(idx int) {
+			defer wg.Done()
+			mgr.StopStream(fmt.Sprintf("cam-%d", idx))
+		}(i)
+	}
+	wg.Wait()
+	// No panic/deadlock = success
 }

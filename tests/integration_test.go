@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,9 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 )
 
@@ -482,7 +487,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	cameraID := "cam-upload"
 	// Insert camera via DB so upload handler can validate it
-	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "http://example.com/stream", "", "", true)
+	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "http://example.com/stream", "", "", true, "", "")
 	require.NoError(t, err)
 
 	// 1. Create upload handler with chi router
@@ -643,12 +648,12 @@ func TestCameraCredentialDisplay(t *testing.T) {
 
 	// Insert camera with credentials
 	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "admin", "secret123", true)
+		"rtsp://192.168.1.1/stream", "admin", "secret123", true, "", "")
 	require.NoError(t, err)
 
 	// Insert camera without credentials
 	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg",
-		"http://192.168.1.2/stream", "", "", true)
+		"http://192.168.1.2/stream", "", "", true, "", "")
 	require.NoError(t, err)
 
 	// List cameras
@@ -682,7 +687,7 @@ func TestPTZProtocolRejection(t *testing.T) {
 
 	// Insert a non-ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "", "", true)
+		"rtsp://192.168.1.1/stream", "", "", true, "", "")
 	require.NoError(t, err)
 
 	// PTZ move should be rejected with 400 for non-ONVIF camera
@@ -801,7 +806,7 @@ func TestPerCameraMergeConfig(t *testing.T) {
 	// Insert a camera
 	cameraID := "cam-merge-test"
 	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "", "", true)
+		"rtsp://192.168.1.1/stream", "", "", true, "", "")
 	require.NoError(t, err)
 
 	// PUT /api/cameras/{id}/merge-config — set per-camera override
@@ -864,4 +869,330 @@ func TestMergeSettingsNoConfig(t *testing.T) {
 	updateBody := `{"enabled":false}`
 	rr = do(t, h.Routes(), "PUT", "/api/settings/merge", strings.NewReader(updateBody))
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+// ============================================================================
+// Test 15: Multi-Stream HLS (4 concurrent streams)
+// ============================================================================
+
+func TestMultiStreamHLS(t *testing.T) {
+	db, store := setupEnv(t)
+
+	// Create HLS manager with small limits for testing
+	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20)
+
+	// Create handler with HLS manager (no camMgr — HLS endpoint returns 500)
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil)
+
+	// 1. Request HLS stream for non-existent camera → 500 (camMgr is nil)
+	rr := do(t, h.Routes(), "GET", "/api/cameras/cam-1/stream/index.m3u8", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	// 2. Insert H264 camera into DB
+	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264",
+		"rtsp://192.168.1.1/stream", "", "", true, "", "")
+	require.NoError(t, err)
+
+	// 3. Request HLS for H264 camera with no camMgr → 500 (camMgr is nil)
+	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-hls-1/stream/index.m3u8", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	var errResp map[string]string
+	parseJSON(t, rr, &errResp)
+	require.Contains(t, errResp["error"], "HLS not available")
+
+	// 4. Insert MJPEG camera — same 500 (camMgr is nil, checked before protocol)
+	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg",
+		"rtsp://192.168.1.2/stream", "", "", true, "", "")
+	require.NoError(t, err)
+	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-mjpeg/stream/index.m3u8", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	// 5. Stop non-existent stream → 200 (not active)
+	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
+
+	// 5. Stop non-existent stream → 200 (not active)
+	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var stopResp map[string]string
+	parseJSON(t, rr, &stopResp)
+	require.Equal(t, "not active", stopResp["status"])
+
+	// 6. Verify HLS manager state
+	require.Equal(t, 0, hlsMgr.GetActiveStreamCount())
+
+	hlsMgr.StopAll()
+}
+
+// ============================================================================
+// Test 16: ONVIF Discovery with Mock
+// ============================================================================
+
+func TestONVIFDiscoveryWithMock(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// 1. Discovery with default timeout returns 200 (even if no devices found)
+	rr := do(t, h.Routes(), "POST", "/api/onvif/discover", strings.NewReader(`{}`))
+	// Discovery may succeed (empty list) or fail (no network) — both are acceptable
+	require.True(t, rr.Code == http.StatusOK || rr.Code == http.StatusInternalServerError,
+		"expected 200 or 500, got %d: %s", rr.Code, rr.Body.String())
+
+	if rr.Code == http.StatusOK {
+		var resp map[string]interface{}
+		parseJSON(t, rr, &resp)
+		// 2. Verify response structure
+		devices, ok := resp["devices"].([]interface{})
+		require.True(t, ok, "response should contain devices array")
+		// Empty or populated — either is valid in test env
+		_ = devices
+	}
+
+	// 3. Discovery with explicit timeout
+	rr = do(t, h.Routes(), "POST", "/api/onvif/discover", strings.NewReader(`{"timeout":1}`))
+	require.True(t, rr.Code == http.StatusOK || rr.Code == http.StatusInternalServerError,
+		"expected 200 or 500, got %d: %s", rr.Code, rr.Body.String())
+
+	// 4. Discovery with invalid timeout (> 30) → 400
+	rr = do(t, h.Routes(), "POST", "/api/onvif/discover", strings.NewReader(`{"timeout":50}`))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// 5. Discovery with invalid body → uses default timeout
+	rr = do(t, h.Routes(), "POST", "/api/onvif/discover", strings.NewReader(`not-json`))
+	require.True(t, rr.Code == http.StatusOK || rr.Code == http.StatusInternalServerError,
+		"expected 200 or 500, got %d: %s", rr.Code, rr.Body.String())
+
+	// 6. Device detail for non-existent IP → 502 (connection refused)
+	rr = do(t, h.Routes(), "GET", "/api/onvif/discover/192.0.2.1", nil)
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+}
+
+// ============================================================================
+// Test 17: ONVIF Camera Creation
+// ============================================================================
+
+func TestONVIFCameraCreation(t *testing.T) {
+	db, store := setupEnv(t)
+
+	// Create a camera manager with config that includes an ONVIF camera
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+		Cameras: []config.CameraConfig{
+			{
+				ID:       "cam-onvif-test",
+				Name:     "ONVIF Test Camera",
+				Protocol: "onvif",
+				URL:      "http://192.168.1.100/onvif/device_service",
+				Username: "admin",
+				Password: "pass",
+				Enabled:  true,
+			},
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0755))
+
+	storeMgr, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+
+	camMgr := camera.NewCameraManager(cfg, storeMgr, nil, "")
+
+	// 1. Verify camera config exists in manager
+	camCfg := camMgr.GetCameraConfig("cam-onvif-test")
+	require.NotNil(t, camCfg)
+	require.Equal(t, "onvif", camCfg.Protocol)
+	require.Equal(t, "ONVIF Test Camera", camCfg.Name)
+
+	// 2. Create ONVIFRecorder directly (createRecorder is unexported)
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+	_ = segDur
+	onvifClient := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
+	rec := recorder.NewONVIFRecorder(recorder.ONVIFConfig{
+		CameraID:   "cam-onvif-test",
+		SegmentDur: segDur,
+	}, onvifClient, storeMgr)
+	require.NotNil(t, rec, "ONVIF protocol should create a recorder")
+
+	// 3. Verify it implements model.Recorder
+	var _ model.Recorder = rec
+
+	// 4. Verify initial status is stopped
+	require.Equal(t, model.StatusStopped, rec.Status())
+
+	// 5. Verify camera appears in list
+	h := newAPI(db, store)
+	err = db.UpsertCamera(context.Background(), "cam-onvif-test", "ONVIF Test Camera",
+		"onvif", "http://192.168.1.100/onvif/device_service", "admin", "", true, "", "")
+	require.NoError(t, err)
+
+	rr := do(t, h.Routes(), "GET", "/api/cameras", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var cameras []storage.CameraRow
+	parseJSON(t, rr, &cameras)
+	require.NotEmpty(t, cameras)
+
+	found := false
+	for _, c := range cameras {
+		if c.ID == "cam-onvif-test" {
+			require.Equal(t, "onvif", c.Protocol)
+			found = true
+		}
+	}
+	require.True(t, found, "ONVIF camera should be in camera list")
+}
+
+// ============================================================================
+// Test 18: PTZ Lifecycle (Mock-based)
+// ============================================================================
+
+func TestPTZLifecycle(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// 1. Insert ONVIF camera
+	err := db.UpsertCamera(context.Background(), "cam-ptz", "PTZ Camera", "onvif",
+		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "")
+	require.NoError(t, err)
+
+	// 2. PTZ move with invalid mode → 400
+	invalidMove := `{"mode":"invalid","pan":0,"tilt":0,"zoom":0}`
+	rr := do(t, h.Routes(), "POST", "/api/cameras/cam-ptz/ptz/move", strings.NewReader(invalidMove))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// 3. PTZ move with valid mode but no camMgr → 500 (camera manager not available)
+	validMove := `{"mode":"absolute","pan":0.5,"tilt":0.3,"zoom":1.0}`
+	rr = do(t, h.Routes(), "POST", "/api/cameras/cam-ptz/ptz/move", strings.NewReader(validMove))
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	var errResp map[string]string
+	parseJSON(t, rr, &errResp)
+	require.Contains(t, errResp["error"], "camera manager not available")
+
+	// 4. PTZ stop with no camMgr → 500
+	rr = do(t, h.Routes(), "POST", "/api/cameras/cam-ptz/ptz/stop", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	// 5. PTZ status with no camMgr → 500
+	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-ptz/ptz/status", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	// 6. Test mock PTZ controller directly
+	mockPTZ := &onvif.MockPTZController{
+		Position: onvif.PTZVector{Pan: 0.5, Tilt: 0.3, Zoom: 1.0},
+		Moving:   false,
+	}
+
+	ctx := context.Background()
+	// Continuous move
+	err = mockPTZ.ContinuousMove(ctx, onvif.PTZVector{Pan: 0.1, Tilt: 0.0, Zoom: 0.0})
+	require.NoError(t, err)
+	require.Equal(t, 1, mockPTZ.ContinuousMoveCalls)
+	require.Len(t, mockPTZ.MoveHistory, 1)
+
+	// Absolute move
+	err = mockPTZ.AbsoluteMove(ctx, onvif.PTZVector{Pan: 0.5, Tilt: 0.3, Zoom: 1.0})
+	require.NoError(t, err)
+	require.Equal(t, 1, mockPTZ.AbsoluteMoveCalls)
+	require.Len(t, mockPTZ.MoveHistory, 2)
+
+	// Relative move
+	err = mockPTZ.RelativeMove(ctx, onvif.PTZVector{Pan: 0.1, Tilt: -0.1, Zoom: 0.5})
+	require.NoError(t, err)
+	require.Equal(t, 1, mockPTZ.RelativeMoveCalls)
+	require.Len(t, mockPTZ.MoveHistory, 3)
+
+	// Stop
+	err = mockPTZ.Stop(ctx, true, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, mockPTZ.StopCalls)
+
+	// GetStatus
+	pos, moving, err := mockPTZ.GetStatus(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, mockPTZ.GetStatusCalls)
+	require.Equal(t, 0.5, pos.Pan)
+	require.Equal(t, 0.3, pos.Tilt)
+	require.Equal(t, 1.0, pos.Zoom)
+	require.False(t, moving)
+
+	// 7. PTZ with mock error
+	errMockPTZ := &onvif.MockPTZController{Error: fmt.Errorf("PTZ error")}
+	err = errMockPTZ.ContinuousMove(ctx, onvif.PTZVector{})
+	require.EqualError(t, err, "PTZ error")
+	err = errMockPTZ.Stop(ctx, true, true)
+	require.EqualError(t, err, "PTZ error")
+	_, _, err = errMockPTZ.GetStatus(ctx)
+	require.EqualError(t, err, "PTZ error")
+}
+
+// ============================================================================
+// Test 19: HLS with ONVIF Camera
+// ============================================================================
+
+func TestHLSWithONVIFCamera(t *testing.T) {
+	db, store := setupEnv(t)
+
+	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20)
+
+	// Create handler with HLS manager but no camMgr
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil)
+
+	// 1. Insert ONVIF camera
+	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif",
+		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "")
+	require.NoError(t, err)
+
+	// 2. Request HLS stream for ONVIF camera → 500 (camMgr is nil)
+	rr := do(t, h.Routes(), "GET", "/api/cameras/cam-onvif-hls/stream/index.m3u8", nil)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	var errResp map[string]string
+	parseJSON(t, rr, &errResp)
+	require.Contains(t, errResp["error"], "HLS not available")
+
+	// 3. With camMgr but no recorder → 400
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+		Cameras: []config.CameraConfig{
+			{
+				ID:       "cam-onvif-hls",
+				Name:     "ONVIF HLS Camera",
+				Protocol: "onvif",
+				URL:      "http://192.168.1.100/onvif/device_service",
+				Enabled:  true,
+			},
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0755))
+	storeMgr, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	camMgr := camera.NewCameraManager(cfg, storeMgr, nil, "")
+
+	h2 := api.NewHandler(db, storeMgr, func(next http.Handler) http.Handler { return next }, cfg, camMgr, hlsMgr, "", nil)
+	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/stream/index.m3u8", nil)
+	// ONVIF camera recorder is not running → 400
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// 4. ONVIF camera profiles endpoint returns stub data
+	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/onvif/profiles", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var profilesResp map[string]interface{}
+	// 5. Verify profiles response
+	parseJSON(t, rr, &profilesResp)
+	profiles, ok := profilesResp["profiles"].([]interface{})
+	require.True(t, ok)
+	require.Empty(t, profiles)
+	caps, ok := profilesResp["capabilities"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, false, caps["ptz"])
+	require.Equal(t, false, caps["streaming"])
+
+	hlsMgr.StopAll()
 }

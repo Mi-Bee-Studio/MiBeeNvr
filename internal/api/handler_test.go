@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2260,4 +2261,62 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, pending)
 	require.True(t, ok)
+}
+
+// --- HLS stream handler tests ---
+
+func TestHandleHLSStream_NilHLSManager(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // nil hlsMgr
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/stream/index.m3u8", nil, "", "")
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	require.Equal(t, "HLS not available", resp["error"])
+}
+
+func TestHandleStopHLSStream_NilHLSManager(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam-1/stream", nil, "", "")
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+func TestHandleStopHLSStream_NotActive(t *testing.T) {
+	hlsMgr := hls.NewManager(t.TempDir())
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/nonexistent/stream", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	require.Equal(t, "not active", resp["status"])
+}
+
+func TestHandleStopHLSStream_Active(t *testing.T) {
+	hlsMgr := hls.NewManager(t.TempDir())
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil)
+
+	// Manually insert a stream entry
+	hlsMgr.StartStream("cam-1",
+		[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
+		[]byte{0x68, 0xce, 0x38, 0x80}, 0)
+	defer hlsMgr.StopAll()
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam-1/stream", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	require.Equal(t, "stopped", resp["status"])
+	require.False(t, hlsMgr.IsActive("cam-1"))
 }

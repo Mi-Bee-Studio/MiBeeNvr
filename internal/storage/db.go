@@ -153,6 +153,14 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='5' WHERE key='schema_version'")
 	// Create merged index after migrations have ensured the column exists
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
+	// Migration v5 → v6: add ONVIF columns
+	var onvifColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='onvif_endpoint'`).Scan(&onvifColExists)
+	if onvifColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN onvif_endpoint TEXT DEFAULT ''")
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN profile_token TEXT DEFAULT ''")
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='6' WHERE key='schema_version'")
 
 	return nil
 
@@ -513,12 +521,15 @@ type CameraRow struct {
 	MergeBatchLimit      *int    `json:"merge_batch_limit,omitempty"`
 	MergeMinSegmentAge   *string `json:"merge_min_segment_age,omitempty"`
 	MergeMinSegmentsToMerge *int `json:"merge_min_segments_to_merge,omitempty"`
+	ONVIFEndpoint string               `json:"onvif_endpoint"`
+	ProfileToken  string               `json:"profile_token"`
 }
 
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		onvif_endpoint, profile_token
 		FROM cameras ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -531,7 +542,8 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
-			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge); err != nil {
+			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+			&c.ONVIFEndpoint, &c.ProfileToken); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -553,13 +565,13 @@ func (d *DB) CountRecordings(ctx context.Context) (int, error) {
 
 // UpsertCamera inserts or updates a camera record in the database
 
-func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, url, username, password string, enabled bool) error {
+func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, url, username, password string, enabled bool, onvifEndpoint, profileToken string) error {
 
-    q := `INSERT INTO cameras(id, name, protocol, url, username, password, enabled) VALUES(?,?,?,?,?,?,?)
+    q := `INSERT INTO cameras(id, name, protocol, url, username, password, enabled, onvif_endpoint, profile_token) VALUES(?,?,?,?,?,?,?,?,?)
 
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled;`
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token;`
 
-    _, err := d.db.ExecContext(ctx, q, id, name, protocol, url, username, password, enabled)
+    _, err := d.db.ExecContext(ctx, q, id, name, protocol, url, username, password, enabled, onvifEndpoint, profileToken)
 
 	return err
 }
@@ -570,10 +582,12 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
-		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		onvif_endpoint, profile_token
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
-		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge)
+		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+		&c.ONVIFEndpoint, &c.ProfileToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
