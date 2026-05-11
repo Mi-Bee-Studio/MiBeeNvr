@@ -487,7 +487,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	cameraID := "cam-upload"
 	// Insert camera via DB so upload handler can validate it
-	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "http://example.com/stream", "", "", true, "", "", "")
+	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "", "http://example.com/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// 1. Create upload handler with chi router
@@ -647,12 +647,12 @@ func TestCameraCredentialDisplay(t *testing.T) {
 	h := newAPI(db, store)
 
 	// Insert camera with credentials
-	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264",
+	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264", "",
 		"rtsp://192.168.1.1/stream", "admin", "secret123", true, "", "", "")
 	require.NoError(t, err)
 
 	// Insert camera without credentials
-	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg",
+	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg", "",
 		"http://192.168.1.2/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
@@ -686,7 +686,7 @@ func TestPTZProtocolRejection(t *testing.T) {
 	h := newAPI(db, store)
 
 	// Insert a non-ONVIF camera
-	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264",
+	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264", "",
 		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
@@ -805,7 +805,7 @@ func TestPerCameraMergeConfig(t *testing.T) {
 
 	// Insert a camera
 	cameraID := "cam-merge-test"
-	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264",
+	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264", "",
 		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
@@ -890,7 +890,7 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	// 2. Insert H264 camera into DB
-	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264",
+	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264", "",
 		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
@@ -902,7 +902,7 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Contains(t, errResp["error"], "HLS not available")
 
 	// 4. Insert MJPEG camera — same 500 (camMgr is nil, checked before protocol)
-	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg",
+	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg", "",
 		"rtsp://192.168.1.2/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-mjpeg/stream/index.m3u8", nil)
@@ -1026,7 +1026,7 @@ func TestONVIFCameraCreation(t *testing.T) {
 	// 5. Verify camera appears in list
 	h := newAPI(db, store)
 	err = db.UpsertCamera(context.Background(), "cam-onvif-test", "ONVIF Test Camera",
-		"onvif", "http://192.168.1.100/onvif/device_service", "admin", "", true, "", "", "")
+		"onvif", "", "http://192.168.1.100/onvif/device_service", "admin", "", true, "", "", "")
 	require.NoError(t, err)
 
 	rr := do(t, h.Routes(), "GET", "/api/cameras", nil)
@@ -1054,7 +1054,7 @@ func TestPTZLifecycle(t *testing.T) {
 	h := newAPI(db, store)
 
 	// 1. Insert ONVIF camera
-	err := db.UpsertCamera(context.Background(), "cam-ptz", "PTZ Camera", "onvif",
+	err := db.UpsertCamera(context.Background(), "cam-ptz", "PTZ Camera", "onvif", "",
 		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "", "")
 	require.NoError(t, err)
 
@@ -1142,7 +1142,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil)
 
 	// 1. Insert ONVIF camera
-	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif",
+	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif", "",
 		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "", "")
 	require.NoError(t, err)
 
