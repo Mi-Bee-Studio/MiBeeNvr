@@ -41,7 +41,9 @@ type CameraConfig struct {
 	URL      string `yaml:"url"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-  ONVIFEndpoint string `yaml:"onvif_endpoint"`
+	ONVIFEndpoint  string `yaml:"onvif_endpoint"`
+	ProfileToken   string `yaml:"profile_token"`
+	StreamEncoding string `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
 	Enabled  bool   `yaml:"enabled"`
 	SubStreamURL   string `yaml:"sub_stream_url"`
 	SnapshotURL    string `yaml:"snapshot_url"`
@@ -165,8 +167,11 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(c.ID) == "" {
 			return fmt.Errorf("camera[%d].id is required", i)
 		}
-		if strings.TrimSpace(c.URL) == "" {
+		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" {
 			return fmt.Errorf("camera[%d].url is required", i)
+		}
+		if c.Protocol == "onvif" && strings.TrimSpace(c.ONVIFEndpoint) == "" {
+			return fmt.Errorf("camera[%d].onvif_endpoint is required for ONVIF cameras", i)
 		}
 		if c.Protocol != "rtsp_h264" && c.Protocol != "rtsp_mjpeg" && c.Protocol != "http_jpeg" && c.Protocol != "rtsp_h265" && c.Protocol != "onvif" {
 			return fmt.Errorf("camera[%d].protocol invalid: %s", i, c.Protocol)

@@ -324,5 +324,10 @@
   "dashboard.apply": "Apply",
   "dashboard.clickToLive": "Click for live view",
   "dashboard.backToGrid": "Back to grid",
-  "dashboard.snapshotError": "Snapshot unavailable"
+  "dashboard.snapshotError": "Snapshot unavailable",
+  "onvif.credentials": "ONVIF Credentials (optional)",
+  "onvif.username": "Username",
+  "onvif.password": "Password",
+  "onvif.credentialsHint": "Enter device credentials to get stream URI",
+  "onvif.noStreamUri": "Failed to get stream URI. Check device credentials."
 }

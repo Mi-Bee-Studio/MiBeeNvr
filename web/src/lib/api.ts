@@ -42,12 +42,15 @@ export interface Camera {
   status?: string;
   last_seen?: string;
   retention_days?: number;
+  onvif_endpoint?: string;
+  profile_token?: string;
+  stream_encoding?: string;
 }
 
 export interface CreateCameraRequest {
   name: string;
   protocol: string;
-  url: string;
+  url?: string;
   username?: string;
   password?: string;
   enabled?: boolean;
@@ -56,6 +59,9 @@ export interface CreateCameraRequest {
   brand?: string;
   model?: string;
   serial_number?: string;
+  onvif_endpoint?: string;
+  profile_token?: string;
+  stream_encoding?: string;
 }
 
 export interface UpdateCameraRequest {
@@ -71,6 +77,9 @@ export interface UpdateCameraRequest {
   model?: string;
   serial_number?: string;
   retention_days?: number;
+  onvif_endpoint?: string;
+  profile_token?: string;
+  stream_encoding?: string;
 }
 
 export interface MergeConfig {

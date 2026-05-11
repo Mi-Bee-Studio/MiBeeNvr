@@ -487,7 +487,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	cameraID := "cam-upload"
 	// Insert camera via DB so upload handler can validate it
-	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "http://example.com/stream", "", "", true, "", "")
+	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "http://example.com/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// 1. Create upload handler with chi router
@@ -648,12 +648,12 @@ func TestCameraCredentialDisplay(t *testing.T) {
 
 	// Insert camera with credentials
 	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "admin", "secret123", true, "", "")
+		"rtsp://192.168.1.1/stream", "admin", "secret123", true, "", "", "")
 	require.NoError(t, err)
 
 	// Insert camera without credentials
 	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg",
-		"http://192.168.1.2/stream", "", "", true, "", "")
+		"http://192.168.1.2/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// List cameras
@@ -687,7 +687,7 @@ func TestPTZProtocolRejection(t *testing.T) {
 
 	// Insert a non-ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "", "", true, "", "")
+		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// PTZ move should be rejected with 400 for non-ONVIF camera
@@ -806,7 +806,7 @@ func TestPerCameraMergeConfig(t *testing.T) {
 	// Insert a camera
 	cameraID := "cam-merge-test"
 	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "", "", true, "", "")
+		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// PUT /api/cameras/{id}/merge-config — set per-camera override
@@ -891,7 +891,7 @@ func TestMultiStreamHLS(t *testing.T) {
 
 	// 2. Insert H264 camera into DB
 	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264",
-		"rtsp://192.168.1.1/stream", "", "", true, "", "")
+		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 
 	// 3. Request HLS for H264 camera with no camMgr → 500 (camMgr is nil)
@@ -903,7 +903,7 @@ func TestMultiStreamHLS(t *testing.T) {
 
 	// 4. Insert MJPEG camera — same 500 (camMgr is nil, checked before protocol)
 	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg",
-		"rtsp://192.168.1.2/stream", "", "", true, "", "")
+		"rtsp://192.168.1.2/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-mjpeg/stream/index.m3u8", nil)
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
@@ -1026,7 +1026,7 @@ func TestONVIFCameraCreation(t *testing.T) {
 	// 5. Verify camera appears in list
 	h := newAPI(db, store)
 	err = db.UpsertCamera(context.Background(), "cam-onvif-test", "ONVIF Test Camera",
-		"onvif", "http://192.168.1.100/onvif/device_service", "admin", "", true, "", "")
+		"onvif", "http://192.168.1.100/onvif/device_service", "admin", "", true, "", "", "")
 	require.NoError(t, err)
 
 	rr := do(t, h.Routes(), "GET", "/api/cameras", nil)
@@ -1055,7 +1055,7 @@ func TestPTZLifecycle(t *testing.T) {
 
 	// 1. Insert ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-ptz", "PTZ Camera", "onvif",
-		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "")
+		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "", "")
 	require.NoError(t, err)
 
 	// 2. PTZ move with invalid mode → 400
@@ -1143,7 +1143,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 
 	// 1. Insert ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif",
-		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "")
+		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "", "")
 	require.NoError(t, err)
 
 	// 2. Request HLS stream for ONVIF camera → 500 (camMgr is nil)

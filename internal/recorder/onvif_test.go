@@ -138,7 +138,7 @@ func TestONVIFRecorder_Start_ConnectFails(t *testing.T) {
 func TestONVIFRecorder_Start_GetStreamURIFails(t *testing.T) {
 	client := &onvif.MockDeviceClient{
 		DeviceInfo: &onvif.DeviceInfo{Manufacturer: "Test", Model: "Cam"},
-		StreamURI:  nil, // GetStreamURI returns nil → will panic, use a different approach
+		StreamURI:  nil, // GetStreamURI returns nil -> will panic, use a different approach
 	}
 	// Override GetStreamURI to return an error by wrapping
 	wrappedClient := &errorStreamURIClient{MockDeviceClient: client}
@@ -301,8 +301,8 @@ func TestONVIFRecorder_DetectEncoding_Default(t *testing.T) {
 		}
 		r := newTestONVIFRecorder(t, client)
 		encoding := r.detectEncoding(context.Background())
-		// Falls through to first profile's encoding
-		require.Equal(t, "JPEG", encoding)
+		// Unknown encoding not in {H264, H265} -> falls back to H264
+		require.Equal(t, "H264", encoding)
 	})
 }
 

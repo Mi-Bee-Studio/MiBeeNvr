@@ -2,8 +2,12 @@ package onvif
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
 	"sync"
 
 	onvifgo "github.com/0x524a/onvif-go"
@@ -83,7 +87,6 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 	return result, nil
 }
 
-// GetStreamURI retrieves the RTSP stream URI for a profile.
 func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*StreamInfo, error) {
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
@@ -94,7 +97,80 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 		return nil, fmt.Errorf("get stream URI: %w", err)
 	}
 
+	// onvif-go may return empty URI due to XML namespace parsing issues
+	// with some devices. Fallback to raw SOAP request if URI is empty.
+	if strings.TrimSpace(uri.URI) == "" {
+		logger.Warn("onvif-go returned empty URI, trying raw SOAP fallback", "profile_token", profileToken)
+		rawURI, rawErr := c.getRawStreamURI(ctx, profileToken)
+		if rawErr != nil {
+			logger.Warn("raw SOAP fallback failed", "error", rawErr)
+		} else if strings.TrimSpace(rawURI) != "" {
+			uri.URI = rawURI
+		}
+	}
+
+	logger.Info("GetStreamURI response", "profile_token", profileToken, "uri", uri.URI)
+
 	return mapStreamURI(uri, profileToken), nil
+}
+
+// getRawStreamURI sends a raw SOAP GetStreamUri request and parses the response.
+// This works around XML namespace parsing issues in onvif-go with some devices.
+func (c *Client) getRawStreamURI(ctx context.Context, profileToken string) (string, error) {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+ xmlns:tt="http://www.onvif.org/ver10/schema">
+  <s:Body>
+    <trt:GetStreamUri>
+      <trt:StreamSetup>
+        <tt:Stream>RTP-Unicast</tt:Stream>
+        <tt:Transport>
+          <tt:Protocol>RTSP</tt:Protocol>
+        </tt:Transport>
+      </trt:StreamSetup>
+      <trt:ProfileToken>%s</trt:ProfileToken>
+    </trt:GetStreamUri>
+  </s:Body>
+</s:Envelope>`, profileToken)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, strings.NewReader(soapBody))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/soap+xml")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	// Parse URI from XML response using regex-like approach
+	// Look for <tt:Uri> or <Uri> tag content
+	var envelope struct {
+		XMLName xml.Name `xml:"Envelope"`
+		Body    struct {
+			XMLName xml.Name `xml:"Body"`
+			GetStreamURIResponse struct {
+				XMLName  xml.Name `xml:"GetStreamUriResponse"`
+				MediaURI struct {
+					URI string `xml:"Uri"`
+				} `xml:"MediaUri"`
+			} `xml:"GetStreamUriResponse"`
+		} `xml:"Body"`
+	}
+
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	return envelope.Body.GetStreamURIResponse.MediaURI.URI, nil
 }
 
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).

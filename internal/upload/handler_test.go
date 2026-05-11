@@ -35,8 +35,8 @@ func setupTestEnv(t *testing.T) (*Handler, func()) {
 	require.NoError(t, db.Init(context.Background()))
 
 	// Insert test cameras via DB
-	require.NoError(t, db.UpsertCamera(context.Background(), "cam1", "Test Camera 1", "http_jpeg", "http://example.com/cam1.jpg", "", "", true, "", ""))
-	require.NoError(t, db.UpsertCamera(context.Background(), "cam2", "Test Camera 2", "rtsp_h264", "rtsp://example.com/cam2", "", "", true, "", ""))
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam1", "Test Camera 1", "http_jpeg", "http://example.com/cam1.jpg", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam2", "Test Camera 2", "rtsp_h264", "rtsp://example.com/cam2", "", "", true, "", "", ""))
 
 	h := NewHandler(mgr, db, 10*1024*1024) // 10MB max
 
@@ -117,7 +117,7 @@ func TestUploadOversized(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Init(context.Background()))
 
-	require.NoError(t, db.UpsertCamera(context.Background(), "cam1", "Cam", "http_jpeg", "http://x", "", "", true, "", ""))
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam1", "Cam", "http_jpeg", "http://x", "", "", true, "", "", ""))
 
 	// 16 bytes max upload size
 	h := NewHandler(mgr, db, 16)

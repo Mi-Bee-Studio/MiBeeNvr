@@ -325,5 +325,10 @@
   "dashboard.apply": "应用",
   "dashboard.clickToLive": "点击查看实时画面",
   "dashboard.backToGrid": "返回网格",
-  "dashboard.snapshotError": "快照不可用"
+  "dashboard.snapshotError": "快照不可用",
+  "onvif.credentials": "ONVIF 凭据（可选）",
+  "onvif.username": "用户名",
+  "onvif.password": "密码",
+  "onvif.credentialsHint": "输入设备凭据以获取流地址",
+  "onvif.noStreamUri": "获取流地址失败，请检查设备凭据"
 }
