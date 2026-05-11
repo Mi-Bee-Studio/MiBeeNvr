@@ -149,7 +149,7 @@
     else if (camera.protocol === 'rtsp_h265') { formProtocol = 'rtsp'; formEncoding = 'h265'; }
     else if (camera.protocol === 'rtsp_mjpeg') { formProtocol = 'rtsp'; formEncoding = 'mjpeg'; }
     else if (camera.protocol === 'http_jpeg') { formProtocol = 'http'; formEncoding = 'jpeg'; }
-    formUrl = camera.url || (camera as any).onvif_endpoint || '';
+    formUrl = camera.url || '';
     formUsername = camera.username || '';
     formPassword = '';
     showPassword = false;
@@ -197,8 +197,7 @@
         const data: UpdateCameraRequest = {
           name: formName,
           protocol: formProtocol,
-          url: formProtocol === 'onvif' ? undefined : formUrl,
-          onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
+          url: formUrl,
           enabled: formEnabled,
           description: formDescription || undefined,
           location: formLocation || undefined,
@@ -227,12 +226,13 @@
             await updateMergeConfig(editingCamera.id, mergeConfig);
           } catch { /* ignore merge config save errors */ }
         }
+        await updateCamera(editingCamera.id, data);
+        showFeedback(t('cameras.cameraUpdated') || '摄像头已更新', 'success');
       } else {
         const data: CreateCameraRequest = {
           name: formName,
           protocol: formProtocol,
-          url: formProtocol === 'onvif' ? undefined : formUrl,
-          onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
+          url: formUrl,
           enabled: formEnabled,
           description: formDescription || undefined,
           location: formLocation || undefined,
@@ -302,7 +302,7 @@
       const results = await discoverONVIFDevices(5);
       // Filter out devices that are already added as ONVIF cameras
       const existingEndpoints = new Set(
-        cameras.filter(c => c.protocol === 'onvif' && (c as any).onvif_endpoint).map(c => (c as any).onvif_endpoint)
+        cameras.filter(c => c.protocol === 'onvif' && c.url).map(c => c.url)
       );
       discoveredDevices = results.filter(d => {
         const ep = d.endpoint || (d.xaddrs.length > 0 ? d.xaddrs[0] : '');
@@ -322,7 +322,7 @@
       await createCamera({
         name: device.name || t('onvif.deviceName'),
         protocol: 'onvif',
-        onvif_endpoint: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
+        url: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
         enabled: true,
         username: onvifUsername || undefined,
         password: onvifPassword || undefined,
@@ -515,7 +515,7 @@
 
               <!-- Encoding -->
               <div>
-                <label for="cam-encoding" class="input-label">Encoding</label>
+                <label for="cam-encoding" class="input-label">{t('cameras.tableEncoding')}</label>
                 <select id="cam-encoding" class="input" bind:value={formEncoding}>
                   {#if formProtocol === 'rtsp'}
                     <option value="h264">H.264</option>
@@ -533,8 +533,15 @@
 
               <!-- URL -->
               <div class="md:col-span-2">
-                <label for="cam-url" class="input-label">{formProtocol === 'onvif' ? 'ONVIF Endpoint' : t('cameras.url')}</label>
-                <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl} on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
+                <label for="cam-url" class="input-label">
+                  {t('cameras.url')}
+                  {#if formProtocol === 'onvif'}
+                    <span class="text-xs th-text-muted ml-1">(ONVIF Endpoint)</span>
+                  {/if}
+                </label>
+                <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
+                  placeholder={formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
+                  on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
@@ -820,10 +827,9 @@
                 <thead>
                   <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableName')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableDescription')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableStatus')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">Protocol</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">Encoding</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableEncoding')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableUrl')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableActions')}</th>
                   </tr>
@@ -855,15 +861,14 @@
                           </button>
                         {/if}
                       </td>
-                      <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.description || '-'}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <span class="badge {formatTimeAgo(camera.last_seen).color}">{formatTimeAgo(camera.last_seen).text}</span>
                         {#if camera.status}
                           <div class="text-xs th-text-muted mt-0.5">{camera.status}</div>
                         {/if}
                       </td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol === 'rtsp' ? 'RTSP' : camera.protocol === 'http' ? 'HTTP' : camera.protocol === 'onvif' ? 'ONVIF' : camera.protocol}</td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.encoding || '-'}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{t('cameras.protocol.' + camera.protocol) || camera.protocol}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : '-'}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2 items-center">

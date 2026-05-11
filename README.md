@@ -15,7 +15,7 @@ A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/H
 
 ## Features
 
-- RTSP (H.264/H.265/MJPEG) and HTTP JPEG camera support
+- RTSP (H.264/H.265/MJPEG), HTTP JPEG, and ONVIF camera support
 - Automatic MP4 segment recording
 - Web UI with **dark/light theme** (auto-detects system preference)
 - **Chart.js-powered** storage trends and per-camera statistics

@@ -331,4 +331,14 @@
   "onvif.password": "密码",
   "onvif.credentialsHint": "输入设备凭据以获取流地址",
   "onvif.noStreamUri": "获取流地址失败，请检查设备凭据"
+,
+  "cameras.tableEncoding": "编码",
+  "cameras.protocol.rtsp": "RTSP",
+  "cameras.protocol.http": "HTTP",
+  "cameras.protocol.onvif": "ONVIF",
+  "cameras.encoding.h264": "H.264",
+  "cameras.encoding.h265": "H.265",
+  "cameras.encoding.mjpeg": "MJPEG",
+  "cameras.encoding.jpeg": "JPEG",
+  "cameras.encoding.auto": "自动"
 }

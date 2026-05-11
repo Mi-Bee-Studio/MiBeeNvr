@@ -17,7 +17,8 @@ auth:
 cameras:
   - id: "cam1"
     name: "摄像头名称"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://..."
     enabled: true
     sub_stream_url: "rtsp://..."
@@ -132,11 +133,28 @@ cameras:
 - **示例**: `"前门摄像头"`, `"后院"`
 
 ### `cameras[].protocol`
+
 - **类型**: 字符串
 - **必需**: 是
-- **描述**: 摄像头协议类型
-- **选项**: `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`, `"onvif"`
-- **注意**: H.265/HEVC 提供比 H.264 更好的压缩率，但需要更多的 CPU 处理
+- **描述**: 摄像头传输协议（v0.2.0 新增独立协议字段）
+- **选项**: `"rtsp"`, `"http"`, `"onvif"`（新的传输层协议值）
+
+### `cameras[].encoding`
+
+- **类型**: 字符串
+- **可选**: 从旧协议自动检测或根据协议默认
+- **描述**: 视频编码格式（v0.2.0 新增独立编码字段）
+- **选项**: `"h264"`, `"h265"`, `"mjpeg"`, `"jpeg"`
+
+**有效组合**:
+  - `rtsp` 协议支持: `h264`, `h265`, `mjpeg`
+  - `http` 协议支持: `jpeg`
+  - `onvif` 协议支持: `h264`, `h265`
+
+**注意事项**:
+  - 不提供时自动从协议推断（如 `rtsp` 默认为 `h264`）
+  - 某些编码格式仅适用于特定协议（如 `http` 只支持 `jpeg`）
+**向后兼容支持**: 旧格式如 `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` 仍然可用（自动解析为对应的协议和编码）
 
 ### `cameras[].url`
 - **类型**: 字符串
@@ -200,7 +218,20 @@ cameras:
 
 ## 协议示例
 
-### RTSP H.264 摄像头
+### RTSP H.264 摄像头（新格式）
+
+```yaml
+- id: "front-door"
+  name: "前门"
+  protocol: "rtsp"
+  encoding: "h264"
+  url: "rtsp://192.168.1.100:554/live"
+  username: "admin"
+  password: "password123"
+  enabled: true
+```
+
+**旧格式仍然支持**:
 ```yaml
 - id: "front-door"
   name: "前门"
@@ -231,7 +262,18 @@ cameras:
   enabled: true
 ```
 
-### HTTP JPEG 摄像头
+### HTTP JPEG 摄像头（新格式）
+
+```yaml
+- id: "garage"
+  name: "车库"
+  protocol: "http"
+  encoding: "jpeg"
+  url: "http://192.168.1.102/capture"
+  enabled: true
+```
+
+**旧格式仍然支持**:
 ```yaml
 - id: "garage"
   name: "车库"
@@ -312,33 +354,34 @@ cameras:
 - **MJPEG**: JPEG 文件移动到同一目录（无重编码）。
 - **磁盘空间**: 如果可用磁盘空间不足合并文件大小的 110%，合并会被跳过。
 - **原子操作**: 合并文件使用原子重命名（临时文件 → 最终文件）防止数据损坏。
-#BK|- **原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
-#JS|
-#VY|### 每摄像头合并配置
-#RK|
-#NK|单个摄像头可以通过 API 或 Web UI 覆盖全局合并设置。这允许不同摄像头根据其录制模式和存储需求采用不同的合并策略。
-#JY|
-#PX|**API 接口**:
-#HK|- `GET /api/cameras/:id/merge-config` - 获取摄像头合并覆盖设置
-#HK|- `PUT /api/cameras/:id/merge-config` - 设置摄像头合并覆盖设置
-#HK|- `DELETE /api/cameras/:id/merge-config` - 重置为全局默认值
-#JS|
-#VY|**摄像头合并参数**:
-#WK|配置摄像头合并设置时，可以覆盖所有 6 个全局参数：
-#NJ|
-#RK|- `enabled` - 启用/禁用此摄像头的合并功能
-#VK|- `check_interval` - 检查可合并段的频率
-#BY|- `window_size` - 分段组合的时间窗口
-#NP|- `batch_limit` - 单次合并运行的最大段数
-#JR|- `min_segment_age` - 段可合并的最小年龄
-#PV|- `min_segments_to_merge` - 触发合并所需的最小段数
-#JS|
-#VY|**覆盖示例**:
-#YP|```yaml
+**原始文件**: 合并成功后，源段会从磁盘和数据库中删除。
+
+### 每摄像头合并配置
+
+单个摄像头可以通过 API 或 Web UI 覆盖全局合并设置。这允许不同摄像头根据其录制模式和存储需求采用不同的合并策略。
+
+**API 接口**:
+- `GET /api/cameras/:id/merge-config` - 获取摄像头合并覆盖设置
+- `PUT /api/cameras/:id/merge-config` - 设置摄像头合并覆盖设置
+- `DELETE /api/cameras/:id/merge-config` - 重置为全局默认值
+
+**摄像头合并参数**:
+配置摄像头合并设置时，可以覆盖所有 6 个全局参数：
+
+- `enabled` - 启用/禁用此摄像头的合并功能
+- `check_interval` - 检查可合并段的频率
+- `window_size` - 分段组合的时间窗口
+- `batch_limit` - 单次合并运行的最大段数
+- `min_segment_age` - 段可合并的最小年龄
+- `min_segments_to_merge` - 触发合并所需的最小段数
+
+**覆盖示例**:
+```yaml
 cameras:
   - id: "front-door"
     name: "前门"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://192.168.1.100:554/live"
     # 摄像头合并设置
     merge_config:
@@ -347,11 +390,7 @@ cameras:
       batch_limit: 100  # 低于全局值 200
       min_segments_to_merge: 2  # 低于全局值 3
 ```
-#JS|
-#MX|## FTP 配置
-#BV|
 
-## FTP 配置
 
 ### `ftp.enabled`
 - **类型**: 布尔值
@@ -412,12 +451,13 @@ cameras:
 - **示例**: `"/dav"`, `"/recordings"`
 
 ### `webdav.read_write`
+
 - **类型**: 布尔值
 - **默认值**: `false`
-- **描述**: WebDAV 服务器是否允许写入操作
+- **描述**: WebDAV 服务器是否允许写入操作（v0.2.0 可配置）
 - **重要**: 启用后，可以通过 WebDAV PUT 请求自动注册新摄像头
 - **安全考虑**: 启用写入访问前请考虑安全影响
-- **示例**: `false`, `true`
+- **示例**: `false`（只读），`true`（可读写）
 
 ## 可观测性配置
 

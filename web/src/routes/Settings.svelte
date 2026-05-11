@@ -432,9 +432,9 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
             <div>
               <label for="autoRefresh" class="input-label">{t('settings.autoRefresh')}</label>
               <select id="autoRefresh" class="input" bind:value={autoRefresh} onchange={handleAutoRefreshChange}>
-                <option value="10s">{t('settings.every10s')}</option>
                 <option value="30s">{t('settings.every30s')}</option>
                 <option value="60s">{t('settings.every60s')}</option>
+                <option value="120s">2 分钟</option>
                 <option value="off">{t('settings.off')}</option>
               </select>
             </div>

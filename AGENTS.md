@@ -12,27 +12,28 @@ Lightweight NVR for Raspberry Pi 3B. Records RTSP (H.264/H.265/MJPEG) and HTTP J
 ```
 cmd/mibee-nvr/main.go   # Entry point — wires all subsystems, graceful shutdown, hash-password CLI subcommand
 internal/
-  api/handler.go         # REST API (chi router) — recordings/cameras CRUD, stats, settings, download, ONVIF, PTZ, stream proxy
+  api/handler.go         # REST API (chi router) — recordings/cameras CRUD, stats, settings, download, ONVIF, PTZ, stream proxy (see api/AGENTS.md)
   camera/manager.go      # CameraManager — manages recorder lifecycle per camera, CRUD + config persistence, metrics integration
   camera/id.go           # GenerateCameraID — nanoid-style random IDs via crypto/rand
   cleanup/cleanup.go     # CleanupManager — retention-based + disk-threshold-based recording deletion
   config/config.go       # YAML config load/save/validate with defaults, MergeConfig, HLS config
   ftp/server.go          # FTP server (ftpserverlib) — anonymous always rejected, upload auto-registers DB recordings
-  hls/manager.go         # HLS Manager — on-demand live preview via gohlslib, async write buffers, idle eviction, sub-stream fallback
-  merge/manager.go       # MergeManager — periodic MP4/MJPEG segment merging to reduce file count
+  hls/manager.go         # HLS Manager — on-demand live preview via gohlslib, async write buffers, idle eviction, sub-stream fallback (see hls/AGENTS.md)
+  merge/manager.go       # MergeManager — periodic MP4/MJPEG segment merging to reduce file count (see merge/AGENTS.md)
   merge/mp4merge.go      # Streaming MP4 merge — placeholder moov, limitedWriter, sample data copy
   merge/parser.go        # MP4 segment parser — extracts sample tables, codec params, keyframe flags
   merge/mjpegmerge.go    # MJPEG segment merge — directory-based JPEG concatenation
   metrics/metrics.go     # Prometheus metrics — custom registry, Go runtime (memstats only), 9 NVR gauges/counters
-  middleware/auth.go      # BasicAuth + bcrypt middleware with rate limiting and verification caching
+  middleware/auth.go     # BasicAuth + bcrypt middleware with rate limiting and verification caching (see middleware/AGENTS.md)
   model/types.go         # Core interfaces (Recorder, StorageProvider) + domain types + constants
   mqtt/client.go         # MQTT client — subscribe to trigger topic for event-driven recording
   muxer/mp4mux.go        # MP4Muxer — low-level MP4 box writing (abema/go-mp4), SPS resolution parsing
-  recorder/h264.go       # H264Recorder — RTSP→RTP decode→ring buffer→MP4 segment, SPS change detection, auto-reconnect
+  recorder/h264.go       # H264Recorder — RTSP→RTP decode→ring buffer→MP4 segment, SPS change detection, auto-reconnect (see recorder/AGENTS.md)
   recorder/h265.go       # H265Recorder — RTSP HEVC→RTP→ring buffer→MP4, VPS/SPS/PPS handling, IRAP sync
   recorder/mjpeg.go      # MJPEGRecorder — RTSP MJPEG→JPEG frames to directory segments, frame sampling
   recorder/http_jpeg.go  # HTTPJPEGRecorder — HTTP multipart MJPEG stream→JPEG frames, boundary parsing
-  storage/db.go          # SQLite DB — recordings/cameras CRUD, time format handling (UTC, multi-format parse)
+  recorder/onvif.go      # ONVIFRecorder — delegate recorder via ONVIF GetStreamUri → RTSP sub-recorder
+  storage/db.go          # SQLite DB — recordings/cameras CRUD, time format handling (UTC, multi-format parse) (see storage/AGENTS.md)
   storage/manager.go     # FileManager — segment create/write/close (temp→atomic rename), disk usage, crash recovery
   ui/embed.go            # //go:embed of built SPA from internal/ui/static/
   upload/handler.go      # HTTP multipart upload handler (100MB max), auto-registers DB recordings
@@ -103,7 +104,7 @@ e2e-tests/               # Playwright E2E tests — recording playback, download
 - **Metrics**: Optional `opts ...*metrics.Metrics` variadic parameter pattern across recorder, camera, storage, cleanup packages
 - **Dependency injection**: `NewXxx()` constructors with required deps as params, no DI framework, manual wiring in main.go
 - **Static build**: `CGO_ENABLED=0` always — no C dependencies, pure Go SQLite (modernc)
-- **Protocol strings**: `rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`, `onvif` — used in camera config and recorder factory
+- **Protocol strings**: Transport-only: `rtsp`, `http`, `onvif` — encoding is separate field (`h264`, `h265`, `mjpeg`, `jpeg`). Legacy combined format (`rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`) auto-parsed via `model.ParseLegacyProtocol()`
 
 ## ANTI-PATTERNS (THIS PROJECT)
 

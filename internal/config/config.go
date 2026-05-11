@@ -173,8 +173,12 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
-		if c.Protocol == "onvif" && strings.TrimSpace(c.ONVIFEndpoint) == "" {
-			return fmt.Errorf("camera[%d].onvif_endpoint is required for ONVIF cameras", i)
+		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) == "" {
+			return fmt.Errorf("camera[%d].url or onvif_endpoint is required for ONVIF cameras", i)
+		}
+		// Auto-populate: if url is set but onvif_endpoint is empty, copy url to onvif_endpoint
+		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) != "" {
+			c.ONVIFEndpoint = c.URL
 		}
 		// Accept both old combined format and new separate format
 		proto := c.Protocol

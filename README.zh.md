@@ -15,7 +15,7 @@
 
 ## 功能特性
 
-- 支持 RTSP (H.264/H.265/MJPEG) 和 HTTP JPEG 摄像头
+- 支持 RTSP (H.264/H.265/MJPEG)、HTTP JPEG 和 ONVIF 摄像头
 - 自动将视频流封装为 MP4 片段存储
 - Web 管理界面，支持 **深色/浅色主题**（自动检测系统偏好）
 - **Chart.js** 驱动的存储趋势和单摄像头统计图表

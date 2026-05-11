@@ -628,6 +628,15 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 
 // --- Camera and stats endpoints ---
 
+// cameraRowForAPI normalizes camera rows for API responses.
+// For ONVIF cameras, it exposes onvif_endpoint as url so the frontend
+// can use a single url field for all protocols.
+func cameraRowForAPI(row *storage.CameraRow) {
+	if row.Protocol == "onvif" && row.URL == "" && row.ONVIFEndpoint != "" {
+		row.URL = row.ONVIFEndpoint
+	}
+}
+
 func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	cameras, err := h.db.ListCameras(r.Context())
 	if err != nil {
@@ -656,6 +665,10 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	}
+	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
+	for i := range cameras {
+		cameraRowForAPI(&cameras[i])
 	}
 	writeJSON(w, http.StatusOK, cameras)
 }
@@ -754,12 +767,18 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif", body.Protocol))
 		return
 	}
-	// ONVIF cameras require onvif_endpoint instead of url
+	// ONVIF cameras: accept url OR onvif_endpoint
 	if body.Protocol == "onvif" {
-		if body.ONVIFEndpoint == "" {
-			writeError(w, http.StatusBadRequest, "onvif_endpoint is required for ONVIF cameras")
+		endpoint := body.ONVIFEndpoint
+		if endpoint == "" {
+			endpoint = body.URL
+		}
+		if endpoint == "" {
+			writeError(w, http.StatusBadRequest, "url or onvif_endpoint is required for ONVIF cameras")
 			return
 		}
+		body.ONVIFEndpoint = endpoint
+		body.URL = "" // Don't store in url field for ONVIF
 		// Check for duplicate ONVIF endpoint
 		if h.db != nil {
 			existingCams, _ := h.db.ListCameras(r.Context())
@@ -841,6 +860,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
+		cameraRowForAPI(row)
 		writeJSON(w, http.StatusCreated, row)
 	} else {
 		cam.ID = id
@@ -868,6 +888,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
+	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
 }
 
@@ -882,6 +903,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Name          *string `json:"name"`
 		URL           *string `json:"url"`
 		Protocol      *string `json:"protocol"`
+		Encoding      *string `json:"encoding"`
 		Username      *string `json:"username"`
 		Password      *string `json:"password"`
 		Enabled       *bool   `json:"enabled"`
@@ -914,6 +936,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Name:          body.Name,
 		URL:           body.URL,
 		Protocol:      body.Protocol,
+		Encoding:      body.Encoding,
 		Username:      username,
 		Password:      password,
 		Enabled:       body.Enabled,
@@ -926,6 +949,17 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
+	}
+
+	// For ONVIF cameras, sync url and onvif_endpoint
+	if body.Protocol != nil && *body.Protocol == "onvif" {
+		if updates.URL != nil && *updates.URL != "" {
+			updates.ONVIFEndpoint = updates.URL
+			updates.URL = nil
+		}
+		if updates.ONVIFEndpoint != nil && *updates.ONVIFEndpoint != "" {
+			updates.URL = updates.ONVIFEndpoint
+		}
 	}
 
 	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
@@ -952,6 +986,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
+		cameraRowForAPI(row)
 		writeJSON(w, http.StatusOK, row)
 	} else {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
