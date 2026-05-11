@@ -18,13 +18,15 @@ func TestONVIFDiscoverEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Discovery is not yet implemented, expect 500
-	require.Equal(t, http.StatusInternalServerError, w.Code)
+	// Discovery now works — returns 200 with empty devices list
+	require.Equal(t, http.StatusOK, w.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
-	require.Contains(t, resp["error"], "discovery failed")
+	devices, ok := resp["devices"].([]interface{})
+	require.True(t, ok, "response should have 'devices' field")
+	require.Equal(t, 0, len(devices), "no ONVIF devices in test environment")
 }
 
 func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
@@ -36,8 +38,8 @@ func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Default timeout = 5, but discovery returns error
-	require.Equal(t, http.StatusInternalServerError, w.Code)
+	// Discovery succeeds — returns 200 with empty devices
+	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
@@ -66,8 +68,8 @@ func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Negative timeout defaults to 5, but discovery returns error
-	require.Equal(t, http.StatusInternalServerError, w.Code)
+	// Negative timeout defaults to 5s, discovery runs and returns
+	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestONVIFDeviceDetailEndpoint(t *testing.T) {
@@ -77,11 +79,67 @@ func TestONVIFDeviceDetailEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Not yet implemented
-	require.Equal(t, http.StatusNotImplemented, w.Code)
-
+	// Device detail now actually tries to connect to the ONVIF device.
+	// In test environment with no real device, this returns 502 BadGateway.
+	require.Equal(t, http.StatusBadGateway, w.Code)
 	var resp map[string]string
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
-	require.Contains(t, resp["error"], "not yet implemented")
+	require.Contains(t, resp["error"], "failed to connect")
+}
+
+func TestONVIFDeviceDetail_MissingIP(t *testing.T) {
+	h := TestHandler(nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/onvif/discover/", nil)
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	// chi requires at least one char for {ip} param, so /api/onvif/discover/ returns 404
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestPTZMove_InvalidMode(t *testing.T) {
+	h := TestHandler(nil, nil)
+	body := `{"mode": "invalid"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestPTZMove_InvalidBody(t *testing.T) {
+	h := TestHandler(nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestPTZStop_NoCamMgr(t *testing.T) {
+	h := TestHandler(nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/stop", nil)
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	// No DB means requireONVIF returns 404 (camera not found)
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestPTZStatus_NoCamMgr(t *testing.T) {
+	h := TestHandler(nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/ptz/status", nil)
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	// No DB means requireONVIF returns 404 (camera not found)
+	require.Equal(t, http.StatusNotFound, w.Code)
 }

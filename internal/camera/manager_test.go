@@ -740,3 +740,125 @@ func TestRestartRecorder_Disabled(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disabled")
 }
+
+func TestCreateRecorder_ONVIF(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	cam := config.CameraConfig{
+		ID:       "cam-onvif",
+		Name:     "ONVIF Camera",
+		Protocol: "onvif",
+		URL:      "http://192.168.1.100/onvif/device_service",
+		Username: "admin",
+		Password: "pass",
+		Enabled:  true,
+	}
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	rec := mgr.createRecorder(cam, segDur)
+	require.NotNil(t, rec, "ONVIF protocol should create a recorder")
+	// Verify it's an ONVIFRecorder
+	status := rec.Status()
+	require.Equal(t, model.StatusStopped, status)
+}
+
+func TestCreateRecorder_ONVIF_WithEndpoint(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "30s",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	cam := config.CameraConfig{
+		ID:            "cam-onvif-endpoint",
+		Name:          "ONVIF Camera",
+		Protocol:      "onvif",
+		URL:           "http://192.168.1.100/stream",
+		ONVIFEndpoint: "http://192.168.1.100:8080/onvif/device_service",
+		Username:      "admin",
+		Password:      "pass",
+	}
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	rec := mgr.createRecorder(cam, segDur)
+	require.NotNil(t, rec, "ONVIF protocol with endpoint should create a recorder")
+}
+
+func TestGetONVIFPTZController_NotFound(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	ctx := context.Background()
+	_, err = mgr.GetONVIFPTZController(ctx, "nonexistent")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+}
+
+func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+		Cameras: []config.CameraConfig{{
+			ID:       "cam-h264",
+			Name:     "H264 Camera",
+			Protocol: "rtsp_h264",
+			URL:      "rtsp://127.0.0.1/stream",
+			Enabled:  true,
+		}},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	ctx := context.Background()
+	_, err = mgr.GetONVIFPTZController(ctx, "cam-h264")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not an ONVIF camera")
+}

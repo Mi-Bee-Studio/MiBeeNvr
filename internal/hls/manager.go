@@ -24,9 +24,10 @@ import (
 var hlsLogger = slog.Default().With("component", "hls-manager")
 
 const (
-	defaultIdleTimeout = 60 * time.Second
-	defaultMaxStreams  = 4
-	writeBufSize      = 120 // buffered frames per stream (~6s at 20fps)
+	defaultIdleTimeout  = 60 * time.Second
+	defaultMaxStreams   = 4
+	defaultWriteBufSize = 40  // buffered frames per stream (~2s at 20fps)
+	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
 )
 
 // hlsFrame is an async write request for the HLS muxer.
@@ -51,20 +52,45 @@ type streamEntry struct {
 
 // Manager manages on-demand HLS streams for cameras.
 type Manager struct {
-	mu          sync.RWMutex
-	streams     map[string]*streamEntry // cameraID -> entry
-	dataDir     string
-	idleTimeout time.Duration
-	maxStreams  int
+	mu              sync.RWMutex
+	streams         map[string]*streamEntry // cameraID -> entry
+	dataDir         string
+	idleTimeout     time.Duration
+	maxStreams       int
+	writeBufSize    int
+	segmentMaxSize  int
 }
 
-// NewManager creates a new HLS Manager. dataDir is the root directory for HLS segment storage.
+// NewManager creates a new HLS Manager with default settings.
+// Use NewManagerWithOpts for custom buffer/segment sizes.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		streams:     make(map[string]*streamEntry),
-		dataDir:     dataDir,
-		idleTimeout: defaultIdleTimeout,
-		maxStreams:  defaultMaxStreams,
+		streams:        make(map[string]*streamEntry),
+		dataDir:        dataDir,
+		idleTimeout:    defaultIdleTimeout,
+		maxStreams:      defaultMaxStreams,
+		writeBufSize:   defaultWriteBufSize,
+		segmentMaxSize: defaultSegmentMaxSize,
+	}
+}
+
+// NewManagerWithOpts creates a new HLS Manager with custom buffer and segment sizes.
+// writeBufSize controls the async frame buffer per stream (default: 40).
+// segmentMaxSize controls the maximum HLS segment file size in bytes (default: 10MB).
+func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize int) *Manager {
+	if writeBufSize <= 0 {
+		writeBufSize = defaultWriteBufSize
+	}
+	if segmentMaxSize <= 0 {
+		segmentMaxSize = defaultSegmentMaxSize
+	}
+	return &Manager{
+		streams:        make(map[string]*streamEntry),
+		dataDir:        dataDir,
+		idleTimeout:    defaultIdleTimeout,
+		maxStreams:      defaultMaxStreams,
+		writeBufSize:   writeBufSize,
+		segmentMaxSize: segmentMaxSize,
 	}
 }
 
@@ -83,20 +109,9 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Evict oldest stream if at capacity
+	// At capacity — return error instead of silently evicting
 	if len(m.streams) >= m.maxStreams {
-		var oldestID string
-		var oldestTime time.Time
-		for id, entry := range m.streams {
-			if oldestID == "" || entry.lastUsed.Before(oldestTime) {
-				oldestID = id
-				oldestTime = entry.lastUsed
-			}
-		}
-		if oldestID != "" {
-			hlsLogger.Info("evicting oldest HLS stream for new request", "evicted_id", oldestID, "new_id", cameraID)
-			m.stopStreamLocked(oldestID)
-		}
+		return ErrMaxStreamsReached
 	}
 
 	// Already active — just update lastUsed
@@ -124,7 +139,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 			Variant:            gohlslib.MuxerVariantFMP4,
 			SegmentCount:       3,
 			SegmentMinDuration: 2 * time.Second,
-			SegmentMaxSize:     50 * 1024 * 1024,
+			SegmentMaxSize:     uint64(m.segmentMaxSize),
 			Directory:          dirPath,
 		}
 	} else {
@@ -137,7 +152,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 			Variant:            gohlslib.MuxerVariantMPEGTS,
 			SegmentCount:       3,
 			SegmentMinDuration: 2 * time.Second,
-			SegmentMaxSize:     50 * 1024 * 1024,
+			SegmentMaxSize:     uint64(m.segmentMaxSize),
 			Directory:          dirPath,
 		}
 	}
@@ -154,7 +169,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		dirPath:  dirPath,
 		lastUsed: time.Now(),
 		cancel:   cancel,
-		frameCh:  make(chan hlsFrame, writeBufSize),
+		frameCh:  make(chan hlsFrame, m.writeBufSize),
 		isH265:   isH265,
 		maxFPS:   maxFPS,
 	}
@@ -372,6 +387,25 @@ func (m *Manager) StopStream(cameraID string) {
 	m.stopStreamLocked(cameraID)
 }
 
+// EvictStream stops and removes an active HLS stream, freeing a slot.
+// Returns ErrStreamNotActive if the stream is not running.
+func (m *Manager) EvictStream(cameraID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.streams[cameraID]; !ok {
+		return ErrStreamNotActive
+	}
+	m.stopStreamLocked(cameraID)
+	return nil
+}
+
+// GetActiveStreamCount returns the number of currently active HLS streams.
+func (m *Manager) GetActiveStreamCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.streams)
+}
+
 // stopStreamLocked stops a stream. Caller must hold m.mu write lock.
 func (m *Manager) stopStreamLocked(cameraID string) {
 	entry, ok := m.streams[cameraID]
@@ -384,7 +418,9 @@ func (m *Manager) stopStreamLocked(cameraID string) {
 		entry.subStreamCancel()
 		entry.subStreamCancel = nil
 	}
-	entry.mux.Close()
+	if entry.mux != nil {
+		entry.mux.Close()
+	}
 
 	// Clean up segment directory
 	os.RemoveAll(entry.dirPath)
@@ -438,6 +474,16 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 
 // IsActive returns true if an HLS stream is active for the given camera.
 func (m *Manager) IsActive(cameraID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.streams[cameraID]
+	return ok
+}
+
+// GetStreamStatus returns whether a stream is active for the given camera.
+// Returns (active, nil) — use IsActive() for simple boolean check.
+// This method is designed for API responses that include stream metadata.
+func (m *Manager) GetStreamStatus(cameraID string) (active bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, ok := m.streams[cameraID]

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, MergeConfig } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -64,6 +64,13 @@
   let scanError = $state('');
   let discoveredDevices = $state<DiscoveredDevice[]>([]);
   let addingDeviceId = $state<string | null>(null);
+  let probeIP = $state('');
+  let selectedDevice = $state<DiscoveredDevice | null>(null);
+  let deviceDetail = $state<{ device_info: any; profiles: DeviceProfile[] } | null>(null);
+  let detailLoading = $state(false);
+  let selectedProfileToken = $state('');
+  let onvifUsername = $state('');
+  let onvifPassword = $state('');
 
   // Merge config (per-camera)
   let mergeConfig = $state<MergeConfig | null>(null);
@@ -276,26 +283,43 @@
   }
 
   async function addDiscoveredDevice(device: DiscoveredDevice) {
-    addingDeviceId = device.id;
+    addingDeviceId = device.uuid;
     try {
       await createCamera({
-        name: device.name,
-        protocol: device.protocol || 'rtsp_h264',
-        url: device.url,
+        name: device.name || t('onvif.deviceName'),
+        protocol: 'onvif',
+        url: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
         enabled: true,
-        description: device.description || undefined,
-        location: device.location || undefined,
-        brand: device.brand || undefined,
-        model: device.model || undefined,
-        serial_number: device.serial_number || undefined,
+        description: device.hardware || undefined,
+        username: onvifUsername || undefined,
+        password: onvifPassword || undefined,
       });
       showToast(t('cameras.cameraAdded'), 'success');
-      discoveredDevices = discoveredDevices.filter(d => d.id !== device.id);
+      discoveredDevices = discoveredDevices.filter(d => d.uuid !== device.uuid);
       await loadCameras();
     } catch (e) {
       showToast(t('cameras.failedAdd'), 'error');
     } finally {
       addingDeviceId = null;
+    }
+  }
+
+  async function viewDeviceDetail(device: DiscoveredDevice) {
+    selectedDevice = device;
+    detailLoading = true;
+    deviceDetail = null;
+    try {
+      // Extract IP from endpoint or xaddrs
+      const url = new URL(device.endpoint || device.xaddrs[0]);
+      const ip = url.hostname;
+      deviceDetail = await getONVIFDeviceDetail(ip);
+      if (deviceDetail?.profiles?.length) {
+        selectedProfileToken = deviceDetail.profiles[0].token;
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to get device details', 'error');
+    } finally {
+      detailLoading = false;
     }
   }
 

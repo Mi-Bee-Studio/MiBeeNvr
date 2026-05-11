@@ -6,6 +6,9 @@
   import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import { formatDate } from '$lib/format';
+  import { createHlsConfig } from '$lib/hls-config';
+  import { setupHlsErrorHandling, checkStreamAvailable } from '$lib/hls-errors';
+  import type { StreamState } from '$lib/hls-errors';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -16,6 +19,7 @@
   let hlsInstances: Record<string, any> = {};
   let playerErrors = $state<Record<string, string>>({});
   let playerReady = $state<Record<string, boolean>>({});
+  let streamStates = $state<Record<string, StreamState>>({});
 
   let ptzOpenIndex = $state(-1);
 
@@ -104,15 +108,14 @@
   }
 
   function isHlsSupported(camera: Camera): boolean {
-    return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265';
+    return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif';
   }
 
-  type CameraMode = 'snapshot' | 'hls-expanded' | 'hls-fallback' | 'unsupported';
+  type CameraMode = 'snapshot' | 'hls' | 'unsupported';
 
   function getCameraMode(camera: Camera): CameraMode {
-    if (expandedCameraId === camera.id) return 'hls-expanded';
-    if (noSnapshotCameras.has(camera.id) && isHlsSupported(camera)) return 'hls-fallback';
-    if (noSnapshotCameras.has(camera.id) && !isHlsSupported(camera)) return 'unsupported';
+    if (isHlsSupported(camera)) return 'hls';
+    if (noSnapshotCameras.has(camera.id)) return 'unsupported';
     return 'snapshot';
   }
 
@@ -173,67 +176,72 @@
 
   // --- HLS player ---
 
+  function updateStreamState(cameraId: string, state: StreamState) {
+    streamStates[cameraId] = state;
+  }
+
+  function fallbackToSnapshot(cameraId: string) {
+    const hls = hlsInstances[cameraId];
+    if (hls) {
+      hls.destroy();
+      delete hlsInstances[cameraId];
+    }
+    delete playerErrors[cameraId];
+    delete playerReady[cameraId];
+    updateStreamState(cameraId, 'snapshot');
+    startSnapshotRefresh(cameraId);
+  }
+
   function initPlayer(cameraId: string) {
     const videoEl = videoEls[cameraId];
     if (!videoEl) return;
 
     const url = getStreamUrl(cameraId);
 
-    import('hls.js').then((HlsModule) => {
-      const Hls = HlsModule.default;
-      if (!Hls.isSupported()) {
-        playerErrors[cameraId] = 'HLS not supported';
+    // Check if stream endpoint is available (not 429)
+    checkStreamAvailable(url).then((available) => {
+      if (!available) {
+        updateStreamState(cameraId, 'snapshot');
+        startSnapshotRefresh(cameraId);
         return;
       }
 
-      const existing = hlsInstances[cameraId];
-      if (existing) {
-        existing.destroy();
-      }
-
-      const hls = new Hls({
-        enableWorker: false,
-        xhrSetup: (xhr: XMLHttpRequest, reqUrl: string) => {
-          const creds = getCredentials();
-          if (creds) {
-            if (!xhr.readyState) {
-              xhr.open('GET', reqUrl, true);
-            }
-            xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
-          }
-        },
-      });
-
-      hlsInstances[cameraId] = hls;
-
-      hls.loadSource(url);
-      hls.attachMedia(videoEl);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        videoEl.play().catch(() => {});
-        playerReady[cameraId] = true;
-        delete playerErrors[cameraId];
-      });
-
-      hls.on(Hls.Events.ERROR, (_event: string, data: any) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              hls.recoverMediaError();
-              break;
-            default:
-              playerErrors[cameraId] = 'Stream error';
-              hls.destroy();
-              delete hlsInstances[cameraId];
-              break;
-          }
+      import('hls.js').then((HlsModule) => {
+        const Hls = HlsModule.default;
+        if (!Hls.isSupported()) {
+          playerErrors[cameraId] = 'HLS not supported';
+          return;
         }
+
+        const existing = hlsInstances[cameraId];
+        if (existing) {
+          existing.destroy();
+        }
+
+        const hls = new Hls(createHlsConfig());
+        hlsInstances[cameraId] = hls;
+        updateStreamState(cameraId, 'buffering');
+
+        setupHlsErrorHandling(hls, Hls, {
+          cameraId,
+          maxRetries: 3,
+          retryDelays: [2000, 4000, 8000],
+          onStateChange: updateStreamState,
+          onFallbackToSnapshot: fallbackToSnapshot,
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(videoEl);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoEl.play().catch(() => {});
+          playerReady[cameraId] = true;
+          delete playerErrors[cameraId];
+        });
+      }).catch(() => {
+        playerErrors[cameraId] = 'Failed to load player';
+        updateStreamState(cameraId, 'error');
       });
-    }).catch(() => {
-      playerErrors[cameraId] = 'Failed to load player';
     });
   }
 
@@ -253,47 +261,31 @@
     expandedCameraId = cameraId;
   }
 
-  function shrinkToSnapshot() {
-    const prevId = expandedCameraId;
+  function shrinkToGrid() {
     expandedCameraId = null;
-    if (prevId) {
-      destroyPlayer(prevId);
-      if (!noSnapshotCameras.has(prevId)) {
-        startSnapshotRefresh(prevId);
-      }
-    }
   }
 
   function handleFullscreenChange() {
     if (!document.fullscreenElement) {
-      shrinkToSnapshot();
+      shrinkToGrid();
     }
   }
-
   function handleCellClick(camera: Camera, index: number) {
-    const mode = getCameraMode(camera);
-
-    if (mode === 'snapshot') {
-      // Click snapshot → expand to HLS live view
-      if (isHlsSupported(camera)) {
-        expandToHls(camera.id);
-      } else if (camera.protocol === 'onvif') {
-        ptzOpenIndex = ptzOpenIndex === index ? -1 : index;
-      }
+    if (expandedCameraId === camera.id) {
+      shrinkToGrid();
       return;
     }
-
-    // In HLS mode: toggle PTZ for ONVIF cameras
-    if (camera.protocol === 'onvif') {
-      ptzOpenIndex = ptzOpenIndex === index ? -1 : index;
+    if (isHlsSupported(camera)) {
+      expandToHls(camera.id);
     }
   }
 
   function handleCellDblClick(camera: Camera) {
     if (expandedCameraId === camera.id) {
-      shrinkToSnapshot();
+      shrinkToGrid();
     }
   }
+
 
   function closePtz() {
     ptzOpenIndex = -1;
@@ -359,10 +351,15 @@
     for (const cam of _cameras) {
       const mode = getCameraMode(cam);
 
-      if (mode === 'hls-expanded' || mode === 'hls-fallback') {
-        // Stop snapshot, start HLS
+      if (mode === 'hls') {
+        // Stop snapshot, start HLS (unless already in snapshot fallback)
+        const currentState = streamStates[cam.id];
+        if (currentState === 'snapshot') {
+          // Keep snapshot mode — error recovery put us here
+          continue;
+        }
         stopSnapshotRefresh(cam.id);
-        if (!hlsInstances[cam.id] && isHlsSupported(cam)) {
+        if (!hlsInstances[cam.id]) {
           setTimeout(() => initPlayer(cam.id), 50);
         }
       } else if (mode === 'unsupported') {
@@ -478,7 +475,7 @@
             ondblclick={() => handleCellDblClick(camera)}
           >
             {#if mode === 'snapshot'}
-              <!-- Snapshot thumbnail mode -->
+              <!-- Snapshot thumbnail mode (HTTP_JPEG cameras) -->
               {#if snapshotLoading[camera.id] && !snapshotUrls[camera.id]}
                 <!-- Initial loading -->
                 <div class="absolute inset-0 flex items-center justify-center bg-black/40">
@@ -510,16 +507,6 @@
                 </div>
               {/if}
 
-              <!-- "Click for live" hint overlay (shows on hover for HLS-capable cameras) -->
-              {#if isHlsSupported(camera)}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors pointer-events-none">
-                  <div class="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1">
-                    <Maximize size={20} class="text-white/80" />
-                    <span class="text-white/80 text-xs">{t('dashboard.clickToLive')}</span>
-                  </div>
-                </div>
-              {/if}
-
               <!-- Camera name + status overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
@@ -528,7 +515,7 @@
                 </div>
               </div>
 
-            {:else if mode === 'hls-expanded' || mode === 'hls-fallback'}
+            {:else if mode === 'hls'}
               <!-- HLS Player -->
               <!-- svelte-ignore binding_property_non_reactive -->
               <video
@@ -560,6 +547,17 @@
                 </div>
               {/if}
 
+              <!-- Stream state indicator -->
+              {@const state = streamStates[camera.id]}
+              {#if state === 'playing'}
+                <span class="absolute top-2 left-2 w-2 h-2 bg-green-500 rounded-full" title="Live"></span>
+              {:else if state === 'buffering'}
+                <span class="absolute top-2 left-2 w-2 h-2 bg-yellow-500 rounded-full animate-pulse" title="Buffering"></span>
+              {:else if state === 'error'}
+                <span class="absolute top-2 left-2 w-2 h-2 bg-red-500 rounded-full" title="Error"></span>
+              {:else if state === 'snapshot'}
+                <span class="absolute top-2 left-2 w-2 h-2 bg-gray-400 rounded-full" title="Snapshot mode"></span>
+              {/if}
               <!-- Camera name + status overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
@@ -572,14 +570,14 @@
               {#if isExpanded}
                 <!-- Shrink / back to grid button -->
                 <button
-                  onclick={(e: MouseEvent) => { e.stopPropagation(); shrinkToSnapshot(); }}
+                  onclick={(e: MouseEvent) => { e.stopPropagation(); shrinkToGrid(); }}
                   class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all"
                   title={t('dashboard.backToGrid')}
                 >
                   <Minimize size={16} />
                 </button>
               {:else}
-                <!-- Expand button for fallback HLS cameras -->
+                <!-- Expand button for grid HLS cameras -->
                 <button
                   onclick={(e: MouseEvent) => { e.stopPropagation(); expandToHls(camera.id); }}
                   class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all opacity-0 group-hover:opacity-100"

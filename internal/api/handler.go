@@ -989,10 +989,32 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "IP address is required")
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "device detail lookup not yet implemented")
+	ctx := r.Context()
+	client := onvif.NewClient(fmt.Sprintf("http://%s/onvif/device_service", ip), "", "")
+	if err := client.Connect(ctx); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to device: %v", err))
+		return
+	}
+	info, err := client.GetDeviceInformation(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get device info: %v", err))
+		return
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		profiles = nil
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"device_info": info,
+		"profiles":    profiles,
+	})
 }
 
 func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
+	if h.db == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return false
+	}
 	cameraID := chi.URLParam(r, "id")
 	camera, err := h.db.GetCamera(r.Context(), cameraID)
 	if err != nil || camera == nil {
@@ -1027,8 +1049,28 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	if !h.requireONVIF(w, r) {
 		return
 	}
-	_ = cameraID
-	// TODO: Actual PTZ control via ONVIF client
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	vec := onvif.PTZVector{Pan: req.Pan, Tilt: req.Tilt, Zoom: req.Zoom}
+	switch req.Mode {
+	case "continuous":
+		err = ptz.ContinuousMove(r.Context(), vec)
+	case "absolute":
+		err = ptz.AbsoluteMove(r.Context(), vec)
+	case "relative":
+		err = ptz.RelativeMove(r.Context(), vec)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ command failed: %v", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1037,8 +1079,19 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	if !h.requireONVIF(w, r) {
 		return
 	}
-	_ = cameraID
-	// TODO: Actual PTZ stop via ONVIF client
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := ptz.Stop(r.Context(), true, true); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ stop failed: %v", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
@@ -1047,13 +1100,25 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.requireONVIF(w, r) {
 		return
 	}
-	_ = cameraID
-	// TODO: Actual PTZ status via ONVIF client
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	pos, moving, err := ptz.GetStatus(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get PTZ status failed: %v", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"pan":    0.0,
-		"tilt":   0.0,
-		"zoom":   0.0,
-		"moving": false,
+		"pan":    pos.Pan,
+		"tilt":   pos.Tilt,
+		"zoom":   pos.Zoom,
+		"moving": moving,
 	})
 }
 

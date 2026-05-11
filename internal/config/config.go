@@ -20,6 +20,7 @@ type Config struct {
 	FTP         FTPConfig         `yaml:"ftp"`
 	MQTT        MQTTConfig        `yaml:"mqtt"`
 	WebDAV      WebDAVConfig      `yaml:"webdav"`
+	HLS         HLSConfig         `yaml:"hls"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Version     string            `yaml:"version"`
 }
@@ -97,6 +98,10 @@ type ObservabilityConfig struct {
 	EnablePprof  bool   `yaml:"enable_pprof"`  // default false
 }
 
+type HLSConfig struct {
+	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 40)
+	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
+}
 
 // Load reads a YAML config file and returns a Config with defaults applied.
 func Load(path string) (*Config, error) {
@@ -268,6 +273,13 @@ func (cfg *Config) applyDefaults() {
 	}
 	// EnablePprof defaults to false (zero value)
 	// Version
+	// HLS defaults
+	if cfg.HLS.WriteBufferSize <= 0 {
+		cfg.HLS.WriteBufferSize = 40
+	}
+	if cfg.HLS.SegmentMaxSizeMB <= 0 {
+		cfg.HLS.SegmentMaxSizeMB = 10
+	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"
 	}
