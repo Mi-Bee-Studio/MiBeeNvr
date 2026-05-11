@@ -36,7 +36,8 @@
   let showForm = $state(false);
   let editingCamera = $state<Camera | null>(null);
   let formName = $state('');
-  let formProtocol = $state('rtsp_h264');
+  let formProtocol = $state('rtsp');
+  let formEncoding = $state('h264');
   let formUrl = $state('');
   let formUsername = $state('');
   let formPassword = $state('');
@@ -50,6 +51,17 @@
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');  // For ONVIF cameras: '' = auto, 'H264', 'H265'
+
+  $effect(() => {
+    // When protocol changes, auto-select appropriate encoding
+    if (formProtocol === 'http') {
+      formEncoding = 'jpeg';
+    } else if (formProtocol === 'onvif') {
+      formEncoding = '';
+    } else if (formProtocol === 'rtsp' && (formEncoding === 'jpeg' || formEncoding === '')) {
+      formEncoding = 'h264';
+    }
+  });
 
   // Inline name edit
   let editingNameId = $state<string | null>(null);
@@ -104,7 +116,8 @@
     showForm = false;
     editingCamera = null;
     formName = '';
-    formProtocol = 'rtsp_h264';
+    formProtocol = 'rtsp';
+    formEncoding = 'h264';
     formUrl = '';
     formUsername = '';
     formPassword = '';
@@ -130,6 +143,12 @@
     editingCamera = camera;
     formName = camera.name;
     formProtocol = camera.protocol;
+    formEncoding = camera.encoding || '';
+    // Handle legacy combined protocols from existing cameras
+    if (camera.protocol === 'rtsp_h264') { formProtocol = 'rtsp'; formEncoding = 'h264'; }
+    else if (camera.protocol === 'rtsp_h265') { formProtocol = 'rtsp'; formEncoding = 'h265'; }
+    else if (camera.protocol === 'rtsp_mjpeg') { formProtocol = 'rtsp'; formEncoding = 'mjpeg'; }
+    else if (camera.protocol === 'http_jpeg') { formProtocol = 'http'; formEncoding = 'jpeg'; }
     formUrl = camera.url || (camera as any).onvif_endpoint || '';
     formUsername = camera.username || '';
     formPassword = '';
@@ -187,7 +206,8 @@
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
           retention_days: formRetentionDays,
-          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined
+          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+          encoding: formEncoding
         };
         // Only send username if changed from original
         if (formUsername && formUsername !== editingCamera.username) {
@@ -219,7 +239,8 @@
           brand: formBrand || undefined,
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
-          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined
+          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+          encoding: formEncoding
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -483,14 +504,31 @@
               <div>
                 <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
                 <select id="cam-protocol" class="input" bind:value={formProtocol}>
-                  <option value="rtsp_h264">RTSP H.264</option>
-                  <option value="rtsp_h265">RTSP H.265</option>
-                  <option value="rtsp_mjpeg">RTSP MJPEG</option>
-                  <option value="http_jpeg">HTTP JPEG</option>
+                  <option value="rtsp">RTSP</option>
+                  <option value="http">HTTP</option>
+                  <option value="onvif">ONVIF</option>
                 </select>
                 {#if validationErrors['protocol']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
                 {/if}
+              </div>
+
+              <!-- Encoding -->
+              <div>
+                <label for="cam-encoding" class="input-label">Encoding</label>
+                <select id="cam-encoding" class="input" bind:value={formEncoding}>
+                  {#if formProtocol === 'rtsp'}
+                    <option value="h264">H.264</option>
+                    <option value="h265">H.265</option>
+                    <option value="mjpeg">MJPEG</option>
+                  {:else if formProtocol === 'http'}
+                    <option value="jpeg">JPEG</option>
+                  {:else if formProtocol === 'onvif'}
+                    <option value="">Auto-detect</option>
+                    <option value="h264">H.264</option>
+                    <option value="h265">H.265</option>
+                  {/if}
+                </select>
               </div>
 
               <!-- URL -->
@@ -540,17 +578,6 @@
                 <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
               </div>
 
-              {#if formProtocol === 'onvif'}
-              <!-- Stream Encoding (ONVIF only) -->
-              <div>
-                <label for="cam-encoding" class="input-label">Stream Encoding</label>
-                <select id="cam-encoding" class="input" bind:value={formStreamEncoding}>
-                  <option value="">Auto-detect</option>
-                  <option value="H264">H.264</option>
-                  <option value="H265">H.265</option>
-                </select>
-              </div>
-              {/if}
 
               <!-- Description -->
 
@@ -795,7 +822,8 @@
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableName')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableDescription')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableStatus')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">Protocol</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">Encoding</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableUrl')}</th>
                     <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableActions')}</th>
                   </tr>
@@ -834,11 +862,12 @@
                           <div class="text-xs th-text-muted mt-0.5">{camera.status}</div>
                         {/if}
                       </td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.protocol === 'rtsp' ? 'RTSP' : camera.protocol === 'http' ? 'HTTP' : camera.protocol === 'onvif' ? 'ONVIF' : camera.protocol}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.encoding || '-'}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2 items-center">
-                          {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265'}
+                          {#if camera.protocol === 'rtsp' || camera.protocol === 'onvif' || camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265'}
                             <a
                               href="#/live/{camera.id}"
                               class="btn btn-primary px-2 py-1 text-sm flex items-center gap-1"

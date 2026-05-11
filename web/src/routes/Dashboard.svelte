@@ -108,7 +108,7 @@
   }
 
   function isHlsSupported(camera: Camera): boolean {
-    return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif';
+    return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif' || camera.protocol === 'rtsp';
   }
 
   type CameraMode = 'snapshot' | 'hls' | 'unsupported';
