@@ -55,6 +55,7 @@ func (d *DB) Init(ctx context.Context) error {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         protocol TEXT NOT NULL,
+        encoding TEXT NOT NULL DEFAULT '',
         url TEXT NOT NULL,
         username TEXT DEFAULT '',
         password TEXT DEFAULT '',
@@ -168,6 +169,11 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='7' WHERE key='schema_version'")
 
+	// Migration: add encoding column if missing
+	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
+	// Migration: normalize legacy protocol values + populate encoding
+	d.migrateEncodings()
+
 	return nil
 
 }
@@ -176,6 +182,34 @@ func (d *DB) Close() error {
 		return nil
 	}
 	return d.db.Close()
+}
+
+func (d *DB) migrateEncodings() {
+	rows, err := d.db.Query("SELECT id, protocol FROM cameras WHERE encoding = ''")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, protocol string
+		if err := rows.Scan(&id, &protocol); err != nil {
+			continue
+		}
+		proto, enc, err := model.ParseLegacyProtocol(protocol)
+		if err != nil {
+			continue
+		}
+		// Only update if protocol actually changed (was a combined format)
+		if proto != protocol {
+			d.db.Exec("UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
+		} else {
+			// Same protocol (onvif or already normalized) — just set encoding if available
+			if enc != "" {
+				d.db.Exec("UPDATE cameras SET encoding = ? WHERE id = ?", enc, id)
+			}
+		}
+	}
 }
 
 // Backup creates a backup of the database using VACUUM INTO.
@@ -507,7 +541,8 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 type CameraRow struct {
 	ID           string               `json:"id"`
 	Name         string               `json:"name"`
-	Protocol     string               `json:"protocol"`
+Protocol     string               `json:"protocol"`
+Encoding       string               `json:"encoding"`
 	URL          string               `json:"url"`
 	Enabled      bool                 `json:"enabled"`
 	Description  string               `json:"description"`
@@ -534,7 +569,7 @@ type CameraRow struct {
 
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding
 		FROM cameras ORDER BY id;`)
@@ -548,7 +583,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeEnabled sql.NullBool
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding); err != nil {
 			return nil, err
@@ -572,13 +607,13 @@ func (d *DB) CountRecordings(ctx context.Context) (int, error) {
 
 // UpsertCamera inserts or updates a camera record in the database
 
-func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, url, username, password string, enabled bool, onvifEndpoint, profileToken, streamEncoding string) error {
+func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, enabled bool, onvifEndpoint, profileToken, streamEncoding string) error {
 
-    q := `INSERT INTO cameras(id, name, protocol, url, username, password, enabled, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?)
+    q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, enabled, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
 
-    _, err := d.db.ExecContext(ctx, q, id, name, protocol, url, username, password, enabled, onvifEndpoint, profileToken, streamEncoding)
+    _, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, enabled, onvifEndpoint, profileToken, streamEncoding)
 
 	return err
 }
@@ -588,11 +623,11 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeEnabled sql.NullBool
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding
 		FROM cameras WHERE id = ?`, cameraID).Scan(
-		&c.ID, &c.Name, &c.Protocol, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding)
 	if err != nil {
