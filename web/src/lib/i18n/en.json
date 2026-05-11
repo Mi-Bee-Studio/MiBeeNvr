@@ -330,4 +330,14 @@
   "onvif.password": "Password",
   "onvif.credentialsHint": "Enter device credentials to get stream URI",
   "onvif.noStreamUri": "Failed to get stream URI. Check device credentials."
+,
+  "cameras.tableEncoding": "Encoding",
+  "cameras.protocol.rtsp": "RTSP",
+  "cameras.protocol.http": "HTTP",
+  "cameras.protocol.onvif": "ONVIF",
+  "cameras.encoding.h264": "H.264",
+  "cameras.encoding.h265": "H.265",
+  "cameras.encoding.mjpeg": "MJPEG",
+  "cameras.encoding.jpeg": "JPEG",
+  "cameras.encoding.auto": "Auto"
 }

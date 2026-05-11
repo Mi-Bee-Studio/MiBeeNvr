@@ -331,6 +331,8 @@
   });
 
 
+  let prevVisibleIds: Set<string> = new Set();
+
   // React to camera list and mode changes
   $effect(() => {
     const _cameras = cameras;
@@ -339,43 +341,28 @@
 
     const visibleIds = new Set(_cameras.map(c => c.id));
 
-    // Cleanup removed cameras
-    for (const id of [...Object.keys(snapshotIntervals), ...Object.keys(hlsInstances)]) {
+    // Cleanup cameras that were removed (in previous but not in current)
+    for (const id of prevVisibleIds) {
       if (!visibleIds.has(id)) {
         stopSnapshotRefresh(id);
         destroyPlayer(id);
+        delete streamStates[id];
       }
     }
 
-    // Manage each camera's mode
+    // Init cameras that were added (in current but not in previous)
     for (const cam of _cameras) {
-      const mode = getCameraMode(cam);
+      if (prevVisibleIds.has(cam.id)) continue;
 
+      const mode = getCameraMode(cam);
       if (mode === 'hls') {
-        // Stop snapshot, start HLS (unless already in snapshot fallback)
-        const currentState = streamStates[cam.id];
-        if (currentState === 'snapshot') {
-          // Keep snapshot mode — error recovery put us here
-          continue;
-        }
-        stopSnapshotRefresh(cam.id);
-        if (!hlsInstances[cam.id]) {
-          setTimeout(() => initPlayer(cam.id), 50);
-        }
-      } else if (mode === 'unsupported') {
-        // No snapshot, no HLS — stop everything
-        stopSnapshotRefresh(cam.id);
-        destroyPlayer(cam.id);
-      } else {
-        // Snapshot mode — stop HLS, start snapshot refresh
-        if (hlsInstances[cam.id]) {
-          destroyPlayer(cam.id);
-        }
-        if (!snapshotIntervals[cam.id]) {
-          startSnapshotRefresh(cam.id);
-        }
+        setTimeout(() => initPlayer(cam.id), 50);
+      } else if (mode === 'snapshot') {
+        startSnapshotRefresh(cam.id);
       }
     }
+
+    prevVisibleIds = visibleIds;
   });
 </script>
 

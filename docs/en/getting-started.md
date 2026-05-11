@@ -7,7 +7,7 @@ MiBee NVR is a lightweight Network Video Recorder (NVR) written in Go that recor
 **Key Features:**
 - Records RTSP (H.264, H.265 and MJPEG) and HTTP JPEG cameras to MP4 segments
 - Web UI for camera management and recording playback
-- WebDAV (read-only) access to recordings
+- WebDAV (configurable read-only/read-write) access to recordings
 - FTP server access for recording downloads
 - MQTT integration for triggering recording events
 - Single static binary with embedded web interface

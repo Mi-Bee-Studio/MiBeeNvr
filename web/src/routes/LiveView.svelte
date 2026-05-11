@@ -154,11 +154,12 @@
   });
 
   // Initialize player after camera loads
+  let playerInitialized = false;
   $effect(() => {
-    if (camera && !loading && !error && videoEl) {
+    if (camera && !loading && !error && videoEl && !playerInitialized) {
       const protocol = camera.protocol;
       if (protocol === 'rtsp_h264' || protocol === 'rtsp_h265' || protocol === 'onvif' || protocol === 'rtsp') {
-        // Small delay to ensure video element is mounted
+        playerInitialized = true;
         setTimeout(() => initPlayer(), 50);
       }
     }

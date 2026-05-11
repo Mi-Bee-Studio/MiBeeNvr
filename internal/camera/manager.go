@@ -23,6 +23,7 @@ type CameraUpdate struct {
 	Name         *string
 	URL          *string
 	Protocol     *string
+	Encoding     *string
 	Username     *string
 	Password     *string
 	Enabled      *bool
@@ -178,7 +179,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, "", "", ""); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
@@ -203,7 +204,11 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				}
 			}
 		case string(model.ProtoONVIF):
-			logger.Info("camera has ONVIF protocol, managed via ONVIF discovery", "camera_id", cam.ID)
+			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+				logger.Error("failed to start ONVIF recorder", "camera_id", cam.ID, "error", err)
+			} else {
+				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
+			}
 		default:
 			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 		}
@@ -412,6 +417,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 	if updates.Protocol != nil {
 		cam.Protocol = *updates.Protocol
+	}
+	if updates.Encoding != nil {
+		if *updates.Encoding != cam.Encoding {
+			needsRestart = true
+		}
+		cam.Encoding = *updates.Encoding
 	}
 	if updates.Username != nil {
 		cam.Username = *updates.Username
