@@ -160,11 +160,16 @@ func ParseLegacyProtocol(old string) (protocol, encoding string, err error) {
 	}
 }
 
-// ValidateProtocolEncoding checks if the protocol+encoding combination is valid
+// ValidateProtocolEncoding checks if the protocol+encoding combination is valid.
+// Empty encoding is allowed for ONVIF (auto-detect).
 func ValidateProtocolEncoding(protocol, encoding string) error {
 	encodings, ok := ValidEncodingsForProtocol[protocol]
 	if !ok {
 		return fmt.Errorf("unknown protocol: %s", protocol)
+	}
+	// ONVIF allows empty encoding (auto-detect)
+	if protocol == string(ProtoONVIF) && encoding == "" {
+		return nil
 	}
 	for _, e := range encodings {
 		if e == encoding {

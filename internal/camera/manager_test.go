@@ -25,28 +25,32 @@ func testConfig() *config.Config {
 			{
 				ID:       "cam-h264",
 				Name:     "H264 Camera",
-				Protocol: "rtsp_h264",
+				Protocol: "rtsp",
+				Encoding: "h264",
 				URL:      "rtsp://127.0.0.1:1/stream",
 				Enabled:  true,
 			},
 			{
 				ID:       "cam-mjpeg",
 				Name:     "MJPEG Camera",
-				Protocol: "rtsp_mjpeg",
+				Protocol: "rtsp",
+				Encoding: "mjpeg",
 				URL:      "rtsp://127.0.0.1:1/stream",
 				Enabled:  true,
 			},
 			{
 				ID:       "cam-disabled",
 				Name:     "Disabled Camera",
-				Protocol: "rtsp_h264",
+				Protocol: "rtsp",
+				Encoding: "h264",
 				URL:      "rtsp://127.0.0.1:1/stream",
 				Enabled:  false,
 			},
 			{
 				ID:       "cam-jpeg",
 				Name:     "JPEG Camera",
-				Protocol: "http_jpeg",
+				Protocol: "http",
+				Encoding: "jpeg",
 				URL:      "http://192.168.1.13/jpg",
 				Enabled:  true,
 			},
@@ -130,7 +134,8 @@ func TestStart_DisabledCamerasSkipped(t *testing.T) {
 		Cameras: []config.CameraConfig{
 			{
 				ID:       "cam-1",
-				Protocol: "rtsp_h264",
+				Protocol: "rtsp",
+				Encoding: "h264",
 				URL:      "rtsp://192.168.1.10:554/stream",
 				Enabled:  false,
 			},
@@ -168,8 +173,8 @@ func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 		Cameras: []config.CameraConfig{
 			{
 				ID:       "cam-1",
-				Protocol: "http_jpeg",
-				URL:      "http://192.168.1.10/jpg",
+				Protocol: "http",
+				Encoding: "jpeg",
 				Enabled:  true,
 			},
 		},
@@ -208,8 +213,8 @@ func TestStart_InvalidSegmentDuration(t *testing.T) {
 		Cameras: []config.CameraConfig{
 			{
 				ID:       "cam-1",
-				Protocol: "rtsp_h264",
-				URL:      "rtsp://192.168.1.10:554/stream",
+				Protocol: "rtsp",
+				Encoding: "h264",
 				Enabled:  true,
 			},
 		},
@@ -432,14 +437,14 @@ func TestStart_InsertsCameraRecords(t *testing.T) {
 	h264Cam, exists := cameraMap["cam-h264"]
 	require.True(t, exists, "H264 camera should be in database")
 	assert.Equal(t, "H264 Camera", h264Cam.Name)
-	assert.Equal(t, "rtsp_h264", h264Cam.Protocol)
+	assert.Equal(t, "rtsp", h264Cam.Protocol)
 	assert.True(t, h264Cam.Enabled)
 
 	// Check MJPEG camera
 	mjpegCam, exists := cameraMap["cam-mjpeg"]
 	require.True(t, exists, "MJPEG camera should be in database")
 	assert.Equal(t, "MJPEG Camera", mjpegCam.Name)
-	assert.Equal(t, "rtsp_mjpeg", mjpegCam.Protocol)
+	assert.Equal(t, "rtsp", mjpegCam.Protocol)
 	assert.True(t, mjpegCam.Enabled)
 
 	// Verify disabled camera IS in database (all cameras are inserted)
@@ -461,8 +466,8 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-new-h264",
 		Name:     "New H264 Camera",
-		Protocol: "rtsp_h264",
-		URL:      "rtsp://127.0.0.1:1/new-stream",
+		Protocol: "rtsp",
+			Encoding: "h264",
 		Enabled:  true,
 	})
 	require.NoError(t, err)
@@ -485,8 +490,8 @@ func TestAddCamera_Disabled(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-new-disabled",
 		Name:     "Disabled Camera",
-		Protocol: "rtsp_h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
+			Protocol: "rtsp",
+				Encoding: "h264",
 		Enabled:  false,
 	})
 	require.NoError(t, err)
@@ -504,8 +509,8 @@ func TestAddCamera_HTTPJPEG(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-new-jpeg",
 		Name:     "JPEG Camera",
-		Protocol: "http_jpeg",
-		URL:      "http://192.168.1.10/jpg",
+			Protocol: "http",
+				Encoding: "jpeg",
 		Enabled:  true,
 	})
 	require.NoError(t, err)
@@ -525,8 +530,8 @@ func TestAddCamera_DuplicateID(t *testing.T) {
 	_, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-h264", // duplicate
 		Name:     "Dup Camera",
-		Protocol: "rtsp_h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
+		Protocol: "rtsp",
+				Encoding: "h264",
 		Enabled:  true,
 	})
 	require.Error(t, err)
@@ -541,8 +546,8 @@ func TestAddCamera_AutoID(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "", // empty → auto-generate
 		Name:     "Auto ID Camera",
-		Protocol: "rtsp_h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
+			Protocol: "rtsp",
+				Encoding: "h264",
 		Enabled:  false,
 	})
 	require.NoError(t, err)
@@ -558,8 +563,8 @@ func TestAddCamera_Persists(t *testing.T) {
 	_, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-persist",
 		Name:     "Persist Camera",
-		Protocol: "rtsp_h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
+			Protocol: "rtsp",
+				Encoding: "h264",
 		Enabled:  false,
 	})
 	require.NoError(t, err)
@@ -844,8 +849,8 @@ func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
 		Cameras: []config.CameraConfig{{
 			ID:       "cam-h264",
 			Name:     "H264 Camera",
-			Protocol: "rtsp_h264",
-			URL:      "rtsp://127.0.0.1/stream",
+			Protocol: "rtsp",
+				Encoding: "h264",
 			Enabled:  true,
 		}},
 	}

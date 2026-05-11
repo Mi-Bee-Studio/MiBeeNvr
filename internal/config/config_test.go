@@ -97,7 +97,7 @@ func TestSave(t *testing.T) {
         Server:  ServerConfig{Listen: ":8080"},
         Storage: StorageConfig{RootDir: "/data/rec", SegmentDuration: "5m"},
         Cameras: []CameraConfig{{
-            ID: "cam1", Name: "Front", Protocol: "rtsp_h264",
+            ID: "cam1", Name: "Front", Protocol: "rtsp", Encoding: "h264",
             URL: "rtsp://192.168.1.10/stream", Username: "admin", Password: "secret", Enabled: true,
         }},
         Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
@@ -119,7 +119,7 @@ func TestSave(t *testing.T) {
     require.Len(t, loaded.Cameras, 1)
     require.Equal(t, "cam1", loaded.Cameras[0].ID)
     require.Equal(t, "Front", loaded.Cameras[0].Name)
-    require.Equal(t, "rtsp_h264", loaded.Cameras[0].Protocol)
+    require.Equal(t, "rtsp", loaded.Cameras[0].Protocol)
     require.Equal(t, "rtsp://192.168.1.10/stream", loaded.Cameras[0].URL)
     require.Equal(t, "admin", loaded.Cameras[0].Username)
     require.Equal(t, "secret", loaded.Cameras[0].Password)
