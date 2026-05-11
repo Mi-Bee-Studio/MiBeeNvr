@@ -30,6 +30,7 @@ export interface Camera {
   id: string;
   name: string;
   protocol: string;
+  encoding?: string;
   url: string;
   username?: string;
   has_password?: boolean;
@@ -50,6 +51,7 @@ export interface Camera {
 export interface CreateCameraRequest {
   name: string;
   protocol: string;
+  encoding?: string;
   url?: string;
   username?: string;
   password?: string;
@@ -68,6 +70,7 @@ export interface UpdateCameraRequest {
   name?: string;
   url?: string;
   protocol?: string;
+  encoding?: string;
   username?: string;
   password?: string;
   enabled?: boolean;
