@@ -8,5 +8,7 @@ VOLUME ["/data"]
 
 EXPOSE 9090
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["mibee-nvr", "health"]
+
 ENTRYPOINT ["mibee-nvr"]
 CMD ["-config", "/data/mibee-nvr.yaml"]
