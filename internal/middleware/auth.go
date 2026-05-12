@@ -28,7 +28,7 @@ var authFailures sync.Map
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
 // If passwordHash is empty but plaintextPassword is non-empty, it is auto-hashed via bcrypt.
 // Returns the middleware and the effective hash used (for config persistence).
-// If both are empty, authentication is rejected (not bypassed).
+// If both are empty, authentication is bypassed (first-time setup mode).
 func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(http.Handler) http.Handler, string) {
 	effectiveHash := passwordHash
 	if strings.TrimSpace(passwordHash) == "" && strings.TrimSpace(plaintextPassword) != "" {
@@ -57,8 +57,9 @@ func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(h
 			}
 
 			if strings.TrimSpace(effectiveHash) == "" {
-				logger.Info("rejected request: no password hash configured", "ip", ip)
-				w.WriteHeader(http.StatusUnauthorized)
+				// No password configured — allow access (first-time setup mode)
+				// User can set password later via Web UI settings page
+				next.ServeHTTP(w, r)
 				return
 			}
 

@@ -42,6 +42,63 @@ var (
 
 var appVersion = "0.1.0-dev" // overridden via -ldflags at build time
 
+
+func autoInitConfig(configPath string) *config.Config {
+	// Determine data directory
+	dataDir := os.Getenv("NVR_DATA_DIR")
+	if dataDir == "" {
+		// Check if /data exists (Docker container)
+		if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+			dataDir = "/data"
+		} else {
+			dataDir = "/var/lib/mibee-nvr"
+		}
+	}
+
+	// Check for initial password from env var
+	password := os.Getenv("NVR_PASSWORD")
+
+	cfg := &config.Config{
+		Server:  config.ServerConfig{Listen: ":9090"},
+		Storage: config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
+		Auth:    config.AuthConfig{Username: "admin"},
+		Cameras: []config.CameraConfig{},
+		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
+		WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
+		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
+		Version: "1.0",
+	}
+
+	if password != "" {
+		cfg.Auth.Password = password
+	}
+
+	// Create data directory if needed
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		slog.Warn("failed to create data directory", "dir", dataDir, "error", err)
+	}
+
+	// Create config directory if needed
+	configDir := filepath.Dir(configPath)
+	if configDir != "." && configDir != "/" {
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			slog.Warn("failed to create config directory", "dir", configDir, "error", err)
+		}
+	}
+
+	if err := config.Save(configPath, cfg); err != nil {
+		slog.Warn("failed to save auto-generated config", "path", configPath, "error", err)
+	} else {
+		slog.Info("auto-generated default config", "path", configPath, "data_dir", dataDir)
+		if password == "" {
+			slog.Warn("no password set — running in setup mode (unauthenticated access allowed). Set a password via Web UI settings or NVR_PASSWORD env var")
+		}
+	}
+
+	return cfg
+}
+
 func main() {
 	// Handle health subcommand
 	if len(os.Args) > 1 && os.Args[1] == "health" {
@@ -207,8 +264,13 @@ func main() {
 	// Load and validate config
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		slog.Error("config", "error", err)
-		os.Exit(1)
+		if !os.IsNotExist(err) {
+			slog.Error("config", "error", err)
+			os.Exit(1)
+		}
+		// Auto-initialize: config file not found, generate defaults
+		slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
+		cfg = autoInitConfig(*configPath)
 	}
 	if err := config.Validate(cfg); err != nil {
 		slog.Error("config validation", "error", err)

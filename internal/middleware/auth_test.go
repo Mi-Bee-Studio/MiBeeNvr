@@ -76,8 +76,8 @@ func TestEmptyHashBypass(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 when no password hash configured, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when no password configured (setup mode), got %d", w.Code)
 	}
 }
 
