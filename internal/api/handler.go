@@ -1528,8 +1528,12 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"path_prefix": h.config.WebDAV.PathPrefix,
 			"read_write":  h.config.WebDAV.ReadWrite,
 		},
+		"auth": map[string]any{
+			"username":        h.config.Auth.Username,
+			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
+		},
 	})
-	}
+}
 
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
