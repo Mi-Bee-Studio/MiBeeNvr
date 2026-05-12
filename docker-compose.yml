@@ -1,0 +1,27 @@
+# MiBee NVR — Docker Compose
+# Usage:
+#   1. mkdir -p data
+#   2. cp config.example.yaml data/mibee-nvr.yaml
+#   3. Edit data/mibee-nvr.yaml (set password, add cameras)
+#   4. docker compose up -d
+#   5. Open http://localhost:9090
+
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibee-nvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
