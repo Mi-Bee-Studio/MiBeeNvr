@@ -8,7 +8,7 @@ MiBee NVR 使用 YAML 格式的配置文件来控制所有功能模块。以下�
 server:
   listen: ":9090"
 storage:
-  root_dir: "/mnt/data/nvr"
+  root_dir: "/var/lib/mibee-nvr"
   segment_duration: "30s"
 auth:
   username: "admin"
@@ -49,6 +49,9 @@ webdav:
   enabled: true
   path_prefix: "/dav"
   read_write: false
+hls:
+  write_buffer_size: 40
+  segment_max_size_mb: 10
 observability:
   log_level: "info"
   log_format: "text"
@@ -68,9 +71,9 @@ version: "1.0"
 
 ### `storage.root_dir`
 - **类型**: 字符串
-- **必需**: 是
+- **默认值**: `/var/lib/mibee-nvr`
 - **描述**: 录像文件的存储根目录
-- **示例**: `"/mnt/data/nvr"` 或 `"/var/lib/mibee-nvr"`
+- **示例**: `/var/lib/mibee-nvr`
 
 ### `storage.segment_duration`
 - **类型**: 字符串
@@ -96,13 +99,15 @@ version: "1.0"
 - **类型**: 字符串
 - **必需**: 是（Web UI 和 FTP 使用）
 - **描述**: bcrypt 哈希密码。使用 `mibee-nvr hash-password <password>` 命令生成。
-- **注意**: 也可以设置 `auth.password` 为明文密码，服务器会在启动时自动生成哈希。
+- **优先级**: 如果同时设置了 `password` 和 `password_hash`，`password_hash` 优先
+- **注意**: 如果只设置了 `auth.password`（明文），服务器会在启动时自动生成哈希并写回配置文件
 - **示例**: `$2a$10$N9qo8uLOickgx2ZMRZoMy...`
 
 ### `auth.password`
 - **类型**: 字符串
-- **可选**
-- **描述**: 明文密码（用于方便配置）。服务器启动时会自动生成 `password_hash`。
+- **可选**: 是
+- **描述**: 明文密码（用于便捷的初始配置）。首次运行时，服务器会自动哈希此值并写入 `password_hash`，然后清空 `password` 字段。
+- **优先级**: 仅当 `password_hash` 为空时才使用
 - **示例**: `"admin123"`
 
 ## 摄像头配置
@@ -243,6 +248,20 @@ cameras:
 ```
 
 ### RTSP H.265 摄像头
+
+**新格式**:
+```yaml
+- id: "h265-camera"
+  name: "H.265 摄像头"
+  protocol: "rtsp"
+  encoding: "h265"
+  url: "rtsp://192.168.1.100:554/live"
+  username: "admin"
+  password: "password123"
+  enabled: true
+```
+
+**旧格式仍然支持**:
 ```yaml
 - id: "h265-camera"
   name: "H.265 摄像头"
@@ -254,6 +273,18 @@ cameras:
 ```
 
 ### RTSP MJPEG 摄像头
+
+**新格式**:
+```yaml
+- id: "back-yard"
+  name: "后院"
+  protocol: "rtsp"
+  encoding: "mjpeg"
+  url: "rtsp://192.168.1.101:554/stream"
+  enabled: true
+```
+
+**旧格式仍然支持**:
 ```yaml
 - id: "back-yard"
   name: "后院"
@@ -392,6 +423,9 @@ cameras:
 ```
 
 
+
+## FTP 配置
+
 ### `ftp.enabled`
 - **类型**: 布尔值
 - **默认值**: `true`
@@ -459,6 +493,20 @@ cameras:
 - **安全考虑**: 启用写入访问前请考虑安全影响
 - **示例**: `false`（只读），`true`（可读写）
 
+## HLS 配置
+
+### `hls.write_buffer_size`
+- **类型**: 整数
+- **默认值**: `40`
+- **描述**: 每个 HLS 流的异步帧缓冲区大小。控制写入前缓冲的帧数。
+- **示例**: `40`, `80`, `120`
+
+### `hls.segment_max_size_mb`
+- **类型**: 整数
+- **默认值**: `10`
+- **描述**: HLS 分段的最大大小（MB）
+- **示例**: `10`, `20`
+
 ## 可观测性配置
 
 ### `observability.log_level`
@@ -485,6 +533,48 @@ cameras:
 - **类型**: 字符串
 - **默认值**: `"1.0"`
 - **描述**: 配置文件版本
+
+## CLI 子命令
+
+MiBee NVR 除了主服务模式外，还支持以下子命令：
+
+### `mibee-nvr init`
+交互式首次配置向导。创建包含基本设置的配置文件。
+
+```bash
+mibee-nvr init [flags]
+```
+
+**参数**:
+- `--password <密码>` — 设置管理员密码（如未提供则交互式输入）
+- `--username <名称>` — 设置管理员用户名（默认：`admin`）
+- `--data-dir <路径>` — 设置存储目录（默认：`/var/lib/mibee-nvr`）
+- `--listen <地址>` — 设置监听地址（默认：`:9090`）
+- `--config <路径>` — 配置文件路径（默认：`mibee-nvr.yaml`）
+- `--force` — 覆盖已有配置文件
+
+### `mibee-nvr health`
+健康检查，适用于容器/Docker 编排。服务器健康时退出码为 0。
+
+```bash
+mibee-nvr health [--addr :9090] [--config <path>]
+```
+
+### `mibee-nvr hash-password <密码>`
+生成 bcrypt 密码哈希，用于 `auth.password_hash` 配置。
+
+```bash
+mibee-nvr hash-password my-secret-password
+# 输出: $2a$10$N9qo8uLOickgx2ZMRZoMy...
+```
+
+### `mibee-nvr -version`
+打印二进制版本并退出。
+
+```bash
+mibee-nvr -version
+# 输出: MiBee NVR version 0.1.0-dev
+```
 
 ## 重要提示
 

@@ -8,11 +8,12 @@ MiBee NVR uses a YAML configuration file to control all aspects of its operation
 server:
   listen: ":9090"
 storage:
-  root_dir: "/mnt/data/nvr"
+  root_dir: "/var/lib/mibee-nvr"
   segment_duration: "30s"
 auth:
   username: "admin"
   password_hash: ""
+  password: ""
 cameras:
   - id: "cam1"
     name: "Camera Name"
@@ -46,6 +47,15 @@ mqtt:
 webdav:
   enabled: true
   path_prefix: "/dav"
+  read_write: false
+hls:
+  write_buffer_size: 40
+  segment_max_size_mb: 10
+observability:
+  log_level: "info"
+  log_format: "text"
+  enable_pprof: false
+version: "1.0"
 ```
 
 ## Server Configuration
@@ -60,9 +70,9 @@ webdav:
 
 ### `storage.root_dir`
 - **Type**: string
-- **Required**: Yes
+- **Default**: `/var/lib/mibee-nvr`
 - **Description**: Root directory for storing recordings and temporary files
-- **Example**: `"/mnt/data/nvr"` or `"/var/lib/mibee-nvr"`
+- **Example**: `/var/lib/mibee-nvr`
 
 ### `storage.segment_duration`
 - **Type**: string
@@ -87,10 +97,17 @@ webdav:
 ### `auth.password_hash`
 - **Type**: string
 - **Required**: Yes (for web UI and FTP)
-- **Description**: bcrypt hashed password
-- **Description**: bcrypt hashed password. Use `mibee-nvr hash-password <password>` CLI command to generate.
-- **Note**: Alternatively, set `auth.password` with a plaintext password and the server will auto-generate the hash on startup.
+- **Description**: bcrypt hashed password. Use `mibee-nvr hash-password <password>` to generate.
+- **Priority**: `password_hash` takes precedence if both `password` and `password_hash` are set
+- **Note**: If only `auth.password` (plaintext) is provided, the server auto-generates the hash on startup and persists it back to the config file
 - **Example**: `$2a$10$N9qo8uLOickgx2ZMRZoMy...`
+
+### `auth.password`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: Plaintext password for convenient initial setup. On first run, the server auto-hashes this value and writes it to `password_hash`, then clears the `password` field.
+- **Priority**: Only used when `password_hash` is empty
+- **Example**: `"admin123"`
 
 ## Camera Configuration
 
@@ -278,6 +295,8 @@ cameras:
   username: "admin"
   password: "camera-password"
   enabled: true
+```
+
 ### ONVIF Camera
 
 **New Format (using url field)**:
@@ -298,6 +317,31 @@ cameras:
   encoding: "h265"
   onvif_endpoint: "http://192.168.1.104/onvif"
   profile_token: "profile_1"
+  enabled: true
+```
+
+**Legacy Format**:
+```yaml
+- id: "cam4"
+  name: "H.265 Security Camera"
+  protocol: "rtsp_h265"
+  url: "rtsp://192.168.1.103:554/stream"
+  username: "admin"
+  password: "camera-password"
+  enabled: true
+```
+
+### RTSP H.265 Camera
+
+**New Format**:
+```yaml
+- id: "cam4"
+  name: "H.265 Security Camera"
+  protocol: "rtsp"
+  encoding: "h265"
+  url: "rtsp://192.168.1.103:554/stream"
+  username: "admin"
+  password: "camera-password"
   enabled: true
 ```
 
@@ -384,7 +428,6 @@ The merge feature automatically combines small video segments into larger files,
 - **MJPEG**: JPEG files are moved into a single directory (no re-encoding).
 - **Disk space**: Merging is skipped if available disk space is less than 110% of the estimated merged file size.
 - **Atomic**: Merged files use atomic rename (temp file → final) to prevent corruption.
-- **Originals**: Source segments are deleted from disk and database after successful merge.
 - **Originals**: Source segments are deleted from disk and database after successful merge.
 
 ### Per-Camera Merge Configuration
@@ -489,6 +532,89 @@ cameras:
 - **Important**: When enabled, new cameras can be auto-registered via WebDAV PUT requests
 - **Security**: Consider security implications before enabling write access
 - **Example**: `false`, `true`
+## Observability Configuration
+
+### `observability.log_level`
+- **Type**: string
+- **Default**: `"info"`
+- **Description**: Log level
+- **Options**: `"debug"`, `"info"`, `"warn"`, `"error"`
+- **Example**: `"debug"`, `"info"`
+
+### `observability.log_format`
+- **Type**: string
+- **Default**: `"text"`
+- **Description**: Log output format
+- **Options**: `"json"`, `"text"`
+- **Example**: `"json"`, `"text"`
+
+### `observability.enable_pprof`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable Go pprof performance profiling endpoints at `/debug/pprof`
+- **Example**: `false`, `true`
+
+### `version`
+- **Type**: string
+- **Default**: `"1.0"`
+- **Description**: Configuration file schema version
+
+## HLS Configuration
+
+### `hls.write_buffer_size`
+- **Type**: integer
+- **Default**: `40`
+- **Description**: Async frame buffer size per HLS stream. Controls how many frames are buffered before writing.
+- **Example**: `40`, `80`, `120`
+
+### `hls.segment_max_size_mb`
+- **Type**: integer
+- **Default**: `10`
+- **Description**: Maximum HLS segment size in megabytes
+- **Example**: `10`, `20`
+
+
+## CLI Subcommands
+
+MiBee NVR supports several subcommands in addition to the main server mode:
+
+### `mibee-nvr init`
+Interactive first-time setup wizard. Creates a config file with essential settings.
+
+```bash
+mibee-nvr init [flags]
+```
+
+**Flags**:
+- `--password <pw>` — Set admin password (prompts interactively if not provided)
+- `--username <name>` — Set admin username (default: `admin`)
+- `--data-dir <path>` — Set storage directory (default: `/var/lib/mibee-nvr`)
+- `--listen <addr>` — Set listen address (default: `:9090`)
+- `--config <path>` — Config file path (default: `mibee-nvr.yaml`)
+- `--force` — Overwrite existing config file
+
+### `mibee-nvr health`
+Health check for container/Docker orchestration. Exits 0 if the server is healthy.
+
+```bash
+mibee-nvr health [--addr :9090] [--config <path>]
+```
+
+### `mibee-nvr hash-password <password>`
+Generate a bcrypt password hash for use in `auth.password_hash`.
+
+```bash
+mibee-nvr hash-password my-secret-password
+# Output: $2a$10$N9qo8uLOickgx2ZMRZoMy...
+```
+
+### `mibee-nvr -version`
+Print the binary version and exit.
+
+```bash
+mibee-nvr -version
+# Output: MiBee NVR version 0.1.0-dev
+```
 
 ## Important Notes
 
