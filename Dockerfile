@@ -28,8 +28,9 @@ COPY internal/ ./internal/
 COPY --from=frontend /build/web/dist ./internal/ui/static/
 
 # Static build — no C dependencies
-ENV CGO_ENABLED=0
-RUN go build -ldflags="-s -w" -o /mibee-nvr ./cmd/mibee-nvr/
+
+ARG VERSION=dev
+RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/mibee-nvr/
 
 # ---- Stage 3: Minimal runtime image ----
 FROM gcr.io/distroless/static-debian12:nonroot
