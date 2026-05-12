@@ -136,12 +136,13 @@ make docker-push-all          # 推送全部
 make docker-release
 ```
 
-镜像版本号取自 git short SHA（如 `0c7e0eb`）：
+镜像在打版本标签时自动发布到 GitHub Container Registry：
 
-| 镜像 | 架构 | 基础镜像 |
-|------|------|----------|
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>` | amd64 | distroless |
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>-arm64` | arm64 | scratch |
+| 镜像 | 架构 |
+|------|------|
+| `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64 |
+
+可用标签：`latest`、`v1.2.3`（semver）、`sha-abc1234`
 
 ## 项目结构
 

@@ -136,12 +136,13 @@ make docker-push-all          # Push all
 make docker-release
 ```
 
-Image version is derived from git short SHA (e.g. `0c7e0eb`):
+Images are published to GitHub Container Registry on version tags:
 
-| Image | Architecture | Base Image |
-|-------|-------------|------------|
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>` | amd64 | distroless |
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:<SHA>-arm64` | arm64 | scratch |
+| Image | Architectures |
+|-------|--------------|
+| `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64 |
+
+Available tags: `latest`, `v1.2.3` (semver), `sha-abc1234`
 
 ## Project Structure
 
