@@ -22,12 +22,14 @@ test:
 
 cross: frontend
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
+cross-armv7: frontend
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o mibee-nvr-armv7 ./cmd/mibee-nvr/
 
 lint:
 	go vet ./...
 
 clean:
-	rm -f mibee-nvr mibee-nvr-arm64
+	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7
 	rm -rf web/dist .build-tmp
 
 install: build
