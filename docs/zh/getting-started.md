@@ -41,10 +41,11 @@ chmod +x mibee-nvr-arm64
 ### 方式二：Docker
 
 ```bash
-mkdir -p data
-cp config.example.yaml data/mibee-nvr.yaml
-# 编辑 data/mibee-nvr.yaml — 设置密码、添加摄像头
 docker compose up -d
+
+在浏览器打开 http://localhost:9090。
+
+> **注意**：无需准备配置文件！MiBee NVR 在没有配置文件的情况下启动时会自动初始化。
 ```
 
 在浏览器打开 http://localhost:9090。

@@ -40,42 +40,38 @@ sudo ./install.sh --uninstall
 
 #### 快速启动
 
-```bash
-# 1. 创建数据目录并复制配置文件
+# 方式 A：直接运行 — 自动初始化（推荐）
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -v ./data:/data \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 方式 B：带初始密码
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -e NVR_PASSWORD=你的密码 \
+  -v ./data:/data \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 方式 C：使用 docker-compose.yml
 mkdir -p data
-cp config.example.yaml data/mibee-nvr.yaml
-
-# 2. 编辑配置文件
-#    重要：将 storage.root_dir 更改为 "/data"（容器内路径）
-#    设置管理员密码（见下方配置说明）
-nano data/mibee-nvr.yaml
-
-# 3. 启动服务
 docker compose up -d
 
-# 4. 打开 http://localhost:9090
-```
+> **首次设置**：在没有配置文件的情况下启动时，MiBee NVR 会自动生成默认配置并以**设置模式**运行 — 所有 API 端点无需认证即可访问。通过 Web UI 设置页面或 `NVR_PASSWORD` 环境变量设置密码。一旦设置密码，将强制执行身份验证。
 
 #### 配置说明
 
 Docker 部署与非 Docker 部署有一些关键差异：
 
-- **数据目录**：`storage.root_dir` 必须设置为 `/data`（容器内部路径，与非 Docker 默认的 `/var/lib/mibee-nvr` 不同）。配置示例文件中的默认值需要手动修改。
-- **端口映射**：
-  - `9090`：Web 界面 / REST API
-  - `2121`：FTP 服务
-  - `2122-2140`：FTP 被动模式端口范围
-  - 如需修改端口，在 `docker-compose.yml` 中修改冒号左侧的主机端口
-- **数据持久化**：`./data:/data` 卷挂载会将主机数据目录映射到容器内。该目录存储：
-  - 录像文件（MP4 片段）
-  - SQLite 数据库（`mibee-nvr.db`）
-  - 配置文件（`mibee-nvr.yaml`）
-- **环境变量**：`NVR_DATA_DIR=/data` 告知容器数据目录的位置
-- **时区**：通过 `TZ=Asia/Shanghai` 环境变量设置时区，确保录像时间戳正确
-- **密码设置**：Docker 容器内无法使用 `mibee-nvr init` 子命令，请使用以下方式之一：
-  1. 在配置文件中设置 `auth.password`（明文，首次启动时自动转换为哈希）
-  2. 使用 `mibee-nvr hash-password <密码>` 生成哈希，粘贴到 `auth.password_hash`
+#### 配置说明
 
+- **自动初始化**：如果在 `/data/mibee-nvr.yaml` 不存在配置文件，会自动生成包含合理默认值的配置。无需手动设置。
+- **初始密码**：通过 `NVR_PASSWORD` 环境变量设置。如果未设置，应用将以设置模式启动（无认证） — 通过 Web UI 设置页面设置密码。
+- **数据目录**：通过 `NVR_DATA_DIR` 环境变量，`storage.root_dir` 在 Docker 容器中自动设置为 `/data`。
 #### docker-compose.yml 详解
 
 完整的配置文件及各字段说明：
@@ -84,7 +80,7 @@ Docker 部署与非 Docker 部署有一些关键差异：
 services:
   mibee-nvr:
     # 容器镜像：官方预构建镜像
-    image: ghcr.io/mi-bee-studio/mibee-nvr:latest
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
 
     # 容器名称（便于管理和查看日志）
     container_name: mibee-nvr
@@ -121,9 +117,8 @@ services:
 
 **选项 A：使用预构建镜像（推荐）**
 
-- 镜像地址：`ghcr.io/mi-bee-studio/mibee-nvr:latest`
-- 架构标签：`latest`（amd64）、`latest-arm64`（arm64）
-- 国内镜像：`registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr`
+- 镜像地址：`ghcr.io/mi-bee-studio/mibeenvr:latest`
+- 架构标签：`latest`（多架构：amd64 + arm64）
 
 直接使用 `docker-compose.yml` 中的默认镜像地址即可，无需额外操作。
 
@@ -178,6 +173,57 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 
 > **注意**：由于使用 distroless/scratch 基础镜像，无法通过 `docker exec` 进入容器调试。请使用 `docker compose logs` 查看日志。
 
+#### 使用 Docker CLI
+
+如果不使用 Docker Compose，可以直接用 Docker 命令运行：
+
+```bash
+# 1. 登录 GHCR（私有镜像需要）
+echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+
+# 2. 拉取镜像
+docker pull ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 3. 运行容器
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -p 2121:2121 \
+  -p 2122-2140:2122-2140 \
+  -v ./data:/data \
+  -e NVR_DATA_DIR=/data \
+  -e TZ=Asia/Shanghai \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 4. 查看状态
+docker ps
+docker logs -f mibee-nvr
+docker inspect --format='{{.State.Health.Status}}' mibee-nvr
+```
+
+**运行指定版本：**
+
+```bash
+docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+```
+
+**停止和删除：**
+
+```bash
+docker stop mibee-nvr
+docker rm mibee-nvr
+```
+
+**更新到最新版：**
+
+```bash
+docker stop mibee-nvr
+docker rm mibee-nvr
+docker pull ghcr.io/mi-bee-studio/mibeenvr:latest
+docker run -d ... ghcr.io/mi-bee-studio/mibeenvr:latest
+```
 #### 数据备份与恢复
 
 **备份：**
@@ -214,9 +260,7 @@ docker compose up -d
 # docker-compose.yml — 树莓派配置
 services:
   mibee-nvr:
-    image: ghcr.io/mi-bee-studio/mibee-nvr:latest-arm64
-    # 或使用国内镜像：
-    # image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest-arm64
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
     deploy:
       resources:
         limits:

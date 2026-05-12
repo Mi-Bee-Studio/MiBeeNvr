@@ -40,42 +40,38 @@ The installer will prompt for an admin password if no config file exists. After 
 
 #### Quick Start
 
-```bash
-# 1. Prepare data directory and config
+# Option A: Just run — auto-initialization (recommended)
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -v ./data:/data \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# Option B: With initial password
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -e NVR_PASSWORD=yourpassword \
+  -v ./data:/data \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# Option C: With docker-compose.yml
 mkdir -p data
-cp config.example.yaml data/mibee-nvr.yaml
-
-# 2. Edit config
-#    IMPORTANT: Change storage.root_dir to "/data" (the in-container path)
-#    Set admin password (see Configuration Notes below)
-nano data/mibee-nvr.yaml
-
-# 3. Start the service
 docker compose up -d
 
-# 4. Open http://localhost:9090
-```
+> **First-time setup**: When started without a config file, MiBee NVR auto-generates a default configuration and runs in **setup mode** — all API endpoints are accessible without authentication. Set a password via the Web UI Settings page or the `NVR_PASSWORD` environment variable. Once a password is set, authentication is enforced.
 
 #### Configuration Notes
 
 Docker deployment has some key differences from non-Docker setups:
 
-- **Data directory**: `storage.root_dir` MUST be set to `/data` inside the container (differs from the non-Docker default of `/var/lib/mibee-nvr`). Update the copied config file accordingly.
-- **Port mapping**:
-  - `9090`: Web UI / REST API
-  - `2121`: FTP server
-  - `2122-2140`: FTP passive mode port range
-  - To change ports, modify the left-side (host) value in `docker-compose.yml`
-- **Data persistence**: The `./data:/data` volume mount stores:
-  - Recording files (MP4 segments)
-  - SQLite database (`mibee-nvr.db`)
-  - Config file (`mibee-nvr.yaml`)
-- **Environment variable**: `NVR_DATA_DIR=/data` tells the container where to find data
-- **Timezone**: Set via `TZ=Asia/Shanghai` (or your timezone) to ensure correct timestamps
-- **Password setup**: The `mibee-nvr init` subcommand is not available inside Docker. Use one of these methods:
-  1. Set `auth.password` in plaintext (auto-converted to hash on first start)
-  2. Generate a hash with `mibee-nvr hash-password <pw>` and paste into `auth.password_hash`
+#### Configuration Notes
 
+- **Auto-initialization**: If no config file exists at `/data/mibee-nvr.yaml`, one is generated automatically with sensible defaults. No manual setup required.
+- **Initial password**: Set via `NVR_PASSWORD` environment variable. If not set, the app starts in setup mode (no auth) — set a password through the Web UI Settings page.
+- **Data directory**: `storage.root_dir` is automatically set to `/data` inside Docker containers via the `NVR_DATA_DIR` environment variable.
 #### docker-compose.yml Reference
 
 Full configuration with annotated fields:
@@ -84,7 +80,7 @@ Full configuration with annotated fields:
 services:
   mibee-nvr:
     # Docker image — official pre-built image
-    image: ghcr.io/mi-bee-studio/mibee-nvr:latest
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
 
     # Container name (for easier management and log viewing)
     container_name: mibee-nvr
@@ -121,9 +117,8 @@ services:
 
 **Option A: Use pre-built image (recommended)**
 
-- Image: `ghcr.io/mi-bee-studio/mibee-nvr:latest`
-- Architecture tags: `latest` (amd64), `latest-arm64` (arm64)
-- Alternative registry (China): `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr`
+- Image: `ghcr.io/mi-bee-studio/mibeenvr:latest`
+- Architecture tags: `latest (multi-arch: amd64 + arm64)`
 
 No extra steps needed — the `docker-compose.yml` uses the pre-built image by default.
 
@@ -178,6 +173,57 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 
 > **Note**: The container uses a distroless/scratch base image, so `docker exec` shell access is not available. Use `docker compose logs` for debugging.
 
+#### Using Docker CLI
+
+If you prefer not to use Docker Compose, you can run the container directly:
+
+```bash
+# 1. Login to GHCR (required for private images)
+echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+
+# 2. Pull the image
+docker pull ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 3. Run the container
+docker run -d \
+  --name mibee-nvr \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -p 2121:2121 \
+  -p 2122-2140:2122-2140 \
+  -v ./data:/data \
+  -e NVR_DATA_DIR=/data \
+  -e TZ=Asia/Shanghai \
+  ghcr.io/mi-bee-studio/mibeenvr:latest
+
+# 4. Check status
+docker ps
+docker logs -f mibee-nvr
+docker inspect --format='{{.State.Health.Status}}' mibee-nvr
+```
+
+**Run a specific version:**
+
+```bash
+docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+```
+
+**Stop and remove:**
+
+```bash
+docker stop mibee-nvr
+docker rm mibee-nvr
+```
+
+**Update to latest:**
+
+```bash
+docker stop mibee-nvr
+docker rm mibee-nvr
+docker pull ghcr.io/mi-bee-studio/mibeenvr:latest
+docker run -d ... ghcr.io/mi-bee-studio/mibeenvr:latest
+```
 #### Data Backup and Restore
 
 **Backup:**
@@ -214,9 +260,7 @@ Raspberry Pi requires the ARM64 image:
 # docker-compose.yml — Raspberry Pi configuration
 services:
   mibee-nvr:
-    image: ghcr.io/mi-bee-studio/mibee-nvr:latest-arm64
-    # Alternative (China):
-    # image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest-arm64
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
     deploy:
       resources:
         limits:
