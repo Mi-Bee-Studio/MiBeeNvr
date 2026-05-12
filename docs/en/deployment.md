@@ -29,30 +29,250 @@ The installer will prompt for an admin password if no config file exists. After 
 
 ### Docker
 
-Use the provided `docker-compose.yml`:
+#### Prerequisites
+
+- Docker Engine 20.10+ and Docker Compose v2 (or Podman equivalent)
+- Check versions:
+  ```bash
+  docker --version
+  docker compose version
+  ```
+
+#### Quick Start
 
 ```bash
 # 1. Prepare data directory and config
 mkdir -p data
 cp config.example.yaml data/mibee-nvr.yaml
-# Edit config: set password, add cameras
+
+# 2. Edit config
+#    IMPORTANT: Change storage.root_dir to "/data" (the in-container path)
+#    Set admin password (see Configuration Notes below)
 nano data/mibee-nvr.yaml
 
-# 2. Start the service
+# 3. Start the service
 docker compose up -d
 
-# 3. Open http://localhost:9090
+# 4. Open http://localhost:9090
 ```
 
-Ports:
+#### Configuration Notes
 
-| Port | Purpose |
-|------|---------|
-| 9090 | Web UI / REST API |
-| 2121 | FTP |
-| 2122-2140 | FTP passive mode |
+Docker deployment has some key differences from non-Docker setups:
 
-The Docker image includes a health check (`mibee-nvr health`) that runs every 30 seconds. Data is persisted in the `./data` volume mount.
+- **Data directory**: `storage.root_dir` MUST be set to `/data` inside the container (differs from the non-Docker default of `/var/lib/mibee-nvr`). Update the copied config file accordingly.
+- **Port mapping**:
+  - `9090`: Web UI / REST API
+  - `2121`: FTP server
+  - `2122-2140`: FTP passive mode port range
+  - To change ports, modify the left-side (host) value in `docker-compose.yml`
+- **Data persistence**: The `./data:/data` volume mount stores:
+  - Recording files (MP4 segments)
+  - SQLite database (`mibee-nvr.db`)
+  - Config file (`mibee-nvr.yaml`)
+- **Environment variable**: `NVR_DATA_DIR=/data` tells the container where to find data
+- **Timezone**: Set via `TZ=Asia/Shanghai` (or your timezone) to ensure correct timestamps
+- **Password setup**: The `mibee-nvr init` subcommand is not available inside Docker. Use one of these methods:
+  1. Set `auth.password` in plaintext (auto-converted to hash on first start)
+  2. Generate a hash with `mibee-nvr hash-password <pw>` and paste into `auth.password_hash`
+
+#### docker-compose.yml Reference
+
+Full configuration with annotated fields:
+
+```yaml
+services:
+  mibee-nvr:
+    # Docker image — official pre-built image
+    image: ghcr.io/mi-bee-studio/mibee-nvr:latest
+
+    # Container name (for easier management and log viewing)
+    container_name: mibee-nvr
+
+    # Auto-restart policy: always restart unless manually stopped
+    restart: unless-stopped
+
+    # Port mapping: host_port:container_port
+    ports:
+      - "9090:9090"               # Web UI and REST API
+      - "2121:2121"               # FTP server
+      - "2122-2140:2122-2140"     # FTP passive mode ports
+
+    # Volume mount: map host ./data to container /data
+    # Persists config, recordings, and database
+    volumes:
+      - ./data:/data
+
+    # Environment variables
+    environment:
+      - NVR_DATA_DIR=/data         # Data directory path
+      - TZ=Asia/Shanghai            # Timezone
+
+    # Health check: verifies service status every 30 seconds
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]  # Health check command
+      interval: 30s                           # Check interval
+      timeout: 5s                             # Timeout
+      start_period: 10s                       # Grace period after start
+      retries: 3                              # Retry count
+```
+
+#### Pre-built Images vs Local Build
+
+**Option A: Use pre-built image (recommended)**
+
+- Image: `ghcr.io/mi-bee-studio/mibee-nvr:latest`
+- Architecture tags: `latest` (amd64), `latest-arm64` (arm64)
+- Alternative registry (China): `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr`
+
+No extra steps needed — the `docker-compose.yml` uses the pre-built image by default.
+
+**Option B: Build locally**
+
+If you need custom builds or want the latest source code:
+
+```bash
+# Multi-stage build (compiles frontend + backend inside container, requires network)
+docker build -t mibee-nvr .
+
+# Cross-compile ARM64 (on host, no QEMU needed)
+make docker-build-arm64
+
+# Build both architectures
+make docker-build-all
+```
+
+After building locally, replace the `image:` field in `docker-compose.yml` with your local tag.
+
+#### Common Docker Operations
+
+```bash
+# View logs (follow mode)
+docker compose logs -f mibee-nvr
+
+# View recent logs (last 100 lines)
+docker compose logs --tail 100 mibee-nvr
+
+# Restart container
+docker compose restart mibee-nvr
+
+# Stop container (preserves data)
+docker compose down
+
+# Stop and remove volumes (WARNING: deletes all data!)
+docker compose down -v
+
+# Update to latest image
+docker compose pull
+docker compose up -d
+
+# Container status
+docker compose ps
+
+# Resource usage
+docker stats mibee-nvr
+
+# Health check status
+docker inspect --format='{{.State.Health.Status}}' mibee-nvr
+```
+
+> **Note**: The container uses a distroless/scratch base image, so `docker exec` shell access is not available. Use `docker compose logs` for debugging.
+
+#### Data Backup and Restore
+
+**Backup:**
+
+```bash
+# 1. Stop container
+docker compose stop
+
+# 2. Backup data directory
+tar czf nvr-backup-$(date +%Y%m%d).tar.gz data/
+
+# 3. Restart
+docker compose start
+```
+
+**Restore:**
+
+```bash
+# 1. Stop and remove container
+docker compose down
+
+# 2. Extract backup
+tar xzf nvr-backup-20240101.tar.gz
+
+# 3. Start with restored data
+docker compose up -d
+```
+
+#### Running on Raspberry Pi
+
+Raspberry Pi requires the ARM64 image:
+
+```yaml
+# docker-compose.yml — Raspberry Pi configuration
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibee-nvr:latest-arm64
+    # Alternative (China):
+    # image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest-arm64
+    deploy:
+      resources:
+        limits:
+          memory: 512m      # Prevent OOM on RPi 3B
+```
+
+Important notes:
+
+- Segment duration must stay at 30s (`segment_duration: "30s"`)
+- Use an external USB disk (ext4) for recording storage
+- Limit concurrent recording to 2-3 cameras depending on resolution and bitrate
+
+#### Docker Troubleshooting
+
+**Permission errors**
+
+The container runs as nonroot (UID 65534). Fix mount permission issues:
+
+```bash
+chown -R 65534:65534 ./data
+```
+
+**Port conflicts**
+
+Change the left-side (host) port in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "8090:9090"   # Change host port to 8090
+```
+
+**Container keeps restarting**
+
+Usually a config file error. Check logs:
+
+```bash
+docker compose logs mibee-nvr
+```
+
+**FTP won't connect**
+
+Ensure passive port range (2122-2140) is mapped and not blocked by firewall.
+
+**Wrong timezone**
+
+Add the `TZ` environment variable to `docker-compose.yml`:
+
+```yaml
+environment:
+  - TZ=America/New_York
+```
+
+**Docker Compose v1 vs v2**
+
+- Use `docker compose` (with space, v2)
+- Not `docker-compose` (with hyphen, v1, deprecated)
 
 ### Manual Installation
 

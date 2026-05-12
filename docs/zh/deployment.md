@@ -29,30 +29,250 @@ sudo ./install.sh --uninstall
 
 ### Docker
 
-使用项目提供的 `docker-compose.yml`：
+#### 前置条件
+
+- Docker Engine 20.10+ 和 Docker Compose v2（或 Podman 等兼容运行时）
+- 检查版本：
+  ```bash
+  docker --version
+  docker compose version
+  ```
+
+#### 快速启动
 
 ```bash
-# 1. 准备数据目录和配置文件
+# 1. 创建数据目录并复制配置文件
 mkdir -p data
 cp config.example.yaml data/mibee-nvr.yaml
-# 编辑配置：设置密码、添加摄像头
+
+# 2. 编辑配置文件
+#    重要：将 storage.root_dir 更改为 "/data"（容器内路径）
+#    设置管理员密码（见下方配置说明）
 nano data/mibee-nvr.yaml
 
-# 2. 启动服务
+# 3. 启动服务
 docker compose up -d
 
-# 3. 打开 http://localhost:9090
+# 4. 打开 http://localhost:9090
 ```
 
-端口说明：
+#### 配置说明
 
-| 端口 | 用途 |
-|------|------|
-| 9090 | Web 界面 / REST API |
-| 2121 | FTP |
-| 2122-2140 | FTP 被动模式 |
+Docker 部署与非 Docker 部署有一些关键差异：
 
-Docker 镜像内置健康检查（`mibee-nvr health`），每 30 秒执行一次。数据通过 `./data` 卷挂载持久化。
+- **数据目录**：`storage.root_dir` 必须设置为 `/data`（容器内部路径，与非 Docker 默认的 `/var/lib/mibee-nvr` 不同）。配置示例文件中的默认值需要手动修改。
+- **端口映射**：
+  - `9090`：Web 界面 / REST API
+  - `2121`：FTP 服务
+  - `2122-2140`：FTP 被动模式端口范围
+  - 如需修改端口，在 `docker-compose.yml` 中修改冒号左侧的主机端口
+- **数据持久化**：`./data:/data` 卷挂载会将主机数据目录映射到容器内。该目录存储：
+  - 录像文件（MP4 片段）
+  - SQLite 数据库（`mibee-nvr.db`）
+  - 配置文件（`mibee-nvr.yaml`）
+- **环境变量**：`NVR_DATA_DIR=/data` 告知容器数据目录的位置
+- **时区**：通过 `TZ=Asia/Shanghai` 环境变量设置时区，确保录像时间戳正确
+- **密码设置**：Docker 容器内无法使用 `mibee-nvr init` 子命令，请使用以下方式之一：
+  1. 在配置文件中设置 `auth.password`（明文，首次启动时自动转换为哈希）
+  2. 使用 `mibee-nvr hash-password <密码>` 生成哈希，粘贴到 `auth.password_hash`
+
+#### docker-compose.yml 详解
+
+完整的配置文件及各字段说明：
+
+```yaml
+services:
+  mibee-nvr:
+    # 容器镜像：官方预构建镜像
+    image: ghcr.io/mi-bee-studio/mibee-nvr:latest
+
+    # 容器名称（便于管理和查看日志）
+    container_name: mibee-nvr
+
+    # 自动重启策略：除非手动停止，否则总是重启
+    restart: unless-stopped
+
+    # 端口映射：主机端口:容器端口
+    ports:
+      - "9090:9090"               # Web 界面和 REST API
+      - "2121:2121"               # FTP 服务
+      - "2122-2140:2122-2140"     # FTP 被动模式端口范围
+
+    # 数据卷挂载：将主机的 ./data 目录挂载到容器的 /data
+    # 用于持久化存储配置文件、录像数据和数据库
+    volumes:
+      - ./data:/data
+
+    # 环境变量
+    environment:
+      - NVR_DATA_DIR=/data         # 指定数据目录路径
+      - TZ=Asia/Shanghai            # 设置时区
+
+    # 健康检查：每 30 秒检查一次服务状态
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]  # 健康检查命令
+      interval: 30s                           # 检查间隔
+      timeout: 5s                             # 超时时间
+      start_period: 10s                       # 启动后延迟开始检查
+      retries: 3                              # 重试次数
+```
+
+#### 使用预构建镜像 vs 本地构建
+
+**选项 A：使用预构建镜像（推荐）**
+
+- 镜像地址：`ghcr.io/mi-bee-studio/mibee-nvr:latest`
+- 架构标签：`latest`（amd64）、`latest-arm64`（arm64）
+- 国内镜像：`registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr`
+
+直接使用 `docker-compose.yml` 中的默认镜像地址即可，无需额外操作。
+
+**选项 B：本地构建**
+
+如果需要自定义构建或使用最新源码：
+
+```bash
+# 多阶段构建（在容器内编译前端和后端，需要网络拉取基础镜像）
+docker build -t mibee-nvr .
+
+# 交叉编译 ARM64（在主机上交叉编译，不需要 QEMU）
+make docker-build-arm64
+
+# 构建所有架构
+make docker-build-all
+```
+
+本地构建后，将 `docker-compose.yml` 中的 `image:` 替换为本地标签。
+
+#### 常用 Docker 操作
+
+```bash
+# 查看实时日志
+docker compose logs -f mibee-nvr
+
+# 查看最近 100 行日志
+docker compose logs --tail 100 mibee-nvr
+
+# 重启服务
+docker compose restart mibee-nvr
+
+# 停止服务（保留数据）
+docker compose down
+
+# 停止并删除数据卷（警告：删除所有录像数据！）
+docker compose down -v
+
+# 更新到最新镜像
+docker compose pull
+docker compose up -d
+
+# 查看容器状态
+docker compose ps
+
+# 查看资源使用情况
+docker stats mibee-nvr
+
+# 查看健康检查状态
+docker inspect --format='{{.State.Health.Status}}' mibee-nvr
+```
+
+> **注意**：由于使用 distroless/scratch 基础镜像，无法通过 `docker exec` 进入容器调试。请使用 `docker compose logs` 查看日志。
+
+#### 数据备份与恢复
+
+**备份：**
+
+```bash
+# 1. 停止容器
+docker compose stop
+
+# 2. 备份数据目录
+tar czf nvr-backup-$(date +%Y%m%d).tar.gz data/
+
+# 3. 重新启动服务
+docker compose start
+```
+
+**恢复：**
+
+```bash
+# 1. 停止并删除容器
+docker compose down
+
+# 2. 解压备份文件
+tar xzf nvr-backup-20240101.tar.gz
+
+# 3. 重新启动服务
+docker compose up -d
+```
+
+#### 在树莓派上使用 Docker
+
+树莓派需要使用 ARM64 架构镜像：
+
+```yaml
+# docker-compose.yml — 树莓派配置
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibee-nvr:latest-arm64
+    # 或使用国内镜像：
+    # image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest-arm64
+    deploy:
+      resources:
+        limits:
+          memory: 512m      # 限制内存，防止 OOM
+```
+
+注意事项：
+
+- 片段时长必须保持在 30 秒（`segment_duration: "30s"`）
+- 建议使用外接 USB 硬盘（ext4 格式）存储录像数据
+- 同时录制不超过 2-3 路摄像头，具体取决于分辨率和码率
+
+#### Docker 常见问题
+
+**权限错误**
+
+容器以非 root 用户运行（UID 65534）。如果遇到挂载目录权限问题：
+
+```bash
+chown -R 65534:65534 ./data
+```
+
+**端口冲突**
+
+修改 `docker-compose.yml` 中的端口映射左侧值：
+
+```yaml
+ports:
+  - "8090:9090"   # 将主机端口改为 8090
+```
+
+**容器频繁重启**
+
+通常是配置文件错误导致。检查日志：
+
+```bash
+docker compose logs mibee-nvr
+```
+
+**FTP 无法连接**
+
+确保被动端口范围（2122-2140）已映射且未被防火墙阻止。
+
+**时区不正确**
+
+在 `docker-compose.yml` 中添加 `TZ` 环境变量：
+
+```yaml
+environment:
+  - TZ=Asia/Shanghai
+```
+
+**Docker Compose v1 vs v2**
+
+- 使用 `docker compose`（带空格，v2 版本）
+- 不使用 `docker-compose`（带连字符，v1 版本，已过时）
 
 ### 手动安装
 
