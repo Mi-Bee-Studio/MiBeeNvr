@@ -29,8 +29,8 @@ jobs:
 
       - name: Build binaries
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o mibee-nvr-amd64 ./cmd/mibee-nvr/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o mibee-nvr-arm64 ./cmd/mibee-nvr/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.appVersion=${{ github.ref_name }}" -o mibee-nvr-amd64 ./cmd/mibee-nvr/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.appVersion=${{ github.ref_name }}" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
 
       - name: Create release
         uses: softprops/action-gh-release@v2
