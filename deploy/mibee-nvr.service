@@ -1,14 +1,26 @@
 [Unit]
-Description=MiBee NVR
+Description=MiBee NVR - Network Video Recorder
 After=network.target
+Requires=network.target
 
 [Service]
 Type=simple
 User=nvr
-ExecStart=/mnt/data/nvr/bin/mibee-nvr -config /mnt/data/nvr/mibee-nvr.yaml
-WorkingDirectory=/mnt/data/nvr
+Group=nvr
+ExecStart=/usr/local/bin/mibee-nvr -config /var/lib/mibee-nvr/mibee-nvr.yaml
 Restart=on-failure
-RestartSec=10
+RestartSec=5s
+WorkingDirectory=/var/lib/mibee-nvr
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mibee-nvr
+# Memory limit — uncomment for RPi 3B (905MB RAM)
+# MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target

@@ -41,7 +41,7 @@ func TestDefaultsApplied(t *testing.T) {
     cfg := &Config{}
     cfg.applyDefaults()
     require.Equal(t, ":9090", cfg.Server.Listen)
-    require.Equal(t, "/mnt/data/nvr", cfg.Storage.RootDir)
+    require.Equal(t, "/var/lib/mibee-nvr", cfg.Storage.RootDir)
     require.Equal(t, "30s", cfg.Storage.SegmentDuration)
     require.Equal(t, 30, cfg.Cleanup.RetentionDays)
     require.Equal(t, "1h", cfg.Cleanup.CheckInterval)

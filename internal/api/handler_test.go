@@ -616,7 +616,7 @@ func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Co
 	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 }
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
-	authMW := middleware.NewAuthMiddleware(username, passwordHash)
+	authMW, _ := middleware.NewAuthMiddleware(username, passwordHash, "")
 	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil)
 }
 func TestGetSettings_NoConfig(t *testing.T) {

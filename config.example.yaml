@@ -1,39 +1,38 @@
+# MiBee NVR Configuration
+# Copy to mibee-nvr.yaml and customize for your setup
+# Or use: ./mibee-nvr init --password <your-password>
+
 server:
   listen: ":9090"
 
 storage:
-  root_dir: "/mnt/data/nvr"
+  root_dir: "/var/lib/mibee-nvr"
   segment_duration: "30s"
 
+# Authentication
+# Option 1: Set password_hash (generate with: mibee-nvr hash-password <pw>)
+# Option 2: Set password in plaintext (auto-converted to hash on first run)
 auth:
   username: "admin"
   password_hash: ""  # Use `mibee-nvr hash-password <password>` to generate
+  # password: ""      # Or set plaintext here (auto-hashed on first start)
 
-cameras:
-  - id: "esp32-cam1"
-    name: "Front Door"
-    protocol: "rtsp_mjpeg"
-    url: "rtsp://192.168.1.X:554/stream"
-    enabled: true
-  - id: "esp32-cam2"
-    name: "Back Yard"
-    protocol: "rtsp_h264"
-    url: "rtsp://192.168.1.X:554/live"
-    username: "admin"
-    password: "your-password-here"
-    enabled: true
-  - id: "esp32-cam3"
-    name: "Garage"
-    protocol: "http_jpeg"
-    url: "http://192.168.1.X/capture"
-    enabled: true
-  - id: "h265-cam1"
-    name: "H.265 Camera"
-    protocol: "rtsp_h265"
-    url: "rtsp://192.168.1.X:554/stream"
-    username: "admin"
-    password: "your-password-here"
-    enabled: true
+# Camera configuration — add your cameras here
+cameras: []
+# Example cameras:
+# cameras:
+#   - id: "front-door"
+#     name: "Front Door"
+#     protocol: "rtsp"        # Transport: rtsp, http, onvif
+#     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
+#     url: "rtsp://192.168.1.100:554/stream"
+#     enabled: true
+#   - id: "backyard"
+#     name: "Back Yard"
+#     protocol: "http"
+#     encoding: "jpeg"
+#     url: "http://192.168.1.101/capture"
+#     enabled: true
 
 cleanup:
   retention_days: 30
@@ -63,3 +62,7 @@ webdav:
   enabled: true
   path_prefix: "/dav"
   read_write: false
+
+hls:
+  write_buffer_size: 40
+  segment_max_size_mb: 10
