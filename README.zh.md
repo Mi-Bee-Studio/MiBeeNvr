@@ -33,18 +33,59 @@
 - 单文件部署，无外部依赖 (`CGO_ENABLED=0`)
 ## 快速开始
 
+### 方式 1：预编译二进制（推荐）
+
+从 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载最新二进制文件：
+
 ```bash
-# 编译
-make build
+# AMD64（大多数 PC/服务器）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
+chmod +x mibee-nvr-amd64
 
-# 创建配置文件
-cp config.example.yaml mibee-nvr.yaml
+# ARM64（树莓派等）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
+chmod +x mibee-nvr-arm64
+```
 
-# 运行
-./mibee-nvr -config mibee-nvr.yaml
+初始化配置并启动：
+
+```bash
+./mibee-nvr-amd64 init --password yourpassword
+./mibee-nvr-amd64 -config mibee-nvr.yaml
 ```
 
 打开 `http://localhost:9090` 即可访问管理界面。
+
+### 方式 2：Docker
+
+```bash
+mkdir -p data
+cp config.example.yaml data/mibee-nvr.yaml
+# 编辑 data/mibee-nvr.yaml — 设置密码、添加摄像头
+docker compose up -d
+```
+
+打开 `http://localhost:9090` 即可访问管理界面。详见 [`docker-compose.yml`](docker-compose.yml)。
+
+### 方式 3：一键安装脚本
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
+```
+
+自动下载二进制文件、创建系统用户（`nvr`）、生成配置、安装 systemd 服务并启动。数据目录：`/var/lib/mibee-nvr`。
+
+### 方式 4：源码编译
+
+```bash
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
+cd MiBeeNvr
+make build
+./mibee-nvr init --password yourpassword
+./mibee-nvr -config mibee-nvr.yaml
+```
+
+详细设置请参考 [快速入门](docs/zh/getting-started.md)。
 
 ## 文档
 
@@ -64,6 +105,12 @@ make lint               # 代码检查
 ```
 
 ## Docker 容器镜像
+
+快速部署请参考 [`docker-compose.yml`](docker-compose.yml)：
+
+```bash
+docker compose up -d
+```
 
 支持两种构建方式：
 
