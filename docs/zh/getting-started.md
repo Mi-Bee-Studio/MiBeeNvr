@@ -1,106 +1,141 @@
-# MiBee NVR 快速入门指南
+# MiBee NVR 快速入门
 
-## 简介
+## MiBee NVR 是什么
 
-MiBee NVR 是一个用 Go 语言编写的轻量级家用网络视频录像机。它支持 RTSP (H.264/MJPEG) 和 HTTP JPEG 摄像头录制，将视频流保存为 MP4 片段。MiBee NVR 提供简洁的 Web 管理界面，支持 WebDAV（只读）、FTP 和 MQTT 集成，可以部署为单个静态二进制文件，内嵌 SPA 前端。
+MiBee NVR 是一个用 Go 语言编写的轻量级网络视频录像机。它将 IP 摄像头的视频流录制为 MP4 片段并保存到磁盘，提供 Web 界面用于查看录像、管理摄像头和访问录制内容。
 
-### 主要特性
+**主要功能：**
 
-- 支持多种摄像头协议：RTSP H.264、RTSP H.265、RTSP MJPEG、HTTP JPEG
-- 实时录制为 MP4 片段，自动分段管理
-- Web 管理界面，支持摄像头配置和录像管理
-- WebDAV（可配置只读/读写）访问，支持文件浏览器播放
-- FTP 服务器，便于第三方工具访问
-- MQTT 集成，支持远程触发
-- 轻量级设计，低内存占用
-- 单文件部署，无需额外依赖
+- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG 和 ONVIF 摄像头录制为 MP4 片段
+- Web 管理界面，支持深色/浅色主题、HLS 实时预览和 Chart.js 统计图表
+- WebDAV（可配置只读/读写）和 FTP 访问录像文件
+- MQTT 集成，支持事件触发录制
+- 片段合并，减少文件数量
+- 单一静态二进制文件，内嵌 Web 界面，无外部依赖
 
-## 环境要求
+## 快速开始（5 分钟）
 
-### 系统要求
+### 方式一：下载预编译二进制文件（推荐）
 
-- **操作系统**: Linux (推荐 Ubuntu 20.04+ 或其他主流发行版)
-- **架构**: AMD64 或 ARM64
-- **内存**: 推荐 1GB 以上，最低 512MB
-- **存储**: 足够的磁盘空间用于录像存储
-
-### 软件要求
-
-- **Go 1.26+**: 用于编译和运行
-- **存储设备**: 推荐使用 SSD 或高性能 SD 卡
-
-### 硬件要求
-
-- **处理器**: 任何支持 x86_64 或 arm64 的处理器
-- **网络**: 有线网络连接（推荐），WiFi 也可用
-- **摄像头**: 支持 RTSP 或 HTTP JPEG 的网络摄像头
-
-## 快速开始
-
-### 1. 获取 MiBee NVR
-
-#### 从发布版本下载
-
-访问 [GitHub Releases 页面](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载预编译的二进制文件：
+从 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载对应架构的最新版本：
 
 ```bash
-# 下载最新版本
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-linux-amd64
-chmod +x mibee-nvr-linux-amd64
+# AMD64（大多数 PC/服务器）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
+chmod +x mibee-nvr-amd64
+
+# ARM64（树莓派等）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
+chmod +x mibee-nvr-arm64
 ```
 
-#### 从源码编译
+初始化配置并启动：
 
 ```bash
-# 克隆仓库
+./mibee-nvr-amd64 init --password 你的密码
+./mibee-nvr-amd64 -config mibee-nvr.yaml
+```
+
+在浏览器打开 http://localhost:9090。
+
+### 方式二：Docker
+
+```bash
+mkdir -p data
+cp config.example.yaml data/mibee-nvr.yaml
+# 编辑 data/mibee-nvr.yaml — 设置密码、添加摄像头
+docker compose up -d
+```
+
+在浏览器打开 http://localhost:9090。
+
+### 方式三：一键安装脚本
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
+```
+
+此脚本会自动下载二进制文件、创建系统用户（`nvr`）、生成配置、安装 systemd 服务并启动。数据目录：`/var/lib/mibee-nvr`。
+
+卸载（保留录像数据）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash -s -- --uninstall
+```
+
+### 方式四：从源码编译
+
+需要 Go 1.26+ 和 Node.js（编译前端）：
+
+```bash
 git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
 cd MiBeeNvr
-
-# 编译
 make build
-# 或者交叉编译到 ARM64
+./mibee-nvr init --password 你的密码
+./mibee-nvr -config mibee-nvr.yaml
+```
+
+交叉编译到 ARM64（如树莓派）：
+
+```bash
 make cross
 ```
 
-### 2. 创建配置文件
+## 首次配置
 
-复制示例配置文件：
+### 使用 `mibee-nvr init`
 
-```bash
-cp config.example.yaml mibee-nvr.yaml
-```
-
-编辑 `config.yaml` 文件，配置服务器、存储和摄像头设置。
-
-### 3. 启动服务
+`init` 子命令创建带有安全默认值的配置文件：
 
 ```bash
-# 直接运行
-./mibee-nvr
-
-# 后台运行
-nohup ./mibee-nvr > nvr.log 2>&1 &
-
-# 使用 systemd（推荐）
-sudo systemctl start mibee-nvr
+./mibee-nvr init --password 你的密码
 ```
 
-### 4. 访问 Web 界面
+选项：
 
-打开浏览器访问 `http://your-server-ip:9090`，默认用户名和密码在配置文件中设置。
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--password` | （交互输入） | Web UI 管理员密码 |
+| `--username` | `admin` | 管理员用户名 |
+| `--data-dir` | `/var/lib/mibee-nvr` | 录像和数据库的数据目录 |
+| `--listen` | `:9090` | HTTP 监听地址 |
+| `--config` | `mibee-nvr.yaml` | 配置文件路径 |
+| `--force` | false | 覆盖已有配置文件 |
+
+### 密码设置
+
+设置管理员密码有三种方式：
+
+1. **`mibee-nvr init --password <密码>`** — 初始化时直接设置哈希密码（推荐）
+2. **配置文件明文** — 在 YAML 中设置 `auth.password`，首次启动时自动转换为 `password_hash`
+3. **手动生成哈希** — 使用 `mibee-nvr hash-password <密码>` 生成，粘贴到 `auth.password_hash`
+
+### 默认路径
+
+| 路径 | 说明 |
+|------|------|
+| `/var/lib/mibee-nvr/` | 数据目录（录像、数据库） |
+| `/var/lib/mibee-nvr/mibee-nvr.db` | SQLite 数据库 |
+| `mibee-nvr.yaml` | 配置文件 |
 
 ## 添加第一个摄像头
+
+MiBee NVR 使用**独立的传输协议 + 编码格式**配置摄像头：
+
+- **传输协议**：`rtsp`、`http`、`onvif`
+- **编码格式**：`h264`、`h265`、`mjpeg`、`jpeg`
+
+> 旧版组合格式（`rtsp_h264`、`rtsp_h265`、`rtsp_mjpeg`、`http_jpeg`）仍然支持，保持向后兼容。
 
 ### RTSP H.264 摄像头
 
 ```yaml
 cameras:
-  - id: "cam1"
-    name: "前门摄像头"
-    protocol: "rtsp_h264"
-    url: "rtsp://192.168.1.100:554/h264/main"
-    username: "admin"
-    password: "password123"
+  - id: "front-door"
+    name: "前门"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://192.168.1.100:554/stream"
     enabled: true
 ```
 
@@ -108,22 +143,11 @@ cameras:
 
 ```yaml
 cameras:
-  - id: "cam4"
-    name: "H.265 摄像头"
-    protocol: "rtsp_h265"
+  - id: "driveway"
+    name: "车道"
+    protocol: "rtsp"
+    encoding: "h265"
     url: "rtsp://192.168.1.103:554/stream"
-    enabled: true
-```
-
-### RTSP MJPEG 摄像头
-
-
-```yaml
-cameras:
-  - id: "cam2"
-    name: "后院摄像头"
-    protocol: "rtsp_mjpeg"
-    url: "rtsp://192.168.1.101:554/mjpeg"
     enabled: true
 ```
 
@@ -131,93 +155,103 @@ cameras:
 
 ```yaml
 cameras:
-  - id: "cam3"
-    name: "室内摄像头"
-    protocol: "http_jpeg"
+  - id: "garage"
+    name: "车库"
+    protocol: "http"
+    encoding: "jpeg"
     url: "http://192.168.1.102:8080/snapshot"
     enabled: true
 ```
 
-## 访问录像
+### ONVIF 摄像头
+
+```yaml
+cameras:
+  - id: "lobby"
+    name: "大厅"
+    protocol: "onvif"
+    url: "http://192.168.1.104:80/onvif/device_service"
+    username: "admin"
+    password: "camera123"
+    enabled: true
+```
+
+> ONVIF 会自动检测编码格式，可以省略 `encoding` 字段。
+
+### 使用旧版组合格式
+
+以下格式仍然可用：
+
+```yaml
+cameras:
+  - id: "cam1"
+    name: "旧格式摄像头"
+    protocol: "rtsp_h264"
+    url: "rtsp://192.168.1.100:554/stream"
+    enabled: true
+```
+
+编辑配置后重启 MiBee NVR，或通过 Web UI 在运行时添加摄像头。
+
+## 访问 MiBee NVR
 
 ### Web 管理界面
 
-通过 Web 界面可以：
-- 查看实时摄像头画面
-- 播放历史录像
-- 下载录像文件
-- 管理摄像头配置
-- 查看存储统计
+在浏览器打开 http://你的服务器地址:9090，使用配置的凭据登录。通过 Web UI 可以：
 
-### WebDAV 只读访问
+- 查看摄像头实时画面（HLS）
+- 回放和下载录像
+- 添加、编辑和删除摄像头
+- 查看存储统计和趋势
+- 配置系统设置
 
-配置 WebDAV 后，可以通过文件浏览器访问：
+### WebDAV
 
-```bash
-# 在文件管理器中访问
-davs://your-server-ip:9090/dav/
-
-# 使用 curl 下载
-curl -u admin:password -O "http://your-server-ip:9090/dav/recordings/2024/01/01/cam1_1704110400.mp4"
-```
-
-### FTP 访问
-
-启用 FTP 服务器后，可以通过 FTP 客户端访问：
+WebDAV 默认启用（只读模式），访问路径为 `/dav/`：
 
 ```bash
-# 连接参数
-主机: your-server-ip
-端口: 2121
-用户名: admin  
-密码: password
-
-# 查看文件
-ftp> ls recordings/
+curl -u admin:密码 http://你的服务器地址:9090/dav/
 ```
 
-## 健康检查
+在文件管理器中挂载：`davs://你的服务器地址:9090/dav/`
 
-检查 MiBee NVR 运行状态：
+要启用读写访问，在配置中设置 `webdav.read_write: true`。
+
+### FTP
+
+FTP 默认启用，端口为 2121：
 
 ```bash
-curl http://localhost:9090/api/health
+ftp 你的服务器地址 2121
+# 用户名：admin
+# 密码：（你设置的密码）
 ```
 
-预期响应：
-```json
-{
-  "status": "ok",
-  "uptime": "2h30m",
-  "checks": {
-    "database": {"status": "ok"},
-    "storage": {"status": "ok", "message": "20% used (10737418240 / 53687091200 bytes)"},
-    "goroutines": {"status": "ok", "message": "42 goroutines"}
-  },
-  "version": "0.1.0-dev"
-}
-```
+## 常见问题
 
-## 下一步
+### 服务无法启动
 
-- 查看 [配置文档](configuration.md) 了解详细的配置选项
-- 阅读 [媒体服务器指南](mediamtx-guide.md) 了解如何配置 mediamtx
-- 查看 [API 参考文档](api-reference.md) 了解 API 接口
-- 阅读 [部署文档](deployment.md) 了解生产环境部署
+- 检查配置文件语法：`cat mibee-nvr.yaml`
+- 确认数据目录存在且可写：`ls -la /var/lib/mibee-nvr/`
+- 查看日志：`journalctl -u mibee-nvr -f`
 
-## 故障排除
+### 权限错误
 
-如果遇到问题，请检查：
+- `install.sh` 脚本创建了 `nvr` 系统用户。确保数据目录的所有者正确：
+  `sudo chown -R nvr:nvr /var/lib/mibee-nvr/`
 
-1. **配置文件格式**: 确保 YAML 格式正确
-2. **网络连接**: 确保摄像头可以访问
-3. **存储权限**: 确保有写入存储目录的权限
-4. **端口占用**: 确保配置的端口没有被占用
-5. **内存使用**: 监控内存使用，避免过度占用
+### 端口冲突
 
-## 支持
+- 默认端口为 9090。如果被占用，在配置中修改 `server.listen`（如 `":8080"`）
 
-如需帮助，请：
-- 查看 [Issues 页面](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)
-- 提交新的 Issue 描述问题
-- 查看项目文档和 FAQ
+### 无法连接摄像头
+
+- 使用 VLC 或 ffplay 验证摄像头 URL：`ffplay rtsp://192.168.1.100:554/stream`
+- 检查网络连通性：`ping 192.168.1.100`
+- 确认摄像头用户名和密码正确
+- 部分 H.265 摄像头可能需要使用特定的子码流 URL
+
+### 树莓派内存占用过高
+
+- 将 `segment_duration` 设为 `30s`（默认值）。更长的时长会在内存中缓存更多数据。
+- 树莓派 3B 约 900MB 内存，4 个摄像头 30 秒片段时稳定运行约占 300MB。
