@@ -33,18 +33,59 @@ A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/H
 - Single static binary, no external dependencies (`CGO_ENABLED=0`)
 ## Quick Start
 
+### Option 1: Pre-built Binary (Recommended)
+
+Download the latest binary from [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases):
+
 ```bash
-# Build
-make build
+# AMD64 (most PCs/servers)
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
+chmod +x mibee-nvr-amd64
 
-# Create config
-cp config.example.yaml mibee-nvr.yaml
+# ARM64 (Raspberry Pi, etc.)
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
+chmod +x mibee-nvr-arm64
+```
 
-# Run
-./mibee-nvr -config mibee-nvr.yaml
+Initialize config and start:
+
+```bash
+./mibee-nvr-amd64 init --password yourpassword
+./mibee-nvr-amd64 -config mibee-nvr.yaml
 ```
 
 Open `http://localhost:9090` to access the Web UI.
+
+### Option 2: Docker
+
+```bash
+mkdir -p data
+cp config.example.yaml data/mibee-nvr.yaml
+# Edit data/mibee-nvr.yaml — set password, add cameras
+docker compose up -d
+```
+
+Open `http://localhost:9090` to access the Web UI. See [`docker-compose.yml`](docker-compose.yml) for details.
+
+### Option 3: One-click Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
+```
+
+This downloads the binary, creates a system user (`nvr`), generates config, installs a systemd service, and starts it. Data directory: `/var/lib/mibee-nvr`.
+
+### Option 4: Build from Source
+
+```bash
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
+cd MiBeeNvr
+make build
+./mibee-nvr init --password yourpassword
+./mibee-nvr -config mibee-nvr.yaml
+```
+
+For detailed setup, see [Getting Started](docs/en/getting-started.md).
 
 ## Documentation
 
@@ -64,6 +105,12 @@ make lint               # Run linter
 ```
 
 ## Docker Container Images
+
+For quick deployment, see [`docker-compose.yml`](docker-compose.yml):
+
+```bash
+docker compose up -d
+```
 
 Two build methods are available:
 
