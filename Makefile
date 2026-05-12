@@ -5,7 +5,7 @@ RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
 RPi_SRV  := mibee-nvr
 
 # Docker image registry
-DOCKER_REGISTRY ?= registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr
+DOCKER_REGISTRY ?= ghcr.io/mi-bee-studio/mibee-nvr
 VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
 
