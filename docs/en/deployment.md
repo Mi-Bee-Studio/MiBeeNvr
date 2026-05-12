@@ -1,206 +1,166 @@
 # Deployment Guide
 
-This guide covers deploying MiBee NVR in production, including building from source, setting up system services, and configuring reverse proxies.
+This guide covers installing, configuring, and maintaining MiBee NVR in production.
 
-## Building MiBee NVR
+## Installation Methods
 
-### Local Build
+### One-Click Install Script (Recommended)
 
-Build MiBee NVR for your current architecture:
+The install script downloads the latest release binary, creates the `nvr` system user, initializes the config, and installs the systemd service — all in one step.
+
+```bash
+# Install latest version
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
+```
+
+Install a specific version:
+
+```bash
+sudo ./install.sh --version v0.2.0
+```
+
+Uninstall (preserves recordings in `/var/lib/mibee-nvr`):
+
+```bash
+sudo ./install.sh --uninstall
+```
+
+The installer will prompt for an admin password if no config file exists. After installation, the Web UI is available at `http://<host-ip>:9090`.
+
+### Docker
+
+Use the provided `docker-compose.yml`:
+
+```bash
+# 1. Prepare data directory and config
+mkdir -p data
+cp config.example.yaml data/mibee-nvr.yaml
+# Edit config: set password, add cameras
+nano data/mibee-nvr.yaml
+
+# 2. Start the service
+docker compose up -d
+
+# 3. Open http://localhost:9090
+```
+
+Ports:
+
+| Port | Purpose |
+|------|---------|
+| 9090 | Web UI / REST API |
+| 2121 | FTP |
+| 2122-2140 | FTP passive mode |
+
+The Docker image includes a health check (`mibee-nvr health`) that runs every 30 seconds. Data is persisted in the `./data` volume mount.
+
+### Manual Installation
+
+If you prefer full control or the install script doesn't cover your use case:
+
+```bash
+# 1. Download binary from GitHub Releases
+#    https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
+sudo cp mibee-nvr /usr/local/bin/mibee-nvr
+sudo chmod +x /usr/local/bin/mibee-nvr
+
+# 2. Create system user and data directory
+sudo useradd -r -s /bin/false -d /var/lib/mibee-nvr nvr
+sudo mkdir -p /var/lib/mibee-nvr
+sudo chown -R nvr:nvr /var/lib/mibee-nvr
+
+# 3. Initialize config (prompts for admin password)
+sudo -u nvr /usr/local/bin/mibee-nvr init \
+    --password <your-password> \
+    --data-dir /var/lib/mibee-nvr \
+    --config /var/lib/mibee-nvr/mibee-nvr.yaml \
+    --listen ":9090"
+
+# 4. Install systemd service
+sudo cp deploy/mibee-nvr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now mibee-nvr
+```
+
+### Building from Source
 
 ```bash
 git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
 cd MiBeeNvr
+
+# Build for current architecture
 make build
-```
 
-This creates `./mibee-nvr` binary for your system.
-
-### Cross-Compilation
-
-Build for ARM64 (common for home servers and embedded devices):
-
-```bash
+# Cross-compile for ARM64 (e.g., Raspberry Pi)
 make cross
-```
 
-This creates `./mibee-nvr-arm64` binary for Linux ARM64.
-
-### Docker Container Images
-
-Build container images for deployment:
-
-```bash
-# Build amd64 image (multi-stage, compiles everything inside container)
-make docker-build
-
-# Build arm64 image (host cross-compile + scratch, no QEMU needed)
-make docker-build-arm64
-
-# Build all architectures
-make docker-build-all
-
-# Push to registry (login first: docker login <registry>)
-make docker-push-all
-
-# One-shot: build + push
-make docker-release
-```
-
-Images are tagged with git short SHA. For example, on commit `0c7e0eb`:
-
-| Image | Arch | Base |
-|-------|------|------|
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb` | amd64 | distroless |
-| `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64` | arm64 | scratch |
-
-#### Running with Docker/Podman
-
-```bash
-docker run -d \
-  --name mibee-nvr \
-  -p 9090:9090 \
-  -v /mnt/data/nvr:/data \
-  registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:0c7e0eb-arm64
-```
-
-The config file is expected at `/data/mibee-nvr.yaml` (mount it via volume).
-
-### Build and Test
-
-Run the test suite to ensure everything works:
-
-```bash
+# Run tests
 make test
-```
 
-Check for any issues:
-
-```bash
+# Lint
 make lint
 ```
 
-## Systemd Service Setup
-
-Create a systemd service file for MiBee NVR:
+To deploy a cross-compiled binary directly to a Raspberry Pi:
 
 ```bash
-sudo tee /etc/systemd/system/mibee-nvr.service > /dev/null <<EOF
-[Unit]
-Description=MiBee NVR - Network Video Recorder
-After=network.target
-Requires=network.target
-
-[Service]
-Type=simple
-User=nvr
-Group=nvr
-ExecStart=/mnt/data/nvr/bin/mibee-nvr -config /mnt/data/nvr/mibee-nvr.yaml
-Restart=on-failure
-RestartSec=5s
-WorkingDirectory=/mnt/data/nvr
-LimitNOFILE=65536
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/mnt/data/nvr
-MemoryMax=512M
-
-[Install]
-WantedBy=multi-user.target
-EOF
+make deploy RPi_HOST=user@your-rpi-host
+make deploy-check RPi_HOST=user@your-rpi-host
+make rollback RPi_HOST=user@your-rpi-host
 ```
 
-### Set up the NVR user and directories
+## Systemd Service
+
+The service file is maintained in [`deploy/mibee-nvr.service`](../../deploy/mibee-nvr.service). Key details:
+
+- **Binary**: `/usr/local/bin/mibee-nvr`
+- **Config**: `/var/lib/mibee-nvr/mibee-nvr.yaml`
+- **Working directory**: `/var/lib/mibee-nvr`
+- **Runs as**: `nvr` user
+- **Security**: `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome`
+- **Memory limit**: `MemoryMax=512M` (commented out by default; uncomment for RPi 3B)
+
+Common commands:
 
 ```bash
-# Create nvr user
-sudo useradd -r -s /bin/false -d /mnt/data/nvr nvr
-
-# Create necessary directories
-sudo mkdir -p /mnt/data/nvr/bin /mnt/data/nvr/config /mnt/data/nvr/recordings
-sudo chown -R nvr:nvr /mnt/data/nvr
-
-# Copy binary and configuration
-sudo cp mibee-nvr-arm64 /mnt/data/nvr/bin/mibee-nvr
-sudo chmod +x /mnt/data/nvr/bin/mibee-nvr
-
-# Create configuration file
-sudo cp mibee-nvr.yaml /mnt/data/nvr/mibee-nvr.yaml
-sudo chown nvr:nvr /mnt/data/nvr/mibee-nvr.yaml
-```
-
-### Start and enable the service
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable mibee-nvr
 sudo systemctl start mibee-nvr
-```
-
-### Check service status
-
-```bash
+sudo systemctl stop mibee-nvr
+sudo systemctl restart mibee-nvr
 sudo systemctl status mibee-nvr
-sudo journalctl -u mibee-nvr -f  # View logs
+sudo journalctl -u mibee-nvr -f   # follow logs
 ```
 
-## Reverse Proxy Configuration
+## Reverse Proxy
 
-### Caddy Example
+### Caddy
 
-Caddy is recommended for its automatic HTTPS support:
+Caddy provides automatic HTTPS with minimal configuration:
 
-```bash
-sudo tee /etc/caddy/Caddyfile > /dev/null <<EOF
+```caddyfile
+nvr.example.com {
+    reverse_proxy localhost:9090
+}
+```
+
+For TLS with explicit email:
+
+```caddyfile
 {
     email admin@example.com
 }
 
-# Main web interface
-https://nvr.example.com {
+nvr.example.com {
     reverse_proxy localhost:9090
-    
-    # Authentication (basic auth)
-    basicauth {
-        admin password123
-    }
-    
-    # Logging
-    log {
-        output file /var/log/caddy/nvr_access.log
-    }
 }
-
-# WebDAV access
-https://nvr.example.com/dav/ {
-    reverse_proxy localhost:9090
-    basicauth {
-        admin password123
-    }
-    # WebDAV specific headers
-    @webdav method {GET HEAD POST PUT DELETE PROPFIND PROPPATCH COPY MOVE LOCK UNLOCK}
-    reverse_proxy @webdav localhost:9090
-}
-EOF
-
-sudo systemctl restart caddy
 ```
 
-### Nginx Example
+### Nginx
 
 ```nginx
 server {
     listen 80;
     server_name nvr.example.com;
-    
-    # Basic authentication
-    auth_basic "MiBee NVR";
-    auth_basic_user_file /etc/nginx/htpasswd;
-    
+
     location / {
         proxy_pass http://localhost:9090;
         proxy_set_header Host $host;
@@ -208,160 +168,119 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
-    
-    # WebDAV location
+
     location /dav/ {
         proxy_pass http://localhost:9090;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # WebDAV specific headers
         proxy_request_buffering off;
         proxy_buffering off;
     }
 }
 ```
 
-## Access Protocol Notes
+## RPi 3B Notes
 
-### Web Interface
-- **URL**: `https://your-domain.com` or `http://your-ip:9090`
-- **Authentication**: Required (basic auth)
-- **Features**: Camera management, recording playback, live view
+The Raspberry Pi 3B has 905MB RAM. For stable operation:
 
-### FTP Access
-- **Port**: 2121 (cannot be reverse-proxied)
-- **Protocol**: FTP (not SFTP)
-- **Authentication**: Required (same as web interface)
-- **Access**: Direct FTP connection to server
+- **Segment duration**: Use 30s (`segment_duration: "30s"`). Longer durations hold more frames in RAM (e.g., 120s = 60-80MB per segment).
+- **Memory limit**: Uncomment `MemoryMax=512M` in `deploy/mibee-nvr.service` to prevent OOM kills.
+- **Storage**: Use an external USB disk (ext4) for recordings. The SD card will wear out quickly with continuous writes.
+- **Cameras**: Limit to 2-3 concurrent H.264/H.265 streams depending on resolution and bitrate.
 
-### WebDAV Access
-- **URL**: `https://your-domain.com/dav/` or `http://your-ip:9090/dav/`
-- **Authentication**: Required (basic auth)
-- **Access**: Read-only to recordings
-- **Protocol**: WebDAV (RFC 4918)
+## Updating
 
-## Storage Considerations
+### Using install.sh (Recommended)
 
-### Memory Requirements
-- **Minimum**: 512MB RAM (for 30s segments)
-- **Recommended**: 1GB+ RAM for multiple cameras
-- **Segment Memory Usage**:
-  - 30s segments: ~15-20MB per segment
-  - 60s segments: ~30-40MB per segment
-  - 120s segments: ~60-80MB per segment
-
-### Disk Space Planning
-- **Single Camera**: ~1-5GB per day depending on resolution and frame rate
-- **Multiple Cameras**: Scale accordingly
-- **Retention**: Plan for retention_days + buffer for cleanup delay
-
-### Filesystem Considerations
-- Use ext4 for best performance on Linux
-- Consider SSD for better write performance
-- Monitor disk I/O for multiple concurrent recordings
-
-### Performance Tips
-1. **Segment Duration**: Use 30s for low-memory systems
-2. **Disk Monitoring**: Set appropriate disk_threshold_percent (80-95)
-3. **Retention**: Regular cleanup prevents disk space issues
-4. **Network**: Ensure cameras and server have stable network connections
-
-## Updating MiBee NVR
-
-### Backup Configuration
 ```bash
-sudo cp /mnt/data/nvr/mibee-nvr.yaml /mnt/data/nvr/mibee-nvr.yaml.backup
+sudo ./install.sh --version v0.2.0
 ```
 
-### Stop Service
+The script stops the service, replaces the binary, and restarts automatically. Config and recordings are preserved.
+
+### Manual Update
+
 ```bash
 sudo systemctl stop mibee-nvr
-```
-
-### Update Binary
-```bash
-# Download new binary or build from source
-sudo cp mibee-nvr-arm64 /mnt/data/nvr/bin/mibee-nvr
-sudo chmod +x /mnt/data/nvr/bin/mibee-nvr
-```
-
-### Start Service
-```bash
+sudo cp mibee-nvr /usr/local/bin/mibee-nvr
+sudo chmod +x /usr/local/bin/mibee-nvr
 sudo systemctl start mibee-nvr
 ```
 
-### Check Status
+Always back up your config before updating:
+
 ```bash
-sudo systemctl status mibee-nvr
+sudo cp /var/lib/mibee-nvr/mibee-nvr.yaml /var/lib/mibee-nvr/mibee-nvr.yaml.backup
 ```
 
-## Monitoring and Maintenance
+## Monitoring
 
-### Log Management
+### Logs
+
 ```bash
-# View logs
-sudo journalctl -u mibee-nvr -n 100
-
-# Follow logs
-sudo journalctl -u mibee-nvr -f
-
-# Rotate logs (add to /etc/logrotate.d/mibee-nvr)
-sudo tee /etc/logrotate.d/mibee-nvr > /dev/null <<EOF
-/var/log/caddy/nvr_access.log {
-    daily
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 644 nvr nvr
-}
-EOF
+sudo journalctl -u mibee-nvr -n 100    # last 100 lines
+sudo journalctl -u mibee-nvr -f        # follow
+sudo journalctl -u mibee-nvr --since "1 hour ago"
 ```
 
-### Health Checks
+### Health Check
+
 ```bash
-# Check if service is running
 sudo systemctl is-active mibee-nvr
-
-# Check web interface
 curl -f http://localhost:9090/api/health
-
-# Check disk usage
-df -h /mnt/data/nvr
 ```
 
-### Regular Maintenance Tasks
-1. **Review Logs**: Check for errors or warnings
-2. **Monitor Disk Usage**: Ensure retention policies are working
-3. **Update Software**: Periodically update to latest version
-4. **Backup Configuration**: Regular config backups
+### Disk Usage
+
+```bash
+df -h /var/lib/mibee-nvr
+du -sh /var/lib/mibee-nvr/recordings
+```
+
+### Prometheus Metrics
+
+Metrics are available at `/metrics` (public, no auth required):
+
+```bash
+curl http://localhost:9090/metrics
+```
 
 ## Troubleshooting
 
-### Common Issues
-1. **Service won't start**: Check config file syntax and permissions
-2. **Port conflicts**: Ensure ports aren't used by other services
-3. **Permission errors**: Check file ownership and permissions
-4. **Memory issues**: Reduce segment duration or add more RAM
+### Service won't start
 
-### Debug Mode
-Add `-v` flag for verbose logging:
 ```bash
-sudo /mnt/data/nvr/bin/mibee-nvr -config /mnt/data/nvr/mibee-nvr.yaml -v
+sudo journalctl -u mibee-nvr -n 50
+# Verify config syntax
+sudo -u nvr /usr/local/bin/mibee-nvr -config /var/lib/mibee-nvr/mibee-nvr.yaml
 ```
 
-### Resource Monitoring
+### Camera connection failures
+
 ```bash
-# Monitor memory usage
-ps aux | grep mibee-nvr
+# Test RTSP connection
+ffmpeg -rtsp_transport tcp -i "rtsp://admin:pass@192.168.1.100:554/stream" -t 5 -f null -
 
-# Monitor disk I/O
-iostat -x 1
-
-# Monitor network
-netstat -an | grep :9090
+# Check network
+ping 192.168.1.100
 ```
+
+### Port conflicts
+
+```bash
+sudo lsof -i :9090
+sudo lsof -i :2121
+```
+
+### Permission errors
+
+```bash
+ls -la /var/lib/mibee-nvr/
+sudo -u nvr ls /var/lib/mibee-nvr/
+```
+
+### High memory usage
+
+Reduce `segment_duration` to 30s. On RPi 3B, uncomment `MemoryMax=512M` in the service file.
