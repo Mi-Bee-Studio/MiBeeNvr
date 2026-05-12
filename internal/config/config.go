@@ -249,7 +249,7 @@ func (cfg *Config) applyDefaults() {
 	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
-		cfg.Storage.RootDir = "/mnt/data/nvr"
+		cfg.Storage.RootDir = "/var/lib/mibee-nvr"
 	}
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		cfg.Storage.SegmentDuration = "30s"

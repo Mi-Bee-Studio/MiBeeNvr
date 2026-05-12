@@ -1314,7 +1314,7 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
-	authMW := middleware.NewAuthMiddleware(username, passwordHash)
+	authMW, _ := middleware.NewAuthMiddleware(username, passwordHash, "")
 	return NewHandler(db, store, authMW, nil, nil, nil, "", nil)
 }
 

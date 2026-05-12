@@ -208,7 +208,7 @@ func TestAuthMiddlewareBlocksUnauthenticated(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	authMW := middleware.NewAuthMiddleware("admin", hash)
+	authMW, _ := middleware.NewAuthMiddleware("admin", hash, "")
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
@@ -226,7 +226,7 @@ func TestAuthMiddlewareAllowsAuthenticated(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	authMW := middleware.NewAuthMiddleware("admin", hash)
+	authMW, _ := middleware.NewAuthMiddleware("admin", hash, "")
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
@@ -246,7 +246,7 @@ func TestAuthMiddlewareRejectsWhenNoPassword(t *testing.T) {
 	createTestFiles(t, tmpDir)
 
 	// Empty password hash = auth rejected (security fix)
-	authMW := middleware.NewAuthMiddleware("admin", "")
+	authMW, _ := middleware.NewAuthMiddleware("admin", "", "")
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
