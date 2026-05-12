@@ -27,8 +27,8 @@ COPY internal/ ./internal/
 # Copy built frontend into the embed directory
 COPY --from=frontend /build/web/dist ./internal/ui/static/
 
-# Static build — no C dependencies
-
+# Static build — no C dependencies, pure Go binary
+ENV CGO_ENABLED=0
 ARG VERSION=dev
 RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/mibee-nvr/
 
