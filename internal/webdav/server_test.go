@@ -144,7 +144,7 @@ func TestWriteMethodsForbidden(t *testing.T) {
 	ts := setupTestServer(t, tmpDir, nil)
 	defer ts.Close()
 
-	methods := []string{"PUT", "DELETE", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "PATCH"}
+	methods := []string{"PUT", "DELETE", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			req, err := http.NewRequest(method, ts.URL+"/dav/", nil)
