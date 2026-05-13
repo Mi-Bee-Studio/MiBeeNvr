@@ -3,8 +3,7 @@
   import { getStats, listCameras, healthCheck, getSystemStats, getMergeStatus, getMergePending } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, MergeStatus, MergePending } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatFileSize } from '$lib/format';
-  import { formatDate } from '$lib/format';
+  import { formatFileSize, formatDate, getChartUnit } from '$lib/format';
 
   import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi, ChevronDown, ChevronUp, GitMerge } from 'lucide-svelte';
   import {
@@ -196,7 +195,9 @@
     const accentFill = 'rgba(139, 92, 246, 0.1)';
 
     const labels = trends.map(d => d.date.slice(5)); // "MM-DD"
-    const sizes = trends.map(d => +(d.total_size / (1024 * 1024)).toFixed(1)); // MB as number
+    const rawSizes = trends.map(d => d.total_size);
+    const chartUnit = getChartUnit(rawSizes);
+    const sizes = rawSizes.map(s => +(s / chartUnit.divisor).toFixed(1));
 
     // Aggregate camera counts
     const cameraTotals: Record<string, number> = {};
@@ -227,7 +228,7 @@
         data: {
           labels,
           datasets: [{
-            label: 'Storage (MB)',
+            label: `Storage (${chartUnit.unit})`,
             data: sizes,
             borderColor: accentColor,
             backgroundColor: accentFill,
@@ -616,13 +617,13 @@
             >
               <div class="flex items-center gap-2">
                 <GitMerge size={18} class="text-accent" />
-                <h3 class="text-lg font-semibold th-text-primary">合并状态</h3>
+                <h3 class="text-lg font-semibold th-text-primary">{t('merge.status')}</h3>
                 <span class="badge {mergeStatus.enabled ? 'badge-success' : 'badge-neutral'} text-xs">
-                  {mergeStatus.enabled ? '启用' : '关闭'}
+                  {mergeStatus.enabled ? t('merge.enabled') : t('merge.disabled')}
                 </span>
                 {#if mergePending && mergePending.pending && Object.keys(mergePending.pending).length > 0}
                   {@const total = Object.values(mergePending.pending).reduce((a, b) => a + b, 0)}
-                  <span class="badge badge-warning text-xs">待合并 {total}</span>
+                  <span class="badge badge-warning text-xs">{t('merge.pendingCount', { total })}</span>
                 {/if}
               </div>
               {#if mergeCollapsed}
@@ -636,7 +637,7 @@
               <div class="px-5 pb-5 border-t th-border pt-4">
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                   <div>
-                    <p class="text-xs th-text-muted mb-1">上次运行</p>
+                    <p class="text-xs th-text-muted mb-1">{t('merge.lastRun')}</p>
                     <p class="text-sm font-medium th-text-primary">
                       {mergeStatus.last_run_time && mergeStatus.last_run_time !== '0001-01-01T00:00:00Z'
                         ? formatDate(mergeStatus.last_run_time)
@@ -644,15 +645,15 @@
                     </p>
                   </div>
                   <div>
-                    <p class="text-xs th-text-muted mb-1">合并段数</p>
+                    <p class="text-xs th-text-muted mb-1">{t('merge.segmentsMerged')}</p>
                     <p class="text-sm font-medium th-text-primary">{mergeStatus.segments_merged}</p>
                   </div>
                   <div>
-                    <p class="text-xs th-text-muted mb-1">新建文件</p>
+                    <p class="text-xs th-text-muted mb-1">{t('merge.filesCreated')}</p>
                     <p class="text-sm font-medium th-text-primary">{mergeStatus.files_created}</p>
                   </div>
                   <div>
-                    <p class="text-xs th-text-muted mb-1">错误数</p>
+                    <p class="text-xs th-text-muted mb-1">{t('merge.errorCount')}</p>
                     <p class="text-sm font-medium th-text-primary {mergeStatus.error_count > 0 ? 'text-[var(--color-danger)]' : ''}">
                       {mergeStatus.error_count}
                     </p>
@@ -661,7 +662,7 @@
 
                 {#if mergePending && mergePending.pending && Object.keys(mergePending.pending).length > 0}
                   <div>
-                    <p class="text-xs th-text-muted mb-2">待合并</p>
+                    <p class="text-xs th-text-muted mb-2">{t('merge.pending')}</p>
                     <div class="flex flex-wrap gap-2">
                       {#each Object.entries(mergePending.pending) as [camId, count]}
                         <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs th-bg-tertiary th-text-secondary">
@@ -672,7 +673,7 @@
                     </div>
                   </div>
                 {:else}
-                  <p class="text-xs th-text-muted">暂无待合并</p>
+                  <p class="text-xs th-text-muted">{t('merge.noPending')}</p>
                 {/if}
               </div>
             {/if}

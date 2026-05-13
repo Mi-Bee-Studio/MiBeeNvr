@@ -136,7 +136,7 @@ import { onMount, onDestroy } from 'svelte';
     try {
       cameras = await listCameras();
     } catch (e) {
-      console.error(t('common.failedLoadCameras'), e);
+      console.error('Failed to load cameras:', e);
     }
   }
 
@@ -269,15 +269,15 @@ import { onMount, onDestroy } from 'svelte';
               <option value="">{t('recordings.allFormats')}</option>
               <option value="h264">{t('recordings.h264')}</option>
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
-              <option value="h265">H.265 (HEVC)</option>
+              <option value="h265">{t('recordings.h265')}</option>
             </select>
           </div>
           <div class="flex-1 min-w-[120px]">
-            <label for="merged" class="input-label">全部</label>
+            <label for="merged" class="input-label">{t('recordings.allStatus')}</label>
             <select id="merged" class="input" bind:value={mergedFilter}>
-              <option value="">全部</option>
-              <option value="true">已合并</option>
-              <option value="false">未合并</option>
+              <option value="">{t('recordings.all')}</option>
+              <option value="true">{t('recordings.merged')}</option>
+              <option value="false">{t('recordings.unmerged')}</option>
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">
@@ -437,7 +437,7 @@ import { onMount, onDestroy } from 'svelte';
                   </td>
                   <td>
                     <span class="badge badge-neutral text-xs">
-                      {(recording.format === 'h264' || recording.format === 'h265') ? 'MP4' : 'JPEG'}
+                      {(recording.format === 'h264' || recording.format === 'h265') ? t('recording.format.h264') : t('recording.format.mjpeg')}
                     </span>
                   </td>
                   <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>
@@ -445,9 +445,9 @@ import { onMount, onDestroy } from 'svelte';
                   <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
                   <td class="hidden sm:table-cell">
                     {#if recording.merged}
-                      <span class="badge badge-success">已合并</span>
+                      <span class="badge badge-success">{t('recordings.merged')}</span>
                     {:else}
-                      <span class="badge badge-neutral">原始段</span>
+                      <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
                     {/if}
                   </td>
                   <td class="text-right">

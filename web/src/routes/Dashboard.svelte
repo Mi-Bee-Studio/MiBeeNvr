@@ -537,13 +537,13 @@
               <!-- Stream state indicator -->
               {@const state = streamStates[camera.id]}
               {#if state === 'playing'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-green-500 rounded-full" title="Live"></span>
+                <span class="absolute top-2 left-2 w-2 h-2 bg-green-500 rounded-full" title={t('dashboard.live')}></span>
               {:else if state === 'buffering'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-yellow-500 rounded-full animate-pulse" title="Buffering"></span>
+                <span class="absolute top-2 left-2 w-2 h-2 bg-yellow-500 rounded-full animate-pulse" title={t('dashboard.buffering')}></span>
               {:else if state === 'error'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-red-500 rounded-full" title="Error"></span>
+                <span class="absolute top-2 left-2 w-2 h-2 bg-red-500 rounded-full" title={t('dashboard.errorState')}></span>
               {:else if state === 'snapshot'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-gray-400 rounded-full" title="Snapshot mode"></span>
+                <span class="absolute top-2 left-2 w-2 h-2 bg-gray-400 rounded-full" title={t('dashboard.snapshotMode')}></span>
               {/if}
               <!-- Camera name + status overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">

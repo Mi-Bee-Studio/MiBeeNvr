@@ -98,7 +98,7 @@ import {
       const resp = await listFrames(currentId);
       frames = resp.frames;
     } catch (e) {
-      console.error(t('common.failedLoadRecording'), e);
+      console.error('Failed to load recording:', e);
       framesLoading = false;
       return;
     }
@@ -356,7 +356,7 @@ import {
     try {
       videoBlobUrl = await loadRecordingVideoBlob(currentId);
     } catch (e) {
-      console.error(t('detail.failedLoadVideo'), e);
+      console.error('Failed to load video:', e);
       error = t('detail.failedLoadVideo');
     } finally {
       videoLoading = false;
@@ -679,12 +679,12 @@ if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
             </div>
             <div class="flex gap-2">
               {#if recording.merged}
-                <span class="badge badge-success">已合并</span>
+                <span class="badge badge-success">{t('recordings.merged')}</span>
               {:else}
-                <span class="badge badge-neutral">原始段</span>
+                <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
               {/if}
               <span class="badge badge-neutral">
-                {(recording.format === 'h264' || recording.format === 'h265') ? 'MP4' : 'JPEG'}
+                {(recording.format === 'h264' || recording.format === 'h265') ? t('recording.format.h264') : t('recording.format.mjpeg')}
               </span>
             </div>
           </div>

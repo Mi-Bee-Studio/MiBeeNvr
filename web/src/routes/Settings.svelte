@@ -331,13 +331,13 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
 
         <!-- Merge Strategy -->
         <div class="card p-8 border th-border">
-          <h3 class="text-lg font-semibold th-text-primary mb-1">合并策略</h3>
-          <p class="text-sm th-text-tertiary mb-8">配置录制段的自动合并策略，减少碎片文件数量</p>
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('merge.title')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('merge.description')}</p>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable Merge -->
             <div>
-              <label class="input-label">启用合并</label>
+              <label class="input-label">{t('merge.enableMerge')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
                   type="button"
@@ -348,34 +348,34 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                 >
                   <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {mergeEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
                 </button>
-                <span class="text-sm th-text-secondary">{mergeEnabled ? '已启用' : '已禁用'}</span>
+                <span class="text-sm th-text-secondary">{mergeEnabled ? t('merge.enabledState') : t('merge.disabledState')}</span>
               </div>
             </div>
 
             <!-- Check Interval -->
             <div>
-              <label for="mergeInterval" class="input-label">检查间隔</label>
+              <label for="mergeInterval" class="input-label">{t('merge.checkInterval')}</label>
               <select id="mergeInterval" class="input" bind:value={mergeCheckInterval}>
-                <option value="30m">30 分钟</option>
-                <option value="1h">1 小时</option>
-                <option value="2h">2 小时</option>
-                <option value="6h">6 小时</option>
+                <option value="30m">{t('merge.30m')}</option>
+                <option value="1h">{t('merge.1h')}</option>
+                <option value="2h">{t('merge.2h')}</option>
+                <option value="6h">{t('merge.6h')}</option>
               </select>
             </div>
 
             <!-- Window Size -->
             <div>
-              <label for="mergeWindow" class="input-label">合并窗口</label>
+              <label for="mergeWindow" class="input-label">{t('merge.windowSize')}</label>
               <select id="mergeWindow" class="input" bind:value={mergeWindowSize}>
-                <option value="30m">30 分钟</option>
-                <option value="1h">1 小时</option>
-                <option value="2h">2 小时</option>
+                <option value="30m">{t('merge.30m')}</option>
+                <option value="1h">{t('merge.1h')}</option>
+                <option value="2h">{t('merge.2h')}</option>
               </select>
             </div>
 
             <!-- Min Segments -->
             <div>
-              <label for="mergeMinSegs" class="input-label">最小段数</label>
+              <label for="mergeMinSegs" class="input-label">{t('merge.minSegments')}</label>
               <input
                 id="mergeMinSegs"
                 type="number"
@@ -388,18 +388,18 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
 
             <!-- Min Segment Age -->
             <div>
-              <label for="mergeMinAge" class="input-label">最小段年龄</label>
+              <label for="mergeMinAge" class="input-label">{t('merge.minAge')}</label>
               <select id="mergeMinAge" class="input" bind:value={mergeMinSegmentAge}>
-                <option value="5m">5 分钟</option>
-                <option value="10m">10 分钟</option>
-                <option value="30m">30 分钟</option>
-                <option value="1h">1 小时</option>
+                <option value="5m">{t('merge.5m')}</option>
+                <option value="10m">{t('merge.10m')}</option>
+                <option value="30m">{t('merge.30m')}</option>
+                <option value="1h">{t('merge.1h')}</option>
               </select>
             </div>
 
             <!-- Batch Limit -->
             <div>
-              <label for="mergeBatch" class="input-label">批量限制</label>
+              <label for="mergeBatch" class="input-label">{t('merge.batchLimitLabel')}</label>
               <input
                 id="mergeBatch"
                 type="number"
@@ -434,7 +434,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
               <select id="autoRefresh" class="input" bind:value={autoRefresh} onchange={handleAutoRefreshChange}>
                 <option value="30s">{t('settings.every30s')}</option>
                 <option value="60s">{t('settings.every60s')}</option>
-                <option value="120s">2 分钟</option>
+                <option value="120s">{t('settings.every2m')}</option>
                 <option value="off">{t('settings.off')}</option>
               </select>
             </div>
