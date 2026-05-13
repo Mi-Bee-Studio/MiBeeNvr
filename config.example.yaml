@@ -33,6 +33,19 @@ cameras: []
 #     encoding: "jpeg"
 #     url: "http://192.168.1.101/capture"
 #     enabled: true
+#   - id: "xiaomi-cam"
+#     name: "Xiaomi Camera"
+#     protocol: "xiaomi"
+#     encoding: "h264"
+#     did: "xiaomi_device_id"
+#     vendor: "cs2"
+#     enabled: true
+# Xiaomi cloud account settings (required for xiaomi cameras)
+# xiaomi:
+#   user_id: ""    # Populated after first login
+#   token: ""      # Xiaomi passToken (obtained via /api/xiaomi/auth)
+#   region: "cn"   # Region: cn, sg, de, etc.
+
 
 cleanup:
   retention_days: 30
