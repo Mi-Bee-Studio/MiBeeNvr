@@ -153,8 +153,8 @@ func (h *Handler) Routes() http.Handler {
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
 			r.Post("/auth", h.handleXiaomiAuth)
-			r.Post("/auth/captcha", h.handleXiaomiCaptcha)
-			r.Post("/auth/verify", h.handleXiaomiVerify)
+			r.Post("/captcha", h.handleXiaomiCaptcha)
+			r.Post("/verify", h.handleXiaomiVerify)
 			r.Get("/devices", h.handleXiaomiDevices)
 		})
 	})

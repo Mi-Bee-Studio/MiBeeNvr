@@ -2386,7 +2386,7 @@ func TestXiaomiCaptchaRequiresFields(t *testing.T) {
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
 	body := strings.NewReader(`{}`)
-	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/captcha", body, "", "")
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/captcha", body, "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
@@ -2397,6 +2397,6 @@ func TestXiaomiVerifyRequiresFields(t *testing.T) {
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
 	body := strings.NewReader(`{}`)
-	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/verify", body, "", "")
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/verify", body, "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
