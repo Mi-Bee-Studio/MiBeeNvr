@@ -3,23 +3,15 @@
   import { getDashboardCameras, getCredentials } from '$lib/api';
   import type { Camera } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
+  import VideoPlayer from '../components/VideoPlayer.svelte';
   import { formatDate } from '$lib/format';
-  import { createHlsConfig } from '$lib/hls-config';
-  import { setupHlsErrorHandling, checkStreamAvailable } from '$lib/hls-errors';
-  import type { StreamState } from '$lib/hls-errors';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
   let expandedCameraId = $state<string | null>(null);
-
-  let videoEls: Record<string, HTMLVideoElement> = {};
-  let hlsInstances: Record<string, any> = {};
-  let playerErrors = $state<Record<string, string>>({});
-  let playerReady = $state<Record<string, boolean>>({});
-  let streamStates = $state<Record<string, StreamState>>({});
 
   let ptzOpenIndex = $state(-1);
 
@@ -174,87 +166,6 @@
     delete snapshotTransientErrors[cameraId];
   }
 
-  // --- HLS player ---
-
-  function updateStreamState(cameraId: string, state: StreamState) {
-    streamStates[cameraId] = state;
-  }
-
-  function fallbackToSnapshot(cameraId: string) {
-    const hls = hlsInstances[cameraId];
-    if (hls) {
-      hls.destroy();
-      delete hlsInstances[cameraId];
-    }
-    delete playerErrors[cameraId];
-    delete playerReady[cameraId];
-    updateStreamState(cameraId, 'snapshot');
-    startSnapshotRefresh(cameraId);
-  }
-
-  function initPlayer(cameraId: string) {
-    const videoEl = videoEls[cameraId];
-    if (!videoEl) return;
-
-    const url = getStreamUrl(cameraId);
-
-    // Check if stream endpoint is available (not 429)
-    checkStreamAvailable(url).then((available) => {
-      if (!available) {
-        updateStreamState(cameraId, 'snapshot');
-        startSnapshotRefresh(cameraId);
-        return;
-      }
-
-      import('hls.js').then((HlsModule) => {
-        const Hls = HlsModule.default;
-        if (!Hls.isSupported()) {
-          playerErrors[cameraId] = 'HLS not supported';
-          return;
-        }
-
-        const existing = hlsInstances[cameraId];
-        if (existing) {
-          existing.destroy();
-        }
-
-        const hls = new Hls(createHlsConfig());
-        hlsInstances[cameraId] = hls;
-        updateStreamState(cameraId, 'buffering');
-
-        setupHlsErrorHandling(hls, Hls, {
-          cameraId,
-          maxRetries: 3,
-          retryDelays: [2000, 4000, 8000],
-          onStateChange: updateStreamState,
-          onFallbackToSnapshot: fallbackToSnapshot,
-        });
-
-        hls.loadSource(url);
-        hls.attachMedia(videoEl);
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoEl.play().catch(() => {});
-          playerReady[cameraId] = true;
-          delete playerErrors[cameraId];
-        });
-      }).catch(() => {
-        playerErrors[cameraId] = 'Failed to load player';
-        updateStreamState(cameraId, 'error');
-      });
-    });
-  }
-
-  function destroyPlayer(cameraId: string) {
-    const hls = hlsInstances[cameraId];
-    if (hls) {
-      hls.destroy();
-      delete hlsInstances[cameraId];
-    }
-    delete playerErrors[cameraId];
-    delete playerReady[cameraId];
-  }
-
   // --- Expand / shrink ---
 
   function expandToHls(cameraId: string) {
@@ -321,9 +232,6 @@
   });
 
   onDestroy(() => {
-    for (const id of Object.keys(hlsInstances)) {
-      destroyPlayer(id);
-    }
     for (const id of Object.keys(snapshotIntervals)) {
       stopSnapshotRefresh(id);
     }
@@ -333,7 +241,7 @@
 
   let prevVisibleIds: Set<string> = new Set();
 
-  // React to camera list and mode changes
+  // React to camera list changes — init/teardown snapshot cameras
   $effect(() => {
     const _cameras = cameras;
     const _loading = loading;
@@ -341,23 +249,19 @@
 
     const visibleIds = new Set(_cameras.map(c => c.id));
 
-    // Cleanup cameras that were removed (in previous but not in current)
+    // Cleanup snapshot cameras that were removed
     for (const id of prevVisibleIds) {
       if (!visibleIds.has(id)) {
         stopSnapshotRefresh(id);
-        destroyPlayer(id);
-        delete streamStates[id];
       }
     }
 
-    // Init cameras that were added (in current but not in previous)
+    // Init snapshot cameras that were added
     for (const cam of _cameras) {
       if (prevVisibleIds.has(cam.id)) continue;
 
       const mode = getCameraMode(cam);
-      if (mode === 'hls') {
-        setTimeout(() => initPlayer(cam.id), 50);
-      } else if (mode === 'snapshot') {
+      if (mode === 'snapshot') {
         startSnapshotRefresh(cam.id);
       }
     }
@@ -446,13 +350,12 @@
       <div
         class="grid gap-2 sm:gap-3"
         style={getGridStyle(cameras.length)}
+        onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
+        onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
         {#each cameras as camera, index}
           {@const status = getStatusBadge(camera)}
           {@const mode = getCameraMode(camera)}
-          {@const hasPlayerError = playerErrors[camera.id]}
-          {@const isPlayerReady = playerReady[camera.id]}
-          {@const isExpanded = expandedCameraId === camera.id}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
@@ -503,76 +406,13 @@
               </div>
 
             {:else if mode === 'hls'}
-              <!-- HLS Player -->
-              <!-- svelte-ignore binding_property_non_reactive -->
-              <video
-                bind:this={videoEls[camera.id]}
-                class="w-full h-full object-contain"
-                autoplay
-                muted
-                playsinline
-              >
-              </video>
-
-              <!-- Loading overlay -->
-              {#if !isPlayerReady && !hasPlayerError}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <div class="flex flex-col items-center gap-2">
-                    <Loader2 size={24} class="text-white animate-spin" />
-                    <span class="text-white/70 text-xs">{t('live.loading')}</span>
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Error overlay -->
-              {#if hasPlayerError}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/60">
-                  <div class="flex flex-col items-center gap-2">
-                    <AlertCircle size={24} class="text-red-400" />
-                    <span class="text-white/70 text-xs">{hasPlayerError}</span>
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Stream state indicator -->
-              {@const state = streamStates[camera.id]}
-              {#if state === 'playing'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-green-500 rounded-full" title={t('dashboard.live')}></span>
-              {:else if state === 'buffering'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-yellow-500 rounded-full animate-pulse" title={t('dashboard.buffering')}></span>
-              {:else if state === 'error'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-red-500 rounded-full" title={t('dashboard.errorState')}></span>
-              {:else if state === 'snapshot'}
-                <span class="absolute top-2 left-2 w-2 h-2 bg-gray-400 rounded-full" title={t('dashboard.snapshotMode')}></span>
-              {/if}
-              <!-- Camera name + status overlay -->
-              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
-                <div class="flex items-center gap-2">
-                  <span class="badge {status.class} text-[10px] px-1.5 py-0.5">{status.label}</span>
-                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
-                </div>
-              </div>
-
-              <!-- Control buttons (top-right) -->
-              {#if isExpanded}
-                <!-- Shrink / back to grid button -->
-                <button
-                  onclick={(e: MouseEvent) => { e.stopPropagation(); shrinkToGrid(); }}
-                  class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all"
-                  title={t('dashboard.backToGrid')}
-                >
-                  <Minimize size={16} />
-                </button>
-              {:else}
-                <!-- Expand button for grid HLS cameras -->
-                <button
-                  onclick={(e: MouseEvent) => { e.stopPropagation(); expandToHls(camera.id); }}
-                  class="absolute top-2 right-2 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all opacity-0 group-hover:opacity-100"
-                  title={t('dashboard.fullscreen')}
-                >
-                  <Maximize size={16} />
-                </button>
-              {/if}
+              <VideoPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                streamUrl={getStreamUrl(camera.id)}
+                cameraProtocol={camera.protocol}
+                expanded={expandedCameraId === camera.id}
+              />
 
             {:else}
               <!-- Unsupported protocol (no snapshot, no HLS) -->
