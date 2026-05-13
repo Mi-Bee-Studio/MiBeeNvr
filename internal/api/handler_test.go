@@ -2320,3 +2320,81 @@ func TestHandleStopHLSStream_Active(t *testing.T) {
 	require.Equal(t, "stopped", resp["status"])
 	require.False(t, hlsMgr.IsActive("cam-1"))
 }
+
+// --- Xiaomi cloud endpoint tests ---
+
+func TestXiaomiAuthEmptyCredentials(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
+
+	// Test empty body
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth", strings.NewReader("{}"), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	require.Contains(t, resp["error"], "username and password")
+
+	// Test empty username
+	body := `{"username":"","password":"test"}`
+	rr = doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth", strings.NewReader(body), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// Test empty password
+	body = `{"username":"test","password":""}`
+	rr = doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth", strings.NewReader(body), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestXiaomiDevicesNoAuth(t *testing.T) {
+	t.Helper()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	authMW, _ := middleware.NewAuthMiddleware("admin", "$2a$10$testhash", "")
+	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil)
+
+	// Without auth should return 401
+	req := httptest.NewRequest("GET", "/api/xiaomi/devices", nil)
+	rr := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+func TestXiaomiDevicesEmpty(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
+
+	// With no token configured, should return empty list
+	rr := doRequest(t, h.Routes(), "GET", "/api/xiaomi/devices", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	devices, ok := resp["devices"].([]interface{})
+	require.True(t, ok)
+	require.Empty(t, devices)
+}
+
+func TestXiaomiCaptchaNotImplemented(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/captcha", nil, "", "")
+	require.Equal(t, http.StatusNotImplemented, rr.Code)
+}
+
+func TestXiaomiVerifyNotImplemented(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/verify", nil, "", "")
+	require.Equal(t, http.StatusNotImplemented, rr.Code)
+}

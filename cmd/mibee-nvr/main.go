@@ -33,6 +33,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	_ "github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var (

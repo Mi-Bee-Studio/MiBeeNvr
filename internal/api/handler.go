@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var logger = slog.Default().With("component", "api")
@@ -147,6 +149,13 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		// Xiaomi cloud auth and device discovery
+		r.Route("/api/xiaomi", func(r chi.Router) {
+			r.Post("/auth", h.handleXiaomiAuth)
+			r.Post("/auth/captcha", h.handleXiaomiCaptcha)
+			r.Post("/auth/verify", h.handleXiaomiVerify)
+			r.Get("/devices", h.handleXiaomiDevices)
+		})
 	})
 
 	return r
@@ -1841,6 +1850,117 @@ func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		backups = []string{}
 	}
 	writeJSON(w, http.StatusOK, backups)
+}
+
+// --- Xiaomi cloud endpoints ---
+
+func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	var req xiaomi.AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+
+	region := req.Region
+	if region == "" {
+		region = "cn"
+	}
+
+	session, err := xiaomi.SignIn(req.Username, req.Password, region)
+	if err != nil {
+		// Check if it's a LoginError (captcha/2FA required)
+		var loginErr *xiaomi.LoginError
+		if errors.As(err, &loginErr) {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status":       "verification_required",
+				"captcha":      loginErr.Captcha,
+				"verify_phone": loginErr.VerifyPhone,
+				"verify_email": loginErr.VerifyEmail,
+			})
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
+}
+
+func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotImplemented, "captcha support not implemented")
+}
+
+func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotImplemented, "two-factor verification not implemented")
+}
+
+func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
+	// Get stored token from config
+	if h.config == nil || h.config.Xiaomi.Token == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"devices": []xiaomi.CloudDevice{},
+			"message": "not authenticated",
+		})
+		return
+	}
+
+	session, err := xiaomi.SignInWithToken(h.config.Xiaomi.UserID, h.config.Xiaomi.Token, h.config.Xiaomi.Region)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("session expired: %v", err))
+		return
+	}
+
+	devices, err := xiaomi.GetDeviceList(session)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		return
+	}
+
+	// Filter for camera devices only
+	cameras := make([]xiaomi.CloudDevice, 0, len(devices))
+	for _, d := range devices {
+		if isXiaomiCameraModel(d.Model) {
+			cameras = append(cameras, d)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": cameras,
+	})
+}
+
+// isXiaomiCameraModel returns true if the model string looks like a Xiaomi camera.
+func isXiaomiCameraModel(model string) bool {
+	knownPrefixes := []string{
+		"isa.camera.",
+		"loock.cateye.",
+		"chuangmi.camera.",
+		"mjsxj",       // Mi Sphere, etc.
+		"yj.smart_camera",
+	}
+	for _, prefix := range knownPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".

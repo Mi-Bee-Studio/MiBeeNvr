@@ -182,23 +182,38 @@ export async function getVideoReadyState(page: Page): Promise<number | null> {
  */
 export async function navigateToDashboard(page: Page): Promise<void> {
   await page.goto('/#/dashboard');
-  await page.waitForLoadState('networkidle');
 
-  // Check if redirected to login
-  const url = page.url();
-  if (!url.includes('dashboard')) {
+  // Wait for SPA to render — either dashboard grid or login form
+  // The SPA router runs async after page load, so URL-based checks are unreliable.
+  // Instead, wait for actual DOM content to appear.
+  const loginForm = page.locator('form').filter({ has: page.locator('button[type="submit"]') });
+  const dashboardGrid = page.locator('div.grid');
+
+  // Race: whichever appears first determines our state
+  const loginVisible = await loginForm.isVisible().catch(() => false);
+
+  if (loginVisible) {
     // We're on the login page — fill credentials
-    const usernameInput = page.locator('input[type="text"], input[name="username"]').first();
-    const passwordInput = page.locator('input[type="password"], input[name="password"]').first();
-    const submitButton = page.locator('button[type="submit"]').first();
+    const usernameInput = page.locator('#username');
+    const passwordInput = page.locator('#password');
+    const submitButton = page.locator('button[type="submit"]');
 
     await usernameInput.fill('admin');
     await passwordInput.fill('admin');
     await submitButton.click();
 
-    // Wait for navigation to dashboard
-    await page.waitForURL(/.*dashboard.*/, { timeout: 10000 });
+    // Login redirects to #/recordings — wait for SPA navigation
+    await page.waitForURL(/.*recordings.*/, { timeout: 10000 });
     await page.waitForLoadState('networkidle');
+
+    // Now navigate to dashboard explicitly
+    await page.goto('/#/dashboard');
+    await dashboardGrid.waitFor({ state: 'visible', timeout: 10000 });
+  } else {
+    // Already authenticated — wait for dashboard grid to be visible
+    await dashboardGrid.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {
+      // Dashboard may not have a grid if no cameras — check for login redirect
+    });
   }
 }
 

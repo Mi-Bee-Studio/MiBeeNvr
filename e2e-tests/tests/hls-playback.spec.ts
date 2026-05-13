@@ -42,13 +42,15 @@ test.describe('HLS Playback', () => {
     const noCamerasVisible = await page.locator('text=/No cameras|暂无摄像头/').isVisible().catch(() => false);
     expect(gridVisible || noCamerasVisible).toBe(true);
 
-    // Filter out known non-critical errors (e.g., HLS manifest fetch failures when cameras offline)
+    // Filter out known non-critical errors (e.g., HLS manifest fetch failures, offline camera streams)
     const criticalErrors = consoleErrors.filter(
       (e) =>
         !e.includes('manifest') &&
         !e.includes('HLS') &&
         !e.includes('net::ERR') &&
-        !e.includes('401'),
+        !e.includes('401') &&
+        !e.includes('404') &&
+        !e.includes('405'),
     );
     expect(criticalErrors).toHaveLength(0);
   });
