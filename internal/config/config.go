@@ -104,8 +104,9 @@ type ObservabilityConfig struct {
 }
 
 type HLSConfig struct {
-	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 40)
+	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
 	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
+	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -239,6 +240,10 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
 		}
 	}
+	// Validate hls.segment_count
+	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
+		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)
+	}
 	return nil
 }
 
@@ -300,10 +305,13 @@ func (cfg *Config) applyDefaults() {
 	// Version
 	// HLS defaults
 	if cfg.HLS.WriteBufferSize <= 0 {
-		cfg.HLS.WriteBufferSize = 40
+		cfg.HLS.WriteBufferSize = 100
 	}
 	if cfg.HLS.SegmentMaxSizeMB <= 0 {
 		cfg.HLS.SegmentMaxSizeMB = 10
+	}
+	if cfg.HLS.SegmentCount <= 0 {
+		cfg.HLS.SegmentCount = 7
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"

@@ -256,3 +256,35 @@ func TestResolveMergeConfig_AllFieldsOverridden(t *testing.T) {
 	require.Equal(t, "2m", result.MinSegmentAge)
 	require.Equal(t, 2, result.MinSegmentsToMerge)
 }
+
+func TestHLSSegmentCountDefault(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 7, cfg.HLS.SegmentCount)
+	require.Equal(t, 100, cfg.HLS.WriteBufferSize)
+}
+
+func TestHLSSegmentCountValidation_Valid(t *testing.T) {
+	for _, sc := range []int{3, 5, 7, 10} {
+		cfg := &Config{HLS: HLSConfig{SegmentCount: sc}}
+		cfg.applyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "segment_count=%d should be valid", sc)
+	}
+}
+
+func TestHLSSegmentCountValidation_TooLow(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 2}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.segment_count")
+}
+
+func TestHLSSegmentCountValidation_TooHigh(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 11}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.segment_count")
+}
