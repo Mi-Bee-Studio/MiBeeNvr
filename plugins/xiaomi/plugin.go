@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+//
+// Xiaomi camera plugin registration for MiBee NVR.
+// Licensed under the MIT License.
+
 package xiaomi
 
 import (
