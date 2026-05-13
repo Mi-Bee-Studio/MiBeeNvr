@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice, XiaomiAuthResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -94,6 +94,13 @@
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
   let xiaomiLoggedIn = $state(false);
   let xiaomiAddingDid = $state<string | null>(null);
+  let xiaomiCaptchaImage = $state<string>('');  // base64 data URL
+  let xiaomiCaptchaSessionId = $state('');
+  let xiaomiCaptchaCode = $state('');
+  let xiaomiVerifySessionId = $state('');
+  let xiaomiVerifyTicket = $state('');
+  let xiaomiVerifyTarget = $state('');  // masked phone or email
+  let xiaomiVerifyType = $state<'phone' | 'email' | ''>('');
   // Merge config (per-camera)
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
@@ -368,12 +375,79 @@
   async function handleXiaomiLogin() {
     xiaomiLoading = true;
     xiaomiError = '';
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
     try {
-      await xiaomiAuth(xiaomiUsername, xiaomiPassword);
-      xiaomiLoggedIn = true;
-      xiaomiDeviceList = await xiaomiDevices();
+      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword);
+      await handleAuthResult(result);
     } catch (e: any) {
       xiaomiError = e.message || t('xiaomi.authFailed');
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  async function handleAuthResult(result: XiaomiAuthResponse) {
+    if (result.status === 'verification_required') {
+      if (result.captcha && result.session_id) {
+        // Show captcha image
+        xiaomiCaptchaImage = result.captcha.startsWith('data:') ? result.captcha : `data:image/png;base64,${result.captcha}`;
+        xiaomiCaptchaSessionId = result.session_id;
+        xiaomiCaptchaCode = '';
+      } else if (result.verify_phone && result.session_id) {
+        xiaomiVerifySessionId = result.session_id;
+        xiaomiVerifyTarget = result.verify_phone;
+        xiaomiVerifyType = 'phone';
+        xiaomiVerifyTicket = '';
+      } else if (result.verify_email && result.session_id) {
+        xiaomiVerifySessionId = result.session_id;
+        xiaomiVerifyTarget = result.verify_email;
+        xiaomiVerifyType = 'email';
+        xiaomiVerifyTicket = '';
+      } else {
+        xiaomiError = t('xiaomi.verificationRequired');
+      }
+      return;
+    }
+    // Success
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
+    xiaomiLoggedIn = true;
+    xiaomiDeviceList = await xiaomiDevices();
+  }
+
+  async function handleXiaomiCaptcha() {
+    if (!xiaomiCaptchaSessionId || !xiaomiCaptchaCode.trim()) return;
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
+      await handleAuthResult(result);
+    } catch (e: any) {
+      xiaomiError = e.message || t('xiaomi.authFailed');
+      // Reset captcha code for retry, keep image
+      xiaomiCaptchaCode = '';
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  async function handleXiaomiVerify() {
+    if (!xiaomiVerifySessionId || !xiaomiVerifyTicket.trim()) return;
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
+      await handleAuthResult(result);
+    } catch (e: any) {
+      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiVerifyTicket = '';
     } finally {
       xiaomiLoading = false;
     }
@@ -562,7 +636,70 @@
                     {xiaomiLoading ? t('xiaomi.signingIn') : t('xiaomi.signIn')}
                   </button>
                 </form>
-              {:else}
+
+                <!-- Captcha form (shown when captcha required) -->
+                {#if xiaomiCaptchaImage}
+                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
+                    <p class="text-sm font-medium th-text-primary mb-3">{t('xiaomi.captchaTitle')}</p>
+                    <div class="flex items-start gap-4">
+                      <img src={xiaomiCaptchaImage} alt="Captcha" class="border th-border rounded h-12" />
+                      <div class="flex-1 space-y-2">
+                        <input
+                          type="text"
+                          class="input py-1 text-sm"
+                          bind:value={xiaomiCaptchaCode}
+                          placeholder={t('xiaomi.captchaPlaceholder')}
+                          disabled={xiaomiLoading}
+                        />
+                        <button
+                          type="button"
+                          on:click={handleXiaomiCaptcha}
+                          class="btn btn-primary btn-sm"
+                          disabled={xiaomiLoading || !xiaomiCaptchaCode.trim()}
+                        >
+                          {#if xiaomiLoading}
+                            <span class="spinner mr-1"></span>
+                          {/if}
+                          {t('xiaomi.submitCaptcha')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Verify form (shown when phone/email verification required) -->
+                {#if xiaomiVerifyType}
+                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
+                    <p class="text-sm font-medium th-text-primary mb-1">{t('xiaomi.verifyTitle')}</p>
+                    <p class="text-xs th-text-secondary mb-3">
+                      {#if xiaomiVerifyType === 'phone'}
+                        {t('xiaomi.verifyPhoneHint').replace('{phone}', xiaomiVerifyTarget)}
+                      {:else}
+                        {t('xiaomi.verifyEmailHint').replace('{email}', xiaomiVerifyTarget)}
+                      {/if}
+                    </p>
+                    <div class="flex gap-3">
+                      <input
+                        type="text"
+                        class="input py-1 text-sm flex-1"
+                        bind:value={xiaomiVerifyTicket}
+                        placeholder={t('xiaomi.verifyCodePlaceholder')}
+                        disabled={xiaomiLoading}
+                      />
+                      <button
+                        type="button"
+                        on:click={handleXiaomiVerify}
+                        class="btn btn-primary btn-sm"
+                        disabled={xiaomiLoading || !xiaomiVerifyTicket.trim()}
+                      >
+                        {#if xiaomiLoading}
+                          <span class="spinner mr-1"></span>
+                        {/if}
+                        {t('xiaomi.submitVerify')}
+                      </button>
+                    </div>
+                  </div>
+                {/if}
                 <!-- Device list -->
                 <div class="flex items-center justify-between mb-3">
                   <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>

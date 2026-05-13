@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1870,17 +1871,26 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		region = "cn"
 	}
 
-	session, err := xiaomi.SignIn(req.Username, req.Password, region)
+	session, captchaSessionID, err := xiaomi.SignInWithCaptcha(req.Username, req.Password, region)
 	if err != nil {
-		// Check if it's a LoginError (captcha/2FA required)
 		var loginErr *xiaomi.LoginError
 		if errors.As(err, &loginErr) {
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":       "verification_required",
-				"captcha":      loginErr.Captcha,
-				"verify_phone": loginErr.VerifyPhone,
-				"verify_email": loginErr.VerifyEmail,
-			})
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(loginErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(loginErr.Captcha)
+			}
+			if loginErr.VerifyPhone != "" {
+				resp["verify_phone"] = loginErr.VerifyPhone
+			}
+			if loginErr.VerifyEmail != "" {
+				resp["verify_email"] = loginErr.VerifyEmail
+			}
+			if captchaSessionID != "" {
+				resp["session_id"] = captchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
 			return
 		}
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
@@ -1904,11 +1914,115 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "captcha support not implemented")
+	var req struct {
+		SessionID   string `json:"session_id"`
+		CaptchaCode string `json:"captcha_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" || req.CaptchaCode == "" {
+		writeError(w, http.StatusBadRequest, "session_id and captcha_code are required")
+		return
+	}
+
+	session, err := xiaomi.LoginWithCaptcha(req.SessionID, req.CaptchaCode)
+	if err != nil {
+		var captchaSessionErr *xiaomi.CaptchaSessionError
+		if errors.As(err, &captchaSessionErr) {
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(captchaSessionErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
+			}
+			if captchaSessionErr.VerifyPhone != "" {
+				resp["verify_phone"] = captchaSessionErr.VerifyPhone
+			}
+			if captchaSessionErr.VerifyEmail != "" {
+				resp["verify_email"] = captchaSessionErr.VerifyEmail
+			}
+			if captchaSessionErr.CaptchaSessionID != "" {
+				resp["session_id"] = captchaSessionErr.CaptchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
 }
 
 func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "two-factor verification not implemented")
+	var req struct {
+		SessionID string `json:"session_id"`
+		Ticket    string `json:"ticket"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" || req.Ticket == "" {
+		writeError(w, http.StatusBadRequest, "session_id and ticket are required")
+		return
+	}
+
+	session, err := xiaomi.LoginWithVerify(req.SessionID, req.Ticket)
+	if err != nil {
+		var captchaSessionErr *xiaomi.CaptchaSessionError
+		if errors.As(err, &captchaSessionErr) {
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(captchaSessionErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
+			}
+			if captchaSessionErr.VerifyPhone != "" {
+				resp["verify_phone"] = captchaSessionErr.VerifyPhone
+			}
+			if captchaSessionErr.VerifyEmail != "" {
+				resp["verify_email"] = captchaSessionErr.VerifyEmail
+			}
+			if captchaSessionErr.CaptchaSessionID != "" {
+				resp["session_id"] = captchaSessionErr.CaptchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
 }
 
 func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
@@ -1947,20 +2061,11 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 // isXiaomiCameraModel returns true if the model string looks like a Xiaomi camera.
+// Uses Contains matching like go2rtc: .camera., .cateye., .feeder.
 func isXiaomiCameraModel(model string) bool {
-	knownPrefixes := []string{
-		"isa.camera.",
-		"loock.cateye.",
-		"chuangmi.camera.",
-		"mjsxj",       // Mi Sphere, etc.
-		"yj.smart_camera",
-	}
-	for _, prefix := range knownPrefixes {
-		if strings.HasPrefix(model, prefix) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(model, ".camera.") ||
+		strings.Contains(model, ".cateye.") ||
+		strings.Contains(model, ".feeder.")
 }
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".

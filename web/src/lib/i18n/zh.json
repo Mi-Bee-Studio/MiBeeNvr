@@ -413,5 +413,14 @@
   "xiaomi.online": "在线",
   "xiaomi.offline": "离线",
   "xiaomi.signOut": "退出",
-  "xiaomi.authFailed": "认证失败"
+  "xiaomi.authFailed": "认证失败",
+  "xiaomi.verificationRequired": "需要验证 — 请在下方完成验证",
+  "xiaomi.captchaTitle": "输入验证码",
+  "xiaomi.captchaPlaceholder": "请输入图中字符",
+  "xiaomi.submitCaptcha": "提交",
+  "xiaomi.verifyTitle": "需要验证",
+  "xiaomi.verifyPhoneHint": "请输入发送至 {phone} 的验证码",
+  "xiaomi.verifyEmailHint": "请输入发送至 {email} 的验证码",
+  "xiaomi.verifyCodePlaceholder": "验证码",
+  "xiaomi.submitVerify": "验证"
 }

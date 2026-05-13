@@ -24,10 +24,36 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
-
 var cloudLogger = slog.Default().With("component", "xiaomi-cloud")
+
+// pendingClouds stores Cloud objects that are awaiting captcha/verify continuation.
+var (
+	pendingClouds   = make(map[string]*Cloud)
+	pendingCloudsMu sync.Mutex
+)
+
+func storePendingCloud(c *Cloud) string {
+	id := randString(16)
+	pendingCloudsMu.Lock()
+	pendingClouds[id] = c
+	pendingCloudsMu.Unlock()
+	return id
+}
+
+func loadPendingCloud(id string) *Cloud {
+	pendingCloudsMu.Lock()
+	defer pendingCloudsMu.Unlock()
+	return pendingClouds[id]
+}
+
+func deletePendingCloud(id string) {
+	pendingCloudsMu.Lock()
+	defer pendingCloudsMu.Unlock()
+	delete(pendingClouds, id)
+}
 
 // CloudSession holds authenticated Xiaomi cloud session data.
 type CloudSession struct {
@@ -108,6 +134,42 @@ func SignIn(username, password, region string) (*CloudSession, error) {
 	}, nil
 }
 
+// SignInWithCaptcha handles the initial sign-in that may require captcha.
+// Returns (session, captchaSessionID, error). If captchaSessionID != "", captcha/2FA is required.
+func SignInWithCaptcha(username, password, region string) (session *CloudSession, captchaSessionID string, err error) {
+	if username == "" || password == "" {
+		return nil, "", errors.New("xiaomi: username and password are required")
+	}
+	if region == "" {
+		region = "cn"
+	}
+
+	c := &Cloud{
+		client: &http.Client{Timeout: 15 * time.Second},
+		sid:    "xiaomiio",
+		region: region,
+	}
+
+	if err := c.Login(username, password); err != nil {
+		var loginErr *LoginError
+		if errors.As(err, &loginErr) {
+			sid := storePendingCloud(c)
+			return nil, sid, loginErr
+		}
+		return nil, "", err
+	}
+
+	userID, passToken := c.UserToken()
+	return &CloudSession{
+		UserID:    userID,
+		PassToken: passToken,
+		Region:    region,
+		client:    c.client,
+		ssecurity: c.ssecurity,
+		cookies:   c.cookies,
+	}, "", nil
+}
+
 // SignInWithToken re-authenticates using a stored passToken.
 func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if userID == "" || passToken == "" {
@@ -132,6 +194,82 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 		UserID:    actualUserID,
 		PassToken: actualPassToken,
 		Region:    region,
+		client:    c.client,
+		ssecurity: c.ssecurity,
+		cookies:   c.cookies,
+	}, nil
+}
+
+// CaptchaSessionError wraps a LoginError with a new session ID for continued flow.
+type CaptchaSessionError struct {
+	*LoginError
+	CaptchaSessionID string
+}
+
+func (e *CaptchaSessionError) Error() string {
+	return e.LoginError.Error()
+}
+
+func (e *CaptchaSessionError) Unwrap() error {
+	return e.LoginError
+}
+
+// LoginWithCaptcha submits a captcha code to continue the login flow.
+func LoginWithCaptcha(cloudID, captchaCode string) (*CloudSession, error) {
+	c := loadPendingCloud(cloudID)
+	if c == nil {
+		return nil, errors.New("xiaomi: invalid or expired captcha session")
+	}
+	defer deletePendingCloud(cloudID)
+
+	if err := c.loginWithCaptcha(captchaCode); err != nil {
+		var loginErr *LoginError
+		if errors.As(err, &loginErr) {
+			newID := storePendingCloud(c)
+			return nil, &CaptchaSessionError{
+				LoginError:        loginErr,
+				CaptchaSessionID: newID,
+			}
+		}
+		return nil, err
+	}
+
+	userID, passToken := c.UserToken()
+	return &CloudSession{
+		UserID:    userID,
+		PassToken: passToken,
+		Region:    c.region,
+		client:    c.client,
+		ssecurity: c.ssecurity,
+		cookies:   c.cookies,
+	}, nil
+}
+
+// LoginWithVerify submits a verification ticket (SMS/email code) to continue login.
+func LoginWithVerify(cloudID, ticket string) (*CloudSession, error) {
+	c := loadPendingCloud(cloudID)
+	if c == nil {
+		return nil, errors.New("xiaomi: invalid or expired verification session")
+	}
+	defer deletePendingCloud(cloudID)
+
+	if err := c.loginWithVerify(ticket); err != nil {
+		var loginErr *LoginError
+		if errors.As(err, &loginErr) {
+			newID := storePendingCloud(c)
+			return nil, &CaptchaSessionError{
+				LoginError:        loginErr,
+				CaptchaSessionID: newID,
+			}
+		}
+		return nil, err
+	}
+
+	userID, passToken := c.UserToken()
+	return &CloudSession{
+		UserID:    userID,
+		PassToken: passToken,
+		Region:    c.region,
 		client:    c.client,
 		ssecurity: c.ssecurity,
 		cookies:   c.cookies,
@@ -537,6 +675,52 @@ func (c *Cloud) finishAuth(location string) error {
 	c.cookies = fmt.Sprintf("userId=%s; cUserId=%s; serviceToken=%s", c.userID, cUserID, serviceToken)
 
 	return nil
+}
+
+func (c *Cloud) loginWithCaptcha(captcha string) error {
+	if c.auth == nil || c.auth["ick"] == "" {
+		return errors.New("xiaomi: no pending captcha session")
+	}
+
+	c.auth["captcha_code"] = captcha
+
+	// check if captcha after verify (2FA flow)
+	if c.auth["flag"] != "" {
+		return c.sendTicket()
+	}
+
+	return c.Login(c.auth["username"], c.auth["password"])
+}
+
+func (c *Cloud) loginWithVerify(ticket string) error {
+	if c.auth == nil || c.auth["flag"] == "" {
+		return errors.New("xiaomi: no pending verification session")
+	}
+
+	req := cloudRequest{
+		Method:     "POST",
+		URL:        "https://account.xiaomi.com/identity/auth/verify" + c.verifyName(),
+		RawParams:  "_flag=" + c.auth["flag"] + "&ticket=" + ticket + "&trust=false&_json=true",
+		RawCookies: "identity_session=" + c.auth["identity_session"],
+	}.Encode()
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	var v1 struct {
+		Location string `json:"location"`
+	}
+	body, err := readLoginResponse(res.Body, &v1)
+	if err != nil {
+		return err
+	}
+	if v1.Location == "" {
+		return fmt.Errorf("xiaomi: verification failed: %s", body)
+	}
+
+	return c.finishAuth(v1.Location)
 }
 
 // --- Internal helpers ---

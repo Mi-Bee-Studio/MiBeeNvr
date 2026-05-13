@@ -2379,22 +2379,24 @@ func TestXiaomiDevicesEmpty(t *testing.T) {
 	require.Empty(t, devices)
 }
 
-func TestXiaomiCaptchaNotImplemented(t *testing.T) {
+func TestXiaomiCaptchaRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
-	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/captcha", nil, "", "")
-	require.Equal(t, http.StatusNotImplemented, rr.Code)
+	body := strings.NewReader(`{}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/captcha", body, "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
-func TestXiaomiVerifyNotImplemented(t *testing.T) {
+func TestXiaomiVerifyRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil)
 
-	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/verify", nil, "", "")
-	require.Equal(t, http.StatusNotImplemented, rr.Code)
+	body := strings.NewReader(`{}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth/verify", body, "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }

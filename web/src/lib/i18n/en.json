@@ -413,5 +413,14 @@
   "xiaomi.online": "Online",
   "xiaomi.offline": "Offline",
   "xiaomi.signOut": "Sign Out",
-  "xiaomi.authFailed": "Authentication failed"
+  "xiaomi.authFailed": "Authentication failed",
+  "xiaomi.verificationRequired": "Verification required — please complete verification below",
+  "xiaomi.captchaTitle": "Enter Captcha",
+  "xiaomi.captchaPlaceholder": "Enter the characters shown",
+  "xiaomi.submitCaptcha": "Submit",
+  "xiaomi.verifyTitle": "Verification Required",
+  "xiaomi.verifyPhoneHint": "Enter the code sent to {phone}",
+  "xiaomi.verifyEmailHint": "Enter the code sent to {email}",
+  "xiaomi.verifyCodePlaceholder": "Verification code",
+  "xiaomi.submitVerify": "Verify"
 }
