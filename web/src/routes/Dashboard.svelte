@@ -359,7 +359,8 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="relative bg-black rounded-lg overflow-hidden group {getCellClass(camera, index, cameras.length)}"
+            class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)}"
+            class:cell-expanded={expandedCameraId === camera.id}
             style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
             onclick={() => handleCellClick(camera, index)}
             ondblclick={() => handleCellDblClick(camera)}
@@ -457,3 +458,32 @@
 
   </main>
 </div>
+
+<style>
+  /* Grid cell expand/shrink transitions */
+  .camera-grid-cell {
+    transition: opacity var(--duration-normal) var(--ease-out),
+                transform var(--duration-normal) var(--ease-out);
+  }
+
+  /* Subtle hover lift on grid cells */
+  .camera-grid-cell:not(.hidden):hover {
+    opacity: 0.92;
+  }
+
+  /* Fade-in + scale-up when a cell expands */
+  .cell-expanded {
+    animation: cell-expand var(--duration-normal) var(--ease-out);
+  }
+
+  @keyframes cell-expand {
+    from {
+      opacity: 0.3;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+</style>
