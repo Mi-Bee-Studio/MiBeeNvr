@@ -34,8 +34,6 @@
   let zombieCleanup: (() => void) | null = null;
   let visibilityCleanup: (() => void) | null = null;
 
-  const dispatch = $effect.root(() => {});
-
   function dispatchStateChange(state: StreamState | 'loading') {
     // Svelte 5 custom events via bubbling — parent reads detail from DOM event
     const event = new CustomEvent('statechange', {
