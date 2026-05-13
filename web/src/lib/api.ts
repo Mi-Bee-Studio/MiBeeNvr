@@ -630,7 +630,16 @@ export interface XiaomiDevice {
   isOnline: boolean;
 }
 
-export async function xiaomiAuth(username: string, password: string, region?: string): Promise<{ user_id: string }> {
+export interface XiaomiAuthResponse {
+  user_id?: string;
+  status?: string;
+  captcha?: string;       // base64-encoded image
+  verify_phone?: string;  // masked phone number
+  verify_email?: string;  // masked email
+  session_id?: string;    // for captcha/verify continuation
+}
+
+export async function xiaomiAuth(username: string, password: string, region?: string): Promise<XiaomiAuthResponse> {
   return apiRequest('/xiaomi/auth', {
     method: 'POST',
     body: JSON.stringify({ username, password, region: region || 'cn' }),
@@ -639,4 +648,18 @@ export async function xiaomiAuth(username: string, password: string, region?: st
 
 export async function xiaomiDevices(): Promise<XiaomiDevice[]> {
   return apiRequest('/xiaomi/devices');
+}
+
+export async function xiaomiCaptcha(sessionId: string, captchaCode: string): Promise<XiaomiAuthResponse> {
+  return apiRequest('/xiaomi/captcha', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, captcha_code: captchaCode }),
+  });
+}
+
+export async function xiaomiVerify(sessionId: string, ticket: string): Promise<XiaomiAuthResponse> {
+  return apiRequest('/xiaomi/verify', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, ticket }),
+  });
 }
