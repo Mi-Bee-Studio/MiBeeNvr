@@ -620,3 +620,23 @@ export async function getMergeStatus(): Promise<MergeStatus> {
 export async function getMergePending(): Promise<MergePending> {
   return apiRequest<MergePending>('/merge/pending');
 }
+
+// Xiaomi API
+export interface XiaomiDevice {
+  did: string;
+  name: string;
+  model: string;
+  ip: string;
+  isOnline: boolean;
+}
+
+export async function xiaomiAuth(username: string, password: string, region?: string): Promise<{ user_id: string }> {
+  return apiRequest('/xiaomi/auth', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, region: region || 'cn' }),
+  });
+}
+
+export async function xiaomiDevices(): Promise<XiaomiDevice[]> {
+  return apiRequest('/xiaomi/devices');
+}

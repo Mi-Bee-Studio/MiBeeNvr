@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -85,6 +85,15 @@
   let onvifUsername = $state('');
   let onvifPassword = $state('');
 
+  // Xiaomi discovery
+  let xiaomiExpanded = $state(false);
+  let xiaomiUsername = $state('');
+  let xiaomiPassword = $state('');
+  let xiaomiLoading = $state(false);
+  let xiaomiError = $state('');
+  let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
+  let xiaomiLoggedIn = $state(false);
+  let xiaomiAddingDid = $state<string | null>(null);
   // Merge config (per-camera)
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
@@ -356,6 +365,40 @@
     }
   }
 
+  async function handleXiaomiLogin() {
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      await xiaomiAuth(xiaomiUsername, xiaomiPassword);
+      xiaomiLoggedIn = true;
+      xiaomiDeviceList = await xiaomiDevices();
+    } catch (e: any) {
+      xiaomiError = e.message || 'Authentication failed';
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  async function addXiaomiDevice(device: XiaomiDevice) {
+    xiaomiAddingDid = device.did;
+    try {
+      await createCamera({
+        name: device.name,
+        protocol: 'xiaomi',
+        encoding: 'h264',
+        url: `xiaomi://${device.did}`,
+        enabled: true,
+      });
+      showToast(t('cameras.cameraAdded'), 'success');
+      xiaomiDeviceList = xiaomiDeviceList.filter(d => d.did !== device.did);
+      await loadCameras();
+    } catch (e: any) {
+      showToast(t('cameras.failedAdd'), 'error');
+    } finally {
+      xiaomiAddingDid = null;
+    }
+  }
+
   onMount(() => {
     loadCameras();
   });
@@ -482,6 +525,83 @@
             {/if}
           </div>
         {/if}
+
+        <!-- Xiaomi Device Discovery -->
+        <div class="card p-6 border th-border">
+          <button 
+            class="w-full flex items-center justify-between text-left"
+            on:click={() => xiaomiExpanded = !xiaomiExpanded}
+          >
+            <h3 class="text-lg font-semibold th-text-primary">Xiaomi Device Discovery</h3>
+            <span class="th-text-muted text-sm">{xiaomiExpanded ? '▲' : '▼'}</span>
+          </button>
+
+          {#if xiaomiExpanded}
+            <div class="mt-4">
+              {#if !xiaomiLoggedIn}
+                <!-- Login form -->
+                <form on:submit|preventDefault={handleXiaomiLogin} class="space-y-3">
+                  <p class="text-sm th-text-secondary">Sign in with your Xiaomi account to discover cameras.</p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label class="input-label text-xs">Xiaomi Account</label>
+                      <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder="email or phone" required />
+                    </div>
+                    <div>
+                      <label class="input-label text-xs">Password</label>
+                      <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
+                    </div>
+                  </div>
+                  {#if xiaomiError}
+                    <p class="th-color-danger text-sm">{xiaomiError}</p>
+                  {/if}
+                  <button type="submit" class="btn btn-primary btn-sm" disabled={xiaomiLoading}>
+                    {#if xiaomiLoading}
+                      <span class="spinner mr-1"></span>
+                    {/if}
+                    {xiaomiLoading ? 'Signing in...' : 'Sign In'}
+                  </button>
+                </form>
+              {:else}
+                <!-- Device list -->
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-sm th-text-secondary">{xiaomiDeviceList.length} device(s) found</span>
+                  <button class="btn btn-ghost btn-sm" on:click={async () => { xiaomiDeviceList = await xiaomiDevices(); }}>Refresh</button>
+                </div>
+                {#if xiaomiDeviceList.length === 0}
+                  <p class="th-text-secondary text-sm py-2">No cameras found on your Xiaomi account.</p>
+                {:else}
+                  <div class="space-y-3">
+                    {#each xiaomiDeviceList as device (device.did)}
+                      <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
+                        <div class="min-w-0 flex-1 mr-4">
+                          <div class="font-medium th-text-primary truncate">{device.name}</div>
+                          <div class="text-sm th-text-secondary truncate">{device.model} · {device.ip}</div>
+                          <div class="text-xs mt-0.5 {device.isOnline ? 'th-color-success' : 'th-text-muted'}">
+                            {device.isOnline ? 'Online' : 'Offline'}
+                          </div>
+                        </div>
+                        <button
+                          on:click={() => addXiaomiDevice(device)}
+                          class="btn btn-primary btn-sm shrink-0"
+                          disabled={xiaomiAddingDid === device.did}
+                        >
+                          {#if xiaomiAddingDid === device.did}
+                            <span class="spinner mr-1"></span>
+                          {/if}
+                          {t('onvif.addCamera')}
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="mt-4 flex justify-end">
+                  <button class="btn btn-ghost btn-sm" on:click={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>Sign Out</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
 
         <!-- Add/Edit Form -->
         {#if showForm}
