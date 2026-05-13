@@ -292,25 +292,23 @@ func GetDeviceList(session *CloudSession) ([]CloudDevice, error) {
 	}
 
 	result, err := c.Request(
-		"https://openapi.io.mi.com",
-		"/openapi/device/list",
-		`{"getVirtualModel":false,"getHuamiDevices":0}`,
+		getAPIBaseURL(session.Region),
+		"/v2/home/device_list_page",
+		"{}",
 		nil,
-	)
+)
 	if err != nil {
 		return nil, err
 	}
 
 	var raw struct {
-		List struct {
-			List []CloudDevice `json:"list"`
-		} `json:"list"`
+		List []CloudDevice `json:"list"`
 	}
 	if err := json.Unmarshal(result, &raw); err != nil {
 		return nil, fmt.Errorf("xiaomi: failed to parse device list: %w", err)
 	}
 
-	return raw.List.List, nil
+	return raw.List, nil
 }
 
 // --- Internal cloud client ---
@@ -829,6 +827,16 @@ func findCookie(res *http.Response, name string) string {
 }
 
 // randString generates a random alphanumeric string of the given length.
+
+// getAPIBaseURL returns the Xiaomi API base URL for the given region.
+// Matches go2rtc's GetBaseURL logic.
+func getAPIBaseURL(region string) string {
+	switch region {
+	case "de", "i2", "ru", "sg", "us":
+		return "https://" + region + ".api.io.mi.com/app"
+	}
+	return "https://api.io.mi.com/app"
+}
 func randString(length int) string {
 	const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	result := make([]byte, length)
