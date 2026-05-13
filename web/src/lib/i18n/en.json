@@ -399,5 +399,19 @@
   "cameras.autoDetect": "Auto-detect",
   "cameras.notSet": "Not set",
   "cameras.onvifEndpoint": "(ONVIF Endpoint)",
-  "cameras.passwordSet": "Set"
+  "cameras.passwordSet": "Set",
+  "xiaomi.title": "Xiaomi Device Discovery",
+  "xiaomi.signInHint": "Sign in with your Xiaomi account to discover cameras.",
+  "xiaomi.account": "Xiaomi Account",
+  "xiaomi.accountPlaceholder": "email or phone",
+  "xiaomi.password": "Password",
+  "xiaomi.signIn": "Sign In",
+  "xiaomi.signingIn": "Signing in...",
+  "xiaomi.devicesFound": "{count} device(s) found",
+  "xiaomi.refresh": "Refresh",
+  "xiaomi.noDevices": "No cameras found on your Xiaomi account.",
+  "xiaomi.online": "Online",
+  "xiaomi.offline": "Offline",
+  "xiaomi.signOut": "Sign Out",
+  "xiaomi.authFailed": "Authentication failed"
 }

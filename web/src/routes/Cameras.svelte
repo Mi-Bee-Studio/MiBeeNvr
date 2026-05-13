@@ -373,7 +373,7 @@
       xiaomiLoggedIn = true;
       xiaomiDeviceList = await xiaomiDevices();
     } catch (e: any) {
-      xiaomiError = e.message || 'Authentication failed';
+      xiaomiError = e.message || t('xiaomi.authFailed');
     } finally {
       xiaomiLoading = false;
     }
@@ -532,7 +532,7 @@
             class="w-full flex items-center justify-between text-left"
             on:click={() => xiaomiExpanded = !xiaomiExpanded}
           >
-            <h3 class="text-lg font-semibold th-text-primary">Xiaomi Device Discovery</h3>
+            <h3 class="text-lg font-semibold th-text-primary">{t('xiaomi.title')}</h3>
             <span class="th-text-muted text-sm">{xiaomiExpanded ? '▲' : '▼'}</span>
           </button>
 
@@ -541,14 +541,14 @@
               {#if !xiaomiLoggedIn}
                 <!-- Login form -->
                 <form on:submit|preventDefault={handleXiaomiLogin} class="space-y-3">
-                  <p class="text-sm th-text-secondary">Sign in with your Xiaomi account to discover cameras.</p>
+                  <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label class="input-label text-xs">Xiaomi Account</label>
-                      <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder="email or phone" required />
+                      <label class="input-label text-xs">{t('xiaomi.account')}</label>
+                      <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
                     </div>
                     <div>
-                      <label class="input-label text-xs">Password</label>
+                      <label class="input-label text-xs">{t('xiaomi.password')}</label>
                       <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
                     </div>
                   </div>
@@ -559,17 +559,17 @@
                     {#if xiaomiLoading}
                       <span class="spinner mr-1"></span>
                     {/if}
-                    {xiaomiLoading ? 'Signing in...' : 'Sign In'}
+                    {xiaomiLoading ? t('xiaomi.signingIn') : t('xiaomi.signIn')}
                   </button>
                 </form>
               {:else}
                 <!-- Device list -->
                 <div class="flex items-center justify-between mb-3">
-                  <span class="text-sm th-text-secondary">{xiaomiDeviceList.length} device(s) found</span>
-                  <button class="btn btn-ghost btn-sm" on:click={async () => { xiaomiDeviceList = await xiaomiDevices(); }}>Refresh</button>
+                  <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
+                  <button class="btn btn-ghost btn-sm" on:click={async () => { xiaomiDeviceList = await xiaomiDevices(); }}>{t('xiaomi.refresh')}</button>
                 </div>
                 {#if xiaomiDeviceList.length === 0}
-                  <p class="th-text-secondary text-sm py-2">No cameras found on your Xiaomi account.</p>
+                  <p class="th-text-secondary text-sm py-2">{t('xiaomi.noDevices')}</p>
                 {:else}
                   <div class="space-y-3">
                     {#each xiaomiDeviceList as device (device.did)}
@@ -578,7 +578,7 @@
                           <div class="font-medium th-text-primary truncate">{device.name}</div>
                           <div class="text-sm th-text-secondary truncate">{device.model} · {device.ip}</div>
                           <div class="text-xs mt-0.5 {device.isOnline ? 'th-color-success' : 'th-text-muted'}">
-                            {device.isOnline ? 'Online' : 'Offline'}
+                            {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
                           </div>
                         </div>
                         <button
@@ -596,7 +596,7 @@
                   </div>
                 {/if}
                 <div class="mt-4 flex justify-end">
-                  <button class="btn btn-ghost btn-sm" on:click={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>Sign Out</button>
+                  <button class="btn btn-ghost btn-sm" on:click={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>{t('xiaomi.signOut')}</button>
                 </div>
               {/if}
             </div>
