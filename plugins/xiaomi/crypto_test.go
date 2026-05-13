@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: MIT
+//
+// Xiaomi camera crypto tests adapted from go2rtc (https://github.com/AlexxIT/go2rtc)
+// Copyright (c) go2rtc contributors
+// Licensed under the MIT License.
+
 package xiaomi
 
 import (
