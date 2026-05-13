@@ -4,6 +4,7 @@
   import type { Camera } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
+  import { t } from '$lib/i18n';
   import { createHlsConfig } from '$lib/hls-config';
   import { setupHlsErrorHandling, checkStreamAvailable } from '$lib/hls-errors';
   import type { StreamState } from '$lib/hls-errors';
@@ -30,7 +31,7 @@
     try {
       camera = await getCamera(cameraId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load camera';
+      error = e instanceof Error ? e.message : t('live.failedLoadCamera');
       camera = null;
     } finally {
       loading = false;
@@ -52,14 +53,14 @@
     checkStreamAvailable(url).then((available) => {
       if (!available) {
         streamState = 'error';
-        error = 'Maximum concurrent streams reached. Try again later.';
+        error = t('live.maxStreamsReached');
         return;
       }
 
       import('hls.js').then((HlsModule) => {
         const Hls = HlsModule.default;
         if (!Hls.isSupported()) {
-          error = 'HLS is not supported in this browser';
+          error = t('live.hlsNotSupported');
           return;
         }
 
@@ -72,12 +73,12 @@
           onStateChange: (_id, state) => {
             streamState = state;
             if (state === 'error') {
-              error = 'Stream error after retries. Click Retry to reconnect.';
+              error = t('live.streamErrorRetries');
             }
           },
           onFallbackToSnapshot: () => {
             streamState = 'error';
-            error = 'Stream unavailable. Click Retry to reconnect.';
+            error = t('live.streamUnavailable');
           },
         });
 
@@ -88,7 +89,7 @@
           videoEl?.play();
         });
       }).catch(() => {
-        error = 'Failed to load HLS player';
+        error = t('live.failedLoadPlayer');
         streamState = 'error';
       });
     });
@@ -136,7 +137,7 @@
 
   onMount(() => {
     if (!cameraId) {
-      error = 'Camera ID is required';
+      error = t('live.cameraIdRequired');
       loading = false;
       return;
     }
@@ -176,15 +177,15 @@
     {:else if error}
       <div class="card p-8 text-center">
         <div class="th-color-danger mb-4 flex justify-center"><AlertCircle size={48} /></div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">Error</h3>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
         <div class="flex justify-center gap-3">
           <button onclick={loadCamera} class="btn btn-primary btn-sm flex items-center gap-1">
             <RefreshCw size={14} />
-            Retry
+            {t('common.retry')}
           </button>
           <button onclick={goBack} class="btn btn-secondary btn-sm">
-            Back
+            {t('detail.back')}
           </button>
         </div>
       </div>
@@ -194,7 +195,7 @@
         <div class="flex items-center gap-3">
           <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
             <ArrowLeft size={16} />
-            Cameras
+            {t('nav.cameras')}
           </button>
           <h2 class="text-xl font-bold th-text-primary truncate">
             {camera.name || camera.id}
@@ -215,18 +216,18 @@
                 onplay={handlePlay}
                 onpause={handlePause}
               >
-                Your browser does not support video playback.
+                {t('live.videoUnsupportedTag')}
               </video>
 
               <!-- Stream state indicator -->
               {#if streamState === 'playing'}
-                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-green-500 rounded-full" title="Live"></span>
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-green-500 rounded-full" title={t('dashboard.live')}></span>
               {:else if streamState === 'buffering'}
-                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-yellow-500 rounded-full animate-pulse" title="Buffering"></span>
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-yellow-500 rounded-full animate-pulse" title={t('dashboard.buffering')}></span>
               {:else if streamState === 'error'}
-                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-red-500 rounded-full" title="Error"></span>
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-red-500 rounded-full" title={t('dashboard.errorState')}></span>
               {:else if streamState === 'snapshot'}
-                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-gray-400 rounded-full" title="Snapshot mode"></span>
+                <span class="absolute top-3 left-3 w-2.5 h-2.5 bg-gray-400 rounded-full" title={t('dashboard.snapshotMode')}></span>
               {/if}
               <!-- Custom controls overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
@@ -254,13 +255,13 @@
           <!-- Unsupported protocol -->
           <div class="card p-12 text-center">
             <div class="th-text-muted mb-4 flex justify-center"><AlertCircle size={48} /></div>
-            <h3 class="text-lg font-medium th-text-primary mb-2">不支持实时播放</h3>
+            <h3 class="text-lg font-medium th-text-primary mb-2">{t('live.notSupported')}</h3>
             <p class="th-text-secondary text-sm mb-4">
-              Live streaming is only available for H.264/H.265 cameras.
-              This camera uses <span class="font-mono th-text-primary">{camera.protocol}</span>.
+              {t('live.notSupportedDesc')}
+              <span class="font-mono th-text-primary">{camera.protocol}</span>.
             </p>
             <button onclick={goBack} class="btn btn-secondary btn-sm">
-              Back to Cameras
+              {t('live.backToCameras')}
             </button>
           </div>
         {/if}

@@ -1,5 +1,6 @@
 <script>
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { t } from '$lib/i18n';
   export let currentPage = 1;
   export let totalPages = 1;
   export let onPageChange = () => {};
@@ -54,7 +55,7 @@
       <ChevronRight size={16} />
     </button>
     <div class="flex items-center gap-2 text-sm text-[var(--text-secondary)] ml-2">
-      <span>Go to page</span>
+      <span>{t('pagination.jumpToPage')}</span>
       <input
         type="number"
         min="1"
@@ -70,7 +71,7 @@
         }}
         class="w-16 text-center py-1 px-2 border border-[var(--border)] rounded focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] text-sm"
       />
-      <span>/ {totalPages}</span>
+      <span>{t('pagination.of')} {totalPages}</span>
     </div>
   </div>
 </div>

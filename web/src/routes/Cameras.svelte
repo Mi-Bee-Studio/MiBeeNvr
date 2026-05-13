@@ -7,22 +7,22 @@
   import { showToast } from '$lib/toast';
 
   function formatTimeAgo(lastSeen: string | null | undefined): { text: string; color: string } {
-    if (!lastSeen) return { text: t('cameras.neverRecorded') || '从未录制', color: 'badge-neutral' };
+    if (!lastSeen) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
     const now = Date.now();
     const then = new Date(lastSeen).getTime();
-    if (isNaN(then)) return { text: t('cameras.neverRecorded') || '从未录制', color: 'badge-neutral' };
+    if (isNaN(then)) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
     const diffMs = now - then;
     const diffMin = Math.floor(diffMs / 60000);
     if (diffMin < 5) {
-      return { text: (t('cameras.active') || '活跃') + ' ' + diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-success' };
+      return { text: t('cameras.active') + ' ' + diffMin + t('cameras.minutesAgo'), color: 'badge-success' };
     } else if (diffMin < 30) {
-      return { text: diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-warning' };
+      return { text: diffMin + t('cameras.minutesAgo'), color: 'badge-warning' };
     } else {
       const diffHours = Math.floor(diffMin / 60);
       if (diffHours < 1) {
-        return { text: diffMin + (t('cameras.minutesAgo') || 'm前'), color: 'badge-error' };
+        return { text: diffMin + t('cameras.minutesAgo'), color: 'badge-error' };
       }
-      return { text: diffHours + (t('cameras.hoursAgo') || 'h前'), color: 'badge-error' };
+      return { text: diffHours + t('cameras.hoursAgo'), color: 'badge-error' };
     }
   }
 
@@ -227,7 +227,7 @@
           } catch { /* ignore merge config save errors */ }
         }
         await updateCamera(editingCamera.id, data);
-        showFeedback(t('cameras.cameraUpdated') || '摄像头已更新', 'success');
+        showFeedback(t('cameras.cameraUpdated'), 'success');
       } else {
         const data: CreateCameraRequest = {
           name: formName,
@@ -350,7 +350,7 @@
         selectedProfileToken = deviceDetail.profiles[0].token;
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to get device details', 'error');
+      showToast(e instanceof Error ? e.message : t('onvif.failedGetDetails'), 'error');
     } finally {
       detailLoading = false;
     }
@@ -524,7 +524,7 @@
                   {:else if formProtocol === 'http'}
                     <option value="jpeg">JPEG</option>
                   {:else if formProtocol === 'onvif'}
-                    <option value="">Auto-detect</option>
+                    <option value="">{t('cameras.autoDetect')}</option>
                     <option value="h264">H.264</option>
                     <option value="h265">H.265</option>
                   {/if}
@@ -536,7 +536,7 @@
                 <label for="cam-url" class="input-label">
                   {t('cameras.url')}
                   {#if formProtocol === 'onvif'}
-                    <span class="text-xs th-text-muted ml-1">(ONVIF Endpoint)</span>
+                    <span class="text-xs th-text-muted ml-1">({t('cameras.onvifEndpoint')})</span>
                   {/if}
                 </label>
                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
@@ -550,7 +550,7 @@
               <!-- Username -->
               <div>
                 <label for="cam-user" class="input-label">{t('cameras.username')}</label>
-                <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || '未设置') : ''} />
+                <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || t('cameras.notSet')) : ''} />
               </div>
 
               <!-- Password -->
@@ -562,7 +562,7 @@
                     type={showPassword ? 'text' : 'password'}
                     class="input pr-10"
                     bind:value={formPassword}
-                    placeholder={editingCamera ? (editingCamera.has_password ? '已设置' : '未设置') : ''}
+                    placeholder={editingCamera ? (editingCamera.has_password ? t('cameras.passwordSet') : t('cameras.notSet')) : ''}
                   />
                   <button
                     type="button"
@@ -620,9 +620,9 @@
 
               <!-- Retention Days -->
               <div>
-                <label for="cam-retention" class="input-label">{t('cameras.retentionDays') || '保存天数'}</label>
+                <label for="cam-retention" class="input-label">{t('cameras.retentionDays')}</label>
                 <input id="cam-retention" type="number" min="0" class="input" bind:value={formRetentionDays} />
-                <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint') || '0 = 使用全局设置'}</p>
+                <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint')}</p>
               </div>
             </div>
 
@@ -632,11 +632,11 @@
                 open={mergeConfig ? true : undefined}
               >
                 <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-                  合并策略
+                  {t('merge.title')}
                   {#if mergeConfig}
-                    <span class="text-xs th-text-muted ml-2">(已自定义)</span>
+                    <span class="text-xs th-text-muted ml-2">{t('merge.customized')}</span>
                   {:else}
-                    <span class="text-xs th-text-muted ml-2">(使用全局默认)</span>
+                    <span class="text-xs th-text-muted ml-2">{t('merge.usingDefault')}</span>
                   {/if}
                 </summary>
 
@@ -644,7 +644,7 @@
                   {#if mergeConfigLoading}
                     <div class="flex items-center gap-2 py-4 th-text-muted">
                       <span class="spinner"></span>
-                      <span class="text-sm">加载中...</span>
+                      <span class="text-sm">{t('common.loading')}</span>
                     </div>
                   {:else}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -660,12 +660,12 @@
                             mergeConfig.enabled = (e.target as HTMLInputElement).checked;
                           }}
                         />
-                        <label for="merge-enabled" class="th-text-secondary text-sm">启用合并</label>
+                        <label for="merge-enabled" class="th-text-secondary text-sm">{t('merge.enableMerge')}</label>
                       </div>
 
                       <!-- Check Interval -->
                       <div>
-                        <label for="merge-check-interval" class="input-label">检查间隔</label>
+                        <label for="merge-check-interval" class="input-label">{t('merge.checkInterval')}</label>
                         <select
                           id="merge-check-interval"
                           class="input"
@@ -675,16 +675,16 @@
                             mergeConfig.check_interval = (e.target as HTMLSelectElement).value;
                           }}
                         >
-                          <option value="30m">30 分钟</option>
-                          <option value="1h">1 小时</option>
-                          <option value="2h">2 小时</option>
-                          <option value="6h">6 小时</option>
+                          <option value="30m">{t('merge.30m')}</option>
+                          <option value="1h">{t('merge.1h')}</option>
+                          <option value="2h">{t('merge.2h')}</option>
+                          <option value="6h">{t('merge.6h')}</option>
                         </select>
                       </div>
 
                       <!-- Window Size -->
                       <div>
-                        <label for="merge-window" class="input-label">合并窗口</label>
+                        <label for="merge-window" class="input-label">{t('merge.windowSize')}</label>
                         <select
                           id="merge-window"
                           class="input"
@@ -694,15 +694,15 @@
                             mergeConfig.window_size = (e.target as HTMLSelectElement).value;
                           }}
                         >
-                          <option value="30m">30 分钟</option>
-                          <option value="1h">1 小时</option>
-                          <option value="2h">2 小时</option>
+                          <option value="30m">{t('merge.30m')}</option>
+                          <option value="1h">{t('merge.1h')}</option>
+                          <option value="2h">{t('merge.2h')}</option>
                         </select>
                       </div>
 
                       <!-- Batch Limit -->
                       <div>
-                        <label for="merge-batch" class="input-label">批处理上限</label>
+                        <label for="merge-batch" class="input-label">{t('merge.batchLimit')}</label>
                         <input
                           id="merge-batch"
                           type="number"
@@ -719,7 +719,7 @@
 
                       <!-- Min Segment Age -->
                       <div>
-                        <label for="merge-age" class="input-label">最小片段年龄</label>
+                        <label for="merge-age" class="input-label">{t('merge.minSegmentAge')}</label>
                         <select
                           id="merge-age"
                           class="input"
@@ -729,16 +729,16 @@
                             mergeConfig.min_segment_age = (e.target as HTMLSelectElement).value;
                           }}
                         >
-                          <option value="5m">5 分钟</option>
-                          <option value="10m">10 分钟</option>
-                          <option value="30m">30 分钟</option>
-                          <option value="1h">1 小时</option>
+                          <option value="5m">{t('merge.5m')}</option>
+                          <option value="10m">{t('merge.10m')}</option>
+                          <option value="30m">{t('merge.30m')}</option>
+                          <option value="1h">{t('merge.1h')}</option>
                         </select>
                       </div>
 
                       <!-- Min Segments to Merge -->
                       <div>
-                        <label for="merge-min-segments" class="input-label">最小合并数</label>
+                        <label for="merge-min-segments" class="input-label">{t('merge.minSegmentsToMerge')}</label>
                         <input
                           id="merge-min-segments"
                           type="number"
@@ -764,13 +764,13 @@
                           try {
                             await deleteCameraMergeConfig(editingCamera.id);
                             mergeConfig = null;
-                            showToast('已恢复全局默认设置', 'success');
+                            showToast(t('merge.restoredDefault'), 'success');
                           } catch {
-                            showToast('操作失败', 'error');
+                            showToast(t('merge.operationFailed'), 'error');
                           }
                         }}
                       >
-                        使用全局默认
+                        {t('merge.useGlobalDefault')}
                       </button>
                     </div>
                   {/if}
@@ -876,10 +876,10 @@
                             <a
                               href="#/live/{camera.id}"
                               class="btn btn-primary px-2 py-1 text-sm flex items-center gap-1"
-                              title={t('cameras.live') || 'Live'}
+                              title={t('cameras.live')}
                             >
                               <Eye size={14} />
-                              {t('cameras.live') || '实时'}
+                              {t('cameras.live')}
                             </a>
                           {/if}
                           <button
