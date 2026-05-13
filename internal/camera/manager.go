@@ -11,6 +11,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -67,6 +68,13 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
+	// 1. Try plugin registry first
+	p := plugin.LookupProtocol(cam.Protocol)
+	if p != nil {
+		return p.NewRecorder(cam, cm.store, cm.db, cm.metrics)
+	}
+
+	// 2. Fall back to built-in recorders
 	switch cam.Protocol {
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
