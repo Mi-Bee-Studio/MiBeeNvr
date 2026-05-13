@@ -24,7 +24,8 @@ type Config struct {
 	WebDAV      WebDAVConfig      `yaml:"webdav"`
 	HLS         HLSConfig         `yaml:"hls"`
 	Observability ObservabilityConfig `yaml:"observability"`
-	Version     string            `yaml:"version"`
+	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
+	Version       string              `yaml:"version"`
 }
 
 type ServerConfig struct {
@@ -53,6 +54,10 @@ type CameraConfig struct {
 	SampleInterval int    `yaml:"sample_interval"`
 	HLSMaxFPS      int    `yaml:"hls_max_fps"`
 	Merge         *MergeConfig `yaml:"merge"`
+
+	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
+	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
+	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
 }
 
 type CleanupConfig struct {
@@ -107,6 +112,13 @@ type HLSConfig struct {
 	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
 	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
 	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
+}
+
+// XiaomiConfig holds Xiaomi cloud authentication settings.
+type XiaomiConfig struct {
+	UserID string `yaml:"user_id"` // Xiaomi account user ID (from auth response)
+	Token  string `yaml:"token"`   // Xiaomi passToken for API access
+	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -171,7 +183,7 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(c.ID) == "" {
 			return fmt.Errorf("camera[%d].id is required", i)
 		}
-		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" {
+		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
 		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) == "" {
@@ -195,6 +207,12 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+	}
+	}
+	// Validate Xiaomi configuration
+	for _, cam := range cfg.Cameras {
+		if cam.Protocol == "xiaomi" && strings.TrimSpace(cfg.Xiaomi.Token) == "" {
+			return fmt.Errorf("xiaomi camera %q requires xiaomi.token in config", cam.ID)
 		}
 	}
 	// port ranges
@@ -293,6 +311,10 @@ func (cfg *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(cfg.WebDAV.PathPrefix) == "" {
 		cfg.WebDAV.PathPrefix = "/dav"
+	}
+	// Xiaomi
+	if cfg.Xiaomi.Region == "" {
+		cfg.Xiaomi.Region = "cn"
 	}
 	// Observability
 	if strings.TrimSpace(cfg.Observability.LogLevel) == "" {
