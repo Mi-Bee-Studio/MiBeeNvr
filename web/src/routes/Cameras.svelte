@@ -394,7 +394,7 @@
     if (result.status === 'verification_required') {
       if (result.captcha && result.session_id) {
         // Show captcha image
-        xiaomiCaptchaImage = result.captcha.startsWith('data:') ? result.captcha : `data:image/png;base64,${result.captcha}`;
+        xiaomiCaptchaImage = result.captcha.startsWith('data:') ? result.captcha : `data:image/jpeg;base64,${result.captcha}`;
         xiaomiCaptchaSessionId = result.session_id;
         xiaomiCaptchaCode = '';
       } else if (result.verify_phone && result.session_id) {
