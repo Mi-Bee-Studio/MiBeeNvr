@@ -9,6 +9,7 @@
   import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
+  import Plugins from './routes/Plugins.svelte';
 
   import Header from './components/Header.svelte';
 
@@ -55,6 +56,11 @@
     if (segments[0] === 'stats') {
       return { route: 'stats', params: {} };
     }
+
+    if (segments[0] === 'plugins') {
+      return { route: 'plugins', params: {} };
+    }
+
 
     if (segments[0] === 'settings') {
       return { route: 'settings', params: {} };
@@ -113,5 +119,7 @@
       <Settings />
     {:else if currentRoute === 'dashboard'}
       <Dashboard />
+    {:else if currentRoute === 'plugins'}
+      <Plugins />
     {/if}
   {/if}
