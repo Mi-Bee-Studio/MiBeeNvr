@@ -189,6 +189,25 @@ func (m *PluginManager) GetClient(name string) (gen.PluginServiceClient, bool) {
 	return mp.Client, true
 }
 
+// GetClientForProtocol searches all running plugins for one that supports the
+// given protocol. Returns the gRPC client if found, or nil otherwise.
+func (m *PluginManager) GetClientForProtocol(protocol string) gen.PluginServiceClient {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, mp := range m.plugins {
+		if mp.Status != StatusRunning || mp.Client == nil || mp.Info == nil {
+			continue
+		}
+		for _, p := range mp.Info.GetProtocols() {
+			if p == protocol {
+				return mp.Client
+			}
+		}
+	}
+	return nil
+}
+
 // RestartPlugin manually restarts a running plugin by name. Returns an error
 // if the plugin is not found or the restart fails.
 func (m *PluginManager) RestartPlugin(name string) error {
