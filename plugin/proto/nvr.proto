@@ -1,0 +1,152 @@
+// MiBee NVR Plugin Protocol
+//
+// gRPC contract between the NVR main process and plugin processes.
+// Transported via HashiCorp go-plugin over Unix Domain Sockets.
+
+syntax = "proto3";
+
+package nvr;
+
+option go_package = "github.com/Mi-Bee-Studio/MiBeeNvr/plugin/proto/gen";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// Codec identifies the media encoding of a frame.
+enum Codec {
+  CODEC_UNSPECIFIED = 0;
+  CODEC_H264        = 1;
+  CODEC_H265        = 2;
+  CODEC_MJPEG       = 3;
+}
+
+// RecorderState represents the current state of a recorder instance.
+enum RecorderState {
+  RECORDER_STATE_UNSPECIFIED = 0;
+  RECORDER_STATE_IDLE        = 1;
+  RECORDER_STATE_CONNECTING  = 2;
+  RECORDER_STATE_RECORDING   = 3;
+  RECORDER_STATE_ERROR       = 4;
+  RECORDER_STATE_STOPPED     = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// PluginService is the gRPC interface every NVR plugin must implement.
+// The NVR host is the gRPC client; the plugin is the gRPC server.
+service PluginService {
+  // GetPluginInfo returns plugin metadata (name, version, supported protocols).
+  rpc GetPluginInfo(Empty) returns (PluginInfo);
+
+  // StartRecorder begins streaming NAL frames from a camera.
+  // The plugin sends a stream of Frame messages; the host receives them.
+  // The stream ends when the plugin encounters an error or StopRecorder is called.
+  rpc StartRecorder(RecorderConfig) returns (stream Frame);
+
+  // StopRecorder signals the plugin to stop a running recorder.
+  rpc StopRecorder(StopRequest) returns (StopResponse);
+
+  // GetRecorderStatus queries the current state of a recorder.
+  rpc GetRecorderStatus(StatusRequest) returns (RecorderStatus);
+
+  // HealthCheck verifies the plugin process is alive and responsive.
+  rpc HealthCheck(Empty) returns (HealthCheckResponse);
+
+  // SetCloudConfig pushes cloud authentication credentials to the plugin.
+  // Used for cameras that require cloud-based auth (e.g., Xiaomi).
+  rpc SetCloudConfig(CloudConfig) returns (CloudConfigResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// Empty is a sentinel message for RPCs that take no parameters.
+message Empty {}
+
+// Frame carries a single encoded video frame (NAL unit) from plugin to host.
+message Frame {
+  bytes data          = 1; // Raw NAL unit bytes (with start code prefix 00 00 00 01)
+  uint64 pts_ns       = 2; // Presentation timestamp in nanoseconds since segment start
+  bool   is_idr       = 3; // True if this frame is an IDR / keyframe
+  Codec  codec        = 4; // Codec of this frame
+  bool   is_codec_info = 5; // True for SPS/PPS/VPS frames (codec parameters, not media data)
+  map<string, string> extra = 6; // Additional codec-specific parameters (e.g. "sps_hex", "pps_hex", "vps_hex")
+}
+
+// PluginInfo describes a plugin's identity and capabilities.
+message PluginInfo {
+  string name              = 1; // Human-readable plugin name (e.g. "xiaomi")
+  string version           = 2; // Semantic version (e.g. "1.0.0")
+  repeated string protocols = 3; // Supported protocol strings (e.g. "xiaomi")
+  Capabilities capabilities = 4; // Optional feature flags
+  repeated Codec supported_encodings = 5; // Codecs this plugin can produce
+}
+
+// Capabilities describes optional features a plugin may support.
+message Capabilities {
+  bool hls        = 1; // Can produce HLS-compatible stream
+  bool ptz        = 2; // Supports PTZ control
+  bool snapshot   = 3; // Can capture still snapshots
+  bool discovery  = 4; // Supports device discovery
+  bool auth       = 5; // Requires username/password authentication
+}
+
+// RecorderConfig is sent by the host to start a new recording session.
+message RecorderConfig {
+  string camera_id           = 1; // Unique camera identifier
+  string name                = 2; // Human-readable camera name
+  string url                 = 3; // Connection URL (RTSP, proprietary, etc.)
+  string username            = 4; // Auth username (if applicable)
+  string password            = 5; // Auth password (if applicable)
+  uint64 segment_duration_ns = 6; // Desired segment duration in nanoseconds
+  map<string, string> options = 7; // Protocol-specific options (e.g. "did", "vendor", "region")
+  string encoding            = 8; // Desired encoding: "h264", "h265", "mjpeg", "auto"
+}
+
+// StopRequest asks the plugin to stop a specific recorder.
+message StopRequest {
+  string camera_id = 1; // Camera to stop
+}
+
+// StopResponse acknowledges a stop request.
+message StopResponse {}
+
+// StatusRequest asks for the status of a specific recorder.
+message StatusRequest {
+  string camera_id = 1; // Camera to query
+}
+
+// RecorderStatus reports the current state of a recorder instance.
+message RecorderStatus {
+  RecorderState state          = 1; // Current state
+  string        error_msg      = 2; // Error message if state == ERROR
+  int64         bytes_recorded = 3; // Total bytes written in current session
+  int64         segments_created = 4; // Number of segments completed
+  uint64        uptime_ns      = 5; // Nanoseconds since recorder started
+}
+
+// HealthCheckResponse indicates the plugin's health.
+message HealthCheckResponse {
+  bool   healthy  = 1; // Is the plugin healthy?
+  string message  = 2; // Optional detail (version, uptime, etc.)
+}
+
+// CloudConfig pushes cloud authentication data to a plugin.
+// Used for cameras that require cloud service tokens (e.g., Xiaomi).
+message CloudConfig {
+  string service_token = 1; // Cloud service auth token
+  string user_id       = 2; // Cloud user ID
+  string device_id     = 3; // Device ID (DID) to authenticate
+  string region        = 4; // Region code (e.g. "cn", "sg", "de")
+  map<string, string> extra = 5; // Additional cloud-specific parameters
+}
+
+// CloudConfigResponse acknowledges cloud config reception.
+message CloudConfigResponse {
+  bool   success   = 1; // Was the config accepted?
+  string message   = 2; // Optional detail or error
+}
