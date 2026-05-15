@@ -583,3 +583,48 @@ github.com/jhump/protoreflect v1.17.0 (indirect)
 3. TestNewCameraManager_WithPluginMgr — constructor accepts both metrics and pluginMgr
 4. TestNewCameraManager_BackwardCompatOpts — old-style metrics-only and no-opts still work
 5. TestStop_WithPluginMgr — Stop with empty PluginManager doesn't panic
+
+
+## 2026-05-15: Plugin Management REST API Endpoints (Task 13)
+
+### Endpoints Added
+- `GET /api/plugins` — lists all plugins (built-in from plugin.All() + gRPC from PluginManager)
+- `GET /api/plugins/{name}` — single gRPC plugin details (404 if not found or no manager)
+- `POST /api/plugins/{name}/restart` — restart gRPC plugin (200 on success, 404/500 on failure)
+- `GET /api/plugins/{name}/capabilities` — plugin capabilities (protocols, encodings, feature flags)
+- `GET /api/protocols` — merged protocol list (3 built-in + plugin protocols)
+
+### Handler Changes
+- Added `pluginMgr *plugin.PluginManager` field to Handler struct
+- `NewHandler` signature extended with `pluginMgr` parameter (10th arg)
+- Routes restructured: `/api/plugins` is now a `chi.Route` group with sub-routes
+- Old `GET /api/plugins` handler preserved as list endpoint within the route group
+- `GET /api/protocols` registered as standalone protected route
+
+### Plugin JSON Response
+- `pluginJSON` struct with: name, version, status, protocols, capabilities, supported_encodings, uptime_seconds, restart_count
+- `codecToString()` helper maps proto Codec enum to lowercase string (h264, h265, mjpeg)
+- `managedPluginToJSON()` converts ManagedPlugin to API response with uptime calculation
+
+### Protocols Endpoint
+- Returns 3 built-in protocols: rtsp (h264/h265/mjpeg, HLS), http (jpeg), onvif (h264/h265/mjpeg, HLS+PTZ)
+- Plugin protocols appended with `built_in: false` flag
+- Each protocol includes: id, label, encodings, built_in, capabilities map
+
+### Test Infrastructure
+- `grpc_manager_test_helper.go` in plugin package: `NewTestPluginManager(names...)` and `AddTestPlugin(mgr, name, info)`
+- Helper creates PluginManager with config entries so `RestartPlugin` can find plugin by name
+- `plugin_test.go` in api package: 14 tests covering all endpoints with nil manager + mock manager
+- Tests for nil manager return 404 for single-plugin endpoints, 200 with built-in list for plugins endpoint
+
+### Bug Fix: Missing writeError in restart handler
+- Initial implementation had empty if-branch for "not found" errors in handleRestartPlugin
+- Chi router returns 200 by default when handler writes nothing — caught by tests
+- Added explicit `writeError(w, http.StatusNotFound, err.Error())` in the not-found branch
+
+### NewHandler Signature Update (All Callers)
+- `cmd/mibee-nvr/main.go`: passes `pluginMgr`
+- `internal/api/handler_test.go`: all 16 calls updated with `, nil`
+- `tests/integration_test.go`: all 4 calls updated with `, nil`
+- `internal/api/handler.go`: noopHandler, TestHandler, TestHandlerWithAuth updated
+
