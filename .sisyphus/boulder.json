@@ -38,6 +38,22 @@
       "agent": "Sisyphus-Junior",
       "category": "deep",
       "updated_at": "2026-05-15T13:43:30.839Z"
+    },
+    "todo:9": {
+      "task_key": "todo:9",
+      "task_label": "9",
+      "task_title": "**Xiaomi plugin gRPC server**",
+      "session_id": "ses_1d417414bffehnDAGqkKhfI0Sr",
+      "updated_at": "2026-05-15T14:14:55.769Z"
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "**Camera manager dual-mode dispatch**",
+      "session_id": "ses_1d402736bffeIzze6VuOyimvN9",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-05-15T14:21:01.784Z"
     }
   }
 }

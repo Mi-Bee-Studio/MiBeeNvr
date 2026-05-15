@@ -1036,7 +1036,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 12. **Camera manager dual-mode dispatch**
+- [x] 12. **Camera manager dual-mode dispatch**
 
   **What to do**:
   - 修改 `internal/camera/manager.go` 支持双模式分派

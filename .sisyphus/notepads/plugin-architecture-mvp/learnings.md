@@ -513,3 +513,73 @@ github.com/jhump/protoreflect v1.17.0 (indirect)
 - `SetCloudConfig` RPC confirmed in `nvr.proto` (line 60): takes CloudConfig, returns CloudConfigResponse
 - CloudConfig message: service_token, user_id, device_id, region, extra map
 - No proto changes needed for this task
+
+## 2026-05-15: Xiaomi gRPC Plugin Server (Task 9 — Standalone Process)
+
+### Files Created
+- `plugins/xiaomi/grpc_server.go` — `PluginServer` implements `gen.PluginServiceServer`
+- `plugins/xiaomi/cmd/xiaomi-plugin/main.go` — standalone binary entry point via `plugin.Serve()`
+- `plugins/xiaomi/grpc_server_test.go` — 9 tests using bufconn in-memory gRPC
+
+### Implementation Notes
+- `PluginServer` / `NewPluginServer()` naming — consistent with mock_plugin's `MockServer` / `NewMockServer()` pattern
+- `streamSender` adapter bridges `grpc.ServerStreamingServer[gen.Frame]` to `FrameSender` interface
+- StartRecorder uses placeholder frame generation (synthetic H.264) — real MISS protocol integration deferred to Task 10
+- Placeholder matches mock_plugin pattern: SPS→PPS→IDR→P×N→IDR at ~30fps with Annex B start codes
+- `recorderState` tracks per-camera state: bytes, segments, timestamps, cancel func
+- Cloud config stored in `PluginServer.cloudCfg` (protected by `cloudMu` RWMutex)
+- `GetCloudConfig()` public method for test verification
+
+### go-plugin Handshake
+- Same as mock plugin: `MagicCookieKey="NVR_PLUGIN"`, `MagicCookieValue="nvr-plugin"`, `ProtocolVersion=1`
+- `XiaomiPluginGRPC` struct wraps server, embeds `plugin.NetRPCUnsupportedPlugin`
+- `plugin.DefaultGRPCServer` as server factory
+
+### Type Alias Added
+- `type RecorderState = gen.RecorderState` in `grpc_recorder.go` — fixes references from StreamRecorder that use unqualified `RecorderState`
+
+### Test Coverage (9 tests, all pass)
+1. GetPluginInfo — name, version, protocols, capabilities, encodings
+2. HealthCheck — healthy, message
+3. SetCloudConfig — stores credentials, GetCloudConfig retrieves
+4. GetRecorderStatus_Idle — nonexistent camera returns IDLE
+5. StartRecorder_SendsFrames — SPS, PPS, IDR sequence in 2s
+6. StartRecorder_StatusWhileRecording — RECORDING state, bytes > 0, uptime > 0
+7. StartRecorder_StopRecorder — stop closes stream, status → IDLE
+8. StopRecorder_NotFound — error for nonexistent camera
+9. ConcurrentRecorders — two simultaneous recorders produce frames
+
+### Binary Size
+- ~28MB standalone binary (gRPC + MISS/CS2/crypto + go-plugin framework)
+
+
+## 2026-05-15: Camera Manager Dual-Mode Dispatch (Task 12)
+
+### Architecture
+- `CameraManager.pluginMgr *plugin.PluginManager` — nil means no gRPC plugins (backward compatible)
+- Triple dispatch in `createRecorder()`: 1. gRPC plugin → 2. in-process plugin → 3. built-in
+- `GetClientForProtocol(protocol)` on PluginManager searches all running plugins for protocol match
+- `FrameReceiver` created per-camera, passed as `FrameHandler` to `NewGRPCRecorderAdapter`
+
+### Constructor Signature Change
+- Changed `NewCameraManager` variadic from `opts ...*metrics.Metrics` to `opts ...interface{}`
+- Type-switch pattern: checks `*metrics.Metrics` and `*plugin.PluginManager` from variadic args
+- Backward compatible: existing callers passing just metrics still work
+- Callers can pass `(metrics, pluginMgr)` in any order
+
+### GetClientForProtocol
+- Searches all running plugins by iterating `m.plugins` map under RLock
+- Checks `Status == StatusRunning && Client != nil && Info != nil` before matching protocols
+- Returns first matching `gen.PluginServiceClient`, or nil if none found
+
+### main.go Integration
+- PluginManager initialized after config load, before CameraManager creation
+- Non-fatal: if `pluginMgr.Start()` fails, logs warning and sets `pluginMgr = nil`
+- CameraManager.Stop() also calls `pluginMgr.Stop()` if non-nil
+
+### Test Coverage (5 new, all pass)
+1. TestCreateRecorder_GRPCPluginTakesPrecedence — pluginMgr set but no client → falls back to built-in
+2. TestCreateRecorder_NilPluginMgr — nil pluginMgr → built-in recorders work
+3. TestNewCameraManager_WithPluginMgr — constructor accepts both metrics and pluginMgr
+4. TestNewCameraManager_BackwardCompatOpts — old-style metrics-only and no-opts still work
+5. TestStop_WithPluginMgr — Stop with empty PluginManager doesn't panic
