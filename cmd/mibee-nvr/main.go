@@ -27,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
@@ -337,8 +338,18 @@ func main() {
 		}
 	}
 
+	// Start gRPC plugin manager (non-fatal if it fails)
+	var pluginMgr *plugin.PluginManager
+	if cfg.Plugins.Directory != "" {
+		pluginMgr = plugin.NewPluginManager(&cfg.Plugins)
+		if err := pluginMgr.Start(ctx); err != nil {
+			slog.Warn("plugin manager start failed, continuing without plugins", "error", err)
+			pluginMgr = nil
+		}
+	}
+
 	// Camera manager
-	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m)
+	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, pluginMgr)
 
 	// HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
