@@ -33,7 +33,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var (
@@ -361,8 +360,8 @@ func main() {
 	)
 
 	// API handler — Routes() already includes /api prefix
-	// API handler — Routes() already includes /api prefix
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr)
+	cloudProxy := api.NewLocalXiaomiAuth(cfg)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy)
 
 	// WebDAV
 	var davHandler http.Handler
@@ -425,8 +424,7 @@ func main() {
 	}))
 
 
-	// Initialize Xiaomi cloud config for MISS URL resolution
-	xiaomi.SetCloudConfig(cfg.Xiaomi)
+	// Xiaomi cloud config is initialized via LocalXiaomiAuth (see above)
 	// Start camera manager
 	go func() {
 		if err := camMgr.Start(ctx); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,7 +28,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var logger = slog.Default().With("component", "api")
@@ -92,10 +90,10 @@ type Handler struct {
 	snapshotMu    sync.RWMutex
 	snapshots     map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr      *merge.MergeManager
+	cloudProxy    CloudAuthProxy
 }
-// NewHandler creates a new API handler.
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -1317,7 +1315,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
 }
 // --- Test helper exported for handler_test.go ---
 
@@ -1329,7 +1327,7 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(username, passwordHash, "")
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil)
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
 }
 
 // --- HLS streaming endpoints ---
@@ -1860,7 +1858,16 @@ func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
 // --- Xiaomi cloud endpoints ---
 
 func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
-	var req xiaomi.AuthRequest
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Region   string `json:"region,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -1875,49 +1882,32 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		region = "cn"
 	}
 
-	session, captchaSessionID, err := xiaomi.SignInWithCaptcha(req.Username, req.Password, region)
+	result, verification, err := h.cloudProxy.SignIn(r.Context(), req.Username, req.Password, region)
 	if err != nil {
-		var loginErr *xiaomi.LoginError
-		if errors.As(err, &loginErr) {
-			resp := map[string]any{
-				"status": "verification_required",
-			}
-			if len(loginErr.Captcha) > 0 {
-				resp["captcha"] = base64.StdEncoding.EncodeToString(loginErr.Captcha)
-			}
-			if loginErr.VerifyPhone != "" {
-				resp["verify_phone"] = loginErr.VerifyPhone
-			}
-			if loginErr.VerifyEmail != "" {
-				resp["verify_email"] = loginErr.VerifyEmail
-			}
-			if captchaSessionID != "" {
-				resp["session_id"] = captchaSessionID
-			}
-			writeJSON(w, http.StatusAccepted, resp)
-			return
-		}
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
 		return
 	}
 
-	// Store token in config
-	if h.config != nil {
-		h.config.Xiaomi.UserID = session.UserID
-		h.config.Xiaomi.Token = session.PassToken
-		h.config.Xiaomi.Region = session.Region
-		if err := config.Save(h.configPath, h.config); err != nil {
-			logger.Warn("failed to save xiaomi config", "error", err)
-		}
+	if verification != nil {
+		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
+		return
 	}
+
+	// Store token in config
+	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"user_id": session.UserID,
+		"user_id": result.UserID,
 	})
 }
 
 func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+
 	var req struct {
 		SessionID   string `json:"session_id"`
 		CaptchaCode string `json:"captcha_code"`
@@ -1931,49 +1921,32 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := xiaomi.LoginWithCaptcha(req.SessionID, req.CaptchaCode)
+	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
-		var captchaSessionErr *xiaomi.CaptchaSessionError
-		if errors.As(err, &captchaSessionErr) {
-			resp := map[string]any{
-				"status": "verification_required",
-			}
-			if len(captchaSessionErr.Captcha) > 0 {
-				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
-			}
-			if captchaSessionErr.VerifyPhone != "" {
-				resp["verify_phone"] = captchaSessionErr.VerifyPhone
-			}
-			if captchaSessionErr.VerifyEmail != "" {
-				resp["verify_email"] = captchaSessionErr.VerifyEmail
-			}
-			if captchaSessionErr.CaptchaSessionID != "" {
-				resp["session_id"] = captchaSessionErr.CaptchaSessionID
-			}
-			writeJSON(w, http.StatusAccepted, resp)
-			return
-		}
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
 		return
 	}
 
-	// Store token in config
-	if h.config != nil {
-		h.config.Xiaomi.UserID = session.UserID
-		h.config.Xiaomi.Token = session.PassToken
-		h.config.Xiaomi.Region = session.Region
-		if err := config.Save(h.configPath, h.config); err != nil {
-			logger.Warn("failed to save xiaomi config", "error", err)
-		}
+	if verification != nil {
+		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
+		return
 	}
+
+	// Store token in config
+	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"user_id": session.UserID,
+		"user_id": result.UserID,
 	})
 }
 
 func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+
 	var req struct {
 		SessionID string `json:"session_id"`
 		Ticket    string `json:"ticket"`
@@ -1987,89 +1960,92 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := xiaomi.LoginWithVerify(req.SessionID, req.Ticket)
+	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
-		var captchaSessionErr *xiaomi.CaptchaSessionError
-		if errors.As(err, &captchaSessionErr) {
-			resp := map[string]any{
-				"status": "verification_required",
-			}
-			if len(captchaSessionErr.Captcha) > 0 {
-				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
-			}
-			if captchaSessionErr.VerifyPhone != "" {
-				resp["verify_phone"] = captchaSessionErr.VerifyPhone
-			}
-			if captchaSessionErr.VerifyEmail != "" {
-				resp["verify_email"] = captchaSessionErr.VerifyEmail
-			}
-			if captchaSessionErr.CaptchaSessionID != "" {
-				resp["session_id"] = captchaSessionErr.CaptchaSessionID
-			}
-			writeJSON(w, http.StatusAccepted, resp)
-			return
-		}
 		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
 		return
 	}
 
-	// Store token in config
-	if h.config != nil {
-		h.config.Xiaomi.UserID = session.UserID
-		h.config.Xiaomi.Token = session.PassToken
-		h.config.Xiaomi.Region = session.Region
-		if err := config.Save(h.configPath, h.config); err != nil {
-			logger.Warn("failed to save xiaomi config", "error", err)
-		}
+	if verification != nil {
+		writeJSON(w, http.StatusAccepted, verificationToResponse(verification))
+		return
 	}
+
+	// Store token in config
+	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"user_id": session.UserID,
+		"user_id": result.UserID,
 	})
 }
 
 func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+
 	// Get stored token from config
 	if h.config == nil || h.config.Xiaomi.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"devices": []xiaomi.CloudDevice{},
+			"devices": []CloudDeviceInfo{},
 			"message": "not authenticated",
 		})
 		return
 	}
 
-	session, err := xiaomi.SignInWithToken(h.config.Xiaomi.UserID, h.config.Xiaomi.Token, h.config.Xiaomi.Region)
+	devices, err := h.cloudProxy.ListDevices(r.Context())
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Sprintf("session expired: %v", err))
-		return
-	}
-
-	devices, err := xiaomi.GetDeviceList(session)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
-		return
-	}
-
-	// Filter for camera devices only
-	cameras := make([]xiaomi.CloudDevice, 0, len(devices))
-	for _, d := range devices {
-		if isXiaomiCameraModel(d.Model) {
-			cameras = append(cameras, d)
+		if strings.Contains(err.Error(), "expired") || strings.Contains(err.Error(), "auth") {
+			writeError(w, http.StatusUnauthorized, fmt.Sprintf("session expired: %v", err))
+		} else {
+			writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		}
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"devices": cameras,
+		"devices": devices,
 	})
 }
 
-// isXiaomiCameraModel returns true if the model string looks like a Xiaomi camera.
-// Uses Contains matching like go2rtc: .camera., .cateye., .feeder.
-func isXiaomiCameraModel(model string) bool {
-	return strings.Contains(model, ".camera.") ||
-		strings.Contains(model, ".cateye.") ||
-		strings.Contains(model, ".feeder.")
+// saveXiaomiToken persists auth result to config file.
+func (h *Handler) saveXiaomiToken(result *CloudAuthResult) {
+	if h.config == nil || result == nil {
+		return
+	}
+	h.config.Xiaomi.UserID = result.UserID
+	h.config.Xiaomi.Token = result.PassToken
+	h.config.Xiaomi.Region = result.Region
+	if err := config.Save(h.configPath, h.config); err != nil {
+		logger.Warn("failed to save xiaomi config", "error", err)
+	}
+
+	// Also push to the cloud proxy so it has the latest credentials
+	if h.cloudProxy != nil {
+		_ = h.cloudProxy.SetCloudConfig(context.Background(), result.UserID, result.PassToken, result.Region)
+	}
+}
+
+// verificationToResponse converts a CloudVerificationRequired to an API response map.
+func verificationToResponse(v *CloudVerificationRequired) map[string]any {
+	resp := map[string]any{
+		"status": "verification_required",
+	}
+	if len(v.Captcha) > 0 {
+		resp["captcha"] = base64.StdEncoding.EncodeToString(v.Captcha)
+	}
+	if v.VerifyPhone != "" {
+		resp["verify_phone"] = v.VerifyPhone
+	}
+	if v.VerifyEmail != "" {
+		resp["verify_email"] = v.VerifyEmail
+	}
+	if v.CaptchaSessionID != "" {
+		resp["session_id"] = v.CaptchaSessionID
+	}
+	return resp
 }
 
 func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
