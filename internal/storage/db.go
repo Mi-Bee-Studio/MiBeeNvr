@@ -302,6 +302,40 @@ func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
 	return err
 }
 
+// InsertRecordingWithRetry wraps InsertRecording with retry logic for SQLITE_BUSY errors.
+// It retries up to maxRetries attempts with a fixed backoff between retries.
+// Non-SQLITE_BUSY errors are returned immediately without retry.
+func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error {
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			logger.Warn("insert recording: database busy, retrying",
+				"camera_id", r.CameraID,
+				"file_path", r.FilePath,
+				"attempt", attempt,
+				"max_retries", maxRetries,
+				"error", lastErr,
+			)
+			time.Sleep(backoff)
+		}
+		err := d.InsertRecording(ctx, r)
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "database is locked") && !strings.Contains(err.Error(), "SQLITE_BUSY") {
+			return err
+		}
+		lastErr = err
+	}
+	logger.Error("insert recording: exhausted retries",
+		"camera_id", r.CameraID,
+		"file_path", r.FilePath,
+		"max_retries", maxRetries,
+		"error", lastErr,
+	)
+	return fmt.Errorf("insert recording failed after %d attempts: %w", maxRetries, lastErr)
+}
+
 func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=? WHERE id=?;`
 	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.ID)
@@ -425,6 +459,61 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 	return count, err
 }
 
+// GetRecordingsByPathSet returns a set of file paths that exist in the recordings table.
+// Used for orphan file reconciliation to determine which files are already registered.
+func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	if len(paths) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(paths))
+	args := make([]interface{}, len(paths))
+	for i, p := range paths {
+		placeholders[i] = "?"
+		args[i] = p
+	}
+	q := "SELECT file_path FROM recordings WHERE file_path IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := d.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err == nil {
+			result[p] = true
+		}
+	}
+	return result, nil
+}
+
+// InsertOrphanRecordings batch-inserts orphan recording metadata using INSERT OR IGNORE.
+// Returns the number of actually inserted rows (skips duplicates).
+func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Recording) (int, error) {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	q := `INSERT OR IGNORE INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,?,?,?,?,?);`
+	inserted := 0
+	for _, r := range recordings {
+		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged)
+		if err != nil {
+			continue
+		}
+		if n, _ := result.RowsAffected(); n > 0 {
+			inserted++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return inserted, nil
+}
+
 func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
 	return err
@@ -458,6 +547,34 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 		return nil, err
 	}
 	return deleted, nil
+}
+
+// MergeAndReplaceRecordings atomically inserts a merged recording and deletes old recordings in a single transaction.
+// This reduces SQLITE_BUSY contention compared to separate INSERT + SetMerged + DeleteBatch calls.
+func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Recording, oldIDs []string) error {
+	if len(oldIDs) == 0 {
+		return d.InsertRecording(ctx, merged)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true)
+	if err != nil {
+		return err
+	}
+
+	for _, id := range oldIDs {
+		_, err = tx.ExecContext(ctx, `DELETE FROM recordings WHERE id = ?;`, id)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {

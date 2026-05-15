@@ -37,6 +37,7 @@ type SegmentStore interface {
 // RecordingDB abstracts database operations needed by the recorder.
 type RecordingDB interface {
 	InsertRecording(ctx context.Context, r *model.Recording) error
+	InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error
 }
 
 const (
@@ -447,7 +448,7 @@ func (r *H264Recorder) closeCurrentSegment() {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
 		}
-		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			h264Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}

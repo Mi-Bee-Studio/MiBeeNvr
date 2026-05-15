@@ -412,6 +412,7 @@
   "xiaomi.noDevices": "No cameras found on your Xiaomi account.",
   "xiaomi.online": "Online",
   "xiaomi.offline": "Offline",
+  "xiaomi.added": "Added",
   "xiaomi.signOut": "Sign Out",
   "xiaomi.authFailed": "Authentication failed",
   "xiaomi.verificationRequired": "Verification required — please complete verification below",

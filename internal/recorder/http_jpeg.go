@@ -369,7 +369,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 			return nil
 		})
 		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}

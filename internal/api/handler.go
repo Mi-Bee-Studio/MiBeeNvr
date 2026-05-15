@@ -26,6 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
@@ -150,6 +151,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		r.Get("/api/plugins", h.handlePlugins)
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
 			r.Post("/auth", h.handleXiaomiAuth)
@@ -736,6 +738,8 @@ var validProtocols = map[string]bool{
 	"rtsp":  true,
 	"http":  true,
 	"onvif": true,
+	// Plugin protocols
+	"xiaomi": true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
 	"rtsp_h265":  true,
@@ -774,7 +778,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif", body.Protocol))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, xiaomi", body.Protocol))
 		return
 	}
 	// ONVIF cameras: accept url OR onvif_endpoint
@@ -2066,6 +2070,24 @@ func isXiaomiCameraModel(model string) bool {
 	return strings.Contains(model, ".camera.") ||
 		strings.Contains(model, ".cateye.") ||
 		strings.Contains(model, ".feeder.")
+}
+
+func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	plugins := plugin.All()
+	type pluginInfo struct {
+		Name      string   `json:"name"`
+		Protocols []string `json:"protocols"`
+	}
+	result := make([]pluginInfo, 0, len(plugins))
+	for _, p := range plugins {
+		result = append(result, pluginInfo{
+			Name:      p.Name(),
+			Protocols: p.Protocols(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plugins": result,
+	})
 }
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".

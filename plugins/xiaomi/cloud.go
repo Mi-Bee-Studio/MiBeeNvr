@@ -72,7 +72,8 @@ type CloudDevice struct {
 	DID      string `json:"did"`
 	Name     string `json:"name"`
 	Model    string `json:"model"`
-	IP       string `json:"ip"`
+	IP       string `json:"localip"`
+	MAC      string `json:"mac"`
 	IsOnline bool   `json:"isOnline"`
 }
 
@@ -309,6 +310,108 @@ func GetDeviceList(session *CloudSession) ([]CloudDevice, error) {
 	}
 
 	return raw.List, nil
+}
+
+func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, error) {
+	session, err := SignInWithToken(xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
+	if err != nil {
+		return "", fmt.Errorf("xiaomi cloud auth: %w", err)
+	}
+
+	// Get device LAN IP from cloud device list.
+	var deviceIP string
+	devices, err := GetDeviceList(session)
+	if err != nil {
+		cloudLogger.Warn("failed to get device list for IP lookup", "error", err)
+	} else {
+		for _, d := range devices {
+			if d.DID == did {
+				deviceIP = d.IP
+				if model == "" {
+					model = d.Model
+				}
+				break
+			}
+		}
+	}
+
+	if deviceIP == "" {
+		return "", fmt.Errorf("xiaomi: device %s has no LAN IP (not on local network or offline)", did)
+	}
+
+	// Generate client key pair for key exchange.
+	clientPublic, clientPrivate, err := GenerateKey()
+	if err != nil {
+		return "", fmt.Errorf("generate key: %w", err)
+	}
+
+	// Call cloud API to get device's public key and authentication sign.
+	params := fmt.Sprintf(
+		`{"app_pubkey":"%x","did":"%s","support_vendors":"TUTK_CS2_MTP"}`,
+		clientPublic, did,
+	)
+
+	c := &Cloud{
+		client:    session.client,
+		sid:       "xiaomiio",
+		region:    session.Region,
+		ssecurity: session.ssecurity,
+		cookies:   session.cookies,
+		userID:    session.UserID,
+	}
+
+	result, err := c.Request(
+		getAPIBaseURL(session.Region),
+		"/v2/device/miss_get_vendor",
+		params,
+		nil,
+	)
+	if err != nil {
+		return "", fmt.Errorf("miss_get_vendor API: %w", err)
+	}
+
+	var resp struct {
+		Vendor struct {
+			ID     byte `json:"vendor"`
+			Params struct {
+				UID string `json:"p2p_id"`
+			} `json:"vendor_params"`
+		} `json:"vendor"`
+		PublicKey string `json:"public_key"`
+		Sign      string `json:"sign"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return "", fmt.Errorf("parse miss_get_vendor response: %w", err)
+	}
+
+	// Map vendor ID to name (CS2=4).
+	vendorName := "cs2"
+	if resp.Vendor.ID == 1 {
+		vendorName = "tutk"
+	}
+
+	// Build MISS URL with device LAN IP as host (CS2 P2P connects directly to this IP).
+	missURL := &url.URL{
+		Scheme: "miss",
+		Host:   deviceIP,
+	}
+	q := missURL.Query()
+	q.Set("vendor", vendorName)
+	q.Set("device_public", resp.PublicKey)
+	q.Set("client_private", fmt.Sprintf("%x", clientPrivate))
+	q.Set("client_public", fmt.Sprintf("%x", clientPublic))
+	q.Set("sign", resp.Sign)
+	if model != "" {
+		q.Set("model", model)
+	}
+	if vendorName == "tutk" && resp.Vendor.Params.UID != "" {
+		q.Set("uid", resp.Vendor.Params.UID)
+	}
+	missURL.RawQuery = q.Encode()
+
+	cloudLogger.Info("resolved xiaomi MISS URL", "did", did, "ip", deviceIP, "vendor", vendorName, "model", model)
+
+	return missURL.String(), nil
 }
 
 // --- Internal cloud client ---

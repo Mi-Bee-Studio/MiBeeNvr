@@ -343,29 +343,22 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			Duration:   totalDuration,
 			FileSize:   fi.Size(),
 			FrameCount: totalFrames,
-			Merged:     false,
-		}
-		if err := m.db.InsertRecording(ctx, mergedRec); err != nil {
-			logger.Error("failed to insert merged recording", "error", err)
-			// Keep the merged file, don't delete source segments.
-			continue
+			Merged:     true,
 		}
 
-		// Mark the new recording as merged
-		if err := m.db.SetMerged(ctx, mergedRec.ID, true); err != nil {
-			logger.Warn("failed to mark recording as merged", "recording_id", mergedRec.ID, "error", err)
-		}
-
-		// Delete old recordings from DB and files from disk.
+		// Atomic: insert merged recording + delete old recordings in single transaction
 		ids := make([]string, len(recordings))
 		for i, r := range recordings {
 			ids[i] = r.ID
 		}
-		_, err = m.db.DeleteRecordingsBatch(ctx, ids)
-		if err != nil {
-			logger.Warn("failed to batch delete old recordings", "error", err)
+		if err := m.db.MergeAndReplaceRecordings(ctx, mergedRec, ids); err != nil {
+			logger.Error("failed to merge and replace recordings", "camera_id", cameraID, "error", err)
+			// Delete the merged file on DB failure (it's useless without a DB record)
+			os.Remove(finalPath)
+			continue
 		}
 
+		// Only delete old segment files AFTER successful DB transaction
 		var oldSize int64
 		for _, r := range recordings {
 			oldSize += r.FileSize

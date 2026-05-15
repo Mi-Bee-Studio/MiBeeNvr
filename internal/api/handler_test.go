@@ -2400,3 +2400,77 @@ func TestXiaomiVerifyRequiresFields(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/verify", body, "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
+// --- Plugins endpoint tests ---
+
+func TestPluginsEndpoint(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/plugins", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Plugins []struct {
+			Name      string   `json:"name"`
+			Protocols []string `json:"protocols"`
+		} `json:"plugins"`
+	}
+	parseJSON(t, rr, &resp)
+	require.NotEmpty(t, resp.Plugins, "expected at least one plugin")
+
+	// Verify xiaomi plugin is present
+	found := false
+	for _, p := range resp.Plugins {
+		if p.Name == "xiaomi" {
+			found = true
+			require.Contains(t, p.Protocols, "xiaomi", "xiaomi plugin should handle xiaomi protocol")
+			break
+		}
+	}
+	require.True(t, found, "xiaomi plugin should be registered")
+}
+
+func TestPluginsEndpointNoAuth(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	hash, err := middleware.HashPassword("secret")
+	require.NoError(t, err)
+	h := TestHandlerWithAuth(db, store, "admin", hash)
+
+	// Request without auth credentials → 401
+	rr := doRequest(t, h.Routes(), "GET", "/api/plugins", nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+func TestPluginsNoSecrets(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/plugins", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	body := rr.Body.String()
+	// Verify no sensitive fields leak into the response
+	require.NotContains(t, body, "token")
+	require.NotContains(t, body, "user_id")
+	require.NotContains(t, body, "Token")
+	require.NotContains(t, body, "UserID")
+}
+
+func TestCameraXiaomiProtocol(t *testing.T) {
+	h, _, _ := newTestCamHandler(t)
+
+	body := strings.NewReader(`{"name":"Xiaomi Camera","protocol":"xiaomi","url":"xiaomi://655448418","encoding":"h265"}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+
+	var cam config.CameraConfig
+	parseJSON(t, rr, &cam)
+	require.Equal(t, "xiaomi", cam.Protocol)
+	require.Equal(t, "Xiaomi Camera", cam.Name)
+	require.Equal(t, "h265", cam.Encoding)
+	require.NotEmpty(t, cam.ID)
+}

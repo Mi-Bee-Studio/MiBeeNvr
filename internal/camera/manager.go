@@ -218,10 +218,14 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
 			}
 		default:
-			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
+			// Try plugin-registered protocols (e.g. xiaomi)
+			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+				logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
+			} else {
+				logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
+			}
 		}
 	}
-
 	return nil
 }
 

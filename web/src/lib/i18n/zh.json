@@ -412,6 +412,7 @@
   "xiaomi.noDevices": "未在您的小米账号下找到摄像头。",
   "xiaomi.online": "在线",
   "xiaomi.offline": "离线",
+  "xiaomi.added": "已添加",
   "xiaomi.signOut": "退出",
   "xiaomi.authFailed": "认证失败",
   "xiaomi.verificationRequired": "需要验证 — 请在下方完成验证",
