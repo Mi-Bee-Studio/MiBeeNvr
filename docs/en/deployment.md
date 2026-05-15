@@ -65,10 +65,6 @@ docker compose up -d
 
 #### Configuration Notes
 
-Docker deployment has some key differences from non-Docker setups:
-
-#### Configuration Notes
-
 - **Auto-initialization**: If no config file exists at `/data/mibee-nvr.yaml`, one is generated automatically with sensible defaults. No manual setup required.
 - **Initial password**: Set via `NVR_PASSWORD` environment variable. If not set, the app starts in setup mode (no auth) — set a password through the Web UI Settings page.
 - **Data directory**: `storage.root_dir` is automatically set to `/data` inside Docker containers via the `NVR_DATA_DIR` environment variable.

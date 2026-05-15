@@ -309,7 +309,8 @@ Set merge configuration overrides for a specific camera. All 6 parameters are re
 }
 
   # Note: When set, these override the global merge settings for this camera
-}```
+}
+```
 
 **Request:**
 ```bash
@@ -415,26 +416,14 @@ curl -u username:password \
 
   }
 
-]```
+]
+```
 
 ### Create Camera
 
 **Endpoint:** `POST /api/cameras`
 
 Add a new camera configuration.
-
-**Request Body:**
-```json
-{
-  "name": "Garage Camera",
-  "protocol": "rtsp_mjpeg",
-  "encoding": "mjpeg",
-  # Supported protocols: rtsp_h264, rtsp_h265, rtsp_mjpeg, http_jpeg
-  "url": "rtsp://192.168.1.102:554/mjpeg_stream",
-  "username": "admin",
-  "password": "secret",
-  "enabled": true
-```
 
 **Request Body:**
 ```json
@@ -449,7 +438,8 @@ Add a new camera configuration.
   "retention_days": 15
   
   # Note: retention_days is optional, defaults to global setting
-}```
+}
+```
 
 **Request:**
 ```bash
@@ -515,7 +505,8 @@ curl -u username:password \
   "username": "admin",
   "has_password": true
 
-}```
+}
+```
 
 ### Update Camera
 
@@ -532,7 +523,8 @@ Update camera configuration. All fields are optional for partial updates.
   "retention_days": 7
   
   # Note: retention_days is optional, updates per-camera retention
-}```
+}
+```
 
 **Request:**
 ```bash

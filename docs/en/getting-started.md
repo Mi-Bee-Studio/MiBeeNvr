@@ -42,13 +42,11 @@ Open http://localhost:9090 in your browser.
 
 ```bash
 docker compose up -d
+```
 
 Open http://localhost:9090 in your browser.
 
 > **Note**: No config preparation needed! MiBee NVR auto-initializes when started without a config file.
-```
-
-Open http://localhost:9090 in your browser.
 
 ### Option 3: One-click Install Script
 

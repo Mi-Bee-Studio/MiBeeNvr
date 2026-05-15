@@ -422,8 +422,6 @@ cameras:
       min_segments_to_merge: 2  # 低于全局值 3
 ```
 
-
-
 ## FTP 配置
 
 ### `ftp.enabled`

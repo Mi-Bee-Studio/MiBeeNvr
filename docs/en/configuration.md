@@ -331,31 +331,6 @@ cameras:
   enabled: true
 ```
 
-### RTSP H.265 Camera
-
-**New Format**:
-```yaml
-- id: "cam4"
-  name: "H.265 Security Camera"
-  protocol: "rtsp"
-  encoding: "h265"
-  url: "rtsp://192.168.1.103:554/stream"
-  username: "admin"
-  password: "camera-password"
-  enabled: true
-```
-
-**Legacy Format**:
-```yaml
-- id: "cam4"
-  name: "H.265 Security Camera"
-  protocol: "rtsp_h265"
-  url: "rtsp://192.168.1.103:554/stream"
-  username: "admin"
-  password: "camera-password"
-  enabled: true
-```
-
 ## Cleanup Configuration
 
 ### `cleanup.retention_days`

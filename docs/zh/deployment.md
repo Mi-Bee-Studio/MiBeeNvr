@@ -65,10 +65,6 @@ docker compose up -d
 
 #### 配置说明
 
-Docker 部署与非 Docker 部署有一些关键差异：
-
-#### 配置说明
-
 - **自动初始化**：如果在 `/data/mibee-nvr.yaml` 不存在配置文件，会自动生成包含合理默认值的配置。无需手动设置。
 - **初始密码**：通过 `NVR_PASSWORD` 环境变量设置。如果未设置，应用将以设置模式启动（无认证） — 通过 Web UI 设置页面设置密码。
 - **数据目录**：通过 `NVR_DATA_DIR` 环境变量，`storage.root_dir` 在 Docker 容器中自动设置为 `/data`。

@@ -1,6 +1,6 @@
 BUILD_TARGET ?= mibee-nvr
 
-RPi_HOST := user@your-rpi-host
+RPi_HOST ?= user@your-rpi-host
 RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
 RPi_SRV  := mibee-nvr
 

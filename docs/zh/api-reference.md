@@ -184,7 +184,6 @@ curl -X GET "http://localhost:9090/api/recordings/1704110400000000000" \
 curl -X DELETE "http://localhost:9090/api/recordings/1704110400000000000" \
   -H "Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM="
 ```
-```
 
 ### 下载录像
 
@@ -307,7 +306,8 @@ curl -X GET "http://localhost:9090/api/cameras" \
   "retention_days": 15
   
   # 注意：retention_days 是可选的，默认使用全局设置
-}```
+}
+```
 
 **响应**:
 ```json
@@ -327,7 +327,8 @@ curl -X GET "http://localhost:9090/api/cameras" \
     "created_at": "2024-01-01T10:20:00Z",
     "updated_at": "2024-01-01T10:20:00Z"
   }
-}```
+}
+```
 
 **curl 示例**:
 ```bash
@@ -376,17 +377,6 @@ curl -X POST "http://localhost:9090/api/cameras" \
       },
       "created_at": "2024-01-01T09:00:00Z",
       "updated_at": "2024-01-01T09:00:00Z"
-      "username": "admin",
-      "password": "password123",
-      "statistics": {
-        "uptime": "2h30m",
-        "recording_count": 156,
-        "total_size": "1.2GB",
-        "bitrate": 256000,
-        "framerate": 30
-      },
-      "created_at": "2024-01-01T09:00:00Z",
-      "updated_at": "2024-01-01T09:00:00Z"
     }
 ```
 
@@ -411,7 +401,8 @@ curl -X GET "http://localhost:9090/api/cameras/cam1" \
   "password": "newpassword123"
   
   # 注意：retention_days 是可选的，更新按摄像头保留策略
-}```
+}
+```
 
 **响应**:
 ```json
@@ -713,7 +704,8 @@ curl -X PUT "http://localhost:9090/api/settings/merge" \
 }
 
   # 注意：设置后，这些配置会覆盖该摄像头的全局合并设置
-}```
+}
+```
 
 **请求**: 
 ```bash
@@ -753,10 +745,6 @@ curl -X DELETE "http://localhost:9090/api/cameras/cam1/merge-config" \
 }
 ```
 
-### 获取系统设置
-
-
-### 获取系统设置
 
 **接口**: `GET /api/settings`
 

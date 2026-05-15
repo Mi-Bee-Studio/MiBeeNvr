@@ -42,13 +42,11 @@ chmod +x mibee-nvr-arm64
 
 ```bash
 docker compose up -d
+```
 
 在浏览器打开 http://localhost:9090。
 
 > **注意**：无需准备配置文件！MiBee NVR 在没有配置文件的情况下启动时会自动初始化。
-```
-
-在浏览器打开 http://localhost:9090。
 
 ### 方式三：一键安装脚本
 

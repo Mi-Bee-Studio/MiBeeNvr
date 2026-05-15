@@ -122,15 +122,47 @@ func (c *CS2Conn) worker() {
 		c.channels[2].Close()
 	}()
 
-	var keepaliveTS time.Time // only for TCP
+	const (
+		pingInterval = 1 * time.Second
+		idleTimeout  = 30 * time.Second
+	)
 
+	var keepaliveTS time.Time // only for TCP
+	lastData := time.Now()
 	buf := make([]byte, 1200)
 
 	for {
+		// Set a short read deadline for TCP to wake up and send keepalive pings.
+		// For UDP use the full idle timeout since there is no ping mechanism.
+		if c.isTCP {
+			_ = c.Conn.SetReadDeadline(time.Now().Add(pingInterval))
+		} else {
+			_ = c.Conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		}
+
 		n, err := c.Conn.Read(buf)
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// TCP: send keepalive ping on each timeout wakeup.
+				if c.isTCP && time.Now().After(keepaliveTS) {
+					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					keepaliveTS = time.Now().Add(pingInterval)
+				}
+
+				// Detect truly dead connection: no data for idleTimeout.
+				if time.Since(lastData) > idleTimeout {
+					c.err = fmt.Errorf("cs2: no data for %v", idleTimeout)
+					return
+				}
+				continue
+			}
 			c.err = fmt.Errorf("cs2: %w", err)
 			return
+		}
+
+		lastData = time.Now()
+		if c.isTCP {
+			keepaliveTS = time.Now().Add(pingInterval)
 		}
 
 		switch buf[1] {
@@ -139,12 +171,6 @@ func (c *CS2Conn) worker() {
 			channel := c.channels[ch]
 
 			if c.isTCP {
-				// For TCP we should send ping every second to keep connection alive.
-				if now := time.Now(); now.After(keepaliveTS) {
-					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
-					keepaliveTS = now.Add(time.Second)
-				}
-
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int

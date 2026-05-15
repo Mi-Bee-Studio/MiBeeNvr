@@ -102,6 +102,11 @@ Token encryption is planned for future versions. Consider using a secure configu
   - Check NVR system logs for specific error messages
   - Try re-authenticating with Xiaomi cloud
 
+#### Recording Stops After ~20 Minutes
+- **Cause**: CS2 P2P TCP connection hangs when camera stops sending data (no idle timeout)
+- **Solution**: Update to the latest version which adds read deadlines and independent TCP keepalive pings
+- **Note**: The fix adds a 30-second idle timeout to detect dead connections and triggers automatic reconnection
+
 ### Getting Xiaomi Credentials
 
 If you need to obtain your Xiaomi credentials manually:
