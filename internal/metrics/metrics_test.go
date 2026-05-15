@@ -115,7 +115,8 @@ func TestRegistryGather(t *testing.T) {
 	m.CleanupDeleted.WithLabelValues("retention").Inc()
 	m.StorageTotalBytes.Set(2048)
 	m.RecordingCount.Set(3)
-	m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
+m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
+	m.HLSFramesDropped.WithLabelValues("cam1").Inc()
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -136,4 +137,25 @@ func TestRegistryGather(t *testing.T) {
 	require.True(t, names["nvr_storage_total_bytes"])
 	require.True(t, names["nvr_recording_count"])
 	require.True(t, names["nvr_camera_errors_total"])
+	require.True(t, names["nvr_hls_frames_dropped_total"])
+}
+
+func TestHLSFramesDroppedCounter(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	require.NotNil(t, m.HLSFramesDropped)
+
+	m.HLSFramesDropped.WithLabelValues("cam1").Inc()
+	m.HLSFramesDropped.WithLabelValues("cam1").Add(5)
+	m.HLSFramesDropped.WithLabelValues("cam2").Inc()
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_hls_frames_dropped_total" {
+			require.Len(t, f.GetMetric(), 2) // cam1 and cam2
+			return
+		}
+	}
+	t.Fatal("expected nvr_hls_frames_dropped_total metric family")
 }

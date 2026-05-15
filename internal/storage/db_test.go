@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -894,4 +895,197 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
 	require.Equal(t, "7", version)
+}
+
+func TestInsertRecordingWithRetry_Success(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_retry.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	started := time.Now()
+	rec := &model.Recording{
+		ID:         "retry-001",
+		CameraID:   "cam1",
+		FilePath:   "/path/retry.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  started,
+		EndedAt:    started.Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   1024,
+		FrameCount: 60,
+		Merged:     false,
+	}
+	err = db.InsertRecordingWithRetry(ctx, rec, 3, 10*time.Millisecond)
+	require.NoError(t, err)
+
+	got, err := db.GetRecording(ctx, rec.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "cam1", got.CameraID)
+	require.Equal(t, "/path/retry.mp4", got.FilePath)
+}
+
+func TestMergeAndReplaceRecordings(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_replace.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	// Insert 5 source recordings
+	oldIDs := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("old-%d", i)
+		oldIDs[i] = id
+		rec := &model.Recording{
+			ID:        id,
+			CameraID:  "camMerge",
+			FilePath:  fmt.Sprintf("/merge/seg%d.mp4", i),
+			Format:    model.FormatH264,
+			StartedAt: now.Add(time.Duration(i) * time.Minute),
+			EndedAt:   now.Add(time.Duration(i+1) * time.Minute),
+			Duration:  60.0,
+			FileSize:  1024,
+		}
+		require.NoError(t, db.InsertRecording(ctx, rec))
+	}
+
+	// Merge and replace
+	merged := &model.Recording{
+		ID:        "merged-001",
+		CameraID:  "camMerge",
+		FilePath:  "/merge/merged.mp4",
+		Format:    model.FormatH264,
+		StartedAt: now,
+		EndedAt:   now.Add(5 * time.Minute),
+		Duration:  300.0,
+		FileSize:  5120,
+		Merged:    true,
+	}
+	err = db.MergeAndReplaceRecordings(ctx, merged, oldIDs)
+	require.NoError(t, err)
+
+	// Old recordings should be deleted
+	for _, id := range oldIDs {
+		got, err := db.GetRecording(ctx, id)
+		require.NoError(t, err)
+		require.Nil(t, got, "old recording %s should be deleted", id)
+	}
+
+	// Merged recording should exist with Merged=true
+	got, err := db.GetRecording(ctx, merged.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.Merged)
+	require.Equal(t, "/merge/merged.mp4", got.FilePath)
+}
+
+func TestMergeAndReplaceRecordings_EmptyOldIDs(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_empty.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	merged := &model.Recording{
+		ID:        "merge-no-old",
+		CameraID:  "cam1",
+		FilePath:  "/merge/single.mp4",
+		Format:    model.FormatH264,
+		StartedAt: time.Now(),
+		Duration:  60.0,
+		FileSize:  1024,
+	}
+	err = db.MergeAndReplaceRecordings(ctx, merged, nil)
+	require.NoError(t, err)
+
+	got, err := db.GetRecording(ctx, merged.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "merge-no-old", got.ID)
+}
+
+func TestGetRecordingsByPathSet(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_pathset.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	paths := []string{"/a/seg1.mp4", "/a/seg2.mp4", "/a/seg3.mp4"}
+	for i, p := range paths {
+		rec := &model.Recording{
+			ID:        fmt.Sprintf("ps-%d", i),
+			CameraID:  "camPS",
+			FilePath:  p,
+			Format:    model.FormatH264,
+			StartedAt: now.Add(time.Duration(i) * time.Minute),
+		}
+		require.NoError(t, db.InsertRecording(ctx, rec))
+	}
+
+	// Query with all 3 paths + 1 non-existent
+	result, err := db.GetRecordingsByPathSet(ctx, append(paths, "/a/nonexistent.mp4"))
+	require.NoError(t, err)
+	require.Len(t, result, 3)
+	for _, p := range paths {
+		require.True(t, result[p], "path %s should be in result set", p)
+	}
+}
+
+func TestGetRecordingsByPathSet_Empty(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_pathset_empty.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	result, err := db.GetRecordingsByPathSet(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result, 0)
+}
+
+func TestInsertOrphanRecordings(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_orphan.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	recordings := []*model.Recording{
+		{ID: "orph-1", CameraID: "camO", FilePath: "/o/seg1.mp4", Format: model.FormatH264, StartedAt: now, FileSize: 100},
+		{ID: "orph-2", CameraID: "camO", FilePath: "/o/seg2.mp4", Format: model.FormatH264, StartedAt: now.Add(time.Minute), FileSize: 200},
+	}
+
+	count, err := db.InsertOrphanRecordings(ctx, recordings)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+
+	// Verify they exist
+	got, err := db.GetRecording(ctx, "orph-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Insert same data again — should be ignored (OR IGNORE)
+	count2, err := db.InsertOrphanRecordings(ctx, recordings)
+	require.NoError(t, err)
+	require.Equal(t, 0, count2, "duplicate inserts should be ignored")
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var (
@@ -314,6 +315,18 @@ func main() {
 		slog.Warn("incomplete cleanup", "error", err)
 	}
 
+	// Reconcile orphaned recording files (exists on disk but not in DB)
+	cameraIDs := make(map[string]bool)
+	for _, cam := range cfg.Cameras {
+		cameraIDs[cam.ID] = true
+	}
+	reconciled, err := store.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	if err != nil {
+		slog.Error("failed to reconcile orphaned files", "error", err)
+	} else if reconciled > 0 {
+		slog.Info("reconciled orphaned recording files", "count", reconciled)
+	}
+
 	// Auth middleware
 	authMW, effectiveHash := authmw.NewAuthMiddleware(cfg.Auth.Username, cfg.Auth.PasswordHash, cfg.Auth.Password)
 	if effectiveHash != "" && cfg.Auth.PasswordHash == "" && cfg.Auth.Password != "" {
@@ -330,7 +343,7 @@ func main() {
 
 	// HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024)
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
  
 	// Merge manager
 	mergeMgr := merge.NewMergeManager(
@@ -411,6 +424,9 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	}))
 
+
+	// Initialize Xiaomi cloud config for MISS URL resolution
+	xiaomi.SetCloudConfig(cfg.Xiaomi)
 	// Start camera manager
 	go func() {
 		if err := camMgr.Start(ctx); err != nil {

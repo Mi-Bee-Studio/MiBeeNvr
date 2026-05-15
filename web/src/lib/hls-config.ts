@@ -1,21 +1,24 @@
 /**
- * Shared hls.js configuration optimized for Raspberry Pi 3B.
+ * Shared hls.js configuration optimized for modern browsers.
  *
- * Low buffer sizes minimize memory usage on constrained devices.
- * enableWorker:false ensures compatibility with RPi browsers.
+ * Larger buffer sizes for smoother playback. enableWorker for off-thread parsing.
  */
 
 import { getCredentials } from '$lib/api';
 import type Hls from 'hls.js';
 
-/** RPi-optimized hls.js configuration. */
+/** Modern browser optimized hls.js configuration. */
 export function createHlsConfig(): Partial<Hls.Config> {
   return {
-    enableWorker: false,
-    maxBufferLength: 5,
-    maxMaxBufferLength: 10,
-    maxBufferSize: 10 * 1024 * 1024, // 10 MB
-    backBufferLength: 2,
+    enableWorker: true,
+    maxBufferLength: 15,
+    maxMaxBufferLength: 30,
+    maxBufferSize: 30 * 1024 * 1024, // 30 MB
+    backBufferLength: 5,
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: 7,
+    liveDurationInfinity: true,
+    progressive: true,
     xhrSetup: (xhr: XMLHttpRequest, url: string) => {
       const creds = getCredentials();
       if (creds) {

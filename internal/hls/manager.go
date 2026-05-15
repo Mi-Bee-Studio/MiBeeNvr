@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gohlslib/v2"
@@ -19,6 +20,8 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
 	"github.com/pion/rtp"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 var hlsLogger = slog.Default().With("component", "hls-manager")
@@ -26,7 +29,7 @@ var hlsLogger = slog.Default().With("component", "hls-manager")
 const (
 	defaultIdleTimeout  = 60 * time.Second
 	defaultMaxStreams   = 4
-	defaultWriteBufSize = 40  // buffered frames per stream (~2s at 20fps)
+	defaultWriteBufSize = 100 // buffered frames per stream (~5s at 20fps)
 	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
 )
 
@@ -47,7 +50,8 @@ type streamEntry struct {
 	isH265          bool
 	subStreamCancel context.CancelFunc // cancels the sub-stream RTSP reader goroutine
 	maxFPS          int
-	lastFrameTime time.Time
+	lastFrameTime   time.Time
+	drops          uint64 // atomic: total frames dropped due to buffer full
 }
 
 // Manager manages on-demand HLS streams for cameras.
@@ -59,38 +63,51 @@ type Manager struct {
 	maxStreams       int
 	writeBufSize    int
 	segmentMaxSize  int
+	segmentCount    int
+	metrics         *metrics.Metrics
 }
 
 // NewManager creates a new HLS Manager with default settings.
 // Use NewManagerWithOpts for custom buffer/segment sizes.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		streams:        make(map[string]*streamEntry),
-		dataDir:        dataDir,
-		idleTimeout:    defaultIdleTimeout,
-		maxStreams:      defaultMaxStreams,
-		writeBufSize:   defaultWriteBufSize,
+		streams:       make(map[string]*streamEntry),
+		dataDir:       dataDir,
+		idleTimeout:   defaultIdleTimeout,
+		maxStreams:     defaultMaxStreams,
+		writeBufSize:  defaultWriteBufSize,
 		segmentMaxSize: defaultSegmentMaxSize,
+		segmentCount:  3,
 	}
 }
 
-// NewManagerWithOpts creates a new HLS Manager with custom buffer and segment sizes.
-// writeBufSize controls the async frame buffer per stream (default: 40).
+// NewManagerWithOpts creates a new HLS Manager with custom buffer, segment sizes, and segment count.
+// writeBufSize controls the async frame buffer per stream (default: 100).
 // segmentMaxSize controls the maximum HLS segment file size in bytes (default: 10MB).
-func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize int) *Manager {
+// segmentCount controls the number of HLS segments per stream (default: 7, range [3,10]).
+func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize, segmentCount int, opts ...*metrics.Metrics) *Manager {
 	if writeBufSize <= 0 {
 		writeBufSize = defaultWriteBufSize
 	}
 	if segmentMaxSize <= 0 {
 		segmentMaxSize = defaultSegmentMaxSize
 	}
+	if segmentCount <= 0 {
+		segmentCount = 3
+	}
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	return &Manager{
-		streams:        make(map[string]*streamEntry),
-		dataDir:        dataDir,
-		idleTimeout:    defaultIdleTimeout,
-		maxStreams:      defaultMaxStreams,
-		writeBufSize:   writeBufSize,
+		streams:       make(map[string]*streamEntry),
+		dataDir:       dataDir,
+		idleTimeout:   defaultIdleTimeout,
+		maxStreams:     defaultMaxStreams,
+		writeBufSize:  writeBufSize,
 		segmentMaxSize: segmentMaxSize,
+		segmentCount:  segmentCount,
+		metrics:       m,
 	}
 }
 
@@ -137,7 +154,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		mux = &gohlslib.Muxer{
 			Tracks:             []*gohlslib.Track{track},
 			Variant:            gohlslib.MuxerVariantFMP4,
-			SegmentCount:       3,
+			SegmentCount:       m.segmentCount,
 			SegmentMinDuration: 2 * time.Second,
 			SegmentMaxSize:     uint64(m.segmentMaxSize),
 			Directory:          dirPath,
@@ -150,7 +167,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		mux = &gohlslib.Muxer{
 			Tracks:             []*gohlslib.Track{track},
 			Variant:            gohlslib.MuxerVariantMPEGTS,
-			SegmentCount:       3,
+			SegmentCount:       m.segmentCount,
 			SegmentMinDuration: 2 * time.Second,
 			SegmentMaxSize:     uint64(m.segmentMaxSize),
 			Directory:          dirPath,
@@ -467,6 +484,13 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	case entry.frameCh <- hlsFrame{pts: pts, au: au}:
 	default:
 		// Buffer full, drop frame. Live view tolerates dropped frames.
+		if m.metrics != nil {
+			m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
+		}
+		dropCount := atomic.AddUint64(&entry.drops, 1)
+		if dropCount%100 == 0 {
+			hlsLogger.Warn("HLS frames dropped due to buffer full", "camera_id", cameraID, "total_drops", dropCount)
+		}
 	}
 
 	return nil

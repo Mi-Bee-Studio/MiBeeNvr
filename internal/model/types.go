@@ -115,6 +115,7 @@ const (
 	ProtoHTTPJPEG  Protocol = "http_jpeg"
 	ProtoRTSPH265 Protocol = "rtsp_h265"
 	ProtoONVIF    Protocol = "onvif"
+	ProtoXiaomi Protocol = "xiaomi"
 )
 
 // Transport-only protocol constants
@@ -140,6 +141,7 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoRTSP):  {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
 	string(ProtoHTTP):  {string(EncJPEG)},
 	string(ProtoONVIF): {string(FormatH264), string(FormatH265)},
+	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice, XiaomiAuthResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -58,6 +58,8 @@
       formEncoding = 'jpeg';
     } else if (formProtocol === 'onvif') {
       formEncoding = '';
+    } else if (formProtocol === 'xiaomi') {
+      formEncoding = 'h265';
     } else if (formProtocol === 'rtsp' && (formEncoding === 'jpeg' || formEncoding === '')) {
       formEncoding = 'h264';
     }
@@ -85,6 +87,22 @@
   let onvifUsername = $state('');
   let onvifPassword = $state('');
 
+  // Xiaomi discovery
+  let xiaomiExpanded = $state(false);
+  let xiaomiUsername = $state('');
+  let xiaomiPassword = $state('');
+  let xiaomiLoading = $state(false);
+  let xiaomiError = $state('');
+  let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
+  let xiaomiLoggedIn = $state(false);
+  let xiaomiAddingDid = $state<string | null>(null);
+  let xiaomiCaptchaImage = $state<string>('');  // base64 data URL
+  let xiaomiCaptchaSessionId = $state('');
+  let xiaomiCaptchaCode = $state('');
+  let xiaomiVerifySessionId = $state('');
+  let xiaomiVerifyTicket = $state('');
+  let xiaomiVerifyTarget = $state('');  // masked phone or email
+  let xiaomiVerifyType = $state<'phone' | 'email' | ''>('');
   // Merge config (per-camera)
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
@@ -356,8 +374,136 @@
     }
   }
 
-  onMount(() => {
+  async function handleXiaomiLogin() {
+    xiaomiLoading = true;
+    xiaomiError = '';
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
+    try {
+      const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword);
+      await handleAuthResult(result);
+    } catch (e: any) {
+      xiaomiError = e.message || t('xiaomi.authFailed');
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  async function handleAuthResult(result: XiaomiAuthResponse) {
+    if (result.status === 'verification_required') {
+      if (result.captcha && result.session_id) {
+        // Show captcha image
+        xiaomiCaptchaImage = result.captcha.startsWith('data:') ? result.captcha : `data:image/jpeg;base64,${result.captcha}`;
+        xiaomiCaptchaSessionId = result.session_id;
+        xiaomiCaptchaCode = '';
+      } else if (result.verify_phone && result.session_id) {
+        xiaomiVerifySessionId = result.session_id;
+        xiaomiVerifyTarget = result.verify_phone;
+        xiaomiVerifyType = 'phone';
+        xiaomiVerifyTicket = '';
+      } else if (result.verify_email && result.session_id) {
+        xiaomiVerifySessionId = result.session_id;
+        xiaomiVerifyTarget = result.verify_email;
+        xiaomiVerifyType = 'email';
+        xiaomiVerifyTicket = '';
+      } else {
+        xiaomiError = t('xiaomi.verificationRequired');
+      }
+      return;
+    }
+    // Success
+    xiaomiCaptchaImage = '';
+    xiaomiCaptchaSessionId = '';
+    xiaomiVerifySessionId = '';
+    xiaomiVerifyTarget = '';
+    xiaomiVerifyType = '';
+    xiaomiLoggedIn = true;
+    const devRes = await xiaomiDevices();
+    xiaomiDeviceList = devRes.devices;
+  }
+
+  async function handleXiaomiCaptcha() {
+    if (!xiaomiCaptchaSessionId || !xiaomiCaptchaCode.trim()) return;
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
+      await handleAuthResult(result);
+    } catch (e: any) {
+      xiaomiError = e.message || t('xiaomi.authFailed');
+      // Reset captcha code for retry, keep image
+      xiaomiCaptchaCode = '';
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  async function handleXiaomiVerify() {
+    if (!xiaomiVerifySessionId || !xiaomiVerifyTicket.trim()) return;
+    xiaomiLoading = true;
+    xiaomiError = '';
+    try {
+      const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
+      await handleAuthResult(result);
+    } catch (e: any) {
+      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiVerifyTicket = '';
+    } finally {
+      xiaomiLoading = false;
+    }
+  }
+
+  function isXiaomiDeviceAdded(did: string): boolean {
+    return cameras.some(c => c.protocol === 'xiaomi' && c.url === `xiaomi://${did}`);
+  }
+  async function addXiaomiDevice(device: XiaomiDevice) {
+    xiaomiAddingDid = device.did;
+    try {
+      await createCamera({
+        name: device.name,
+        protocol: 'xiaomi',
+        encoding: 'h264',
+        url: `xiaomi://${device.did}`,
+        enabled: true,
+      });
+      showToast(t('cameras.cameraAdded'), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(t('cameras.failedAdd'), 'error');
+    } finally {
+      xiaomiAddingDid = null;
+    }
+  }
+
+  async function refreshXiaomiDevices() {
+    try {
+      const res = await xiaomiDevices();
+      xiaomiDeviceList = res.devices || [];
+      xiaomiLoggedIn = true;
+    } catch (e: any) {
+      // Token expired or not authenticated
+      xiaomiLoggedIn = false;
+      xiaomiDeviceList = [];
+    }
+  }
+
+  onMount(async () => {
     loadCameras();
+    // Probe xiaomi auth status
+    try {
+      const res = await xiaomiDevices();
+      if (res.devices && res.devices.length > 0) {
+        xiaomiLoggedIn = true;
+        xiaomiDeviceList = res.devices;
+      } else if (res.message) {
+        // No token configured — keep login form visible
+      }
+    } catch (e: any) {
+      // 401 = token expired, keep login form visible
+    }
   });
 </script>
 
@@ -483,6 +629,157 @@
           </div>
         {/if}
 
+        <!-- Xiaomi Device Discovery -->
+        <div class="card p-6 border th-border">
+          <button 
+            class="w-full flex items-center justify-between text-left"
+            on:click={() => xiaomiExpanded = !xiaomiExpanded}
+          >
+            <h3 class="text-lg font-semibold th-text-primary">{t('xiaomi.title')}</h3>
+            <span class="th-text-muted text-sm">{xiaomiExpanded ? '▲' : '▼'}</span>
+          </button>
+
+          {#if xiaomiExpanded}
+            <div class="mt-4">
+              {#if !xiaomiLoggedIn}
+                <!-- Login form -->
+                <form on:submit|preventDefault={handleXiaomiLogin} class="space-y-3">
+                  <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label class="input-label text-xs">{t('xiaomi.account')}</label>
+                      <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
+                    </div>
+                    <div>
+                      <label class="input-label text-xs">{t('xiaomi.password')}</label>
+                      <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
+                    </div>
+                  </div>
+                  {#if xiaomiError}
+                    <p class="th-color-danger text-sm">{xiaomiError}</p>
+                  {/if}
+                  <button type="submit" class="btn btn-primary btn-sm" disabled={xiaomiLoading}>
+                    {#if xiaomiLoading}
+                      <span class="spinner mr-1"></span>
+                    {/if}
+                    {xiaomiLoading ? t('xiaomi.signingIn') : t('xiaomi.signIn')}
+                  </button>
+                </form>
+
+                <!-- Captcha form (shown when captcha required) -->
+                {#if xiaomiCaptchaImage}
+                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
+                    <p class="text-sm font-medium th-text-primary mb-3">{t('xiaomi.captchaTitle')}</p>
+                    <div class="flex items-start gap-4">
+                      <img src={xiaomiCaptchaImage} alt="Captcha" class="border th-border rounded h-12" />
+                      <div class="flex-1 space-y-2">
+                        <input
+                          type="text"
+                          class="input py-1 text-sm"
+                          bind:value={xiaomiCaptchaCode}
+                          placeholder={t('xiaomi.captchaPlaceholder')}
+                          disabled={xiaomiLoading}
+                        />
+                        <button
+                          type="button"
+                          on:click={handleXiaomiCaptcha}
+                          class="btn btn-primary btn-sm"
+                          disabled={xiaomiLoading || !xiaomiCaptchaCode.trim()}
+                        >
+                          {#if xiaomiLoading}
+                            <span class="spinner mr-1"></span>
+                          {/if}
+                          {t('xiaomi.submitCaptcha')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Verify form (shown when phone/email verification required) -->
+                {#if xiaomiVerifyType}
+                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
+                    <p class="text-sm font-medium th-text-primary mb-1">{t('xiaomi.verifyTitle')}</p>
+                    <p class="text-xs th-text-secondary mb-3">
+                      {#if xiaomiVerifyType === 'phone'}
+                        {t('xiaomi.verifyPhoneHint').replace('{phone}', xiaomiVerifyTarget)}
+                      {:else}
+                        {t('xiaomi.verifyEmailHint').replace('{email}', xiaomiVerifyTarget)}
+                      {/if}
+                    </p>
+                    <div class="flex gap-3">
+                      <input
+                        type="text"
+                        class="input py-1 text-sm flex-1"
+                        bind:value={xiaomiVerifyTicket}
+                        placeholder={t('xiaomi.verifyCodePlaceholder')}
+                        disabled={xiaomiLoading}
+                      />
+                      <button
+                        type="button"
+                        on:click={handleXiaomiVerify}
+                        class="btn btn-primary btn-sm"
+                        disabled={xiaomiLoading || !xiaomiVerifyTicket.trim()}
+                      >
+                        {#if xiaomiLoading}
+                          <span class="spinner mr-1"></span>
+                        {/if}
+                        {t('xiaomi.submitVerify')}
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              {:else}
+                <!-- Device list -->
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
+                <button class="btn btn-ghost btn-sm" on:click={refreshXiaomiDevices}>{t('xiaomi.refresh')}</button>
+                </div>
+                {#if xiaomiDeviceList.length === 0}
+                  <p class="th-text-secondary text-sm py-2">{t('xiaomi.noDevices')}</p>
+                {:else}
+                  <div class="space-y-3">
+                    {#each xiaomiDeviceList as device (device.did)}
+                      <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
+                        <div class="min-w-0 flex-1 mr-4">
+                          <div class="font-medium th-text-primary truncate">{device.name}</div>
+                          <div class="text-sm th-text-secondary truncate">{device.model} · {device.localip}</div>
+                          <div class="text-xs mt-0.5 {device.isOnline ? 'th-color-success' : 'th-text-muted'}">
+                            {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
+                          </div>
+                        </div>
+                        {#if isXiaomiDeviceAdded(device.did)}
+                          <button
+                            type="button"
+                            class="btn btn-sm shrink-0 opacity-50 cursor-not-allowed"
+                            disabled
+                          >
+                            {t('xiaomi.added')}
+                          </button>
+                        {:else}
+                          <button
+                            on:click={() => addXiaomiDevice(device)}
+                            class="btn btn-primary btn-sm shrink-0"
+                            disabled={xiaomiAddingDid === device.did}
+                          >
+                            {#if xiaomiAddingDid === device.did}
+                              <span class="spinner mr-1"></span>
+                            {/if}
+                            {t('onvif.addCamera')}
+                          </button>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="mt-4 flex justify-end">
+                  <button class="btn btn-ghost btn-sm" on:click={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>{t('xiaomi.signOut')}</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+
         <!-- Add/Edit Form -->
         {#if showForm}
           <div class="card p-6 border th-border">
@@ -507,6 +804,7 @@
                   <option value="rtsp">RTSP</option>
                   <option value="http">HTTP</option>
                   <option value="onvif">ONVIF</option>
+                  <option value="xiaomi">Xiaomi</option>
                 </select>
                 {#if validationErrors['protocol']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
@@ -527,6 +825,9 @@
                     <option value="">{t('cameras.autoDetect')}</option>
                     <option value="h264">H.264</option>
                     <option value="h265">H.265</option>
+                  {:else if formProtocol === 'xiaomi'}
+                    <option value="h264">H.264</option>
+                    <option value="h265">H.265</option>
                   {/if}
                 </select>
               </div>
@@ -540,44 +841,66 @@
                   {/if}
                 </label>
                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
-                  placeholder={formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
+                  placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
                   on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
               </div>
 
-              <!-- Username -->
-              <div>
-                <label for="cam-user" class="input-label">{t('cameras.username')}</label>
-                <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || t('cameras.notSet')) : ''} />
-              </div>
+              {#if formProtocol === 'xiaomi'}
+                {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}
+                  {@const matchDid = formUrl.replace('xiaomi://', '')}
+                  {@const matchedDevice = xiaomiDeviceList.find(d => d.did === matchDid)}
+                  {#if matchedDevice}
+                    <div class="p-3 rounded-md th-bg-hover border th-border text-sm">
+                      <div class="font-medium th-text-primary">{matchedDevice.name}</div>
+                      <div class="th-text-secondary">{matchedDevice.model} · {matchedDevice.localip}</div>
+                      <div class="{matchedDevice.isOnline ? 'th-color-success' : 'th-text-muted'}">
+                        {matchedDevice.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
+                      </div>
+                    </div>
+                  {/if}
+                {/if}
+              {/if}
 
-              <!-- Password -->
-              <div>
-                <label for="cam-pass" class="input-label">{t('cameras.password')}</label>
-                <div class="relative">
-                  <input
-                    id="cam-pass"
-                    type={showPassword ? 'text' : 'password'}
-                    class="input pr-10"
-                    bind:value={formPassword}
-                    placeholder={editingCamera ? (editingCamera.has_password ? t('cameras.passwordSet') : t('cameras.notSet')) : ''}
-                  />
-                  <button
-                    type="button"
-                    class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
-                    on:click={() => showPassword = !showPassword}
-                    aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
-                  >
-                    {#if showPassword}
-                      <EyeOff class="w-4 h-4" />
-                    {:else}
-                      <Eye class="w-4 h-4" />
-                    {/if}
-                  </button>
+              {#if formProtocol !== 'xiaomi'}
+                <!-- Username -->
+                <div>
+                  <label for="cam-user" class="input-label">{t('cameras.username')}</label>
+                  <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || t('cameras.notSet')) : ''} />
                 </div>
-              </div>
+
+                <!-- Password -->
+                <div>
+                  <label for="cam-pass" class="input-label">{t('cameras.password')}</label>
+                  <div class="relative">
+                    <input
+                      id="cam-pass"
+                      type={showPassword ? 'text' : 'password'}
+                      class="input pr-10"
+                      bind:value={formPassword}
+                      placeholder={editingCamera ? (editingCamera.has_password ? t('cameras.passwordSet') : t('cameras.notSet')) : ''}
+                    />
+                    <button
+                      type="button"
+                      class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+                      on:click={() => showPassword = !showPassword}
+                      aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+                    >
+                      {#if showPassword}
+                        <EyeOff class="w-4 h-4" />
+                      {:else}
+                        <Eye class="w-4 h-4" />
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+              {:else}
+                <div class="md:col-span-2 text-sm th-text-secondary">
+                  Credentials are managed via Xiaomi cloud authentication above.
+                </div>
+              {/if}
 
               <!-- Enabled -->
               <div class="md:col-span-2 flex items-center gap-2">

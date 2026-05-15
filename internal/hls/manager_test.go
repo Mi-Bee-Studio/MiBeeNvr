@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 // newTestManager creates a Manager with a writable temp directory.
@@ -238,22 +240,26 @@ func TestNewManager(t *testing.T) {
 	require.Equal(t, defaultMaxStreams, mgr.maxStreams)
 	require.Equal(t, defaultWriteBufSize, mgr.writeBufSize)
 	require.Equal(t, defaultSegmentMaxSize, mgr.segmentMaxSize)
+	require.Equal(t, 3, mgr.segmentCount)
+	require.Nil(t, mgr.metrics)
 }
 
 // --- NewManagerWithOpts Tests ---
 
 func TestNewManagerWithOpts_CustomValues(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), 80, 20*1024*1024)
+	mgr := NewManagerWithOpts(t.TempDir(), 80, 20*1024*1024, 7)
 	require.NotNil(t, mgr)
 	require.Equal(t, 80, mgr.writeBufSize)
 	require.Equal(t, 20*1024*1024, mgr.segmentMaxSize)
+	require.Equal(t, 7, mgr.segmentCount)
 }
 
 func TestNewManagerWithOpts_ZeroValuesUseDefaults(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), 0, 0)
+	mgr := NewManagerWithOpts(t.TempDir(), 0, 0, 0)
 	require.NotNil(t, mgr)
 	require.Equal(t, defaultWriteBufSize, mgr.writeBufSize)
 	require.Equal(t, defaultSegmentMaxSize, mgr.segmentMaxSize)
+	require.Equal(t, 3, mgr.segmentCount)
 }
 
 // --- Thread Safety Tests ---
@@ -330,7 +336,7 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 // --- ErrMaxStreamsReached Tests ---
 
 func TestStartStream_AtCapacity_ReturnsErrMaxStreamsReached(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 	cameraID := "test-cam"
 
 	// Fill streams to maxStreams capacity
@@ -456,7 +462,7 @@ func TestGetStreamStatus_ConcurrentReads(t *testing.T) {
 // --- Concurrent Stream Start/Stop Tests ---
 
 func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	var wg sync.WaitGroup
 	// Start 4 streams concurrently (at maxStreams limit)
@@ -478,7 +484,7 @@ func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
 }
 
 func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill to max capacity
 	for i := 0; i < defaultMaxStreams; i++ {
@@ -513,7 +519,7 @@ func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
 }
 
 func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill streams
 	for i := 0; i < defaultMaxStreams; i++ {
@@ -542,7 +548,7 @@ func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
 }
 
 func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize)
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	var wg sync.WaitGroup
 	// Interleave starts and stops
@@ -563,4 +569,67 @@ func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
 	}
 	wg.Wait()
 	// No panic/deadlock = success
+}
+
+// --- Frame Drop Counter Tests ---
+
+func TestWriteFrame_DropCounterIncrements(t *testing.T) {
+	m := metrics.NewMetrics()
+	mgr := NewManagerWithOpts(t.TempDir(), 2, defaultSegmentMaxSize, 0, m) // tiny buffer
+	cameraID := "test-cam"
+
+	// Insert a stream entry with tiny buffer and no FPS limit
+	mgr.mu.Lock()
+	entry := &streamEntry{
+		frameCh:       make(chan hlsFrame, 2), // matches writeBufSize
+		maxFPS:        0,
+		lastUsed:      time.Now(),
+		lastFrameTime: time.Time{},
+	}
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// Fill the buffer completely
+	for i := 0; i < 2; i++ {
+		err := mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00}})
+		require.NoError(t, err)
+	}
+
+	// Next write should be dropped and counter incremented
+	err := mgr.WriteH264(cameraID, 3000, [][]byte{{0x00}})
+	require.NoError(t, err)
+
+	// Verify Prometheus counter incremented
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_hls_frames_dropped_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			return
+		}
+	}
+	t.Fatal("expected nvr_hls_frames_dropped_total metric")
+}
+
+func TestWriteFrame_DropCounterNilMetrics(t *testing.T) {
+	// Verify no panic when metrics is nil
+	mgr := NewManagerWithOpts(t.TempDir(), 1, defaultSegmentMaxSize, 0) // no metrics
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := &streamEntry{
+		frameCh:       make(chan hlsFrame, 1),
+		maxFPS:        0,
+		lastUsed:      time.Now(),
+		lastFrameTime: time.Time{},
+	}
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// Fill buffer
+	_ = mgr.WriteH264(cameraID, 1000, [][]byte{{0x00}})
+	// Drop one — should not panic
+	err := mgr.WriteH264(cameraID, 2000, [][]byte{{0x00}})
+	require.NoError(t, err)
 }

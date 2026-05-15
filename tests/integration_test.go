@@ -880,7 +880,7 @@ func TestMultiStreamHLS(t *testing.T) {
 
 	// Create HLS manager with small limits for testing
 	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20)
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager (no camMgr — HLS endpoint returns 500)
 	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil)
@@ -1136,7 +1136,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	db, store := setupEnv(t)
 
 	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20)
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager but no camMgr
 	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil)

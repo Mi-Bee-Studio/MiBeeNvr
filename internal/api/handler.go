@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,8 +26,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var logger = slog.Default().With("component", "api")
@@ -147,6 +151,14 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		r.Get("/api/plugins", h.handlePlugins)
+		// Xiaomi cloud auth and device discovery
+		r.Route("/api/xiaomi", func(r chi.Router) {
+			r.Post("/auth", h.handleXiaomiAuth)
+			r.Post("/captcha", h.handleXiaomiCaptcha)
+			r.Post("/verify", h.handleXiaomiVerify)
+			r.Get("/devices", h.handleXiaomiDevices)
+		})
 	})
 
 	return r
@@ -726,6 +738,8 @@ var validProtocols = map[string]bool{
 	"rtsp":  true,
 	"http":  true,
 	"onvif": true,
+	// Plugin protocols
+	"xiaomi": true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
 	"rtsp_h265":  true,
@@ -764,7 +778,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif", body.Protocol))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, xiaomi", body.Protocol))
 		return
 	}
 	// ONVIF cameras: accept url OR onvif_endpoint
@@ -1841,6 +1855,239 @@ func (h *Handler) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		backups = []string{}
 	}
 	writeJSON(w, http.StatusOK, backups)
+}
+
+// --- Xiaomi cloud endpoints ---
+
+func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	var req xiaomi.AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+
+	region := req.Region
+	if region == "" {
+		region = "cn"
+	}
+
+	session, captchaSessionID, err := xiaomi.SignInWithCaptcha(req.Username, req.Password, region)
+	if err != nil {
+		var loginErr *xiaomi.LoginError
+		if errors.As(err, &loginErr) {
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(loginErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(loginErr.Captcha)
+			}
+			if loginErr.VerifyPhone != "" {
+				resp["verify_phone"] = loginErr.VerifyPhone
+			}
+			if loginErr.VerifyEmail != "" {
+				resp["verify_email"] = loginErr.VerifyEmail
+			}
+			if captchaSessionID != "" {
+				resp["session_id"] = captchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
+}
+
+func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID   string `json:"session_id"`
+		CaptchaCode string `json:"captcha_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" || req.CaptchaCode == "" {
+		writeError(w, http.StatusBadRequest, "session_id and captcha_code are required")
+		return
+	}
+
+	session, err := xiaomi.LoginWithCaptcha(req.SessionID, req.CaptchaCode)
+	if err != nil {
+		var captchaSessionErr *xiaomi.CaptchaSessionError
+		if errors.As(err, &captchaSessionErr) {
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(captchaSessionErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
+			}
+			if captchaSessionErr.VerifyPhone != "" {
+				resp["verify_phone"] = captchaSessionErr.VerifyPhone
+			}
+			if captchaSessionErr.VerifyEmail != "" {
+				resp["verify_email"] = captchaSessionErr.VerifyEmail
+			}
+			if captchaSessionErr.CaptchaSessionID != "" {
+				resp["session_id"] = captchaSessionErr.CaptchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
+}
+
+func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+		Ticket    string `json:"ticket"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" || req.Ticket == "" {
+		writeError(w, http.StatusBadRequest, "session_id and ticket are required")
+		return
+	}
+
+	session, err := xiaomi.LoginWithVerify(req.SessionID, req.Ticket)
+	if err != nil {
+		var captchaSessionErr *xiaomi.CaptchaSessionError
+		if errors.As(err, &captchaSessionErr) {
+			resp := map[string]any{
+				"status": "verification_required",
+			}
+			if len(captchaSessionErr.Captcha) > 0 {
+				resp["captcha"] = base64.StdEncoding.EncodeToString(captchaSessionErr.Captcha)
+			}
+			if captchaSessionErr.VerifyPhone != "" {
+				resp["verify_phone"] = captchaSessionErr.VerifyPhone
+			}
+			if captchaSessionErr.VerifyEmail != "" {
+				resp["verify_email"] = captchaSessionErr.VerifyEmail
+			}
+			if captchaSessionErr.CaptchaSessionID != "" {
+				resp["session_id"] = captchaSessionErr.CaptchaSessionID
+			}
+			writeJSON(w, http.StatusAccepted, resp)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
+		return
+	}
+
+	// Store token in config
+	if h.config != nil {
+		h.config.Xiaomi.UserID = session.UserID
+		h.config.Xiaomi.Token = session.PassToken
+		h.config.Xiaomi.Region = session.Region
+		if err := config.Save(h.configPath, h.config); err != nil {
+			logger.Warn("failed to save xiaomi config", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"user_id": session.UserID,
+	})
+}
+
+func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
+	// Get stored token from config
+	if h.config == nil || h.config.Xiaomi.Token == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"devices": []xiaomi.CloudDevice{},
+			"message": "not authenticated",
+		})
+		return
+	}
+
+	session, err := xiaomi.SignInWithToken(h.config.Xiaomi.UserID, h.config.Xiaomi.Token, h.config.Xiaomi.Region)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, fmt.Sprintf("session expired: %v", err))
+		return
+	}
+
+	devices, err := xiaomi.GetDeviceList(session)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		return
+	}
+
+	// Filter for camera devices only
+	cameras := make([]xiaomi.CloudDevice, 0, len(devices))
+	for _, d := range devices {
+		if isXiaomiCameraModel(d.Model) {
+			cameras = append(cameras, d)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": cameras,
+	})
+}
+
+// isXiaomiCameraModel returns true if the model string looks like a Xiaomi camera.
+// Uses Contains matching like go2rtc: .camera., .cateye., .feeder.
+func isXiaomiCameraModel(model string) bool {
+	return strings.Contains(model, ".camera.") ||
+		strings.Contains(model, ".cateye.") ||
+		strings.Contains(model, ".feeder.")
+}
+
+func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	plugins := plugin.All()
+	type pluginInfo struct {
+		Name      string   `json:"name"`
+		Protocols []string `json:"protocols"`
+	}
+	result := make([]pluginInfo, 0, len(plugins))
+	for _, p := range plugins {
+		result = append(result, pluginInfo{
+			Name:      p.Name(),
+			Protocols: p.Protocols(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plugins": result,
+	})
 }
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".

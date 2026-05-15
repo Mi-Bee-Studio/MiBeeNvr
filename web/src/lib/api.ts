@@ -620,3 +620,62 @@ export async function getMergeStatus(): Promise<MergeStatus> {
 export async function getMergePending(): Promise<MergePending> {
   return apiRequest<MergePending>('/merge/pending');
 }
+
+// Xiaomi API
+export interface XiaomiDevice {
+  did: string;
+  name: string;
+  model: string;
+  localip: string;
+  isOnline: boolean;
+}
+
+export interface XiaomiDevicesResponse {
+  devices: XiaomiDevice[];
+  message?: string;
+}
+
+export interface XiaomiAuthResponse {
+  user_id?: string;
+  status?: string;
+  captcha?: string;       // base64-encoded image
+  verify_phone?: string;  // masked phone number
+  verify_email?: string;  // masked email
+  session_id?: string;    // for captcha/verify continuation
+}
+
+export async function xiaomiAuth(username: string, password: string, region?: string): Promise<XiaomiAuthResponse> {
+  return apiRequest('/xiaomi/auth', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, region: region || 'cn' }),
+  });
+}
+
+export async function xiaomiDevices(): Promise<XiaomiDevicesResponse> {
+  return apiRequest<XiaomiDevicesResponse>('/xiaomi/devices');
+}
+
+export async function xiaomiCaptcha(sessionId: string, captchaCode: string): Promise<XiaomiAuthResponse> {
+  return apiRequest('/xiaomi/captcha', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, captcha_code: captchaCode }),
+  });
+}
+
+export async function xiaomiVerify(sessionId: string, ticket: string): Promise<XiaomiAuthResponse> {
+  return apiRequest('/xiaomi/verify', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, ticket }),
+  });
+}
+
+// Plugin API
+export interface Plugin {
+  name: string;
+  protocols: string[];
+}
+
+export async function listPlugins(): Promise<Plugin[]> {
+  const response = await apiRequest<{ plugins: Plugin[] }>('/plugins');
+  return response.plugins;
+}

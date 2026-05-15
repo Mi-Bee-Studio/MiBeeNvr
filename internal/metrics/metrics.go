@@ -18,6 +18,7 @@ type Metrics struct {
 	StorageTotalBytes  prometheus.Gauge
 	RecordingCount     prometheus.Gauge
 	CameraErrors       *prometheus.CounterVec // labels: camera_id, error_type
+	HLSFramesDropped  *prometheus.CounterVec // labels: camera_id
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -78,6 +79,10 @@ func NewMetrics() *Metrics {
 		Name: "nvr_camera_errors_total",
 		Help: "Total camera errors, partitioned by camera and error type.",
 	}, []string{"camera_id", "error_type"})
+	hlsFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_hls_frames_dropped_total",
+		Help: "Total HLS frames dropped due to buffer full, partitioned by camera.",
+	}, []string{"camera_id"})
 
 	reg.MustRegister(
 		recordingBytesTotal,
@@ -89,6 +94,7 @@ func NewMetrics() *Metrics {
 		storageTotalBytes,
 		recordingCount,
 		cameraErrors,
+		hlsFramesDropped,
 	)
 
 	return &Metrics{
@@ -102,5 +108,6 @@ func NewMetrics() *Metrics {
 		StorageTotalBytes:   storageTotalBytes,
 		RecordingCount:      recordingCount,
 		CameraErrors:        cameraErrors,
+		HLSFramesDropped:    hlsFramesDropped,
 	}
 }
