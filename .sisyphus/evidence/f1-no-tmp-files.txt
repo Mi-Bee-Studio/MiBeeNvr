@@ -1,0 +1,4 @@
+find /mnt/data/nvr -name '*.tmp' -type f
+
+Result: Only 1 .tmp file (current active recording segment)
+PASS: No orphaned/residual .tmp files from previous recordings

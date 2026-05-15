@@ -1,0 +1,15 @@
+Task 7a: Create MIT LICENSE file
+
+- File: LICENSE (project root)
+- Lines: 21
+- License: MIT
+- Year: 2026
+- Copyright holder: Mi&Bee Studio
+- Content matches standard MIT license text from opensource.org
+
+Verification:
+MIT License
+
+Copyright (c) 2026 Mi&Bee Studio
+
+File exists: YES

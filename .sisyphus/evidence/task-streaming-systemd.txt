@@ -1,0 +1,100 @@
+## Systemd Service Deployment - Task Streaming Pipeline (May 1, 2026)
+
+### Files Created
+
+#### 1. mediamtx.service
+Location: /home/mickey/Projects/iot/rpi3b-storeage/deploy/mediamtx.service
+
+```ini
+[Unit]
+Description=MediaMTX Streaming Server
+After=network.target
+
+[Service]
+Type=simple
+User=mickey
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
+WorkingDirectory=/etc/mediamtx
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### 2. rpicam-stream.service  
+Location: /home/mickey/Projects/iot/rpi3b-storeage/deploy/rpicam-stream.service
+
+```ini
+[Unit]
+Description=Raspberry Pi Camera Streaming Pipeline
+Wants=mediamtx.service
+After=mediamtx.service
+
+[Service]
+Type=simple
+User=mickey
+ExecStart=/bin/bash -c 'rpicam-vid -n --codec h264 --width 1280 --height 720 --framerate 15 -t 0 -o - | ffmpeg -fflags +genpts -i pipe:0 -c:v copy -f mpegts -flush_packets 0 "udp://127.0.0.1:8555?pkt_size=188"'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Deployment Process
+
+1. **Existing processes killed**:
+   - Killed PID 3339 (mediamtx), 3349 (rpicam-vid), 3350 (ffmpeg)
+   - All processes terminated successfully
+
+2. **Binary and config deployment**:
+   - Copied mediamtx from /tmp to /usr/local/bin/mediamtx (sudo)
+   - Created /etc/mediamtx directory (sudo)
+   - Copied mediamtx.yml from /tmp to /etc/mediamtx/mediamtx.yml (sudo)
+
+3. **Service file deployment**:
+   - Copied service files from local deploy/ directory to /tmp on .120
+   - Moved service files to /etc/systemd/system/ (sudo)
+
+4. **Systemd configuration**:
+   - systemctl daemon-reload
+   - systemctl enable --now mediamtx.service
+   - systemctl enable --now rpicam-stream.service
+
+### Verification Results
+
+#### Service Status (both active):
+- ✅ mediamtx.service: active (running)
+- ✅ rpicam-stream.service: active (running)
+
+#### Service Logs Summary:
+**MediaMTX**:
+- Configuration loaded from /etc/mediamtx/mediamtx.yml
+- UDP source started for path 'stream'
+- RTSP listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+- HLS listener opened on :8888
+- WebRTC listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+- SRT listener opened on :8890 (UDP)
+- Connection from 192.168.63.31 established and closed
+- UDP source ready: 1 track (H264)
+
+**Rpicam Stream**:
+- rpicam-vid and ffmpeg processes running
+- Video pipeline established: rpicam-vid → ffmpeg → UDP
+- Input: h264, 1280x720, 25 fps
+- Output: mpegts to udp://127.0.0.1:8555
+
+### Stream Access Points Available:
+- RTSP: rtsp://192.168.63.120:8554/stream
+- HLS: http://192.168.63.120:8888/stream  
+- RTMP: rtmp://192.168.63.120:1935/stream
+
+### Notes:
+- Both services start automatically on boot
+- Restart on failure with 5 second delay
+- Uses mickey user for camera device access
+- Pipeline parameters unchanged (1280x720, 15fps, h264)
+- Services are properly ordered: rpicam-stream depends on mediamtx
+
+Task completed successfully.

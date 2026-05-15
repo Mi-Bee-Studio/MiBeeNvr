@@ -1,0 +1,15 @@
+=== Task 1 Evidence: Go Module Rename ===
+Date: 2026-04-27T11:36:47+08:00
+
+=== go.mod module path ===
+module github.com/Mi-Bee-Studio/MiBeeNvr
+
+=== Old module path references (should be 0) ===
+0
+
+=== Intentionally kept camvault references (config + DB) ===
+32:	configPath = flag.String("config", "camvault.yaml", "path to configuration file")
+56:	dbPath := filepath.Join(cfg.Storage.RootDir, "camvault.db")
+
+=== cmd directory ===
+/home/mickey/Projects/iot/rpi3b-storeage/cmd/mibee-nvr/

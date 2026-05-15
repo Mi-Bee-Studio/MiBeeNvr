@@ -1,0 +1,3 @@
+ACCEPTANCE: web/src/app.css comment header updated to MiBee NVR
+STATUS: PASS
+EVIDENCE: Line 4 of web/src/app.css contains " * Design System for MiBee NVR Web UI"

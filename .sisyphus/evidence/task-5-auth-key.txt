@@ -1,0 +1,3 @@
+ACCEPTANCE: web/src/lib/api.ts AUTH_KEY = 'mibee_nvr_auth'
+STATUS: PASS
+EVIDENCE: Line 49 of web/src/lib/api.ts contains const AUTH_KEY = 'mibee_nvr_auth';

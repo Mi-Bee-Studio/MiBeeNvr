@@ -1,0 +1,11 @@
+ACCEPTANCE: cd web && npm run build succeeds
+STATUS: PASS
+EVIDENCE:
+> web@0.0.0 build
+> vite build
+vite v8.0.10 building client environment for production...
+✓ 115 modules transformed.
+dist/index.html                  0.45 kB │ gzip:  0.29 kB
+dist/assets/index-vOx4y1Ho.css  26.29 kB │ gzip:  5.19 kB
+dist/assets/index-DSHSKX-i.js   66.68 kB │ gzip: 23.45 kB
+✓ built in 486ms

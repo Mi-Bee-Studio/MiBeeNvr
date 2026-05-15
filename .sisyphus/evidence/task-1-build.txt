@@ -1,0 +1,11 @@
+=== Task 1 Evidence: Build Verification ===
+Date: 2026-04-27T11:37:02+08:00
+
+=== Build command ===
+CGO_ENABLED=0 GOPROXY=https://goproxy.cn,direct go build -o mibee-nvr ./cmd/mibee-nvr/
+
+=== Binary exists ===
+-rwxr-xr-x 1 mickey mickey 20723585  4月27日 11:35 /home/mickey/Projects/iot/rpi3b-storeage/mibee-nvr
+
+=== Binary type ===
+/home/mickey/Projects/iot/rpi3b-storeage/mibee-nvr: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=q9syEXCNG7vIkAndNcnE/sYsR8KhcL0bkWyqBdMc1/tLB0a42kmDsSmptyqmFc/gwJYyBF4xmL_XqPjDPWh, BuildID[sha1]=08ed9c07b0d1aa8180b460c912398ab2f836973c, with debug_info, not stripped

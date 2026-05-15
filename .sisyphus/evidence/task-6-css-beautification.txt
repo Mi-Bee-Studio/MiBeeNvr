@@ -1,0 +1,91 @@
+Task 6: UI CSS Beautification - COMPLETED
+==========================================
+
+Date: Mon Apr 27 2026
+
+CHANGES MADE:
+
+1. web/src/app.css - Design System Redesign:
+   - Replaced amber/orange accent with cooler blue/cyan/teal palette
+   - Updated color palette documentation:
+     * Primary accent: cyan-500 / cyan-400 (for buttons, links, focus rings)
+     * Secondary: blue-500 / blue-400
+     * Kept emerald for success, red for error, yellow for warning
+   - Updated focus ring color from amber-500 to cyan-500
+   - Enhanced card styling:
+     * Added transparency: bg-slate-800/90
+     * Subtle borders: border-slate-700/50
+     * Added backdrop-blur-sm
+     * Improved shadows: shadow-lg
+   - Updated .btn-primary with gradient:
+     * from-cyan-600 to-blue-600
+     * hover:from-cyan-500 hover:to-blue-500
+     * Added shadow-md hover:shadow-lg
+   - Updated .input focus ring to cyan-500
+   - Updated utility classes:
+     * .text-accent: text-cyan-500
+     * .bg-accent-subtle: bg-cyan-500/10
+     * .border-accent: border-cyan-500
+
+2. web/src/routes/Login.svelte - Polish:
+   - Enhanced login card with subtle shadow-2xl
+   - Added border: border-slate-700/60
+   - Applied gradient to title: from-cyan-400 to-blue-400 with bg-clip-text
+   - Added top border to footer text: border-slate-700/50 pt-6
+
+3. web/src/routes/Recordings.svelte - Polish:
+   - Updated navigation link from text-amber-500 to text-cyan-500
+   - Enhanced filter card with border-slate-700/60
+   - Enhanced table card with border-slate-700/60
+   - Enhanced table container with border-slate-700/50
+
+4. web/src/routes/RecordingDetail.svelte - Polish:
+   - Enhanced playback card with border-slate-700/60
+   - Enhanced recording info card with border-slate-700/60
+   - Fixed card structure with proper flex layout for header
+
+5. web/src/routes/Stats.svelte - Major Polish:
+   - Updated navigation link from text-amber-500 to text-cyan-500
+   - Enhanced stat cards:
+     * Added border-slate-700/60
+     * Added gradient background: bg-gradient-to-br from-slate-800 to-slate-800/80
+     * Increased font size from text-3xl to text-4xl for metric numbers (mlsbs.top style)
+   - Enhanced storage usage card with border-slate-700/60
+   - Enhanced camera list card with border-slate-700/60
+
+6. web/src/App.svelte:
+   - No changes needed - this file only handles routing logic, not UI styling
+
+DESIGN DIRECTION - mlsbs.top style:
+- Dark tech theme maintained (bg-slate-900, bg-slate-800)
+- Clean sans-serif typography
+- Metric cards with BIG numbers (text-4xl)
+- Subtle blue/cyan accent colors (cyan-500, blue-500)
+- Professional, minimal, tech-forward feel
+- Subtle gradients and shadows
+- No excessive decorations or animations
+
+BUILD VERIFICATION:
+- Command: cd web && npm run build
+- Result: SUCCESS
+- Output:
+  dist/index.html                  0.45 kB │ gzip:  0.29 kB
+  dist/assets/index-CViQsxyn.css  32.39 kB │ gzip:  5.89 kB
+  dist/assets/index-CKG-yrJg.js   67.04 kB │ gzip: 23.56 kB
+  ✓ built in 505ms
+
+FILES MODIFIED:
+- web/src/app.css
+- web/src/routes/Login.svelte
+- web/src/routes/Recordings.svelte
+- web/src/routes/RecordingDetail.svelte
+- web/src/routes/Stats.svelte
+
+OUTCOME:
+✓ All requirements met
+✓ Build succeeds
+✓ Design system updated to blue/cyan/teal palette
+✓ Login page polished with better card styling
+✓ Recordings page polished with better table/list styling
+✓ Stats page displays large metric numbers (text-4xl)
+✓ App navigation bar uses new accent color (cyan-500)

@@ -1,0 +1,5 @@
+51:  let abortController: AbortController | null = null;
+103:    if (abortController) {
+104:      abortController.abort();
+106:    abortController = new AbortController();
+123:        signal: abortController.signal

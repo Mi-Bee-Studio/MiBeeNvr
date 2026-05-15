@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+Accept-Ranges: bytes
+Content-Disposition: inline; filename="rpi-csi-cam_20260502_225546_1777733746761508141.mp4"
+Content-Length: 14306688
+Content-Type: video/mp4
+Last-Modified: Sat, 02 May 2026 14:56:00 GMT
+Date: Sat, 02 May 2026 14:56:35 GMT
+
+PASS: Content-Length present (14306688)
+PASS: Accept-Ranges: bytes present
+PASS: Content-Type: video/mp4
+PASS: Content-Disposition: inline with filename

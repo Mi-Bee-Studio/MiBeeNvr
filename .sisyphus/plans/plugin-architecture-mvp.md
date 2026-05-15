@@ -271,7 +271,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 2. **Define Protocol Buffers SDK**
+- [x] 2. **Define Protocol Buffers SDK**
 
   **What to do**:
   - 创建 `plugin/proto/nvr.proto` 定义 gRPC 服务接口
@@ -356,7 +356,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 3. **Build system updates (dual binary)**
+- [x] 3. **Build system updates (dual binary)**
 
   **What to do**:
   - 更新 `Makefile` 添加插件构建目标:
@@ -431,7 +431,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 4. **Config schema extension**
+- [x] 4. **Config schema extension**
 
   **What to do**:
   - 扩展 `internal/config/config.go` 添加 `PluginsConfig`:
@@ -505,7 +505,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 5. **FrameReceiver service**
+- [x] 5. **FrameReceiver service**
 
   **What to do**:
   - 创建 `internal/plugin/frame_receiver.go` — 主进程侧的帧接收服务
@@ -598,7 +598,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 6. **PluginManager lifecycle**
+- [x] 6. **PluginManager lifecycle**
 
   **What to do**:
   - 创建 `internal/plugin/grpc_manager.go` — 插件进程生命周期管理
@@ -697,7 +697,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 7. **gRPCRecorderAdapter**
+- [x] 7. **gRPCRecorderAdapter**
 
   **What to do**:
   - 创建 `internal/plugin/grpc_adapter.go` — 将 gRPC 插件客户端适配为 `model.Recorder` 接口
@@ -770,7 +770,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 8. **Mock plugin for testing**
+- [x] 8. **Mock plugin for testing**
 
   **What to do**:
   - 创建 `tests/mock_plugin/` — 用于集成测试的模拟插件

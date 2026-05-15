@@ -1,0 +1,23 @@
+=== Task 1 Evidence: Test + Vet ===
+Date: 2026-04-27T11:37:17+08:00
+
+=== go test ./... ===
+?   	github.com/Mi-Bee-Studio/MiBeeNvr/cmd/mibee-nvr	[no test files]
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/api	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/config	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage	(cached)
+?   	github.com/Mi-Bee-Studio/MiBeeNvr/internal/types	[no test files]
+?   	github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui	[no test files]
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/tests	(cached)
+
+=== go vet ./... ===
+EXIT CODE: 0

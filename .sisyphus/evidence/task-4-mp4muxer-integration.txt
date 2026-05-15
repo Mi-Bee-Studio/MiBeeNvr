@@ -1,0 +1,83 @@
+MP4Muxer Integration into H264Recorder - Evidence
+===================================================
+
+Date: 2026-04-30
+
+## Changes Made
+
+### 1. internal/recorder/h264.go (primary target)
+- Added `muxer *muxer.MP4Muxer` field to H264Recorder struct
+- Added `trackID int` field to H264Recorder struct
+- Added `curTempPath string` field to track and clean up orphaned temp files
+- Added `"os"` import for temp file cleanup
+- `writeFrames()` method now:
+  - Creates MP4Muxer when first video frame arrives (with SPS/PPS available)
+  - Calls `muxer.AddH264Track(sps, pps)` to initialize H264 track
+  - Calls `muxer.WriteSample(trackID, nalu, pts, duration)` for each video frame
+  - PTS calculated as `time.Since(segStart)`, duration as inter-frame delta (min 33ms)
+  - Cleans up temp file on muxer init failure
+- `closeCurrentSegment()` method now:
+  - Calls `muxer.Close()` to finalize MP4 (writes ftyp + moov + mdat)
+  - Removes orphaned .tmp file created by CreateSegment
+  - Resets muxer fields
+
+### 2. internal/model/types.go (pre-existing bug fix)
+- Removed duplicate closing brace `}` on line 41 that caused syntax error
+
+### 3. internal/camera/manager.go (pre-existing bug fixes)
+- Restored missing `for _, cam := range cm.cfg.Cameras {` loop header
+- Fixed `InsertCamera` → `UpsertCamera` (correct method name with individual params)
+- Fixed indentation throughout Start() function
+- Removed extra blank lines in CameraManager struct
+
+### 4. cmd/mibee-nvr/main.go (pre-existing bug fix)
+- Fixed `cfg.WebDAV.Enabled` → `cfg.WebDAV.Enabled != nil && *cfg.WebDAV.Enabled` (pointer deref)
+- Fixed `cfg.FTP.Enabled` → `cfg.FTP.Enabled != nil && *cfg.FTP.Enabled` (pointer deref)
+
+## Verification
+
+### Build
+- `go build ./...` — PASSES (no errors)
+
+### Tests
+- `go test ./internal/muxer/... -v` — ALL 6 TESTS PASS
+  - TestNewMP4Muxer
+  - TestAddH264Track
+  - TestWriteAndClose
+  - TestEmptyClose
+  - TestDuration
+  - TestWriteSampleInvalidTrack
+
+- `go test ./internal/recorder/... -v` — ALL 16 TESTS PASS
+  - TestH264Recorder_RecordsFrames
+  - TestH264Recorder_StartStop
+  - TestH264Recorder_SegmentDuration
+  - TestH264Recorder_SPSChangeNewSegment
+  - TestH264Recorder_GracefulShutdown
+  - TestH264Recorder_Reconnect
+  - TestH264Recorder_StatusTransitions
+  - TestH264Recorder_RingBufferDrop
+  - TestMJPEGRecorder_RecordsFrames
+  - TestMJPEGRecorder_StartStop
+  - TestMJPEGRecorder_SegmentDuration
+  - TestMJPEGRecorder_FrameSampling
+  - TestMJPEGRecorder_GracefulShutdown
+  - TestMJPEGRecorder_StatusTransitions
+
+### MP4 Output Validation
+- Verified muxer produces valid MP4 with ftyp + moov + mdat boxes
+- File header: 00000020 66747970 69736f6d (ftyp box with 'isom' brand)
+- File size: 670 bytes for 2-frame test
+
+### Interface Preservation
+- SegmentStore interface unchanged (CreateSegment, WriteFrame, CloseSegment all present)
+- MJPEG recorder untouched
+- MP4Muxer public API untouched
+- Reconnect/backoff logic untouched
+- SPS/PPS change detection logic untouched
+
+### Edge Cases Handled
+- Segment with no SPS/PPS: muxer is not created (lines 268-270 check)
+- Segment with 0 frames: muxer.Close() handles empty tracks gracefully
+- SPS changes: closeCurrentSegment() closes old muxer, new segment creates new one
+- Temp file cleanup: os.Remove on both normal close and muxer init failure

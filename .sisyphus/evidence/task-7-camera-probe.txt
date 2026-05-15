@@ -1,0 +1,55 @@
+Camera Hardware and Software Probe Results
+============================================
+Date: 2026-04-30
+Task: SSH to 192.168.63.120 (user: mickey) and probe camera hardware/software status
+
+1. Architecture and Model:
+   - Architecture: aarch64
+   - Device: Raspberry Pi 3 Model B Rev 1.2
+
+2. libcamera Camera Detection:
+   - Status: NOT FOUND
+   - Command: libcamera-hello --list-cameras
+   - Error: libcamera-hello: command not found
+   - Note: libcamera does not appear to be installed
+
+3. libcamera Availability:
+   - Status: NOT FOUND  
+   - Command: libcamera-vid --version
+   - Result: libcamera-vid not found
+   - Note: libcamera package not installed on device
+
+4. mediamtx Availability:
+   - Status: NOT FOUND
+   - Command: which mediamtx && dpkg -l | grep mediamtx
+   - Result: mediamtx not found
+   - Note: mediamtx package not installed on device
+
+5. RTSP Port Status:
+   - Ports checked: 8554, 8553
+   - Command: ss -tlnp | grep -E "8554|8553"
+   - Result: No output (ports not listening)
+   - Note: No streaming server currently running
+
+6. System Resources:
+   - Memory: 905MiB total, 620MiB available (68.5% available)
+   - Swap: 904MiB total, 0B used
+   - Disk: 58G total, 50G available (11% used)
+   - Note: Adequate resources for NVR deployment
+
+Camera Model Identification:
+- Status: CANNOT DETERMINE
+- Reason: libcamera not installed
+- If camera is connected: libcamera installation required for detection
+
+Streaming Protocol Recommendation:
+- Hardware: RPi 3B Model B supports H.264 hardware encoding
+- Recommended protocol: rtsp_h264 (if H.264 camera available)
+- Alternative: rtsp_mjpeg (if only MJPEG camera available)
+- Note: Requires libcamera installation and mediamtx deployment
+
+Next Steps:
+1. Install libcamera on RPi 3B
+2. Install mediamtx streaming server
+3. Connect CSI camera and verify detection
+4. Test streaming functionality

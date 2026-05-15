@@ -20,6 +20,24 @@
       "agent": "Sisyphus-Junior",
       "category": "deep",
       "updated_at": "2026-05-15T13:25:46.793Z"
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "**Define Protocol Buffers SDK**",
+      "session_id": "ses_1d42e61b8ffe9XlEp9FcDuQaQr",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-05-15T13:33:33.828Z"
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "**FrameReceiver service**",
+      "session_id": "ses_1d4250571ffe6Igch0Nc7bX8Kn",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-05-15T13:43:30.839Z"
     }
   }
 }

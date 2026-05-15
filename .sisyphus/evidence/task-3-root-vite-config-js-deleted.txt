@@ -1,0 +1,1 @@
+Task 3 Evidence: Root vite.config.js did not exist, nothing to delete

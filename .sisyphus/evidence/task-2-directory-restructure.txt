@@ -1,0 +1,43 @@
+=== Task 2 Evidence: Directory Restructure ===
+Date: 2026-04-27T11:45:41+08:00
+
+ACCEPTANCE CRITERIA VERIFICATION:
+
+[✓] internal/types/ merged into internal/model/ and deleted
+    - All 11 types (Recorder, StorageProvider, Camera, Recording, Segment, 
+      SegmentMeta, RecordingFilter, RecorderStatus, StorageStats, Protocol, Format)
+      and all constants moved to internal/model/types.go
+    - 16 consumer files updated: import paths changed from internal/types → internal/model
+    - All types.XXX references updated to model.XXX
+    - internal/types/ directory deleted
+
+[✓] go-mp4/ vendor directory deleted
+    - Was a leftover local vendor copy; go.mod already has the dependency
+
+[✓] web/src/lib/Counter.svelte deleted
+    - Dead code, never imported anywhere
+
+[✓] Root compiled binaries deleted
+    - camvault and camvault-arm64 removed
+
+[✓] tests/integration_test.go evaluated and KEPT
+    - 577 lines, 7 real integration tests
+    - Go convention allows root _test.go files
+    - Decision: keep at root
+
+[✓] .gitkeep cleanup
+    - deploy/.gitkeep removed (dir has Caddyfile.example, camvault.service)
+    - tests/.gitkeep removed (dir has integration_test.go)
+    - web_embed/.gitkeep KEPT (dir has no other content)
+
+[✓] Build passes:
+    CGO_ENABLED=0 GOPROXY=https://goproxy.cn,direct go build -o mibee-nvr ./cmd/mibee-nvr/
+    Result: BUILD PASS (binary: 20MB)
+
+[✓] All tests pass:
+    12 test packages OK, 0 failures
+    - internal/api, camera, cleanup, config, ftp, middleware, mqtt, muxer,
+      recorder, storage, upload, webdav, tests (integration)
+
+[✓] Zero old internal/types imports remain (verified by grep)
+[✓] 16 files now import internal/model (verified by grep)

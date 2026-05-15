@@ -1,0 +1,39 @@
+## T1: SSH + RPi Environment Check
+
+**Timestamp**: 2026-05-03
+
+### SSH Connectivity
+- ✅ SSH connected: `ssh mickey@192.168.63.31 "echo ok"` → ok
+- ✅ Architecture: aarch64 (ARM64)
+
+### Directory Structure
+- ✅ `/mnt/data/nvr/` exists
+- Owner: `mickey` (NOT `nvr` user — nvr user does not exist)
+- Contents: bin/, recordings/, rpi-csi-cam/, mibee-nvr.db, mibee-nvr.yaml
+
+### Service Status
+- ✅ mibee-nvr: ACTIVE (pid 2486464, listening on :9090 and :2121)
+- ❌ mediamtx: INACTIVE
+- ❌ mediamtx binary: NOT FOUND
+
+### Disk Space
+- ✅ /mnt/data: 2.7TB total, 2.5TB available (9% used)
+
+### Dependencies
+- ✅ rpicam-vid: /usr/bin/rpicam-vid
+- ✅ ffmpeg: /usr/bin/ffmpeg
+- ❌ mediamtx: not installed
+
+### Current Config (mibee-nvr.yaml)
+- segment_duration: 30s (ALREADY SAFE)
+- password_hash: "" (EMPTY — confirms auth bypass vulnerability!)
+- password: admin (plaintext in config)
+- Camera: rpi-csi-cam → rtsp://192.168.63.120:8554/stream
+- retention_days: 7, disk_threshold: 95%
+
+### Key Observations
+1. Service runs as `mickey` user, NOT `nvr` user (service file may differ from deploy/)
+2. Auth bypass is ACTIVE on current deployment (empty password_hash)
+3. segment_duration already 30s in config (but code default still 10m)
+4. External USB drive with plenty of space
+5. mediamtx not needed — camera streams directly via RTSP
