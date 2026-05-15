@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getDashboardCameras, getCredentials } from '$lib/api';
-  import type { Camera } from '$lib/api';
+  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
+  import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -27,6 +27,8 @@
   let noSnapshotCameras: Set<string> = new Set();
   let snapshotIntervals: Record<string, ReturnType<typeof setInterval>> = {};
 
+  // Protocol capabilities for capability-based checks
+  let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   const STORAGE_KEY = 'dashboard-selected-cameras';
   const SNAPSHOT_INTERVAL_MS = 3000;
 
@@ -100,7 +102,7 @@
   }
 
   function isHlsSupported(camera: Camera): boolean {
-    return camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif' || camera.protocol === 'rtsp';
+    return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
   type CameraMode = 'snapshot' | 'hls' | 'unsupported';
@@ -226,6 +228,15 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
+    }
+    // Load protocol capabilities
+    try {
+      const list = await listProtocols();
+      if (list && list.length > 0) {
+        protocolsMap = buildProtocolsMap(list);
+      }
+    } catch {
+      // Use DEFAULT_PROTOCOLS already initialized
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
@@ -433,8 +444,8 @@
               </div>
             {/if}
 
-            <!-- PTZ Overlay for ONVIF cameras -->
-            {#if ptzOpenIndex === index && camera.protocol === 'onvif'}
+            <!-- PTZ Overlay for PTZ-capable cameras -->
+            {#if ptzOpenIndex === index && getProtocolCapabilities(camera.protocol, protocolsMap).ptz}
               <div
                 class="absolute top-2 left-2 z-10"
                 onclick={(e: MouseEvent) => { e.stopPropagation(); }}

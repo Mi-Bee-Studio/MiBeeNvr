@@ -713,3 +713,84 @@ export async function getPluginCapabilities(name: string): Promise<{
 }> {
   return apiRequest(`/plugins/${name}/capabilities`);
 }
+
+// Protocol info (from GET /api/protocols)
+export interface ProtocolCapabilities {
+  hls: boolean;
+  ptz: boolean;
+  snapshot: boolean;
+  discovery: boolean;
+  auth: boolean;
+}
+
+export interface ProtocolInfo {
+  id: string;
+  label: string;
+  encodings: string[];
+  builtIn: boolean;
+  capabilities: ProtocolCapabilities;
+}
+
+// Hardcoded fallback if API is unreachable
+export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
+  {
+    id: 'rtsp',
+    label: 'RTSP',
+    encodings: ['h264', 'h265', 'mjpeg'],
+    builtIn: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: true },
+  },
+  {
+    id: 'http',
+    label: 'HTTP',
+    encodings: ['jpeg'],
+    builtIn: true,
+    capabilities: { hls: false, ptz: false, snapshot: true, discovery: false, auth: true },
+  },
+  {
+    id: 'onvif',
+    label: 'ONVIF',
+    encodings: ['h264', 'h265', 'mjpeg'],
+    builtIn: true,
+    capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: true },
+  },
+  {
+    id: 'xiaomi',
+    label: 'Xiaomi',
+    encodings: ['h264', 'h265'],
+    builtIn: false,
+    capabilities: { hls: false, ptz: false, snapshot: false, discovery: true, auth: false },
+  },
+];
+
+export async function listProtocols(): Promise<ProtocolInfo[]> {
+  const response = await apiRequest<{ protocols: ProtocolInfo[] }>('/protocols');
+  return response.protocols;
+}
+
+// Normalize legacy combined protocol names (rtsp_h264, etc.) to base protocol ID
+export function normalizeProtocol(protocol: string): string {
+  if (protocol === 'rtsp_h264' || protocol === 'rtsp_h265' || protocol === 'rtsp_mjpeg') return 'rtsp';
+  if (protocol === 'http_jpeg') return 'http';
+  return protocol;
+}
+
+// Build a lookup map from protocol list
+export function buildProtocolsMap(protocols: ProtocolInfo[]): Map<string, ProtocolInfo> {
+  const map = new Map<string, ProtocolInfo>();
+  for (const p of protocols) {
+    map.set(p.id, p);
+  }
+  return map;
+}
+
+// Get capabilities for a protocol, handling legacy protocol names
+export function getProtocolCapabilities(
+  protocol: string,
+  protocolsMap: Map<string, ProtocolInfo>,
+): ProtocolCapabilities {
+  const baseId = normalizeProtocol(protocol);
+  const info = protocolsMap.get(baseId);
+  if (info) return info.capabilities;
+  return { hls: false, ptz: false, snapshot: false, discovery: false, auth: false };
+}
