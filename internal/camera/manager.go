@@ -46,14 +46,21 @@ type CameraManager struct {
 	configPath string
 	recorders  map[string]model.Recorder // camera_id → Recorder
 	metrics    *metrics.Metrics
+	pluginMgr  *plugin.PluginManager // gRPC plugin manager (nil = no plugins)
 	mu         sync.RWMutex
 }
 
 // NewCameraManager creates a new CameraManager.
-func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...*metrics.Metrics) *CameraManager {
+func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
-	if len(opts) > 0 {
-		m = opts[0]
+	var pm *plugin.PluginManager
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case *metrics.Metrics:
+			m = v
+		case *plugin.PluginManager:
+			pm = v
+		}
 	}
 	return &CameraManager{
 		cfg:        cfg,
@@ -62,13 +69,23 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		configPath: configPath,
 		recorders:  make(map[string]model.Recorder),
 		metrics:    m,
+		pluginMgr:  pm,
 	}
 }
 
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
+// Dispatch order: 1. gRPC plugin → 2. in-process plugin → 3. built-in
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
-	// 1. Try plugin registry first
+	// 1. Try gRPC plugin manager (external process)
+	if cm.pluginMgr != nil {
+		if client := cm.pluginMgr.GetClientForProtocol(cam.Protocol); client != nil {
+			receiver := plugin.NewFrameReceiver(cm.store, cm.db, cm.metrics, cam.ID, segDur)
+			return plugin.NewGRPCRecorderAdapter(client, receiver, cam, segDur)
+		}
+	}
+
+	// 2. Try in-process plugin registry
 	p := plugin.LookupProtocol(cam.Protocol)
 	if p != nil {
 		return p.NewRecorder(cam, cm.store, cm.db, cm.metrics)
@@ -247,6 +264,12 @@ func (cm *CameraManager) Stop() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
 	}
+
+	// Stop gRPC plugin manager if present
+	if cm.pluginMgr != nil {
+		cm.pluginMgr.Stop()
+	}
+
 	return nil
 }
 
