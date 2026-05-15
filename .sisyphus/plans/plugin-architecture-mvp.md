@@ -1106,7 +1106,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 13. **Plugin management REST API endpoints**
+- [x] 13. **Plugin management REST API endpoints**
 
   **What to do**:
   - 扩展 `internal/api/handler.go` 添加插件管理 API:
@@ -1179,7 +1179,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 14. **Plugin management UI page**
+- [x] 14. **Plugin management UI page**
 
   **What to do**:
   - 创建 `web/src/routes/Plugins.svelte` — 插件管理页面
@@ -1253,7 +1253,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 15. **Dynamic protocol selector and encoding options**
+- [x] 15. **Dynamic protocol selector and encoding options**
 
   **What to do**:
   - 重构 `web/src/routes/Cameras.svelte` 的协议和编码选择器为动态:
@@ -1338,7 +1338,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 16. **Plugin discovery panel abstraction**
+- [x] 16. **Plugin discovery panel abstraction**
 
   **What to do**:
   - 将 Cameras.svelte 中的 ONVIF 和 Xiaomi 发现面板抽象为插件驱动:
@@ -1404,7 +1404,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 17. **Architecture doc update**
+- [x] 17. **Architecture doc update**
 
   **What to do**:
   - 更新 `docs/private/plugin-architecture.md`:
@@ -1465,19 +1465,19 @@ Max Concurrent: 5 (Wave 4)
 
 > 4 review agents run in PARALLEL. ALL must APPROVE.
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   Read the plan end-to-end. For each "Must Have": verify implementation exists. For each "Must NOT Have": search codebase for forbidden patterns. Check evidence files. Compare deliverables against plan.
   Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT: APPROVE/REJECT`
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high`
   Run `go vet` + `go test ./...`. Review all changed files for: AI slop, excessive comments, over-abstraction, unused imports. Check all proto-generated code is committed.
   Output: `Build [PASS/FAIL] | Lint [PASS/FAIL] | Tests [N/N] | VERDICT`
 
-- [ ] F3. **Real Manual QA** — `unspecified-high` (+ `playwright` skill)
+- [x] F3. **Real Manual QA** — `unspecified-high` (+ `playwright` skill)
   Start from clean state. Execute EVERY QA scenario from EVERY task. Test: plugin crash isolation (kill -9), mock plugin streaming, API endpoints, frontend plugin page. Save to `.sisyphus/evidence/final-qa/`.
   Output: `Scenarios [N/N pass] | VERDICT`
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep`
   For each task: verify 1:1 — everything in spec was built, nothing beyond spec was built. Check "Must NOT do" compliance. Flag unaccounted changes.
   Output: `Tasks [N/N compliant] | VERDICT`
 
