@@ -626,8 +626,13 @@ export interface XiaomiDevice {
   did: string;
   name: string;
   model: string;
-  ip: string;
+  localip: string;
   isOnline: boolean;
+}
+
+export interface XiaomiDevicesResponse {
+  devices: XiaomiDevice[];
+  message?: string;
 }
 
 export interface XiaomiAuthResponse {
@@ -646,8 +651,8 @@ export async function xiaomiAuth(username: string, password: string, region?: st
   });
 }
 
-export async function xiaomiDevices(): Promise<XiaomiDevice[]> {
-  return apiRequest('/xiaomi/devices');
+export async function xiaomiDevices(): Promise<XiaomiDevicesResponse> {
+  return apiRequest<XiaomiDevicesResponse>('/xiaomi/devices');
 }
 
 export async function xiaomiCaptcha(sessionId: string, captchaCode: string): Promise<XiaomiAuthResponse> {
@@ -662,4 +667,15 @@ export async function xiaomiVerify(sessionId: string, ticket: string): Promise<X
     method: 'POST',
     body: JSON.stringify({ session_id: sessionId, ticket }),
   });
+}
+
+// Plugin API
+export interface Plugin {
+  name: string;
+  protocols: string[];
+}
+
+export async function listPlugins(): Promise<Plugin[]> {
+  const response = await apiRequest<{ plugins: Plugin[] }>('/plugins');
+  return response.plugins;
 }

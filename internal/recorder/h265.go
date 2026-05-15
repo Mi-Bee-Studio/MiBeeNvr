@@ -451,7 +451,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
 		}
-		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			h265Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}

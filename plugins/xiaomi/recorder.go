@@ -33,6 +33,7 @@ type SegmentStore interface {
 // RecordingDB abstracts database operations needed by the recorder.
 type RecordingDB interface {
 	InsertRecording(ctx context.Context, r *model.Recording) error
+	InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error
 }
 
 const (
@@ -41,11 +42,19 @@ const (
 	defaultInitBackoff = 1 * time.Second
 )
 
+// XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
+type XiaomiCloudConfig struct {
+	UserID string
+	Token  string
+	Region string
+}
+
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
 	CameraID    string
-	MISSURL     string // Full MISS URL with credentials and parameters
-	Model       string // Camera model (e.g. ModelC200, ModelC300)
+	DID         string             // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model       string             // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg    XiaomiCloudConfig   // Cloud API credentials for MISS URL resolution
 	SegmentDur  time.Duration
 	MaxBackoff  time.Duration
 	InitBackoff time.Duration
@@ -197,7 +206,29 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 
 	backoff := r.cfg.InitBackoff
 	for {
-		err := r.connectAndRecord(ctx)
+		// Resolve xiaomi://deviceID to miss://... URL via cloud API.
+		missURL, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+			r.recordError("cloud_resolve")
+			r.setStatus(model.StatusReconnecting)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+			backoff = backoff*2 + jitter
+			if backoff > r.cfg.MaxBackoff {
+				backoff = r.cfg.MaxBackoff
+			}
+			continue
+		}
+
+		err = r.connectAndRecord(ctx, missURL)
 		if ctx.Err() != nil {
 			return
 		}
@@ -218,8 +249,8 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 }
 
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
-func (r *XiaomiRecorder) connectAndRecord(ctx context.Context) error {
-	client, err := NewMISSClient(r.cfg.MISSURL)
+func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) error {
+	client, err := NewMISSClient(missURL)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err)
 	}
@@ -495,7 +526,7 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
 		}
-		if err := r.cfg.DB.InsertRecording(context.Background(), rec); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			xiaomiLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}

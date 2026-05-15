@@ -1,6 +1,7 @@
 package storage
 
-	import (
+import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ package storage
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // Manager handles file system storage for camera recordings.
@@ -265,4 +267,115 @@ func (m *Manager) CleanupTempFiles() error {
 		}
 		return nil
 	})
+}
+
+// ReconcileOrphanedFiles scans camera directories for .mp4 files that are not registered
+// in the database and inserts their metadata. Returns the number of reconciled files.
+func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs map[string]bool) (int, error) {
+	entries, err := os.ReadDir(m.rootDir)
+	if err != nil {
+		return 0, err
+	}
+
+	var orphans []model.Recording
+	skippedDirs := map[string]bool{"hls": true, "recordings": true, "logs": true, "backups": true, "bin": true}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+		if skippedDirs[dirName] || !cameraIDs[dirName] {
+			continue
+		}
+
+		files, err := os.ReadDir(filepath.Join(m.rootDir, dirName))
+		if err != nil {
+			logger.Warn("reconcile: cannot read camera dir", "dir", dirName, "error", err)
+			continue
+		}
+
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			name := f.Name()
+			if !strings.HasSuffix(name, ".mp4") {
+				continue
+			}
+
+			baseName := strings.TrimSuffix(name, ".mp4")
+			parts := strings.SplitN(baseName, "_", 4)
+			if len(parts) != 4 {
+				continue
+			}
+
+			cameraIDPart := parts[0]
+			dateStr := parts[1]
+			timeStr := parts[2]
+			nanoStr := parts[3]
+
+			if cameraIDPart != dirName {
+				continue
+			}
+
+			info, err := f.Info()
+			if err != nil || info.Size() == 0 {
+				continue
+			}
+
+			startedAt, err := time.ParseInLocation("20060102_150405", dateStr+"_"+timeStr, time.Local)
+			if err != nil {
+				continue
+			}
+
+			orphans = append(orphans, model.Recording{
+				ID:         nanoStr,
+				CameraID:   dirName,
+				FilePath:   filepath.Join(m.rootDir, dirName, name),
+				Format:     model.FormatH264,
+				StartedAt:  startedAt,
+				EndedAt:    startedAt,
+				Duration:   0,
+				FileSize:   info.Size(),
+				FrameCount: 0,
+				Merged:     false,
+			})
+		}
+	}
+
+	if len(orphans) == 0 {
+		return 0, nil
+	}
+
+	paths := make([]string, len(orphans))
+	for i, o := range orphans {
+		paths[i] = o.FilePath
+	}
+	existing, err := db.GetRecordingsByPathSet(ctx, paths)
+	if err != nil {
+		return 0, fmt.Errorf("query existing recordings: %w", err)
+	}
+
+	var toInsert []*model.Recording
+	for i := range orphans {
+		if !existing[orphans[i].FilePath] {
+			toInsert = append(toInsert, &orphans[i])
+		}
+	}
+
+	if len(toInsert) == 0 {
+		return 0, nil
+	}
+
+	reconciled, err := db.InsertOrphanRecordings(ctx, toInsert)
+	if err != nil {
+		return 0, fmt.Errorf("insert orphan recordings: %w", err)
+	}
+
+	if reconciled > 0 {
+		logger.Info("reconciled orphaned recording files", "count", reconciled)
+	}
+
+	return reconciled, nil
 }

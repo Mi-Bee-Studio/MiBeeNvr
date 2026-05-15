@@ -163,7 +163,7 @@ func TestXiaomiRecorderInitialStatus(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{})
 	require.Equal(t, model.StatusStopped, r.Status())
 }
@@ -172,7 +172,7 @@ func TestXiaomiRecorderStopWithoutStart(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{})
 	// Stop without start should not panic.
 	err := r.Stop()
@@ -184,7 +184,7 @@ func TestXiaomiRecorderStartAndStop(t *testing.T) {
 	store := &noopSegmentStore{}
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		MISSURL:     "miss://192.168.1.1", // Will fail to connect, that's expected
+		DID: "test-device", // Will fail to connect, that's expected
 		SegmentDur:  1 * time.Minute,
 		MaxBackoff:  1 * time.Second,
 		InitBackoff: 1 * time.Second,
@@ -206,7 +206,7 @@ func TestXiaomiRecorderDoubleStart(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		MISSURL:     "miss://192.168.1.1",
+		DID: "test-device",
 		InitBackoff: 10 * time.Second, // Long backoff so status stays recording
 	}, &noopSegmentStore{})
 
@@ -225,7 +225,7 @@ func TestXiaomiRecorderContextCancel(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
-		MISSURL:     "miss://192.168.1.1",
+		DID: "test-device",
 		InitBackoff: 100 * time.Millisecond,
 		MaxBackoff:  100 * time.Millisecond,
 	}, &noopSegmentStore{})
@@ -247,12 +247,12 @@ func TestXiaomiRecorderMetrics(t *testing.T) {
 	t.Helper()
 	require.NotNil(t, NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{}))
 	// Metrics is nil, should not panic on any operation.
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{})
 	r.incActive()
 	r.decActive()
@@ -267,7 +267,7 @@ func TestXiaomiRecorderCodecDetectionH264(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{})
 
 	require.False(t, r.codecOK)
@@ -293,7 +293,7 @@ func TestXiaomiRecorderCodecDetectionH265(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
-		MISSURL:  "miss://192.168.1.1",
+		DID: "test-device",
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH265
@@ -331,7 +331,7 @@ func TestXiaomiRecorderWithMockMISS(t *testing.T) {
 
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:   "test-cam",
-		MISSURL:    "miss://192.168.1.1", // Won't be used, we inject packets directly
+		DID: "test-device", // Won't be used, we inject packets directly
 		SegmentDur: 10 * time.Minute,
 		DB:         &noopDB{},
 	}, store)
@@ -385,6 +385,10 @@ func (s *noopSegmentStore) CloseSegment(tempPath, finalPath string) error {
 type noopDB struct{}
 
 func (db *noopDB) InsertRecording(ctx context.Context, r *model.Recording) error {
+	return nil
+}
+
+func (db *noopDB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error {
 	return nil
 }
 

@@ -1,11 +1,14 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // --- NewManager() ---
@@ -572,4 +575,162 @@ func TestManager_RootDir(t *testing.T) {
 	if m.RootDir() != dir {
 		t.Fatalf("RootDir() = %q, want %q", m.RootDir(), dir)
 	}
+}
+
+func TestReconcileOrphanedFiles_Basic(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Insert camera into DB
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	// Create camera directory and MP4 files with correct naming pattern
+	camDir := filepath.Join(storeDir, "test-cam-1")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	files := []string{
+		"test-cam-1_20260514_120000_1234567890123456789.mp4",
+		"test-cam-1_20260514_120100_1234567890123456790.mp4",
+		"test-cam-1_20260514_120200_1234567890123456791.mp4",
+	}
+	for _, f := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(camDir, f), []byte("fake-mp4-data-123456"), 0644))
+	}
+
+	cameraIDs := map[string]bool{"test-cam-1": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
+
+	// Verify recordings are in DB
+	for _, f := range files {
+		nanoStr := strings.TrimSuffix(f, ".mp4")
+		parts := strings.SplitN(nanoStr, "_", 4)
+		recID := parts[3]
+		got, err := db.GetRecording(ctx, recID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "recording for file %s should exist", f)
+		require.Equal(t, "test-cam-1", got.CameraID)
+	}
+}
+
+func TestReconcileOrphanedFiles_SkipsUnknownCamera(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_unknown.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Do NOT insert camera into DB — it's unknown
+	camDir := filepath.Join(storeDir, "unknown-cam")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "unknown-cam_20260514_120000_1234567890123456789.mp4"), []byte("data"), 0644))
+
+	cameraIDs := map[string]bool{} // empty — unknown-cam not recognized
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+}
+
+func TestReconcileOrphanedFiles_SkipsNonMatching(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_nomatch.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "test-cam-1")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	// Files with wrong pattern
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "random_file.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "incomplete_.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "test-cam-1_onlydate.mp4"), []byte("data"), 0644))
+
+	cameraIDs := map[string]bool{"test-cam-1": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+}
+
+func TestReconcileOrphanedFiles_SkipsZeroByte(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_zerobyte.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "test-cam-1")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	// Zero-byte file with correct naming
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "test-cam-1_20260514_120000_1234567890123456789.mp4"), nil, 0644))
+
+	cameraIDs := map[string]bool{"test-cam-1": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+}
+
+func TestReconcileOrphanedFiles_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_idem.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "test-cam-1")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "test-cam-1_20260514_120000_1234567890123456789.mp4"), []byte("fake-data-here-1234"), 0644))
+
+	cameraIDs := map[string]bool{"test-cam-1": true}
+
+	// First run: should reconcile 1 file
+	count1, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 1, count1)
+
+	// Second run: same files, should reconcile 0 (already registered)
+	count2, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count2)
 }

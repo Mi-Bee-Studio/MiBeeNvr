@@ -58,6 +58,8 @@
       formEncoding = 'jpeg';
     } else if (formProtocol === 'onvif') {
       formEncoding = '';
+    } else if (formProtocol === 'xiaomi') {
+      formEncoding = 'h265';
     } else if (formProtocol === 'rtsp' && (formEncoding === 'jpeg' || formEncoding === '')) {
       formEncoding = 'h264';
     }
@@ -419,7 +421,8 @@
     xiaomiVerifyTarget = '';
     xiaomiVerifyType = '';
     xiaomiLoggedIn = true;
-    xiaomiDeviceList = await xiaomiDevices();
+    const devRes = await xiaomiDevices();
+    xiaomiDeviceList = devRes.devices;
   }
 
   async function handleXiaomiCaptcha() {
@@ -453,6 +456,9 @@
     }
   }
 
+  function isXiaomiDeviceAdded(did: string): boolean {
+    return cameras.some(c => c.protocol === 'xiaomi' && c.url === `xiaomi://${did}`);
+  }
   async function addXiaomiDevice(device: XiaomiDevice) {
     xiaomiAddingDid = device.did;
     try {
@@ -464,7 +470,6 @@
         enabled: true,
       });
       showToast(t('cameras.cameraAdded'), 'success');
-      xiaomiDeviceList = xiaomiDeviceList.filter(d => d.did !== device.did);
       await loadCameras();
     } catch (e: any) {
       showToast(t('cameras.failedAdd'), 'error');
@@ -473,8 +478,32 @@
     }
   }
 
-  onMount(() => {
+  async function refreshXiaomiDevices() {
+    try {
+      const res = await xiaomiDevices();
+      xiaomiDeviceList = res.devices || [];
+      xiaomiLoggedIn = true;
+    } catch (e: any) {
+      // Token expired or not authenticated
+      xiaomiLoggedIn = false;
+      xiaomiDeviceList = [];
+    }
+  }
+
+  onMount(async () => {
     loadCameras();
+    // Probe xiaomi auth status
+    try {
+      const res = await xiaomiDevices();
+      if (res.devices && res.devices.length > 0) {
+        xiaomiLoggedIn = true;
+        xiaomiDeviceList = res.devices;
+      } else if (res.message) {
+        // No token configured — keep login form visible
+      }
+    } catch (e: any) {
+      // 401 = token expired, keep login form visible
+    }
   });
 </script>
 
@@ -700,10 +729,11 @@
                     </div>
                   </div>
                 {/if}
+              {:else}
                 <!-- Device list -->
                 <div class="flex items-center justify-between mb-3">
                   <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
-                  <button class="btn btn-ghost btn-sm" on:click={async () => { xiaomiDeviceList = await xiaomiDevices(); }}>{t('xiaomi.refresh')}</button>
+                <button class="btn btn-ghost btn-sm" on:click={refreshXiaomiDevices}>{t('xiaomi.refresh')}</button>
                 </div>
                 {#if xiaomiDeviceList.length === 0}
                   <p class="th-text-secondary text-sm py-2">{t('xiaomi.noDevices')}</p>
@@ -713,21 +743,31 @@
                       <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
                         <div class="min-w-0 flex-1 mr-4">
                           <div class="font-medium th-text-primary truncate">{device.name}</div>
-                          <div class="text-sm th-text-secondary truncate">{device.model} · {device.ip}</div>
+                          <div class="text-sm th-text-secondary truncate">{device.model} · {device.localip}</div>
                           <div class="text-xs mt-0.5 {device.isOnline ? 'th-color-success' : 'th-text-muted'}">
                             {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
                           </div>
                         </div>
-                        <button
-                          on:click={() => addXiaomiDevice(device)}
-                          class="btn btn-primary btn-sm shrink-0"
-                          disabled={xiaomiAddingDid === device.did}
-                        >
-                          {#if xiaomiAddingDid === device.did}
-                            <span class="spinner mr-1"></span>
-                          {/if}
-                          {t('onvif.addCamera')}
-                        </button>
+                        {#if isXiaomiDeviceAdded(device.did)}
+                          <button
+                            type="button"
+                            class="btn btn-sm shrink-0 opacity-50 cursor-not-allowed"
+                            disabled
+                          >
+                            {t('xiaomi.added')}
+                          </button>
+                        {:else}
+                          <button
+                            on:click={() => addXiaomiDevice(device)}
+                            class="btn btn-primary btn-sm shrink-0"
+                            disabled={xiaomiAddingDid === device.did}
+                          >
+                            {#if xiaomiAddingDid === device.did}
+                              <span class="spinner mr-1"></span>
+                            {/if}
+                            {t('onvif.addCamera')}
+                          </button>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -764,6 +804,7 @@
                   <option value="rtsp">RTSP</option>
                   <option value="http">HTTP</option>
                   <option value="onvif">ONVIF</option>
+                  <option value="xiaomi">Xiaomi</option>
                 </select>
                 {#if validationErrors['protocol']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
@@ -784,6 +825,9 @@
                     <option value="">{t('cameras.autoDetect')}</option>
                     <option value="h264">H.264</option>
                     <option value="h265">H.265</option>
+                  {:else if formProtocol === 'xiaomi'}
+                    <option value="h264">H.264</option>
+                    <option value="h265">H.265</option>
                   {/if}
                 </select>
               </div>
@@ -797,44 +841,66 @@
                   {/if}
                 </label>
                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
-                  placeholder={formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
+                  placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
                   on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
               </div>
 
-              <!-- Username -->
-              <div>
-                <label for="cam-user" class="input-label">{t('cameras.username')}</label>
-                <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || t('cameras.notSet')) : ''} />
-              </div>
+              {#if formProtocol === 'xiaomi'}
+                {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}
+                  {@const matchDid = formUrl.replace('xiaomi://', '')}
+                  {@const matchedDevice = xiaomiDeviceList.find(d => d.did === matchDid)}
+                  {#if matchedDevice}
+                    <div class="p-3 rounded-md th-bg-hover border th-border text-sm">
+                      <div class="font-medium th-text-primary">{matchedDevice.name}</div>
+                      <div class="th-text-secondary">{matchedDevice.model} · {matchedDevice.localip}</div>
+                      <div class="{matchedDevice.isOnline ? 'th-color-success' : 'th-text-muted'}">
+                        {matchedDevice.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
+                      </div>
+                    </div>
+                  {/if}
+                {/if}
+              {/if}
 
-              <!-- Password -->
-              <div>
-                <label for="cam-pass" class="input-label">{t('cameras.password')}</label>
-                <div class="relative">
-                  <input
-                    id="cam-pass"
-                    type={showPassword ? 'text' : 'password'}
-                    class="input pr-10"
-                    bind:value={formPassword}
-                    placeholder={editingCamera ? (editingCamera.has_password ? t('cameras.passwordSet') : t('cameras.notSet')) : ''}
-                  />
-                  <button
-                    type="button"
-                    class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
-                    on:click={() => showPassword = !showPassword}
-                    aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
-                  >
-                    {#if showPassword}
-                      <EyeOff class="w-4 h-4" />
-                    {:else}
-                      <Eye class="w-4 h-4" />
-                    {/if}
-                  </button>
+              {#if formProtocol !== 'xiaomi'}
+                <!-- Username -->
+                <div>
+                  <label for="cam-user" class="input-label">{t('cameras.username')}</label>
+                  <input id="cam-user" type="text" class="input" bind:value={formUsername} placeholder={editingCamera ? (editingCamera.username || t('cameras.notSet')) : ''} />
                 </div>
-              </div>
+
+                <!-- Password -->
+                <div>
+                  <label for="cam-pass" class="input-label">{t('cameras.password')}</label>
+                  <div class="relative">
+                    <input
+                      id="cam-pass"
+                      type={showPassword ? 'text' : 'password'}
+                      class="input pr-10"
+                      bind:value={formPassword}
+                      placeholder={editingCamera ? (editingCamera.has_password ? t('cameras.passwordSet') : t('cameras.notSet')) : ''}
+                    />
+                    <button
+                      type="button"
+                      class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+                      on:click={() => showPassword = !showPassword}
+                      aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+                    >
+                      {#if showPassword}
+                        <EyeOff class="w-4 h-4" />
+                      {:else}
+                        <Eye class="w-4 h-4" />
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+              {:else}
+                <div class="md:col-span-2 text-sm th-text-secondary">
+                  Credentials are managed via Xiaomi cloud authentication above.
+                </div>
+              {/if}
 
               <!-- Enabled -->
               <div class="md:col-span-2 flex items-center gap-2">
