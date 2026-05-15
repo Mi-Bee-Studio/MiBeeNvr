@@ -372,7 +372,7 @@ func main() {
 
 	// API handler — Routes() already includes /api prefix
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy, pluginMgr)
 
 	// WebDAV
 	var davHandler http.Handler

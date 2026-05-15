@@ -219,6 +219,10 @@ func (m *PluginManager) RestartPlugin(name string) error {
 		return fmt.Errorf("plugin %q not found", name)
 	}
 
+	if m.config == nil {
+		return fmt.Errorf("plugin %q: no config entry", name)
+	}
+
 	entry, hasEntry := m.config.Plugins[name]
 	if !hasEntry {
 		return fmt.Errorf("plugin %q: no config entry", name)
@@ -484,4 +488,12 @@ func (m *PluginManager) checkAllPlugins(ctx context.Context) {
 			m.mu.Unlock()
 		}
 	}
+}
+
+// InjectManagedPlugin adds a ManagedPlugin directly to the manager.
+// Intended for testing only — production code should use Start().
+func (m *PluginManager) InjectManagedPlugin(mp *ManagedPlugin) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.plugins[mp.Name] = mp
 }
