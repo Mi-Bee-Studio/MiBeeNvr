@@ -834,7 +834,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 9. **Xiaomi plugin gRPC server**
+- [x] 9. **Xiaomi plugin gRPC server**
 
   **What to do**:
   - 创建 `plugins/xiaomi/cmd/xiaomi-plugin/main.go` — 插件进程入口
@@ -903,7 +903,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 10. **Xiaomi recorder refactor to streaming**
+- [x] 10. **Xiaomi recorder refactor to streaming**
 
   **What to do**:
   - 创建 `plugins/xiaomi/grpc_recorder.go` — 重构后的 Xiaomi 录制器
@@ -973,7 +973,7 @@ Max Concurrent: 5 (Wave 4)
 
 ---
 
-- [ ] 11. **Xiaomi cloud auth boundary**
+- [x] 11. **Xiaomi cloud auth boundary**
 
   **What to do**:
   - 解决 Xiaomi 云认证的进程边界问题

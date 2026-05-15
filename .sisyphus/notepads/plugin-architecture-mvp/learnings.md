@@ -367,3 +367,149 @@ github.com/jhump/protoreflect v1.17.0 (indirect)
 
 ### Parallel Task Conflict
 - Task 5 (FrameReceiver) created duplicate `SegmentStore`/`RecordingDB` interfaces in `frame_receiver.go`. Task 2 also created `interfaces.go` with canonical definitions. The `frame_receiver.go` was updated to remove its local copies.
+
+## 2026-05-15: StreamRecorder (gRPC Streaming Xiaomi Recorder)
+
+### Architecture
+- `plugins/xiaomi/grpc_recorder.go` — streams NAL frames over gRPC via `FrameSender` interface
+- Zero internal package dependencies: no `internal/muxer`, no `internal/storage`, no `internal/metrics`
+- Keeps only: MISS protocol (`miss.go`), CS2 (`cs2.go`), crypto (`crypto.go`), cloud (`cloud.go`), proto gen
+- Uses `gen.Codec` and `gen.RecorderState` from proto package instead of `model.Format` / `model.RecorderStatus`
+
+### Key Design Decisions
+- `FrameSender` interface with single method `SendFrame(ctx, *gen.Frame) error` — decouples from gRPC stream impl
+- Codec info frames (SPS/PPS/VPS) sent with `IsCodecInfo=true` and hex-encoded data in `Extra` map (`sps_hex`, `pps_hex`, `vps_hex`)
+- NAL type detection mirrors existing recorder: H264 uses `nalu[0] & 0x1F`, H265 uses `(nalu[0] >> 1) & 0x3F`
+- IDR marking: H264 NAL type 5, H265 NAL types 19/20 → `IsIdr=true`
+- PTS in nanoseconds since stream start via `time.Since(r.streamStart).Nanoseconds()`
+- `nextBackoff()` extracted as package-level function for testability
+- Same reconnection pattern as existing XiaomiRecorder: resolve MISS URL → connect → retry with exponential backoff + jitter
+
+### Parallel Task File Conflict
+- Task 9 (Xiaomi gRPC server) running in parallel modified `grpc_recorder.go` multiple times while this task was writing it
+- Task 9 added: `Wait()` method, `RecorderState` type alias, changed `Start()` to use no-op cancel function, added `grpc_plugin.go` / `grpc_server.go`
+- The no-op cancel (`r.cancel = func() {}`) broke `Stop()` — context never cancelled, `done` channel never closed, tests hung forever
+- Resolution: rewrote `grpc_recorder.go` to clean version, verified with tests
+- Lesson: When parallel tasks write to the same file, one will clobber the other. Need file-level coordination.
+
+### Test Coverage (30 tests, all pass)
+1. H264 IDR → Frame (IsIdr=true, Codec=H264)
+2. H264 P-frame → Frame (IsIdr=false)
+3. H264 SPS → Frame (IsCodecInfo=true, Extra has sps_hex)
+4. H264 PPS → Frame (IsCodecInfo=true, Extra has pps_hex)
+5. H264 skips unknown NAL types (SEI, AUD)
+6. H265 IDR_W_RADL (type 19) → Frame
+7. H265 IDR_N_LP (type 20) → Frame
+8. H265 P-frame → Frame
+9. H265 VPS → Frame (IsCodecInfo, vps_hex)
+10. H265 SPS → Frame (IsCodecInfo, sps_hex)
+11. H265 PPS → Frame (IsCodecInfo, pps_hex)
+12. H265 skips non-VCL (type >= 32)
+13. PTS calculation (0 before start, >0 after, monotonically increasing)
+14. PTS monotonically increasing across frames
+15. H264 is_idr flag correctness (IDR→true, P→false, IDR→true)
+16. H265 is_idr flag correctness (type 19→true, type 20→true, type 1→false)
+17. H264 is_codec_info correctness (SPS/PPS→true, IDR/P→false)
+18. H265 is_codec_info correctness (VPS/SPS/PPS→true, IDR→false)
+19. Full H264 sequence: SPS→PPS→IDR→P→IDR with frame field validation
+20. Reconnection logic (connection failure handled gracefully)
+21. Initial status = STOPPED
+22. Double start fails with error
+23. Stop without start (no panic)
+24. Context cancel → clean shutdown
+25. nextBackoff calculation + cap at max
+26. Empty/nil NALU silently ignored
+27. SendFrame error logged, counters not updated
+28. Counter tracking (frameCount, bytesTotal)
+29. Concurrent access (50 goroutines)
+30. processNALU dispatch (H264/H265 codec routing)
+
+## 2026-05-15: Xiaomi Plugin gRPC Server + Streaming Recorder (Tasks 9+10)
+
+### Architecture
+- `plugin/handshake.go` — shared handshake constants outside `internal/`, importable by both main NVR and plugin binaries
+- `internal/plugin/grpc_manager.go` — re-exports handshake constants from `plugin/handshake.go` for backward compat
+- `plugins/xiaomi/grpc_plugin.go` — go-plugin bridge (`GRPCPlugin` wraps `PluginServer`)
+- `plugins/xiaomi/grpc_server.go` — `PluginServer` implements `gen.PluginServiceServer`
+- `plugins/xiaomi/grpc_recorder.go` — `StreamRecorder` connects via MISS, sends frames via `FrameSender` interface
+- `plugins/xiaomi/cmd/xiaomi-plugin/main.go` — standalone binary entry point
+
+### Key Design Decisions
+- **FrameSender interface**: Decouples streaming from gRPC. `streamSender` adapter wraps `grpc.ServerStreamingServer[gen.Frame]`
+- **Start() accepts external context**: `context.WithCancel(ctx)` derives child context so `Stop()` can cancel independently
+- **Wait() method**: `StartRecorder` blocks on `rec.Wait()` (reads done channel) — gRPC stream handler must block
+- **PluginServer vs XiaomiGRPCServer**: Renamed to `PluginServer` / `NewPluginServer()` for consistency with mock plugin
+- **No `internal/` imports**: New plugin files (grpc_*.go, cmd/) import only `plugin/proto/gen`, `plugin` (handshake), and standard libs
+- **Existing recorder.go/plugin.go unchanged**: In-process mode still works for backward compatibility
+
+### go-plugin Integration
+- Entry point: `plugin.Serve()` with `sharedPlugin.Handshake` config
+- Plugin type key: `sharedPlugin.PluginType` ("nvr_plugin") — must match host's `pluginMap()`
+- Binary size: ~29MB standalone (includes gRPC runtime + MISS/CS2/crypto code)
+- `GRPCPlugin` embeds `plugin.NetRPCUnsupportedPlugin` for gRPC-only transport
+
+### StreamRecorder Patterns
+- Same reconnect loop pattern as `XiaomiRecorder`: `run() → ResolveMISSURL → connectAndRecord → processNALU`
+- Same NAL type detection: H264 SPS=7/PPS=8/IDR=5/P=1, H265 VPS=32/SPS=33/PPS=34/IDR=19,20
+- Codec info frames sent with `IsCodecInfo=true` and hex-encoded Extra map
+- PTS calculated as nanoseconds since stream start (`time.Since(streamStart)`)
+- Segment tracking via atomic counter (incremented on each IDR after first)
+
+### Test Coverage
+- Existing tests (recorder_test.go): 23 tests — all pass
+- StreamRecorder tests (grpc_recorder_test.go): 26 tests — all pass
+- Total: 49 tests in xiaomi package
+
+
+## 2026-05-15: Cloud Auth Boundary Extraction (Task 10)
+
+### Architecture
+- Created `CloudAuthProxy` interface in `internal/api/cloud_auth.go` with 5 methods: SetCloudConfig, SignIn, SubmitCaptcha, SubmitVerify, ListDevices
+- Created `LocalXiaomiAuth` adapter in `internal/api/xiaomi_local.go` that implements CloudAuthProxy by calling xiaomi package directly
+- Adapter also handles `xiaomi.SetCloudConfig(cfg.Xiaomi)` initialization (moved from main.go)
+- Handler struct has `cloudProxy CloudAuthProxy` field — nil means 503 Service Unavailable
+
+### CloudAuthProxy Interface
+- `SetCloudConfig(ctx, userID, token, region) error` — pushes credentials
+- `SignIn(ctx, username, password, region) (*CloudAuthResult, *CloudVerificationRequired, error)` — returns result OR verification required
+- `SubmitCaptcha(ctx, sessionID, code) (*CloudAuthResult, *CloudVerificationRequired, error)` — captcha continuation
+- `SubmitVerify(ctx, sessionID, ticket) (*CloudAuthResult, *CloudVerificationRequired, error)` — 2FA continuation
+- `ListDevices(ctx) ([]CloudDeviceInfo, error)` — device discovery
+
+### Key Types
+- `CloudAuthResult` — successful auth: UserID, PassToken, Region
+- `CloudVerificationRequired` — needs interaction: Captcha, VerifyPhone, VerifyEmail, CaptchaSessionID
+- `CloudDeviceInfo` — generic device: DID, Name, Model, IP, MAC, IsOnline
+- These replace direct use of `xiaomi.CloudSession`, `xiaomi.LoginError`, `xiaomi.CaptchaSessionError`, `xiaomi.CloudDevice`
+
+### Handler Changes
+- Handler gained `cloudProxy CloudAuthProxy` field
+- `NewHandler` signature extended with `cloudProxy` parameter
+- All 4 xiaomi handlers now check `cloudProxy != nil` and return 503 if unavailable
+- `saveXiaomiToken` helper persists auth result to config AND pushes to cloudProxy via SetCloudConfig
+- `verificationToResponse` helper converts CloudVerificationRequired to JSON response
+- Removed direct `xiaomi` import, `errors` import, and `base64` was kept for captcha encoding
+
+### Main.go Changes
+- Removed `xiaomi "github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"` import
+- Removed `xiaomi.SetCloudConfig(cfg.Xiaomi)` call
+- Added `cloudProxy := api.NewLocalXiaomiAuth(cfg)` and passes to NewHandler
+- Plugin registration still works because `xiaomi_local.go` imports `plugins/xiaomi` (triggers init())
+- Removed `_ "plugins/xiaomi"` blank import — not needed since xiaomi_local.go provides the import
+
+### Test Changes
+- All 19 NewHandler calls in handler_test.go updated to include `, nil` cloudProxy param
+- Added `noopCloudProxy` struct implementing CloudAuthProxy for test isolation
+- Xiaomi validation tests use `noopCloudProxy{}` (validation returns before proxy call)
+- Added `TestXiaomiCloudUnavailableWithoutProxy` — verifies 503 for all 4 endpoints when proxy is nil
+- 4 integration_test.go NewHandler calls also updated
+
+### Bridge Pattern
+- `xiaomi_local.go` is the in-process bridge until Task 9 (Xiaomi gRPC server) completes
+- When gRPC xiaomi plugin is ready, swap LocalXiaomiAuth with a gRPC-based CloudAuthProxy
+- The adapter pattern means handler.go never changes again for cloud auth
+
+### Proto Verification
+- `SetCloudConfig` RPC confirmed in `nvr.proto` (line 60): takes CloudConfig, returns CloudConfigResponse
+- CloudConfig message: service_token, user_id, device_id, region, extra map
+- No proto changes needed for this task

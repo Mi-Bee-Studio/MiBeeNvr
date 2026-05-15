@@ -16,43 +16,26 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	gen "github.com/Mi-Bee-Studio/MiBeeNvr/plugin/proto/gen"
+	sharedPlugin "github.com/Mi-Bee-Studio/MiBeeNvr/plugin"
 )
 
+// Handshake constants are defined in plugin/handshake.go (shared between host and plugins).
+// Re-export here for backward compatibility with internal consumers.
 const (
-	// MagicCookieKey is the environment variable key for the plugin handshake.
-	MagicCookieKey = "NVR_PLUGIN"
-
-	// MagicCookieValue is the expected value for the plugin handshake.
-	MagicCookieValue = "mibee-nvr-plugin"
-
-	// PluginType is the plugin type name used for dispensing via go-plugin.
-	PluginType = "nvr_plugin"
-
-	// DefaultHealthCheckInterval is the default interval between health checks.
+	MagicCookieKey           = sharedPlugin.MagicCookieKey
+	MagicCookieValue         = sharedPlugin.MagicCookieValue
+	PluginType               = sharedPlugin.PluginType
 	DefaultHealthCheckInterval = 30 * time.Second
-
-	// healthCheckTimeout is the per-plugin health check RPC timeout.
 	healthCheckTimeout = 5 * time.Second
-
-	// DefaultInitBackoff is the initial backoff duration for crash restart.
 	DefaultInitBackoff = 1 * time.Second
-
-	// DefaultMaxBackoff is the maximum backoff duration for crash restart.
-	DefaultMaxBackoff = 60 * time.Second
-
-	// MaxRestartAttempts is the maximum number of auto-restart attempts before
-	// permanently marking a plugin as errored.
+	DefaultMaxBackoff  = 60 * time.Second
 	MaxRestartAttempts = 10
 )
 
 var grpcMgrLogger = slog.Default().With("component", "plugin-manager")
 
-// Handshake is the go-plugin handshake config shared between host and plugins.
-var Handshake = goPlugin.HandshakeConfig{
-	ProtocolVersion:  1,
-	MagicCookieKey:   MagicCookieKey,
-	MagicCookieValue: MagicCookieValue,
-}
+// Handshake is re-exported from the shared plugin package.
+var Handshake = sharedPlugin.Handshake
 
 // PluginInterface implements hashicorp/go-plugin's Plugin interface for gRPC
 // transport. The host uses it to dispense a PluginServiceClient; the plugin
