@@ -1,0 +1,6 @@
+- Fixed two review issues:
+  - Reverted config.yaml and camvault.db names in main.go to preserve backward compatibility.
+  - Corrected .gitignore typo from .sisyyphus/ to .sisyphus/.
+- Changes were applied via patch system to two files:
+  - cfg defaults updated in cmd/mibee-nvr/main.go
+  - typo fixed in .gitignore
