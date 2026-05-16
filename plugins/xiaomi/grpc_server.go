@@ -79,19 +79,15 @@ func (s *PluginServer) GetPluginInfo(_ context.Context, _ *gen.Empty) (*gen.Plug
 }
 
 // StartRecorder begins streaming NAL frames from a Xiaomi camera.
-//
-// TODO(Task 10): Replace placeholder frame generation with real Xiaomi
-// protocol (StreamRecorder + MISS client + CS2 transport).
-// For now, sends synthetic H.264 frames to validate the gRPC plumbing.
 func (s *PluginServer) StartRecorder(cfg *gen.RecorderConfig, stream grpc.ServerStreamingServer[gen.Frame]) error {
 	cameraID := cfg.GetCameraId()
-	ctx, cancel := context.WithCancel(stream.Context())
+	ctx := stream.Context()
 
 	rs := &recorderState{
 		cameraID:  cameraID,
 		state:     gen.RecorderState_RECORDER_STATE_RECORDING,
 		startTime: time.Now(),
-		cancel:    cancel,
+		cancel:    func() {}, // stream context controls lifecycle
 	}
 
 	s.mu.Lock()
@@ -101,80 +97,49 @@ func (s *PluginServer) StartRecorder(cfg *gen.RecorderConfig, stream grpc.Server
 	s.recorders[cameraID] = rs
 	s.mu.Unlock()
 
-	// Placeholder frame generation — will be replaced by real Xiaomi protocol
-	// in Task 10 when StreamRecorder is integrated.
-	startCode := []byte{0x00, 0x00, 0x00, 0x01}
-	frameSeq := 0
-	ptsNs := uint64(0)
-	ticker := time.NewTicker(33 * time.Millisecond)
-	defer ticker.Stop()
-
-	grpcServerLogger.Info("recorder started (placeholder)", "camera_id", cameraID)
-
-	for {
-		select {
-		case <-ctx.Done():
-			s.mu.Lock()
-			rs.state = gen.RecorderState_RECORDER_STATE_STOPPED
-			s.mu.Unlock()
-			return nil
-		case <-ticker.C:
-		}
-
-		frameSeq++
-
-		if frameSeq == 1 {
-			frame := &gen.Frame{
-				Data:        append(startCode, 0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0x00),
-				IsCodecInfo: true,
-				Codec:       gen.Codec_CODEC_H264,
-				Extra:       map[string]string{"sps_hex": "6742c01ed90000"},
-			}
-			if err := stream.Send(frame); err != nil {
-				return err
-			}
-			rs.bytesWritten.Add(int64(len(frame.Data)))
-		}
-
-		if frameSeq == 1 {
-			frame := &gen.Frame{
-				Data:        append(startCode, 0x68, 0xce, 0x38, 0x80),
-				IsCodecInfo: true,
-				Codec:       gen.Codec_CODEC_H264,
-				Extra:       map[string]string{"pps_hex": "68ce3880"},
-			}
-			if err := stream.Send(frame); err != nil {
-				return err
-			}
-			rs.bytesWritten.Add(int64(len(frame.Data)))
-		}
-
-		isIDR := (frameSeq-1)%30 == 0
-		var nalPayload []byte
-		if isIDR {
-			nalPayload = make([]byte, 10240)
-			nalPayload[0] = 0x65
-		} else {
-			nalPayload = make([]byte, 5120)
-			nalPayload[0] = 0x41
-		}
-
-		frame := &gen.Frame{
-			Data:  append(startCode, nalPayload...),
-			PtsNs: ptsNs,
-			IsIdr: isIDR,
-			Codec: gen.Codec_CODEC_H264,
-		}
-		if err := stream.Send(frame); err != nil {
-			return err
-		}
-		rs.bytesWritten.Add(int64(len(frame.Data)))
-		ptsNs += uint64(33 * time.Millisecond.Nanoseconds())
-
-		if isIDR && frameSeq > 1 {
-			rs.segments.Add(1)
-		}
+	// Build StreamRecorder config from the gRPC RecorderConfig options.
+	did := cfg.GetOptions()["did"]
+	modelName := cfg.GetOptions()["model"]
+	if modelName == "" {
+		modelName = "unknown"
 	}
+
+	streamCfg := StreamRecorderConfig{
+		CameraID:    cameraID,
+		DID:         did,
+		Model:       modelName,
+		CloudCfg:    s.GetCloudConfig(),
+		MaxBackoff:  defaultStreamMaxBackoff,
+		InitBackoff: defaultStreamInitBackoff,
+	}
+
+	sender := &streamSender{
+		stream:       stream,
+		bytesWritten: &rs.bytesWritten,
+	}
+
+	rec := NewStreamRecorder(streamCfg, sender)
+	grpcServerLogger.Info("starting Xiaomi stream recorder", "camera_id", cameraID, "did", did, "model", modelName)
+
+	if err := rec.Start(ctx); err != nil {
+		s.mu.Lock()
+		rs.state = gen.RecorderState_RECORDER_STATE_ERROR
+		rs.errMsg = err.Error()
+		s.mu.Unlock()
+		return fmt.Errorf("stream recorder start failed for %q: %w", cameraID, err)
+	}
+
+	// Block until stream context is cancelled (client disconnect or StopRecorder).
+	<-ctx.Done()
+
+	_ = rec.Stop()
+
+	s.mu.Lock()
+	rs.state = gen.RecorderState_RECORDER_STATE_STOPPED
+	s.mu.Unlock()
+
+	grpcServerLogger.Info("recorder stopped", "camera_id", cameraID)
+	return nil
 }
 
 // StopRecorder cancels the frame streaming for the given camera.
