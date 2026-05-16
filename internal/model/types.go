@@ -13,6 +13,18 @@ type Recorder interface {
 	Status() RecorderStatus
 }
 
+// HLSProvider is an optional interface that recorders can implement
+// to support HLS live streaming. The api handler checks for this
+// interface via type assertion when starting an HLS stream.
+type HLSProvider interface {
+	// CodecParams returns the current codec parameters detected from the stream.
+	// Returns nil slices if codec info frames have not been received yet.
+	CodecParams() (codec Format, sps, pps, vps []byte)
+	// SetOnHLSFrame registers a callback for HLS frame delivery.
+	// The callback must be non-blocking — frames are dropped if buffer is full.
+	SetOnHLSFrame(cb func(pts int64, au [][]byte))
+}
+
 // StorageProvider manages recording storage and metadata
 type StorageProvider interface {
 	CreateSegment(cameraID string, meta SegmentMeta) (*Segment, error)
