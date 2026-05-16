@@ -6,6 +6,7 @@
 # Binary outputs
 /mibee-nvr
 /mibee-nvr-arm64
+*-arm64
 
 # Database files
 *.db
@@ -39,6 +40,7 @@ package-lock.json
 
 # QA screenshots
 /qa-*.png
+plugins-*.png
 
 # Private documentation (not committed to remote)
 docs/private/

@@ -6,16 +6,13 @@
 package main
 
 import (
+	sharedPlugin "github.com/Mi-Bee-Studio/MiBeeNvr/plugin"
 	"github.com/hashicorp/go-plugin"
 )
 
 func main() {
 	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  1,
-			MagicCookieKey:   "NVR_PLUGIN",
-			MagicCookieValue: "nvr-plugin",
-		},
+		HandshakeConfig: sharedPlugin.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"plugin": &PluginGRPC{Impl: NewMockServer()},
 		},

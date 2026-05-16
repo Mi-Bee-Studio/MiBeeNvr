@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 
+	sharedPlugin "github.com/Mi-Bee-Studio/MiBeeNvr/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/plugin/proto/gen"
 	xiaomi "github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 	"github.com/hashicorp/go-plugin"
@@ -35,11 +36,7 @@ func (p *XiaomiPluginGRPC) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c
 
 func main() {
 	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  1,
-			MagicCookieKey:   "NVR_PLUGIN",
-			MagicCookieValue: "nvr-plugin",
-		},
+		HandshakeConfig: sharedPlugin.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"plugin": &XiaomiPluginGRPC{Impl: xiaomi.NewPluginServer()},
 		},

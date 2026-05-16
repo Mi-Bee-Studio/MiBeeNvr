@@ -235,6 +235,13 @@
 
   // Determine visibility
   let visible = $derived(protocol === 'onvif' ? (scanning || scanDone) : xiaomiExpanded);
+
+  // Auto-start discovery when mounted or protocol changes
+  $effect(() => {
+    if (protocol) {
+      startDiscovery();
+    }
+  });
 </script>
 
 {#if visible}
