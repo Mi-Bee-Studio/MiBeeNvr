@@ -42,10 +42,17 @@ type gRPCRecorderAdapter struct {
 	cancel context.CancelFunc
 	status model.RecorderStatus
 	done   chan struct{}
+
+	// HLS live streaming support
+	hlsMu      sync.Mutex
+	onHLSFrame func(pts int64, au [][]byte)
 }
 
 // Compile-time interface check.
 var _ model.Recorder = (*gRPCRecorderAdapter)(nil)
+
+// Compile-time HLSProvider interface check.
+var _ model.HLSProvider = (*gRPCRecorderAdapter)(nil)
 
 // NewGRPCRecorderAdapter creates a new adapter that proxies model.Recorder calls
 // to the given gRPC plugin client. Frames received from the plugin are forwarded
@@ -135,6 +142,30 @@ func (a *gRPCRecorderAdapter) Status() model.RecorderStatus {
 	return a.status
 }
 
+// codecParamsProvider is a private interface for accessing codec params
+// from the underlying FrameHandler.
+type codecParamsProvider interface {
+	CodecParams() (codec model.Format, sps, pps, vps []byte)
+}
+
+// CodecParams returns the current codec parameters from the stream.
+// Implements model.HLSProvider.
+func (a *gRPCRecorderAdapter) CodecParams() (codec model.Format, sps, pps, vps []byte) {
+	if cp, ok := a.handler.(codecParamsProvider); ok {
+		return cp.CodecParams()
+	}
+	return model.Format(""), nil, nil, nil
+}
+
+// SetOnHLSFrame registers a callback for HLS frame delivery.
+// The callback is non-blocking — frames are dropped if the HLS buffer is full.
+// Implements model.HLSProvider.
+func (a *gRPCRecorderAdapter) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
+	a.hlsMu.Lock()
+	a.onHLSFrame = cb
+	a.hlsMu.Unlock()
+}
+
 // receiveLoop reads frames from the gRPC stream and forwards them to the handler.
 func (a *gRPCRecorderAdapter) receiveLoop(ctx context.Context, stream grpc.ServerStreamingClient[gen.Frame]) {
 	defer close(a.done)
@@ -156,6 +187,16 @@ func (a *gRPCRecorderAdapter) receiveLoop(ctx context.Context, stream grpc.Serve
 			grpcAdapterLogger.Error("handle frame error", "camera_id", a.cameraID, "error", err)
 			a.setStatus(model.StatusError)
 			return
+		}
+
+		// Forward frame to HLS if callback is set (non-blocking).
+		if !frame.IsCodecInfo {
+			a.hlsMu.Lock()
+			cb := a.onHLSFrame
+			a.hlsMu.Unlock()
+			if cb != nil {
+				cb(int64(frame.PtsNs), [][]byte{frame.Data})
+			}
 		}
 	}
 }
