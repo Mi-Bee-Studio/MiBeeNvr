@@ -8,6 +8,7 @@
   - [Camera Snapshot](#camera-snapshot)
 - [Stats & Settings API](#stats--settings-api)
 - [Upload API](#upload-api)
+- [Plugins API](#plugins-api)
 - [Error Responses](#error-responses)
 - [HTTP Status Codes](#http-status-codes)
 - [Quick Start](#quick-start)
@@ -747,26 +748,176 @@ curl -u username:password \
 }
 ```
 
-## Error Responses
+## Plugins API
 
-All error responses use the following format:
+### List Plugins
+
+**Endpoint:** `GET /api/plugins`
+
+Retrieve a list of all loaded plugins with their status and capabilities. Returns deduplicated list where gRPC managed plugins take priority.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins"
+```
+
+**Response:**
 
 ```json
 {
-  "error": "descriptive error message"
+  "plugins": [
+    {
+      "name": "xiaomi",
+      "version": "1.0.0",
+      "status": "running",
+      "protocols": ["xiaomi"],
+      "capabilities": {
+        "hls": false,
+        "ptz": false,
+        "snapshot": false,
+        "discovery": true,
+        "auth": false
+      },
+      "supported_encodings": ["h264", "h265"],
+      "uptime_seconds": 3600,
+      "restart_count": 0
+    }
+  ]
 }
 ```
 
-Common error scenarios:
+### Get Plugin
 
-- Authentication failures (401)
-- Invalid request parameters (400)
-- Missing required fields (400)
-- File upload too large (400)
-- Resource not found (404)
-- Internal server errors (500)
+**Endpoint:** `GET /api/plugins/{name}`
 
-## HTTP Status Codes
+Retrieve details for a specific plugin by name.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi"
+```
+
+**Response:**
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "status": "running",
+  "protocols": ["xiaomi"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  },
+  "supported_encodings": ["h264", "h265"],
+  "uptime_seconds": 3600,
+  "restart_count": 0
+}
+```
+
+### Restart Plugin
+
+**Endpoint:** `POST /api/plugins/{name}/restart`
+
+Restart a plugin process. This will gracefully shutdown the plugin and start a new instance.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  -X POST \
+  "http://localhost:9090/api/plugins/xiaomi/restart"
+```
+
+**Response:**
+
+```json
+{
+  "status": "restarting"
+}
+```
+
+### Get Plugin Capabilities
+
+**Endpoint:** `GET /api/plugins/{name}/capabilities`
+
+Retrieve plugin capabilities without detailed status information.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi/capabilities"
+```
+
+**Response:**
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "protocols": ["xiaomi"],
+  "supported_encodings": ["h264", "h265"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  }
+}
+```
+
+### List Protocols
+
+**Endpoint:** `GET /api/protocols`
+
+Retrieve a merged list of all available protocols from both built-in recorders and plugins. Built-in protocols take priority in case of conflicts.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/protocols"
+```
+
+**Response:**
+
+```json
+{
+  "protocols": [
+    {
+      "id": "rtsp",
+      "label": "RTSP",
+      "encodings": ["h264", "h265", "mjpeg"],
+      "built_in": true,
+      "capabilities": {
+        "hls": true,
+        "ptz": false
+      }
+    },
+    {
+      "id": "xiaomi",
+      "label": "xiaomi",
+      "encodings": ["h264", "h265"],
+      "built_in": false,
+      "capabilities": {
+        "discovery": true,
+        "hls": false,
+        "ptz": false,
+        "snapshot": false
+      }
+    }
+  ]
+}
+```
 
 | Code | Description |
 |------|-------------|
@@ -824,4 +975,175 @@ curl -u admin:password \
     }
   }' \
   "http://localhost:9090/api/settings"
+```
+
+### List Protocols
+
+**Endpoint:** `GET /api/protocols`
+
+Retrieve a merged list of all available protocols from both built-in recorders and plugins. Built-in protocols take priority in case of conflicts.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/protocols"
+```
+
+**Response:**
+
+```json
+{
+  "protocols": [
+    {
+      "id": "rtsp",
+      "label": "RTSP",
+      "encodings": ["h264", "h265", "mjpeg"],
+      "built_in": true,
+      "capabilities": {
+        "hls": true,
+        "ptz": false
+      }
+    },
+    {
+      "id": "xiaomi",
+      "label": "xiaomi",
+      "encodings": ["h264", "h265"],
+      "built_in": false,
+      "capabilities": {
+        "discovery": true,
+        "hls": false,
+        "ptz": false,
+        "snapshot": false
+      }
+    }
+  ]
+}
+```
+
+### Get Plugin Capabilities
+
+**Endpoint:** `GET /api/plugins/{name}/capabilities`
+
+Retrieve plugin capabilities without detailed status information.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi/capabilities"
+```
+
+**Response:**
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "protocols": ["xiaomi"],
+  "supported_encodings": ["h264", "h265"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  }
+}
+```
+
+### Restart Plugin
+
+**Endpoint:** `POST /api/plugins/{name}/restart`
+
+Restart a plugin process. This will gracefully shutdown the plugin and start a new instance.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  -X POST \
+  "http://localhost:9090/api/plugins/xiaomi/restart"
+```
+
+**Response:**
+
+```json
+{
+  "status": "restarting"
+}
+```
+
+### Get Plugin
+
+**Endpoint:** `GET /api/plugins/{name}`
+
+Retrieve details for a specific plugin by name.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi"
+```
+
+**Response:**
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "status": "running",
+  "protocols": ["xiaomi"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  },
+  "supported_encodings": ["h264", "h265"],
+  "uptime_seconds": 3600,
+  "restart_count": 0
+}
+```
+
+## Plugins API
+
+### List Plugins
+
+**Endpoint:** `GET /api/plugins`
+
+Retrieve a list of all loaded plugins with their status and capabilities. Returns deduplicated list where gRPC managed plugins take priority.
+
+**Request:**
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins"
+```
+
+**Response:**
+
+```json
+{
+  "plugins": [
+    {
+      "name": "xiaomi",
+      "version": "1.0.0",
+      "status": "running",
+      "protocols": ["xiaomi"],
+      "capabilities": {
+        "hls": false,
+        "ptz": false,
+        "snapshot": false,
+        "discovery": true,
+        "auth": false
+      },
+      "supported_encodings": ["h264", "h265"],
+      "uptime_seconds": 3600,
+      "restart_count": 0
+    }
+  ]
+}
 ```

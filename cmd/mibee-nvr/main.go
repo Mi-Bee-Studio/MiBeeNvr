@@ -27,13 +27,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
 )
 
 var (
@@ -338,8 +338,18 @@ func main() {
 		}
 	}
 
+	// Start gRPC plugin manager (non-fatal if it fails)
+	var pluginMgr *plugin.PluginManager
+	if cfg.Plugins.Directory != "" {
+		pluginMgr = plugin.NewPluginManager(&cfg.Plugins)
+		if err := pluginMgr.Start(ctx); err != nil {
+			slog.Warn("plugin manager start failed, continuing without plugins", "error", err)
+			pluginMgr = nil
+		}
+	}
+
 	// Camera manager
-	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m)
+	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, pluginMgr)
 
 	// HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -361,8 +371,8 @@ func main() {
 	)
 
 	// API handler — Routes() already includes /api prefix
-	// API handler — Routes() already includes /api prefix
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr)
+	cloudProxy := api.NewLocalXiaomiAuth(cfg)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy, pluginMgr)
 
 	// WebDAV
 	var davHandler http.Handler
@@ -425,8 +435,7 @@ func main() {
 	}))
 
 
-	// Initialize Xiaomi cloud config for MISS URL resolution
-	xiaomi.SetCloudConfig(cfg.Xiaomi)
+	// Xiaomi cloud config is initialized via LocalXiaomiAuth (see above)
 	// Start camera manager
 	go func() {
 		if err := camMgr.Start(ctx); err != nil {
