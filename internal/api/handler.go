@@ -2127,26 +2127,28 @@ func managedPluginToJSON(mp *plugin.ManagedPlugin) pluginJSON {
 }
 
 func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
-	// Also include built-in plugins from plugin.All() for backward compat
-	builtIn := plugin.All()
-	type builtinInfo struct {
-		Name      string   `json:"name"`
-		Protocols []string `json:"protocols"`
-	}
-	result := make([]any, 0, len(builtIn))
-	for _, p := range builtIn {
-		result = append(result, builtinInfo{
-			Name:      p.Name(),
-			Protocols: p.Protocols(),
-		})
-	}
+	result := make([]any, 0)
 
-	// Add gRPC plugins if manager is available
+	// Track gRPC plugin names to avoid duplicates
+	grpcNames := make(map[string]bool)
+
+	// Add gRPC plugins first (full metadata)
 	if h.pluginMgr != nil {
 		for _, mp := range h.pluginMgr.ListPlugins() {
 			if mp.Info != nil {
 				result = append(result, managedPluginToJSON(mp))
+				grpcNames[mp.Name] = true
 			}
+		}
+	}
+
+	// Add built-in plugins only if not already covered by gRPC
+	for _, p := range plugin.All() {
+		if !grpcNames[p.Name()] {
+			result = append(result, map[string]any{
+				"name":      p.Name(),
+				"protocols": p.Protocols(),
+			})
 		}
 	}
 
@@ -2257,21 +2259,21 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:       "RTSP",
 			Encodings:   []string{"h264", "h265", "mjpeg"},
 			BuiltIn:     true,
-			Capabilities: map[string]bool{"hls": true, "ptz": false},
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": true},
 		},
 		{
 			ID:          "http",
 			Label:       "HTTP JPEG",
 			Encodings:   []string{"jpeg"},
 			BuiltIn:     true,
-			Capabilities: map[string]bool{"hls": false, "ptz": false},
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": true, "discovery": false, "auth": true},
 		},
 		{
 			ID:          "onvif",
 			Label:       "ONVIF",
 			Encodings:   []string{"h264", "h265", "mjpeg"},
 			BuiltIn:     true,
-			Capabilities: map[string]bool{"hls": true, "ptz": true},
+			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 	}
 
@@ -2294,12 +2296,13 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 					Label:       proto,
 					Encodings:   encodings,
 					BuiltIn:     false,
-					Capabilities: map[string]bool{
-						"hls":       caps.GetHls(),
-						"ptz":       caps.GetPtz(),
-						"snapshot":  caps.GetSnapshot(),
-						"discovery": caps.GetDiscovery(),
-					},
+				Capabilities: map[string]bool{
+					"hls":       caps.GetHls(),
+					"ptz":       caps.GetPtz(),
+					"snapshot":  caps.GetSnapshot(),
+					"discovery": caps.GetDiscovery(),
+					"auth":      false,
+				},
 				})
 			}
 		}

@@ -105,8 +105,8 @@ func TestResolvePluginPath(t *testing.T) {
 		want      string
 	}{
 		{"explicit path", "/usr/local/bin/my-plugin", "/plugins", "test", "/usr/local/bin/my-plugin"},
-		{"empty path uses dir", "", "/opt/plugins", "xiaomi", "/opt/plugins/xiaomi"},
-		{"relative dir", "", "./plugins", "demo", "plugins/demo"},
+		{"empty path uses dir", "", "/opt/plugins", "xiaomi", "/opt/plugins/xiaomi/xiaomi-plugin"},
+		{"relative dir", "", "./plugins", "demo", "plugins/demo/demo-plugin"},
 	}
 
 	for _, tc := range tests {

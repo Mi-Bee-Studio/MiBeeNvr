@@ -252,7 +252,7 @@ func resolvePluginPath(entryPath, dir, name string) string {
 	if entryPath != "" {
 		return entryPath
 	}
-	return filepath.Join(dir, name)
+	return filepath.Join(dir, name, name+"-plugin")
 }
 
 // startPlugin launches a single plugin process, dispenses the gRPC client,
