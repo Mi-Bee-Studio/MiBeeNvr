@@ -33,12 +33,12 @@ type FrameReceiver struct {
 	mu sync.Mutex
 
 	// current segment state
-	muxer       *muxer.MP4Muxer
-	trackID     int
-	curTempPath string
-	curFinalPath string
-	segStart    time.Time
-	frameCount  int
+	muxer         *muxer.MP4Muxer
+	trackID       int
+	curTempPath   string
+	curFinalPath  string
+	segStart      time.Time
+	frameCount    int
 	lastFrameTime time.Time
 
 	// codec state
@@ -138,7 +138,6 @@ func (r *FrameReceiver) CodecParams() (codec model.Format, sps, pps, vps []byte)
 	defer r.mu.Unlock()
 	return r.codec, r.sps, r.pps, r.vps
 }
-
 
 // handleCodecInfo processes codec parameter frames (SPS/PPS/VPS).
 func (r *FrameReceiver) handleCodecInfo(frame *gen.Frame) {

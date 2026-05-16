@@ -17,17 +17,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/go-chi/chi/v5"
 
 	gen "github.com/Mi-Bee-Studio/MiBeeNvr/plugin/proto/gen"
 )
@@ -38,24 +38,24 @@ var appStartTime = time.Now()
 
 // HealthCheck represents the result of a single health check.
 type HealthCheck struct {
-	Status  string `json:"status"`  // "ok" | "warning" | "error"
+	Status  string `json:"status"` // "ok" | "warning" | "error"
 	Message string `json:"message,omitempty"`
 }
 
 // HealthResponse is the response from /api/health.
 type HealthResponse struct {
-	Status string            `json:"status"` // "ok" | "degraded" | "unhealthy"
+	Status string                 `json:"status"` // "ok" | "degraded" | "unhealthy"
 	Checks map[string]HealthCheck `json:"checks"`
-	Uptime string            `json:"uptime"`
+	Uptime string                 `json:"uptime"`
 }
 
 // SystemStats is the response from /api/stats/system.
 type SystemStats struct {
-	CPU     CPUStats     `json:"cpu"`
-	Memory  MemoryStats  `json:"memory"`
-	Network NetworkStats `json:"network"`
-	Uptime  string       `json:"uptime"`
-	Timestamp int64       `json:"timestamp"`
+	CPU       CPUStats     `json:"cpu"`
+	Memory    MemoryStats  `json:"memory"`
+	Network   NetworkStats `json:"network"`
+	Uptime    string       `json:"uptime"`
+	Timestamp int64        `json:"timestamp"`
 }
 
 type CPUStats struct {
@@ -82,19 +82,20 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	db      *storage.DB
-	store   *storage.Manager
-	authMW  func(http.Handler) http.Handler
-	config  *config.Config
-	camMgr  *camera.CameraManager
-	hlsMgr  *hls.Manager
+	db         *storage.DB
+	store      *storage.Manager
+	authMW     func(http.Handler) http.Handler
+	config     *config.Config
+	camMgr     *camera.CameraManager
+	hlsMgr     *hls.Manager
 	configPath string
-	snapshotMu    sync.RWMutex
-	snapshots     map[string]*snapshotCache // cameraID -> cached snapshot
-	mergeMgr      *merge.MergeManager
-	cloudProxy    CloudAuthProxy
-	pluginMgr     *plugin.PluginManager
+	snapshotMu sync.RWMutex
+	snapshots  map[string]*snapshotCache // cameraID -> cached snapshot
+	mergeMgr   *merge.MergeManager
+	cloudProxy CloudAuthProxy
+	pluginMgr  *plugin.PluginManager
 }
+
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, pluginMgr *plugin.PluginManager) *Handler {
 	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, pluginMgr: pluginMgr}
 }
@@ -128,8 +129,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/", h.handleGetCamera)
 				r.Put("/", h.handleUpdateCamera)
 				r.Delete("/", h.handleDeleteCamera)
-			r.Get("/stream/*", h.handleHLSStream)
-			r.Delete("/stream", h.handleStopHLSStream)
+				r.Get("/stream/*", h.handleHLSStream)
+				r.Delete("/stream", h.handleStopHLSStream)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 				r.Post("/ptz/move", h.handlePTZMove)
 				r.Post("/ptz/stop", h.handlePTZStop)
@@ -243,9 +244,9 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.Uptime = formatUptime(time.Since(appStartTime))
 
 	writeJSON(w, http.StatusOK, resp)
-		}
+}
 
-		func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	checks := make(map[string]HealthCheck)
 
 	// Database must be ok
@@ -326,7 +327,6 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
 // --- Recording endpoints ---
 
 func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +388,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"recordings": recordings,
-		"total":     total,
+		"total":      total,
 	})
 }
 
@@ -495,7 +495,6 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, http.StatusOK, result)
 }
-
 
 func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -675,15 +674,15 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				cameras[i].Status = model.StatusStopped
 			}
 		}
-	// Inject last_seen from DB
-	lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
-	if err == nil {
-		for i := range cameras {
-			if t, ok := lastSeenMap[cameras[i].ID]; ok {
-				cameras[i].LastSeen = t
+		// Inject last_seen from DB
+		lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
+		if err == nil {
+			for i := range cameras {
+				if t, ok := lastSeenMap[cameras[i].ID]; ok {
+					cameras[i].LastSeen = t
+				}
 			}
 		}
-	}
 	}
 	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
 	for i := range cameras {
@@ -691,7 +690,6 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, cameras)
 }
-
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -756,21 +754,21 @@ var validProtocols = map[string]bool{
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name         string  `json:"name"`
-		Protocol     string  `json:"protocol"`
-		URL          string  `json:"url"`
-		Username     string  `json:"username"`
-		Password     string  `json:"password"`
-		Enabled      *bool   `json:"enabled"`
-		Description  string  `json:"description"`
-		Location     string  `json:"location"`
-		Brand        string  `json:"brand"`
-		Model        string  `json:"model"`
-		SerialNumber string  `json:"serial_number"`
-		ONVIFEndpoint  string  `json:"onvif_endpoint"`
-		ProfileToken   string  `json:"profile_token"`
-		StreamEncoding string  `json:"stream_encoding"`
-		Encoding        string  `json:"encoding"`
+		Name           string `json:"name"`
+		Protocol       string `json:"protocol"`
+		URL            string `json:"url"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		Enabled        *bool  `json:"enabled"`
+		Description    string `json:"description"`
+		Location       string `json:"location"`
+		Brand          string `json:"brand"`
+		Model          string `json:"model"`
+		SerialNumber   string `json:"serial_number"`
+		ONVIFEndpoint  string `json:"onvif_endpoint"`
+		ProfileToken   string `json:"profile_token"`
+		StreamEncoding string `json:"stream_encoding"`
+		Encoding       string `json:"encoding"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -839,16 +837,16 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cam := config.CameraConfig{
-    Name:          body.Name,
-    Protocol:      proto,
-    Encoding:      enc,
-    URL:           body.URL,
-    Username:      body.Username,
-    Password:      body.Password,
-    ONVIFEndpoint:  body.ONVIFEndpoint,
-    ProfileToken:   body.ProfileToken,
-    StreamEncoding: body.StreamEncoding,
-  }
+		Name:           body.Name,
+		Protocol:       proto,
+		Encoding:       enc,
+		URL:            body.URL,
+		Username:       body.Username,
+		Password:       body.Password,
+		ONVIFEndpoint:  body.ONVIFEndpoint,
+		ProfileToken:   body.ProfileToken,
+		StreamEncoding: body.StreamEncoding,
+	}
 	if body.Enabled != nil {
 		cam.Enabled = *body.Enabled
 	} else {
@@ -921,19 +919,19 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body struct {
-		Name          *string `json:"name"`
-		URL           *string `json:"url"`
-		Protocol      *string `json:"protocol"`
-		Encoding      *string `json:"encoding"`
-		Username      *string `json:"username"`
-		Password      *string `json:"password"`
-		Enabled       *bool   `json:"enabled"`
-		Description   *string `json:"description"`
-		Location      *string `json:"location"`
-		Brand         *string `json:"brand"`
-		Model         *string `json:"model"`
-		SerialNumber  *string `json:"serial_number"`
-		RetentionDays *int    `json:"retention_days"`
+		Name           *string `json:"name"`
+		URL            *string `json:"url"`
+		Protocol       *string `json:"protocol"`
+		Encoding       *string `json:"encoding"`
+		Username       *string `json:"username"`
+		Password       *string `json:"password"`
+		Enabled        *bool   `json:"enabled"`
+		Description    *string `json:"description"`
+		Location       *string `json:"location"`
+		Brand          *string `json:"brand"`
+		Model          *string `json:"model"`
+		SerialNumber   *string `json:"serial_number"`
+		RetentionDays  *int    `json:"retention_days"`
 		ONVIFEndpoint  *string `json:"onvif_endpoint"`
 		ProfileToken   *string `json:"profile_token"`
 		StreamEncoding *string `json:"stream_encoding"`
@@ -954,19 +952,19 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := camera.CameraUpdate{
-		Name:          body.Name,
-		URL:           body.URL,
-		Protocol:      body.Protocol,
-		Encoding:      body.Encoding,
-		Username:      username,
-		Password:      password,
-		Enabled:       body.Enabled,
-		Description:   body.Description,
-		Location:      body.Location,
-		Brand:         body.Brand,
-		Model:         body.Model,
-		SerialNumber:  body.SerialNumber,
-		RetentionDays: body.RetentionDays,
+		Name:           body.Name,
+		URL:            body.URL,
+		Protocol:       body.Protocol,
+		Encoding:       body.Encoding,
+		Username:       username,
+		Password:       password,
+		Enabled:        body.Enabled,
+		Description:    body.Description,
+		Location:       body.Location,
+		Brand:          body.Brand,
+		Model:          body.Model,
+		SerialNumber:   body.SerialNumber,
+		RetentionDays:  body.RetentionDays,
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
@@ -1038,7 +1036,6 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
-
 
 // --- ONVIF camera management endpoints ---
 
@@ -1137,10 +1134,10 @@ func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
 func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	var req struct {
-		Mode  string  `json:"mode"`
-		Pan   float64 `json:"pan"`
-		Tilt  float64 `json:"tilt"`
-		Zoom  float64 `json:"zoom"`
+		Mode string  `json:"mode"`
+		Pan  float64 `json:"pan"`
+		Tilt float64 `json:"tilt"`
+		Zoom float64 `json:"zoom"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1326,6 +1323,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
 	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 }
+
 // --- Test helper exported for handler_test.go ---
 
 // TestHandler creates a Handler with a no-op auth middleware for testing.
@@ -1359,7 +1357,6 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
-
 
 	// If stream not active, start it
 	if !h.hlsMgr.IsActive(id) {
@@ -1542,7 +1539,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
 			return
-	}
+		}
 	}
 	// Proxy to muxer handler
 	if !h.hlsMgr.Handle(id, w, r) {
@@ -1676,7 +1673,7 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":              h.config.Merge.Enabled,
+		"enabled":               h.config.Merge.Enabled,
 		"check_interval":        h.config.Merge.CheckInterval,
 		"window_size":           h.config.Merge.WindowSize,
 		"batch_limit":           h.config.Merge.BatchLimit,
@@ -1797,8 +1794,8 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	}
 
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
-			body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
-			body.BatchLimit, body.MinSegmentsToMerge); err != nil {
+		body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
+		body.BatchLimit, body.MinSegmentsToMerge); err != nil {
 		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
 		writeError(w, http.StatusInternalServerError, "failed to update merge config")
 		return
@@ -1821,7 +1818,7 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 
 	// Pass all nil to clear (revert to global defaults)
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
-			nil, nil, nil, nil, nil, nil); err != nil {
+		nil, nil, nil, nil, nil, nil); err != nil {
 		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
 		writeError(w, http.StatusInternalServerError, "failed to clear merge config")
 		return
@@ -1863,7 +1860,6 @@ func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
 		"pending": counts,
 	})
 }
-
 
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
@@ -2113,14 +2109,14 @@ func codecToString(c gen.Codec) string {
 
 // pluginJSON is the JSON representation of a plugin for the API.
 type pluginJSON struct {
-	Name              string         `json:"name"`
-	Version           string         `json:"version"`
-	Status            string         `json:"status"`
-	Protocols         []string       `json:"protocols"`
-	Capabilities      *capabilitiesJSON `json:"capabilities,omitempty"`
-	SupportedEncodings []string      `json:"supported_encodings"`
-	UptimeSeconds     float64        `json:"uptime_seconds"`
-	RestartCount      int            `json:"restart_count"`
+	Name               string            `json:"name"`
+	Version            string            `json:"version"`
+	Status             string            `json:"status"`
+	Protocols          []string          `json:"protocols"`
+	Capabilities       *capabilitiesJSON `json:"capabilities,omitempty"`
+	SupportedEncodings []string          `json:"supported_encodings"`
+	UptimeSeconds      float64           `json:"uptime_seconds"`
+	RestartCount       int               `json:"restart_count"`
 }
 
 type capabilitiesJSON struct {
@@ -2229,7 +2225,7 @@ func (h *Handler) handleRestartPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.pluginMgr.RestartPlugin(name); err != nil {
-	if strings.Contains(err.Error(), "plugin \"") && strings.Contains(err.Error(), "not found") {
+		if strings.Contains(err.Error(), "plugin \"") && strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to restart plugin: %v", err))
@@ -2283,34 +2279,34 @@ func (h *Handler) handleGetPluginCapabilities(w http.ResponseWriter, r *http.Req
 
 // protocolInfo describes a protocol for the /api/protocols endpoint.
 type protocolInfo struct {
-	ID          string            `json:"id"`
-	Label       string            `json:"label"`
-	Encodings   []string          `json:"encodings"`
-	BuiltIn     bool              `json:"built_in"`
-	Capabilities map[string]bool   `json:"capabilities"`
+	ID           string          `json:"id"`
+	Label        string          `json:"label"`
+	Encodings    []string        `json:"encodings"`
+	BuiltIn      bool            `json:"built_in"`
+	Capabilities map[string]bool `json:"capabilities"`
 }
 
 func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 	protocols := []protocolInfo{
 		{
-			ID:          "rtsp",
-			Label:       "RTSP",
-			Encodings:   []string{"h264", "h265", "mjpeg"},
-			BuiltIn:     true,
+			ID:           "rtsp",
+			Label:        "RTSP",
+			Encodings:    []string{"h264", "h265", "mjpeg"},
+			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": true},
 		},
 		{
-			ID:          "http",
-			Label:       "HTTP JPEG",
-			Encodings:   []string{"jpeg"},
-			BuiltIn:     true,
+			ID:           "http",
+			Label:        "HTTP JPEG",
+			Encodings:    []string{"jpeg"},
+			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": true, "discovery": false, "auth": true},
 		},
 		{
-			ID:          "onvif",
-			Label:       "ONVIF",
-			Encodings:   []string{"h264", "h265", "mjpeg"},
-			BuiltIn:     true,
+			ID:           "onvif",
+			Label:        "ONVIF",
+			Encodings:    []string{"h264", "h265", "mjpeg"},
+			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 	}
@@ -2330,17 +2326,17 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, proto := range mp.Info.GetProtocols() {
 				protocols = append(protocols, protocolInfo{
-					ID:          proto,
-					Label:       proto,
-					Encodings:   encodings,
-					BuiltIn:     false,
-				Capabilities: map[string]bool{
-					"hls":       caps.GetHls(),
-					"ptz":       caps.GetPtz(),
-					"snapshot":  caps.GetSnapshot(),
-					"discovery": caps.GetDiscovery(),
-					"auth":      false,
-				},
+					ID:        proto,
+					Label:     proto,
+					Encodings: encodings,
+					BuiltIn:   false,
+					Capabilities: map[string]bool{
+						"hls":       caps.GetHls(),
+						"ptz":       caps.GetPtz(),
+						"snapshot":  caps.GetSnapshot(),
+						"discovery": caps.GetDiscovery(),
+						"auth":      false,
+					},
 				})
 			}
 		}
@@ -2477,10 +2473,10 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 	processRSS := readProcessRSS()
 
 	writeJSON(w, http.StatusOK, SystemStats{
-		CPU:     CPUStats{Total: cpuTotal, Idle: cpuIdle},
-		Memory:  MemoryStats{Total: memTotal, Available: memAvailable, ProcessRSS: processRSS},
-		Network: NetworkStats{BytesSent: netSent, BytesRecv: netRecv},
-		Uptime:  formatUptime(time.Since(appStartTime)),
+		CPU:       CPUStats{Total: cpuTotal, Idle: cpuIdle},
+		Memory:    MemoryStats{Total: memTotal, Available: memAvailable, ProcessRSS: processRSS},
+		Network:   NetworkStats{BytesSent: netSent, BytesRecv: netRecv},
+		Uptime:    formatUptime(time.Since(appStartTime)),
 		Timestamp: time.Now().Unix(),
 	})
 }
