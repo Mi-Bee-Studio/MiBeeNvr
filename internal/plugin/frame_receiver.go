@@ -131,6 +131,15 @@ func (r *FrameReceiver) Close() error {
 	return nil
 }
 
+// CodecParams returns the current codec parameters detected from the stream.
+// Returns nil slices if codec info frames have not been received yet.
+func (r *FrameReceiver) CodecParams() (codec model.Format, sps, pps, vps []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.codec, r.sps, r.pps, r.vps
+}
+
+
 // handleCodecInfo processes codec parameter frames (SPS/PPS/VPS).
 func (r *FrameReceiver) handleCodecInfo(frame *gen.Frame) {
 	// Detect codec type from the frame's Codec field.
