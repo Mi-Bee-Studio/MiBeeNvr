@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, listPlugins, restartPlugin } from '$lib/api';
+  import type { SettingsConfig, Plugin } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
-  import type { SettingsConfig } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { AlertCircle, Settings as SettingsIcon } from 'lucide-svelte';
+  import { AlertCircle, Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   let settings = $state<SettingsConfig | null>(null);
@@ -29,6 +29,11 @@ let mergeWindowSize = $state('1h');
 let mergeMinSegments = $state(3);
 let mergeMinSegmentAge = $state('10m');
 let mergeBatchLimit = $state(100);
+
+// Plugin state
+let plugins = $state<Plugin[]>([]);
+let pluginsLoading = $state(false);
+let restartingPlugin = $state<string | null>(null);
   
   // Original values for change tracking
   let originalRetentionDays = $state(30);
@@ -170,7 +175,32 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
 
   onMount(() => {
     loadSettings();
+    loadPlugins();
   });
+
+  async function loadPlugins() {
+    pluginsLoading = true;
+    try {
+      plugins = await listPlugins();
+    } catch {
+      plugins = [];
+    } finally {
+      pluginsLoading = false;
+    }
+  }
+
+  async function handleRestartPlugin(name: string) {
+    restartingPlugin = name;
+    try {
+      await restartPlugin(name);
+      showToast(t('settings.pluginRestarted'), 'success');
+      await loadPlugins();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.pluginRestartFailed'), 'error');
+    } finally {
+      restartingPlugin = null;
+    }
+  }
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
@@ -441,6 +471,72 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
           </div>
         </div>
 
+
+        <!-- Plugins -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.plugins')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.pluginsDesc')}</p>
+
+          {#if pluginsLoading}
+            <div class="flex items-center gap-2 py-4 th-text-muted">
+              <span class="spinner"></span>
+              <span class="text-sm">{t('common.loading')}</span>
+            </div>
+          {:else if plugins.length === 0}
+            <p class="th-text-secondary text-sm py-2">{t('settings.noPlugins')}</p>
+          {:else}
+            <div class="space-y-4">
+              {#each plugins as plugin (plugin.name)}
+                <div class="p-4 rounded-md th-bg-hover border th-border">
+                  <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="font-medium th-text-primary">{plugin.name}</div>
+                      <div class="text-sm th-text-secondary">
+                        v{plugin.version}
+                        {#if plugin.protocols.length > 0}
+                          &middot; {plugin.protocols.join(', ')}
+                        {/if}
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <span class="text-xs px-2 py-1 rounded-full {plugin.status === 'running' ? 'bg-[rgba(16,185,129,0.2)] th-color-success' : plugin.status === 'error' ? 'bg-[rgba(239,68,68,0.2)] th-color-danger' : 'th-bg-tertiary th-text-muted'}">
+                        {plugin.status}
+                      </span>
+                      <button
+                        onclick={() => handleRestartPlugin(plugin.name)}
+                        class="btn btn-ghost btn-sm"
+                        disabled={restartingPlugin === plugin.name}
+                        title={t('settings.restartPlugin')}
+                      >
+                        {#if restartingPlugin === plugin.name}
+                          <span class="spinner"></span>
+                        {:else}
+                          <RefreshCw size={14} />
+                        {/if}
+                      </button>
+                    </div>
+                  </div>
+                  {#if plugin.capabilities}
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#if plugin.capabilities.discovery}
+                        <span class="text-xs px-2 py-0.5 rounded th-bg-tertiary th-text-muted">Discovery</span>
+                      {/if}
+                      {#if plugin.capabilities.ptz}
+                        <span class="text-xs px-2 py-0.5 rounded th-bg-tertiary th-text-muted">PTZ</span>
+                      {/if}
+                      {#if plugin.capabilities.hls}
+                        <span class="text-xs px-2 py-0.5 rounded th-bg-tertiary th-text-muted">HLS</span>
+                      {/if}
+                      {#if plugin.capabilities.auth}
+                        <span class="text-xs px-2 py-0.5 rounded th-bg-tertiary th-text-muted">Auth</span>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
         <!-- Save button -->
         <div class="flex items-center gap-4 pt-2">
           <button

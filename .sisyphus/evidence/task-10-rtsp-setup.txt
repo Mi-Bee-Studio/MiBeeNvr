@@ -1,0 +1,116 @@
+## Task 10: RTSP Streaming Setup on 192.168.63.120
+### Date: 2026-04-30
+
+---
+
+### Step 1: libcamera-apps Status
+- libcamera-apps transitional package was ALREADY INSTALLED
+- Binaries use `rpicam-` prefix (Debian Bookworm+ naming)
+- rpicam-hello: /usr/bin/rpicam-hello
+- rpicam-vid: /usr/bin/rpicam-vid
+- Version: rpicam-apps build v1.11.1 02-02-2026
+- libcamera build: v0.7.0+rpt20260205
+- NO sudo needed (already installed)
+
+### Step 2: Camera Detection
+```
+Available cameras
+-----------------
+0 : ov5647 [2592x1944 10-bit GBRG] (/base/soc/i2c0mux/i2c@1/ov5647@36)
+    Modes: 'SGBRG10_CSI2P' : 640x480 [58.92 fps - (16, 0)/2560x1920 crop]
+                             1296x972 [46.34 fps - (0, 0)/2592x1944 crop]
+                             1920x1080 [32.81 fps - (348, 434)/1928x1080 crop]
+                             2592x1944 [15.63 fps - (0, 0)/2592x1944 crop]
+```
+- Camera: OV5647 (Raspberry Pi Camera V1)
+- Connected via CSI (i2c0mux/i2c@1)
+
+### Step 3: H.264 Capture Test
+```
+rpicam-vid --codec h264 --width 1280 --height 720 --framerate 15 -t 3000 -o /tmp/test.h264
+```
+- Result: SUCCESS
+- Output: /tmp/test.h264: JVT NAL sequence, H.264 video @ L 40
+- Size: 1.4MB in 3 seconds (~15fps stable)
+- H.264 hardware encoding confirmed
+
+### Step 4: mediamtx Download
+- URL: https://github.com/bluenviron/mediamtx/releases/download/v1.11.3/mediamtx_v1.11.3_linux_arm64v8.tar.gz
+- Architecture: aarch64 (full 64-bit Debian 13 trixie)
+- Binary: 41MB, ELF 64-bit LSB executable, ARM aarch64, statically linked, Go
+- Config: /tmp/mediamtx.yml
+
+### Step 5: mediamtx Configuration
+```yaml
+paths:
+  stream:
+    source: udp://127.0.0.1:8555
+    sourceOnDemand: no
+```
+NOTE: exec:// and direct command sources NOT supported in mediamtx v1.11.3
+
+### Step 6: Pipeline Architecture
+```
+rpicam-vid (H.264) -> pipe -> ffmpeg (MPEG-TS mux) -> UDP 127.0.0.1:8555 -> mediamtx
+```
+Full command chain:
+```bash
+# mediamtx
+cd /tmp && ./mediamtx mediamtx.yml &
+
+# rpicam-vid piped through ffmpeg for MPEG-TS wrapping
+rpicam-vid -n --codec h264 --width 1280 --height 720 --framerate 15 -t 0 -o - | \
+ffmpeg -fflags +genpts -i pipe:0 -c:v copy -f mpegts -flush_packets 0 "udp://127.0.0.1:8555?pkt_size=188" &
+```
+
+### Step 7: mediamtx Startup Log
+```
+2026/04/30 21:55:39 INF MediaMTX v1.11.3
+2026/04/30 21:55:39 INF configuration loaded from /tmp/mediamtx.yml
+2026/04/30 21:55:39 INF [path stream] [UDP source] started
+2026/04/30 21:55:39 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/04/30 21:55:39 INF [RTMP] listener opened on :1935
+2026/04/30 21:55:39 INF [HLS] listener opened on :8888
+2026/04/30 21:55:39 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/04/30 21:55:39 INF [SRT] listener opened on :8890 (UDP)
+2026/04/30 21:55:46 INF [path stream] [UDP source] ready: 1 track (H264)
+```
+- Stream READY: 1 track (H264) - no errors
+- RTSP on :8554 TCP
+- Also available: RTMP :1935, HLS :8888, WebRTC :8889, SRT :8890
+
+### Step 8: Connectivity Test from .31
+```
+nc -zv 192.168.63.120 8554
+Connection to 192.168.63.120 8554 port [tcp/*] succeeded!
+```
+
+### Stream URLs
+- RTSP: rtsp://192.168.63.120:8554/stream
+- RTMP: rtmp://192.168.63.120:1935/stream
+- HLS: http://192.168.63.120:8888/stream
+- WebRTC: http://192.168.63.120:8889/stream
+
+### Start Script Location
+- /tmp/start_stream.sh on 192.168.63.120
+- Run: bash /tmp/start_stream.sh
+
+### Memory Usage
+- mediamtx: ~20MB
+- rpicam-vid: ~63MB
+- ffmpeg: ~58MB
+- Total: ~141MB (acceptable, 620MB available)
+
+---
+
+### Issues Encountered & Resolutions
+
+1. **libcamera-hello not found**: Binary renamed to rpicam-hello in Debian Bookworm+. Use `rpicam-*` commands.
+
+2. **mediamtx exec:// not supported**: v1.11.3 doesn't support exec:// source. Use UDP pipe approach.
+
+3. **h264_ts codec not available**: rpicam-vid only supports h264, libav, mjpeg, yuv420. Use ffmpeg for TS muxing.
+
+4. **UDP TS packet alignment error**: "received packet with size 1472 not multiple of 188" - Fixed by adding `?pkt_size=188` to ffmpeg UDP output URL.
+
+5. **SSH background process issues**: Background processes started via SSH don't survive. Used a shell script on the RPi to start all processes.

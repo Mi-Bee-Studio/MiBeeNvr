@@ -1,0 +1,35 @@
+FTP Authentication Bug Fix - Evidence
+=====================================
+
+Date: 2026-04-30
+Task: Bug #3 - FTP server authentication compares password hash with plaintext
+
+Problem Summary:
+- FTP server expected plaintext password but config only provided password hash
+- Authentication always failed because plaintext ≠ bcrypt hash
+- HTTP auth middleware uses hash, FTP server needs plaintext
+
+Solution Implemented:
+Option A - Added plaintext password field to AuthConfig:
+
+1. Added `Password string "yaml:"password"`` to AuthConfig in internal/config/config.go
+2. Updated cmd/mibee-nvr/main.go line 170 to use cfg.Auth.Password instead of cfg.Auth.PasswordHash
+3. Fixed unrelated build errors in storage/model modules
+
+Files Modified:
+- internal/config/config.go: Added Password field to AuthConfig
+- cmd/mibee-nvr/main.go: Updated to use plaintext password for FTP
+- internal/storage/db.go: Removed commented-out function with undefined fields
+- internal/model/types.go: Removed extra closing brace
+
+Test Results:
+✓ go test ./internal/config/... - PASS
+✓ go test ./internal/ftp/... - PASS  
+✓ go test ./internal/api/... - PASS
+✓ go test ./internal/middleware/... - PASS
+
+Verification:
+- FTP authentication now uses plaintext password as expected by server
+- HTTP authentication continues to use password hash (unchanged)
+- Both auth mechanisms work correctly
+- No breaking changes to existing functionality

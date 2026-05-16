@@ -1,0 +1,12 @@
+Go test: 363 passed, 2 failed in 20 packages
+═══════════════════════════════════════
+
+webdav (19 passed, 2 failed)
+  [FAIL] TestWriteMethodsForbidden/PATCH
+     server_test.go:157:
+     Error Trace:	/home/mickey/Projects/iot/rpi3b-storeage/internal/webdav/server_test.go:157
+     Error:      	Not equal:
+     expected: 403
+     actual  : 405
+  [FAIL] TestWriteMethodsForbidden
+[full output: ~/.local/share/rtk/tee/1778404179_go_test.log]

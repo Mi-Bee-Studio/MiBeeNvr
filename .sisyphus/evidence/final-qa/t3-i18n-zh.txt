@@ -1,0 +1,3 @@
+28:  "recordings.allStatus": "全部状态",
+29:  "recordings.pinnedOnly": "仅置顶",
+30:  "recordings.unpinnedOnly": "未置顶",

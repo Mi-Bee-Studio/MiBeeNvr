@@ -1,0 +1,3 @@
+ACCEPTANCE: web/index.html <title>MiBee NVR</title>
+STATUS: PASS
+EVIDENCE: Line 7 of web/index.html contains <title>MiBee NVR</title>

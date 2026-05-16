@@ -1,0 +1,1 @@
+Task 3 Evidence: Root package.json deleted

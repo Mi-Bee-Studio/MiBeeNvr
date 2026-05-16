@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, discoverONVIFDevices, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify } from '$lib/api';
-  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice, XiaomiAuthResponse } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
+  import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice, XiaomiAuthResponse, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
 
   function formatTimeAgo(lastSeen: string | null | undefined): { text: string; color: string } {
     if (!lastSeen) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
@@ -54,14 +55,20 @@
 
   $effect(() => {
     // When protocol changes, auto-select appropriate encoding
-    if (formProtocol === 'http') {
-      formEncoding = 'jpeg';
-    } else if (formProtocol === 'onvif') {
-      formEncoding = '';
-    } else if (formProtocol === 'xiaomi') {
-      formEncoding = 'h265';
-    } else if (formProtocol === 'rtsp' && (formEncoding === 'jpeg' || formEncoding === '')) {
-      formEncoding = 'h264';
+    const proto = protocolsMap.get(formProtocol);
+    if (!proto) return;
+    const encodings = proto.encodings;
+    // If current encoding is not valid for the new protocol, auto-select
+    if (!encodings.includes(formEncoding)) {
+      if (formProtocol === 'onvif') {
+        formEncoding = '';
+      } else if (formProtocol === 'http') {
+        formEncoding = 'jpeg';
+      } else if (encodings.length > 0) {
+        formEncoding = encodings[0];
+      } else {
+        formEncoding = '';
+      }
     }
   });
 
@@ -107,6 +114,17 @@
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
 
+  // Protocol info from API
+  let protocols = $state<ProtocolInfo[]>(DEFAULT_PROTOCOLS);
+  let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
+
+  // Discovery panel (plugin-driven)
+  let discoveryPanel: ReturnType<typeof DiscoveryPanel> | null = $state(null);
+  let activeDiscoveryProtocol = $state<string | null>(null);
+  let showDiscoveryMenu = $state(false);
+
+  // Protocols that support discovery
+  let discoverableProtocols = $derived(protocols.filter(p => p.capabilities.discovery));
 
   function showFeedback(msg: string, type: 'success' | 'error') {
     showToast(msg, type);
@@ -492,6 +510,16 @@
 
   onMount(async () => {
     loadCameras();
+    // Load protocol list from API (fallback to defaults on error)
+    try {
+      const list = await listProtocols();
+      if (list && list.length > 0) {
+        protocols = list;
+        protocolsMap = buildProtocolsMap(list);
+      }
+    } catch {
+      // Use DEFAULT_PROTOCOLS already initialized
+    }
     // Probe xiaomi auth status
     try {
       const res = await xiaomiDevices();
@@ -514,14 +542,32 @@
     <div class="flex items-center justify-between mb-6">
       <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
       <div class="flex gap-3">
-        <button on:click={scanONVIF} class="btn btn-ghost" disabled={scanning}>
-          {#if scanning}
-            <span class="spinner mr-2"></span>{t('onvif.discovering')}
-          {:else}
-            {t('onvif.discover')}
-          {/if}
-        </button>
-        <button on:click={openAddForm} class="btn btn-primary">
+        {#if discoverableProtocols.length > 0}
+          <div class="relative" ref="discoveryDropdown">
+            <button onclick={() => {
+              if (discoverableProtocols.length === 1) {
+                activeDiscoveryProtocol = discoverableProtocols[0].id;
+              } else {
+                showDiscoveryMenu = !showDiscoveryMenu;
+              }
+            }} class="btn btn-ghost">
+              {t('discovery.scanDevices')}
+            </button>
+            {#if showDiscoveryMenu && discoverableProtocols.length > 1}
+              <div class="absolute right-0 top-full mt-1 card border th-border rounded-md shadow-lg z-10 py-1 min-w-[140px]">
+                {#each discoverableProtocols as proto}
+                  <button
+                    class="w-full text-left px-4 py-2 text-sm th-text-primary hover:th-bg-hover transition-colors"
+                    onclick={() => { activeDiscoveryProtocol = proto.id; showDiscoveryMenu = false; }}
+                  >
+                    {proto.label}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+        <button onclick={openAddForm} class="btn btn-primary">
           + {t('cameras.addCamera')}
         </button>
       </div>
@@ -544,7 +590,7 @@
         </div>
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
-        <button on:click={loadCameras} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+        <button onclick={loadCameras} class="btn btn-primary btn-sm">{t('common.retry')}</button>
       </div>
     {/if}
 
@@ -565,220 +611,15 @@
     {:else}
       <div class="space-y-6">
 
-        <!-- ONVIF Discovery Panel -->
-        {#if scanning || scanDone}
-          <div class="card p-6 border th-border">
-            <h3 class="text-lg font-semibold th-text-primary mb-4">
-              {t('onvif.discover')}
-            </h3>
-            <!-- ONVIF Credentials -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 items-end">
-              <div>
-                <label class="input-label text-xs">{t('onvif.username')}</label>
-                <input type="text" class="input py-1 text-sm" bind:value={onvifUsername} placeholder="admin" />
-              </div>
-              <div>
-                <label class="input-label text-xs">{t('onvif.password')}</label>
-                <input type="password" class="input py-1 text-sm" bind:value={onvifPassword} placeholder="******" />
-              </div>
-              <div class="flex items-center">
-                <span class="text-xs th-text-muted">{t('onvif.credentialsHint')}</span>
-              </div>
-            </div>
-            {#if scanning}
-              <div class="flex items-center gap-3 th-text-secondary py-4">
-                <span class="spinner"></span>
-                <span>{t('onvif.discovering')}</span>
-              </div>
-            {:else if scanError}
-              <div class="th-color-danger text-sm py-2">{scanError}</div>
-            {:else if discoveredDevices.length === 0}
-              <p class="th-text-secondary text-sm py-2">{t('onvif.noDevices')}</p>
-            {:else}
-              <div class="space-y-3">
-                {#each discoveredDevices as device (device.uuid)}
-                  <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
-                    <div class="min-w-0 flex-1 mr-4">
-                      <div class="font-medium th-text-primary truncate">{device.name || t('onvif.deviceName')}</div>
-                      <div class="text-sm th-text-secondary truncate">{device.endpoint}</div>
-                      {#if device.hardware}
-                        <div class="text-xs th-text-muted mt-0.5">{device.hardware}</div>
-                      {/if}
-                    </div>
-                    <button
-                      on:click={() => addDiscoveredDevice(device)}
-                      class="btn btn-primary btn-sm shrink-0"
-                      disabled={addingDeviceId === device.uuid}
-                    >
-                      {#if addingDeviceId === device.uuid}
-                        <span class="spinner mr-1"></span>
-                      {/if}
-                      {t('onvif.addCamera')}
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-            {#if !scanning && scanDone}
-              <div class="mt-4 flex justify-end">
-                <button on:click={scanONVIF} class="btn btn-ghost btn-sm">
-                  {t('onvif.discover')}
-                </button>
-              </div>
-            {/if}
-          </div>
+        <!-- Plugin-driven Discovery Panel -->
+        {#if activeDiscoveryProtocol}
+          <DiscoveryPanel
+            bind:this={discoveryPanel}
+            protocol={activeDiscoveryProtocol}
+            {cameras}
+            oncameraadded={loadCameras}
+          />
         {/if}
-
-        <!-- Xiaomi Device Discovery -->
-        <div class="card p-6 border th-border">
-          <button 
-            class="w-full flex items-center justify-between text-left"
-            on:click={() => xiaomiExpanded = !xiaomiExpanded}
-          >
-            <h3 class="text-lg font-semibold th-text-primary">{t('xiaomi.title')}</h3>
-            <span class="th-text-muted text-sm">{xiaomiExpanded ? '▲' : '▼'}</span>
-          </button>
-
-          {#if xiaomiExpanded}
-            <div class="mt-4">
-              {#if !xiaomiLoggedIn}
-                <!-- Login form -->
-                <form on:submit|preventDefault={handleXiaomiLogin} class="space-y-3">
-                  <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label class="input-label text-xs">{t('xiaomi.account')}</label>
-                      <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
-                    </div>
-                    <div>
-                      <label class="input-label text-xs">{t('xiaomi.password')}</label>
-                      <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
-                    </div>
-                  </div>
-                  {#if xiaomiError}
-                    <p class="th-color-danger text-sm">{xiaomiError}</p>
-                  {/if}
-                  <button type="submit" class="btn btn-primary btn-sm" disabled={xiaomiLoading}>
-                    {#if xiaomiLoading}
-                      <span class="spinner mr-1"></span>
-                    {/if}
-                    {xiaomiLoading ? t('xiaomi.signingIn') : t('xiaomi.signIn')}
-                  </button>
-                </form>
-
-                <!-- Captcha form (shown when captcha required) -->
-                {#if xiaomiCaptchaImage}
-                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
-                    <p class="text-sm font-medium th-text-primary mb-3">{t('xiaomi.captchaTitle')}</p>
-                    <div class="flex items-start gap-4">
-                      <img src={xiaomiCaptchaImage} alt="Captcha" class="border th-border rounded h-12" />
-                      <div class="flex-1 space-y-2">
-                        <input
-                          type="text"
-                          class="input py-1 text-sm"
-                          bind:value={xiaomiCaptchaCode}
-                          placeholder={t('xiaomi.captchaPlaceholder')}
-                          disabled={xiaomiLoading}
-                        />
-                        <button
-                          type="button"
-                          on:click={handleXiaomiCaptcha}
-                          class="btn btn-primary btn-sm"
-                          disabled={xiaomiLoading || !xiaomiCaptchaCode.trim()}
-                        >
-                          {#if xiaomiLoading}
-                            <span class="spinner mr-1"></span>
-                          {/if}
-                          {t('xiaomi.submitCaptcha')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-
-                <!-- Verify form (shown when phone/email verification required) -->
-                {#if xiaomiVerifyType}
-                  <div class="mt-4 p-4 rounded-md border th-border bg-[rgba(0,0,0,0.05)]">
-                    <p class="text-sm font-medium th-text-primary mb-1">{t('xiaomi.verifyTitle')}</p>
-                    <p class="text-xs th-text-secondary mb-3">
-                      {#if xiaomiVerifyType === 'phone'}
-                        {t('xiaomi.verifyPhoneHint').replace('{phone}', xiaomiVerifyTarget)}
-                      {:else}
-                        {t('xiaomi.verifyEmailHint').replace('{email}', xiaomiVerifyTarget)}
-                      {/if}
-                    </p>
-                    <div class="flex gap-3">
-                      <input
-                        type="text"
-                        class="input py-1 text-sm flex-1"
-                        bind:value={xiaomiVerifyTicket}
-                        placeholder={t('xiaomi.verifyCodePlaceholder')}
-                        disabled={xiaomiLoading}
-                      />
-                      <button
-                        type="button"
-                        on:click={handleXiaomiVerify}
-                        class="btn btn-primary btn-sm"
-                        disabled={xiaomiLoading || !xiaomiVerifyTicket.trim()}
-                      >
-                        {#if xiaomiLoading}
-                          <span class="spinner mr-1"></span>
-                        {/if}
-                        {t('xiaomi.submitVerify')}
-                      </button>
-                    </div>
-                  </div>
-                {/if}
-              {:else}
-                <!-- Device list -->
-                <div class="flex items-center justify-between mb-3">
-                  <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
-                <button class="btn btn-ghost btn-sm" on:click={refreshXiaomiDevices}>{t('xiaomi.refresh')}</button>
-                </div>
-                {#if xiaomiDeviceList.length === 0}
-                  <p class="th-text-secondary text-sm py-2">{t('xiaomi.noDevices')}</p>
-                {:else}
-                  <div class="space-y-3">
-                    {#each xiaomiDeviceList as device (device.did)}
-                      <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
-                        <div class="min-w-0 flex-1 mr-4">
-                          <div class="font-medium th-text-primary truncate">{device.name}</div>
-                          <div class="text-sm th-text-secondary truncate">{device.model} · {device.localip}</div>
-                          <div class="text-xs mt-0.5 {device.isOnline ? 'th-color-success' : 'th-text-muted'}">
-                            {device.isOnline ? t('xiaomi.online') : t('xiaomi.offline')}
-                          </div>
-                        </div>
-                        {#if isXiaomiDeviceAdded(device.did)}
-                          <button
-                            type="button"
-                            class="btn btn-sm shrink-0 opacity-50 cursor-not-allowed"
-                            disabled
-                          >
-                            {t('xiaomi.added')}
-                          </button>
-                        {:else}
-                          <button
-                            on:click={() => addXiaomiDevice(device)}
-                            class="btn btn-primary btn-sm shrink-0"
-                            disabled={xiaomiAddingDid === device.did}
-                          >
-                            {#if xiaomiAddingDid === device.did}
-                              <span class="spinner mr-1"></span>
-                            {/if}
-                            {t('onvif.addCamera')}
-                          </button>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-                <div class="mt-4 flex justify-end">
-                  <button class="btn btn-ghost btn-sm" on:click={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>{t('xiaomi.signOut')}</button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
 
         <!-- Add/Edit Form -->
         {#if showForm}
@@ -791,7 +632,7 @@
               <!-- Name -->
               <div>
                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
-                <input id="cam-name" type="text" class="input {validationErrors['name'] ? 'border-red-500' : ''}" bind:value={formName} on:blur={() => validateField('name', formName)} on:input={() => { if (validationErrors['name']) delete validationErrors['name']; }} />
+                <input id="cam-name" type="text" class="input {validationErrors['name'] ? 'border-red-500' : ''}" bind:value={formName} onblur={() => validateField('name', formName)} oninput={() => { if (validationErrors['name']) delete validationErrors['name']; }} />
                 {#if validationErrors['name']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['name']}</p>
                 {/if}
@@ -801,10 +642,9 @@
               <div>
                 <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
                 <select id="cam-protocol" class="input" bind:value={formProtocol}>
-                  <option value="rtsp">RTSP</option>
-                  <option value="http">HTTP</option>
-                  <option value="onvif">ONVIF</option>
-                  <option value="xiaomi">Xiaomi</option>
+                  {#each protocols as proto (proto.id)}
+                    <option value={proto.id}>{proto.label}</option>
+                  {/each}
                 </select>
                 {#if validationErrors['protocol']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
@@ -815,20 +655,12 @@
               <div>
                 <label for="cam-encoding" class="input-label">{t('cameras.tableEncoding')}</label>
                 <select id="cam-encoding" class="input" bind:value={formEncoding}>
-                  {#if formProtocol === 'rtsp'}
-                    <option value="h264">H.264</option>
-                    <option value="h265">H.265</option>
-                    <option value="mjpeg">MJPEG</option>
-                  {:else if formProtocol === 'http'}
-                    <option value="jpeg">JPEG</option>
-                  {:else if formProtocol === 'onvif'}
+                  {#if formProtocol === 'onvif'}
                     <option value="">{t('cameras.autoDetect')}</option>
-                    <option value="h264">H.264</option>
-                    <option value="h265">H.265</option>
-                  {:else if formProtocol === 'xiaomi'}
-                    <option value="h264">H.264</option>
-                    <option value="h265">H.265</option>
                   {/if}
+                  {#each (protocolsMap.get(formProtocol)?.encodings || [formEncoding]) as enc}
+                    <option value={enc}>{t('cameras.encoding.' + enc) || enc.toUpperCase()}</option>
+                  {/each}
                 </select>
               </div>
 
@@ -842,7 +674,7 @@
                 </label>
                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
                   placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
-                  on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
+                  onblur={() => validateField('url', formUrl)} oninput={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
                 {#if validationErrors['url']}
                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
                 {/if}
@@ -864,7 +696,7 @@
                 {/if}
               {/if}
 
-              {#if formProtocol !== 'xiaomi'}
+              {#if protocolsMap.get(formProtocol)?.capabilities?.auth}
                 <!-- Username -->
                 <div>
                   <label for="cam-user" class="input-label">{t('cameras.username')}</label>
@@ -885,7 +717,7 @@
                     <button
                       type="button"
                       class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
-                      on:click={() => showPassword = !showPassword}
+                      onclick={() => showPassword = !showPassword}
                       aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
                     >
                       {#if showPassword}
@@ -896,9 +728,9 @@
                     </button>
                   </div>
                 </div>
-              {:else}
+              {:else if protocolsMap.get(formProtocol)}
                 <div class="md:col-span-2 text-sm th-text-secondary">
-                  Credentials are managed via Xiaomi cloud authentication above.
+                  {t('cameras.authManagedExternally')}
                 </div>
               {/if}
 
@@ -978,7 +810,7 @@
                           type="checkbox"
                           class="accent-[var(--color-accent)]"
                           checked={mergeConfig?.enabled !== false}
-                          on:change={(e) => {
+                          onchange={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.enabled = (e.target as HTMLInputElement).checked;
                           }}
@@ -993,7 +825,7 @@
                           id="merge-check-interval"
                           class="input"
                           value={mergeConfig?.check_interval || '1h'}
-                          on:change={(e) => {
+                          onchange={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.check_interval = (e.target as HTMLSelectElement).value;
                           }}
@@ -1012,7 +844,7 @@
                           id="merge-window"
                           class="input"
                           value={mergeConfig?.window_size || '30m'}
-                          on:change={(e) => {
+                          onchange={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.window_size = (e.target as HTMLSelectElement).value;
                           }}
@@ -1033,7 +865,7 @@
                           min="10"
                           max="1000"
                           value={mergeConfig?.batch_limit || 100}
-                          on:input={(e) => {
+                          oninput={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.batch_limit = Number((e.target as HTMLInputElement).value);
                           }}
@@ -1047,7 +879,7 @@
                           id="merge-age"
                           class="input"
                           value={mergeConfig?.min_segment_age || '5m'}
-                          on:change={(e) => {
+                          onchange={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.min_segment_age = (e.target as HTMLSelectElement).value;
                           }}
@@ -1069,7 +901,7 @@
                           min="2"
                           max="50"
                           value={mergeConfig?.min_segments_to_merge || 3}
-                          on:input={(e) => {
+                          oninput={(e) => {
                             if (!mergeConfig) mergeConfig = {};
                             mergeConfig.min_segments_to_merge = Number((e.target as HTMLInputElement).value);
                           }}
@@ -1082,7 +914,7 @@
                       <button
                         type="button"
                         class="btn btn-ghost btn-sm"
-                        on:click={async () => {
+                        onclick={async () => {
                           if (!editingCamera) return;
                           try {
                             await deleteCameraMergeConfig(editingCamera.id);
@@ -1102,13 +934,13 @@
             {/if}
 
             <div class="flex items-center gap-3 mt-6">
-              <button on:click={handleSubmit} class="btn btn-primary" disabled={saving}>
+              <button onclick={handleSubmit} class="btn btn-primary" disabled={saving}>
                 {#if saving}
                   <span class="spinner mr-2"></span>
                 {/if}
                 {t('cameras.save')}
               </button>
-              <button on:click={resetForm} class="btn btn-ghost">
+              <button onclick={resetForm} class="btn btn-ghost">
                 {t('cameras.cancel')}
               </button>
             </div>
@@ -1123,10 +955,10 @@
               {t('cameras.deleteMessage', { name: deletingCamera.name })}
             </p>
             <div class="flex items-center gap-3">
-              <button on:click={handleDelete} class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors">
+              <button onclick={handleDelete} class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors">
                 {t('cameras.deleteConfirm')}
               </button>
-              <button on:click={() => deletingCamera = null} class="btn btn-ghost">
+              <button onclick={() => deletingCamera = null} class="btn btn-ghost">
                 {t('cameras.cancel')}
               </button>
             </div>
@@ -1142,7 +974,7 @@
               </div>
               <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.noCameras')}</h3>
               <p class="text-sm th-text-muted mb-4">{t('cameras.noCamerasHint')}</p>
-              <button on:click={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
+              <button onclick={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
             </div>
           {:else}
             <div class="overflow-x-auto">
@@ -1166,17 +998,17 @@
                             type="text"
                             class="input py-0.5 px-2 text-sm w-40"
                             bind:value={inlineName}
-                            on:keydown={(e) => {
+                            onkeydown={(e) => {
                               if (e.key === 'Enter') saveInlineEdit(camera);
                               if (e.key === 'Escape') cancelInlineEdit();
                             }}
-                            on:blur={() => saveInlineEdit(camera)}
+                            onblur={() => saveInlineEdit(camera)}
                             focus
                           />
                         {:else}
                           <button
                             class="font-medium th-text-primary hover:underline cursor-pointer flex items-center gap-1"
-                            on:click={() => startInlineEdit(camera)}
+                            onclick={() => startInlineEdit(camera)}
                             title={t('cameras.editName')}
                           >
                             {camera.name}
@@ -1190,12 +1022,12 @@
                           <div class="text-xs th-text-muted mt-0.5">{camera.status}</div>
                         {/if}
                       </td>
-                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{t('cameras.protocol.' + camera.protocol) || camera.protocol}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{protocolsMap.get(camera.protocol)?.label || t('cameras.protocol.' + camera.protocol) || camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : '-'}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2 items-center">
-                          {#if camera.protocol === 'rtsp' || camera.protocol === 'onvif' || camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265'}
+                          {#if protocolsMap.get(normalizeProtocol(camera.protocol))?.capabilities?.hls}
                             <a
                               href="#/live/{camera.id}"
                               class="btn btn-primary px-2 py-1 text-sm flex items-center gap-1"
@@ -1206,11 +1038,11 @@
                             </a>
                           {/if}
                           <button
-                            on:click={() => openEditForm(camera)}
+                            onclick={() => openEditForm(camera)}
                             class="btn btn-ghost px-2 py-1 text-sm transition-all duration-200"
                           >{t('cameras.edit')}</button>
                           <button
-                            on:click={() => deletingCamera = camera}
+                            onclick={() => deletingCamera = camera}
                             class="btn btn-ghost px-2 py-1 text-sm th-color-danger transition-all duration-200"
                           >{t('cameras.delete')}</button>
                         </div>

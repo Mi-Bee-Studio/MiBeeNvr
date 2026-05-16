@@ -35,7 +35,13 @@ Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=
 | `/api/stats` | GET | 获取系统统计 | 是 |
 | `/api/settings` | GET | 获取系统设置 | 是 |
 | `/api/settings` | PUT | 更新系统设置 | 是 |
-| `/api/upload` | POST | 文件上传 | 是 |
+|| `/api/upload` | POST | 文件上传 | 是 |
+| `/api/plugins` | GET | 列出所有插件 | 是 |
+| `/api/plugins/{name}` | GET | 获取插件详情 | 是 |
+| `/api/plugins/{name}/restart` | POST | 重启插件 | 是 |
+| `/api/plugins/{name}/capabilities` | GET | 获取插件能力 | 是 |
+| `/api/protocols` | GET | 列出所有协议 | 是 |
+|| `/api/upload` | POST | 文件上传 | 是 |
 
 ## 认证相关接口
 
@@ -871,7 +877,176 @@ curl -X POST "http://localhost:9090/api/upload" \
   -F "camera_id=cam1"
 ```
 
-## 错误处理
+## 插件管理 API
+
+### 列出插件
+
+**端点**: `GET /api/plugins`
+
+获取所有已加载插件的状态和能力信息。返回去重后的列表，其中 gRPC 管理的插件优先。
+
+**请求**:
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins"
+```
+
+**响应**:
+
+```json
+{
+  "plugins": [
+    {
+      "name": "xiaomi",
+      "version": "1.0.0",
+      "status": "running",
+      "protocols": ["xiaomi"],
+      "capabilities": {
+        "hls": false,
+        "ptz": false,
+        "snapshot": false,
+        "discovery": true,
+        "auth": false
+      },
+      "supported_encodings": ["h264", "h265"],
+      "uptime_seconds": 3600,
+      "restart_count": 0
+    }
+  ]
+}
+```
+
+### 获取插件详情
+
+**端点**: `GET /api/plugins/{name}`
+
+根据插件名称获取特定插件的详细信息。
+
+**请求**:
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi"
+```
+
+**响应**:
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "status": "running",
+  "protocols": ["xiaomi"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  },
+  "supported_encodings": ["h264", "h265"],
+  "uptime_seconds": 3600,
+  "restart_count": 0
+}
+```
+
+### 重启插件
+
+**端点**: `POST /api/plugins/{name}/restart`
+
+重启插件进程。这将优雅地关闭插件并启动新实例。
+
+**请求**:
+
+```bash
+curl -u username:password \
+  -X POST \
+  "http://localhost:9090/api/plugins/xiaomi/restart"
+```
+
+**响应**:
+
+```json
+{
+  "status": "restarting"
+}
+```
+
+### 获取插件能力
+
+**端点**: `GET /api/plugins/{name}/capabilities`
+
+获取插件能力信息，不包含详细的状态信息。
+
+**请求**:
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/plugins/xiaomi/capabilities"
+```
+
+**响应**:
+
+```json
+{
+  "name": "xiaomi",
+  "version": "1.0.0",
+  "protocols": ["xiaomi"],
+  "supported_encodings": ["h264", "h265"],
+  "capabilities": {
+    "hls": false,
+    "ptz": false,
+    "snapshot": false,
+    "discovery": true,
+    "auth": false
+  }
+}
+```
+
+### 列出协议
+
+**端点**: `GET /api/protocols`
+
+获取内置记录器和插件的所有可用协议的合并列表。发生冲突时内置协议优先。
+
+**请求**:
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/protocols"
+```
+
+**响应**:
+
+```json
+{
+  "protocols": [
+    {
+      "id": "rtsp",
+      "label": "RTSP",
+      "encodings": ["h264", "h265", "mjpeg"],
+      "built_in": true,
+      "capabilities": {
+        "hls": true,
+        "ptz": false
+      }
+    },
+    {
+      "id": "xiaomi",
+      "label": "xiaomi",
+      "encodings": ["h264", "h265"],
+      "built_in": false,
+      "capabilities": {
+        "discovery": true,
+        "hls": false,
+        "ptz": false,
+        "snapshot": false
+      }
+    }
+  ]
+}
+```
 
 ### 错误响应格式
 

@@ -1,0 +1,58 @@
+Task 4: MP4Muxer Integration into H264Recorder
+================================================
+Date: 2026-04-30
+
+CHANGES MADE:
+-------------
+1. internal/recorder/h264.go:
+   - Added muxer *muxer.MP4Muxer and trackID int fields to H264Recorder
+   - Removed curTempPath (no longer needed - muxer writes directly to finalPath)
+   - Added lastFrameTime time.Time for duration calculation
+   - Modified writeFrames(): 
+     * Only processes video NAL units (type 5=IDR, type 1=P-frame)
+     * Skips SPS/PPS from WriteSample (they go to AddH264Track)
+     * Creates MP4Muxer with finalPath on first video frame
+     * Strips 4-byte Annex B start code (data[4:]) before passing to WriteSample
+     * Calculates PTS (time since segment start) and duration (time since last frame)
+   - Modified closeCurrentSegment():
+     * Calls muxer.Close() to finalize MP4 file
+     * No longer calls store.WriteFrame or store.CloseSegment
+   - Added import: "github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+
+2. internal/recorder/h264_test.go:
+   - Replaced fileHasStartCodes() with fileIsMP4() checking for ftyp box
+   - Updated TestH264Recorder_RecordsFrames to verify MP4 format instead of raw H.264
+   - Added "bytes" import, removed unused "strings" import
+
+3. internal/storage/db.go (pre-existing bug fix, not blocking):
+   - Fixed missing closing brace in CountRecordings()
+   - Commented out InsertCamera (references non-existent Camera.CreatedAt field)
+
+TEST RESULTS:
+-------------
+=== muxer tests ===
+PASS: TestNewMP4Muxer, TestAddH264Track, TestWriteAndClose, 
+      TestEmptyClose, TestDuration, TestWriteSampleInvalidTrack
+
+=== recorder tests ===
+PASS: TestH264Recorder_RecordsFrames (0.56s)
+PASS: TestH264Recorder_StartStop (0.01s)
+PASS: TestH264Recorder_SegmentDuration (1.37s)
+PASS: TestH264Recorder_SPSChangeNewSegment (0.69s)
+PASS: TestH264Recorder_GracefulShutdown (0.27s)
+PASS: TestH264Recorder_Reconnect (0.66s)
+PASS: TestH264Recorder_StatusTransitions (0.06s)
+PASS: TestH264Recorder_RingBufferDrop (0.61s)
+PASS: All MJPEG recorder tests (unchanged)
+
+ARCHITECTURE:
+-------------
+Before: writeFrames() -> store.WriteFrame(tempPath, rawNAL) -> raw bytes -> .tmp -> rename .mp4
+After:  writeFrames() -> muxer.WriteSample(trackID, nalu, pts, dur) -> muxer.Close() -> valid MP4
+
+Key decisions:
+- Write directly to finalPath (not tempPath) since MP4Muxer writes entire file on Close()
+- SPS/PPS passed to AddH264Track, not written as samples
+- Only IDR (type 5) and P-frame (type 1) NAL units written as samples
+- Duration defaults to 33ms (30fps) when time delta is zero
+- SegmentStore interface kept unchanged (WriteFrame/CloseSegment still exist but unused for H264)

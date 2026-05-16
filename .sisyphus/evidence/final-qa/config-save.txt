@@ -1,0 +1,8 @@
+=== RUN   TestSave
+--- PASS: TestSave (0.00s)
+=== RUN   TestSaveAtomic
+--- PASS: TestSaveAtomic (0.00s)
+=== RUN   TestSaveOverwrite
+--- PASS: TestSaveOverwrite (0.00s)
+PASS
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/config	(cached)

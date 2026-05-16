@@ -1,0 +1,16 @@
+Updated deploy/mibee-nvr.service content:
+
+[Unit]
+Description=MiBee NVR
+After=network.target
+
+[Service]
+Type=simple
+User=nvr
+ExecStart=/mnt/data/nvr/bin/mibee-nvr -config /mnt/data/nvr/mibee-nvr.yaml
+WorkingDirectory=/mnt/data/nvr
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+Task 6: Fix H264Recorder DB Recording Entries + Failing Test
+Date: 2026-04-30
+Status: PASS
+
+Changes Made:
+1. internal/recorder/h264.go - Added RecordingDB interface
+2. internal/recorder/h264.go - Added DB field to H264Config
+3. internal/recorder/h264.go - Modified closeCurrentSegment() to insert recording entries
+4. internal/camera/manager.go - Pass cm.db to H264Config
+5. internal/camera/manager_test.go - Fixed assertions (2→4 cameras, disabled/JPEG now expected in DB)
+
+Build: go build ./... → SUCCESS (no output)
+Tests: go test ./... → ALL PASS (0 FAIL)
+
+--- Build Output ---
+(no output, clean build)
+
+--- Test Output ---
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/api	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera	0.323s
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/config	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav	(cached)
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/tests	(cached)

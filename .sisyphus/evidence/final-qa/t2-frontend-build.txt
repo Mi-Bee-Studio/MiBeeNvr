@@ -1,0 +1,415 @@
+> vite build
+vite v8.0.10 building client environment for production...
+[2Ktransforming...✓ 3767 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.90 kB │ gzip:   0.49 kB
+dist/assets/index-eEMtFW1d.css   47.19 kB │ gzip:   9.11 kB
+dist/assets/index-DOsb76D6.js   399.73 kB │ gzip: 128.80 kB
+dist/assets/hls-0EiSYoTw.js     508.78 kB │ gzip: 157.29 kB
+✓ built in 10.42s
+17:09:21 [vite-plugin-svelte] src/components/Header.svelte:198:2 Unused CSS selector ".back-icon"
+https://svelte.dev/e/css_unused_selector
+196:   }
+197: 
+198:   .back-icon {
+                 ^
+199:     width: 1rem;
+200:     height: 1rem;
+17:09:21 [vite-plugin-svelte] src/components/Header.svelte:260:2 Unused CSS selector ".logout-icon"
+https://svelte.dev/e/css_unused_selector
+258:   }
+259: 
+260:   .logout-icon {
+                   ^
+261:     width: 1.125rem;
+262:     height: 1.125rem;
+17:09:21 [vite-plugin-svelte] src/components/Header.svelte:293:2 Unused CSS selector ".hamburger-icon"
+https://svelte.dev/e/css_unused_selector
+291:   }
+292:   
+293:   .hamburger-icon {
+                      ^
+294:     width: 1.5rem;
+295:     height: 1.5rem;
+17:09:21 [vite-plugin-svelte] src/routes/RecordingDetail.svelte:526:16 `<video>` elements must have a `<track kind="captions">`
+https://svelte.dev/e/a11y_media_has_caption
+524:                 </div>
+525:               {:else if videoBlobUrl}
+526:                 <video
+                           ^
+527:                   controls
+528:                   preload="auto"
+17:09:21 [vite-plugin-svelte] src/routes/RecordingDetail.svelte:596:18 Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events
+594:                 <div class="th-bg-secondary px-4 py-3 space-y-2">
+595:                   <!-- Progress bar -->
+596:                   <div
+                           ^
+597:                     class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
+598:                     onclick={handleProgressClick}
+17:09:21 [vite-plugin-svelte] src/routes/RecordingDetail.svelte:596:18 Non-interactive element `<div>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions
+594:                 <div class="th-bg-secondary px-4 py-3 space-y-2">
+595:                   <!-- Progress bar -->
+596:                   <div
+                           ^
+597:                     class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
+598:                     onclick={handleProgressClick}
+17:09:21 [vite-plugin-svelte] src/routes/Settings.svelte:257:14 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+255:             <!-- Enable WebDAV -->
+256:             <div>
+257:               <label class="input-label">{t('settings.webdavEnabled')}</label>
+                                                                                   ^
+258:               <div class="flex items-center gap-3 mt-2">
+259:                 <button
+17:09:21 [vite-plugin-svelte] src/routes/Settings.svelte:259:16 Buttons and links should either contain text or have an `aria-label`, `aria-labelledby` or `title` attribute
+https://svelte.dev/e/a11y_consider_explicit_label
+257:               <label class="input-label">{t('settings.webdavEnabled')}</label>
+258:               <div class="flex items-center gap-3 mt-2">
+259:                 <button
+                            ^
+260:                   type="button"
+261:                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+17:09:21 [vite-plugin-svelte] src/routes/Settings.svelte:286:14 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+284:             <!-- Read-Write Mode -->
+285:             <div>
+286:               <label class="input-label">{t('settings.webdavReadWrite')}</label>
+                                                                                     ^
+287:               <div class="flex items-center gap-3 mt-2">
+288:                 <button
+17:09:21 [vite-plugin-svelte] src/routes/Settings.svelte:288:16 Buttons and links should either contain text or have an `aria-label`, `aria-labelledby` or `title` attribute
+https://svelte.dev/e/a11y_consider_explicit_label
+286:               <label class="input-label">{t('settings.webdavReadWrite')}</label>
+287:               <div class="flex items-center gap-3 mt-2">
+288:                 <button
+                            ^
+289:                   type="button"
+290:                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
+17:09:21 [vite-plugin-svelte] /home/mickey/Projects/iot/rpi3b-storeage/web/src/routes/Recordings.svelte:260:6 This element is implicitly closed by the following `</main>`, which can cause an unexpected DOM structure. Add an explicit `</div>` to avoid surprises.
+https://svelte.dev/e/element_implicitly_closed
+258: 
+259:       <!-- Filters -->
+260:       <div class="card p-5 mb-6 border th-border space-y-3">
+                                                                 ^
+261:         <div class="flex flex-wrap gap-3 items-end">
+262:           <div class="flex-1 min-w-[160px]">
+17:09:21 [vite-plugin-svelte] /home/mickey/Projects/iot/rpi3b-storeage/web/src/routes/Recordings.svelte:256:4 This element is implicitly closed by the following `</main>`, which can cause an unexpected DOM structure. Add an explicit `</div>` to avoid surprises.
+https://svelte.dev/e/element_implicitly_closed
+254:   <!-- Main content -->
+255:   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+256:     <div class="mb-6">
+                           ^
+257:       <h2 class="text-2xl font-bold th-text-primary mb-4">{t('recordings.title')}</h2>
+258: 
+17:09:21 [vite-plugin-svelte] src/routes/Recordings.svelte:289:12 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+287:           </div>
+288:           <div class="flex-1 min-w-[180px]">
+289:             <label class="input-label">{t('recordings.search')}</label>
+                                                                            ^
+290:             <div class="relative">
+291:               <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
+17:09:21 [vite-plugin-svelte] src/routes/Recordings.svelte:304:12 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+302:         <div class="flex flex-wrap gap-4 sm:gap-3 items-stretch sm:items-end mt-1">
+303:           <div class="flex-1 min-w-0">
+304:             <label class="input-label">{t('recordings.startDate')}</label>
+                                                                               ^
+305:             <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
+306:               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:86:10 Using `on:submit` to listen to the submit event is deprecated. Use the event attribute `onsubmit` instead
+https://svelte.dev/e/event_directive_deprecated
+84:     {/if}
+85: 
+86:     <form on:submit|preventDefault={handleSubmit} class="space-y-6">
+                                                     ^
+87:       <div>
+88:         <label for="username" class="input-label">{t('login.username')}</label>
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:96:10 Using `on:keydown` to listen to the keydown event is deprecated. Use the event attribute `onkeydown` instead
+https://svelte.dev/e/event_directive_deprecated
+94:           placeholder={t('login.usernamePlaceholder')}
+95:           disabled={loading}
+96:           on:keydown={handleKeydown}
+                                        ^
+97:           on:blur={validateUsername}
+98:           on:input={onUsernameInput}
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:97:10 Using `on:blur` to listen to the blur event is deprecated. Use the event attribute `onblur` instead
+https://svelte.dev/e/event_directive_deprecated
+ 95:           disabled={loading}
+ 96:           on:keydown={handleKeydown}
+ 97:           on:blur={validateUsername}
+                                         ^
+ 98:           on:input={onUsernameInput}
+ 99:           autocomplete="username"
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:98:10 Using `on:input` to listen to the input event is deprecated. Use the event attribute `oninput` instead
+https://svelte.dev/e/event_directive_deprecated
+ 96:           on:keydown={handleKeydown}
+ 97:           on:blur={validateUsername}
+ 98:           on:input={onUsernameInput}
+                                         ^
+ 99:           autocomplete="username"
+100:         />
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:116:12 Using `on:keydown` to listen to the keydown event is deprecated. Use the event attribute `onkeydown` instead
+https://svelte.dev/e/event_directive_deprecated
+114:             placeholder={t('login.passwordPlaceholder')}
+115:             disabled={loading}
+116:             on:keydown={handleKeydown}
+                                           ^
+117:             on:blur={validatePassword}
+118:             on:input={onPasswordInput}
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:117:12 Using `on:blur` to listen to the blur event is deprecated. Use the event attribute `onblur` instead
+https://svelte.dev/e/event_directive_deprecated
+115:             disabled={loading}
+116:             on:keydown={handleKeydown}
+117:             on:blur={validatePassword}
+                                           ^
+118:             on:input={onPasswordInput}
+119:             autocomplete="current-password"
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:118:12 Using `on:input` to listen to the input event is deprecated. Use the event attribute `oninput` instead
+https://svelte.dev/e/event_directive_deprecated
+116:             on:keydown={handleKeydown}
+117:             on:blur={validatePassword}
+118:             on:input={onPasswordInput}
+                                           ^
+119:             autocomplete="current-password"
+120:           />
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:124:12 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+122:             type="button"
+123:             class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+124:             on:click={() => showPassword = !showPassword}
+                                                              ^
+125:             aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+126:           >
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:8:6 `username` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+ 6:   import { Eye, EyeOff } from 'lucide-svelte';
+ 7: 
+ 8:   let username = '';
+                  ^
+ 9:   let password = '';
+10:   let showPassword = false;
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:9:6 `password` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+ 7: 
+ 8:   let username = '';
+ 9:   let password = '';
+                  ^
+10:   let showPassword = false;
+11:   let error = '';
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:10:6 `showPassword` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+ 8:   let username = '';
+ 9:   let password = '';
+10:   let showPassword = false;
+                      ^
+11:   let error = '';
+12:   let loginErrors = $state({ username: '', password: '' });
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:11:6 `error` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+ 9:   let password = '';
+10:   let showPassword = false;
+11:   let error = '';
+               ^
+12:   let loginErrors = $state({ username: '', password: '' });
+13:   let loading = false;
+17:09:21 [vite-plugin-svelte] src/routes/Login.svelte:13:6 `loading` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+11:   let error = '';
+12:   let loginErrors = $state({ username: '', password: '' });
+13:   let loading = false;
+                 ^
+14:   // Force re-render when language changes
+15: 
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:282:16 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+280:       <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
+281:       <div class="flex gap-3">
+282:         <button on:click={scanONVIF} class="btn btn-ghost" disabled={scanning}>
+                                         ^
+283:           {#if scanning}
+284:             <span class="spinner mr-2"></span>{t('onvif.discovering')}
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:289:16 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+287:           {/if}
+288:         </button>
+289:         <button on:click={openAddForm} class="btn btn-primary">
+                                           ^
+290:           + {t('cameras.addCamera')}
+291:         </button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:312:16 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+310:         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
+311:         <p class="th-text-secondary mb-4">{error}</p>
+312:         <button on:click={loadCameras} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+                                           ^
+313:       </div>
+314:     {/if}
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:363:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+361:                     </div>
+362:                     <button
+363:                       on:click={() => addDiscoveredDevice(device)}
+                                                                       ^
+364:                       class="btn btn-primary btn-sm shrink-0"
+365:                       disabled={addingDeviceId === device.id}
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:378:24 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+376:             {#if !scanning && scanDone}
+377:               <div class="mt-4 flex justify-end">
+378:                 <button on:click={scanONVIF} class="btn btn-ghost btn-sm">
+                                                 ^
+379:                   {t('onvif.discover')}
+380:                 </button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:397:136 Using `on:blur` to listen to the blur event is deprecated. Use the event attribute `onblur` instead
+https://svelte.dev/e/event_directive_deprecated
+395:               <div>
+396:                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
+397:                 <input id="cam-name" type="text" class="input {validationErrors['name'] ? 'border-red-500' : ''}" bind:value={formName} on:blur={() => validateField('name', formName)} on:input={() => { if (validationErrors['name']) delete validationErrors['name']; }} />
+                                                                                                                                                                                            ^
+398:                 {#if validationErrors['name']}
+399:                   <p class="th-color-danger text-xs mt-1">{validationErrors['name']}</p>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:397:184 Using `on:input` to listen to the input event is deprecated. Use the event attribute `oninput` instead
+https://svelte.dev/e/event_directive_deprecated
+395:               <div>
+396:                 <label for="cam-name" class="input-label">{t('cameras.name')}</label>
+397:                 <input id="cam-name" type="text" class="input {validationErrors['name'] ? 'border-red-500' : ''}" bind:value={formName} on:blur={() => validateField('name', formName)} on:input={() => { if (validationErrors['name']) delete validationErrors['name']; }} />
+                                                                                                                                                                                                                                                                                ^
+398:                 {#if validationErrors['name']}
+399:                   <p class="th-color-danger text-xs mt-1">{validationErrors['name']}</p>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:420:133 Using `on:blur` to listen to the blur event is deprecated. Use the event attribute `onblur` instead
+https://svelte.dev/e/event_directive_deprecated
+418:               <div class="md:col-span-2">
+419:                 <label for="cam-url" class="input-label">{t('cameras.url')}</label>
+420:                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl} on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
+                                                                                                                                                                                       ^
+421:                 {#if validationErrors['url']}
+422:                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:420:179 Using `on:input` to listen to the input event is deprecated. Use the event attribute `oninput` instead
+https://svelte.dev/e/event_directive_deprecated
+418:               <div class="md:col-span-2">
+419:                 <label for="cam-url" class="input-label">{t('cameras.url')}</label>
+420:                 <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl} on:blur={() => validateField('url', formUrl)} on:input={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
+                                                                                                                                                                                                                                                                         ^
+421:                 {#if validationErrors['url']}
+422:                   <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:445:20 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+443:                     type="button"
+444:                     class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
+445:                     on:click={() => showPassword = !showPassword}
+                                                                      ^
+446:                     aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
+447:                   >
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:502:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+500: 
+501:             <div class="flex items-center gap-3 mt-6">
+502:               <button on:click={handleSubmit} class="btn btn-primary" disabled={saving}>
+                                                  ^
+503:                 {#if saving}
+504:                   <span class="spinner mr-2"></span>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:508:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+506:                 {t('cameras.save')}
+507:               </button>
+508:               <button on:click={resetForm} class="btn btn-ghost">
+                                               ^
+509:                 {t('cameras.cancel')}
+510:               </button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:523:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+521:             </p>
+522:             <div class="flex items-center gap-3">
+523:               <button on:click={handleDelete} class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors">
+                                                  ^
+524:                 {t('cameras.deleteConfirm')}
+525:               </button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:526:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+524:                 {t('cameras.deleteConfirm')}
+525:               </button>
+526:               <button on:click={() => deletingCamera = null} class="btn btn-ghost">
+                                                                 ^
+527:                 {t('cameras.cancel')}
+528:               </button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:542:22 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+540:               <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.noCameras')}</h3>
+541:               <p class="text-sm th-text-muted mb-4">{t('cameras.noCamerasHint')}</p>
+542:               <button on:click={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
+                                                 ^
+543:             </div>
+544:           {:else}
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:566:28 Using `on:keydown` to listen to the keydown event is deprecated. Use the event attribute `onkeydown` instead
+https://svelte.dev/e/event_directive_deprecated
+564:                             class="input py-0.5 px-2 text-sm w-40"
+565:                             bind:value={inlineName}
+566:                             on:keydown={(e) => {
+                                   ^
+567:                               if (e.key === 'Enter') saveInlineEdit(camera);
+568:                               if (e.key === 'Escape') cancelInlineEdit();
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:570:28 Using `on:blur` to listen to the blur event is deprecated. Use the event attribute `onblur` instead
+https://svelte.dev/e/event_directive_deprecated
+568:                               if (e.key === 'Escape') cancelInlineEdit();
+569:                             }}
+570:                             on:blur={() => saveInlineEdit(camera)}
+                                                                       ^
+571:                             focus
+572:                           />
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:576:28 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+574:                           <button
+575:                             class="font-medium th-text-primary hover:underline cursor-pointer flex items-center gap-1"
+576:                             on:click={() => startInlineEdit(camera)}
+                                                                         ^
+577:                             title={t('cameras.editName')}
+578:                           >
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:606:28 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+604:                           {/if}
+605:                           <button
+606:                             on:click={() => openEditForm(camera)}
+                                                                      ^
+607:                             class="btn btn-ghost px-2 py-1 text-sm transition-all duration-200"
+608:                           >{t('cameras.edit')}</button>
+17:09:22 [vite-plugin-svelte] src/routes/Cameras.svelte:610:28 Using `on:click` to listen to the click event is deprecated. Use the event attribute `onclick` instead
+https://svelte.dev/e/event_directive_deprecated
+608:                           >{t('cameras.edit')}</button>
+609:                           <button
+610:                             on:click={() => deletingCamera = camera}
+                                                                         ^
+611:                             class="btn btn-ghost px-2 py-1 text-sm th-color-danger transition-all duration-200"
+612:                           >{t('cameras.delete')}</button>
+17:09:22 [vite-plugin-svelte] src/components/Toast.svelte:26:2 Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events
+24: <div bind:this={toastContainer}>
+25:   {#each $toasts as toast (toast.id)}
+26:     <div
+            ^
+27:       class="toast"
+28:       class:toast-success={toast.type === 'success'}
+17:09:22 [vite-plugin-svelte] src/components/Toast.svelte:26:2 `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions
+24: <div bind:this={toastContainer}>
+25:   {#each $toasts as toast (toast.id)}
+26:     <div
+            ^
+27:       class="toast"
+28:       class:toast-success={toast.type === 'success'}
+17:09:22 [vite-plugin-svelte] src/components/Toast.svelte:94:1 Unused CSS selector ".toast.fade-out"
+https://svelte.dev/e/css_unused_selector
+92: 
+93:   /* Fade-out animation when removing */
+94:   .toast.fade-out {
+                     ^
+95:     opacity: 0;
+96:     transform: translateY(-10px);
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.

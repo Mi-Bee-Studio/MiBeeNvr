@@ -1,0 +1,163 @@
+=== RUN   TestGenerateCameraID_Format
+--- PASS: TestGenerateCameraID_Format (0.00s)
+=== RUN   TestGenerateCameraID_Unique
+--- PASS: TestGenerateCameraID_Unique (0.00s)
+=== RUN   TestNewCameraManager
+--- PASS: TestNewCameraManager (0.00s)
+=== RUN   TestStart_EnabledCameras
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+--- PASS: TestStart_EnabledCameras (0.00s)
+=== RUN   TestStart_DisabledCamerasSkipped
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-1"
+2026/05/01 18:39:19 [camera-manager] camera "cam-1" (rtsp_h264) is disabled, skipping
+--- PASS: TestStart_DisabledCamerasSkipped (0.00s)
+=== RUN   TestStart_HTTPJPEGSkipped
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-1"
+2026/05/01 18:39:19 [camera-manager] camera "cam-1" uses http_jpeg protocol, skipping (handled by upload handler)
+--- PASS: TestStart_HTTPJPEGSkipped (0.00s)
+=== RUN   TestStart_InvalidSegmentDuration
+--- PASS: TestStart_InvalidSegmentDuration (0.00s)
+=== RUN   TestStop
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestStop (0.21s)
+=== RUN   TestStop_EmptyManager
+--- PASS: TestStop_EmptyManager (0.00s)
+=== RUN   TestStatus_EmptyManager
+--- PASS: TestStatus_EmptyManager (0.00s)
+=== RUN   TestCameraStatus_Unknown
+--- PASS: TestCameraStatus_Unknown (0.00s)
+=== RUN   TestCameraStatus_Known
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestCameraStatus_Known (0.01s)
+=== RUN   TestGracefulShutdown
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestGracefulShutdown (0.11s)
+=== RUN   TestStart_UnknownProtocol
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-1"
+2026/05/01 18:39:19 [camera-manager] camera "cam-1" has unknown protocol "onvif", skipping
+--- PASS: TestStart_UnknownProtocol (0.01s)
+=== RUN   TestStart_InsertsCameraRecords
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+--- PASS: TestStart_InsertsCameraRecords (0.01s)
+=== RUN   TestAddCamera_EnabledH264
+2026/05/01 18:39:19 [camera-manager] started recorder for camera "cam-new-h264"
+2026/05/01 18:39:19 [h264-recorder cam-new-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestAddCamera_EnabledH264 (0.01s)
+=== RUN   TestAddCamera_Disabled
+--- PASS: TestAddCamera_Disabled (0.01s)
+=== RUN   TestAddCamera_HTTPJPEG
+2026/05/01 18:39:19 [camera-manager] add camera: camera "cam-new-jpeg": protocol "http_jpeg" does not support recording
+--- PASS: TestAddCamera_HTTPJPEG (0.00s)
+=== RUN   TestAddCamera_DuplicateID
+--- PASS: TestAddCamera_DuplicateID (0.02s)
+=== RUN   TestAddCamera_AutoID
+--- PASS: TestAddCamera_AutoID (0.01s)
+=== RUN   TestAddCamera_Persists
+--- PASS: TestAddCamera_Persists (0.02s)
+=== RUN   TestRemoveCamera_WithRecorder
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestRemoveCamera_WithRecorder (0.01s)
+=== RUN   TestRemoveCamera_NotFound
+--- PASS: TestRemoveCamera_NotFound (0.01s)
+=== RUN   TestRemoveCamera_Persists
+--- PASS: TestRemoveCamera_Persists (0.02s)
+=== RUN   TestUpdateCamera_Name
+--- PASS: TestUpdateCamera_Name (0.01s)
+=== RUN   TestUpdateCamera_URL
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [camera-manager] started recorder for camera "cam-h264"
+--- PASS: TestUpdateCamera_URL (0.01s)
+=== RUN   TestUpdateCamera_Disable
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestUpdateCamera_Disable (0.02s)
+=== RUN   TestUpdateCamera_Enable
+2026/05/01 18:39:19 [camera-manager] started recorder for camera "cam-disabled"
+2026/05/01 18:39:19 [h264-recorder cam-disabled] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestUpdateCamera_Enable (0.01s)
+=== RUN   TestUpdateCamera_NotFound
+--- PASS: TestUpdateCamera_NotFound (0.00s)
+=== RUN   TestRestartRecorder
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-h264"
+2026/05/01 18:39:19 [camera-manager] started H264 recorder for camera "cam-h264"
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-mjpeg"
+2026/05/01 18:39:19 [camera-manager] started MJPEG recorder for camera "cam-mjpeg"
+2026/05/01 18:39:19 [mjpeg-recorder cam-mjpeg] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-disabled"
+2026/05/01 18:39:19 [camera-manager] camera "cam-disabled" (rtsp_h264) is disabled, skipping
+2026/05/01 18:39:19 [camera-manager] inserted camera record for "cam-jpeg"
+2026/05/01 18:39:19 [camera-manager] camera "cam-jpeg" uses http_jpeg protocol, skipping (handled by upload handler)
+2026/05/01 18:39:19 [camera-manager] started recorder for camera "cam-h264"
+2026/05/01 18:39:19 [h264-recorder cam-h264] connection error: DESCRIBE: dial tcp 127.0.0.1:1: connect: connection refused, reconnecting in 1s
+--- PASS: TestRestartRecorder (0.01s)
+=== RUN   TestRestartRecorder_Disabled
+--- PASS: TestRestartRecorder_Disabled (0.00s)
+PASS
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera	0.559s

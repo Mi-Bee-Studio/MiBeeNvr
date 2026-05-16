@@ -1,0 +1,22 @@
+=== RUN   TestLoadValidConfig
+--- PASS: TestLoadValidConfig (0.00s)
+=== RUN   TestValidateMissingCameraID
+--- PASS: TestValidateMissingCameraID (0.00s)
+=== RUN   TestValidateInvalidProtocol
+--- PASS: TestValidateInvalidProtocol (0.00s)
+=== RUN   TestPortRangeValidation
+--- PASS: TestPortRangeValidation (0.00s)
+=== RUN   TestDefaultsApplied
+--- PASS: TestDefaultsApplied (0.00s)
+=== RUN   TestLoadNonExistentFile
+--- PASS: TestLoadNonExistentFile (0.00s)
+=== RUN   TestFTPExplicitlyDisabled
+--- PASS: TestFTPExplicitlyDisabled (0.00s)
+=== RUN   TestWebDAVExplicitlyDisabled
+--- PASS: TestWebDAVExplicitlyDisabled (0.00s)
+=== RUN   TestFTPNotConfigured
+--- PASS: TestFTPNotConfigured (0.00s)
+=== RUN   TestWebDAVNotConfigured
+--- PASS: TestWebDAVNotConfigured (0.00s)
+PASS
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/config	(cached)

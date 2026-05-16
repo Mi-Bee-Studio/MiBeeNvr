@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera } from '$lib/api';
-  import type { Camera } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
+  import type { Camera, ProtocolInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
@@ -14,6 +14,15 @@
   let error = $state('');
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
+  let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
+
+  function isHlsSupported(cam: Camera): boolean {
+    return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
+  }
+
+  function isPtzSupported(cam: Camera): boolean {
+    return getProtocolCapabilities(cam.protocol, protocolsMap).ptz;
+  }
 
   async function loadCamera() {
     loading = true;
@@ -60,6 +69,10 @@
 
     loadCamera();
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    // Load protocol capabilities
+    listProtocols().then(list => {
+      if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
+    }).catch(() => {});
   });
 
   onDestroy(() => {
@@ -100,8 +113,8 @@
           <h2 class="text-xl font-bold th-text-primary truncate">
             {camera.name || camera.id}
           </h2>
-          <span class="badge badge-neutral">{camera.protocol}</span>
-          {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif' || camera.protocol === 'rtsp'}
+          <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
+          {#if isHlsSupported(camera)}
             <div class="flex-1"></div>
             <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
               {#if isFullscreen}
@@ -113,7 +126,7 @@
           {/if}
         </div>
 
-        {#if camera.protocol === 'rtsp_h264' || camera.protocol === 'rtsp_h265' || camera.protocol === 'onvif' || camera.protocol === 'rtsp'}
+        {#if isHlsSupported(camera)}
           <!-- HLS Player -->
           <div
             class="card border th-border overflow-hidden"
@@ -144,8 +157,8 @@
           </div>
         {/if}
         
-        <!-- PTZ Control for ONVIF cameras -->
-        {#if camera.protocol === 'onvif'}
+        <!-- PTZ Control for PTZ-capable cameras -->
+        {#if isPtzSupported(camera)}
           <div class="card">
             <PtzControl {cameraId} enabled={true} />
           </div>

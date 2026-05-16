@@ -1,0 +1,11 @@
+## Learnings
+- `web/src/app.css:457` 已有 `.gradient-text` 类: `background: linear-gradient(135deg, #8b5cf6, #a78bfa, #38bdf8)` — 可参考配色方案
+- `--color-primary: #8b5cf6` (紫色), `--color-primary-light: #a78bfa`, `--color-primary-dark: #7c3aed`
+- abema/go-mp4 已是项目依赖，提供 ReadBoxStructure() API
+- MP4Muxer 写入顺序: ftyp → moov → mdat (Close 时写出)
+- CleanupManager 是后台任务模板: NewXxxManager(db, store, cfg) + Run(ctx) + RunOnce(ctx)
+- Header.svelte:85 `<a href="#/recordings" class="logo">MiBee NVR</a>`
+- Header.svelte:203-209 `.logo` CSS 样式
+- CGO_ENABLED=0 — 不引入任何 C 依赖
+- testify/require 专用，不用 assert
+- t.Helper() 必须

@@ -1,0 +1,20 @@
+=== RUN   TestUploadJPEG
+--- PASS: TestUploadJPEG (0.00s)
+=== RUN   TestUploadUnknownCamera
+--- PASS: TestUploadUnknownCamera (0.00s)
+=== RUN   TestUploadOversized
+--- PASS: TestUploadOversized (0.01s)
+=== RUN   TestUploadBadContentType
+--- PASS: TestUploadBadContentType (0.00s)
+=== RUN   TestUploadVideo
+--- PASS: TestUploadVideo (0.00s)
+=== RUN   TestUploadBatch
+--- PASS: TestUploadBatch (0.00s)
+=== RUN   TestUploadVideoBadContentType
+--- PASS: TestUploadVideoBadContentType (0.00s)
+=== RUN   TestUploadJPEGWritesFile
+--- PASS: TestUploadJPEGWritesFile (0.01s)
+=== RUN   TestUploadVideoWritesFile
+--- PASS: TestUploadVideoWritesFile (0.00s)
+PASS
+ok  	github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload	(cached)

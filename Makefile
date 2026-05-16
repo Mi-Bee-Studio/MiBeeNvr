@@ -4,24 +4,52 @@ RPi_HOST ?= user@your-rpi-host
 RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
 RPi_SRV  := mibee-nvr
 
+# Plugin build targets
+XIAOMI_PLUGIN_TARGET   := plugins/xiaomi/xiaomi-plugin
+XIAOMI_PLUGIN_ARM64    := plugins/xiaomi/xiaomi-plugin-arm64
+XIAOMI_PLUGIN_SRC      := ./plugins/xiaomi/cmd/xiaomi-plugin/
+XIAOMI_PLUGIN_RPI_DIR  := /mnt/data/nvr/plugins/xiaomi
+XIAOMI_PLUGIN_RPI_BIN  := $(XIAOMI_PLUGIN_RPI_DIR)/xiaomi-plugin
+
 # Docker image registry
 DOCKER_REGISTRY ?= ghcr.io/mi-bee-studio/mibeenvr
 VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+
+proto:
+	@echo "Proto generation not yet configured"
 
 frontend:
 	cd web && npm run build
 	rm -rf internal/ui/static/assets
 	cp -r web/dist/* internal/ui/static/
 
-build: frontend
+build: frontend plugins
 	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BUILD_TARGET) ./cmd/mibee-nvr/
+
+plugin-xiaomi:
+	@if [ -d ./plugins/xiaomi/cmd/xiaomi-plugin ]; then \
+		CGO_ENABLED=0 go build -ldflags="-s -w" -o $(XIAOMI_PLUGIN_TARGET) $(XIAOMI_PLUGIN_SRC); \
+	else \
+		echo "Skipping xiaomi-plugin (cmd directory not found)"; \
+	fi
+
+plugins: plugin-xiaomi
 
 test:
 	go test ./... -v
 
-cross: frontend
+cross: frontend plugins-cross
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
+
+plugin-xiaomi-arm64:
+	@if [ -d ./plugins/xiaomi/cmd/xiaomi-plugin ]; then \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(XIAOMI_PLUGIN_ARM64) $(XIAOMI_PLUGIN_SRC); \
+	else \
+		echo "Skipping xiaomi-plugin-arm64 (cmd directory not found)"; \
+	fi
+
+plugins-cross: plugin-xiaomi-arm64
 cross-armv7: frontend
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o mibee-nvr-armv7 ./cmd/mibee-nvr/
 
@@ -29,7 +57,7 @@ lint:
 	go vet ./...
 
 clean:
-	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7
+	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7 $(XIAOMI_PLUGIN_TARGET) $(XIAOMI_PLUGIN_ARM64)
 	rm -rf web/dist .build-tmp
 
 install: build
@@ -79,12 +107,15 @@ docker-release: docker-build-all docker-push-all
 
 # ---- Deploy to RPi ----
 
-deploy: cross
+deploy: cross plugins-cross
 	@echo "=== Deploying to $(RPi_HOST) ==="
 	ssh $(RPi_HOST) "sudo systemctl stop $(RPi_SRV) || true"
 	ssh $(RPi_HOST) "cp $(RPi_BIN) $(RPi_BIN).bak || true"
 	scp mibee-nvr-arm64 $(RPi_HOST):/tmp/mibee-nvr-new
 	ssh $(RPi_HOST) "mv /tmp/mibee-nvr-new $(RPi_BIN) && chmod +x $(RPi_BIN)"
+	ssh $(RPi_HOST) "mkdir -p $(XIAOMI_PLUGIN_RPI_DIR)"
+	scp $(XIAOMI_PLUGIN_ARM64) $(RPi_HOST):/tmp/xiaomi-plugin-new
+	ssh $(RPi_HOST) "mv /tmp/xiaomi-plugin-new $(XIAOMI_PLUGIN_RPI_BIN) && chmod +x $(XIAOMI_PLUGIN_RPI_BIN)"
 	ssh $(RPi_HOST) "sudo systemctl start $(RPi_SRV)"
 	@echo "=== Deploy complete. Checking... ==="
 	@sleep 2

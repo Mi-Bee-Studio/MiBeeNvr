@@ -1,0 +1,51 @@
+Sanitized config.example.yaml content:
+
+server:
+  listen: ":9090"
+
+storage:
+  root_dir: "/mnt/data/nvr"
+  segment_duration: "10m"
+
+auth:
+  username: "admin"
+  password_hash: ""  # Use `mibee-nvr hash-password <password>` to generate
+
+cameras:
+  - id: "esp32-cam1"
+    name: "Front Door"
+    protocol: "rtsp_mjpeg"
+    url: "rtsp://192.168.1.X:554/stream"
+    enabled: true
+  - id: "esp32-cam2"
+    name: "Back Yard"
+    protocol: "rtsp_h264"
+    url: "rtsp://192.168.1.X:554/live"
+    username: "admin"
+    password: "your-password-here"
+    enabled: true
+  - id: "esp32-cam3"
+    name: "Garage"
+    protocol: "http_jpeg"
+    url: "http://192.168.1.X/capture"
+    enabled: true
+
+cleanup:
+  retention_days: 30
+  check_interval: "1h"
+  disk_threshold_percent: 95
+
+ftp:
+  enabled: true
+  port: 2121
+  passive_port_range: "2122-2140"
+
+mqtt:
+  enabled: false
+  broker: "tcp://localhost:1883"
+  topic: "mibeenr/trigger"
+  client_id: "mibee-nvr"
+
+webdav:
+  enabled: true
+  path_prefix: "/dav"

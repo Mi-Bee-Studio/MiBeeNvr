@@ -1,0 +1,9 @@
+ffprobe -v error -show_format -show_streams /tmp/test-download.mp4
+
+PASS: No errors in ffprobe output
+PASS: codec_name=h264
+PASS: resolution=1280x720
+PASS: duration=12.698000
+PASS: nb_frames=189 (matches API frame_count)
+PASS: probe_score=100
+PASS: file_size=14306688 (matches API file_size)
