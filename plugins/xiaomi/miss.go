@@ -42,6 +42,7 @@ const (
 	ModelC200     = "chuangmi.camera.046c04"
 	ModelC300     = "chuangmi.camera.72ac1"
 	ModelXiaofang = "isa.camera.isc5c1"
+	ModelHLC8     = "isa.camera.hlc8"
 )
 
 // missHdrSize is the size of a MISS media packet header.

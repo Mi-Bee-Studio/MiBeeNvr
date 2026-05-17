@@ -65,7 +65,7 @@ func TestGetPluginInfo(t *testing.T) {
 	require.Equal(t, []string{"xiaomi"}, info.GetProtocols())
 	require.NotNil(t, info.GetCapabilities())
 	require.True(t, info.GetCapabilities().GetDiscovery())
-	require.False(t, info.GetCapabilities().GetHls())
+	require.True(t, info.GetCapabilities().GetHls())
 	require.False(t, info.GetCapabilities().GetPtz())
 	require.Contains(t, info.GetSupportedEncodings(), gen.Codec_CODEC_H264)
 	require.Contains(t, info.GetSupportedEncodings(), gen.Codec_CODEC_H265)

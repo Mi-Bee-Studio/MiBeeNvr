@@ -73,6 +73,7 @@ func (s *PluginServer) GetPluginInfo(_ context.Context, _ *gen.Empty) (*gen.Plug
 		Protocols: []string{"xiaomi"},
 		Capabilities: &gen.Capabilities{
 			Discovery: true,
+			Hls:       true,
 		},
 		SupportedEncodings: []gen.Codec{gen.Codec_CODEC_H264, gen.Codec_CODEC_H265},
 	}, nil

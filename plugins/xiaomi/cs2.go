@@ -72,6 +72,11 @@ const (
 
 const cs2HdrSize = 32
 
+// cs2ReadTimeout is the timeout for Pop() calls in ReadPacket and ReadCommand.
+// If no data arrives within this period, the call returns a timeout error.
+const cs2ReadTimeout = 15 * time.Second
+
+
 func cs2Handshake(host, transport string) (net.Conn, error) {
 	conn, err := cs2NewUDPConn(host, 32108)
 	if err != nil {
@@ -227,9 +232,12 @@ func (c *CS2Conn) Error() error {
 
 // ReadCommand reads a command response from channel 0.
 func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
-	buf, ok := c.channels[0].Pop()
+	buf, ok := c.channels[0].Pop(cs2ReadTimeout)
 	if !ok {
-		return 0, nil, c.Error()
+		if c.err != nil {
+			return 0, nil, c.err
+		}
+		return 0, nil, fmt.Errorf("cs2: no command data for %v", cs2ReadTimeout)
 	}
 	cmd = binary.LittleEndian.Uint32(buf)
 	data = buf[4:]
@@ -277,9 +285,12 @@ func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
 
 // ReadPacket reads a media packet from channel 2.
 func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
-	data, ok := c.channels[2].Pop()
+	data, ok := c.channels[2].Pop(cs2ReadTimeout)
 	if !ok {
-		return nil, nil, c.Error()
+		if c.err != nil {
+			return nil, nil, c.err
+		}
+		return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
 	}
 	return data[:cs2HdrSize], data[cs2HdrSize:], nil
 }
@@ -486,9 +497,13 @@ func (c *cs2DataChannel) Push(b []byte) error {
 	return nil
 }
 
-func (c *cs2DataChannel) Pop() ([]byte, bool) {
-	data, ok := <-c.popBuf
-	return data, ok
+func (c *cs2DataChannel) Pop(timeout time.Duration) ([]byte, bool) {
+	select {
+	case data, ok := <-c.popBuf:
+		return data, ok
+	case <-time.After(timeout):
+		return nil, false
+	}
 }
 
 func (c *cs2DataChannel) Close() {

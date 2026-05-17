@@ -10,7 +10,7 @@ import (
 	"encoding/binary"
 	"io"
 	"testing"
-
+	"time"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +68,7 @@ ch := newCS2DataChannel(0, 10)
 	err := ch.Push(append(sizeBuf, data...))
 	require.NoError(t, err)
 
-	got, ok := ch.Pop()
+	got, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, data, got)
 }
@@ -94,11 +94,11 @@ ch := newCS2DataChannel(0, 10)
 	err := ch.Push(buf)
 	require.NoError(t, err)
 
-	got1, ok := ch.Pop()
+	got1, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, msg1, got1)
 
-	got2, ok := ch.Pop()
+	got2, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, msg2, got2)
 }
@@ -119,11 +119,11 @@ ch := newCS2DataChannel(10, 100)
 	require.NoError(t, err)
 	require.Equal(t, 1, pushed)
 
-	got1, ok := ch.Pop()
+	got1, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, []byte("first"), got1)
 
-	got2, ok := ch.Pop()
+	got2, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, []byte("second"), got2)
 }
@@ -144,11 +144,11 @@ ch := newCS2DataChannel(10, 100)
 	require.NoError(t, err)
 	require.Equal(t, 2, pushed) // processed both seq 0 and seq 1
 
-	got0, ok := ch.Pop()
+	got0, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, []byte("zero"), got0)
 
-	got1, ok := ch.Pop()
+	got1, ok := ch.Pop(5 * time.Second)
 	require.True(t, ok)
 	require.Equal(t, []byte("one"), got1)
 }
@@ -201,7 +201,7 @@ func TestCS2DataChannelClose(t *testing.T) {
 ch := newCS2DataChannel(0, 10)
 	ch.Close()
 
-	_, ok := ch.Pop()
+	_, ok := ch.Pop(5 * time.Second)
 	require.False(t, ok)
 }
 
