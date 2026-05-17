@@ -1089,3 +1089,117 @@ func TestInsertOrphanRecordings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, count2, "duplicate inserts should be ignored")
 }
+
+func TestListCamerasExcludesArchived(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_list_cams.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp_h264", "", "rtsp://host/stream1", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp_h264", "", "rtsp://host/stream2", "", "", true, "", "", ""))
+	// Mark one as archived
+	_, err = db.db.ExecContext(ctx, "UPDATE cameras SET archived=1 WHERE id=?", "cam-archived")
+	require.NoError(t, err)
+
+	cameras, err := db.ListCameras(ctx)
+	require.NoError(t, err)
+	require.Len(t, cameras, 1)
+	require.Equal(t, "cam-active", cameras[0].ID)
+}
+
+func TestListArchivedCameras(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_list_archived_cams.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp_h264", "", "rtsp://host/stream1", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp_h264", "", "rtsp://host/stream2", "", "", true, "", "", ""))
+	_, err = db.db.ExecContext(ctx, "UPDATE cameras SET archived=1 WHERE id=?", "cam-archived")
+	require.NoError(t, err)
+
+	cameras, err := db.ListArchivedCameras(ctx)
+	require.NoError(t, err)
+	require.Len(t, cameras, 1)
+	require.Equal(t, "cam-archived", cameras[0].ID)
+}
+
+func TestListRecordingsArchivedFilter(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_rec_archived.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	// Insert non-archived recording
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID: "rec-normal", CameraID: "cam1", FilePath: "/f/normal.mp4", Format: model.FormatH264,
+		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 100, Merged: false,
+	}))
+	// Insert archived recording
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID: "rec-archived", CameraID: "cam1", FilePath: "/f/archived.mp4", Format: model.FormatH264,
+		StartedAt: now.Add(time.Minute), EndedAt: now.Add(2 * time.Minute), Duration: 60, FileSize: 200, Merged: false,
+	}))
+	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-archived")
+	require.NoError(t, err)
+
+	// Default (Archived=nil) → exclude archived
+	recs, err := db.ListRecordings(ctx, model.RecordingFilter{})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, "rec-normal", recs[0].ID)
+
+	// Archived=false → exclude archived
+	archivedFalse := false
+	recs, err = db.ListRecordings(ctx, model.RecordingFilter{Archived: &archivedFalse})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, "rec-normal", recs[0].ID)
+
+	// Archived=true → only archived
+	archivedTrue := true
+	recs, err = db.ListRecordings(ctx, model.RecordingFilter{Archived: &archivedTrue})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, "rec-archived", recs[0].ID)
+}
+
+func TestListOldestRecordingsExcludesArchived(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_oldest_archived.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	// Insert archived (oldest)
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID: "rec-old-archived", CameraID: "cam1", FilePath: "/f/old.mp4", Format: model.FormatH264,
+		StartedAt: now.Add(-2 * time.Hour), EndedAt: now.Add(-2*time.Hour + time.Minute), Duration: 60, FileSize: 100, Merged: false,
+	}))
+	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-old-archived")
+	require.NoError(t, err)
+	// Insert non-archived (newer)
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID: "rec-new", CameraID: "cam1", FilePath: "/f/new.mp4", Format: model.FormatH264,
+		StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Hour + time.Minute), Duration: 60, FileSize: 200, Merged: false,
+	}))
+
+	recs, err := db.ListOldestRecordings(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, "rec-new", recs[0].ID)
+}

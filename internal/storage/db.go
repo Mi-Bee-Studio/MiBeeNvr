@@ -395,6 +395,13 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
 	}
+	if filter.Archived == nil {
+		where = append(where, "archived=0")
+	} else if *filter.Archived {
+		where = append(where, "archived=1")
+	} else {
+		where = append(where, "archived=0")
+	}
 	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
@@ -461,6 +468,13 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 		pattern := "%" + escaped + "%"
 		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
+	}
+	if filter.Archived == nil {
+		where = append(where, "archived=0")
+	} else if *filter.Archived {
+		where = append(where, "archived=1")
+	} else {
+		where = append(where, "archived=0")
 	}
 	sqlstr := "SELECT COUNT(*) FROM recordings"
 	if len(where) > 0 {
@@ -604,7 +618,7 @@ func (d *DB) CleanupIncomplete(ctx context.Context) error {
 }
 
 func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, retentionDays)
 	if err != nil {
 		return nil, err
@@ -626,7 +640,7 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 
 // ListExpiredRecordingsByCamera returns expired recordings for a specific camera
 func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
 	if err != nil {
 		return nil, err
@@ -647,7 +661,7 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 }
 
 func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL ORDER BY ended_at ASC LIMIT ?;`
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 ORDER BY ended_at ASC LIMIT ?;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, limit)
 	if err != nil {
 		return nil, err
@@ -706,7 +720,46 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
-		FROM cameras ORDER BY id;`)
+		FROM cameras WHERE archived=0 ORDER BY id;`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []CameraRow
+	for rows.Next() {
+		var c CameraRow
+		var mergeEnabled sql.NullBool
+		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
+		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
+		var archivedAtStr sql.NullString
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
+			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
+			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays); err != nil {
+			return nil, err
+		}
+		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
+		c.MergeCheckInterval = nullStringToPtr(mergeCheckInterval)
+		c.MergeWindowSize = nullStringToPtr(mergeWindowSize)
+		c.MergeBatchLimit = nullInt64ToPtr(mergeBatchLimit)
+		c.MergeMinSegmentAge = nullStringToPtr(mergeMinSegmentAge)
+		c.MergeMinSegmentsToMerge = nullInt64ToPtr(mergeMinSegmentsToMerge)
+		if archivedAtStr.Valid && archivedAtStr.String != "" {
+			t := scanTime(archivedAtStr)
+			c.ArchivedAt = &t
+		}
+		res = append(res, c)
+	}
+	return res, nil
+}
+
+// ListArchivedCameras returns only cameras marked as archived.
+func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
+		onvif_endpoint, profile_token, stream_encoding,
+		archived, archived_at, archive_retention_days
+		FROM cameras WHERE archived=1 ORDER BY id;`)
 	if err != nil {
 		return nil, err
 	}
