@@ -27,6 +27,7 @@ import { onMount, onDestroy } from 'svelte';
   let format = $state('');
   let searchQuery = $state('');
   let mergedFilter = $state('');
+  let showArchived = $state(false);
   const pad = (n) => String(n).padStart(2, '0');
   const toLocalDT = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   let startDate = $state(toLocalDT(new Date(Date.now() - 3600000)));
@@ -112,6 +113,7 @@ import { onMount, onDestroy } from 'svelte';
         format: format || undefined,
         search: searchQuery || undefined,
         merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+        archived: showArchived ? true : undefined,
         start: startDate ? new Date(startDate).toISOString() : undefined,
         end: endDate ? new Date(endDate).toISOString() : undefined,
         offset,
@@ -161,6 +163,7 @@ import { onMount, onDestroy } from 'svelte';
     cameraId = '';
     format = '';
     mergedFilter = '';
+    showArchived = false;
     startDate = toLocalDT(new Date(Date.now() - 3600000));
     endDate = toLocalDT(new Date());
     offset = 0;
@@ -193,9 +196,9 @@ import { onMount, onDestroy } from 'svelte';
   });
 
   // When filters change, track previous values to detect changes
-  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}`;
+  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}|${showArchived}`;
   $effect(() => {
-    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}`;
+    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}|${showArchived}`;
     if (current !== prevFilters) {
       prevFilters = current;
       offset = 0;
@@ -205,7 +208,7 @@ import { onMount, onDestroy } from 'svelte';
   // Watch all filter + pagination changes — debounce to avoid double-fire with onMount
   let loadTimeout: number;
   $effect(() => {
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter, showArchived];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
@@ -279,6 +282,17 @@ import { onMount, onDestroy } from 'svelte';
               <option value="true">{t('recordings.merged')}</option>
               <option value="false">{t('recordings.unmerged')}</option>
             </select>
+          </div>
+          <div class="flex-1 min-w-[120px]">
+            <label class="input-label">&nbsp;</label>
+            <label class="input flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                class="w-4 h-4 rounded cursor-pointer"
+                bind:checked={showArchived}
+              />
+              <span class="text-sm th-text-primary">{t('archives.title')}</span>
+            </label>
           </div>
           <div class="flex-1 min-w-[180px]">
             <label class="input-label">{t('recordings.search')}</label>
@@ -444,11 +458,16 @@ import { onMount, onDestroy } from 'svelte';
                   <td>{formatFileSize(recording.file_size)}</td>
                   <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
                   <td class="hidden sm:table-cell">
-                    {#if recording.merged}
-                      <span class="badge badge-success">{t('recordings.merged')}</span>
-                    {:else}
-                      <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
-                    {/if}
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      {#if recording.archived}
+                        <span class="badge bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">{t('archives.archivedAt')}</span>
+                      {/if}
+                      {#if recording.merged}
+                        <span class="badge badge-success">{t('recordings.merged')}</span>
+                      {:else}
+                        <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
+                      {/if}
+                    </div>
                   </td>
                   <td class="text-right">
                     <div class="flex justify-end gap-1">
