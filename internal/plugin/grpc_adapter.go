@@ -46,6 +46,10 @@ type gRPCRecorderAdapter struct {
 	// HLS live streaming support
 	hlsMu      sync.Mutex
 	onHLSFrame func(pts int64, au [][]byte)
+
+	// Codec detection callback
+	onCodecDetected func(cameraID string, codec string)
+	codecNotified   bool
 }
 
 // Compile-time interface check.
@@ -80,20 +84,23 @@ func (a *gRPCRecorderAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("grpc adapter for %q already running (status=%s)", a.cameraID, a.status)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	// Use context.Background() for the stream lifecycle so it survives HTTP request cancellation.
+	// This follows the convention in camera/manager.go startRecorder: "Recorders derive their
+	// run context from context.Background() internally, so their lifecycle is independent of this ctx."
+	streamCtx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.done = make(chan struct{})
 	a.status = model.StatusRecording
 
 	recorderConfig := a.buildRecorderConfig()
-	stream, err := a.client.StartRecorder(ctx, recorderConfig)
+	stream, err := a.client.StartRecorder(streamCtx, recorderConfig)
 	if err != nil {
 		cancel()
 		a.status = model.StatusError
 		return fmt.Errorf("StartRecorder RPC failed for %q: %w", a.cameraID, err)
 	}
 
-	go a.receiveLoop(ctx, stream)
+	go a.receiveLoop(streamCtx, stream)
 	return nil
 }
 
@@ -166,6 +173,11 @@ func (a *gRPCRecorderAdapter) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
 	a.hlsMu.Unlock()
 }
 
+// SetOnCodecDetected registers a callback invoked once when the stream codec is first detected.
+func (a *gRPCRecorderAdapter) SetOnCodecDetected(cb func(cameraID string, codec string)) {
+	a.onCodecDetected = cb
+}
+
 // receiveLoop reads frames from the gRPC stream and forwards them to the handler.
 func (a *gRPCRecorderAdapter) receiveLoop(ctx context.Context, stream grpc.ServerStreamingClient[gen.Frame]) {
 	defer close(a.done)
@@ -198,8 +210,27 @@ func (a *gRPCRecorderAdapter) receiveLoop(ctx context.Context, stream grpc.Serve
 				cb(int64(frame.PtsNs), [][]byte{frame.Data})
 			}
 		}
+
+		// Notify codec detection (once per stream).
+		if frame.IsCodecInfo && !a.codecNotified && frame.Codec != gen.Codec_CODEC_UNSPECIFIED {
+			a.codecNotified = true
+			if a.onCodecDetected != nil {
+				codecStr := ""
+				switch frame.Codec {
+				case gen.Codec_CODEC_H264:
+					codecStr = string(model.FormatH264)
+				case gen.Codec_CODEC_H265:
+					codecStr = string(model.FormatH265)
+				}
+				if codecStr != "" {
+					a.onCodecDetected(a.cameraID, codecStr)
+				}
+			}
+		}
 	}
+
 }
+
 func (a *gRPCRecorderAdapter) setStatus(s model.RecorderStatus) {
 	a.mu.Lock()
 	a.status = s

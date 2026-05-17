@@ -341,7 +341,7 @@ func TestGRPCRecorderAdapter_HandlerError(t *testing.T) {
 	}
 }
 
-func TestGRPCRecorderAdapter_ContextCancellation(t *testing.T) {
+func TestGRPCRecorderAdapter_StopCancelsStream(t *testing.T) {
 	client := &mockPluginClient{}
 	handler := newMockFrameHandler()
 
@@ -353,27 +353,19 @@ func TestGRPCRecorderAdapter_ContextCancellation(t *testing.T) {
 	cfg := testCameraConfig()
 	adapter := NewGRPCRecorderAdapter(client, handler, cfg, 10*time.Second)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := adapter.Start(ctx); err != nil {
+	if err := adapter.Start(context.Background());
+	err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
 
-	// Cancel context and unblock the mock stream.
-	cancel()
-	close(stream.blockCh)
-
-	// Wait for done.
-	timeout := time.After(2 * time.Second)
-	select {
-	case <-adapter.done:
-		// Good.
-	case <-timeout:
-		t.Fatal("timed out waiting for done after context cancellation")
+	// Stop the adapter — this cancels the internal stream context.
+	if err := adapter.Stop(); err != nil {
+		t.Fatalf("Stop() error: %v", err)
 	}
 
-	// Status should be stopped (clean exit via context cancellation).
+	// Status should be stopped (clean exit via Stop()).
 	if s := adapter.Status(); s != model.StatusStopped {
-		t.Errorf("expected stopped after context cancel, got %s", s)
+		t.Errorf("expected stopped after Stop(), got %s", s)
 	}
 }
 
