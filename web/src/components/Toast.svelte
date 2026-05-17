@@ -10,10 +10,8 @@
 	onMount(() => {
 		if (toastContainer) {
 			toastContainer.style.position = 'fixed';
-			toastContainer.style.top = '1rem';
-			toastContainer.style.right = '1rem';
-			toastContainer.style.zIndex = '50';
-			toastContainer.style.display = 'flex';
+		toastContainer.style.top = '5rem';
+		toastContainer.style.zIndex = '1100';
 			toastContainer.style.flexDirection = 'column';
 			toastContainer.style.gap = '0.5rem';
 			toastContainer.style.alignItems = 'flex-end';
