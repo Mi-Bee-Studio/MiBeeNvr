@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -167,18 +168,21 @@ func (r *StreamRecorder) run(ctx context.Context) {
 }
 
 func (r *StreamRecorder) connectAndRecord(ctx context.Context, missURL string) error {
+	// Try HD first, fall back to SD if no data.
+	return r.connectAndRecordWithQuality(ctx, missURL, "hd")
+}
+
+func (r *StreamRecorder) connectAndRecordWithQuality(ctx context.Context, missURL, quality string) error {
 	client, err := NewMISSClient(missURL)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err)
 	}
 	defer client.Conn.Close()
 
-	if err := client.StartMedia("", "hd"); err != nil {
+	if err := client.StartMedia("", quality); err != nil {
 		return fmt.Errorf("miss start media: %w", err)
 	}
-	defer func() {
-		_ = client.StopMedia()
-	}()
+	defer func() { _ = client.StopMedia() }()
 
 	r.setStatus(gen.RecorderState_RECORDER_STATE_RECORDING)
 
@@ -190,6 +194,7 @@ func (r *StreamRecorder) connectAndRecord(ctx context.Context, missURL string) e
 	r.frameCount = 0
 	r.bytesTotal = 0
 
+	firstPacket := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -199,8 +204,18 @@ func (r *StreamRecorder) connectAndRecord(ctx context.Context, missURL string) e
 
 		pkt, err := client.ReadPacket()
 		if err != nil {
+			// If timeout on first packet with HD, try SD fallback.
+			if firstPacket && quality == "hd" && isTimeoutError(err) {
+				streamLogger.Warn("no HD data from camera, trying SD fallback",
+					"camera_id", r.cfg.CameraID, "model", r.cfg.Model)
+				client.Conn.Close()
+				_ = client.StopMedia()
+				return r.connectAndRecordWithQuality(ctx, missURL, "sd")
+			}
 			return fmt.Errorf("miss read: %w", err)
 		}
+
+		firstPacket = false
 
 		if pkt.CodecID != missCodecH264 && pkt.CodecID != missCodecH265 {
 			continue
@@ -348,4 +363,10 @@ func nextBackoff(current, max time.Duration) time.Duration {
 		return max
 	}
 	return next
+}
+
+// isTimeoutError checks if the error is caused by a read timeout from CS2.
+// This indicates the connection is alive but no data is being received.
+func isTimeoutError(err error) bool {
+	return strings.Contains(err.Error(), "no media data") || strings.Contains(err.Error(), "no command data")
 }

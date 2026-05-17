@@ -336,6 +336,7 @@ func TestMISSModelConstants(t *testing.T) {
 	require.Equal(t, "chuangmi.camera.046c04", ModelC200)
 	require.Equal(t, "chuangmi.camera.72ac1", ModelC300)
 	require.Equal(t, "isa.camera.isc5c1", ModelXiaofang)
+	require.Equal(t, "isa.camera.hlc8", ModelHLC8)
 }
 
 func TestMISSNewClientUnsupportedVendor(t *testing.T) {
