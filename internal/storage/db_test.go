@@ -890,11 +890,11 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	require.Equal(t, 1, onvifEndpointExists, "onvif_endpoint column must exist after Init")
 	require.Equal(t, 1, profileTokenExists, "profile_token column must exist after Init")
 
-	// Verify schema version is at least 6 (now 7 with stream_encoding)
+	// Verify schema version is at least 6 (now 8 with archive columns)
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "7", version)
+	require.Equal(t, "8", version)
 }
 
 func TestInsertRecordingWithRetry_Success(t *testing.T) {

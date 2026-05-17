@@ -61,6 +61,7 @@ type Recording struct {
 	FileSize   int64     `json:"file_size"`
 	FrameCount int       `json:"frame_count"`
 	Merged     bool      `json:"merged"`
+	Archived   bool      `json:"archived"`
 }
 
 type Segment struct {
@@ -89,6 +90,7 @@ type RecordingFilter struct {
 	Offset    int
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
+	Archived  *bool // nil = all, true = archived only, false = not archived
 }
 
 type RecorderStatus string
