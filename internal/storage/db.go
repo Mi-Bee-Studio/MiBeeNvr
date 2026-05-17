@@ -660,6 +660,28 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 	return res, nil
 }
 
+// ListExpiredArchivedRecordingsByCamera returns expired archived recordings for a specific camera.
+func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=1 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID, retentionDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.Archived); err != nil {
+			return nil, err
+		}
+		r.StartedAt = scanTime(startedAtStr)
+		r.EndedAt = scanTime(endedAtStr)
+		res = append(res, r)
+	}
+	return res, nil
+}
+
 func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
 	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 ORDER BY ended_at ASC LIMIT ?;`
 	rows, err := d.db.QueryContext(ctx, sqlstr, limit)
@@ -795,6 +817,13 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 func (d *DB) CountRecordings(ctx context.Context) (int, error) {
 	var count int
 	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM recordings;`).Scan(&count)
+	return count, err
+}
+
+// CountRecordingsByCamera returns the number of recordings for a specific camera.
+func (d *DB) CountRecordingsByCamera(ctx context.Context, cameraID string) (int, error) {
+	var count int
+	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM recordings WHERE camera_id=?", cameraID).Scan(&count)
 	return count, err
 }
 

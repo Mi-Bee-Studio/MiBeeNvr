@@ -67,11 +67,12 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce performs a single cleanup pass: time-based then disk-threshold.
+// RunOnce performs a single cleanup pass: time-based, archived, then disk-threshold.
 func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	if err := cm.timeBasedCleanup(ctx); err != nil {
 		logger.Error("time-based cleanup error", "error", err)
 	}
+	cm.archivedRetentionCleanup(ctx)
 	if err := cm.diskThresholdCleanup(ctx); err != nil {
 		logger.Error("disk-threshold cleanup error", "error", err)
 	}
@@ -188,4 +189,54 @@ func (cm *CleanupManager) deleteRecording(ctx context.Context, rec *model.Record
 		logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 	}
 	return nil
+}
+
+// archivedRetentionCleanup deletes expired archived recordings and cleans up empty archive groups.
+func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {
+	archivedCameras, err := cm.db.ListArchivedCameras(ctx)
+	if err != nil {
+		logger.Error("failed to list archived cameras", "error", err)
+		return
+	}
+
+	for _, cam := range archivedCameras {
+		// retention_days=0 means keep forever
+		if cam.ArchiveRetentionDays <= 0 {
+			continue
+		}
+
+		recordings, err := cm.db.ListExpiredArchivedRecordingsByCamera(ctx, cam.ID, cam.ArchiveRetentionDays)
+		if err != nil {
+			logger.Warn("failed to list expired archived recordings", "camera_id", cam.ID, "error", err)
+			continue
+		}
+
+		for _, rec := range recordings {
+			if err := cm.deleteRecording(ctx, &rec); err != nil {
+				logger.Warn("failed to delete archived recording", "recording_id", rec.ID, "error", err)
+				continue
+			}
+			logger.Info("deleted archived recording (retention)", "recording_id", rec.ID, "camera_id", cam.ID)
+			if cm.metrics != nil {
+				cm.metrics.CleanupDeleted.WithLabelValues("archive_retention").Add(1)
+			}
+		}
+
+		// Check if this archived camera has any recordings left
+		remaining, err := cm.db.CountRecordingsByCamera(ctx, cam.ID)
+		if err != nil {
+			logger.Warn("failed to count recordings for archived camera", "camera_id", cam.ID, "error", err)
+			continue
+		}
+		if remaining == 0 {
+			if err := cm.store.DeleteCameraDir(cam.ID); err != nil {
+				logger.Warn("failed to delete camera directory", "camera_id", cam.ID, "error", err)
+			}
+			if err := cm.db.DeleteCamera(ctx, cam.ID); err != nil {
+				logger.Warn("failed to delete archived camera", "camera_id", cam.ID, "error", err)
+				continue
+			}
+			logger.Info("cleaned up empty archive group", "camera_id", cam.ID)
+		}
+	}
 }
