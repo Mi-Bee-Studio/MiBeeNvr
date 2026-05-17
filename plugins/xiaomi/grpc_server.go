@@ -99,6 +99,9 @@ func (s *PluginServer) StartRecorder(cfg *gen.RecorderConfig, stream grpc.Server
 
 	// Build StreamRecorder config from the gRPC RecorderConfig options.
 	did := cfg.GetOptions()["did"]
+	if did == "" {
+		did = extractDID(cfg.GetUrl())
+	}
 	modelName := cfg.GetOptions()["model"]
 	if modelName == "" {
 		modelName = "unknown"
