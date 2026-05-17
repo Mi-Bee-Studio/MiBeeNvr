@@ -915,6 +915,29 @@ func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location
 	return err
 }
 
+// GetArchiveGroupStats returns recording count and total file size for an archived camera.
+func (d *DB) GetArchiveGroupStats(ctx context.Context, cameraID string) (count int, totalSize int64, err error) {
+	err = d.db.QueryRowContext(ctx,
+		"SELECT COUNT(*), COALESCE(SUM(file_size),0) FROM recordings WHERE camera_id=? AND archived=1",
+		cameraID).Scan(&count, &totalSize)
+	return
+}
+
+// SetArchiveRetention updates the archive_retention_days for an archived camera.
+func (d *DB) SetArchiveRetention(ctx context.Context, cameraID string, retentionDays int) error {
+	result, err := d.db.ExecContext(ctx,
+		"UPDATE cameras SET archive_retention_days=? WHERE id=? AND archived=1",
+		retentionDays, cameraID)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpsertCameraMerge writes per-camera merge config columns.
 // Pass nil pointers to leave fields unchanged (keep existing values).
 func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnabled *bool, mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge *string, mergeBatchLimit, mergeMinSegmentsToMerge *int) error {
