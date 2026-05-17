@@ -296,6 +296,7 @@ func (m *PluginManager) startPlugin(ctx context.Context, name, path string) erro
 		"version", info.GetVersion(),
 		"protocols", info.GetProtocols(),
 	)
+	m.pushPluginConfig(pluginCtx, name, grpcClient)
 	return nil
 }
 
@@ -436,6 +437,7 @@ func (m *PluginManager) monitorPlugin(ctx context.Context, name, path string) {
 		m.mu.Unlock()
 
 		backoff = DefaultInitBackoff
+		m.pushPluginConfig(m.ctx, name, newGrpcClient)
 		m.logger.Info("plugin restarted successfully",
 			"plugin", name,
 			"attempt", count,
@@ -490,6 +492,56 @@ func (m *PluginManager) checkAllPlugins(ctx context.Context) {
 	}
 }
 
+
+// pushPluginConfig reads cloud config from the plugin's config entry and pushes
+// it to the plugin via SetCloudConfig. This is non-fatal — the plugin may not
+// support cloud config.
+func (m *PluginManager) pushPluginConfig(ctx context.Context, name string, client gen.PluginServiceClient) {
+	entry, ok := m.config.Plugins[name]
+	if !ok || entry.Config == nil {
+		return
+	}
+
+	cfg := entry.Config
+
+	// Check if any cloud-related keys exist
+	hasCloud := false
+	for _, key := range []string{"user_id", "token", "region"} {
+		if _, ok := cfg[key]; ok {
+			hasCloud = true
+			break
+		}
+	}
+	if !hasCloud {
+		return
+	}
+
+	cloudCfg := &gen.CloudConfig{}
+	if v, ok := cfg["token"]; ok {
+		cloudCfg.ServiceToken = fmt.Sprintf("%v", v)
+	}
+	if v, ok := cfg["user_id"]; ok {
+		cloudCfg.UserId = fmt.Sprintf("%v", v)
+	}
+	if v, ok := cfg["region"]; ok {
+		cloudCfg.Region = fmt.Sprintf("%v", v)
+	}
+
+	pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := client.SetCloudConfig(pushCtx, cloudCfg)
+	if err != nil {
+		m.logger.Warn("failed to push cloud config to plugin (non-fatal)", "plugin", name, "error", err)
+		return
+	}
+	if !resp.GetSuccess() {
+		m.logger.Warn("plugin rejected cloud config (non-fatal)", "plugin", name, "message", resp.GetMessage())
+		return
+	}
+
+	m.logger.Debug("pushed cloud config to plugin", "plugin", name)
+}
 // InjectManagedPlugin adds a ManagedPlugin directly to the manager.
 // Intended for testing only — production code should use Start().
 func (m *PluginManager) InjectManagedPlugin(mp *ManagedPlugin) {
