@@ -859,6 +859,26 @@ func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
 	return nil
 }
 
+// ArchiveCameraDB marks a camera as archived in the database.
+func (d *DB) ArchiveCameraDB(ctx context.Context, cameraID string) error {
+	_, err := d.db.ExecContext(ctx,
+		"UPDATE cameras SET archived=1, archived_at=datetime('now') WHERE id=?",
+		cameraID)
+	return err
+}
+
+// ArchiveAllRecordings marks all non-archived recordings for a camera as archived.
+// Returns the number of rows affected.
+func (d *DB) ArchiveAllRecordings(ctx context.Context, cameraID string) (int64, error) {
+	result, err := d.db.ExecContext(ctx,
+		"UPDATE recordings SET archived=1 WHERE camera_id=? AND archived=0",
+		cameraID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // UpdateCameraMetadata updates DB-only metadata fields for a camera.
 func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error {
 	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`

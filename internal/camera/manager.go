@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
@@ -47,6 +48,7 @@ type CameraManager struct {
 	recorders  map[string]model.Recorder // camera_id → Recorder
 	metrics    *metrics.Metrics
 	pluginMgr  *plugin.PluginManager // gRPC plugin manager (nil = no plugins)
+	mergeMgr   *merge.MergeManager   // segment merge manager (nil = no merge)
 	mu         sync.RWMutex
 }
 
@@ -54,12 +56,15 @@ type CameraManager struct {
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
 	var pm *plugin.PluginManager
+	var mm *merge.MergeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
 			m = v
 		case *plugin.PluginManager:
 			pm = v
+		case *merge.MergeManager:
+			mm = v
 		}
 	}
 	return &CameraManager{
@@ -70,6 +75,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		recorders:  make(map[string]model.Recorder),
 		metrics:    m,
 		pluginMgr:  pm,
+		mergeMgr:   mm,
 	}
 }
 
@@ -437,6 +443,67 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		logger.Error("failed to persist config", "error", err)
 	}
 
+	return nil
+}
+
+// ArchiveCamera archives a camera: stops recorder, merges segments, marks archived in DB,
+// marks all recordings archived, and removes from config YAML.
+// The camera row and recordings are preserved in the database.
+// Merge failure is non-blocking (logged but continues).
+func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Verify camera exists in config
+	idx := -1
+	for i, cam := range cm.cfg.Cameras {
+		if cam.ID == cameraID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("camera %q not found", cameraID)
+	}
+
+	// 1. Stop recorder if running
+	if rec, ok := cm.recorders[cameraID]; ok {
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+		}
+		delete(cm.recorders, cameraID)
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	// 2. Merge segments (non-blocking — failure is logged but does not stop archival)
+	if cm.mergeMgr != nil {
+		if err := cm.mergeMgr.MergeCamera(ctx, cameraID); err != nil {
+			logger.Warn("merge before archive failed", "camera_id", cameraID, "error", err)
+		}
+	}
+
+	// 3. Mark camera archived in DB
+	if err := cm.db.ArchiveCameraDB(ctx, cameraID); err != nil {
+		return fmt.Errorf("failed to archive camera in DB: %w", err)
+	}
+
+	// 4. Mark all recordings archived in DB
+	affected, err := cm.db.ArchiveAllRecordings(ctx, cameraID)
+	if err != nil {
+		logger.Warn("failed to archive recordings", "camera_id", cameraID, "error", err)
+	} else {
+		logger.Info("archived recordings", "camera_id", cameraID, "count", affected)
+	}
+
+	// 5. Remove from in-memory config slice and persist
+	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
+	if err := cm.persistConfig(); err != nil {
+		logger.Error("failed to persist config after archive", "camera_id", cameraID, "error", err)
+	}
+
+	logger.Info("archived camera", "camera_id", cameraID)
 	return nil
 }
 
