@@ -15,6 +15,7 @@ export interface Recording {
   file_size: number;
   frame_count: number;
   merged: boolean;
+  archived?: boolean;
 }
 
 export interface FrameInfo {
@@ -306,6 +307,7 @@ export async function listRecordings(params: {
   sort_by?: string;
   order?: string;
   search?: string;
+  archived?: boolean;
   signal?: AbortSignal;
 } = {}): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
@@ -320,6 +322,7 @@ export async function listRecordings(params: {
   if (params.sort_by) queryParams.set('sort_by', params.sort_by);
   if (params.order) queryParams.set('order', params.order);
   if (params.search) queryParams.set('search', params.search);
+  if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';
@@ -809,4 +812,46 @@ export function getProtocolCapabilities(
   const info = protocolsMap.get(baseId);
   if (info) return info.capabilities;
   return { hls: false, ptz: false, snapshot: false, discovery: false, auth: false };
+}
+
+// Archive endpoints
+export interface ArchiveGroup {
+  id: string;
+  name: string;
+  recording_count: number;
+  total_size: number;
+  archived_at: string;
+  archive_retention_days: number;
+}
+
+export interface ArchiveListResponse {
+  archives: ArchiveGroup[];
+}
+
+export async function listArchives(signal?: AbortSignal): Promise<ArchiveListResponse> {
+  return apiRequest<ArchiveListResponse>('/archives', { signal });
+}
+
+export async function listArchiveRecordings(cameraID: string, params?: { offset?: number; limit?: number; signal?: AbortSignal }): Promise<RecordingListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.offset !== undefined) queryParams.set('offset', String(params.offset));
+  if (params?.limit !== undefined) queryParams.set('limit', String(params.limit));
+  const query = queryParams.toString();
+  const endpoint = query ? `/archives/${cameraID}/recordings?${query}` : `/archives/${cameraID}/recordings`;
+  return apiRequest<RecordingListResponse>(endpoint, { signal: params?.signal });
+}
+
+export async function deleteArchiveGroup(cameraID: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/archives/${cameraID}`, { method: 'DELETE' });
+}
+
+export async function deleteArchiveRecording(cameraID: string, recordingID: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/archives/${cameraID}/recordings/${recordingID}`, { method: 'DELETE' });
+}
+
+export async function setArchiveRetention(cameraID: string, retentionDays: number): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/archives/${cameraID}/retention`, {
+    method: 'PUT',
+    body: JSON.stringify({ retention_days: retentionDays }),
+  });
 }
