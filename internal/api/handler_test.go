@@ -1684,8 +1684,8 @@ func TestHandleDeleteCamera(t *testing.T) {
 	}
 	var resp map[string]string
 	parseJSON(t, rr, &resp)
-	if resp["status"] != "deleted" {
-		t.Fatalf("expected status 'deleted', got %s", resp["status"])
+	if resp["status"] != "archived" {
+		t.Fatalf("expected status 'archived', got %s", resp["status"])
 	}
 }
 
