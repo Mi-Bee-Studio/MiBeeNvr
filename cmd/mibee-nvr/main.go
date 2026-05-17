@@ -348,14 +348,7 @@ func main() {
 		}
 	}
 
-	// Camera manager
-	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, pluginMgr)
-
-	// HLS manager
-	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
- 
-	// Merge manager
+	// Merge manager (created before camera manager so ArchiveCamera can use it)
 	mergeMgr := merge.NewMergeManager(
 		db, store,
 		func() config.MergeConfig { return cfg.Merge },
@@ -369,6 +362,13 @@ func main() {
 		},
 		func() []config.CameraConfig { return cfg.Cameras },
 	)
+
+	// Camera manager
+	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, pluginMgr, mergeMgr)
+
+	// HLS manager
+	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
+	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
 
 	// API handler — Routes() already includes /api prefix
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
