@@ -1146,7 +1146,7 @@ func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
 			ArchiveRetentionDays: cam.ArchiveRetentionDays,
 		})
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"archives": items})
 }
 
 func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Request) {
