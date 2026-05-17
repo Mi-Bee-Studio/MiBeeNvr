@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -138,6 +139,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/snapshot", h.handleSnapshot)
 				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+				r.Post("/start", h.handleStartCamera)
+				r.Post("/stop", h.handleStopCamera)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -166,6 +169,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/captcha", h.handleXiaomiCaptcha)
 			r.Post("/verify", h.handleXiaomiVerify)
 			r.Get("/devices", h.handleXiaomiDevices)
+			r.Post("/sync", h.handleXiaomiSync)
 		})
 	})
 
@@ -1035,6 +1039,46 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("failed to delete camera from DB", "camera_id", id, "error", dbErr)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if h.camMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		return
+	}
+	if err := h.camMgr.StartCamera(r.Context(), id); err != nil {
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "not found"):
+			writeError(w, http.StatusNotFound, errMsg)
+		case strings.Contains(errMsg, "disabled"):
+			writeError(w, http.StatusBadRequest, errMsg)
+		case strings.Contains(errMsg, "already running"):
+			writeError(w, http.StatusConflict, errMsg)
+		default:
+			writeError(w, http.StatusInternalServerError, errMsg)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if h.camMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		return
+	}
+	if err := h.camMgr.StopCamera(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 // --- ONVIF camera management endpoints ---
@@ -2053,6 +2097,75 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleXiaomiSync syncs Xiaomi cloud device info (name, model, MAC) to NVR camera config.
+// It fetches all devices from Xiaomi cloud, matches them to existing NVR cameras by DID,
+// and updates name, model, brand, and serial_number (MAC). Returns count of synced cameras.
+func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+	if h.config == nil || h.config.Xiaomi.Token == "" {
+		writeError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+
+	devices, err := h.cloudProxy.ListDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		return
+	}
+
+	// Build DID → CloudDeviceInfo lookup
+	deviceByDID := make(map[string]*CloudDeviceInfo, len(devices))
+	for i := range devices {
+		deviceByDID[devices[i].DID] = &devices[i]
+	}
+
+	synced := 0
+	for i := range h.config.Cameras {
+		cam := &h.config.Cameras[i]
+		if cam.Protocol != "xiaomi" {
+			continue
+		}
+
+		did := cam.DID
+		if did == "" {
+			did = extractDIDFromURL(cam.URL)
+		}
+		if did == "" {
+			continue
+		}
+
+		dev, ok := deviceByDID[did]
+		if !ok {
+			continue
+		}
+
+		updates := camera.CameraUpdate{
+			Name:         &dev.Name,
+			Model:        &dev.Model,
+			Brand:        strPtr("Xiaomi"),
+			SerialNumber: &dev.MAC,
+		}
+
+		if _, err := h.camMgr.UpdateCamera(context.Background(), cam.ID, updates); err != nil {
+			logger.Warn("failed to sync xiaomi camera", "camera_id", cam.ID, "did", did, "error", err)
+			continue
+		}
+		synced++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"synced": synced,
+		"total":  len(deviceByDID),
+	})
+}
+
 // saveXiaomiToken persists auth result to config file.
 func (h *Handler) saveXiaomiToken(result *CloudAuthResult) {
 	if h.config == nil || result == nil {
@@ -2479,4 +2592,18 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		Uptime:    formatUptime(time.Since(appStartTime)),
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// extractDIDFromURL parses the DID from a xiaomi:// URL.
+func extractDIDFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// strPtr returns a pointer to the given string.
+func strPtr(s string) *string {
+	return &s
 }
