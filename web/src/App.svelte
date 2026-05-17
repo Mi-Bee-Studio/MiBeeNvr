@@ -10,6 +10,7 @@
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Plugins from './routes/Plugins.svelte';
+  import Archives from './routes/Archives.svelte';
 
   import Header from './components/Header.svelte';
 
@@ -59,6 +60,10 @@
 
     if (segments[0] === 'plugins') {
       return { route: 'plugins', params: {} };
+    }
+
+    if (segments[0] === 'archives') {
+      return { route: 'archives', params: {} };
     }
 
 
@@ -119,6 +124,8 @@
       <Settings />
     {:else if currentRoute === 'dashboard'}
       <Dashboard />
+    {:else if currentRoute === 'archives'}
+      <Archives />
     {:else if currentRoute === 'plugins'}
       <Plugins />
     {/if}
