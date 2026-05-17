@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, createCamera, updateCamera, deleteCamera, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
+  import { listCameras, createCamera, updateCamera, deleteCamera, startCamera, stopCamera, getMergeConfig, updateMergeConfig, deleteCameraMergeConfig, getONVIFDeviceDetail, xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
   import type { Camera, CreateCameraRequest, UpdateCameraRequest, DiscoveredDevice, DeviceProfile, MergeConfig, XiaomiDevice, XiaomiAuthResponse, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle } from 'lucide-svelte';
+  import { Eye, EyeOff, Pencil, Camera as CameraIcon, AlertCircle, Play, Square, RotateCw, RefreshCw } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
 
@@ -45,6 +45,7 @@
   let showPassword = $state(false);
   let formEnabled = $state(true);
   let saving = $state(false);
+  let syncing = $state(false);
   let formDescription = $state('');
   let formLocation = $state('');
   let formBrand = $state('');
@@ -305,6 +306,50 @@
     } catch (e) {
       showFeedback(t('cameras.failedDelete'), 'error');
       deletingCamera = null;
+    }
+  }
+
+  async function handleStartCamera(camera: Camera) {
+    try {
+      await startCamera(camera.id);
+      showToast(t('cameras.started'), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.failedStart'), 'error');
+    }
+  }
+
+  async function handleStopCamera(camera: Camera) {
+    try {
+      await stopCamera(camera.id);
+      showToast(t('cameras.stopped'), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.failedStop'), 'error');
+    }
+  }
+
+  async function handleRestartCamera(camera: Camera) {
+    try {
+      await stopCamera(camera.id);
+      await startCamera(camera.id);
+      showToast(t('cameras.cameraUpdated'), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.failedStart'), 'error');
+    }
+  }
+
+  async function handleSyncCloud() {
+    syncing = true;
+    try {
+      const result = await xiaomiSync();
+      showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.syncFailed'), 'error');
+    } finally {
+      syncing = false;
     }
   }
 
@@ -569,6 +614,10 @@
         {/if}
         <button onclick={openAddForm} class="btn btn-primary">
           + {t('cameras.addCamera')}
+        </button>
+        <button onclick={handleSyncCloud} class="btn btn-ghost" disabled={syncing}>
+          <RefreshCw size={16} class={syncing ? 'animate-spin' : ''} />
+          {t('cameras.syncCloud')}
         </button>
       </div>
     </div>
@@ -1017,16 +1066,50 @@
                         {/if}
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        <span class="badge {formatTimeAgo(camera.last_seen).color}">{formatTimeAgo(camera.last_seen).text}</span>
-                        {#if camera.status}
-                          <div class="text-xs th-text-muted mt-0.5">{camera.status}</div>
+                        {#if camera.status === 'recording'}
+                          <span class="badge badge-success">{t('cameras.statusRecording')}</span>
+                        {:else if camera.status === 'error'}
+                          <span class="badge badge-error">{t('cameras.statusError')}</span>
+                        {:else if camera.status === 'reconnecting'}
+                          <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
+                        {:else}
+                          <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
                         {/if}
+                        <div class="text-xs th-text-muted mt-0.5">{formatTimeAgo(camera.last_seen).text}</div>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{protocolsMap.get(camera.protocol)?.label || t('cameras.protocol.' + camera.protocol) || camera.protocol}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm th-text-secondary">{camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : '-'}</td>
                       <td class="px-6 py-4 text-sm th-text-secondary max-w-xs truncate">{camera.url}</td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <div class="flex gap-2 items-center">
+                          {#if camera.status === 'recording' || camera.status === 'reconnecting'}
+                            <button
+                              onclick={() => handleStopCamera(camera)}
+                              class="btn btn-ghost px-2 py-1 text-sm flex items-center gap-1"
+                              title={t('cameras.stop')}
+                            >
+                              <Square size={14} />
+                              {t('cameras.stop')}
+                            </button>
+                          {:else}
+                            <button
+                              onclick={() => handleStartCamera(camera)}
+                              class="btn btn-ghost px-2 py-1 text-sm flex items-center gap-1"
+                              title={t('cameras.start')}
+                            >
+                              <Play size={14} />
+                              {t('cameras.start')}
+                            </button>
+                          {/if}
+                          {#if camera.status === 'recording' || camera.status === 'error' || camera.status === 'reconnecting'}
+                            <button
+                              onclick={() => handleRestartCamera(camera)}
+                              class="btn btn-ghost px-2 py-1 text-sm"
+                              title={t('cameras.restart')}
+                            >
+                              <RotateCw size={14} />
+                            </button>
+                          {/if}
                           {#if protocolsMap.get(normalizeProtocol(camera.protocol))?.capabilities?.hls}
                             <a
                               href="#/live/{camera.id}"

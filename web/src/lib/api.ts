@@ -443,6 +443,18 @@ export async function deleteCamera(id: string): Promise<void> {
   });
 }
 
+export async function startCamera(id: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${id}/start`, {
+    method: 'POST',
+  });
+}
+
+export async function stopCamera(id: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
+    method: 'POST',
+  });
+}
+
 
 // Stats endpoint
 export async function getStats(): Promise<StorageStats> {
@@ -667,6 +679,10 @@ export async function xiaomiVerify(sessionId: string, ticket: string): Promise<X
     method: 'POST',
     body: JSON.stringify({ session_id: sessionId, ticket }),
   });
+}
+
+export async function xiaomiSync(): Promise<{ synced: number; total: number }> {
+  return apiRequest('/xiaomi/sync', { method: 'POST' });
 }
 
 // Plugin API
