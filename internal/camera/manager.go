@@ -81,7 +81,12 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	if cm.pluginMgr != nil {
 		if client := cm.pluginMgr.GetClientForProtocol(cam.Protocol); client != nil {
 			receiver := plugin.NewFrameReceiver(cm.store, cm.db, cm.metrics, cam.ID, segDur)
-			return plugin.NewGRPCRecorderAdapter(client, receiver, cam, segDur)
+			adapter := plugin.NewGRPCRecorderAdapter(client, receiver, cam, segDur)
+			// Sync detected codec back to config so web UI shows actual encoding.
+			if cam.Encoding == "" || cam.Encoding == "h264" || cam.Encoding == "h265" {
+				adapter.SetOnCodecDetected(cm.onPluginCodecDetected)
+			}
+			return adapter
 		}
 	}
 
@@ -192,6 +197,33 @@ func (cm *CameraManager) persistConfig() error {
 		}
 	}
 	return nil
+}
+
+// onPluginCodecDetected is called by gRPC adapters when the runtime codec is first detected.
+// It updates the camera config's encoding field so the web UI reflects the actual codec.
+func (cm *CameraManager) onPluginCodecDetected(cameraID string, codec string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	for i := range cm.cfg.Cameras {
+		cam := &cm.cfg.Cameras[i]
+		if cam.ID != cameraID {
+			continue
+		}
+		if cam.Encoding == codec {
+			return // already correct
+		}
+		old := cam.Encoding
+		cam.Encoding = codec
+		if err := cm.persistConfig(); err != nil {
+			logger.Warn("failed to persist codec update", "camera_id", cameraID, "error", err)
+		}
+		if err := cm.db.UpsertCamera(context.Background(), cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+			logger.Warn("failed to update camera encoding in DB", "camera_id", cameraID, "error", err)
+		}
+		logger.Info("updated camera encoding from runtime detection", "camera_id", cameraID, "old", old, "new", codec)
+		return
+	}
 }
 
 // Start creates and starts recorders for all enabled cameras in the config.
@@ -586,6 +618,70 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		segDur = recorder.DefaultSegmentDur
 	}
 	return cm.startRecorder(ctx, *cam, segDur)
+}
+
+// StartCamera manually starts the recorder for the given camera.
+func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Find camera config
+	var cam *config.CameraConfig
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			cam = &cm.cfg.Cameras[i]
+			break
+		}
+	}
+	if cam == nil {
+		return fmt.Errorf("camera %q not found", cameraID)
+	}
+	if !cam.Enabled {
+		return fmt.Errorf("camera %q is disabled", cameraID)
+	}
+
+	// Check if already running — stale recorders (error/stopped) can be restarted
+	if rec, ok := cm.recorders[cameraID]; ok {
+		status := rec.Status()
+		if status == model.StatusRecording || status == model.StatusReconnecting {
+			return fmt.Errorf("camera %q already running", cameraID)
+		}
+		// Stale recorder — stop and remove so we can start fresh
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
+		}
+		delete(cm.recorders, cameraID)
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	if err != nil {
+		segDur = recorder.DefaultSegmentDur
+	}
+	return cm.startRecorder(ctx, *cam, segDur)
+}
+
+// StopCamera manually stops the recorder for the given camera.
+func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	rec, ok := cm.recorders[cameraID]
+	if !ok {
+		return fmt.Errorf("camera %q not found", cameraID)
+	}
+
+	if err := rec.Stop(); err != nil {
+		logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+	}
+	delete(cm.recorders, cameraID)
+	if cm.metrics != nil {
+		cm.metrics.ActiveCameras.Dec()
+	}
+	logger.Info("stopped recorder for camera", "camera_id", cameraID)
+	return nil
 }
 
 // GetONVIFPTZController returns a PTZController for the given ONVIF camera.
