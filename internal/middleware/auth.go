@@ -56,14 +56,14 @@ func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(h
 				}
 			}
 
-		if strings.TrimSpace(effectiveHash) == "" {
-			// No password configured — reject all requests with setup guidance
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
-			return
-		}
+			if strings.TrimSpace(effectiveHash) == "" {
+				// No password configured — reject all requests with setup guidance
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
+				return
+			}
 
 			user, pass, ok := r.BasicAuth()
 			if !ok || user != username || !CheckPassword(pass, effectiveHash) {
