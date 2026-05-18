@@ -10,9 +10,6 @@ import (
 )
 
 // LocalXiaomiAuth implements CloudAuthProxy by calling the internal xiaomi package directly.
-// This is the in-process bridge for Xiaomi cloud authentication.
-// This is the in-process bridge used until the xiaomi plugin runs as a separate
-// gRPC process.
 type LocalXiaomiAuth struct {
 	cfg *config.Config
 }
@@ -26,7 +23,7 @@ func NewLocalXiaomiAuth(cfg *config.Config) *LocalXiaomiAuth {
 	return &LocalXiaomiAuth{cfg: cfg}
 }
 
-// SetCloudConfig pushes credentials to the xiaomi plugin's in-process state.
+// SetCloudConfig pushes credentials to the xiaomi package's cloud state.
 func (a *LocalXiaomiAuth) SetCloudConfig(_ context.Context, userID, token, region string) error {
 	xiaomi.SetCloudConfig(config.XiaomiConfig{
 		UserID: userID,

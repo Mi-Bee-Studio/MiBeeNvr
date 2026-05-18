@@ -31,10 +31,11 @@ type CloudDeviceInfo struct {
 }
 
 // CloudAuthProxy abstracts cloud authentication operations.
+// The API handler uses this interface to proxy cloud auth calls to the xiaomi package.
 // The main process uses this interface to proxy cloud auth API calls,
 // delegating to either a local in-process implementation or a gRPC plugin.
 type CloudAuthProxy interface {
-	// SetCloudConfig pushes cloud credentials (user_id, token, region) to the
+	// SetCloudConfig pushes cloud credentials (user_id, token, region) to the xiaomi package.
 	// underlying implementation (plugin process or local state).
 	SetCloudConfig(ctx context.Context, userID, token, region string) error
 
