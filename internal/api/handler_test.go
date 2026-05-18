@@ -2465,3 +2465,47 @@ func TestCameraXiaomiProtocol(t *testing.T) {
 	require.Equal(t, "h265", cam.Encoding)
 	require.NotEmpty(t, cam.ID)
 }
+
+func TestHandleCreateCamera_InvalidURL(t *testing.T) {
+	h, _, _ := newTestCamHandler(t)
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{name: "missing scheme", body: `{"name":"Cam","protocol":"rtsp","url":"nohost"}`, wantErr: "invalid URL format"},
+		{name: "empty host", body: `{"name":"Cam","protocol":"rtsp","url":"rtsp://"}`, wantErr: "invalid URL format"},
+		{name: "garbage", body: `{"name":"Cam","protocol":"rtsp","url":"://"}`, wantErr: "invalid URL format"},
+		{name: "spaces only", body: `{"name":"Cam","protocol":"rtsp","url":"   "}`, wantErr: "invalid URL format"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := doRequest(t, h.Routes(), "POST", "/api/cameras", strings.NewReader(tc.body), "", "")
+			require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
+			var resp map[string]string
+			parseJSON(t, rr, &resp)
+			require.Equal(t, tc.wantErr, resp["error"])
+		})
+	}
+}
+
+func TestHandleCreateCamera_ValidURLs(t *testing.T) {
+	h, _, _ := newTestCamHandler(t)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "rtsp", body: `{"name":"Cam","protocol":"rtsp","url":"rtsp://192.168.1.100:554/stream"}`},
+		{name: "http", body: `{"name":"Cam","protocol":"http","url":"http://camera/snap.jpg"}`},
+		{name: "https", body: `{"name":"Cam","protocol":"http","url":"https://camera/snap.jpg"}`},
+		{name: "xiaomi", body: `{"name":"Xiaomi","protocol":"xiaomi","url":"xiaomi://655448418"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := doRequest(t, h.Routes(), "POST", "/api/cameras", strings.NewReader(tc.body), "", "")
+			require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+		})
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -825,6 +826,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
+	// Validate URL format for non-ONVIF cameras
+	if body.Protocol != "onvif" && !validateURL(body.URL) {
+		writeError(w, http.StatusBadRequest, "invalid URL format")
+		return
+	}
 	// Normalize protocol — handle legacy combined formats
 	proto := body.Protocol
 	enc := body.Encoding
@@ -981,6 +987,16 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
+	}
+
+	// Validate URL format if URL is being updated
+	if body.URL != nil && *body.URL != "" {
+		if body.Protocol == nil || *body.Protocol != "onvif" {
+			if !validateURL(*body.URL) {
+				writeError(w, http.StatusBadRequest, "invalid URL format")
+				return
+			}
+		}
 	}
 
 	// For ONVIF cameras, sync url and onvif_endpoint
@@ -1367,6 +1383,10 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "IP address is required")
 		return
 	}
+	if !validateIP(ip) {
+		writeError(w, http.StatusBadRequest, "invalid IP address format")
+		return
+	}
 	ctx := r.Context()
 	client := onvif.NewClient(fmt.Sprintf("http://%s/onvif/device_service", ip), "", "")
 	if err := client.Connect(ctx); err != nil {
@@ -1587,6 +1607,27 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func isImageFile(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
+}
+
+// validateURL checks that a URL has a valid scheme and non-empty host.
+// This is a basic sanity check — specific protocol validation is handled separately.
+func validateURL(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	return true
+}
+
+// validateIP checks that a string is a valid IPv4 address.
+func validateIP(ip string) bool {
+	return net.ParseIP(ip) != nil
 }
 
 // noopAuthMW is a middleware that passes all requests through (no auth).
