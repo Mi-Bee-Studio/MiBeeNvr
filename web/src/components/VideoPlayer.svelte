@@ -156,7 +156,7 @@
     if (!_url || !_proto) return;
 
     // Only HLS protocols
-    const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp'];
+    const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp', 'xiaomi'];
     if (!hlsProtocols.includes(_proto)) return;
 
     destroyCurrentHls();
