@@ -512,12 +512,39 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 }
 
 // forwardHLS sends a NALU to the HLS callback if set (non-blocking).
+// For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended
+// so the HLS DTS extractor receives a complete access unit.
 func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 	r.hlsMu.Lock()
 	cb := r.onHLSFrame
 	r.hlsMu.Unlock()
-	if cb != nil {
-		pts := time.Since(r.streamStart).Nanoseconds()
+	if cb == nil {
+		return
+	}
+	// Convert wall-clock duration to 90kHz ticks (RTP timestamp units).
+	// HLS manager uses ClockRate=90000, so PTS must be in 90kHz ticks,
+	// not nanoseconds. This matches built-in H264/H265 recorders which
+	// pass RTP timestamps directly.
+	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
+
+	switch r.codec {
+	case model.FormatH264:
+		naluType := nalu[0] & 0x1F
+		if naluType == 5 && r.sps != nil && r.pps != nil {
+			// IDR frame: prepend SPS+PPS for complete AU
+			cb(pts, [][]byte{r.sps, r.pps, nalu})
+		} else {
+			cb(pts, [][]byte{nalu})
+		}
+	case model.FormatH265:
+		naluType := (nalu[0] >> 1) & 0x3F
+		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
+			// IDR frame: prepend VPS+SPS+PPS for complete AU
+			cb(pts, [][]byte{r.vps, r.sps, r.pps, nalu})
+		} else {
+			cb(pts, [][]byte{nalu})
+		}
+	default:
 		cb(pts, [][]byte{nalu})
 	}
 }

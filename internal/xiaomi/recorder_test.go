@@ -364,7 +364,8 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	nalu := []byte{0x65, 0x01, 0x02}
 	r.forwardHLS(nalu)
 
-	require.True(t, receivedPTS > 0)
+	// PTS is in 90kHz ticks; may be 0 for sub-millisecond durations (integer truncation)
+	require.True(t, receivedPTS >= 0, "PTS should be non-negative")
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, nalu, receivedAU[0])
 }
