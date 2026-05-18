@@ -1,13 +1,19 @@
 # MiBee NVR Configuration
 # Copy to mibee-nvr.yaml and customize for your setup
 # Or use: ./mibee-nvr init --password <your-password>
+#
+# All durations use Go duration format: 30s, 5m, 1h, 24h
+# Camera IDs must be unique and kebab-case (e.g., "front-door")
+# Enables, ports, and thresholds are validated on startup
 
+# HTTP server listen address (default: ":9090")
 server:
   listen: ":9090"
 
+# Storage settings
 storage:
-  root_dir: "/var/lib/mibee-nvr"
-  segment_duration: "30s"
+  root_dir: "/var/lib/mibee-nvr"   # Recording storage directory
+  segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
 
 # Authentication
 # Option 1: Set password_hash (generate with: mibee-nvr hash-password <pw>)
@@ -18,12 +24,15 @@ auth:
   # password: ""      # Or set plaintext here (auto-hashed on first start)
 
 # Camera configuration — add your cameras here
+# Each camera must have a unique ID and valid URL with scheme + host
+# Supported protocols: rtsp, http, onvif, xiaomi
+# Supported encodings: h264, h265, mjpeg, jpeg
 cameras: []
 # Example cameras:
 # cameras:
 #   - id: "front-door"
 #     name: "Front Door"
-#     protocol: "rtsp"        # Transport: rtsp, http, onvif
+#     protocol: "rtsp"        # Transport: rtsp, http, onvif, xiaomi
 #     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
 #     url: "rtsp://192.168.1.100:554/stream"
 #     enabled: true
@@ -37,46 +46,67 @@ cameras: []
 #     name: "Xiaomi Camera"
 #     protocol: "xiaomi"
 #     encoding: "h264"
-#     did: "xiaomi_device_id"
-#     vendor: "cs2"
+#     did: "xiaomi_device_id"      # Xiaomi Device ID
+#     vendor: "cs2"                # Transport vendor: "cs2" (default)
 #     enabled: true
+
 # Xiaomi cloud account settings (required for xiaomi cameras)
 # xiaomi:
 #   user_id: ""    # Populated after first login
 #   token: ""      # Xiaomi passToken (obtained via /api/xiaomi/auth)
 #   region: "cn"   # Region: cn, sg, de, etc.
 
-
+# Cleanup — retention and disk threshold policies
+# Cleanup runs on a schedule and removes old recordings
 cleanup:
-  retention_days: 30
-  check_interval: "1h"
-  disk_threshold_percent: 95
+  retention_days: 30               # Delete recordings older than N days (1-3650)
+  check_interval: "1h"             # How often to check for expired recordings
+  disk_threshold_percent: 95       # Start cleanup when disk usage exceeds N% (50-99)
 
+# Segment merging — combine short segments into longer recordings
+# Only active when enabled: true. All duration fields are required when enabled.
 merge:
-  enabled: false
-  check_interval: "1h"
-  window_size: "1h"
-  batch_limit: 200
-  min_segment_age: "10m"
-  min_segments_to_merge: 3
+  enabled: false                   # Enable segment merging
+  check_interval: "1h"             # How often to check for merge candidates
+  window_size: "1h"                # Time window for merging segments
+  batch_limit: 200                 # Max segments to merge in one batch
+  min_segment_age: "10m"           # Minimum age before a segment can be merged
+  min_segments_to_merge: 3         # Minimum segments required to trigger a merge
 
+# FTP server — provides file access over FTP protocol
+# Configurable port and passive port range
 ftp:
-  enabled: true
-  port: 2121
-  passive_port_range: "2122-2140"
+  enabled: true                    # Enable FTP server (default: true)
+  port: 2121                       # FTP control port (1-65535)
+  passive_port_range: "2122-2140"  # Passive mode port range
 
+# MQTT trigger-based recording for smart home integration
+# When enabled, subscribe to topic for recording triggers
 mqtt:
-  enabled: false
-  broker: "tcp://localhost:1883"
-  topic: "mibeenr/trigger"
-  client_id: "mibee-nvr"
-  username: ""   # MQTT broker authentication (optional)
-  password: ""   # MQTT broker password (optional, auto-encrypted if encryption key is set)
-webdav:
-  enabled: true
-  path_prefix: "/dav"
-  read_write: false
+  enabled: false                   # Enable MQTT client
+  broker: "tcp://localhost:1883"   # MQTT broker URL
+  topic: "mibeenr/trigger"         # MQTT topic to subscribe to
+  client_id: "mibee-nvr"           # MQTT client ID
+  username: ""                     # MQTT broker authentication (optional)
+  password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)
 
+# WebDAV server — file access over WebDAV protocol
+# Shares recordings directory over HTTP
+webdav:
+  enabled: true                    # Enable WebDAV server (default: true)
+  path_prefix: "/dav"              # URL path prefix for WebDAV access
+  read_write: false                # Allow write operations (PUT, MKCOL, DELETE, etc.)
+
+# HLS streaming — on-demand live view via Web UI
+# RPi constraint: max 4 concurrent streams
 hls:
-  write_buffer_size: 40
-  segment_max_size_mb: 10
+  write_buffer_size: 40            # Async frame buffer per stream (default: 100)
+  segment_max_size_mb: 10          # HLS segment max size in MB (default: 10)
+  segment_count: 7                 # Segments per stream (range: 3-10, default: 7)
+  max_streams: 4                   # Max concurrent HLS streams (range: 1-20, default: 4)
+
+# Observability — logging and debugging
+observability:
+  log_level: "info"                # Log level: debug, info, warn, error (default: info)
+  log_format: "text"               # Log format: json or text (default: text)
+  # enable_pprof: false            # Enable pprof debug endpoints (default: false)
