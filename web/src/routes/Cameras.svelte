@@ -197,7 +197,7 @@
     formModel = camera.model || '';
     formSerialNumber = camera.serial_number || '';
     formRetentionDays = camera.retention_days || 0;
-    formStreamEncoding = (camera as any).stream_encoding || '';
+    formStreamEncoding = camera.stream_encoding || '';
     validationErrors = {};
     showForm = true;
 
