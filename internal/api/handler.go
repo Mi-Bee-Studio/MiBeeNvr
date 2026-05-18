@@ -25,18 +25,17 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
-
-	gen "github.com/Mi-Bee-Studio/MiBeeNvr/plugin/proto/gen"
 )
 
 var logger = slog.Default().With("component", "api")
 
-var appStartTime = time.Now()
 
+
+
+var appStartTime = time.Now()
 // HealthCheck represents the result of a single health check.
 type HealthCheck struct {
 	Status  string `json:"status"` // "ok" | "warning" | "error"
@@ -94,11 +93,10 @@ type Handler struct {
 	snapshots  map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr   *merge.MergeManager
 	cloudProxy CloudAuthProxy
-	pluginMgr  *plugin.PluginManager
 }
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, pluginMgr *plugin.PluginManager) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, pluginMgr: pluginMgr}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -156,12 +154,6 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
-		r.Route("/api/plugins", func(r chi.Router) {
-			r.Get("/", h.handlePlugins)
-			r.Get("/{name}", h.handleGetPlugin)
-			r.Post("/{name}/restart", h.handleRestartPlugin)
-			r.Get("/{name}/capabilities", h.handleGetPluginCapabilities)
-		})
 		r.Get("/api/protocols", h.handleProtocols)
 		// Archive endpoints
 		r.Route("/api/archives", func(r chi.Router) {
@@ -1597,7 +1589,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
 }
 
 // --- Test helper exported for handler_test.go ---
@@ -1610,7 +1602,7 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(username, passwordHash, "")
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
 }
 
 // --- HLS streaming endpoints ---
@@ -2436,191 +2428,6 @@ func verificationToResponse(v *CloudVerificationRequired) map[string]any {
 	return resp
 }
 
-// --- Plugin management endpoints ---
-
-// codecToString maps a proto Codec to a lowercase string.
-func codecToString(c gen.Codec) string {
-	switch c {
-	case gen.Codec_CODEC_H264:
-		return "h264"
-	case gen.Codec_CODEC_H265:
-		return "h265"
-	case gen.Codec_CODEC_MJPEG:
-		return "mjpeg"
-	default:
-		return ""
-	}
-}
-
-// pluginJSON is the JSON representation of a plugin for the API.
-type pluginJSON struct {
-	Name               string            `json:"name"`
-	Version            string            `json:"version"`
-	Status             string            `json:"status"`
-	Protocols          []string          `json:"protocols"`
-	Capabilities       *capabilitiesJSON `json:"capabilities,omitempty"`
-	SupportedEncodings []string          `json:"supported_encodings"`
-	UptimeSeconds      float64           `json:"uptime_seconds"`
-	RestartCount       int               `json:"restart_count"`
-}
-
-type capabilitiesJSON struct {
-	Hls       bool `json:"hls"`
-	Ptz       bool `json:"ptz"`
-	Snapshot  bool `json:"snapshot"`
-	Discovery bool `json:"discovery"`
-	Auth      bool `json:"auth"`
-}
-
-func managedPluginToJSON(mp *plugin.ManagedPlugin) pluginJSON {
-	encodings := make([]string, 0, len(mp.Info.GetSupportedEncodings()))
-	for _, c := range mp.Info.GetSupportedEncodings() {
-		if s := codecToString(c); s != "" {
-			encodings = append(encodings, s)
-		}
-	}
-	var caps *capabilitiesJSON
-	if c := mp.Info.GetCapabilities(); c != nil {
-		caps = &capabilitiesJSON{
-			Hls:       c.GetHls(),
-			Ptz:       c.GetPtz(),
-			Snapshot:  c.GetSnapshot(),
-			Discovery: c.GetDiscovery(),
-			Auth:      c.GetAuth(),
-		}
-	}
-	uptime := 0.0
-	if !mp.StartedAt.IsZero() {
-		uptime = time.Since(mp.StartedAt).Seconds()
-	}
-	return pluginJSON{
-		Name:               mp.Name,
-		Version:            mp.Info.GetVersion(),
-		Status:             string(mp.Status),
-		Protocols:          mp.Info.GetProtocols(),
-		Capabilities:       caps,
-		SupportedEncodings: encodings,
-		UptimeSeconds:      uptime,
-		RestartCount:       mp.RestartCount,
-	}
-}
-
-func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
-	result := make([]any, 0)
-
-	// Track gRPC plugin names to avoid duplicates
-	grpcNames := make(map[string]bool)
-
-	// Add gRPC plugins first (full metadata)
-	if h.pluginMgr != nil {
-		for _, mp := range h.pluginMgr.ListPlugins() {
-			if mp.Info != nil {
-				result = append(result, managedPluginToJSON(mp))
-				grpcNames[mp.Name] = true
-			}
-		}
-	}
-
-	// Add built-in plugins only if not already covered by gRPC
-	for _, p := range plugin.All() {
-		if !grpcNames[p.Name()] {
-			result = append(result, map[string]any{
-				"name":      p.Name(),
-				"protocols": p.Protocols(),
-			})
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"plugins": result,
-	})
-}
-
-func (h *Handler) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "plugin name is required")
-		return
-	}
-
-	if h.pluginMgr == nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
-		return
-	}
-
-	mp, ok := h.pluginMgr.GetPlugin(name)
-	if !ok || mp.Info == nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, managedPluginToJSON(mp))
-}
-
-func (h *Handler) handleRestartPlugin(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "plugin name is required")
-		return
-	}
-
-	if h.pluginMgr == nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
-		return
-	}
-
-	if err := h.pluginMgr.RestartPlugin(name); err != nil {
-		if strings.Contains(err.Error(), "plugin \"") && strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to restart plugin: %v", err))
-		}
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
-}
-
-func (h *Handler) handleGetPluginCapabilities(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "plugin name is required")
-		return
-	}
-
-	if h.pluginMgr == nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
-		return
-	}
-
-	mp, ok := h.pluginMgr.GetPlugin(name)
-	if !ok || mp.Info == nil {
-		writeError(w, http.StatusNotFound, "plugin not found")
-		return
-	}
-
-	caps := mp.Info.GetCapabilities()
-	encodings := make([]string, 0, len(mp.Info.GetSupportedEncodings()))
-	for _, c := range mp.Info.GetSupportedEncodings() {
-		if s := codecToString(c); s != "" {
-			encodings = append(encodings, s)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"name":                mp.Name,
-		"version":             mp.Info.GetVersion(),
-		"protocols":           mp.Info.GetProtocols(),
-		"supported_encodings": encodings,
-		"capabilities": map[string]bool{
-			"hls":       caps.GetHls(),
-			"ptz":       caps.GetPtz(),
-			"snapshot":  caps.GetSnapshot(),
-			"discovery": caps.GetDiscovery(),
-			"auth":      caps.GetAuth(),
-		},
-	})
-}
 
 // protocolInfo describes a protocol for the /api/protocols endpoint.
 type protocolInfo struct {
@@ -2654,43 +2461,20 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
-	}
-
-	// Merge plugin protocols
-	if h.pluginMgr != nil {
-		for _, mp := range h.pluginMgr.ListPlugins() {
-			if mp.Info == nil {
-				continue
-			}
-			caps := mp.Info.GetCapabilities()
-			encodings := make([]string, 0, len(mp.Info.GetSupportedEncodings()))
-			for _, c := range mp.Info.GetSupportedEncodings() {
-				if s := codecToString(c); s != "" {
-					encodings = append(encodings, s)
-				}
-			}
-			for _, proto := range mp.Info.GetProtocols() {
-				protocols = append(protocols, protocolInfo{
-					ID:        proto,
-					Label:     proto,
-					Encodings: encodings,
-					BuiltIn:   false,
-					Capabilities: map[string]bool{
-						"hls":       caps.GetHls(),
-						"ptz":       caps.GetPtz(),
-						"snapshot":  caps.GetSnapshot(),
-						"discovery": caps.GetDiscovery(),
-						"auth":      false,
-					},
-				})
-			}
-		}
+		{
+			ID:           "xiaomi",
+			Label:        "Xiaomi",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
+		},
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"protocols": protocols,
 	})
 }
+
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".
 func formatUptime(d time.Duration) string {

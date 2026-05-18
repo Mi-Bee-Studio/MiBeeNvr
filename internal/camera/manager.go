@@ -47,7 +47,6 @@ type CameraManager struct {
 	configPath string
 	recorders  map[string]model.Recorder // camera_id → Recorder
 	metrics    *metrics.Metrics
-	pluginMgr  *plugin.PluginManager // gRPC plugin manager (nil = no plugins)
 	mergeMgr   *merge.MergeManager   // segment merge manager (nil = no merge)
 	mu         sync.RWMutex
 }
@@ -55,14 +54,11 @@ type CameraManager struct {
 // NewCameraManager creates a new CameraManager.
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
-	var pm *plugin.PluginManager
 	var mm *merge.MergeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
 			m = v
-		case *plugin.PluginManager:
-			pm = v
 		case *merge.MergeManager:
 			mm = v
 		}
@@ -70,38 +66,23 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	return &CameraManager{
 		cfg:        cfg,
 		store:      store,
-		db:         db,
+			db:         db,
 		configPath: configPath,
 		recorders:  make(map[string]model.Recorder),
 		metrics:    m,
-		pluginMgr:  pm,
 		mergeMgr:   mm,
 	}
 }
 
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
-// Dispatch order: 1. gRPC plugin → 2. in-process plugin → 3. built-in
+// Dispatch order: 1. in-process plugin → 2. built-in
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
-	// 1. Try gRPC plugin manager (external process)
-	if cm.pluginMgr != nil {
-		if client := cm.pluginMgr.GetClientForProtocol(cam.Protocol); client != nil {
-			receiver := plugin.NewFrameReceiver(cm.store, cm.db, cm.metrics, cam.ID, segDur)
-			adapter := plugin.NewGRPCRecorderAdapter(client, receiver, cam, segDur)
-			// Sync detected codec back to config so web UI shows actual encoding.
-			if cam.Encoding == "" || cam.Encoding == "h264" || cam.Encoding == "h265" {
-				adapter.SetOnCodecDetected(cm.onPluginCodecDetected)
-			}
-			return adapter
-		}
-	}
-
-	// 2. Try in-process plugin registry
+	// 1. Try in-process plugin registry
 	p := plugin.LookupProtocol(cam.Protocol)
 	if p != nil {
 		return p.NewRecorder(cam, cm.store, cm.db, cm.metrics)
 	}
-
 	// 2. Fall back to built-in recorders
 	switch cam.Protocol {
 	case string(model.ProtoRTSP):
@@ -205,33 +186,6 @@ func (cm *CameraManager) persistConfig() error {
 	return nil
 }
 
-// onPluginCodecDetected is called by gRPC adapters when the runtime codec is first detected.
-// It updates the camera config's encoding field so the web UI reflects the actual codec.
-func (cm *CameraManager) onPluginCodecDetected(cameraID string, codec string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	for i := range cm.cfg.Cameras {
-		cam := &cm.cfg.Cameras[i]
-		if cam.ID != cameraID {
-			continue
-		}
-		if cam.Encoding == codec {
-			return // already correct
-		}
-		old := cam.Encoding
-		cam.Encoding = codec
-		if err := cm.persistConfig(); err != nil {
-			logger.Warn("failed to persist codec update", "camera_id", cameraID, "error", err)
-		}
-		if err := cm.db.UpsertCamera(context.Background(), cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
-			logger.Warn("failed to update camera encoding in DB", "camera_id", cameraID, "error", err)
-		}
-		logger.Info("updated camera encoding from runtime detection", "camera_id", cameraID, "old", old, "new", codec)
-		return
-	}
-}
-
 // Start creates and starts recorders for all enabled cameras in the config.
 // If a single camera fails to start, it logs the error and continues with the rest.
 func (cm *CameraManager) Start(ctx context.Context) error {
@@ -301,11 +255,6 @@ func (cm *CameraManager) Stop() error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
-	}
-
-	// Stop gRPC plugin manager if present
-	if cm.pluginMgr != nil {
-		cm.pluginMgr.Stop()
 	}
 
 	return nil

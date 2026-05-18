@@ -777,8 +777,8 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     id: 'xiaomi',
     label: 'Xiaomi',
     encodings: ['h264', 'h265'],
-    builtIn: false,
-    capabilities: { hls: false, ptz: false, snapshot: false, discovery: true, auth: false },
+    builtIn: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
   },
 ];
 

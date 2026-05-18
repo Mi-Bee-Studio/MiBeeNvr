@@ -27,13 +27,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
 var (
@@ -338,15 +338,6 @@ func main() {
 		}
 	}
 
-	// Start gRPC plugin manager (non-fatal if it fails)
-	var pluginMgr *plugin.PluginManager
-	if cfg.Plugins.Directory != "" {
-		pluginMgr = plugin.NewPluginManager(&cfg.Plugins)
-		if err := pluginMgr.Start(ctx); err != nil {
-			slog.Warn("plugin manager start failed, continuing without plugins", "error", err)
-			pluginMgr = nil
-		}
-	}
 
 	// Merge manager (created before camera manager so ArchiveCamera can use it)
 	mergeMgr := merge.NewMergeManager(
@@ -364,7 +355,7 @@ func main() {
 	)
 
 	// Camera manager
-	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, pluginMgr, mergeMgr)
+	camMgr := camera.NewCameraManager(cfg, store, db, *configPath, m, mergeMgr)
 
 	// HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -372,7 +363,7 @@ func main() {
 
 	// API handler — Routes() already includes /api prefix
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy, pluginMgr)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, *configPath, mergeMgr, cloudProxy)
 
 	// WebDAV
 	var davHandler http.Handler
