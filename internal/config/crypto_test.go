@@ -156,8 +156,7 @@ func TestHasKeyWithEnvVar(t *testing.T) {
 
 func TestGetEncryptionKeyFromRaw(t *testing.T) {
 	key := helperGenerateKey(t)
-	t.Setenv("NVR_ENCRYPTION_KEY", string(key))
-	encryptionKey = nil
+	helperSetEnvKey(t, key)
 
 	got := GetEncryptionKey()
 	require.NotNil(t, got)
