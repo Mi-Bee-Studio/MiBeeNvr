@@ -25,7 +25,6 @@ web_embed/
 # Project management / tooling
 .sisyphus/
 .rtk/
-AGENTS.md
 
 # Test / tooling artifacts
 e2e-tests/
