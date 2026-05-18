@@ -10,7 +10,6 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // --- Xiaomi cloud endpoints ---
@@ -155,11 +154,9 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 
 	devices, err := h.cloudProxy.ListDevices(r.Context())
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, &model.AuthFailedError{Reason: err.Error()})
-	} else {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		return
 	}
-	return
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"devices": devices,
