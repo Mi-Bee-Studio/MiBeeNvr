@@ -70,7 +70,8 @@ mqtt:
   broker: "tcp://localhost:1883"
   topic: "mibeenr/trigger"
   client_id: "mibee-nvr"
-
+  username: ""   # MQTT broker authentication (optional)
+  password: ""   # MQTT broker password (optional, auto-encrypted if encryption key is set)
 webdav:
   enabled: true
   path_prefix: "/dav"
