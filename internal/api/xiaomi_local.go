@@ -6,10 +6,11 @@ import (
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/plugins/xiaomi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
-// LocalXiaomiAuth implements CloudAuthProxy by calling the xiaomi package directly.
+// LocalXiaomiAuth implements CloudAuthProxy by calling the internal xiaomi package directly.
+// This is the in-process bridge for Xiaomi cloud authentication.
 // This is the in-process bridge used until the xiaomi plugin runs as a separate
 // gRPC process.
 type LocalXiaomiAuth struct {
