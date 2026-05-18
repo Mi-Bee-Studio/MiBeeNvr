@@ -119,7 +119,7 @@
   let protocols = $state<ProtocolInfo[]>(DEFAULT_PROTOCOLS);
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
 
-  // Discovery panel (plugin-driven)
+  // Discovery panel
   let discoveryPanel: ReturnType<typeof DiscoveryPanel> | null = $state(null);
   let activeDiscoveryProtocol = $state<string | null>(null);
   let showDiscoveryMenu = $state(false);
@@ -660,7 +660,7 @@
     {:else}
       <div class="space-y-6">
 
-        <!-- Plugin-driven Discovery Panel -->
+        <!-- Discovery Panel -->
         {#if activeDiscoveryProtocol}
           <DiscoveryPanel
             bind:this={discoveryPanel}
