@@ -155,6 +155,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Get("/api/protocols", h.handleProtocols)
+		r.Get("/api/features", h.handleGetFeatures)
+		r.Put("/api/features", h.handleUpdateFeatures)
 		// Archive endpoints
 		r.Route("/api/archives", func(r chi.Router) {
 			r.Get("/", h.handleListArchives)
@@ -2475,6 +2477,44 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- Feature toggle endpoints ---
+
+func (h *Handler) handleGetFeatures(w http.ResponseWriter, r *http.Request) {
+	flags, err := h.db.GetFeatureFlags(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get feature flags")
+		return
+	}
+	protocols := make(map[string]bool)
+	for k, v := range flags {
+		if strings.HasPrefix(k, "protocol.") {
+			proto := strings.TrimPrefix(k, "protocol.")
+			protocols[proto] = v
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"protocols": protocols})
+}
+
+func (h *Handler) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Protocols map[string]bool `json:"protocols"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	ctx := r.Context()
+	for proto, enabled := range body.Protocols {
+		if err := h.db.SetFeatureFlag(ctx, "protocol."+proto, enabled); err != nil {
+			logger.Warn("failed to set feature flag", "protocol", proto, "error", err)
+		}
+		if h.camMgr != nil {
+			h.camMgr.SetProtocolEnabled(proto, enabled)
+		}
+	}
+	// Return updated state
+	h.handleGetFeatures(w, r)
+}
 
 // formatUptime converts a duration to a human-readable string like "2h 15m 30s".
 func formatUptime(d time.Duration) string {
