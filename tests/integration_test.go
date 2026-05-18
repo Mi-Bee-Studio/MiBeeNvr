@@ -56,7 +56,7 @@ func newAPI(db *storage.DB, store *storage.Manager) *api.Handler {
 
 // newAPIWithConfig creates a test API handler with a config (for settings endpoints).
 func newAPIWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config, configPath string) *api.Handler {
-	return api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, cfg, nil, nil, configPath, nil, nil, nil)
+	return api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, cfg, nil, nil, configPath, nil, nil)
 }
 
 // do is a convenience for making requests against the API handler.
@@ -883,7 +883,7 @@ func TestMultiStreamHLS(t *testing.T) {
 	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager (no camMgr — HLS endpoint returns 500)
-	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil, nil)
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
 
 	// 1. Request HLS stream for non-existent camera → 500 (camMgr is nil)
 	rr := do(t, h.Routes(), "GET", "/api/cameras/cam-1/stream/index.m3u8", nil)
@@ -1139,7 +1139,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager but no camMgr
-	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil, nil)
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
 
 	// 1. Insert ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif", "",
@@ -1175,7 +1175,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	require.NoError(t, err)
 	camMgr := camera.NewCameraManager(cfg, storeMgr, nil, "")
 
-	h2 := api.NewHandler(db, storeMgr, func(next http.Handler) http.Handler { return next }, cfg, camMgr, hlsMgr, "", nil, nil, nil)
+	h2 := api.NewHandler(db, storeMgr, func(next http.Handler) http.Handler { return next }, cfg, camMgr, hlsMgr, "", nil, nil)
 	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/stream/index.m3u8", nil)
 	// ONVIF camera recorder is not running → 400
 	require.Equal(t, http.StatusBadRequest, rr.Code)
