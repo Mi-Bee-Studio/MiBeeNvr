@@ -3,28 +3,13 @@
   import { getStats, listCameras, healthCheck, getSystemStats, getMergeStatus, getMergePending } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, MergeStatus, MergePending } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatFileSize, formatDate, getChartUnit } from '$lib/format';
+  import { formatFileSize, formatDate } from '$lib/format';
 
   import { HardDrive, BarChart3, Video, CameraIcon, Activity, Clock, Cpu, Database, MemoryStick, Wifi, ChevronDown, ChevronUp, GitMerge } from 'lucide-svelte';
-  import {
-    Chart,
-    CategoryScale,
-    LinearScale,
-    BarController,
-    BarElement,
-    LineController,
-    LineElement,
-    PointElement, Filler, Tooltip, Legend, Title
-  } from 'chart.js';
+  import { loadChart, createTrendChart, createCameraChart, aggregateCameraTotals, BAR_COLORS } from '$lib/charts';
   import { getStatsTrends } from '$lib/api';
   import { getEffectiveTheme } from '$lib/preferences';
 
-  Chart.register(
-    CategoryScale, LinearScale,
-    BarController, BarElement,
-    LineController, LineElement,
-    PointElement, Filler, Tooltip, Legend, Title
-  );
 
   let stats = $state<StorageStats | null>(null);
   let cameras = $state<Camera[]>([]);
@@ -37,25 +22,17 @@
   let mergeCollapsed = $state(false);
 
   // Auto-refresh interval
+  // Auto-refresh interval
   let refreshInterval: number;
-  let trendChart: Chart | null = null;
-  let cameraChart: Chart | null = null;
+  let trendChart: any | null = null;
+  let cameraChart: any | null = null;
+  let ChartJs: any = null; // Lazy-loaded
 
   // Camera filter state
   let selectedCameras = $state<Set<string>>(new Set());
   let cameraChartCollapsed = $state(false);
   let lastCameraTotals: Record<string, number> = {};
   let allCameraNames = $state<string[]>([]);
-  const BAR_COLORS = [
-    'rgba(139, 92, 246, 0.7)',
-    'rgba(56, 189, 248, 0.7)',
-    'rgba(16, 185, 129, 0.7)',
-    'rgba(245, 158, 11, 0.7)',
-    'rgba(239, 68, 68, 0.7)',
-    'rgba(168, 85, 247, 0.7)',
-    'rgba(34, 197, 94, 0.7)',
-    'rgba(251, 146, 60, 0.7)',
-  ];
 
   // Health data
   let health = $state<HealthResponse | null>(null);
@@ -130,6 +107,7 @@
     try {
       const trends = await getStatsTrends(7);
       if (trends && trends.length > 0) {
+        if (!ChartJs) ChartJs = await loadChart();
         createCharts(trends);
       }
     } catch (e) {
@@ -181,33 +159,14 @@
       ]);
       mergeStatus = status;
       mergePending = pending;
-    } catch {
-      // silently ignore
+    } catch (e) {
+      console.warn('Failed to load merge data:', e);
     }
   }
 
-
   function createCharts(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
-    const isDark = getEffectiveTheme() === 'dark';
-    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-    const textColor = isDark ? '#a1a1a1' : '#4b5563';
-    const accentColor = 'rgba(139, 92, 246, 0.8)';
-    const accentFill = 'rgba(139, 92, 246, 0.1)';
-
-    const labels = trends.map(d => d.date.slice(5)); // "MM-DD"
-    const rawSizes = trends.map(d => d.total_size);
-    const chartUnit = getChartUnit(rawSizes);
-    const sizes = rawSizes.map(s => +(s / chartUnit.divisor).toFixed(1));
-
     // Aggregate camera counts
-    const cameraTotals: Record<string, number> = {};
-    trends.forEach(d => {
-      if (d.cameras) {
-        Object.entries(d.cameras).forEach(([cam, count]) => {
-          cameraTotals[cam] = (cameraTotals[cam] || 0) + count;
-        });
-      }
-    });
+    const cameraTotals = aggregateCameraTotals(trends);
 
     // Store for filter rebuilds
     lastCameraTotals = cameraTotals;
@@ -223,102 +182,31 @@
     // Line chart - Storage Trend
     const trendCtx = document.getElementById('trendChart') as HTMLCanvasElement;
     if (trendCtx) {
-      trendChart = new Chart(trendCtx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: `Storage (${chartUnit.unit})`,
-            data: sizes,
-            borderColor: accentColor,
-            backgroundColor: accentFill,
-            fill: true,
-            tension: 0.3,
-            pointRadius: 4,
-            pointBackgroundColor: accentColor,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { labels: { color: textColor } },
-            tooltip: { mode: 'index', intersect: false }
-          },
-          scales: {
-            x: { grid: { color: gridColor }, ticks: { color: textColor } },
-            y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
-          }
-        }
-      });
+      trendChart = createTrendChart(ChartJs, trendCtx, trends);
     }
 
     // Bar chart - Recordings per Camera
-    buildCameraChart(cameraTotals, textColor, gridColor);
+    buildCameraChart(cameraTotals);
   }
 
-  function buildCameraChart(cameraTotals: Record<string, number>, textColor: string, gridColor: string) {
+  function buildCameraChart(cameraTotals: Record<string, number>) {
     if (cameraChart) { cameraChart.destroy(); cameraChart = null; }
     const cameraCtx = document.getElementById('cameraChart') as HTMLCanvasElement;
-    if (!cameraCtx || Object.keys(cameraTotals).length === 0) return;
+    if (!cameraCtx) return;
 
-    const camLabels = Object.keys(cameraTotals).filter(name => selectedCameras.has(name));
-    const camData = camLabels.map(name => cameraTotals[name]);
-    if (camLabels.length === 0) return;
-
-    const camBarColors = camLabels.map(name => {
-      const idx = allCameraNames.indexOf(name) % BAR_COLORS.length;
-      return BAR_COLORS[idx];
-    });
-
-    cameraChart = new Chart(cameraCtx, {
-      type: 'bar',
-      data: {
-        labels: camLabels,
-        datasets: [{
-          label: 'Recordings',
-          data: camData,
-          backgroundColor: camBarColors,
-          borderRadius: 6,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { mode: 'index', intersect: false }
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: textColor } },
-          y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
-        }
-      }
-    });
+    cameraChart = createCameraChart(ChartJs, cameraCtx, cameraTotals, allCameraNames, selectedCameras);
   }
 
   function toggleCameraFilter(name: string) {
     const newSet = new Set(selectedCameras);
     if (newSet.has(name)) { newSet.delete(name); } else { newSet.add(name); }
     selectedCameras = newSet;
-    rebuildCameraChart();
+    buildCameraChart(lastCameraTotals);
   }
 
   function selectAllCameras() {
     selectedCameras = new Set(allCameraNames);
-    rebuildCameraChart();
-  }
-
-  function deselectAllCameras() {
-    selectedCameras = new Set();
-    rebuildCameraChart();
-  }
-
-  function rebuildCameraChart() {
-    const isDark = getEffectiveTheme() === 'dark';
-    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-    const textColor = isDark ? '#a1a1a1' : '#4b5563';
-    buildCameraChart(lastCameraTotals, textColor, gridColor);
+    buildCameraChart(lastCameraTotals);
   }
 
   // Lifecycle
@@ -684,7 +572,7 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="card p-6 border th-border">
             <h3 class="text-lg font-medium th-text-primary mb-4">{t('stats.storageTrend')}</h3>
-            <div class="h-64">
+            <div class="h-48 sm:h-56 md:h-64">
               <canvas id="trendChart"></canvas>
             </div>
           </div>
@@ -694,7 +582,7 @@
               onclick={() => {
                 cameraChartCollapsed = !cameraChartCollapsed;
                 if (!cameraChartCollapsed) {
-                  setTimeout(() => rebuildCameraChart(), 50);
+                  window.setTimeout(() => buildCameraChart(lastCameraTotals), 50);
                 }
               }}
             >
@@ -740,7 +628,7 @@
                 </div>
               {/if}
               <div class="p-5">
-                <div class="h-64">
+                <div class="h-48 sm:h-56 md:h-64">
                   <canvas id="cameraChart"></canvas>
                 </div>
               </div>

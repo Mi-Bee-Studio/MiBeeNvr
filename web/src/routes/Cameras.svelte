@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiSync, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiSync, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { AlertCircle, Camera as CameraIcon, RefreshCw } from 'lucide-svelte';
+  import { AlertCircle, Camera as CameraIcon, RefreshCw, Plus } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import OnboardingOverlay from '$lib/components/OnboardingOverlay.svelte';
 
   function formatTimeAgo(lastSeen: string | null | undefined): { text: string; color: string } {
     if (!lastSeen) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
@@ -31,8 +33,8 @@
   let editingNameId = $state<string | null>(null);
   let inlineName = $state('');
 
-  // Delete confirmation
-  let deletingCamera = $state<Camera | null>(null);
+  // Confirmation dialog state
+  let confirmAction = $state<{ camera: Camera; action: 'stop' | 'restart' | 'delete' } | null>(null);
 
   // Xiaomi (minimal — only device list for form display + sync)
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
@@ -49,15 +51,33 @@
 
   let discoverableProtocols = $derived(protocols.filter(p => p.capabilities.discovery));
 
+  // Onboarding state
+  let showOnboarding = $state(false);
+
+  // Helper: map API error to user-friendly i18n message
+  function friendlyError(e: unknown, fallback: string): string {
+    if (e instanceof ApiRequestError && e.code) {
+      const keyed = t(`errors.${e.code}`);
+      // t() returns the key itself if not found — check it's different
+      if (keyed !== `errors.${e.code}`) return keyed;
+    }
+    if (e instanceof Error) return e.message || fallback;
+    return fallback;
+  }
+
   async function loadCameras() {
     loading = true;
     error = '';
     try {
       cameras = await listCameras();
     } catch (e) {
-      error = e instanceof Error ? e.message : t('cameras.failedLoad');
+      error = friendlyError(e, t('cameras.failedLoad'));
     } finally {
       loading = false;
+      // Show onboarding for first-time users (no cameras, no dismissed state)
+      if (!loading && cameras.length === 0 && !sessionStorage.getItem('mibee_nvr_onboarding_dismissed')) {
+        showOnboarding = true;
+      }
     }
   }
 
@@ -74,6 +94,7 @@
   function handleFormSave() {
     showForm = false;
     editingCamera = null;
+    showOnboarding = false;
     loadCameras();
   }
 
@@ -82,16 +103,33 @@
     editingCamera = null;
   }
 
-  async function handleDelete() {
-    if (!deletingCamera) return;
-    try {
-      await deleteCamera(deletingCamera.id);
-      showToast(t('cameras.cameraDeleted'), 'success');
-      deletingCamera = null;
-      await loadCameras();
-    } catch {
-      showToast(t('cameras.failedDelete'), 'error');
-      deletingCamera = null;
+  async function executeConfirmAction() {
+    if (!confirmAction) return;
+    const { camera, action } = confirmAction;
+    confirmAction = null;
+    switch (action) {
+      case 'delete':
+        try {
+          await deleteCamera(camera.id);
+          showToast(t('cameras.cameraDeleted'), 'success');
+          await loadCameras();
+        } catch (e) { console.warn('Failed to delete camera:', e); showToast(t('cameras.failedDelete'), 'error'); }
+        break;
+      case 'stop':
+        try {
+          await stopCamera(camera.id);
+          showToast(t('cameras.stopped'), 'success');
+          await loadCameras();
+        } catch (e: any) { showToast(e.message || t('cameras.failedStop'), 'error'); }
+        break;
+      case 'restart':
+        try {
+          await stopCamera(camera.id);
+          await startCamera(camera.id);
+          showToast(t('cameras.cameraUpdated'), 'success');
+          await loadCameras();
+        } catch (e: any) { showToast(e.message || t('cameras.failedStart'), 'error'); }
+        break;
     }
   }
 
@@ -106,24 +144,11 @@
   }
 
   async function handleStopCamera(camera: Camera) {
-    try {
-      await stopCamera(camera.id);
-      showToast(t('cameras.stopped'), 'success');
-      await loadCameras();
-    } catch (e: any) {
-      showToast(e.message || t('cameras.failedStop'), 'error');
-    }
+    confirmAction = { camera, action: 'stop' };
   }
 
   async function handleRestartCamera(camera: Camera) {
-    try {
-      await stopCamera(camera.id);
-      await startCamera(camera.id);
-      showToast(t('cameras.cameraUpdated'), 'success');
-      await loadCameras();
-    } catch (e: any) {
-      showToast(e.message || t('cameras.failedStart'), 'error');
-    }
+    confirmAction = { camera, action: 'restart' };
   }
 
   async function handleSyncCloud() {
@@ -150,9 +175,7 @@
       await updateCamera(camera.id, { name: inlineName.trim() });
       camera.name = inlineName.trim();
       showToast(t('cameras.nameUpdated'), 'success');
-    } catch {
-      showToast(t('cameras.failedUpdate'), 'error');
-    }
+    } catch (e) { console.warn('Failed to update camera name:', e); showToast(t('cameras.failedUpdate'), 'error'); }
     editingNameId = null;
   }
 
@@ -168,25 +191,21 @@
         protocols = list;
         protocolsMap = buildProtocolsMap(list);
       }
-    } catch {
-      // Use DEFAULT_PROTOCOLS already initialized
-    }
+    } catch (e) { console.warn('Failed to load protocols:', e); }
     // Probe xiaomi auth status for device list (used by CameraForm)
     try {
       const res = await xiaomiDevices();
       if (res.devices && res.devices.length > 0) {
         xiaomiDeviceList = res.devices;
       }
-    } catch {
-      // Not authenticated — DiscoveryPanel handles login
-    }
+    } catch (e) { console.warn('Xiaomi not authenticated:', e); }
   });
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
 
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">
       <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
       <div class="flex gap-3">
         {#if discoverableProtocols.length > 0}
@@ -275,27 +294,25 @@
           />
         {/if}
 
-        <!-- Delete Confirmation -->
-        {#if deletingCamera}
-          <div class="card p-6 border th-border-danger bg-[rgba(239,68,68,0.2)]">
-            <h3 class="text-lg font-semibold th-color-danger mb-2">{t('cameras.deleteTitle')}</h3>
-            <p class="th-text-secondary mb-4">
-              {t('cameras.deleteMessage', { name: deletingCamera.name })}
-            </p>
-            <div class="flex items-center gap-3">
-              <button onclick={handleDelete} class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors">
-                {t('cameras.deleteConfirm')}
-              </button>
-              <button onclick={() => deletingCamera = null} class="btn btn-ghost">
-                {t('cameras.cancel')}
-              </button>
-            </div>
-          </div>
+        <!-- Confirmation Dialog (stop/restart/delete) -->
+        {#if confirmAction}
+          <ConfirmDialog
+            title={confirmAction.action === 'delete' ? t('cameras.deleteTitle') : confirmAction.action === 'stop' ? t('cameras.stopTitle') : t('cameras.restartTitle')}
+            message={confirmAction.action === 'delete'
+              ? t('cameras.deleteMessage', { name: confirmAction.camera.name })
+              : confirmAction.action === 'stop'
+                ? t('cameras.stopMessage', { name: confirmAction.camera.name })
+                : t('cameras.restartMessage', { name: confirmAction.camera.name })}
+            confirmText={confirmAction.action === 'delete' ? t('cameras.deleteConfirm') : t('common.confirm')}
+            onconfirm={executeConfirmAction}
+            oncancel={() => confirmAction = null}
+            variant={confirmAction.action === 'delete' ? 'danger' : 'primary'}
+          />
         {/if}
 
         <!-- Camera Table -->
         <div class="card border th-border overflow-hidden">
-          {#if cameras.length === 0}
+        {#if cameras.length === 0}
             <div class="p-12 text-center">
               <div class="flex justify-center mb-4 th-text-muted">
                 <CameraIcon size={48} />
@@ -329,7 +346,7 @@
                       onstop={handleStopCamera}
                       onrestart={handleRestartCamera}
                       onedit={openEditForm}
-                      ondelete={(c) => deletingCamera = c}
+                      ondelete={(c) => confirmAction = { camera: c, action: 'delete' }}
                       onsavename={saveInlineEdit}
                       onstarteditname={startInlineEdit}
                       oncanceleditname={cancelInlineEdit}
@@ -345,4 +362,13 @@
       </div>
     {/if}
   </main>
+
+    <!-- Onboarding overlay for first-time users -->
+    {#if showOnboarding && cameras.length === 0}
+      <OnboardingOverlay
+        onaddcamera={openAddForm}
+        oncomplete={() => { showOnboarding = false; window.location.hash = '#/recordings'; }}
+        onskip={() => { showOnboarding = false; }}
+      />
+    {/if}
 </div>
