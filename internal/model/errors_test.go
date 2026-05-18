@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -178,5 +179,143 @@ func TestCodedErrorInterface(t *testing.T) {
 	}
 	if ce.Code() != "CAMERA_NOT_FOUND" {
 		t.Errorf("Code() = %q, want %q", ce.Code(), "CAMERA_NOT_FOUND")
+	}
+}
+
+// --- ONVIF error tests ---
+
+func TestCameraAlreadyExistsError(t *testing.T) {
+	t.Helper()
+	err := &CameraAlreadyExistsError{CameraID: "front-door"}
+	if got := err.Error(); got != "camera already exists: front-door" {
+		t.Errorf("Error() = %q, want %q", got, "camera already exists: front-door")
+	}
+	if got := err.Code(); got != "CAMERA_ALREADY_EXISTS" {
+		t.Errorf("Code() = %q, want %q", got, "CAMERA_ALREADY_EXISTS")
+	}
+}
+
+func TestONVIFNotCameraError(t *testing.T) {
+	t.Helper()
+	err := &ONVIFNotCameraError{CameraID: "cam-1"}
+	if got := err.Error(); got != "camera is not an ONVIF device: cam-1" {
+		t.Errorf("Error() = %q, want %q", got, "camera is not an ONVIF device: cam-1")
+	}
+	if got := err.Code(); got != "ONVIF_NOT_CAMERA" {
+		t.Errorf("Code() = %q, want %q", got, "ONVIF_NOT_CAMERA")
+	}
+}
+
+func TestONVIFConnectionError(t *testing.T) {
+	t.Helper()
+	inner := errors.New("timeout")
+	err := &ONVIFConnectionError{CameraID: "cam-1", Err: inner}
+	if got := err.Error(); got != "connect to ONVIF camera cam-1: timeout" {
+		t.Errorf("Error() = %q, want %q", got, "connect to ONVIF camera cam-1: timeout")
+	}
+	if got := err.Code(); got != "ONVIF_CONNECTION_FAILED" {
+		t.Errorf("Code() = %q, want %q", got, "ONVIF_CONNECTION_FAILED")
+	}
+	// Test Unwrap
+	if !errors.Is(err, inner) {
+		t.Error("errors.Is should match wrapped error")
+	}
+}
+
+func TestONVIFNoProfilesError(t *testing.T) {
+	t.Helper()
+	err := &ONVIFNoProfilesError{CameraID: "cam-1"}
+	if got := err.Error(); got != "no media profiles found for camera: cam-1" {
+		t.Errorf("Error() = %q, want %q", got, "no media profiles found for camera: cam-1")
+	}
+	if got := err.Code(); got != "ONVIF_NO_PROFILES" {
+		t.Errorf("Code() = %q, want %q", got, "ONVIF_NO_PROFILES")
+	}
+}
+
+// --- Error wrapping tests ---
+
+func TestErrorWrappingWithFmtErrorf(t *testing.T) {
+	t.Helper()
+	original := &CameraNotFoundError{CameraID: "cam-1"}
+	wrapped := fmt.Errorf("operation failed: %w", original)
+	var target *CameraNotFoundError
+	if !errors.As(wrapped, &target) {
+		t.Fatal("errors.As should unwrap CameraNotFoundError")
+	}
+	if target.CameraID != "cam-1" {
+		t.Errorf("CameraID = %q, want %q", target.CameraID, "cam-1")
+	}
+}
+
+func TestErrorWrappingDouble(t *testing.T) {
+	t.Helper()
+	inner := &CameraNotFoundError{CameraID: "cam-1"}
+	middle := fmt.Errorf("middle: %w", inner)
+	outer := fmt.Errorf("outer: %w", middle)
+	var target *CameraNotFoundError
+	if !errors.As(outer, &target) {
+		t.Fatal("errors.As should unwrap through double wrapping")
+	}
+}
+
+func TestErrorCodeWithWrapping(t *testing.T) {
+	t.Helper()
+	original := &CameraNotFoundError{CameraID: "cam-1"}
+	wrapped := fmt.Errorf("failed: %w", original)
+	if got := ErrorCode(wrapped); got != "CAMERA_NOT_FOUND" {
+		t.Errorf("ErrorCode() = %q, want %q", got, "CAMERA_NOT_FOUND")
+	}
+}
+
+func TestErrorCodeWithONVIFConnectionError(t *testing.T) {
+	t.Helper()
+	err := &ONVIFConnectionError{CameraID: "cam-1", Err: errors.New("timeout")}
+	wrapped := fmt.Errorf("failed: %w", err)
+	if got := ErrorCode(wrapped); got != "ONVIF_CONNECTION_FAILED" {
+		t.Errorf("ErrorCode() = %q, want %q", got, "ONVIF_CONNECTION_FAILED")
+	}
+}
+
+// --- All error types implement CodedError ---
+
+func TestAllErrorsImplementCodedError(t *testing.T) {
+	t.Helper()
+	errors := []CodedError{
+		&CameraNotFoundError{CameraID: "x"},
+		&CameraAlreadyRunningError{CameraID: "x"},
+		&CameraDisabledError{CameraID: "x"},
+		&CameraAlreadyExistsError{CameraID: "x"},
+		&RecordingNotFoundError{RecordingID: "x"},
+		&StorageFullError{Message: "x"},
+		&AuthFailedError{Reason: "x"},
+		&InvalidInputError{Message: "x"},
+		&PathTraversalError{Path: "x"},
+		&HLSMaxStreamsError{},
+		&HLSSupportedCodecError{CameraID: "x"},
+		&ONVIFNotCameraError{CameraID: "x"},
+		&ONVIFConnectionError{CameraID: "x", Err: errors.New("x")},
+		&ONVIFNoProfilesError{CameraID: "x"},
+	}
+	codes := []string{
+		"CAMERA_NOT_FOUND",
+		"CAMERA_ALREADY_RUNNING",
+		"CAMERA_DISABLED",
+		"CAMERA_ALREADY_EXISTS",
+		"RECORDING_NOT_FOUND",
+		"STORAGE_FULL",
+		"AUTH_FAILED",
+		"INVALID_INPUT",
+		"PATH_TRAVERSAL",
+		"HLS_MAX_STREAMS",
+		"HLS_UNSUPPORTED_CODEC",
+		"ONVIF_NOT_CAMERA",
+		"ONVIF_CONNECTION_FAILED",
+		"ONVIF_NO_PROFILES",
+	}
+	for i, e := range errors {
+		if e.Code() != codes[i] {
+			t.Errorf("error[%d].Code() = %q, want %q", i, e.Code(), codes[i])
+		}
 	}
 }
