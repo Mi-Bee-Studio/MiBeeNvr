@@ -9,8 +9,6 @@ DOCKER_REGISTRY ?= ghcr.io/mi-bee-studio/mibeenvr
 VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
 
-proto:
-	@echo "Proto generation not yet configured"
 
 frontend:
 	cd web && npm run build
