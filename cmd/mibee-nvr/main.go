@@ -584,44 +584,68 @@ func (a *App) Start() error {
 // Stop gracefully shuts down all components in reverse dependency order
 // with a 30-second timeout. Shutdown order:
 //
-//	1. HTTP server — stop accepting new requests
+	//	1. HTTP server — stop accepting new requests
 //	2. FTP server — close listener
-//	3. MQTT client — disconnect
-//	4. HLS manager — stop all streams
-//	5. Camera manager — stop all recorders
-//	6. Storage (DB) — close connection
+//	3. MQTT client — disconnect from broker
+//	4. WebDAV — handled via HTTP server shutdown
+//	5. Cleanup manager — stopped via context cancellation
+//	6. Merge manager — stopped via context cancellation
+//	7. HLS manager — stop all active streams
+//	8. Camera manager — stop all recorders
+//	9. Storage (DB) — close connection
 func (a *App) Stop() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	done := make(chan struct{})
 	go func() {
-		// Cancel context to signal all goroutines
+		// Cancel context to signal all goroutines (FTP, cleanup, merge, MQTT)
 		if a.cancel != nil {
 			a.cancel()
 		}
 
-		// Shut down in reverse order
 		log := authmw.ComponentLogger("server")
+		log.Info("shutting down...")
 
-		log.Info("shutting down HTTP server")
-		_ = a.httpServer.Shutdown(shutdownCtx)
-
-		if a.ftpServer != nil {
-			log.Info("shutting down FTP server")
+		// 1. HTTP server — stop accepting new requests
+		log.Info("stopping HTTP server")
+		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Warn("HTTP server shutdown error", "error", err)
 		}
 
+		// 2. FTP server
+		if a.ftpServer != nil {
+			log.Info("stopping FTP server")
+			a.ftpServer.Close()
+		}
+
+		// 3. MQTT client
 		if a.mqttClient != nil {
 			log.Info("stopping MQTT client")
-			_ = a.mqttClient.Stop()
+			if err := a.mqttClient.Stop(); err != nil {
+				log.Warn("MQTT stop error", "error", err)
+			}
 		}
 
+		// 4. WebDAV — no explicit stop needed (handler served by HTTP server)
+
+		// 5. Cleanup manager — stopped via context cancellation above
+		log.Info("cleanup manager stopped")
+
+		// 6. Merge manager — stopped via context cancellation above
+		log.Info("merge manager stopped")
+
+		// 7. HLS manager
 		log.Info("stopping HLS streams")
 		a.hlsMgr.StopAll()
 
+		// 8. Camera manager
 		log.Info("stopping camera manager")
-		_ = a.camMgr.Stop()
+		if err := a.camMgr.Stop(); err != nil {
+			log.Warn("camera manager stop error", "error", err)
+		}
 
+		// 9. Storage (DB)
 		log.Info("closing database")
 		a.db.Close()
 
@@ -630,10 +654,11 @@ func (a *App) Stop() error {
 
 	select {
 	case <-done:
-		authmw.ComponentLogger("server").Info("graceful shutdown completed")
+		authmw.ComponentLogger("server").Info("shutdown complete")
 	case <-shutdownCtx.Done():
 		authmw.ComponentLogger("server").Warn("shutdown timed out, forcing exit")
 	}
+
 	slog.Info("MiBee NVR stopped")
 	return nil
 }
