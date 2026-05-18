@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures } from '$lib/api';
-  import type { SettingsConfig, FeatureFlags } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras } from '$lib/api';
+  import type { SettingsConfig, FeatureFlags, StorageStats, Camera } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import { t } from '$lib/i18n';
-  import { AlertCircle, Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
+  import { AlertCircle, Settings as SettingsIcon, RefreshCw, CircleDot } from 'lucide-svelte';
   import { AlertTriangle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
-
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   let settings = $state<SettingsConfig | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -34,18 +34,78 @@ let mergeBatchLimit = $state(100);
 
 // Feature toggles state
 let featureFlags = $state<Record<string, boolean>>({});
+let originalFeatureFlags = $state<Record<string, boolean>>({});
 let featuresLoading = $state(true);
 let featuresSaving = $state(false);
 
-const protocolLabels: Record<string, string> = {
-  rtsp: 'RTSP',
-  http: 'HTTP JPEG',
-  onvif: 'ONVIF',
-  xiaomi: 'Xiaomi',
-};
-  
-  // Original values for change tracking
-  let originalRetentionDays = $state(30);
+// Camera list for feature toggle affected count
+let allCameras = $state<Camera[]>([]);
+
+// Disk info from stats API
+let diskInfo = $state<StorageStats | null>(null);
+
+// Original values snapshot for dirty tracking
+let originalSnapshot = $state<Record<string, string>>('{}');
+
+// Derived: is form dirty?
+let isDirty = $derived(() => {
+    if (loading) return false;
+    const current = JSON.stringify({
+      retentionDays, diskThresholdPercent, checkInterval,
+      webdavEnabled, webdavPathPrefix, webdavReadWrite,
+      mergeEnabled, mergeCheckInterval, mergeWindowSize,
+      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+    });
+    return current !== originalSnapshot;
+  });
+
+// Features dirty state
+let isFeaturesDirty = $derived(() => {
+    if (featuresLoading) return false;
+    return JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags);
+  });
+
+// Unsaved changes navigation guard
+let showNavGuard = $state(false);
+let pendingHash = $state('');
+
+function handleHashChange(e: HashChangeEvent) {
+    const dirty = isDirty() || isFeaturesDirty();
+    if (dirty && !showNavGuard) {
+      e.preventDefault();
+      pendingHash = window.location.hash;
+      showNavGuard = true;
+    }
+  }
+
+function confirmNavigation() {
+    showNavGuard = false;
+    // Allow navigation
+    window.removeEventListener('hashchange', handleHashChange);
+    if (pendingHash) window.location.hash = pendingHash;
+    window.addEventListener('hashchange', handleHashChange);
+  }
+
+function cancelNavigation() {
+    showNavGuard = false;
+    pendingHash = '';
+  }
+
+// Disk GB estimation
+let diskGbEstimate = $derived(() => {
+    if (!diskInfo || diskInfo.total_bytes === 0) return '';
+    const remainingPct = (100 - diskThresholdPercent) / 100;
+    const remainingBytes = diskInfo.total_bytes * remainingPct;
+    const gb = remainingBytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `≈ ${gb.toFixed(0)} GB`;
+    const mb = remainingBytes / (1024 * 1024);
+    return `≈ ${mb.toFixed(0)} MB`;
+  });
+
+// Affected camera count for a protocol
+function getAffectedCameraCount(protocol: string): number {
+    return allCameras.filter(c => c.protocol === protocol || c.protocol.startsWith(protocol)).length;
+  }
 
   // Validation
   let validationErrors = $state<Record<string, string>>({});
@@ -84,16 +144,24 @@ const protocolLabels: Record<string, string> = {
     return Object.keys(validationErrors).length === 0;
   }
 
+  function captureSnapshot() {
+    originalSnapshot = JSON.stringify({
+      retentionDays, diskThresholdPercent, checkInterval,
+      webdavEnabled, webdavPathPrefix, webdavReadWrite,
+      mergeEnabled, mergeCheckInterval, mergeWindowSize,
+      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+    });
+  }
+
   async function loadSettings() {
     loading = true;
     error = '';
 
     try {
       settings = await getSettings();
-retentionDays = settings.cleanup.retention_days;
-diskThresholdPercent = settings.cleanup.disk_threshold_percent;
+      retentionDays = settings.cleanup.retention_days;
+      diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       checkInterval = settings.cleanup.check_interval;
-      originalRetentionDays = settings.cleanup.retention_days;
       webdavEnabled = settings.webdav?.enabled ?? false;
       webdavPathPrefix = settings.webdav?.path_prefix ?? '/dav';
       webdavReadWrite = settings.webdav?.read_write ?? false;
@@ -106,6 +174,8 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       mergeMinSegments = mergeSettings.min_segments_to_merge ?? 3;
       mergeMinSegmentAge = mergeSettings.min_segment_age ?? '10m';
       mergeBatchLimit = mergeSettings.batch_limit ?? 100;
+
+      captureSnapshot();
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedLoadSettings');
     } finally {
@@ -155,7 +225,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       });
 
       settings = await getSettings();
-      originalRetentionDays = settings.cleanup.retention_days;
+      captureSnapshot();
       showToast(t('settings.saved'), 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('common.failedSaveSettings'), 'error');
@@ -185,6 +255,13 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
   onMount(() => {
     loadSettings();
     loadFeatures();
+    loadDiskInfo();
+    loadCameraList();
+    window.addEventListener('hashchange', handleHashChange);
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('hashchange', handleHashChange);
   });
 
 
@@ -193,6 +270,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     try {
       const data = await getFeatures();
       featureFlags = data.protocols;
+      originalFeatureFlags = { ...data.protocols };
     } catch (e) { console.warn('Failed to load feature flags:', e); featureFlags = {}; } finally {
       featuresLoading = false;
     }
@@ -202,6 +280,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     featuresSaving = true;
     try {
       await updateFeatures({ protocols: featureFlags });
+      originalFeatureFlags = { ...featureFlags };
       showToast(t('settings.featureToggles.saved'), 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('settings.featureToggles.error'), 'error');
@@ -210,13 +289,29 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     }
   }
 
+  async function loadDiskInfo() {
+    try {
+      diskInfo = await getStats();
+    } catch (e) { /* non-critical */ }
+  }
+
+  async function loadCameraList() {
+    try {
+      allCameras = await listCameras();
+    } catch (e) { /* non-critical */ }
+  }
+
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">
-      <h2 class="text-2xl font-bold th-text-primary">{t('settings.title')}</h2>
+      <h2 class="text-2xl font-bold th-text-primary">{t('settings.title')}
+        {#if isDirty()}
+          <span class="text-xs font-normal th-color-warning ml-2 inline-flex items-center gap-1"><CircleDot size={12} />{t('settings.unsavedChanges')}</span>
+        {/if}
+      </h2>
     </div>
 
     <!-- Error message -->
@@ -297,6 +392,9 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
               />
               {#if validationErrors['disk_threshold']}
                 <p class="th-color-danger text-xs mt-1" aria-live="polite">{validationErrors['disk_threshold']}</p>
+              {/if}
+              {#if diskGbEstimate()}
+                <p class="text-xs th-text-muted mt-1">{diskThresholdPercent}% {t('settings.diskRemaining')} {diskGbEstimate()}</p>
               {/if}
             </div>
 
@@ -505,7 +603,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                       {#if !enabled}
                         <div class="flex items-center gap-1 mt-1 text-xs th-color-warning">
                           <AlertTriangle size={12} />
-                          <span>{t('settings.featureToggles.warning')}</span>
+                          <span>{t('settings.featureToggles.warning')}{#if getAffectedCameraCount(protocol) > 0} <span class="th-color-danger">({getAffectedCameraCount(protocol)} {t('cameras.title').toLowerCase()})</span>{/if}</span>
                         </div>
                       {/if}
                     </div>
@@ -529,7 +627,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
               <button
                 onclick={saveFeatures}
                 class="btn btn-primary btn-sm"
-                disabled={featuresSaving}
+                disabled={featuresSaving || !isFeaturesDirty()}
               >
                 {#if featuresSaving}
                   <span class="spinner mr-2"></span>
@@ -546,7 +644,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
           <button
             onclick={save}
             class="btn btn-primary"
-            disabled={saving}
+            disabled={saving || !isDirty()}
           >
             {#if saving}
               <span class="spinner mr-2"></span>
@@ -560,29 +658,16 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     {/if}
   </main>
 
-  <!-- Save confirmation modal -->
-  {#if showConfirmDialog}
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div class="card max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('settings.confirmSaveTitle')}</h3>
-        <p class="th-text-secondary mb-6">
-          {t('settings.confirmSaveMessage')}
-        </p>
-        <div class="flex gap-3 justify-end">
-          <button
-            onclick={cancelSave}
-            class="btn btn-secondary"
-          >
-            {t('recordings.cancel')}
-          </button>
-          <button
-            onclick={confirmSave}
-            class="btn btn-danger"
-          >
-            {t('settings.save')}
-          </button>
-</div>
-      </div>
-    </div>
+
+  <!-- Unsaved changes navigation guard -->
+  {#if showNavGuard}
+    <ConfirmDialog
+      title={t('settings.unsavedTitle')}
+      message={t('settings.unsavedMessage')}
+      confirmText={t('settings.unsavedDiscard')}
+      onconfirm={confirmNavigation}
+      oncancel={cancelNavigation}
+      variant="danger"
+    />
   {/if}
 </div>
