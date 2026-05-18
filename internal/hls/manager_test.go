@@ -141,7 +141,7 @@ func TestStartSubStreamReader_NoActiveStream(t *testing.T) {
 	mgr := newTestManager(t)
 
 	// Starting sub-stream for a non-existent camera should return error
-	err := mgr.StartSubStreamReader("nonexistent", "rtsp://192.168.1.1/sub", false)
+	err := mgr.StartSubStreamReader("nonexistent", "rtsp://192.168.1.1/sub", false, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrStreamNotActive)
 }
@@ -163,7 +163,7 @@ func TestStartSubStreamReader_Dedup(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// Calling StartSubStreamReader when subStreamCancel is already set should be a no-op
-	err := mgr.StartSubStreamReader(cameraID, "rtsp://192.168.1.1/sub", false)
+	err := mgr.StartSubStreamReader(cameraID, "rtsp://192.168.1.1/sub", false, nil)
 	require.NoError(t, err)
 
 	// Verify subStreamCancel is still set (not nil) — dedup succeeded
@@ -633,3 +633,49 @@ func TestWriteFrame_DropCounterNilMetrics(t *testing.T) {
 	err := mgr.WriteH264(cameraID, 2000, [][]byte{{0x00}})
 	require.NoError(t, err)
 }
+
+// --- Sub-Stream Fallback Tests ---
+
+func TestSubStreamFallback_CalledOnExit(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	// Insert a stream entry so StartSubStreamReader doesn't return ErrStreamNotActive
+	mgr.mu.Lock()
+	entry := newTestStreamEntry(0)
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// Track whether fallback was invoked
+	var fallbackCalled bool
+	fallback := func() {
+		fallbackCalled = true
+	}
+
+	// Start sub-stream reader with invalid URL — parse fails immediately, triggers fallback
+	err := mgr.StartSubStreamReader(cameraID, "://invalid-url", false, fallback)
+	require.NoError(t, err)
+
+	// Wait for the sub-stream reader goroutine to fail and call fallback
+	require.Eventually(t, func() bool {
+		return fallbackCalled
+	}, 5*time.Second, 50*time.Millisecond, "fallback should have been called when sub-stream failed")
+}
+
+func TestSubStreamFallback_NilWhenNotProvided(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := newTestStreamEntry(0)
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// Calling with nil fallback should not panic when URL is invalid
+	err := mgr.StartSubStreamReader(cameraID, "://invalid-url", false, nil)
+	require.NoError(t, err)
+
+	// Give goroutine time to fail — no panic = success
+	time.Sleep(200 * time.Millisecond)
+}
+

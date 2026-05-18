@@ -211,7 +211,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 // It connects to subStreamURL, extracts codec parameters (SPS/PPS for H264, VPS/SPS/PPS for H265),
 // and feeds frames to the HLS muxer for the given camera.
 // If the sub-stream connection fails, it logs a warning and returns — the caller should fall back to main stream.
-func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool) error {
+func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool, fallbackFn func()) error {
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
 	m.mu.RUnlock()
@@ -226,13 +226,13 @@ func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 boo
 	ctx, cancel := context.WithCancel(context.Background())
 	entry.subStreamCancel = cancel
 
-	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry)
+	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry, fallbackFn)
 
 	hlsLogger.Info("HLS sub-stream reader started", "camera_id", cameraID, "sub_stream_url", subStreamURL)
 	return nil
 }
 
-func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, isH265 bool, entry *streamEntry) {
+func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, isH265 bool, entry *streamEntry, fallbackFn func()) {
 	var err error
 	defer func() {
 		m.mu.Lock()
@@ -242,6 +242,9 @@ func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, i
 		m.mu.Unlock()
 		if err != nil && ctx.Err() == nil {
 			hlsLogger.Warn("HLS sub-stream reader exited, falling back to main stream", "camera_id", cameraID, "error", err)
+			if fallbackFn != nil {
+				fallbackFn()
+			}
 		}
 	}()
 
