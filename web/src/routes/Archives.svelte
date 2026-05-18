@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import {
     listArchives,
     listArchiveRecordings,
@@ -67,7 +67,8 @@
     try {
       const response = await listArchiveRecordings(cameraId, {
         offset: recordingsOffset,
-        limit: recordingsLimit
+        limit: recordingsLimit,
+        signal: abortController?.signal
       });
       recordings = response.recordings || [];
       recordingsTotal = response.total || 0;
@@ -230,10 +231,11 @@
     refreshTimer = window.setInterval(() => {
       loadArchives();
     }, 30000);
-  });
 
-  onDestroy(() => {
-    if (refreshTimer) clearInterval(refreshTimer);
+    return () => {
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (abortController) { abortController.abort(); abortController = null; }
+    };
   });
 </script>
 
