@@ -25,7 +25,6 @@ type Config struct {
 	HLS         HLSConfig         `yaml:"hls"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
-	Plugins       PluginsConfig        `yaml:"plugins"`
 	Version       string              `yaml:"version"`
 }
 
@@ -122,19 +121,6 @@ type XiaomiConfig struct {
 	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
 }
 
-// PluginsConfig holds plugin system configuration.
-type PluginsConfig struct {
-	Directory string                       `yaml:"directory"`
-	Plugins  map[string]PluginEntryConfig `yaml:"plugins"`
-}
-
-// PluginEntryConfig defines configuration for a single plugin.
-type PluginEntryConfig struct {
-	Enabled bool                   `yaml:"enabled"`
-	Path    string                 `yaml:"path"`
-	Config  map[string]interface{} `yaml:"config"`
-}
-
 // Load reads a YAML config file and returns a Config with defaults applied.
 func Load(path string) (*Config, error) {
 	if path == "" {
@@ -151,29 +137,6 @@ func Load(path string) (*Config, error) {
 	// apply defaults
 	cfg.applyDefaults()
 
-	// Backward compatibility: auto-generate plugins.xiaomi from deprecated top-level XiaomiConfig
-	if cfg.Xiaomi.Token != "" || cfg.Xiaomi.UserID != "" {
-		if _, exists := cfg.Plugins.Plugins["xiaomi"]; !exists {
-			if cfg.Plugins.Plugins == nil {
-				cfg.Plugins.Plugins = make(map[string]PluginEntryConfig)
-			}
-			pluginCfg := make(map[string]interface{})
-			if cfg.Xiaomi.UserID != "" {
-				pluginCfg["user_id"] = cfg.Xiaomi.UserID
-			}
-			if cfg.Xiaomi.Token != "" {
-				pluginCfg["token"] = cfg.Xiaomi.Token
-			}
-			if cfg.Xiaomi.Region != "" {
-				pluginCfg["region"] = cfg.Xiaomi.Region
-			}
-			cfg.Plugins.Plugins["xiaomi"] = PluginEntryConfig{
-				Enabled: true,
-				Path:    "",
-				Config:  pluginCfg,
-			}
-		}
-	}
 	return &cfg, nil
 }
 
@@ -353,13 +316,6 @@ func (cfg *Config) applyDefaults() {
 	// Xiaomi
 	if cfg.Xiaomi.Region == "" {
 		cfg.Xiaomi.Region = "cn"
-	}
-	// Plugins defaults
-	if strings.TrimSpace(cfg.Plugins.Directory) == "" {
-		cfg.Plugins.Directory = "./plugins"
-	}
-	if cfg.Plugins.Plugins == nil {
-		cfg.Plugins.Plugins = make(map[string]PluginEntryConfig)
 	}
 	// Observability
 	if strings.TrimSpace(cfg.Observability.LogLevel) == "" {
