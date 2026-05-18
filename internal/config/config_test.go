@@ -103,7 +103,7 @@ func TestSave(t *testing.T) {
         Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
         Auth:    AuthConfig{Username: "admin", PasswordHash: "$2a$10$xxx"},
         FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121, PassivePortRange: "3000-3010"},
-        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee"},
+	        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee", Username: "mqttuser", Password: "mqttpass"},
         WebDAV:  WebDAVConfig{Enabled: &webdavEnabled, PathPrefix: "/files"},
     }
     original.applyDefaults()
@@ -136,6 +136,8 @@ func TestSave(t *testing.T) {
     require.Equal(t, "tcp://mqtt.local:1883", loaded.MQTT.Broker)
     require.Equal(t, "nvr/trigger", loaded.MQTT.Topic)
     require.Equal(t, "mibee", loaded.MQTT.ClientID)
+	require.Equal(t, "mqttuser", loaded.MQTT.Username)
+	require.Equal(t, "mqttpass", loaded.MQTT.Password)
     require.NotNil(t, loaded.WebDAV.Enabled)
     require.False(t, *loaded.WebDAV.Enabled)
     require.Equal(t, "/files", loaded.WebDAV.PathPrefix)

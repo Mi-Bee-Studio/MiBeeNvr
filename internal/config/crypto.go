@@ -145,12 +145,15 @@ func decryptConfig(cfg *Config, key []byte) {
 	if key == nil {
 		return
 	}
-
 	// Auth password (plaintext, before auto-hash conversion)
 	if v, err := Decrypt(cfg.Auth.Password, key); err == nil {
 		cfg.Auth.Password = v
 	} // if decrypt fails, leave as-is (might be plaintext)
 
+	// MQTT password
+	if v, err := Decrypt(cfg.MQTT.Password, key); err == nil {
+		cfg.MQTT.Password = v
+	}
 	// Xiaomi credentials
 	if v, err := Decrypt(cfg.Xiaomi.UserID, key); err == nil {
 		cfg.Xiaomi.UserID = v
@@ -182,6 +185,14 @@ func encryptConfig(cfg *Config, key []byte) []string {
 		if v, err := Encrypt(cfg.Auth.Password, key); err == nil {
 			cfg.Auth.Password = v
 			encrypted = append(encrypted, "auth.password")
+		}
+	}
+
+	// MQTT password
+	if cfg.MQTT.Password != "" && !IsEncrypted(cfg.MQTT.Password) {
+		if v, err := Encrypt(cfg.MQTT.Password, key); err == nil {
+			cfg.MQTT.Password = v
+			encrypted = append(encrypted, "mqtt.password")
 		}
 	}
 
@@ -220,6 +231,9 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if cfg.Auth.Password != "" && !IsEncrypted(cfg.Auth.Password) {
 		fields = append(fields, "auth.password")
 	}
+	if cfg.MQTT.Password != "" && !IsEncrypted(cfg.MQTT.Password) {
+		fields = append(fields, "mqtt.password")
+	}
 	if cfg.Xiaomi.UserID != "" && !IsEncrypted(cfg.Xiaomi.UserID) {
 		fields = append(fields, "xiaomi.user_id")
 	}
@@ -239,6 +253,7 @@ func SensitiveFieldPaths(cfg *Config) []string {
 // so they can be restored after an encrypted save.
 type sensitiveSnapshot struct {
 	AuthPassword    string
+	MQTTPassword    string
 	XiaomiUserID    string
 	XiaomiToken     string
 	CameraPasswords []string
@@ -247,6 +262,7 @@ type sensitiveSnapshot struct {
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 	s := sensitiveSnapshot{
 		AuthPassword:    cfg.Auth.Password,
+		MQTTPassword:    cfg.MQTT.Password,
 		XiaomiUserID:    cfg.Xiaomi.UserID,
 		XiaomiToken:     cfg.Xiaomi.Token,
 		CameraPasswords: make([]string, len(cfg.Cameras)),
@@ -259,6 +275,7 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 
 func (s sensitiveSnapshot) restore(cfg *Config) {
 	cfg.Auth.Password = s.AuthPassword
+	cfg.MQTT.Password = s.MQTTPassword
 	cfg.Xiaomi.UserID = s.XiaomiUserID
 	cfg.Xiaomi.Token = s.XiaomiToken
 	for i := range cfg.Cameras {
