@@ -478,3 +478,253 @@ func TestHLSMaxStreamsValidation_TooHigh(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.max_streams")
 }
+
+func TestValidateNilConfig(t *testing.T) {
+	err := Validate(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "config is nil")
+}
+
+func TestValidateRetentionDaysTooLow(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 0}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	// Default applies 30, so this should pass
+	require.NoError(t, err)
+}
+
+func TestValidateRetentionDaysTooHigh(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 4000}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retention_days")
+}
+
+func TestValidateDiskThresholdTooLow(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 40}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disk_threshold_percent")
+}
+
+func TestValidateDiskThresholdTooHigh(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 100}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disk_threshold_percent")
+}
+
+func TestValidateLogLevelInvalid(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{LogLevel: "verbose"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log_level")
+}
+
+func TestValidateLogFormatInvalid(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{LogFormat: "xml"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log_format")
+}
+
+func TestValidateLogLevelValid(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		cfg := &Config{Observability: ObservabilityConfig{LogLevel: level, LogFormat: "json"}}
+		cfg.applyDefaults()
+		require.NoError(t, Validate(cfg), "log_level=%s should be valid", level)
+	}
+}
+
+func TestValidateLogFormatValid(t *testing.T) {
+	for _, format := range []string{"json", "text"} {
+		cfg := &Config{Observability: ObservabilityConfig{LogFormat: format}}
+		cfg.applyDefaults()
+		require.NoError(t, Validate(cfg), "log_format=%s should be valid", format)
+	}
+}
+
+func TestValidateMergeEnabledInvalidInterval(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "not-a-duration", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge check_interval")
+}
+
+func TestValidateMergeEnabledInvalidWindowSize(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "bad", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge window_size")
+}
+
+func TestValidateMergeEnabledZeroBatchLimit(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 0, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	cfg.Merge.BatchLimit = 0 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "batch_limit")
+}
+
+func TestValidateMergeEnabledInvalidMinSegmentAge(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "bad", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "min_segment_age")
+}
+
+func TestValidateMergeEnabledTooFewSegments(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 1}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "min_segments_to_merge")
+}
+
+func TestValidateMergeDisabledSkipsValidation(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: false, CheckInterval: "bad"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err) // merge disabled, so invalid fields ignored
+}
+
+func TestValidateSegmentDurationInvalid(t *testing.T) {
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: "not-a-duration"}}
+	cfg.applyDefaults()
+	cfg.Storage.SegmentDuration = "not-a-duration" // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "segment_duration")
+}
+
+func TestValidateFTPPortNegative(t *testing.T) {
+	cfg := &Config{FTP: FTPConfig{Port: -1}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+}
+
+func TestCameraWhitespaceID(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "   ", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+}
+
+func TestCameraMissingURLXiaomiExempt(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestSaveNilConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	err := Save(path, nil)
+	require.Error(t, err)
+}
+
+func TestSaveEmptyPath(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	err := Save("", cfg)
+	require.Error(t, err)
+}
+
+func TestLoadEmptyPath(t *testing.T) {
+	_, err := Load("")
+	require.Error(t, err)
+}
+
+func TestApplyDefaultsMergeFields(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 200, cfg.Merge.BatchLimit)
+	require.Equal(t, "1h", cfg.Merge.CheckInterval)
+	require.Equal(t, "1h", cfg.Merge.WindowSize)
+	require.Equal(t, "10m", cfg.Merge.MinSegmentAge)
+	require.Equal(t, 3, cfg.Merge.MinSegmentsToMerge)
+}
+
+func TestApplyDefaultsObservability(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "info", cfg.Observability.LogLevel)
+	require.Equal(t, "text", cfg.Observability.LogFormat)
+	require.Equal(t, false, cfg.Observability.EnablePprof)
+}
+
+func TestApplyDefaultsVersion(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "1.0", cfg.Version)
+}
+
+func TestApplyDefaultsHLS(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 100, cfg.HLS.WriteBufferSize)
+	require.Equal(t, 10, cfg.HLS.SegmentMaxSizeMB)
+	require.Equal(t, 7, cfg.HLS.SegmentCount)
+	require.Equal(t, 4, cfg.HLS.MaxStreams)
+}
+
+func TestApplyDefaultsFTP(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 2121, cfg.FTP.Port)
+	require.Equal(t, "2122-2140", cfg.FTP.PassivePortRange)
+	require.NotNil(t, cfg.FTP.Enabled)
+	require.True(t, *cfg.FTP.Enabled)
+}
+
+func TestCameraProtocolNormalization_RtspH264(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_h264", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
+	require.Equal(t, "h264", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraProtocolNormalization_RtspMjpeg(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_mjpeg", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
+	require.Equal(t, "mjpeg", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraProtocolNormalization_HttpJpeg(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http_jpeg", URL: "http://192.168.1.10/capture"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "http", cfg.Cameras[0].Protocol)
+	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraEncodingDefault_Rtsp(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "h264", cfg.Cameras[0].Encoding) // default for rtsp
+}
+
+func TestCameraEncodingDefault_Http(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http", URL: "http://192.168.1.10/capture"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding) // default for http
+}
+
+func TestValidateONVIFEndpointAutoPopulated(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", URL: "http://192.168.1.100/onvif/device_service"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
