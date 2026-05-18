@@ -84,11 +84,10 @@
     return `/api/cameras/${cameraId}/stream/index.m3u8`;
   }
 
-  function getGridStyle(count: number): string {
-    if (count <= 1) return 'grid-template-columns: 1fr; grid-template-rows: 1fr;';
-    if (count === 2) return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;';
-    if (count === 3) return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;';
-    return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;';
+  function getGridClass(count: number): string {
+    if (count <= 1) return 'grid-cols-1';
+    if (count === 2) return 'grid-cols-1 sm:grid-cols-2';
+    return 'grid-cols-1 sm:grid-cols-2';
   }
 
   function getCellClass(camera: Camera, index: number, count: number): string {
@@ -318,7 +317,7 @@
     {:else}
       <!-- Camera grid -->
       <div
-        class="grid gap-2 sm:gap-3"
+        class="grid gap-2 sm:gap-3 {getGridClass(cameras.length)}"
         style={getGridStyle(cameras.length)}
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}

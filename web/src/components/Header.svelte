@@ -313,7 +313,7 @@
   }
   
   .mobile-menu.open {
-    max-height: 400px;
+    max-height: calc(100vh - 68px);
     opacity: 1;
     box-shadow: var(--shadow-lg);
     border-bottom: 1px solid var(--border);
