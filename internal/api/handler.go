@@ -103,9 +103,16 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 
-	// Public routes
-	r.Get("/api/health", h.handleHealth)
-	r.Get("/api/readyz", h.handleReadyz)
+	// Public routes with rate limiting on health/readyz
+	r.Group(func(r chi.Router) {
+		rl := middleware.NewRateLimiter(middleware.RateLimiterConfig{
+			MaxRequests: 60,
+			Window:      time.Minute,
+		})
+		r.Use(rl)
+		r.Get("/api/health", h.handleHealth)
+		r.Get("/api/readyz", h.handleReadyz)
+	})
 	r.Post("/api/auth/login", h.handleLogin)
 
 	// Protected routes
