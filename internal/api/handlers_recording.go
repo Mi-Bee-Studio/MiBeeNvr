@@ -1,5 +1,6 @@
 package api
 
+
 import (
 	"encoding/json"
 	"fmt"
@@ -207,7 +208,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	// sources like WebDAV uploads) is confined to the storage directory.
 	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "invalid file path")
+		writeAPIError(w, http.StatusNotFound, &model.PathTraversalError{Path: rec.FilePath})
 		return
 	}
 

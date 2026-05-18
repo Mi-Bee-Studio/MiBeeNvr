@@ -1,6 +1,8 @@
 package api
 
+
 import (
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -58,8 +60,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 			err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
 			if err != nil {
-				if err == hls.ErrMaxStreamsReached {
-					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				if errors.Is(err, hls.ErrMaxStreamsReached) {
+					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
 					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
@@ -93,8 +95,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
 			if err != nil {
-				if err == hls.ErrMaxStreamsReached {
-					writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+				if errors.Is(err, hls.ErrMaxStreamsReached) {
+					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
 					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
@@ -133,8 +135,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				}
 				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
 				if err != nil {
-					if err == hls.ErrMaxStreamsReached {
-						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+					if errors.Is(err, hls.ErrMaxStreamsReached) {
+						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
 						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
@@ -153,8 +155,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				}
 				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
 				if err != nil {
-					if err == hls.ErrMaxStreamsReached {
-						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
+					if errors.Is(err, hls.ErrMaxStreamsReached) {
+						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
 						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
@@ -164,7 +166,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					_ = h.hlsMgr.WriteH265(id, pts, au)
 				}
 			} else {
-				writeError(w, http.StatusBadRequest, "ONVIF recorder delegate type does not support HLS")
+				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 				return
 			}
 		} else if provider, ok := rec.(model.HLSProvider); ok {
@@ -177,12 +179,12 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			case model.FormatH264:
 				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
 				if err != nil {
-					if err == hls.ErrMaxStreamsReached {
-						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
-					} else {
-						logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
+					if errors.Is(err, hls.ErrMaxStreamsReached) {
+					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+				} else {
+					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
 					return
 				}
 				provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
@@ -195,23 +197,23 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				}
 				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
 				if err != nil {
-					if err == hls.ErrMaxStreamsReached {
-						writeError(w, http.StatusServiceUnavailable, "maximum HLS streams reached")
-					} else {
-						logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
+					if errors.Is(err, hls.ErrMaxStreamsReached) {
+					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+				} else {
+					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+				}
 					return
 				}
 				provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
 					_ = h.hlsMgr.WriteH265(id, pts, au)
 				})
 			default:
-				writeError(w, http.StatusBadRequest, "unsupported codec for HLS streaming")
+				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 				return
 			}
 		} else {
-			writeError(w, http.StatusBadRequest, "camera recorder does not support HLS")
+			writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 			return
 		}
 	}
