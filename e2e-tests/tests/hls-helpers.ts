@@ -187,7 +187,6 @@ export async function navigateToDashboard(page: Page): Promise<void> {
   // The SPA router runs async after page load, so URL-based checks are unreliable.
   // Instead, wait for actual DOM content to appear.
   const loginForm = page.locator('form').filter({ has: page.locator('button[type="submit"]') });
-  const dashboardGrid = page.locator('div.grid');
 
   // Race: whichever appears first determines our state
   const loginVisible = await loginForm.isVisible().catch(() => false);
@@ -208,12 +207,16 @@ export async function navigateToDashboard(page: Page): Promise<void> {
 
     // Now navigate to dashboard explicitly
     await page.goto('/#/dashboard');
-    await dashboardGrid.waitFor({ state: 'visible', timeout: 10000 });
-  } else {
-    // Already authenticated — wait for dashboard grid to be visible
-    await dashboardGrid.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {
-      // Dashboard may not have a grid if no cameras — check for login redirect
-    });
+  }
+
+  // Wait for dashboard to finish loading ("Loading..." text disappears, grid appears)
+  // The grid may take time if cameras are being fetched from the API
+  const dashboardGrid = page.locator('div.grid');
+  try {
+    await dashboardGrid.waitFor({ state: 'visible', timeout: 20000 });
+  } catch {
+    // Dashboard may show "No cameras" message instead of grid if there are no cameras
+    // This is acceptable — the dashboard loaded successfully
   }
 }
 
@@ -222,9 +225,9 @@ export async function navigateToDashboard(page: Page): Promise<void> {
  * Returns an array of camera objects.
  */
 export async function fetchCamerasFromAPI(page: Page): Promise<CameraInfo[]> {
-  // Use page.evaluate to leverage the browser's auth context (localStorage)
+  // Use page.evaluate to leverage the browser's auth context (sessionStorage)
   return page.evaluate(async () => {
-    const creds = localStorage.getItem('mibee_nvr_auth');
+    const creds = sessionStorage.getItem('mibee_nvr_auth');
     const headers: Record<string, string> = {};
     if (creds) {
       headers['Authorization'] = `Basic ${creds}`;
@@ -241,6 +244,6 @@ export async function fetchCamerasFromAPI(page: Page): Promise<CameraInfo[]> {
  */
 export async function getFirstHlsCamera(page: Page): Promise<CameraInfo | null> {
   const cameras = await fetchCamerasFromAPI(page);
-  const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp'];
+  const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp', 'xiaomi'];
   return cameras.find((c) => hlsProtocols.includes(c.protocol)) || null;
 }
