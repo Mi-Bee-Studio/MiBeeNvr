@@ -20,6 +20,34 @@ export const ZOMBIE_FRAG_GAP_MS = 60_000;
 export const ZOMBIE_CHECK_INTERVAL_MS = 5_000;
 export const MAX_RECREATE_ATTEMPTS = 5;
 
+// Auto-retry constants for error state recovery
+export const AUTO_RETRY_DELAYS = [5000, 10000, 20000, 40000];
+export const MAX_AUTO_RETRIES = 4;
+
+/** Create an auto-retry scheduler for error state recovery.
+ *  Returns { schedule, clear, getCount } for lifecycle management. */
+export function createAutoRetryScheduler(onRetry: () => void) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let count = 0;
+
+  return {
+    schedule() {
+      if (count >= MAX_AUTO_RETRIES) return;
+      const delay = AUTO_RETRY_DELAYS[count] ?? AUTO_RETRY_DELAYS[AUTO_RETRY_DELAYS.length - 1];
+      count++;
+      timer = setTimeout(() => {
+        timer = null;
+        onRetry();
+      }, delay);
+    },
+    clear() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      count = 0;
+    },
+    getCount() { return count; },
+  };
+}
+
 export type StreamState = 'playing' | 'buffering' | 'error' | 'snapshot';
 
 export interface HlsErrorConfig {
