@@ -254,8 +254,36 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(hash)
+	os.Exit(0)
+}
+
+	// Handle encrypt-config subcommand
+	if len(os.Args) > 1 && os.Args[1] == "encrypt-config" {
+		configPath := "mibee-nvr.yaml"
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--config":
+				i++
+				if i < len(os.Args) {
+					configPath = os.Args[i]
+				}
+			}
+		}
+		fields, err := config.EncryptConfigFile(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(fields) == 0 {
+			fmt.Println("No plaintext sensitive fields found. All fields are already encrypted or empty.")
+		} else {
+			fmt.Printf("Encrypted %d sensitive field(s) in %s:\n", len(fields), configPath)
+			for _, f := range fields {
+				fmt.Printf("  - %s\n", f)
+			}
+		}
 		os.Exit(0)
-	}
+}
 
 	// Setup initial logger before config load
 	logger := authmw.SetupLogger("info", "text")
@@ -390,19 +418,23 @@ func main() {
 
 	// Router
 	r := chi.NewRouter()
-	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz", "/metrics"))
+	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(middleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
 
-	// API routes (handler.Routes() already includes /api prefix)
+	// Authenticated routes
+	r.Group(func(r chi.Router) {
+		r.Use(authMW)
 
-	// Prometheus metrics (public, no auth)
-	r.Handle("/metrics", promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
+		// Prometheus metrics (authenticated)
+		r.Handle("/metrics", promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 
-	// pprof (same auth level as other routes)
-	if cfg.Observability.EnablePprof {
-		r.Mount("/debug/pprof", http.DefaultServeMux)
-	}
+		// pprof (authenticated)
+		if cfg.Observability.EnablePprof {
+			r.Mount("/debug/pprof", http.DefaultServeMux)
+		}
+	})
+
 	r.Mount("/", handler.Routes())
 
 	// WebDAV
@@ -455,7 +487,7 @@ func main() {
 
 	// MQTT
 	if cfg.MQTT.Enabled {
-		mqClient := mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, nil)
+		mqClient := mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, nil)
 		go func() {
 			if err := mqClient.Start(ctx); err != nil {
 				slog.Error("mqtt", "error", err)
