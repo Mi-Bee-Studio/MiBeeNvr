@@ -72,9 +72,12 @@ func autoInitConfig(configPath string) *config.Config {
 	}
 
 	if password != "" {
+		if len(password) < 8 {
+			slog.Error("NVR_PASSWORD must be at least 8 characters")
+			os.Exit(1)
+		}
 		cfg.Auth.Password = password
 	}
-
 	// Create data directory if needed
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		slog.Warn("failed to create data directory", "dir", dataDir, "error", err)
@@ -93,7 +96,7 @@ func autoInitConfig(configPath string) *config.Config {
 	} else {
 		slog.Info("auto-generated default config", "path", configPath, "data_dir", dataDir)
 		if password == "" {
-			slog.Warn("no password set — running in setup mode (unauthenticated access allowed). Set a password via Web UI settings or NVR_PASSWORD env var")
+			slog.Warn("no password set — all API requests will return 503 until a password is configured. Set via NVR_PASSWORD env var or edit the config")
 		}
 	}
 
@@ -199,6 +202,10 @@ func main() {
 				os.Exit(1)
 			}
 		}
+	if len(password) < 8 {
+		fmt.Fprintln(os.Stderr, "Error: password must be at least 8 characters")
+		os.Exit(1)
+	}
 		if _, err := os.Stat(configPath); err == nil && !force {
 			fmt.Fprintf(os.Stderr, "Error: config file %s already exists (use --force to overwrite)\n", configPath)
 			os.Exit(2)
