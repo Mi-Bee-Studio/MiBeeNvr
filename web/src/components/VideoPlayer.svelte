@@ -99,9 +99,7 @@
     if (hlsInstance) {
       try {
         hlsInstance.destroy();
-      } catch {
-        // Already destroyed
-      }
+      } catch (e) { console.warn('HLS destroy error (already destroyed?):', e); }
       hlsInstance = null;
     }
     HlsConstructor = null;
@@ -144,9 +142,9 @@
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         videoEl?.play().catch(() => {});
       });
-    } catch {
-      streamState = 'error';
-    }
+    } catch (e) { console.warn('HLS init failed:', e);
+streamState = 'error';
+}
   }
 
   // Main lifecycle effect — reinit when streamUrl changes
@@ -245,6 +243,7 @@
     autoplay
     muted
     playsinline
+    aria-label="{cameraName} — {dotTitle}"
   >
     {t('live.videoUnsupportedTag')}
   </video>

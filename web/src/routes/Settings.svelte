@@ -193,9 +193,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
     try {
       const data = await getFeatures();
       featureFlags = data.protocols;
-    } catch {
-      featureFlags = {};
-    } finally {
+    } catch (e) { console.warn('Failed to load feature flags:', e); featureFlags = {}; } finally {
       featuresLoading = false;
     }
   }
@@ -329,6 +327,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                   type="button"
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavEnabled = !webdavEnabled; }}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
                   role="switch"
                   aria-checked={webdavEnabled}
                 >
@@ -358,6 +357,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                   type="button"
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavReadWrite = !webdavReadWrite; }}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
                   role="switch"
                   aria-checked={webdavReadWrite}
                 >
@@ -384,6 +384,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                   type="button"
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {mergeEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { mergeEnabled = !mergeEnabled; }}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mergeEnabled = !mergeEnabled; } }}
                   role="switch"
                   aria-checked={mergeEnabled}
                 >
@@ -513,6 +514,7 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
                         type="button"
                         class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                         onclick={() => { featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; }}
+                        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; } }}
                         role="switch"
                         aria-checked={enabled}
                       >

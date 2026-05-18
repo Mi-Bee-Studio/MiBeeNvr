@@ -2,7 +2,7 @@
   import { t } from '$lib/i18n';
   import { normalizeProtocol } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
-  import { Pencil, Play, Square, RotateCw, Eye } from 'lucide-svelte';
+  import { Pencil, Play, Square, RotateCw, Eye, CircleCheck, CircleAlert, CirclePause, AlertTriangle } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -67,13 +67,13 @@
   </td>
   <td class="px-6 py-4 whitespace-nowrap text-sm">
     {#if camera.status === 'recording'}
-      <span class="badge badge-success">{t('cameras.statusRecording')}</span>
+      <span class="badge badge-success flex items-center gap-1"><CircleCheck size={12} />{t('cameras.statusRecording')}</span>
     {:else if camera.status === 'error'}
-      <span class="badge badge-error">{t('cameras.statusError')}</span>
+      <span class="badge badge-error flex items-center gap-1"><CircleAlert size={12} />{t('cameras.statusError')}</span>
     {:else if camera.status === 'reconnecting'}
-      <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
+      <span class="badge badge-warning flex items-center gap-1"><AlertTriangle size={12} />{t('cameras.statusReconnecting')}</span>
     {:else}
-      <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
+      <span class="badge badge-neutral flex items-center gap-1"><CirclePause size={12} />{t('cameras.statusStopped')}</span>
     {/if}
     <div class="text-xs th-text-muted mt-0.5">{formatTimeAgo(camera.last_seen).text}</div>
   </td>
