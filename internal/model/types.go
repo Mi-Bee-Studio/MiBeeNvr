@@ -25,17 +25,6 @@ type HLSProvider interface {
 	SetOnHLSFrame(cb func(pts int64, au [][]byte))
 }
 
-// StorageProvider manages recording storage and metadata
-type StorageProvider interface {
-	CreateSegment(cameraID string, meta SegmentMeta) (*Segment, error)
-	CloseSegment(segmentID string) (*Recording, error)
-	WriteFrame(segmentID string, data []byte) (int, error)
-	ListRecordings(filter RecordingFilter) ([]Recording, error)
-	GetRecording(id string) (*Recording, error)
-	DeleteRecording(id string) error
-	GetStats() (StorageStats, error)
-}
-
 // Camera represents a camera source configuration
 type Camera struct {
 	ID       string

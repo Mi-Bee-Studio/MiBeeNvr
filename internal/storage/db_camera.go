@@ -8,6 +8,11 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// CameraRow represents a camera record from the SQLite database.
+// Shared fields with config.CameraConfig: ID, Name, Protocol, Encoding, URL, Username,
+// ONVIFEndpoint, ProfileToken, StreamEncoding, Enabled.
+// CameraRow adds DB-only fields: Description, Location, Brand, Model, SerialNumber,
+// RetentionDays, Status, LastSeen, HasPassword, merge config, archive fields.
 type CameraRow struct {
 	ID           string               `json:"id"`
 	Name         string               `json:"name"`

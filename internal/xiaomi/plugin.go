@@ -12,17 +12,12 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
-// XiaomiPlugin implements plugin.RecorderPlugin for Xiaomi cameras.
+// XiaomiPlugin provides Xiaomi camera recorder creation.
 type XiaomiPlugin struct{}
-
-func init() {
-	plugin.Register(&XiaomiPlugin{})
-}
 
 func (p *XiaomiPlugin) Name() string { return "xiaomi" }
 
