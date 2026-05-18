@@ -688,50 +688,6 @@ export async function xiaomiSync(): Promise<{ synced: number; total: number }> {
   return apiRequest('/xiaomi/sync', { method: 'POST' });
 }
 
-// Plugin API
-export interface PluginCapabilities {
-  hls: boolean;
-  ptz: boolean;
-  snapshot: boolean;
-  discovery: boolean;
-  auth: boolean;
-}
-
-export interface Plugin {
-  name: string;
-  version: string;
-  status: string;
-  protocols: string[];
-  capabilities?: PluginCapabilities;
-  supported_encodings: string[];
-  uptime_seconds: number;
-  restart_count: number;
-}
-
-export async function listPlugins(): Promise<Plugin[]> {
-  const response = await apiRequest<{ plugins: Plugin[] }>('/plugins');
-  return response.plugins;
-}
-
-export async function getPlugin(name: string): Promise<Plugin> {
-  return apiRequest<Plugin>(`/plugins/${name}`);
-}
-
-export async function restartPlugin(name: string): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/plugins/${name}/restart`, {
-    method: 'POST',
-  });
-}
-
-export async function getPluginCapabilities(name: string): Promise<{
-  name: string;
-  version: string;
-  protocols: string[];
-  supported_encodings: string[];
-  capabilities: PluginCapabilities;
-}> {
-  return apiRequest(`/plugins/${name}/capabilities`);
-}
 
 // Protocol info (from GET /api/protocols)
 export interface ProtocolCapabilities {
