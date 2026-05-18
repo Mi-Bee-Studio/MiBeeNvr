@@ -33,7 +33,7 @@ cross-armv7: frontend
 lint:
 	go vet ./...
 
-	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7
+clean:
 	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7
 	rm -rf web/dist .build-tmp
 
@@ -105,3 +105,8 @@ rollback:
 deploy-check:
 	@ssh $(RPi_HOST) "sudo systemctl is-active $(RPi_SRV)" && echo "✅ Service active" || echo "❌ Service not active"
 	@curl -sf http://$(RPi_HOST)/api/health && echo "✅ Health check passed" || echo "❌ Health check failed"
+
+
+.PHONY: frontend build test cross cross-armv7 lint clean install install-service uninstall-service
+.PHONY: docker-build docker-build-arm64 docker-build-all docker-push docker-push-arm64 docker-push-all docker-release
+.PHONY: deploy rollback deploy-check
