@@ -16,22 +16,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	_ "net/http/pprof"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	_ "net/http/pprof"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
-	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
@@ -42,7 +42,6 @@ var (
 )
 
 var appVersion = "0.1.0-dev" // overridden via -ldflags at build time
-
 
 func autoInitConfig(configPath string) *config.Config {
 	// Determine data directory
@@ -60,15 +59,15 @@ func autoInitConfig(configPath string) *config.Config {
 	password := os.Getenv("NVR_PASSWORD")
 
 	cfg := &config.Config{
-		Server:  config.ServerConfig{Listen: ":9090"},
-		Storage: config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
-		Auth:    config.AuthConfig{Username: "admin"},
-		Cameras: []config.CameraConfig{},
-		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
-		FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
-		WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
+		Server:        config.ServerConfig{Listen: ":9090"},
+		Storage:       config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
+		Auth:          config.AuthConfig{Username: "admin"},
+		Cameras:       []config.CameraConfig{},
+		Cleanup:       config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		FTP:           config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
+		WebDAV:        config.WebDAVConfig{PathPrefix: "/dav"},
 		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
-		Version: "1.0",
+		Version:       "1.0",
 	}
 
 	if password != "" {
@@ -202,10 +201,10 @@ func main() {
 				os.Exit(1)
 			}
 		}
-	if len(password) < 8 {
-		fmt.Fprintln(os.Stderr, "Error: password must be at least 8 characters")
-		os.Exit(1)
-	}
+		if len(password) < 8 {
+			fmt.Fprintln(os.Stderr, "Error: password must be at least 8 characters")
+			os.Exit(1)
+		}
 		if _, err := os.Stat(configPath); err == nil && !force {
 			fmt.Fprintf(os.Stderr, "Error: config file %s already exists (use --force to overwrite)\n", configPath)
 			os.Exit(2)
@@ -220,15 +219,15 @@ func main() {
 			os.Exit(1)
 		}
 		cfg := config.Config{
-			Server:  config.ServerConfig{Listen: listenAddr},
-			Storage: config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
-			Auth:    config.AuthConfig{Username: username, PasswordHash: hash},
-			Cameras: []config.CameraConfig{},
-			Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
-			FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
-			WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
+			Server:        config.ServerConfig{Listen: listenAddr},
+			Storage:       config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
+			Auth:          config.AuthConfig{Username: username, PasswordHash: hash},
+			Cameras:       []config.CameraConfig{},
+			Cleanup:       config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+			FTP:           config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
+			WebDAV:        config.WebDAVConfig{PathPrefix: "/dav"},
 			Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
-			Version: "1.0",
+			Version:       "1.0",
 		}
 		if err := config.Save(configPath, &cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
@@ -345,7 +344,6 @@ func main() {
 		}
 	}
 
-
 	// Merge manager (created before camera manager so ArchiveCamera can use it)
 	mergeMgr := merge.NewMergeManager(
 		db, store,
@@ -432,7 +430,6 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	}))
 
-
 	// Xiaomi cloud config is initialized via LocalXiaomiAuth (see above)
 	// Start camera manager
 	go func() {
@@ -440,7 +437,6 @@ func main() {
 			slog.Error("camera manager", "error", err)
 		}
 	}()
-
 
 	// Cleanup manager
 	cleanupMgr, err := cleanup.NewCleanupManager(db, store, cfg.Cleanup, m)
@@ -492,7 +488,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
-		slog.Info("received signal, shutting down", "signal", sig.String())
+	slog.Info("received signal, shutting down", "signal", sig.String())
 
 	// Graceful shutdown with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -500,8 +496,8 @@ func main() {
 
 	done := make(chan struct{})
 	go func() {
-	_ = camMgr.Stop()
-	hlsMgr.StopAll()
+		_ = camMgr.Stop()
+		hlsMgr.StopAll()
 		srv.Shutdown(shutdownCtx)
 		close(done)
 	}()
