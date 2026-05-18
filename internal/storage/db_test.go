@@ -1203,3 +1203,31 @@ func TestListOldestRecordingsExcludesArchived(t *testing.T) {
 	require.Len(t, recs, 1)
 	require.Equal(t, "rec-new", recs[0].ID)
 }
+
+func TestEscapeLike(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain text", input: "hello", want: "hello"},
+		{name: "percent sign", input: "100%", want: "100\\%"},
+		{name: "underscore", input: "test_", want: "test\\_"},
+		{name: "backslash", input: "path\\to", want: "path\\\\to"},
+		{name: "all special chars", input: "%_\\", want: "\\%\\_\\\\"},
+		{name: "empty string", input: "", want: ""},
+		{name: "percent in middle", input: "90%done", want: "90\\%done"},
+		{name: "multiple underscores", input: "a_b_c", want: "a\\_b\\_c"},
+		{name: "mixed", input: "%completed_\\test", want: "\\%completed\\_\\\\test"},
+		{name: "SQL injection attempt", input: "' OR 1=1 --", want: "' OR 1=1 --"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeLike(tt.input)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
