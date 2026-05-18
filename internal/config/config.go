@@ -93,6 +93,8 @@ type MQTTConfig struct {
 	Broker   string `yaml:"broker"`
 	Topic    string `yaml:"topic"`
 	ClientID string `yaml:"client_id"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type WebDAVConfig struct {
