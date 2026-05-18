@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1195,4 +1196,255 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	require.Equal(t, false, caps["streaming"])
 
 	hlsMgr.StopAll()
+}
+
+// ============================================================================
+// Test 20: Disk Full Scenario (small tmpfs)
+// ============================================================================
+
+func TestDiskFullScenario(t *testing.T) {
+	// Create a small tmpfs (1MB) to simulate disk full
+	tmpfsDir := filepath.Join(t.TempDir(), "small_disk")
+	require.NoError(t, os.MkdirAll(tmpfsDir, 0755))
+
+	// Mount tmpfs with 1MB size limit
+	err := exec.Command("mount", "-t", "tmpfs", "-o", "size=1M", "tmpfs", tmpfsDir).Run()
+	if err != nil {
+		t.Skip("cannot mount tmpfs (needs root):", err)
+	}
+	t.Cleanup(func() {
+		exec.Command("umount", tmpfsDir).Run()
+	})
+
+	store, err := storage.NewManager(tmpfsDir)
+	require.NoError(t, err)
+
+	// Initially, storage should be available
+	require.True(t, store.IsAvailable())
+
+	// Fill the disk with data until writes fail
+	cameraID := "cam-full"
+	cameraDir := filepath.Join(tmpfsDir, cameraID)
+	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+
+	// Write data until disk is full
+	bigData := make([]byte, 512*1024) // 512KB chunks
+	for i := byte(0); i < 255; i++ {
+		for j := range bigData {
+			bigData[j] = i
+		}
+		err := os.WriteFile(filepath.Join(cameraDir, fmt.Sprintf("fill_%d.dat", i)), bigData, 0644)
+		if err != nil {
+			break // disk full
+		}
+	}
+
+	// Now try to create a segment — should fail or gracefully handle
+	_, _, err = store.CreateSegment(cameraID, "h264")
+	if err != nil {
+		// Expected: creation failed due to no space
+		t.Log("CreateSegment correctly failed on full disk:", err)
+	} else {
+		// If creation succeeded (some tmpfs allow metadata), writes should fail
+		t.Log("CreateSegment succeeded despite full disk — writes may still fail")
+	}
+
+	// Verify IsAvailable still returns true (dir exists)
+	require.True(t, store.IsAvailable())
+}
+
+// ============================================================================
+// Test 21: Camera Connection Failure
+// ============================================================================
+
+func TestCameraConnectionFailure(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+
+	// Create H264 recorder with invalid RTSP URL
+	rec := recorder.NewH264Recorder(recorder.H264Config{
+		CameraID:    "cam-fail",
+		RTSPURL:     "rtsp://127.0.0.1:1/nonexistent", // port 1 = connection refused
+		SegmentDur:  5 * time.Minute,
+		RingBufCap:  100,
+		InitBackoff: 50 * time.Millisecond,
+		MaxBackoff:  200 * time.Millisecond,
+	}, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	require.Equal(t, model.StatusRecording, rec.Status())
+
+	// Wait for connection failure to trigger reconnect
+	time.Sleep(500 * time.Millisecond)
+
+	// Should be in reconnecting state or still trying
+	status := rec.Status()
+	require.True(t, status == model.StatusReconnecting || status == model.StatusRecording,
+		"expected reconnecting or recording, got %s", status)
+
+	// Stop should succeed cleanly
+	require.NoError(t, rec.Stop())
+	require.Equal(t, model.StatusStopped, rec.Status())
+}
+// ============================================================================
+// Test 22: Concurrent Recording Stress Test (5 cameras)
+// ============================================================================
+
+func TestConcurrentRecordingStress(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+
+	// Create 5 H264 recorders with unreachable URLs (stress test lifecycle)
+	cameraIDs := []string{"stress-1", "stress-2", "stress-3", "stress-4", "stress-5"}
+	recorders := make([]*recorder.H264Recorder, len(cameraIDs))
+	for i, id := range cameraIDs {
+		recorders[i] = recorder.NewH264Recorder(recorder.H264Config{
+			CameraID:    id,
+			RTSPURL:     fmt.Sprintf("rtsp://127.0.0.1:1/%s", id),
+			SegmentDur:  5 * time.Minute,
+			RingBufCap:  50,
+			InitBackoff: 100 * time.Millisecond,
+			MaxBackoff:  500 * time.Millisecond,
+		}, store)
+	}
+
+	// Start all recorders concurrently
+	var startWg sync.WaitGroup
+	ctx := context.Background()
+	for _, rec := range recorders {
+		startWg.Add(1)
+		go func(r *recorder.H264Recorder) {
+			defer startWg.Done()
+			_ = r.Start(ctx)
+		}(rec)
+	}
+	startWg.Wait()
+
+	// All should be in recording state
+	for i, rec := range recorders {
+		status := rec.Status()
+		require.True(t, status == model.StatusRecording || status == model.StatusReconnecting,
+			"recorder %d should be recording or reconnecting, got %s", i, status)
+	}
+
+	// Let them run briefly to stress the reconnection loop
+	time.Sleep(1 * time.Second)
+
+	// Stop all concurrently
+	var stopWg sync.WaitGroup
+	for _, rec := range recorders {
+		stopWg.Add(1)
+		go func(r *recorder.H264Recorder) {
+			defer stopWg.Done()
+			_ = r.Stop()
+		}(rec)
+	}
+	stopWg.Wait()
+
+	// All should be stopped
+	for i, rec := range recorders {
+		require.Equal(t, model.StatusStopped, rec.Status(),
+			"recorder %d should be stopped", i)
+	}
+}
+
+// ============================================================================
+// Test 23: Database Locking Concurrency
+// ============================================================================
+
+func TestDatabaseLockingConcurrency(t *testing.T) {
+	db, store := setupEnv(t)
+
+	// Seed initial recordings for concurrent reads
+	for i := 0; i < 10; i++ {
+		seedRecording(t, db, store, fmt.Sprintf("concurrent-%d", i),
+			"cam-concurrent", "h264", false)
+	}
+
+	const numGoroutines = 20
+	const opsPerGoroutine = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, numGoroutines*opsPerGoroutine)
+
+	ctx := context.Background()
+
+	// Concurrent readers
+	for g := 0; g < numGoroutines/2; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < opsPerGoroutine; i++ {
+				recID := fmt.Sprintf("concurrent-%d", (id+i)%10)
+				_, err := db.GetRecording(ctx, recID)
+				if err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+
+	// Concurrent writers (insert + delete)
+	for g := 0; g < numGoroutines/2; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < opsPerGoroutine; i++ {
+				rec := &model.Recording{
+					ID:         fmt.Sprintf("lock-test-%d-%d", id, i),
+					CameraID:   "cam-concurrent",
+					FilePath:   filepath.Join(store.RootDir(), "cam-concurrent", fmt.Sprintf("%d.mp4", id*opsPerGoroutine+i)),
+					Format:     model.FormatH264,
+					StartedAt:  time.Now().UTC().Truncate(time.Second),
+					EndedAt:    time.Now().UTC().Truncate(time.Second),
+					Duration:   10.0,
+					FileSize:   1024,
+					FrameCount: 300,
+				}
+				if err := db.InsertRecording(ctx, rec); err != nil {
+					errs <- err
+					continue
+				}
+				if err := db.DeleteRecording(ctx, rec.ID); err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	// Separate SQLITE_BUSY (expected under heavy contention) from unexpected errors
+	var busyErrors, otherErrors []error
+	for e := range errs {
+		if strings.Contains(e.Error(), "SQLITE_BUSY") || strings.Contains(e.Error(), "database is locked") {
+			busyErrors = append(busyErrors, e)
+		} else {
+			otherErrors = append(otherErrors, e)
+		}
+	}
+
+	// SQLITE_BUSY is acceptable under extreme contention (20 goroutines × 50 ops)
+	t.Logf("SQLITE_BUSY errors: %d (acceptable under heavy contention)", len(busyErrors))
+	require.Empty(t, otherErrors, "unexpected errors during concurrent DB operations: %v", otherErrors)
+
+	// Verify database is still functional after stress test
+	countRec := &model.Recording{
+		ID:         "post-stress-check",
+		CameraID:   "cam-concurrent",
+		FilePath:   filepath.Join(store.RootDir(), "cam-concurrent", "post-stress.mp4"),
+		Format:     model.FormatH264,
+		StartedAt:  time.Now().UTC().Truncate(time.Second),
+		EndedAt:    time.Now().UTC().Truncate(time.Second),
+		Duration:   10.0,
+		FileSize:   1024,
+		FrameCount: 300,
+	}
+	require.NoError(t, db.InsertRecording(ctx, countRec))
+	got, err := db.GetRecording(ctx, "post-stress-check")
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }
