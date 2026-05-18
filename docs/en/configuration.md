@@ -593,7 +593,107 @@ mibee-nvr -version
 
 ## Important Notes
 
-### Security Considerations
+## Feature Toggle
+
+MiBee NVR supports dynamic protocol enable/disable through a feature toggle system. This allows enabling or disabling camera protocols without restarting the service.
+
+### SQLite Feature Flags
+
+Feature flags are stored in the `feature_flags` table in the SQLite database:
+
+```sql
+CREATE TABLE IF NOT EXISTS feature_flags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Available Features
+
+Current features include:
+
+- `rtsp` - Enable/disable RTSP protocol support
+- `rtsp_h264` - Enable/disable H.264 RTSP support
+- `rtsp_h265` - Enable/disable H.265 RTSP support
+- `rtsp_mjpeg` - Enable/disable MJPEG RTSP support
+- `http_jpeg` - Enable/disable HTTP JPEG protocol support
+- `onvif` - Enable/disable ONVIF protocol support
+- `xiaomi` - Enable/disable built-in Xiaomi camera support
+
+### API Endpoints
+
+#### Get All Features
+
+```bash
+curl http://localhost:9090/api/features
+``
+
+Response:
+
+, "{", 
+features": [
+    {
+      "id": 1,
+      "name": "rtsp",
+      "enabled": true,
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-01T00:00:00Z"
+    },
+    {
+      "id": 2,
+      "name": "xiaomi",
+      "enabled": false,
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+#### Update Feature
+
+```bash
+curl -X PUT http://localhost:9090/api/features/rtsp ", 
+H "Content-Type: application/json" "
+  -d '{"enabled": true}'
+``
+
+#### Batch Update Features
+
+```bash
+curl -X PUT http://localhost:9090/api/features ", 
+H "Content-Type: application/json" "
+  -d '{"features": [{"name": "rtsp", "enabled": true}, {"name": "xiaomi", "enabled": false}]}'
+```
+
+### Web UI
+
+The Settings page provides a toggle interface for managing feature flags:
+
+- Enable/disable protocols via toggle switches
+- Changes take effect immediately (no restart required)
+- Status is reflected in the camera protocol dropdown
+- Feature state persists across service restarts
+
+### Use Cases
+
+- **Security**: Disable unused protocols to reduce attack surface
+- **Testing**: Enable experimental protocols for development
+- **Resource Management**: Disable resource-intensive protocols on low-memory systems
+- **Maintenance**: Temporarily disable protocols during maintenance
+
+### Important Notes
+
+- Feature changes are applied immediately to new camera connections
+- Existing active recordings continue until stopped normally
+- Disabling a protocol prevents new cameras from using that protocol
+- Enabling a protocol allows new cameras to use it immediately
+- Feature state is persisted across service restarts
+
+## Important Notes
 - FTP credentials use the same username/password as the web interface
 - WebDAV supports optional read-only/read-write mode (read-only by default for security)
 - Authentication is required for all web UI and FTP access
