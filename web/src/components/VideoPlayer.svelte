@@ -9,6 +9,7 @@
     destroyAndRecreate,
     handleVisibilityChange,
     checkStreamAvailable,
+    createAutoRetryScheduler,
   } from '$lib/hls-errors';
   import type { StreamState } from '$lib/hls-errors';
 
@@ -32,6 +33,7 @@
   let HlsConstructor: any = null;
   let recreateAttempts = { value: 0 };
   let zombieCleanup: (() => void) | null = null;
+  let autoRetry: ReturnType<typeof createAutoRetryScheduler> | null = null;
   let visibilityCleanup: (() => void) | null = null;
 
   function dispatchStateChange(state: StreamState | 'loading') {
@@ -52,6 +54,10 @@
 
   function updateState(cameraId_: string, state: StreamState) {
     if (cameraId_ === cameraId) {
+      if (state === 'playing' && autoRetry) {
+        autoRetry.clear();
+        autoRetry = null;
+      }
       streamState = state;
     }
   }
@@ -73,6 +79,7 @@
   }
 
   function handleReconnect() {
+    if (autoRetry) { autoRetry.clear(); autoRetry = null; }
     recreateAttempts.value = 0;
     streamState = 'loading';
     destroyCurrentHls();
@@ -87,6 +94,14 @@
       onStateChange: updateState,
       onFallbackToSnapshot: () => {
         streamState = 'error';
+        if (!autoRetry) {
+          autoRetry = createAutoRetryScheduler(() => {
+            streamState = 'loading';
+            destroyCurrentHls();
+            initHls();
+          });
+        }
+        autoRetry.schedule();
       },
     };
   }
@@ -96,6 +111,7 @@
       zombieCleanup();
       zombieCleanup = null;
     }
+    if (autoRetry) { autoRetry.clear(); autoRetry = null; }
     if (hlsInstance) {
       try {
         hlsInstance.destroy();
