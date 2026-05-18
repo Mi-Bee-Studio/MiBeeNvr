@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, listPlugins, restartPlugin } from '$lib/api';
-  import type { SettingsConfig, Plugin } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, listPlugins, restartPlugin, getFeatures, updateFeatures } from '$lib/api';
+  import type { SettingsConfig, Plugin, FeatureFlags } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import { t } from '$lib/i18n';
   import { AlertCircle, Settings as SettingsIcon, RefreshCw } from 'lucide-svelte';
+  import { AlertTriangle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   let settings = $state<SettingsConfig | null>(null);
@@ -34,6 +35,18 @@ let mergeBatchLimit = $state(100);
 let plugins = $state<Plugin[]>([]);
 let pluginsLoading = $state(false);
 let restartingPlugin = $state<string | null>(null);
+
+// Feature toggles state
+let featureFlags = $state<Record<string, boolean>>({});
+let featuresLoading = $state(true);
+let featuresSaving = $state(false);
+
+const protocolLabels: Record<string, string> = {
+  rtsp: 'RTSP',
+  http: 'HTTP JPEG',
+  onvif: 'ONVIF',
+  xiaomi: 'Xiaomi',
+};
   
   // Original values for change tracking
   let originalRetentionDays = $state(30);
@@ -176,6 +189,8 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
   onMount(() => {
     loadSettings();
     loadPlugins();
+    loadFeatures();
+    loadPlugins();
   });
 
   async function loadPlugins() {
@@ -186,6 +201,30 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       plugins = [];
     } finally {
       pluginsLoading = false;
+    }
+  }
+
+  async function loadFeatures() {
+    featuresLoading = true;
+    try {
+      const data = await getFeatures();
+      featureFlags = data.protocols;
+    } catch {
+      featureFlags = {};
+    } finally {
+      featuresLoading = false;
+    }
+  }
+
+  async function saveFeatures() {
+    featuresSaving = true;
+    try {
+      await updateFeatures({ protocols: featureFlags });
+      showToast(t('settings.featureToggles.saved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.featureToggles.error'), 'error');
+    } finally {
+      featuresSaving = false;
     }
   }
 
@@ -472,6 +511,64 @@ diskThresholdPercent = settings.cleanup.disk_threshold_percent;
         </div>
 
 
+
+        <!-- Feature Toggles -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.featureToggles.title')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.featureToggles.description')}</p>
+
+          {#if featuresLoading}
+            <div class="flex items-center gap-2 py-4 th-text-muted">
+              <span class="spinner"></span>
+              <span class="text-sm">{t('common.loading')}</span>
+            </div>
+          {:else if Object.keys(featureFlags).length === 0}
+            <p class="th-text-secondary text-sm py-2">{t('settings.noPlugins')}</p>
+          {:else}
+            <div class="space-y-4">
+              {#each Object.entries(featureFlags) as [protocol, enabled] (protocol)}
+                <div class="p-4 rounded-md th-bg-hover border th-border">
+                  <div class="flex items-center justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="font-medium th-text-primary">{t(`settings.featureToggles.protocols.${protocol}`)}</div>
+                      {#if !enabled}
+                        <div class="flex items-center gap-1 mt-1 text-xs th-color-warning">
+                          <AlertTriangle size={12} />
+                          <span>{t('settings.featureToggles.warning')}</span>
+                        </div>
+                      {/if}
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <button
+                        type="button"
+                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                        onclick={() => { featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; }}
+                        role="switch"
+                        aria-checked={enabled}
+                      >
+                        <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {enabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+            <div class="flex items-center gap-4 pt-4">
+              <button
+                onclick={saveFeatures}
+                class="btn btn-primary btn-sm"
+                disabled={featuresSaving}
+              >
+                {#if featuresSaving}
+                  <span class="spinner mr-2"></span>
+                  {t('settings.featureToggles.saving')}
+                {:else}
+                  {t('settings.featureToggles.save')}
+                {/if}
+              </button>
+            </div>
+          {/if}
+        </div>
         <!-- Plugins -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.plugins')}</h3>

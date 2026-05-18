@@ -855,3 +855,20 @@ export async function setArchiveRetention(cameraID: string, retentionDays: numbe
     body: JSON.stringify({ retention_days: retentionDays }),
   });
 }
+
+// Feature Toggles API
+export interface FeatureFlags {
+  protocols: Record<string, boolean>;
+}
+
+export async function getFeatures(): Promise<FeatureFlags> {
+  const response = await apiRequest<FeatureFlags>('/features');
+  return response;
+}
+
+export async function updateFeatures(features: FeatureFlags): Promise<void> {
+  await apiRequest('/features', {
+    method: 'PUT',
+    body: JSON.stringify(features),
+  });
+}
