@@ -315,9 +315,9 @@ func TestGETPathTraversal(t *testing.T) {
 	// Go's http.Client normalizes the URL path before sending,
 	// so /dav/../secret.txt becomes /secret.txt, bypassing the /dav prefix.
 	// This means the request goes to /secret.txt, NOT /dav/secret.txt.
-	// The webdav handler only handles /dav/*, so this should 404.
-	assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusOK,
-		"expected 404 (outside prefix) or 200 (if handler serves root), got %d", resp.StatusCode)
+	// Path traversal outside /dav prefix now returns 403 Forbidden.
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"path traversal outside prefix should be forbidden")
 }
 
 // --- PROPFIND depth 0 on root ---
@@ -604,11 +604,9 @@ func TestDELETEPathTraversalReadWrite(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// Current behavior: DELETE succeeds because /protected.txt is within webdav.Dir root.
-	// The file IS deleted. This test documents the known gap.
-	// Wave 1 security fix should add explicit path prefix enforcement.
-	assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent,
-		"DELETE of root-level file via path normalization should succeed (known gap)")
+	// Path prefix enforcement now blocks traversal outside /dav prefix.
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"DELETE with path traversal outside prefix should be forbidden")
 }
 
 // --- COPY in read-write mode ---
@@ -822,9 +820,9 @@ func TestGETPathTraversalURLEncoded(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// Go's http client or server normalizes the path
-	assert.True(t, resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusOK,
-		"expected 404/400/200 for URL-encoded traversal, got %d", resp.StatusCode)
+	// Path prefix enforcement now blocks URL-encoded traversal outside /dav prefix.
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"URL-encoded path traversal outside prefix should be forbidden")
 }
 
 // --- PUT to nested path ---
