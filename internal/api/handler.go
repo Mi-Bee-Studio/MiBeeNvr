@@ -119,6 +119,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
 			r.Post("/", h.handleCreateCamera)
+      r.Post("/test-connection", h.handleTestConnection)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetCamera)
 				r.Put("/", h.handleUpdateCamera)

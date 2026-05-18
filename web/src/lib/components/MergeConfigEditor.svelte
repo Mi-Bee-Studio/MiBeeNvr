@@ -24,9 +24,7 @@
       await deleteCameraMergeConfig(cameraId);
       showToast(t('merge.restoredDefault'), 'success');
       ondelete();
-    } catch {
-      showToast(t('merge.operationFailed'), 'error');
-    }
+    } catch (e) { console.warn('Failed to delete merge config:', e); showToast(t('merge.operationFailed'), 'error'); }
   }
 </script>
 

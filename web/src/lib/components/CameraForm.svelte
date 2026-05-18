@@ -7,6 +7,7 @@
     updateMergeConfig,
     buildProtocolsMap,
     normalizeProtocol,
+    testConnection,
   } from '$lib/api';
   import type {
     Camera,
@@ -15,8 +16,9 @@
     MergeConfig,
     ProtocolInfo,
     XiaomiDevice,
+    TestConnectionResult,
   } from '$lib/api';
-  import { Eye, EyeOff } from 'lucide-svelte';
+  import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
 
@@ -56,6 +58,10 @@
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
   let validationErrors = $state<Record<string, string>>({});
+
+  // Test connection state
+  let testing = $state(false);
+  let testResult = $state<TestConnectionResult | null>(null);
 
   // Merge config
   let mergeConfig = $state<MergeConfig | null>(null);
@@ -139,9 +145,7 @@
     mergeConfigLoading = true;
     try {
       mergeConfig = await getMergeConfig(cameraId);
-    } catch {
-      mergeConfig = null;
-    } finally {
+    } catch (e) { console.warn('Failed to load merge config:', e); mergeConfig = null; } finally {
       mergeConfigLoading = false;
     }
   }
@@ -162,6 +166,25 @@
     if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
     if (!formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
     return Object.keys(validationErrors).length === 0;
+  }
+  async function handleTestConnection() {
+    if (!formUrl.trim()) return;
+    testing = true;
+    testResult = null;
+    try {
+      testResult = await testConnection({
+        protocol: formProtocol,
+        url: formUrl,
+        username: formUsername || undefined,
+        password: formPassword || undefined,
+        encoding: formEncoding || undefined,
+        onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
+      });
+    } catch (e: any) {
+      testResult = { success: false, message: e.message || t('cameras.testFailed', { error: '' }), latency_ms: 0 };
+    } finally {
+      testing = false;
+    }
   }
 
   async function handleSubmit() {
@@ -198,7 +221,7 @@
         if (mergeConfig) {
           try {
             await updateMergeConfig(editingCamera.id, mergeConfig);
-          } catch { /* ignore merge config save errors */ }
+          } catch (e) { console.warn('Failed to save merge config:', e); }
         }
         await updateCamera(editingCamera.id, data);
         showToast(t('cameras.cameraUpdated'), 'success');
@@ -222,8 +245,7 @@
         showToast(t('cameras.cameraAdded'), 'success');
       }
       onsave();
-    } catch {
-      showToast(
+    } catch (e) { console.warn('Failed to save camera:', e); showToast(
         editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
         'error'
       );
@@ -282,9 +304,34 @@
           <span class="text-xs th-text-muted ml-1">({t('cameras.onvifEndpoint')})</span>
         {/if}
       </label>
-      <input id="cam-url" type="text" class="input {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
-        placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
-        onblur={() => validateField('url', formUrl)} oninput={() => { if (validationErrors['url']) delete validationErrors['url']; }} />
+      <div class="flex gap-2">
+        <input id="cam-url" type="text" class="input flex-1 {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
+          placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
+          onblur={() => validateField('url', formUrl)} oninput={() => { if (validationErrors['url']) delete validationErrors['url']; testResult = null; }} />
+        {#if formProtocol !== 'xiaomi'}
+          <button
+            type="button"
+            onclick={handleTestConnection}
+            disabled={testing || !formUrl.trim()}
+            class="btn btn-ghost px-3 py-2 flex items-center gap-1.5 whitespace-nowrap"
+            title={t('cameras.testConnection')}
+          >
+            <PlugZap size={14} />
+            {#if testing}
+              <span class="spinner mr-1"></span>{t('cameras.testing')}
+            {:else}
+              {t('cameras.testConnection')}
+            {/if}
+          </button>
+        {/if}
+      </div>
+      {#if testResult}
+        <p class="text-xs mt-1 {testResult.success ? 'th-color-success' : 'th-color-danger'}">
+          {testResult.success
+            ? t('cameras.testSuccess').replace('{latency}', String(testResult.latency_ms))
+            : t('cameras.testFailed').replace('{error}', testResult.message)}
+        </p>
+      {/if}
       {#if validationErrors['url']}
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
       {/if}
