@@ -101,8 +101,8 @@
   // Current route — initialize from hash synchronously to prevent
   // Login component from redirecting to recordings before onMount runs
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
-  let currentRoute = initialRoute.route;
-  let params: Record<string, string> = initialRoute.params;
+  let currentRoute = $state(initialRoute.route);
+  let params: Record<string, string> = $state(initialRoute.params);
 
 
   function updateRoute() {
