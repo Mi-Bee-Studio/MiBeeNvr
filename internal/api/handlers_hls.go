@@ -71,12 +71,14 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 			// Check if sub-stream URL is configured
 			if camCfg != nil && camCfg.SubStreamURL != "" {
-				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, false); subErr != nil {
-					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
-					// Fall back to main stream OnHLSFrame
+				fallback := func() {
 					h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
 						_ = h.hlsMgr.WriteH264(id, pts, au)
 					}
+				}
+				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, false, fallback); subErr != nil {
+					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
+					fallback()
 				}
 				// Sub-stream reader is running — do NOT set OnHLSFrame on recorder
 			} else {
@@ -106,12 +108,14 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 			// Check if sub-stream URL is configured
 			if camCfg != nil && camCfg.SubStreamURL != "" {
-				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, true); subErr != nil {
-					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
-					// Fall back to main stream OnHLSFrame
+				fallback := func() {
 					h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
 						_ = h.hlsMgr.WriteH265(id, pts, au)
 					}
+				}
+				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, true, fallback); subErr != nil {
+					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
+					fallback()
 				}
 			} else {
 				h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
