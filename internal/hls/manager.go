@@ -41,6 +41,7 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
+	mu              sync.Mutex // protects lastUsed and lastFrameTime
 	mux             *gohlslib.Muxer
 	track           *gohlslib.Track
 	dirPath         string
@@ -468,16 +469,19 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		return nil // stream not active, silently ignore
 	}
 
+	entry.mu.Lock()
 	entry.lastUsed = time.Now()
 
 	// Frame rate limiting for live preview bandwidth optimization
 	if entry.maxFPS > 0 {
 		minInterval := time.Second / time.Duration(entry.maxFPS)
 		if time.Since(entry.lastFrameTime) < minInterval {
+			entry.mu.Unlock()
 			return nil // drop frame to stay within target FPS
 		}
 		entry.lastFrameTime = time.Now()
 	}
+	entry.mu.Unlock()
 
 	// Non-blocking send — drop frame if buffer full to protect recording pipeline
 	select {
@@ -525,7 +529,9 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 		return false
 	}
 
+	entry.mu.Lock()
 	entry.lastUsed = time.Now()
+	entry.mu.Unlock()
 	entry.mux.Handle(w, r)
 	return true
 }
@@ -555,7 +561,10 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 			if !ok {
 				return
 			}
-			if time.Since(entry.lastUsed) > m.idleTimeout {
+			entry.mu.Lock()
+			lastUsed := entry.lastUsed
+			entry.mu.Unlock()
+			if time.Since(lastUsed) > m.idleTimeout {
 				hlsLogger.Info("HLS stream idle timeout, stopping", "camera_id", cameraID)
 				m.StopStream(cameraID)
 				return
