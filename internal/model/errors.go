@@ -28,6 +28,13 @@ type CameraDisabledError struct {
 func (e *CameraDisabledError) Error() string { return "camera is disabled: " + e.CameraID }
 func (e *CameraDisabledError) Code() string  { return "CAMERA_DISABLED" }
 
+// CameraAlreadyExistsError indicates a camera with the same ID already exists.
+type CameraAlreadyExistsError struct {
+	CameraID string
+}
+
+func (e *CameraAlreadyExistsError) Error() string { return "camera already exists: " + e.CameraID }
+func (e *CameraAlreadyExistsError) Code() string  { return "CAMERA_ALREADY_EXISTS" }
 // --- Recording errors ---
 
 // RecordingNotFoundError indicates the requested recording does not exist.
@@ -94,6 +101,40 @@ func (e *HLSSupportedCodecError) Error() string {
 	return "camera recorder does not support HLS"
 }
 func (e *HLSSupportedCodecError) Code() string { return "HLS_UNSUPPORTED_CODEC" }
+
+// --- ONVIF errors ---
+
+// ONVIFNotCameraError indicates the camera is not an ONVIF device.
+type ONVIFNotCameraError struct {
+	CameraID string
+}
+
+func (e *ONVIFNotCameraError) Error() string {
+	return "camera is not an ONVIF device: " + e.CameraID
+}
+func (e *ONVIFNotCameraError) Code() string { return "ONVIF_NOT_CAMERA" }
+
+// ONVIFConnectionError indicates a failure to connect to an ONVIF device.
+type ONVIFConnectionError struct {
+	CameraID string
+	Err     error
+}
+
+func (e *ONVIFConnectionError) Error() string {
+	return "connect to ONVIF camera " + e.CameraID + ": " + e.Err.Error()
+}
+func (e *ONVIFConnectionError) Code() string { return "ONVIF_CONNECTION_FAILED" }
+func (e *ONVIFConnectionError) Unwrap() error  { return e.Err }
+
+// ONVIFNoProfilesError indicates no media profiles were found for the camera.
+type ONVIFNoProfilesError struct {
+	CameraID string
+}
+
+func (e *ONVIFNoProfilesError) Error() string {
+	return "no media profiles found for camera: " + e.CameraID
+}
+func (e *ONVIFNoProfilesError) Code() string { return "ONVIF_NO_PROFILES" }
 
 // --- CodedError interface ---
 

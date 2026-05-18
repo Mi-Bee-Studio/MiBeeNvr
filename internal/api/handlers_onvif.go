@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/go-chi/chi/v5"
 )
@@ -134,7 +136,7 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		handleONVIFPTZError(w, cameraID, err)
 		return
 	}
 	vec := onvif.PTZVector{Pan: req.Pan, Tilt: req.Tilt, Zoom: req.Zoom}
@@ -164,7 +166,7 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		handleONVIFPTZError(w, cameraID, err)
 		return
 	}
 	if err := ptz.Stop(r.Context(), true, true); err != nil {
@@ -185,7 +187,7 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		handleONVIFPTZError(w, cameraID, err)
 		return
 	}
 	pos, moving, err := ptz.GetStatus(r.Context())
@@ -199,4 +201,20 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 		"zoom":   pos.Zoom,
 		"moving": moving,
 	})
+}
+
+// handleONVIFPTZError maps ONVIF PTZ controller errors to appropriate HTTP responses.
+func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
+	switch {
+	case errors.As(err, new(*model.CameraNotFoundError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, new(*model.ONVIFNotCameraError)):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, new(*model.ONVIFConnectionError)):
+		writeAPIError(w, http.StatusBadGateway, err)
+	case errors.As(err, new(*model.ONVIFNoProfilesError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	default:
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ operation failed for camera %q: %v", cameraID, err))
+	}
 }
