@@ -13,6 +13,16 @@ import (
 
 var logger = slog.Default().With("component", "storage")
 
+// escapeLike escapes LIKE special characters (% and _) with backslash.
+// This prevents SQL injection via LIKE wildcards while allowing literal searches.
+// Must be used with ESCAPE '\\' clause in the SQL query.
+func escapeLike(input string) string {
+	escaped := strings.ReplaceAll(input, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "%", "\\%")
+	escaped = strings.ReplaceAll(escaped, "_", "\\_")
+	return escaped
+}
+
 type DB struct {
 	path string
 	db   *sql.DB
@@ -401,10 +411,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		where = append(where, "format=?"); args = append(args, filter.Format)
 	}
 	if filter.Search != "" {
-		escaped := strings.ReplaceAll(filter.Search, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "%", "\\%")
-		escaped = strings.ReplaceAll(escaped, "_", "\\_")
-		pattern := "%" + escaped + "%"
+		pattern := "%" + escapeLike(filter.Search) + "%"
 		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
 	}
@@ -475,10 +482,7 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 		where = append(where, "format=?"); args = append(args, filter.Format)
 	}
 	if filter.Search != "" {
-		escaped := strings.ReplaceAll(filter.Search, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "%", "\\%")
-		escaped = strings.ReplaceAll(escaped, "_", "\\_")
-		pattern := "%" + escaped + "%"
+		pattern := "%" + escapeLike(filter.Search) + "%"
 		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
 		args = append(args, pattern, pattern, pattern)
 	}
