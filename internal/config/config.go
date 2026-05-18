@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -114,6 +115,7 @@ type HLSConfig struct {
 	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
 	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
 	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
+	MaxStreams int `yaml:"max_streams"` // default 4 (RPi constraint)
 }
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
@@ -198,12 +200,24 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config is nil")
 	}
 	// cameras must have id and url
+	seen := make(map[string]int)
 	for i, c := range cfg.Cameras {
 		if strings.TrimSpace(c.ID) == "" {
 			return fmt.Errorf("camera[%d].id is required", i)
 		}
+		if j, ok := seen[c.ID]; ok {
+			return fmt.Errorf("camera[%d] and camera[%d] have duplicate id %q", j, i, c.ID)
+		}
+		seen[c.ID] = i
 		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" {
 			return fmt.Errorf("camera[%d].url is required", i)
+		}
+		// Validate URL format if set
+		if c.URL != "" {
+			parsed, err := url.Parse(c.URL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("camera[%d].url has invalid format: %s", i, c.URL)
+			}
 		}
 		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) == "" {
 			return fmt.Errorf("camera[%d].url or onvif_endpoint is required for ONVIF cameras", i)
@@ -211,6 +225,13 @@ func Validate(cfg *Config) error {
 		// Auto-populate: if url is set but onvif_endpoint is empty, copy url to onvif_endpoint
 		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) != "" {
 			c.ONVIFEndpoint = c.URL
+		}
+		// Validate ONVIF endpoint URL format if set
+		if c.ONVIFEndpoint != "" {
+			parsed, err := url.Parse(c.ONVIFEndpoint)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("camera[%d].onvif_endpoint has invalid format: %s", i, c.ONVIFEndpoint)
+			}
 		}
 		// Accept both old combined format and new separate format
 		proto := c.Protocol
@@ -235,14 +256,14 @@ func Validate(cfg *Config) error {
 		}
 	}
 	// port ranges
-	if cfg.FTP.Port < 0 || cfg.FTP.Port > 65535 {
+	if cfg.FTP.Port < 1 || cfg.FTP.Port > 65535 {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
 	}
 	// Validate segment_duration
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("storage.segment_duration invalid: %w", err)
-	} else if dur > 5*time.Minute {
-		return fmt.Errorf("storage.segment_duration must be <= 5m on RPi 3B, got %s", cfg.Storage.SegmentDuration)
+	} else if dur > 30*time.Second {
+		return fmt.Errorf("storage.segment_duration must be <= 30s on RPi 3B, got %s", cfg.Storage.SegmentDuration)
 	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
@@ -280,6 +301,10 @@ func Validate(cfg *Config) error {
 	// Validate hls.segment_count
 	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
 		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)
+	}
+	// Validate hls.max_streams
+	if cfg.HLS.MaxStreams < 1 || cfg.HLS.MaxStreams > 20 {
+		return fmt.Errorf("hls.max_streams must be between 1 and 20, got %d", cfg.HLS.MaxStreams)
 	}
 	return nil
 }
@@ -353,6 +378,9 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.HLS.SegmentCount <= 0 {
 		cfg.HLS.SegmentCount = 7
+	}
+	if cfg.HLS.MaxStreams <= 0 {
+		cfg.HLS.MaxStreams = 4
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"

@@ -343,3 +343,138 @@ func writeTempYAML(t *testing.T, content string) string {
 	return path
 }
 
+func TestDuplicateCameraID(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"},
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
+		},
+	}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate id")
+}
+
+func TestUniqueCameraIDPasses(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"},
+			{ID: "cam2", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
+		},
+	}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestCameraURLInvalidFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"missing scheme", "192.168.1.10:554/stream"},
+		{"missing host", "rtsp://"},
+		{"garbage", ":///"},
+		{"no path", "rtsp://"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: tt.url}}}
+			cfg.applyDefaults()
+			err := Validate(cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "url has invalid format")
+		})
+	}
+}
+
+func TestCameraURLValidFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		protocol string
+	}{
+		{"rtsp", "rtsp://192.168.1.10:554/stream", "rtsp"},
+		{"http", "http://192.168.1.101/capture", "http"},
+		{"https", "https://camera.example.com/stream", "rtsp"},
+		{"xiaomi", "xiaomi://device123", "xiaomi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.protocol == "xiaomi" {
+				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: tt.url}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
+				cfg.applyDefaults()
+				require.NoError(t, Validate(cfg))
+			} else {
+				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: tt.protocol, URL: tt.url}}}
+				cfg.applyDefaults()
+				require.NoError(t, Validate(cfg))
+			}
+		})
+}
+}
+
+func TestONVIFEndpointInvalidFormat(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", ONVIFEndpoint: "no-scheme"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "onvif_endpoint has invalid format")
+}
+
+func TestFTPPortZeroRejected(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.FTP.Port = 0 // override default to test validation
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ftp port out of range")
+}
+
+func TestSegmentDurationExceeds30s(t *testing.T) {
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: "60s"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be <= 30s")
+}
+
+func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "30s", cfg.Storage.SegmentDuration)
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestHLSMaxStreamsDefault(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 4, cfg.HLS.MaxStreams)
+}
+
+func TestHLSMaxStreamsValidation_Valid(t *testing.T) {
+	for _, ms := range []int{1, 4, 10, 20} {
+		cfg := &Config{HLS: HLSConfig{MaxStreams: ms, SegmentCount: 7}}
+		cfg.applyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "max_streams=%d should be valid", ms)
+	}
+}
+
+func TestHLSMaxStreamsValidation_TooLow(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{MaxStreams: 0, SegmentCount: 7}}
+	cfg.applyDefaults()
+	cfg.HLS.MaxStreams = 0 // override default to test validation
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.max_streams")
+}
+func TestHLSMaxStreamsValidation_TooHigh(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{MaxStreams: 21, SegmentCount: 7}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.max_streams")
+}
