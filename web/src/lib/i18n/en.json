@@ -483,5 +483,15 @@
   "archives.deleteRecordingSuccess": "Recording deleted",
   "archives.retentionUpdated": "Retention policy updated",
   "archives.totalSize": "Total Size",
-  "archives.recordingCount": "Recordings"
-}
+  "archives.recordingCount": "Recordings",
+  "settings.featureToggles.title": "Feature Toggles",
+  "settings.featureToggles.description": "Enable or disable camera protocol support. Disabled protocols will stop all associated cameras.",
+  "settings.featureToggles.protocols.rtsp": "RTSP Cameras",
+  "settings.featureToggles.protocols.http": "HTTP JPEG Cameras",
+  "settings.featureToggles.protocols.onvif": "ONVIF Cameras",
+  "settings.featureToggles.protocols.xiaomi": "Xiaomi Cameras",
+  "settings.featureToggles.save": "Save Changes",
+  "settings.featureToggles.saving": "Saving...",
+  "settings.featureToggles.warning": "Disabling will stop all cameras using this protocol",
+  "settings.featureToggles.saved": "Feature toggles saved",
+  "settings.featureToggles.error": "Failed to save feature toggles"}

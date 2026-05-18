@@ -483,5 +483,15 @@
   "archives.deleteRecordingSuccess": "录像已删除",
   "archives.retentionUpdated": "保留策略已更新",
   "archives.totalSize": "总大小",
-  "archives.recordingCount": "录像数量"
-}
+  "archives.recordingCount": "录像数量",
+  "settings.featureToggles.title": "功能开关",
+  "settings.featureToggles.description": "启用或禁用摄像头协议支持。禁用后该协议的所有摄像头将停止录制。",
+  "settings.featureToggles.protocols.rtsp": "RTSP 摄像头",
+  "settings.featureToggles.protocols.http": "HTTP JPEG 摄像头",
+  "settings.featureToggles.protocols.onvif": "ONVIF 摄像头",
+  "settings.featureToggles.protocols.xiaomi": "小米摄像头",
+  "settings.featureToggles.save": "保存修改",
+  "settings.featureToggles.saving": "保存中...",
+  "settings.featureToggles.warning": "禁用后该协议的所有摄像头将停止录制",
+  "settings.featureToggles.saved": "功能开关已保存",
+  "settings.featureToggles.error": "保存功能开关失败"}
