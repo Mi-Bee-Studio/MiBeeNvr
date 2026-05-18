@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,16 +14,16 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Storage     StorageConfig     `yaml:"storage"`
-	Cameras     []CameraConfig    `yaml:"cameras"`
-	Cleanup     CleanupConfig     `yaml:"cleanup"`
-	Merge       MergeConfig        `yaml:"merge"`
-	Auth        AuthConfig        `yaml:"auth"`
-	FTP         FTPConfig         `yaml:"ftp"`
-	MQTT        MQTTConfig        `yaml:"mqtt"`
-	WebDAV      WebDAVConfig      `yaml:"webdav"`
-	HLS         HLSConfig         `yaml:"hls"`
+	Server        ServerConfig        `yaml:"server"`
+	Storage       StorageConfig       `yaml:"storage"`
+	Cameras       []CameraConfig      `yaml:"cameras"`
+	Cleanup       CleanupConfig       `yaml:"cleanup"`
+	Merge         MergeConfig         `yaml:"merge"`
+	Auth          AuthConfig          `yaml:"auth"`
+	FTP           FTPConfig           `yaml:"ftp"`
+	MQTT          MQTTConfig          `yaml:"mqtt"`
+	WebDAV        WebDAVConfig        `yaml:"webdav"`
+	HLS           HLSConfig           `yaml:"hls"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
 	Version       string              `yaml:"version"`
@@ -33,27 +34,27 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	RootDir         string `yaml:"root_dir"`        // default "/mnt/data/nvr"
+	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"
 	SegmentDuration string `yaml:"segment_duration"` // default "30s"
 }
 
 type CameraConfig struct {
-	ID       string `yaml:"id"`
-	Name     string `yaml:"name"`
-	Protocol string `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
-	Encoding       string `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
-	URL      string `yaml:"url"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	ONVIFEndpoint  string `yaml:"onvif_endpoint"`
-	ProfileToken   string `yaml:"profile_token"`
-	StreamEncoding string `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	Enabled  bool   `yaml:"enabled"`
-	SubStreamURL   string `yaml:"sub_stream_url"`
-	SnapshotURL    string `yaml:"snapshot_url"`
-	SampleInterval int    `yaml:"sample_interval"`
-	HLSMaxFPS      int    `yaml:"hls_max_fps"`
-	Merge         *MergeConfig `yaml:"merge"`
+	ID             string       `yaml:"id"`
+	Name           string       `yaml:"name"`
+	Protocol       string       `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding       string       `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
+	URL            string       `yaml:"url"`
+	Username       string       `yaml:"username"`
+	Password       string       `yaml:"password"`
+	ONVIFEndpoint  string       `yaml:"onvif_endpoint"`
+	ProfileToken   string       `yaml:"profile_token"`
+	StreamEncoding string       `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
+	Enabled        bool         `yaml:"enabled"`
+	SubStreamURL   string       `yaml:"sub_stream_url"`
+	SnapshotURL    string       `yaml:"snapshot_url"`
+	SampleInterval int          `yaml:"sample_interval"`
+	HLSMaxFPS      int          `yaml:"hls_max_fps"`
+	Merge          *MergeConfig `yaml:"merge"`
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
@@ -61,9 +62,9 @@ type CameraConfig struct {
 }
 
 type CleanupConfig struct {
-	RetentionDays       int    `yaml:"retention_days"`        // default 30
-	CheckInterval       string `yaml:"check_interval"`         // default "1h"
-	DiskThresholdPercent int   `yaml:"disk_threshold_percent"` // default 95
+	RetentionDays        int    `yaml:"retention_days"`         // default 30
+	CheckInterval        string `yaml:"check_interval"`         // default "1h"
+	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 95
 }
 
 type MergeConfig struct {
@@ -76,19 +77,19 @@ type MergeConfig struct {
 }
 
 type AuthConfig struct {
-Username     string `yaml:"username"`
+	Username     string `yaml:"username"`
 	PasswordHash string `yaml:"password_hash"`
 	Password     string `yaml:"password"`
 }
 
 type FTPConfig struct {
-	Enabled          *bool  `yaml:"enabled"`           // default true
-	Port             int    `yaml:"port"`              // default 2121
+	Enabled          *bool  `yaml:"enabled"`            // default true
+	Port             int    `yaml:"port"`               // default 2121
 	PassivePortRange string `yaml:"passive_port_range"` // default "2122-2140"
 }
 
 type MQTTConfig struct {
-	Enabled  bool   `yaml:"enabled"`   // default false
+	Enabled  bool   `yaml:"enabled"` // default false
 	Broker   string `yaml:"broker"`
 	Topic    string `yaml:"topic"`
 	ClientID string `yaml:"client_id"`
@@ -100,12 +101,11 @@ type WebDAVConfig struct {
 	ReadWrite  bool   `yaml:"read_write"`  // default false
 }
 
-
 // ObservabilityConfig defines observability settings
 type ObservabilityConfig struct {
-	LogLevel     string `yaml:"log_level"`     // default "info"
-	LogFormat    string `yaml:"log_format"`    // default "text"
-	EnablePprof  bool   `yaml:"enable_pprof"`  // default false
+	LogLevel    string `yaml:"log_level"`    // default "info"
+	LogFormat   string `yaml:"log_format"`   // default "text"
+	EnablePprof bool   `yaml:"enable_pprof"` // default false
 }
 
 type HLSConfig struct {
@@ -137,10 +137,17 @@ func Load(path string) (*Config, error) {
 	// apply defaults
 	cfg.applyDefaults()
 
+	// Decrypt sensitive fields if encryption key is available
+	if key := GetEncryptionKey(); key != nil {
+		decryptConfig(&cfg, key)
+	}
+
 	return &cfg, nil
 }
 
 // Save writes the Config to path as YAML using atomic write (temp file + rename).
+// If an encryption key is available, sensitive fields are encrypted before writing
+// and restored to plaintext in memory after the write completes.
 func Save(path string, cfg *Config) error {
 	if path == "" {
 		return fmt.Errorf("path must be provided")
@@ -148,6 +155,15 @@ func Save(path string, cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
+
+	// Snapshot and encrypt sensitive fields if key is available
+	key := GetEncryptionKey()
+	if key != nil {
+		snap := snapshotSensitive(cfg)
+		encryptConfig(cfg, key)
+		defer snap.restore(cfg)
+	}
+
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -208,7 +224,7 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
-	}
+		}
 	}
 	// Validate Xiaomi configuration
 	for _, cam := range cfg.Cameras {
@@ -232,7 +248,7 @@ func Validate(cfg *Config) error {
 	}
 	// Validate disk_threshold_percent
 	if cfg.Cleanup.DiskThresholdPercent < 50 || cfg.Cleanup.DiskThresholdPercent > 99 {
-	return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
+		return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
 	}
 	// Validate observability.log_level
 	if cfg.Observability.LogLevel != "debug" && cfg.Observability.LogLevel != "info" && cfg.Observability.LogLevel != "warn" && cfg.Observability.LogLevel != "error" {
@@ -407,4 +423,33 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
 	}
 	return result
+}
+
+// EncryptConfigFile loads a config file, encrypts all sensitive fields, and saves it back.
+// Returns the list of field paths that were encrypted.
+// Returns an error if no encryption key is available or if the config cannot be loaded/saved.
+func EncryptConfigFile(path string) ([]string, error) {
+	key := GetEncryptionKey()
+	if key == nil {
+		return nil, fmt.Errorf("NVR_ENCRYPTION_KEY environment variable not set (must be 32-byte base64-encoded key)")
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	// Find plaintext fields before encryption
+	plaintextFields := SensitiveFieldPaths(cfg)
+	if len(plaintextFields) == 0 {
+		return nil, nil // nothing to encrypt
+	}
+
+	slog.Info("encrypting config fields", "path", path, "fields", plaintextFields)
+
+	// Save will encrypt via the snapshot mechanism
+	if err := Save(path, cfg); err != nil {
+		return nil, fmt.Errorf("save encrypted config: %w", err)
+	}
+
+	return plaintextFields, nil
 }
