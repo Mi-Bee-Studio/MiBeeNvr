@@ -37,17 +37,19 @@ func (m *mockMessage) Ack()                                     {}
 
 func TestNewClient(t *testing.T) {
 	cb := &mockCallback{}
-	c := NewClient("tcp://localhost:1883", "test-client", "mibee-nvr", cb.callback)
+	c := NewClient("tcp://localhost:1883", "test-client", "mibee-nvr", "", "", cb.callback)
 
 	assert.Equal(t, "tcp://localhost:1883", c.brokerURL)
 	assert.Equal(t, "test-client", c.clientID)
 	assert.Equal(t, "mibee-nvr", c.topicPrefix)
+	assert.Equal(t, "", c.username)
+	assert.Equal(t, "", c.password)
 	assert.NotNil(t, c.onAction)
 }
 
 func TestParseActionStart(t *testing.T) {
 	cb := &mockCallback{}
-	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", cb.callback)
+	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
 
 	msg := &mockMessage{
 		topic:   "mibee-nvr/trigger/camera1",
@@ -63,7 +65,7 @@ func TestParseActionStart(t *testing.T) {
 
 func TestParseActionStop(t *testing.T) {
 	cb := &mockCallback{}
-	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", cb.callback)
+	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
 
 	msg := &mockMessage{
 		topic:   "mibee-nvr/trigger/camera2",
@@ -78,12 +80,12 @@ func TestParseActionStop(t *testing.T) {
 }
 
 func TestIsConfigured(t *testing.T) {
-	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", nil)
+	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", nil)
 	assert.True(t, c.IsConfigured())
 }
 
 func TestNotConfiguredNoOp(t *testing.T) {
-	c := NewClient("", "test", "mibee-nvr", nil)
+	c := NewClient("", "test", "mibee-nvr", "", "", nil)
 	assert.False(t, c.IsConfigured())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -93,4 +95,13 @@ func TestNotConfiguredNoOp(t *testing.T) {
 }
 
 // Ensure mockMessage satisfies mqtt.Message interface at compile time.
+
+func TestNewClientWithAuth(t *testing.T) {
+	cb := &mockCallback{}
+	c := NewClient("tcp://localhost:1883", "test-client", "mibee-nvr", "mqtt-user", "mqtt-pass", cb.callback)
+
+	assert.Equal(t, "mqtt-user", c.username)
+	assert.Equal(t, "mqtt-pass", c.password)
+	assert.True(t, c.IsConfigured())
+}
 var _ mqtt.Message = (*mockMessage)(nil)
