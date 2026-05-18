@@ -130,3 +130,25 @@ func TestValidatePath_RelativePathWithDotDot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tmpDir, "sub", "file.txt"), path)
 }
+
+func TestValidatePath_SymlinkTraversal(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	realDir := filepath.Join(tmpDir, "real")
+	outsideDir := filepath.Join(tmpDir, "outside")
+	require.NoError(t, os.MkdirAll(realDir, 0755))
+	require.NoError(t, os.MkdirAll(outsideDir, 0755))
+
+	// Create a file outside the intended base, then symlink to it from inside
+	outsideFile := filepath.Join(outsideDir, "secret.txt")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0644))
+
+	// Create a symlink inside realDir that points to outsideDir
+	linkPath := filepath.Join(realDir, "escape")
+	require.NoError(t, os.Symlink(outsideDir, linkPath))
+
+	// Attempt traversal via the symlink
+	_, err := ValidatePath(realDir, "escape/secret.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside storage root")
+}
