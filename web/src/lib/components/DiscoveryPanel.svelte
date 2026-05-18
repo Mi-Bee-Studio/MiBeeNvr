@@ -62,9 +62,7 @@
           xiaomiLoggedIn = true;
           xiaomiDeviceList = res.devices;
         }
-      } catch {
-        // Not authenticated, keep login form
-      }
+      } catch (e) { console.warn('Xiaomi not authenticated:', e); }
     }
   }
 
@@ -112,9 +110,7 @@
       showToast(t('cameras.cameraAdded'), 'success');
       discoveredDevices = discoveredDevices.filter(d => d.uuid !== device.uuid);
       oncameraadded?.();
-    } catch {
-      showToast(t('cameras.failedAdd'), 'error');
-    } finally {
+    } catch (e) { console.warn('Failed to add ONVIF device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
       addingDeviceId = null;
     }
   }
@@ -215,9 +211,7 @@
       });
       showToast(t('cameras.cameraAdded'), 'success');
       oncameraadded?.();
-    } catch {
-      showToast(t('cameras.failedAdd'), 'error');
-    } finally {
+    } catch (e) { console.warn('Failed to add Xiaomi device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
       xiaomiAddingDid = null;
     }
   }
@@ -227,10 +221,7 @@
       const res = await xiaomiDevices();
       xiaomiDeviceList = res.devices || [];
       xiaomiLoggedIn = true;
-    } catch {
-      xiaomiLoggedIn = false;
-      xiaomiDeviceList = [];
-    }
+    } catch (e) { console.warn('Failed to refresh Xiaomi devices:', e); xiaomiLoggedIn = false; xiaomiDeviceList = []; }
   }
 
   // Determine visibility

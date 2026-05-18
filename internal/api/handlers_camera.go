@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -190,7 +192,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.camMgr.AddCamera(r.Context(), cam)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add camera: %v", err))
+		var cae *model.CameraAlreadyExistsError
+		if errors.As(err, &cae) {
+			writeAPIError(w, http.StatusConflict, err)
+		} else {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add camera: %v", err))
+		}
 		return
 	}
 	// Persist DB-only metadata fields
@@ -435,4 +442,97 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// handleTestConnection attempts to connect to a camera URL with a short timeout.
+// Returns success/failure, a human-readable message, and the latency in milliseconds.
+func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
+  var body struct {
+    Protocol      string `json:"protocol"`
+    URL           string `json:"url"`
+    Username      string `json:"username"`
+    Password      string `json:"password"`
+    Encoding      string `json:"encoding"`
+    ONVIFEndpoint string `json:"onvif_endpoint"`
+  }
+  if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+    writeError(w, http.StatusBadRequest, "invalid request body")
+    return
+  }
+  if body.URL == "" {
+    writeError(w, http.StatusBadRequest, "url is required")
+    return
+  }
+
+  target := body.URL
+  if body.Protocol == "onvif" && body.ONVIFEndpoint != "" {
+    target = body.ONVIFEndpoint
+  }
+
+  startTime := time.Now()
+
+  switch {
+  case strings.HasPrefix(target, "rtsp://"):
+    // RTSP: try TCP connection to the host:port
+    conn, err := net.DialTimeout("tcp", stripScheme(target), 3*time.Second)
+    if err != nil {
+      writeJSON(w, http.StatusOK, map[string]any{
+        "success":     false,
+        "message":     fmt.Sprintf("connection refused: %v", err),
+        "latency_ms":  time.Since(startTime).Milliseconds(),
+      })
+      return
+    }
+    conn.Close()
+
+  default:
+    // HTTP/ONVIF: try HEAD/GET request with timeout
+    client := &http.Client{Timeout: 3 * time.Second}
+    // For URLs with credentials, inject them
+    req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
+    if err != nil {
+      writeJSON(w, http.StatusOK, map[string]any{
+        "success":     false,
+        "message":     fmt.Sprintf("invalid URL: %v", err),
+        "latency_ms":  time.Since(startTime).Milliseconds(),
+      })
+      return
+    }
+    if body.Username != "" {
+      req.SetBasicAuth(body.Username, body.Password)
+    }
+    resp, err := client.Do(req)
+    if err != nil {
+      writeJSON(w, http.StatusOK, map[string]any{
+        "success":     false,
+        "message":     fmt.Sprintf("connection failed: %v", err),
+        "latency_ms":  time.Since(startTime).Milliseconds(),
+      })
+      return
+    }
+    resp.Body.Close()
+  }
+
+  writeJSON(w, http.StatusOK, map[string]any{
+    "success":     true,
+    "message":     "connection successful",
+    "latency_ms":  time.Since(startTime).Milliseconds(),
+  })
+}
+
+// stripScheme extracts host:port from a URL string for TCP dialing.
+func stripScheme(rawURL string) string {
+  // Remove scheme
+  u := strings.TrimPrefix(rawURL, "rtsp://")
+  u = strings.TrimPrefix(u, "http://")
+  u = strings.TrimPrefix(u, "https://")
+  // Strip path and query
+  if idx := strings.IndexAny(u, "/?"); idx >= 0 {
+    u = u[:idx]
+  }
+  // Default port
+  if !strings.Contains(u, ":") {
+    u = u + ":554"
+  }
+  return u
 }
