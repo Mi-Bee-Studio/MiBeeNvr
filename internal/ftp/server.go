@@ -129,11 +129,23 @@ type clientDriver struct {
 func (d *clientDriver) resolvePath(name string) (string, error) {
 	cleanPath := filepath.Clean(name)
 	realPath := filepath.Join(d.server.storageMgr.RootDir(), cleanPath)
-	rel, err := filepath.Rel(d.server.storageMgr.RootDir(), realPath)
+
+	// Resolve both paths to absolute to ensure proper containment check.
+	// This prevents any bypass attempts via relative rootDir or symlinks.
+	realPathAbs, err := filepath.Abs(realPath)
+	if err != nil {
+		return "", fmt.Errorf("ftp: failed to resolve path: %w", err)
+	}
+	rootAbs, err := filepath.Abs(d.server.storageMgr.RootDir())
+	if err != nil {
+		return "", fmt.Errorf("ftp: failed to resolve root: %w", err)
+	}
+
+	rel, err := filepath.Rel(rootAbs, realPathAbs)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("ftp: access denied: %s", name)
 	}
-	return realPath, nil
+	return realPathAbs, nil
 }
 
 // ---- afero.Fs implementation ----

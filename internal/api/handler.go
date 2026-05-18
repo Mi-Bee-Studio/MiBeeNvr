@@ -527,12 +527,21 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Validate that the recording file path is within the storage root to prevent
+	// path traversal. This ensures rec.FilePath (which may come from external
+	// sources like WebDAV uploads) is confined to the storage directory.
+	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "invalid file path")
+		return
+	}
+
 	// Check for frame parameter (MJPEG frame download)
 	frameStr := r.URL.Query().Get("frame")
 	if frameStr != "" && rec.Format == model.FormatMJPEG {
 		frameIndex, err := strconv.Atoi(frameStr)
 		if err == nil {
-			entries, err := os.ReadDir(rec.FilePath)
+			entries, err := os.ReadDir(validPath)
 			if err == nil {
 				jpgFiles := []os.DirEntry{}
 				for _, e := range entries {
@@ -542,7 +551,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 				}
 				sort.Slice(jpgFiles, func(i, j int) bool { return jpgFiles[i].Name() < jpgFiles[j].Name() })
 				if frameIndex >= 0 && frameIndex < len(jpgFiles) {
-					framePath := filepath.Join(rec.FilePath, jpgFiles[frameIndex].Name())
+					framePath := filepath.Join(validPath, jpgFiles[frameIndex].Name())
 					http.ServeFile(w, r, framePath)
 					return
 				}
@@ -552,7 +561,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	filePath := rec.FilePath
+	filePath := validPath
 	info, err := os.Stat(filePath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "file not found")
