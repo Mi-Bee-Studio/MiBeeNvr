@@ -317,7 +317,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	// Check for duplicate ID
 	for _, existing := range cm.cfg.Cameras {
 		if existing.ID == cam.ID {
-			return "", fmt.Errorf("camera %q already exists", cam.ID)
+			return "", &model.CameraAlreadyExistsError{CameraID: cam.ID}
 		}
 	}
 
@@ -705,7 +705,7 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 	return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Protocol != string(model.ProtoONVIF) {
-	return nil, fmt.Errorf("camera %q is not an ONVIF camera", cameraID)
+	return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
 	}
 	endpoint := cam.ONVIFEndpoint
 	if endpoint == "" {
@@ -713,14 +713,14 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 	}
 	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
 	if err := client.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect to ONVIF camera %q: %w", cameraID, err)
+		return nil, &model.ONVIFConnectionError{CameraID: cameraID, Err: err}
 	}
 	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
 	}
 	if len(profiles) == 0 {
-		return nil, fmt.Errorf("no media profiles found for camera %q", cameraID)
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
 	return client.NewPTZController(profiles[0].Token), nil
 }

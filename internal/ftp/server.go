@@ -66,6 +66,13 @@ func (s *Server) Start(ctx context.Context) error {
 	return ftpServer.Serve()
 }
 
+// Close stops the FTP server if it is running. Safe to call multiple times.
+func (s *Server) Close() {
+	if s.ftpServer != nil {
+		_ = s.ftpServer.Stop()
+	}
+}
+
 // ---- MainDriver interface (ftpserverlib) ----
 
 // GetSettings returns the server configuration.
