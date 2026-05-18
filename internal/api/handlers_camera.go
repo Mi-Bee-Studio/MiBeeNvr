@@ -1,7 +1,9 @@
 package api
 
+
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -322,8 +324,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.camMgr.UpdateCamera(r.Context(), id, updates)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "camera not found")
+		var cnf *model.CameraNotFoundError
+		if errors.As(err, &cnf) {
+			writeAPIError(w, http.StatusNotFound, err)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
@@ -401,16 +404,15 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.camMgr.StartCamera(r.Context(), id); err != nil {
-		errMsg := err.Error()
 		switch {
-		case strings.Contains(errMsg, "not found"):
-			writeError(w, http.StatusNotFound, errMsg)
-		case strings.Contains(errMsg, "disabled"):
-			writeError(w, http.StatusBadRequest, errMsg)
-		case strings.Contains(errMsg, "already running"):
-			writeError(w, http.StatusConflict, errMsg)
+		case errors.As(err, new(*model.CameraNotFoundError)):
+			writeAPIError(w, http.StatusNotFound, err)
+		case errors.As(err, new(*model.CameraDisabledError)):
+			writeAPIError(w, http.StatusBadRequest, err)
+		case errors.As(err, new(*model.CameraAlreadyRunningError)):
+			writeAPIError(w, http.StatusConflict, err)
 		default:
-			writeError(w, http.StatusInternalServerError, errMsg)
+			writeError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}
@@ -424,8 +426,9 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.camMgr.StopCamera(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, err.Error())
+		var cnf *model.CameraNotFoundError
+		if errors.As(err, &cnf) {
+			writeAPIError(w, http.StatusNotFound, err)
 		} else {
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}

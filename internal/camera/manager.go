@@ -12,7 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -76,15 +76,10 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
-// Dispatch order: 1. in-process plugin → 2. built-in
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
-	// 1. Try in-process plugin registry
-	p := plugin.LookupProtocol(cam.Protocol)
-	if p != nil {
-		return p.NewRecorder(cam, cm.store, cm.db, cm.metrics)
-	}
-	// 2. Fall back to built-in recorders
 	switch cam.Protocol {
+	case "xiaomi":
+		return new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):
@@ -370,7 +365,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("camera %q not found", cameraID)
+		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
 	// Stop and remove recorder if running
@@ -473,7 +468,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 	}
 	if idx == -1 {
-		return nil, fmt.Errorf("camera %q not found", cameraID)
+		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
 	// Determine if recorder needs restart
@@ -614,10 +609,10 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 	}
 	if cam == nil {
-		return fmt.Errorf("camera %q not found", cameraID)
+	return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if !cam.Enabled {
-		return fmt.Errorf("camera %q is disabled, cannot restart recorder", cameraID)
+	return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Stop existing recorder
@@ -650,17 +645,17 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 	if cam == nil {
-		return fmt.Errorf("camera %q not found", cameraID)
+	return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if !cam.Enabled {
-		return fmt.Errorf("camera %q is disabled", cameraID)
+		return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Check if already running — stale recorders (error/stopped) can be restarted
 	if rec, ok := cm.recorders[cameraID]; ok {
 		status := rec.Status()
 		if status == model.StatusRecording || status == model.StatusReconnecting {
-			return fmt.Errorf("camera %q already running", cameraID)
+		return &model.CameraAlreadyRunningError{CameraID: cameraID}
 		}
 		// Stale recorder — stop and remove so we can start fresh
 		if err := rec.Stop(); err != nil {
@@ -707,10 +702,10 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 	cam := cm.GetCameraConfig(cameraID)
 	cm.mu.RUnlock()
 	if cam == nil {
-		return nil, fmt.Errorf("camera %q not found", cameraID)
+	return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Protocol != string(model.ProtoONVIF) {
-		return nil, fmt.Errorf("camera %q is not an ONVIF camera", cameraID)
+	return nil, fmt.Errorf("camera %q is not an ONVIF camera", cameraID)
 	}
 	endpoint := cam.ONVIFEndpoint
 	if endpoint == "" {

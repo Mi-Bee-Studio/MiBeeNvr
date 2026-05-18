@@ -1,15 +1,16 @@
 package api
 
+
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // --- Xiaomi cloud endpoints ---
@@ -154,13 +155,11 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 
 	devices, err := h.cloudProxy.ListDevices(r.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "expired") || strings.Contains(err.Error(), "auth") {
-			writeError(w, http.StatusUnauthorized, fmt.Sprintf("session expired: %v", err))
-		} else {
-			writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
-		}
-		return
+		writeAPIError(w, http.StatusUnauthorized, &model.AuthFailedError{Reason: err.Error()})
+	} else {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 	}
+	return
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"devices": devices,
