@@ -745,3 +745,35 @@ func intPtrOrZero(i *int) int {
 	}
 	return *i
 }
+
+// SetProtocolEnabled enables or disables a protocol.
+// When disabling, stops all cameras using that protocol.
+// When enabling, no auto-start (user starts cameras manually).
+func (cm *CameraManager) SetProtocolEnabled(protocol string, enabled bool) {
+	if !enabled {
+		cm.stopCamerasByProtocol(protocol)
+	}
+}
+
+func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	for id, rec := range cm.recorders {
+		var camProtocol string
+		for _, cam := range cm.cfg.Cameras {
+			if cam.ID == id {
+				camProtocol = cam.Protocol
+				break
+			}
+		}
+		if camProtocol == protocol {
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop recorder", "camera_id", id, "error", err)
+			}
+			delete(cm.recorders, id)
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+	}
+}

@@ -180,6 +180,19 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived ON recordings(archived)")
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='8' WHERE key='schema_version'")
+	// Migration v8 → v9: feature_flags table for protocol toggles
+	featSQL := `CREATE TABLE IF NOT EXISTS feature_flags (
+		key TEXT PRIMARY KEY,
+		value BOOLEAN NOT NULL DEFAULT FALSE,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := d.db.ExecContext(ctx, featSQL); err != nil { return err }
+	// Insert default protocol toggles if they don't exist
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags (key, value) VALUES
+		('protocol.xiaomi', 1),
+		('protocol.rtsp', 1),
+		('protocol.http', 1),
+		('protocol.onvif', 1);`)
 
 	// Migration: add encoding column if missing
 	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
