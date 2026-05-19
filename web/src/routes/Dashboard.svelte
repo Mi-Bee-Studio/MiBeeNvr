@@ -167,17 +167,18 @@
   onMount(async () => {
     try {
       const fetched = await getDashboardCameras();
-      allCameras = fetched;
+      const activeFetched = fetched.filter(c => c.enabled !== false);
+      allCameras = activeFetched;
       const savedIds = loadSavedCameraIds();
       if (savedIds.length > 0) {
-        const available = new Map(fetched.map(c => [c.id, c]));
+        const available = new Map(activeFetched.map(c => [c.id, c]));
         const filtered = savedIds
           .map(id => available.get(id))
           .filter((c): c is Camera => c !== undefined);
         selectedCameraIds = filtered.map(c => c.id);
         cameras = filtered;
       } else {
-        cameras = fetched.slice(0, 4);
+        cameras = activeFetched.slice(0, 4);
         selectedCameraIds = cameras.map(c => c.id);
       }
       pendingCameraIds = [...selectedCameraIds];
