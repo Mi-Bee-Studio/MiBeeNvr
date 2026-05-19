@@ -60,7 +60,7 @@
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
-    { href: '#/plugins', labelKey: 'nav.plugins', route: '/plugins' },
+    { href: '#/archives', labelKey: 'nav.archives', route: '/archives' },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ];
@@ -313,7 +313,7 @@
   }
   
   .mobile-menu.open {
-    max-height: 400px;
+    max-height: calc(100vh - 68px);
     opacity: 1;
     box-shadow: var(--shadow-lg);
     border-bottom: 1px solid var(--border);

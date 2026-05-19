@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package webdav
 
 import (
@@ -5,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -69,6 +72,18 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Enforce path prefix: the cleaned URL path must stay under the configured prefix.
+		// This prevents path traversal via path normalization (e.g., /dav/../secret.txt
+		// normalizes to /secret.txt which would be outside the /dav prefix but still within
+		// the webdav.Dir filesystem root). Without this check, files in rootDir but outside
+		// the URL prefix are accessible despite the prefix configuration.
+		cleanedPath := path.Clean(r.URL.Path)
+		prefix := path.Clean(s.pathPrefix)
+		if !strings.HasPrefix(cleanedPath+"/", prefix+"/") {
+			http.Error(w, "Forbidden: path outside WebDAV prefix", http.StatusForbidden)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions, "PROPFIND":
 			davHandler.ServeHTTP(w, r)
@@ -115,8 +130,15 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 		return
 	}
 
-	// Stat the file to get size
-	fullPath := filepath.Join(s.store.RootDir(), relPath)
+	// Validate the relative path stays within storage root (defense-in-depth).
+	// The prefix enforcement above already ensures the path is under /dav, but
+	// this adds an extra layer of protection.
+	fullPath, err := storage.ValidatePath(s.store.RootDir(), relPath)
+	if err != nil {
+		webdavLogger.Warn("path validation failed for uploaded file", "path", relPath, "error", err)
+		return
+	}
+
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		webdavLogger.Warn("failed to stat uploaded file", "path", relPath, "error", err)

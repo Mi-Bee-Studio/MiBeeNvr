@@ -9,8 +9,44 @@
  * - Tab background/foreground recovery via visibilitychange
  */
 
-import { getCredentials } from '$lib/api';
 import { createHlsConfig } from './hls-config';
+
+// Error recovery thresholds (exported for testability)
+export const RECOVERY_DEBOUNCE_MS = 500;
+export const ESCALATION_WINDOW_MS = 5_000;
+export const ESCALATION_THRESHOLD = 3;
+export const ZOMBIE_READYSTATE_DURATION_MS = 20_000;
+export const ZOMBIE_FRAG_GAP_MS = 60_000;
+export const ZOMBIE_CHECK_INTERVAL_MS = 5_000;
+export const MAX_RECREATE_ATTEMPTS = 5;
+
+// Auto-retry constants for error state recovery
+export const AUTO_RETRY_DELAYS = [5000, 10000, 20000, 40000];
+export const MAX_AUTO_RETRIES = 4;
+
+/** Create an auto-retry scheduler for error state recovery.
+ *  Returns { schedule, clear, getCount } for lifecycle management. */
+export function createAutoRetryScheduler(onRetry: () => void) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let count = 0;
+
+  return {
+    schedule() {
+      if (count >= MAX_AUTO_RETRIES) return;
+      const delay = AUTO_RETRY_DELAYS[count] ?? AUTO_RETRY_DELAYS[AUTO_RETRY_DELAYS.length - 1];
+      count++;
+      timer = setTimeout(() => {
+        timer = null;
+        onRetry();
+      }, delay);
+    },
+    clear() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      count = 0;
+    },
+    getCount() { return count; },
+  };
+}
 
 export type StreamState = 'playing' | 'buffering' | 'error' | 'snapshot';
 
@@ -22,19 +58,9 @@ export interface HlsErrorConfig {
   onFallbackToSnapshot: (cameraId: string) => void;
 }
 
-/** Check if HLS stream endpoint returns 429 (max streams reached). */
-export async function checkStreamAvailable(url: string): Promise<boolean> {
-  try {
-    const creds = getCredentials();
-    const headers: HeadersInit = {};
-    if (creds) {
-      headers['Authorization'] = 'Basic ' + btoa(`${creds.username}:${creds.password}`);
-    }
-    const resp = await fetch(url, { method: 'HEAD', headers });
-    return resp.status !== 429;
-  } catch {
-    return true; // Assume available if check fails
-  }
+/** Skip pre-check — hls.js handles errors natively with its own retry logic. */
+export async function checkStreamAvailable(_url: string): Promise<boolean> {
+  return true;
 }
 
 /** Return a cleanup function that clears the timer. */
@@ -60,9 +86,6 @@ export function setupHlsErrorHandling(
   const { cameraId, maxRetries, retryDelays, onStateChange, onFallbackToSnapshot } = config;
 
   // Recovery escalation thresholds
-  const RECOVERY_DEBOUNCE_MS = 500;
-  const ESCALATION_WINDOW_MS = 5000;
-  const ESCALATION_THRESHOLD = 3;
 
   hls.on(Hls.Events.ERROR, (_event: string, data: any) => {
     if (data.fatal) {
@@ -176,9 +199,6 @@ export function setupZombieDetector(
   let lastFragLoadedTime = Date.now();
   let readyStateZeroSince: number | null = null;
 
-  const ZOMBIE_READYSTATE_DURATION_MS = 10_000;  // 10s of readyState===0
-  const ZOMBIE_FRAG_GAP_MS = 30_000;             // 30s without FRAG_LOADED
-  const CHECK_INTERVAL_MS = 5000;                 // Check every 5s
 
   // Track fragment loads
   const onFragLoaded = () => {
@@ -207,7 +227,7 @@ export function setupZombieDetector(
     if (now - lastFragLoadedTime >= ZOMBIE_FRAG_GAP_MS) {
       onZombie(cameraId);
     }
-  }, CHECK_INTERVAL_MS);
+  }, ZOMBIE_CHECK_INTERVAL_MS);
 
   return () => {
     clearInterval(intervalId);
@@ -215,8 +235,6 @@ export function setupZombieDetector(
   };
 }
 
-/** Max recreate attempts before falling back to snapshot. */
-const MAX_RECREATE_ATTEMPTS = 2;
 
 /**
  * Destroy an Hls instance and create a fresh one.

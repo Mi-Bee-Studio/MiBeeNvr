@@ -103,7 +103,7 @@ func TestSave(t *testing.T) {
         Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
         Auth:    AuthConfig{Username: "admin", PasswordHash: "$2a$10$xxx"},
         FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121, PassivePortRange: "3000-3010"},
-        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee"},
+	        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee", Username: "mqttuser", Password: "mqttpass"},
         WebDAV:  WebDAVConfig{Enabled: &webdavEnabled, PathPrefix: "/files"},
     }
     original.applyDefaults()
@@ -136,6 +136,8 @@ func TestSave(t *testing.T) {
     require.Equal(t, "tcp://mqtt.local:1883", loaded.MQTT.Broker)
     require.Equal(t, "nvr/trigger", loaded.MQTT.Topic)
     require.Equal(t, "mibee", loaded.MQTT.ClientID)
+	require.Equal(t, "mqttuser", loaded.MQTT.Username)
+	require.Equal(t, "mqttpass", loaded.MQTT.Password)
     require.NotNil(t, loaded.WebDAV.Enabled)
     require.False(t, *loaded.WebDAV.Enabled)
     require.Equal(t, "/files", loaded.WebDAV.PathPrefix)
@@ -341,124 +343,388 @@ func writeTempYAML(t *testing.T, content string) string {
 	return path
 }
 
-func TestPluginsDefaults(t *testing.T) {
-	cfg := &Config{}
-	cfg.applyDefaults()
-	require.Equal(t, "./plugins", cfg.Plugins.Directory)
-	require.NotNil(t, cfg.Plugins.Plugins)
-	require.Empty(t, cfg.Plugins.Plugins)
-}
-
-func TestPluginsConfigSection(t *testing.T) {
-	yamlContent := `plugins:
-  directory: "/custom/plugins"
-  plugins:
-    testplugin:
-      enabled: true
-      path: "/usr/lib/nvr/plugins/testplugin.so"
-      config:
-        key1: "value1"
-        key2: 42`
-
-	path := writeTempYAML(t, yamlContent)
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	require.Equal(t, "/custom/plugins", cfg.Plugins.Directory)
-	require.Contains(t, cfg.Plugins.Plugins, "testplugin")
-	p := cfg.Plugins.Plugins["testplugin"]
-	require.True(t, p.Enabled)
-	require.Equal(t, "/usr/lib/nvr/plugins/testplugin.so", p.Path)
-	require.Equal(t, "value1", p.Config["key1"])
-	require.Equal(t, 42, p.Config["key2"])
-}
-
-func TestPluginsBackwardCompatXiaomi(t *testing.T) {
-	yamlContent := `xiaomi:
-  user_id: "test-user"
-  token: "test-token"
-  region: "sg"`
-
-	path := writeTempYAML(t, yamlContent)
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	require.Contains(t, cfg.Plugins.Plugins, "xiaomi")
-	xp := cfg.Plugins.Plugins["xiaomi"]
-	require.True(t, xp.Enabled)
-	require.Equal(t, "", xp.Path)
-	require.Equal(t, "test-user", xp.Config["user_id"])
-	require.Equal(t, "test-token", xp.Config["token"])
-	require.Equal(t, "sg", xp.Config["region"])
-}
-
-func TestPluginsBackwardCompatNoOverride(t *testing.T) {
-	yamlContent := `xiaomi:
-  user_id: "old-user"
-  token: "old-token"
-  region: "cn"
-plugins:
-  plugins:
-    xiaomi:
-      enabled: false
-      path: "/custom/xiaomi.so"
-      config:
-        user_id: "new-user"
-        token: "new-token"`
-
-	path := writeTempYAML(t, yamlContent)
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	require.Contains(t, cfg.Plugins.Plugins, "xiaomi")
-	xp := cfg.Plugins.Plugins["xiaomi"]
-	require.False(t, xp.Enabled)
-	require.Equal(t, "/custom/xiaomi.so", xp.Path)
-	require.Equal(t, "new-user", xp.Config["user_id"])
-	require.Equal(t, "new-token", xp.Config["token"])
-}
-
-func TestPluginsNoBackwardCompatWhenXiaomiEmpty(t *testing.T) {
-	yamlContent := `server:
-  listen: ":8080"`
-
-	path := writeTempYAML(t, yamlContent)
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	// Default directory should be set
-	require.Equal(t, "./plugins", cfg.Plugins.Directory)
-	// No xiaomi config → no auto-generated plugins.xiaomi
-	_, exists := cfg.Plugins.Plugins["xiaomi"]
-	require.False(t, exists)
-}
-
-func TestPluginsSaveAndLoad(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mibee-nvr.yaml")
-
+func TestDuplicateCameraID(t *testing.T) {
 	cfg := &Config{
-		Server: ServerConfig{Listen: ":9090"},
-		Plugins: PluginsConfig{
-			Directory: "/opt/nvr/plugins",
-			Plugins: map[string]PluginEntryConfig{
-				"example": {
-					Enabled: true,
-					Path:    "/opt/nvr/plugins/example.so",
-					Config: map[string]interface{}{
-						"timeout": 30,
-					},
-				},
-			},
+		Cameras: []CameraConfig{
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"},
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
 		},
 	}
 	cfg.applyDefaults()
-
-	err := Save(path, cfg)
-	require.NoError(t, err)
-
-	loaded, err := Load(path)
-	require.NoError(t, err)
-	require.Equal(t, "/opt/nvr/plugins", loaded.Plugins.Directory)
-	require.Contains(t, loaded.Plugins.Plugins, "example")
-	p := loaded.Plugins.Plugins["example"]
-	require.True(t, p.Enabled)
-	require.Equal(t, "/opt/nvr/plugins/example.so", p.Path)
-	require.Equal(t, 30, p.Config["timeout"])
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate id")
 }
+
+func TestUniqueCameraIDPasses(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{
+			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"},
+			{ID: "cam2", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
+		},
+	}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestCameraURLInvalidFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"missing scheme", "192.168.1.10:554/stream"},
+		{"missing host", "rtsp://"},
+		{"garbage", ":///"},
+		{"no path", "rtsp://"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: tt.url}}}
+			cfg.applyDefaults()
+			err := Validate(cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "url has invalid format")
+		})
+	}
+}
+
+func TestCameraURLValidFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		protocol string
+	}{
+		{"rtsp", "rtsp://192.168.1.10:554/stream", "rtsp"},
+		{"http", "http://192.168.1.101/capture", "http"},
+		{"https", "https://camera.example.com/stream", "rtsp"},
+		{"xiaomi", "xiaomi://device123", "xiaomi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.protocol == "xiaomi" {
+				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: tt.url}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
+				cfg.applyDefaults()
+				require.NoError(t, Validate(cfg))
+			} else {
+				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: tt.protocol, URL: tt.url}}}
+				cfg.applyDefaults()
+				require.NoError(t, Validate(cfg))
+			}
+		})
+}
+}
+
+func TestONVIFEndpointInvalidFormat(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", ONVIFEndpoint: "no-scheme"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "onvif_endpoint has invalid format")
+}
+
+func TestFTPPortZeroRejected(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.FTP.Port = 0 // override default to test validation
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ftp port out of range")
+}
+
+func TestSegmentDurationExceeds30s(t *testing.T) {
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: "60s"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be <= 30s")
+}
+
+func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "30s", cfg.Storage.SegmentDuration)
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestHLSMaxStreamsDefault(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 4, cfg.HLS.MaxStreams)
+}
+
+func TestHLSMaxStreamsValidation_Valid(t *testing.T) {
+	for _, ms := range []int{1, 4, 10, 20} {
+		cfg := &Config{HLS: HLSConfig{MaxStreams: ms, SegmentCount: 7}}
+		cfg.applyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "max_streams=%d should be valid", ms)
+	}
+}
+
+func TestHLSMaxStreamsValidation_TooLow(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{MaxStreams: 0, SegmentCount: 7}}
+	cfg.applyDefaults()
+	cfg.HLS.MaxStreams = 0 // override default to test validation
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.max_streams")
+}
+func TestHLSMaxStreamsValidation_TooHigh(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{MaxStreams: 21, SegmentCount: 7}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.max_streams")
+}
+
+func TestValidateNilConfig(t *testing.T) {
+	err := Validate(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "config is nil")
+}
+
+func TestValidateRetentionDaysTooLow(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 0}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	// Default applies 30, so this should pass
+	require.NoError(t, err)
+}
+
+func TestValidateRetentionDaysTooHigh(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 4000}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retention_days")
+}
+
+func TestValidateDiskThresholdTooLow(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 40}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disk_threshold_percent")
+}
+
+func TestValidateDiskThresholdTooHigh(t *testing.T) {
+	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 100}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disk_threshold_percent")
+}
+
+func TestValidateLogLevelInvalid(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{LogLevel: "verbose"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log_level")
+}
+
+func TestValidateLogFormatInvalid(t *testing.T) {
+	cfg := &Config{Observability: ObservabilityConfig{LogFormat: "xml"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log_format")
+}
+
+func TestValidateLogLevelValid(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		cfg := &Config{Observability: ObservabilityConfig{LogLevel: level, LogFormat: "json"}}
+		cfg.applyDefaults()
+		require.NoError(t, Validate(cfg), "log_level=%s should be valid", level)
+	}
+}
+
+func TestValidateLogFormatValid(t *testing.T) {
+	for _, format := range []string{"json", "text"} {
+		cfg := &Config{Observability: ObservabilityConfig{LogFormat: format}}
+		cfg.applyDefaults()
+		require.NoError(t, Validate(cfg), "log_format=%s should be valid", format)
+	}
+}
+
+func TestValidateMergeEnabledInvalidInterval(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "not-a-duration", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge check_interval")
+}
+
+func TestValidateMergeEnabledInvalidWindowSize(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "bad", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge window_size")
+}
+
+func TestValidateMergeEnabledZeroBatchLimit(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 0, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	cfg.Merge.BatchLimit = 0 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "batch_limit")
+}
+
+func TestValidateMergeEnabledInvalidMinSegmentAge(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "bad", MinSegmentsToMerge: 3}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "min_segment_age")
+}
+
+func TestValidateMergeEnabledTooFewSegments(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 1}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "min_segments_to_merge")
+}
+
+func TestValidateMergeDisabledSkipsValidation(t *testing.T) {
+	cfg := &Config{Merge: MergeConfig{Enabled: false, CheckInterval: "bad"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err) // merge disabled, so invalid fields ignored
+}
+
+func TestValidateSegmentDurationInvalid(t *testing.T) {
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: "not-a-duration"}}
+	cfg.applyDefaults()
+	cfg.Storage.SegmentDuration = "not-a-duration" // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "segment_duration")
+}
+
+func TestValidateFTPPortNegative(t *testing.T) {
+	cfg := &Config{FTP: FTPConfig{Port: -1}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+}
+
+func TestCameraWhitespaceID(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "   ", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+}
+
+func TestCameraMissingURLXiaomiExempt(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestSaveNilConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	err := Save(path, nil)
+	require.Error(t, err)
+}
+
+func TestSaveEmptyPath(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	err := Save("", cfg)
+	require.Error(t, err)
+}
+
+func TestLoadEmptyPath(t *testing.T) {
+	_, err := Load("")
+	require.Error(t, err)
+}
+
+func TestApplyDefaultsMergeFields(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 200, cfg.Merge.BatchLimit)
+	require.Equal(t, "1h", cfg.Merge.CheckInterval)
+	require.Equal(t, "1h", cfg.Merge.WindowSize)
+	require.Equal(t, "10m", cfg.Merge.MinSegmentAge)
+	require.Equal(t, 3, cfg.Merge.MinSegmentsToMerge)
+}
+
+func TestApplyDefaultsObservability(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "info", cfg.Observability.LogLevel)
+	require.Equal(t, "text", cfg.Observability.LogFormat)
+	require.Equal(t, false, cfg.Observability.EnablePprof)
+}
+
+func TestApplyDefaultsVersion(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "1.0", cfg.Version)
+}
+
+func TestApplyDefaultsHLS(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 100, cfg.HLS.WriteBufferSize)
+	require.Equal(t, 10, cfg.HLS.SegmentMaxSizeMB)
+	require.Equal(t, 7, cfg.HLS.SegmentCount)
+	require.Equal(t, 4, cfg.HLS.MaxStreams)
+}
+
+func TestApplyDefaultsFTP(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, 2121, cfg.FTP.Port)
+	require.Equal(t, "2122-2140", cfg.FTP.PassivePortRange)
+	require.NotNil(t, cfg.FTP.Enabled)
+	require.True(t, *cfg.FTP.Enabled)
+}
+
+func TestCameraProtocolNormalization_RtspH264(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_h264", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
+	require.Equal(t, "h264", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraProtocolNormalization_RtspMjpeg(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_mjpeg", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
+	require.Equal(t, "mjpeg", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraProtocolNormalization_HttpJpeg(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http_jpeg", URL: "http://192.168.1.10/capture"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "http", cfg.Cameras[0].Protocol)
+	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding)
+}
+
+func TestCameraEncodingDefault_Rtsp(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "h264", cfg.Cameras[0].Encoding) // default for rtsp
+}
+
+func TestCameraEncodingDefault_Http(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http", URL: "http://192.168.1.10/capture"}}}
+	cfg.applyDefaults()
+	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding) // default for http
+}
+
+func TestValidateONVIFEndpointAutoPopulated(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", URL: "http://192.168.1.100/onvif/device_service"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+

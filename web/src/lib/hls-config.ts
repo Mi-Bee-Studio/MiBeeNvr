@@ -1,20 +1,20 @@
 /**
- * Shared hls.js configuration optimized for modern browsers.
+ * Shared hls.js configuration optimized for RPi.
  *
- * Larger buffer sizes for smoother playback. enableWorker for off-thread parsing.
+ * Conservative buffer sizes for 512MB RAM. enableWorker disabled for Web Worker compat.
  */
 
 import { getCredentials } from '$lib/api';
 import type Hls from 'hls.js';
 
-/** Modern browser optimized hls.js configuration. */
+/** RPi-optimized hls.js configuration. */
 export function createHlsConfig(): Partial<Hls.Config> {
   return {
-    enableWorker: true,
-    maxBufferLength: 15,
-    maxMaxBufferLength: 30,
-    maxBufferSize: 30 * 1024 * 1024, // 30 MB
-    backBufferLength: 5,
+    enableWorker: false,
+    maxBufferLength: 10,
+    maxMaxBufferLength: 20,
+    maxBufferSize: 15 * 1024 * 1024, // 15 MB
+    backBufferLength: 3,
     liveSyncDurationCount: 3,
     liveMaxLatencyDurationCount: 7,
     liveDurationInfinity: true,
@@ -27,6 +27,17 @@ export function createHlsConfig(): Partial<Hls.Config> {
         }
         xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
       }
+    },
+    // HLS.js 1.6+ uses fetch by default; xhrSetup alone doesn't add auth to fetch requests.
+    fetchSetup: (context, initParams) => {
+      const creds = getCredentials();
+      if (creds) {
+        initParams.headers = {
+          ...initParams.headers,
+          'Authorization': 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+        };
+      }
+      return new Request(context.url, initParams);
     },
   };
 }

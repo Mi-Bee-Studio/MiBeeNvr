@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import { formatDate } from '$lib/format';
+  import { createSnapshotManager } from '$lib/snapshot';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -24,13 +25,25 @@
   let snapshotUrls = $state<Record<string, string>>({});
   let snapshotLoading = $state<Record<string, boolean>>({});
   let snapshotTransientErrors = $state<Record<string, boolean>>({});
-  let noSnapshotCameras: Set<string> = new Set();
-  let snapshotIntervals: Record<string, ReturnType<typeof setInterval>> = {};
+
+  // Snapshot manager — handles fetch, interval, and cleanup lifecycle
+  const snapshotMgr = createSnapshotManager({
+    intervalMs: 3000,
+    getCredentials,
+    onUrlUpdate: (id, url) => { snapshotUrls[id] = url; },
+    onUrlRevoke: (id) => {
+      if (snapshotUrls[id]) { URL.revokeObjectURL(snapshotUrls[id]); delete snapshotUrls[id]; }
+    },
+    onLoadingChange: (id, val) => { snapshotLoading[id] = val; },
+    onErrorChange: (id, val) => {
+      if (val) { snapshotTransientErrors[id] = true; } else { delete snapshotTransientErrors[id]; }
+    },
+    onUnsupported: (id) => { /* tracked internally by manager */ },
+  });
 
   // Protocol capabilities for capability-based checks
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   const STORAGE_KEY = 'dashboard-selected-cameras';
-  const SNAPSHOT_INTERVAL_MS = 3000;
 
 
   function loadSavedCameraIds(): string[] {
@@ -40,7 +53,7 @@
         const ids: string[] = JSON.parse(raw);
         if (Array.isArray(ids)) return ids;
       }
-    } catch {}
+    } catch (e) { console.warn('Failed to load saved camera IDs:', e); }
     return [];
   }
 
@@ -71,11 +84,10 @@
     return `/api/cameras/${cameraId}/stream/index.m3u8`;
   }
 
-  function getGridStyle(count: number): string {
-    if (count <= 1) return 'grid-template-columns: 1fr; grid-template-rows: 1fr;';
-    if (count === 2) return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr;';
-    if (count === 3) return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;';
-    return 'grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;';
+  function getGridClass(count: number): string {
+    if (count <= 1) return 'grid-cols-1';
+    if (count === 2) return 'grid-cols-1 sm:grid-cols-2';
+    return 'grid-cols-1 sm:grid-cols-2';
   }
 
   function getCellClass(camera: Camera, index: number, count: number): string {
@@ -90,15 +102,15 @@
     return '';
   }
 
-  function getStatusBadge(camera: Camera): { class: string; label: string } {
+  function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
     const status = camera.status?.toLowerCase() || '';
     if (status === 'recording' || status === 'active') {
-      return { class: 'badge-success', label: '●' };
+      return { class: 'badge-success', label: '●', icon: CircleCheck, text: t('cameras.statusRecording') };
     }
     if (status === 'error' || status === 'failed') {
-      return { class: 'badge-error', label: '●' };
+      return { class: 'badge-error', label: '●', icon: CircleAlert, text: t('cameras.statusError') };
     }
-    return { class: 'badge-neutral', label: '●' };
+    return { class: 'badge-neutral', label: '●', icon: CirclePause, text: t('cameras.statusStopped') };
   }
 
   function isHlsSupported(camera: Camera): boolean {
@@ -109,63 +121,8 @@
 
   function getCameraMode(camera: Camera): CameraMode {
     if (isHlsSupported(camera)) return 'hls';
-    if (noSnapshotCameras.has(camera.id)) return 'unsupported';
+    if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
     return 'snapshot';
-  }
-
-  // --- Snapshot management ---
-
-  async function fetchSnapshot(cameraId: string): Promise<void> {
-    const creds = getCredentials();
-    const headers: HeadersInit = {};
-    if (creds) {
-      headers['Authorization'] = 'Basic ' + btoa(`${creds.username}:${creds.password}`);
-    }
-
-    try {
-      const response = await fetch(`/api/cameras/${cameraId}/snapshot?_=${Date.now()}`, { headers });
-      if (response.status === 404) {
-        // Camera doesn't support snapshots — permanent fallback
-        if (!noSnapshotCameras.has(cameraId)) {
-          noSnapshotCameras = new Set([...noSnapshotCameras, cameraId]);
-        }
-        return;
-      }
-      if (!response.ok) {
-        snapshotTransientErrors[cameraId] = true;
-        return;
-      }
-
-      const blob = await response.blob();
-      if (snapshotUrls[cameraId]) {
-        URL.revokeObjectURL(snapshotUrls[cameraId]);
-      }
-      snapshotUrls[cameraId] = URL.createObjectURL(blob);
-      delete snapshotTransientErrors[cameraId];
-      snapshotLoading[cameraId] = false;
-    } catch {
-      snapshotTransientErrors[cameraId] = true;
-      snapshotLoading[cameraId] = false;
-    }
-  }
-
-  function startSnapshotRefresh(cameraId: string) {
-    snapshotLoading[cameraId] = true;
-    fetchSnapshot(cameraId);
-    snapshotIntervals[cameraId] = setInterval(() => fetchSnapshot(cameraId), SNAPSHOT_INTERVAL_MS);
-  }
-
-  function stopSnapshotRefresh(cameraId: string) {
-    if (snapshotIntervals[cameraId]) {
-      clearInterval(snapshotIntervals[cameraId]);
-      delete snapshotIntervals[cameraId];
-    }
-    if (snapshotUrls[cameraId]) {
-      URL.revokeObjectURL(snapshotUrls[cameraId]);
-      delete snapshotUrls[cameraId];
-    }
-    delete snapshotLoading[cameraId];
-    delete snapshotTransientErrors[cameraId];
   }
 
   // --- Expand / shrink ---
@@ -235,24 +192,20 @@
       if (list && list.length > 0) {
         protocolsMap = buildProtocolsMap(list);
       }
-    } catch {
-      // Use DEFAULT_PROTOCOLS already initialized
+    } catch (e) {
+      console.warn('Failed to load protocol capabilities:', e);
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
   });
-
-  onDestroy(() => {
-    for (const id of Object.keys(snapshotIntervals)) {
-      stopSnapshotRefresh(id);
-    }
-    document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  });
-
 
   let prevVisibleIds: Set<string> = new Set();
 
   // React to camera list changes — init/teardown snapshot cameras
+  // Cleanup return ensures intervals are cleared on component destroy
   $effect(() => {
     const _cameras = cameras;
     const _loading = loading;
@@ -263,7 +216,7 @@
     // Cleanup snapshot cameras that were removed
     for (const id of prevVisibleIds) {
       if (!visibleIds.has(id)) {
-        stopSnapshotRefresh(id);
+        snapshotMgr.stopRefresh(id);
       }
     }
 
@@ -273,11 +226,16 @@
 
       const mode = getCameraMode(cam);
       if (mode === 'snapshot') {
-        startSnapshotRefresh(cam.id);
+        snapshotMgr.startRefresh(cam.id);
       }
     }
 
     prevVisibleIds = visibleIds;
+
+    // Cleanup: stop all snapshot refreshes when effect re-runs or component unmounts
+    return () => {
+      snapshotMgr.stopAll();
+    };
   });
 </script>
 
@@ -359,8 +317,7 @@
     {:else}
       <!-- Camera grid -->
       <div
-        class="grid gap-2 sm:gap-3"
-        style={getGridStyle(cameras.length)}
+        class="grid gap-2 sm:gap-3 {getGridClass(cameras.length)}"
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
@@ -373,7 +330,11 @@
             class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)}"
             class:cell-expanded={expandedCameraId === camera.id}
             style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
+            role="button"
+            tabindex="0"
+            aria-label="{camera.name || camera.id} — {status.text}"
             onclick={() => handleCellClick(camera, index)}
+            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
             ondblclick={() => handleCellDblClick(camera)}
           >
             {#if mode === 'snapshot'}
@@ -412,7 +373,10 @@
               <!-- Camera name + status overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
-                  <span class="badge {status.class} text-[10px] px-1.5 py-0.5">{status.label}</span>
+                  <span class="badge {status.class} text-[10px] px-1.5 py-0.5 flex items-center gap-1">
+                    <svelte:component this={status.icon} size={10} />
+                    {status.text}
+                  </span>
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
                 </div>
               </div>
@@ -438,7 +402,10 @@
               <!-- Camera name overlay -->
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
-                  <span class="badge badge-neutral text-[10px] px-1.5 py-0.5">●</span>
+                  <span class="badge badge-neutral text-[10px] px-1.5 py-0.5 flex items-center gap-1">
+                    <CirclePause size={10} />
+                    {t('live.notSupported')}
+                  </span>
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
                 </div>
               </div>

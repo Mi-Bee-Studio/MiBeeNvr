@@ -9,6 +9,7 @@
     destroyAndRecreate,
     handleVisibilityChange,
     checkStreamAvailable,
+    createAutoRetryScheduler,
   } from '$lib/hls-errors';
   import type { StreamState } from '$lib/hls-errors';
 
@@ -32,6 +33,7 @@
   let HlsConstructor: any = null;
   let recreateAttempts = { value: 0 };
   let zombieCleanup: (() => void) | null = null;
+  let autoRetry: ReturnType<typeof createAutoRetryScheduler> | null = null;
   let visibilityCleanup: (() => void) | null = null;
 
   function dispatchStateChange(state: StreamState | 'loading') {
@@ -52,6 +54,10 @@
 
   function updateState(cameraId_: string, state: StreamState) {
     if (cameraId_ === cameraId) {
+      if (state === 'playing' && autoRetry) {
+        autoRetry.clear();
+        autoRetry = null;
+      }
       streamState = state;
     }
   }
@@ -73,6 +79,7 @@
   }
 
   function handleReconnect() {
+    if (autoRetry) { autoRetry.clear(); autoRetry = null; }
     recreateAttempts.value = 0;
     streamState = 'loading';
     destroyCurrentHls();
@@ -87,6 +94,14 @@
       onStateChange: updateState,
       onFallbackToSnapshot: () => {
         streamState = 'error';
+        if (!autoRetry) {
+          autoRetry = createAutoRetryScheduler(() => {
+            streamState = 'loading';
+            destroyCurrentHls();
+            initHls();
+          });
+        }
+        autoRetry.schedule();
       },
     };
   }
@@ -96,12 +111,11 @@
       zombieCleanup();
       zombieCleanup = null;
     }
+    if (autoRetry) { autoRetry.clear(); autoRetry = null; }
     if (hlsInstance) {
       try {
         hlsInstance.destroy();
-      } catch {
-        // Already destroyed
-      }
+      } catch (e) { console.warn('HLS destroy error (already destroyed?):', e); }
       hlsInstance = null;
     }
     HlsConstructor = null;
@@ -144,9 +158,9 @@
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         videoEl?.play().catch(() => {});
       });
-    } catch {
-      streamState = 'error';
-    }
+    } catch (e) { console.warn('HLS init failed:', e);
+streamState = 'error';
+}
   }
 
   // Main lifecycle effect — reinit when streamUrl changes
@@ -156,7 +170,7 @@
     if (!_url || !_proto) return;
 
     // Only HLS protocols
-    const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp'];
+    const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp', 'xiaomi'];
     if (!hlsProtocols.includes(_proto)) return;
 
     destroyCurrentHls();
@@ -245,6 +259,7 @@
     autoplay
     muted
     playsinline
+    aria-label="{cameraName} — {dotTitle}"
   >
     {t('live.videoUnsupportedTag')}
   </video>

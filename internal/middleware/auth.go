@@ -28,7 +28,7 @@ var authFailures sync.Map
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
 // If passwordHash is empty but plaintextPassword is non-empty, it is auto-hashed via bcrypt.
 // Returns the middleware and the effective hash used (for config persistence).
-// If both are empty, authentication is bypassed (first-time setup mode).
+// If both are empty, all requests return 503 Service Unavailable with setup guidance.
 func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(http.Handler) http.Handler, string) {
 	effectiveHash := passwordHash
 	if strings.TrimSpace(passwordHash) == "" && strings.TrimSpace(plaintextPassword) != "" {
@@ -57,9 +57,11 @@ func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(h
 			}
 
 			if strings.TrimSpace(effectiveHash) == "" {
-				// No password configured — allow access (first-time setup mode)
-				// User can set password later via Web UI settings page
-				next.ServeHTTP(w, r)
+				// No password configured — reject all requests with setup guidance
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
 				return
 			}
 
@@ -142,4 +144,43 @@ func ResetAuthFailures() {
 		authFailures.Delete(key)
 		return true
 	})
+}
+
+// RateLimiterConfig defines parameters for a per-IP rate limiter.
+type RateLimiterConfig struct {
+	MaxRequests int
+	Window      time.Duration
+}
+
+// NewRateLimiter returns a middleware that rate limits requests per IP
+// using a sliding window approach.
+func NewRateLimiter(cfg RateLimiterConfig) func(http.Handler) http.Handler {
+	var mu sync.Mutex
+	entries := make(map[string]*rateLimitEntry)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := extractIP(r.RemoteAddr)
+
+			mu.Lock()
+			entry, ok := entries[ip]
+			now := time.Now()
+
+			if !ok || now.Sub(entry.windowStart) > cfg.Window {
+				entries[ip] = &rateLimitEntry{count: 1, windowStart: now}
+				mu.Unlock()
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			entry.count++
+			if entry.count > cfg.MaxRequests {
+				mu.Unlock()
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			mu.Unlock()
+			next.ServeHTTP(w, r)
+		})
+	}
 }

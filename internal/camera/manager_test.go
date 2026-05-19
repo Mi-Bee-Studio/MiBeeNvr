@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +15,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
 )
 
 func testConfig() *config.Config {
@@ -869,73 +867,9 @@ func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
 	ctx := context.Background()
 	_, err = mgr.GetONVIFPTZController(ctx, "cam-h264")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not an ONVIF camera")
+	require.Contains(t, err.Error(), "not an ONVIF device")
 }
 
-// --- Plugin registry tests ---
-
-func TestCreateRecorder_PluginLookup(t *testing.T) {
-	t.Helper()
-
-	// Register a mock plugin for a custom protocol
-	const testProto = "test-plugin-proto"
-	mockRec := &mockRecorder{status: model.StatusStopped}
-	plugin.Register(&mockPlugin{
-		name:     "test-plugin",
-		protocols: []string{testProto},
-		recorder: mockRec,
-	})
-
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
-			SegmentDuration: "1m",
-		},
-	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.CleanupTempFiles() })
-
-	mgr := NewCameraManager(cfg, store, nil, "")
-
-	cam := config.CameraConfig{
-		ID:       "cam-plugin",
-		Name:     "Plugin Camera",
-		Protocol: testProto,
-		Enabled:  true,
-	}
-	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
-	require.NoError(t, err)
-
-	rec := mgr.createRecorder(cam, segDur)
-	require.NotNil(t, rec, "plugin-registered protocol should create a recorder via plugin")
-	require.Equal(t, model.StatusStopped, rec.Status())
-}
-
-// mockRecorder satisfies model.Recorder for testing.
-type mockRecorder struct{ status model.RecorderStatus }
-
-func (m *mockRecorder) Start(_ context.Context) error  { return nil }
-func (m *mockRecorder) Stop() error                     { return nil }
-func (m *mockRecorder) Status() model.RecorderStatus    { return m.status }
-
-// mockPlugin satisfies plugin.RecorderPlugin for testing.
-type mockPlugin struct {
-	name      string
-	protocols []string
-	recorder  model.Recorder
-}
-
-func (p *mockPlugin) Name() string                          { return p.name }
-func (p *mockPlugin) Protocols() []string                    { return p.protocols }
-func (p *mockPlugin) NewRecorder(_ config.CameraConfig, _ *storage.Manager, _ *storage.DB, _ ...*metrics.Metrics) model.Recorder {
-	return p.recorder
-}
-func (p *mockPlugin) RegisterRoutes(_ chi.Router)            {}
-func (p *mockPlugin) ConfigSchema() interface{}              { return nil }
 
 func TestCreateRecorder_FallbackToBuiltIn(t *testing.T) {
 	t.Helper()
@@ -970,11 +904,8 @@ func TestCreateRecorder_FallbackToBuiltIn(t *testing.T) {
 	require.NotNil(t, rec, "built-in rtsp+h264 should still create a recorder")
 }
 
-// --- gRPC Plugin Manager dispatch tests ---
 
-func TestCreateRecorder_GRPCPluginTakesPrecedence(t *testing.T) {
-	t.Helper()
-
+func TestNewCameraManager_WithMetrics(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
@@ -988,80 +919,10 @@ func TestCreateRecorder_GRPCPluginTakesPrecedence(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.CleanupTempFiles() })
 
-	// Create a mock PluginManager that claims "xiaomi" protocol
-	pm := plugin.NewPluginManager(&config.PluginsConfig{})
-	mgr := NewCameraManager(cfg, store, nil, "", pm)
-
-	// Note: without a real gRPC plugin running, GetClientForProtocol returns nil
-	// so we can't create a real adapter here. The dispatch order is verified by
-	// testing that built-in/in-process still works when pluginMgr is set but has no client.
-	cam := config.CameraConfig{
-		ID:       "cam-rtsp",
-		Protocol: "rtsp",
-		Encoding: "h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
-		Enabled:  true,
-	}
-	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
-	require.NoError(t, err)
-
-	rec := mgr.createRecorder(cam, segDur)
-	require.NotNil(t, rec, "should fall back to built-in when no gRPC client for protocol")
-}
-
-func TestCreateRecorder_NilPluginMgr(t *testing.T) {
-	t.Helper()
-
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
-			SegmentDuration: "30s",
-		},
-	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.CleanupTempFiles() })
-
-	// nil pluginMgr — should use built-in recorders
-	mgr := NewCameraManager(cfg, store, nil, "")
-	assert.Nil(t, mgr.pluginMgr, "pluginMgr should be nil")
-
-	cam := config.CameraConfig{
-		ID:       "cam-h264",
-		Protocol: "rtsp",
-		Encoding: "h264",
-		URL:      "rtsp://127.0.0.1:1/stream",
-	}
-	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
-	require.NoError(t, err)
-
-	rec := mgr.createRecorder(cam, segDur)
-	require.NotNil(t, rec, "built-in recorder should work with nil pluginMgr")
-}
-
-func TestNewCameraManager_WithPluginMgr(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
-			SegmentDuration: "30s",
-		},
-	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.CleanupTempFiles() })
-
-	pm := plugin.NewPluginManager(&config.PluginsConfig{})
 	mm := metrics.NewMetrics()
 
-	mgr := NewCameraManager(cfg, store, nil, "", mm, pm)
+	mgr := NewCameraManager(cfg, store, nil, "", mm)
 	assert.NotNil(t, mgr)
-	assert.Equal(t, pm, mgr.pluginMgr)
 	assert.Equal(t, mm, mgr.metrics)
 }
 
@@ -1083,33 +944,12 @@ func TestNewCameraManager_BackwardCompatOpts(t *testing.T) {
 	mgr := NewCameraManager(cfg, store, nil, "", metrics.NewMetrics())
 	assert.NotNil(t, mgr)
 	assert.NotNil(t, mgr.metrics)
-	assert.Nil(t, mgr.pluginMgr)
+	assert.Nil(t, mgr.mergeMgr)
 
 	// Old style: no opts at all
 	mgr2 := NewCameraManager(cfg, store, nil, "")
 	assert.NotNil(t, mgr2)
 	assert.Nil(t, mgr2.metrics)
-	assert.Nil(t, mgr2.pluginMgr)
+	assert.Nil(t, mgr2.mergeMgr)
 }
 
-func TestStop_WithPluginMgr(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
-			SegmentDuration: "30s",
-		},
-	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.CleanupTempFiles() })
-
-	pm := plugin.NewPluginManager(&config.PluginsConfig{})
-	mgr := NewCameraManager(cfg, store, nil, "", pm)
-
-	// Stop should not panic even with a PluginManager that has no plugins
-	err = mgr.Stop()
-	require.NoError(t, err)
-}

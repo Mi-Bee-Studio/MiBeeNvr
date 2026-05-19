@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/plugin"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -46,53 +47,39 @@ type CameraManager struct {
 	configPath string
 	recorders  map[string]model.Recorder // camera_id → Recorder
 	metrics    *metrics.Metrics
-	pluginMgr  *plugin.PluginManager // gRPC plugin manager (nil = no plugins)
+	mergeMgr   *merge.MergeManager   // segment merge manager (nil = no merge)
 	mu         sync.RWMutex
 }
 
 // NewCameraManager creates a new CameraManager.
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
-	var pm *plugin.PluginManager
+	var mm *merge.MergeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
 			m = v
-		case *plugin.PluginManager:
-			pm = v
+		case *merge.MergeManager:
+			mm = v
 		}
 	}
 	return &CameraManager{
 		cfg:        cfg,
 		store:      store,
-		db:         db,
+			db:         db,
 		configPath: configPath,
 		recorders:  make(map[string]model.Recorder),
 		metrics:    m,
-		pluginMgr:  pm,
+		mergeMgr:   mm,
 	}
 }
 
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
-// Dispatch order: 1. gRPC plugin → 2. in-process plugin → 3. built-in
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
-	// 1. Try gRPC plugin manager (external process)
-	if cm.pluginMgr != nil {
-		if client := cm.pluginMgr.GetClientForProtocol(cam.Protocol); client != nil {
-			receiver := plugin.NewFrameReceiver(cm.store, cm.db, cm.metrics, cam.ID, segDur)
-			return plugin.NewGRPCRecorderAdapter(client, receiver, cam, segDur)
-		}
-	}
-
-	// 2. Try in-process plugin registry
-	p := plugin.LookupProtocol(cam.Protocol)
-	if p != nil {
-		return p.NewRecorder(cam, cm.store, cm.db, cm.metrics)
-	}
-
-	// 2. Fall back to built-in recorders
 	switch cam.Protocol {
+	case "xiaomi":
+		return new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):
@@ -265,11 +252,6 @@ func (cm *CameraManager) Stop() error {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
 	}
 
-	// Stop gRPC plugin manager if present
-	if cm.pluginMgr != nil {
-		cm.pluginMgr.Stop()
-	}
-
 	return nil
 }
 
@@ -335,7 +317,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	// Check for duplicate ID
 	for _, existing := range cm.cfg.Cameras {
 		if existing.ID == cam.ID {
-			return "", fmt.Errorf("camera %q already exists", cam.ID)
+			return "", &model.CameraAlreadyExistsError{CameraID: cam.ID}
 		}
 	}
 
@@ -383,7 +365,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		}
 	}
 	if idx == -1 {
-		return fmt.Errorf("camera %q not found", cameraID)
+		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
 	// Stop and remove recorder if running
@@ -408,6 +390,67 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	return nil
 }
 
+// ArchiveCamera archives a camera: stops recorder, merges segments, marks archived in DB,
+// marks all recordings archived, and removes from config YAML.
+// The camera row and recordings are preserved in the database.
+// Merge failure is non-blocking (logged but continues).
+func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Verify camera exists in config
+	idx := -1
+	for i, cam := range cm.cfg.Cameras {
+		if cam.ID == cameraID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("camera %q not found", cameraID)
+	}
+
+	// 1. Stop recorder if running
+	if rec, ok := cm.recorders[cameraID]; ok {
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+		}
+		delete(cm.recorders, cameraID)
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	// 2. Merge segments (non-blocking — failure is logged but does not stop archival)
+	if cm.mergeMgr != nil {
+		if err := cm.mergeMgr.MergeCamera(ctx, cameraID); err != nil {
+			logger.Warn("merge before archive failed", "camera_id", cameraID, "error", err)
+		}
+	}
+
+	// 3. Mark camera archived in DB
+	if err := cm.db.ArchiveCameraDB(ctx, cameraID); err != nil {
+		return fmt.Errorf("failed to archive camera in DB: %w", err)
+	}
+
+	// 4. Mark all recordings archived in DB
+	affected, err := cm.db.ArchiveAllRecordings(ctx, cameraID)
+	if err != nil {
+		logger.Warn("failed to archive recordings", "camera_id", cameraID, "error", err)
+	} else {
+		logger.Info("archived recordings", "camera_id", cameraID, "count", affected)
+	}
+
+	// 5. Remove from in-memory config slice and persist
+	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
+	if err := cm.persistConfig(); err != nil {
+		logger.Error("failed to persist config after archive", "camera_id", cameraID, "error", err)
+	}
+
+	logger.Info("archived camera", "camera_id", cameraID)
+	return nil
+}
+
 // UpdateCamera applies partial updates to an existing camera.
 // Returns the updated CameraConfig.
 func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, updates CameraUpdate) (*config.CameraConfig, error) {
@@ -425,7 +468,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 	}
 	if idx == -1 {
-		return nil, fmt.Errorf("camera %q not found", cameraID)
+		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
 	// Determine if recorder needs restart
@@ -566,10 +609,10 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 	}
 	if cam == nil {
-		return fmt.Errorf("camera %q not found", cameraID)
+	return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if !cam.Enabled {
-		return fmt.Errorf("camera %q is disabled, cannot restart recorder", cameraID)
+	return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Stop existing recorder
@@ -588,6 +631,70 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 	return cm.startRecorder(ctx, *cam, segDur)
 }
 
+// StartCamera manually starts the recorder for the given camera.
+func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Find camera config
+	var cam *config.CameraConfig
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			cam = &cm.cfg.Cameras[i]
+			break
+		}
+	}
+	if cam == nil {
+	return &model.CameraNotFoundError{CameraID: cameraID}
+	}
+	if !cam.Enabled {
+		return &model.CameraDisabledError{CameraID: cameraID}
+	}
+
+	// Check if already running — stale recorders (error/stopped) can be restarted
+	if rec, ok := cm.recorders[cameraID]; ok {
+		status := rec.Status()
+		if status == model.StatusRecording || status == model.StatusReconnecting {
+		return &model.CameraAlreadyRunningError{CameraID: cameraID}
+		}
+		// Stale recorder — stop and remove so we can start fresh
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
+		}
+		delete(cm.recorders, cameraID)
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	if err != nil {
+		segDur = recorder.DefaultSegmentDur
+	}
+	return cm.startRecorder(ctx, *cam, segDur)
+}
+
+// StopCamera manually stops the recorder for the given camera.
+func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	rec, ok := cm.recorders[cameraID]
+	if !ok {
+		return fmt.Errorf("camera %q not found", cameraID)
+	}
+
+	if err := rec.Stop(); err != nil {
+		logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+	}
+	delete(cm.recorders, cameraID)
+	if cm.metrics != nil {
+		cm.metrics.ActiveCameras.Dec()
+	}
+	logger.Info("stopped recorder for camera", "camera_id", cameraID)
+	return nil
+}
+
 // GetONVIFPTZController returns a PTZController for the given ONVIF camera.
 // Returns error if camera is not found, not ONVIF, or client creation fails.
 func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
@@ -595,10 +702,10 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 	cam := cm.GetCameraConfig(cameraID)
 	cm.mu.RUnlock()
 	if cam == nil {
-		return nil, fmt.Errorf("camera %q not found", cameraID)
+	return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Protocol != string(model.ProtoONVIF) {
-		return nil, fmt.Errorf("camera %q is not an ONVIF camera", cameraID)
+	return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
 	}
 	endpoint := cam.ONVIFEndpoint
 	if endpoint == "" {
@@ -606,14 +713,14 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 	}
 	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
 	if err := client.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect to ONVIF camera %q: %w", cameraID, err)
+		return nil, &model.ONVIFConnectionError{CameraID: cameraID, Err: err}
 	}
 	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
 	}
 	if len(profiles) == 0 {
-		return nil, fmt.Errorf("no media profiles found for camera %q", cameraID)
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
 	return client.NewPTZController(profiles[0].Token), nil
 }
@@ -632,4 +739,36 @@ func intPtrOrZero(i *int) int {
 		return 0
 	}
 	return *i
+}
+
+// SetProtocolEnabled enables or disables a protocol.
+// When disabling, stops all cameras using that protocol.
+// When enabling, no auto-start (user starts cameras manually).
+func (cm *CameraManager) SetProtocolEnabled(protocol string, enabled bool) {
+	if !enabled {
+		cm.stopCamerasByProtocol(protocol)
+	}
+}
+
+func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	for id, rec := range cm.recorders {
+		var camProtocol string
+		for _, cam := range cm.cfg.Cameras {
+			if cam.ID == id {
+				camProtocol = cam.Protocol
+				break
+			}
+		}
+		if camProtocol == protocol {
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop recorder", "camera_id", id, "error", err)
+			}
+			delete(cm.recorders, id)
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+	}
 }

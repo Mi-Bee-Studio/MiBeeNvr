@@ -13,15 +13,16 @@ type Recorder interface {
 	Status() RecorderStatus
 }
 
-// StorageProvider manages recording storage and metadata
-type StorageProvider interface {
-	CreateSegment(cameraID string, meta SegmentMeta) (*Segment, error)
-	CloseSegment(segmentID string) (*Recording, error)
-	WriteFrame(segmentID string, data []byte) (int, error)
-	ListRecordings(filter RecordingFilter) ([]Recording, error)
-	GetRecording(id string) (*Recording, error)
-	DeleteRecording(id string) error
-	GetStats() (StorageStats, error)
+// HLSProvider is an optional interface that recorders can implement
+// to support HLS live streaming. The api handler checks for this
+// interface via type assertion when starting an HLS stream.
+type HLSProvider interface {
+	// CodecParams returns the current codec parameters detected from the stream.
+	// Returns nil slices if codec info frames have not been received yet.
+	CodecParams() (codec Format, sps, pps, vps []byte)
+	// SetOnHLSFrame registers a callback for HLS frame delivery.
+	// The callback must be non-blocking — frames are dropped if buffer is full.
+	SetOnHLSFrame(cb func(pts int64, au [][]byte))
 }
 
 // Camera represents a camera source configuration
@@ -49,6 +50,7 @@ type Recording struct {
 	FileSize   int64     `json:"file_size"`
 	FrameCount int       `json:"frame_count"`
 	Merged     bool      `json:"merged"`
+	Archived   bool      `json:"archived"`
 }
 
 type Segment struct {
@@ -77,6 +79,7 @@ type RecordingFilter struct {
 	Offset    int
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
+	Archived  *bool // nil = all, true = archived only, false = not archived
 }
 
 type RecorderStatus string
