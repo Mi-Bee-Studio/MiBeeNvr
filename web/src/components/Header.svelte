@@ -60,7 +60,6 @@
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
-    { href: '#/archives', labelKey: 'nav.archives', route: '/archives' },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ];
