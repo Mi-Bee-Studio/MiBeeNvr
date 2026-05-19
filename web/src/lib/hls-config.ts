@@ -28,5 +28,16 @@ export function createHlsConfig(): Partial<Hls.Config> {
         xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
       }
     },
+    // HLS.js 1.6+ uses fetch by default; xhrSetup alone doesn't add auth to fetch requests.
+    fetchSetup: (context, initParams) => {
+      const creds = getCredentials();
+      if (creds) {
+        initParams.headers = {
+          ...initParams.headers,
+          'Authorization': 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+        };
+      }
+      return new Request(context.url, initParams);
+    },
   };
 }

@@ -28,6 +28,9 @@ describe('createHlsConfig', () => {
     expect(config.xhrSetup).toBeTypeOf('function');
   });
 
+  it('should have fetchSetup function defined for HLS.js 1.6+ fetch-based loader', () => {
+    expect(config.fetchSetup).toBeTypeOf('function');
+  });
   it('should have liveSyncDurationCount of 3', () => {
     expect(config.liveSyncDurationCount).toBe(3);
   });
