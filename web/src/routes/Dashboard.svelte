@@ -318,7 +318,6 @@
       <!-- Camera grid -->
       <div
         class="grid gap-2 sm:gap-3 {getGridClass(cameras.length)}"
-        style={getGridStyle(cameras.length)}
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
