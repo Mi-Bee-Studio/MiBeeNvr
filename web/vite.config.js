@@ -11,6 +11,7 @@ export default defineConfig({
       $lib: path.resolve('./src/lib'),
     },
     extensions: ['.js', '.ts', '.svelte', '.svelte.ts'],
+    conditions: ['browser'],
   },
   build: {
     rollupOptions: {
@@ -35,5 +36,7 @@ export default defineConfig({
       },
     },
   },
-  test: {},
+  test: {
+    environment: 'jsdom',
+  },
 })
