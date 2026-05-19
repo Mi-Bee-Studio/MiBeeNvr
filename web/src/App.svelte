@@ -11,7 +11,6 @@
   import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
-  import Archives from './routes/Archives.svelte';
 
   import Header from './components/Header';
 
@@ -81,9 +80,6 @@
     }
 
 
-    if (segments[0] === 'archives') {
-      return { route: 'archives', params: {} };
-    }
 
 
     if (segments[0] === 'settings') {
@@ -167,8 +163,6 @@
       <Settings />
     {:else if currentRoute === 'dashboard'}
       <Dashboard />
-    {:else if currentRoute === 'archives'}
-      <Archives />
     {/if}
   {/if}
 
