@@ -196,6 +196,14 @@ export async function deleteCamera(id: string, signal?: AbortSignal): Promise<vo
   });
 }
 
+export async function enableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
+  return updateCamera(id, { enabled: true }, signal);
+}
+
+export async function disableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
+  return updateCamera(id, { enabled: false }, signal);
+}
+
 export async function startCamera(
   id: string,
   signal?: AbortSignal
