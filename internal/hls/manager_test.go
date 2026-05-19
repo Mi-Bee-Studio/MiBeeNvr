@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -646,10 +647,10 @@ func TestSubStreamFallback_CalledOnExit(t *testing.T) {
 	mgr.streams[cameraID] = entry
 	mgr.mu.Unlock()
 
-	// Track whether fallback was invoked
-	var fallbackCalled bool
+	// Track whether fallback was invoked (atomic for data-race safety)
+	var fallbackCalled atomic.Bool
 	fallback := func() {
-		fallbackCalled = true
+		fallbackCalled.Store(true)
 	}
 
 	// Start sub-stream reader with invalid URL — parse fails immediately, triggers fallback
@@ -658,7 +659,7 @@ func TestSubStreamFallback_CalledOnExit(t *testing.T) {
 
 	// Wait for the sub-stream reader goroutine to fail and call fallback
 	require.Eventually(t, func() bool {
-		return fallbackCalled
+		return fallbackCalled.Load()
 	}, 5*time.Second, 50*time.Millisecond, "fallback should have been called when sub-stream failed")
 }
 
