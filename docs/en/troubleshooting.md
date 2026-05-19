@@ -153,6 +153,71 @@ This guide helps you diagnose and resolve common issues with MiBee NVR. If you c
    grep -r "id:" mibee-nvr.yaml
    ```
 
+#SX|## Live View Issues
+#SY|
+#HB|### Dashboard or Live View Shows Loading Indefinitely
+#SY|
+#XW|**Symptom**: Dashboard camera grid or Live View page shows "Buffering" or "Loading..." indefinitely. Video never starts playing.
+#PR|
+#SY|**Root Cause**: HLS.js 1.6+ uses `fetch` API by default instead of XHR. If auth headers are not injected into fetch requests, the server returns 401 Unauthorized, and the stream cannot load.
+#PR|
+#SY|**Solution**:
+#HB|1. Ensure you are running MiBee NVR v0.6.0 or later, which includes the `fetchSetup` auth fix
+#RP|2. Check browser console (F12) for 401 errors on `.m3u8` or `.ts` requests
+#WW|3. Verify the camera is recording (status = "Recording") before attempting live view
+#SR|4. For cameras in "Reconnecting" state, wait for the camera to reconnect — HLS requires an active recording stream
+#SY|
+#RM|### Stream Shows "SPS/PPS Not Available" Error (503)
+#SY|
+#XW|**Symptom**: HLS endpoint returns HTTP 503 with message "SPS/PPS not available yet"
+#PR|
+#SY|**Solution**:
+#HB|1. This is normal for the first few seconds after camera starts recording — the video encoder needs to produce keyframe data
+#RP|2. The frontend automatically retries with exponential backoff (5s, 10s, 20s, 40s)
+#WW|3. If the error persists for more than 60 seconds, check:
+#SR|   - Camera is actually streaming video (test with `ffprobe`)
+#XW|   - Recording is active (check camera status via API)
+#SY|   ```bash
+#HB|   curl -u admin:password http://localhost:9090/api/cameras/{id}/stream/index.m3u8
+#WW|   ```
+#SY|
+#HB|### Stream Plays in Live View but Not in Dashboard
+#SY|
+#XW|**Symptom**: Individual camera Live View works, but Dashboard grid shows all cameras stuck in "Buffering"
+#PR|
+#SY|**Solution**:
+#HB|1. Dashboard loads multiple streams simultaneously — check `hls.max_streams` setting (default: 4)
+#RP|2. Reduce Dashboard camera count (max 4, fewer is better on RPi)
+#WW|3. Use sub-stream URLs for Dashboard to reduce bandwidth:
+#SR|   ```yaml
+#HB|   cameras:
+#XW|     - id: "cam1"
+#SY|       sub_stream_url: "rtsp://192.168.1.100:554/sub"  # Lower resolution stream
+#WW|       hls_max_fps: 10  # Limit frame rate for Dashboard
+#SR|   ```
+#WW|4. On low-power devices (RPi 3B), limit Dashboard to 2 HLS cameras
+#SY|
+#RM|### Maximum Concurrent Streams Reached
+#SY|
+#XW|**Symptom**: Stream fails to start with error "maximum concurrent HLS streams reached"
+#PR|
+#SY|**Solution**:
+#HB|1. Close unused Dashboard or Live View tabs
+#RP|2. Increase `max_streams` if your hardware can handle it:
+#WW|   ```yaml
+#SR|   hls:
+#HB|     max_streams: 6  # Increase from default 4
+#WW|   ```
+#SR|3. Use snapshot thumbnails instead of live streams for some cameras:
+#SY|   ```yaml
+#HB|   cameras:
+#XW|     - id: "cam-low-priority"
+#SY|       snapshot_url: "http://192.168.1.100/snapshot"
+#WW|   ```
+#PR|
+#JB|
+#NX|## Recording Issues
+#SY|
 ### ONVIF Camera Issues
 
 #### ONVIF Discovery Fails
