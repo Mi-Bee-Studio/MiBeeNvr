@@ -178,6 +178,31 @@ func (m *MergeManager) RunOnce(ctx context.Context) error {
 
 	return nil
 }
+
+// MergeCamera performs a single merge pass for the given camera.
+// It resolves the effective merge config (global + per-camera override) and delegates to processCamera.
+// Errors are logged but never returned — the method is intentionally non-blocking for the archive flow.
+func (m *MergeManager) MergeCamera(ctx context.Context, cameraID string) error {
+	cfg := m.getGlobalCfg()
+
+	minAge, err := time.ParseDuration(cfg.MinSegmentAge)
+	if err != nil {
+		minAge = 10 * time.Minute
+	}
+
+	effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(cameraID))
+	if !effectiveCfg.Enabled {
+		return nil
+	}
+
+	_, _, _, mergeErr := m.processCamera(ctx, cameraID, minAge, effectiveCfg)
+	if mergeErr != nil {
+		logger.Warn("merge pass error for camera", "camera_id", cameraID, "error", mergeErr)
+	}
+
+	return nil
+}
+
 // processCamera handles all merge windows for a single camera.
 // cfg is the effective merge config for this camera (resolved from global + per-camera override).
 func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAge time.Duration, cfg config.MergeConfig) (merged, segments int, freed int64, err error) {

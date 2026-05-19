@@ -377,7 +377,7 @@ func TestH264Recorder_Reconnect(t *testing.T) {
 
 	stream := &gortsplib.ServerStream{Server: srv, Desc: desc}
 	require.NoError(t, stream.Initialize())
-	h.stream = stream
+	h.setStream(stream)
 
 	defer func() {
 		stream.Close()
@@ -466,21 +466,34 @@ func TestH264Recorder_RingBufferDrop(t *testing.T) {
 }
 
 type reconnHandler struct {
+	mu     sync.RWMutex
 	stream *gortsplib.ServerStream
 	playCh chan struct{}
 	once   sync.Once
 }
 
+func (h *reconnHandler) setStream(s *gortsplib.ServerStream) {
+	h.mu.Lock()
+	h.stream = s
+	h.mu.Unlock()
+}
+
+func (h *reconnHandler) getStream() *gortsplib.ServerStream {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.stream
+}
+
 func (h *reconnHandler) OnDescribe(_ *gortsplib.ServerHandlerOnDescribeCtx) (
 	*base.Response, *gortsplib.ServerStream, error,
 ) {
-	return &base.Response{StatusCode: base.StatusOK}, h.stream, nil
+	return &base.Response{StatusCode: base.StatusOK}, h.getStream(), nil
 }
 
 func (h *reconnHandler) OnSetup(_ *gortsplib.ServerHandlerOnSetupCtx) (
 	*base.Response, *gortsplib.ServerStream, error,
 ) {
-	return &base.Response{StatusCode: base.StatusOK}, h.stream, nil
+	return &base.Response{StatusCode: base.StatusOK}, h.getStream(), nil
 }
 
 func (h *reconnHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (

@@ -41,6 +41,7 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
+	mu              sync.Mutex // protects lastUsed and lastFrameTime
 	mux             *gohlslib.Muxer
 	track           *gohlslib.Track
 	dirPath         string
@@ -210,7 +211,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 // It connects to subStreamURL, extracts codec parameters (SPS/PPS for H264, VPS/SPS/PPS for H265),
 // and feeds frames to the HLS muxer for the given camera.
 // If the sub-stream connection fails, it logs a warning and returns — the caller should fall back to main stream.
-func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool) error {
+func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool, fallbackFn func()) error {
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
 	m.mu.RUnlock()
@@ -225,13 +226,13 @@ func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 boo
 	ctx, cancel := context.WithCancel(context.Background())
 	entry.subStreamCancel = cancel
 
-	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry)
+	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry, fallbackFn)
 
 	hlsLogger.Info("HLS sub-stream reader started", "camera_id", cameraID, "sub_stream_url", subStreamURL)
 	return nil
 }
 
-func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, isH265 bool, entry *streamEntry) {
+func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, isH265 bool, entry *streamEntry, fallbackFn func()) {
 	var err error
 	defer func() {
 		m.mu.Lock()
@@ -241,6 +242,9 @@ func (m *Manager) readSubStream(ctx context.Context, cameraID, rtspURL string, i
 		m.mu.Unlock()
 		if err != nil && ctx.Err() == nil {
 			hlsLogger.Warn("HLS sub-stream reader exited, falling back to main stream", "camera_id", cameraID, "error", err)
+			if fallbackFn != nil {
+				fallbackFn()
+			}
 		}
 	}()
 
@@ -468,16 +472,19 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		return nil // stream not active, silently ignore
 	}
 
+	entry.mu.Lock()
 	entry.lastUsed = time.Now()
 
 	// Frame rate limiting for live preview bandwidth optimization
 	if entry.maxFPS > 0 {
 		minInterval := time.Second / time.Duration(entry.maxFPS)
 		if time.Since(entry.lastFrameTime) < minInterval {
+			entry.mu.Unlock()
 			return nil // drop frame to stay within target FPS
 		}
 		entry.lastFrameTime = time.Now()
 	}
+	entry.mu.Unlock()
 
 	// Non-blocking send — drop frame if buffer full to protect recording pipeline
 	select {
@@ -525,7 +532,9 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 		return false
 	}
 
+	entry.mu.Lock()
 	entry.lastUsed = time.Now()
+	entry.mu.Unlock()
 	entry.mux.Handle(w, r)
 	return true
 }
@@ -555,7 +564,10 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 			if !ok {
 				return
 			}
-			if time.Since(entry.lastUsed) > m.idleTimeout {
+			entry.mu.Lock()
+			lastUsed := entry.lastUsed
+			entry.mu.Unlock()
+			if time.Since(lastUsed) > m.idleTimeout {
 				hlsLogger.Info("HLS stream idle timeout, stopping", "camera_id", cameraID)
 				m.StopStream(cameraID)
 				return

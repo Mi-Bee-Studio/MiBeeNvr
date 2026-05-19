@@ -16,7 +16,7 @@ A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/H
 ## Features
 
 - RTSP (H.264/H.265/MJPEG), HTTP JPEG, and ONVIF camera support
-- **Xiaomi camera support** — CS2 P2P protocol, cloud auth, H.264/H.265 via Xiaomi plugin
+- **Xiaomi camera support** — CS2 P2P protocol, cloud auth, H.264/H.265 (built-in)
 - Automatic MP4 segment recording
 - Web UI with **dark/light theme** (auto-detects system preference)
 - **Chart.js-powered** storage trends and per-camera statistics
@@ -163,8 +163,7 @@ internal/            # Core packages
   webdav/            # WebDAV server (configurable read-only/read-write)
   mqtt/              # MQTT client
   ui/                # Embedded web UI
-plugins/            # Camera plugins
-  xiaomi/           # Xiaomi camera plugin (CS2 P2P, cloud auth)
+  xiaomi/            # Xiaomi camera support (built-in, CS2 P2P, cloud auth)
 web/                 # Svelte 5 frontend
 deploy/              # systemd services
 docs/                # Documentation (EN/ZH)

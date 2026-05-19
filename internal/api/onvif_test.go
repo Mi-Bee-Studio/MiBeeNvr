@@ -143,3 +143,26 @@ func TestPTZStatus_NoCamMgr(t *testing.T) {
 	// No DB means requireONVIF returns 404 (camera not found)
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestONVIFDeviceDetail_InvalidIP(t *testing.T) {
+	h := TestHandler(nil, nil)
+
+	invalidIPs := []string{
+		"/api/onvif/discover/notanip",
+		"/api/onvif/discover/256.256.256.256",
+		"/api/onvif/discover/abc.def.ghi.jkl",
+		"/api/onvif/discover/127.0.0.999",
+	}
+	for _, path := range invalidIPs {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			var resp map[string]string
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			require.Equal(t, "invalid IP address format", resp["error"])
+		})
+	}
+}

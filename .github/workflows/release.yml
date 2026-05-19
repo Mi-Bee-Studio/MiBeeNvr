@@ -29,6 +29,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
+      - name: Lint
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
       - name: Build frontend
         run: cd web && npm ci && npm run build && cp -r dist/* ../internal/ui/static/
 

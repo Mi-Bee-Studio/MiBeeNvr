@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -12,4 +12,28 @@ export default defineConfig({
     },
     extensions: ['.js', '.ts', '.svelte', '.svelte.ts'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/chart.js')) {
+            return 'vendor-chart';
+          }
+          if (id.includes('node_modules/svelte')) {
+            return 'vendor-svelte';
+          }
+          if (id.includes('node_modules/hls.js')) {
+            return 'vendor-hls';
+          }
+          if (id.includes('node_modules/lucide-svelte')) {
+            return 'vendor-lucide';
+          }
+          if (id.includes('node_modules')) {
+            return 'vendor';
+          }
+        },
+      },
+    },
+  },
+  test: {},
 })

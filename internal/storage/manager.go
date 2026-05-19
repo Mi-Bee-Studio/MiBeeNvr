@@ -210,6 +210,15 @@ func (m *Manager) DeleteFile(path string) error {
 	return nil
 }
 
+// DeleteCameraDir removes the entire directory for a camera.
+func (m *Manager) DeleteCameraDir(cameraID string) error {
+	dir := filepath.Join(m.rootDir, cameraID)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("storage: failed to remove camera dir %q: %w", dir, err)
+	}
+	return nil
+}
+
 // GetDiskUsage returns total and used disk space for the filesystem containing rootDir.
 func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
 	var stat syscall.Statfs_t

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +69,7 @@ func TestMalformedAuth(t *testing.T) {
     }
 }
 
-func TestEmptyHashBypass(t *testing.T) {
+func TestEmptyHashReturnsSetupRequired(t *testing.T) {
 	mw, _ := NewAuthMiddleware("user", "", "")
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -76,9 +77,10 @@ func TestEmptyHashBypass(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 when no password configured (setup mode), got %d", w.Code)
-	}
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, "expected 503 when no password configured")
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	require.Equal(t, `Basic realm="MiBee NVR"`, w.Header().Get("WWW-Authenticate"))
+	require.Contains(t, w.Body.String(), "setup required")
 }
 
 func TestHashCheckRoundTrip(t *testing.T) {
@@ -157,4 +159,66 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	require.Equal(t, http.StatusUnauthorized, w2.Code, "plaintext password should not authenticate when hash takes priority")
+}
+
+func TestRateLimiterAllowsUnderLimit(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 5, Window: time.Minute})
+	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Send 5 requests (at the limit) — should all pass
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
+	}
+}
+
+func TestRateLimiterBlocksOverLimit(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 3, Window: time.Minute})
+	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Send 3 requests (at the limit) — all pass
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
+	}
+
+	// 4th request should be blocked
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusTooManyRequests, w.Code, "request over limit should be 429")
+}
+
+func TestRateLimiterResetsAfterWindow(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 1, Window: 50 * time.Millisecond})
+	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// First request passes
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Second request blocked
+	req = httptest.NewRequest("GET", "/", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+
+	// Wait for window to expire
+	time.Sleep(60 * time.Millisecond)
+
+	// Should be allowed again
+	req = httptest.NewRequest("GET", "/", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
 }

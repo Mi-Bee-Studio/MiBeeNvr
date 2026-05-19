@@ -51,9 +51,7 @@
         document.exitFullscreen();
         isFullscreen = false;
       }
-    } catch {
-      // Fullscreen not supported
-    }
+    } catch (e) { console.warn('Fullscreen not supported:', e); }
   }
 
   function handleFullscreenChange() {
@@ -72,7 +70,7 @@
     // Load protocol capabilities
     listProtocols().then(list => {
       if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
-    }).catch(() => {});
+    }).catch((e) => { console.warn('Failed to load protocols:', e); });
   });
 
   onDestroy(() => {

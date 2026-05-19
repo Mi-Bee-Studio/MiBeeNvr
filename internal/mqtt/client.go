@@ -18,16 +18,20 @@ type Client struct {
 	brokerURL   string
 	clientID    string
 	topicPrefix string
+	username    string
+	password    string
 	mqttClient  mqtt.Client
 	onAction    func(cameraID string, action string)
 }
 
 // NewClient creates a new MQTT trigger event subscriber.
-func NewClient(brokerURL, clientID, topicPrefix string, onAction func(cameraID, action string)) *Client {
+func NewClient(brokerURL, clientID, topicPrefix, username, password string, onAction func(cameraID, action string)) *Client {
 	return &Client{
 		brokerURL:   brokerURL,
 		clientID:    clientID,
 		topicPrefix: topicPrefix,
+		username:    username,
+		password:    password,
 		onAction:    onAction,
 	}
 }
@@ -54,6 +58,12 @@ func (c *Client) Start(ctx context.Context) error {
 			token.Wait()
 		})
 
+	if c.username != "" {
+		opts.SetUsername(c.username)
+		if c.password != "" {
+			opts.SetPassword(c.password)
+		}
+	}
 	c.mqttClient = mqtt.NewClient(opts)
 	token := c.mqttClient.Connect()
 	token.Wait()
