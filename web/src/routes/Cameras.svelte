@@ -1,42 +1,34 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiSync, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError } from '$lib/api';
-  import type { Camera, XiaomiDevice, ProtocolInfo } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiSync, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup } from '$lib/api';
+  import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { AlertCircle, Camera as CameraIcon, RefreshCw, Plus } from 'lucide-svelte';
-  import { showToast } from '$lib/toast';
+  import { formatFileSize } from '$lib/format';
+  import { AlertCircle, Camera as CameraIcon, RefreshCw, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import ArchiveConfirmDialog from '$lib/components/ArchiveConfirmDialog.svelte';
   import OnboardingOverlay from '$lib/components/OnboardingOverlay.svelte';
-
-  function formatTimeAgo(lastSeen: string | null | undefined): { text: string; color: string } {
-    if (!lastSeen) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
-    const diffMin = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 60000);
-    if (isNaN(diffMin)) return { text: t('cameras.neverRecorded'), color: 'badge-neutral' };
-    if (diffMin < 5) return { text: t('cameras.active') + ' ' + diffMin + t('cameras.minutesAgo'), color: 'badge-success' };
-    if (diffMin < 30) return { text: diffMin + t('cameras.minutesAgo'), color: 'badge-warning' };
-    const h = Math.floor(diffMin / 60);
-    return { text: (h < 1 ? diffMin + t('cameras.minutesAgo') : h + t('cameras.hoursAgo')), color: 'badge-error' };
-  }
+  import Tab from '$lib/components/Tab.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
+  let activeTab = $state('active');
+  let archives = $state<ArchiveGroup[]>([]);
+  let archiveConfirm = $state<Camera | null>(null);
+  let confirmDeleteArchive = $state<string | null>(null);
 
   // Form state
   let showForm = $state(false);
   let editingCamera = $state<Camera | null>(null);
 
-  // Inline name edit
-  let editingNameId = $state<string | null>(null);
-  let inlineName = $state('');
-
   // Confirmation dialog state
-  let confirmAction = $state<{ camera: Camera; action: 'stop' | 'restart' | 'delete' } | null>(null);
+  let confirmAction = $state<{ camera: Camera; action: 'stop' | 'restart' } | null>(null);
 
-  // Xiaomi (minimal — only device list for form display + sync)
+  // Xiaomi
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
   let syncing = $state(false);
 
@@ -54,15 +46,48 @@
   // Onboarding state
   let showOnboarding = $state(false);
 
-  // Helper: map API error to user-friendly i18n message
+  let tabItems = $derived([
+    { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.filter(c => c.enabled).length },
+    { id: 'archived', label: t('cameras.tab.archived'), icon: ArchiveIcon, count: archives.length },
+  ]);
+
   function friendlyError(e: unknown, fallback: string): string {
     if (e instanceof ApiRequestError && e.code) {
       const keyed = t(`errors.${e.code}`);
-      // t() returns the key itself if not found — check it's different
       if (keyed !== `errors.${e.code}`) return keyed;
     }
     if (e instanceof Error) return e.message || fallback;
     return fallback;
+  }
+
+  async function loadArchives() {
+    try {
+      const res = await listArchives();
+      archives = res.archives || [];
+    } catch (e) {
+      console.warn('Failed to load archives:', e);
+    }
+  }
+
+  async function handleRetentionChange(archiveId: string, days: number) {
+    try {
+      await setArchiveRetention(archiveId, days);
+      showToast(t('cameras.archive.retentionUpdateSuccess'), 'success');
+      await loadArchives();
+    } catch (e) {
+      showToast(t('cameras.failedArchive'), 'error');
+    }
+  }
+
+  async function handleDeleteArchive(archiveId: string) {
+    try {
+      await deleteArchiveGroup(archiveId);
+      showToast(t('cameras.archive.deleteAllSuccess'), 'success');
+      confirmDeleteArchive = null;
+      await loadArchives();
+    } catch (e) {
+      showToast(t('cameras.failedArchive'), 'error');
+    }
   }
 
   async function loadCameras() {
@@ -74,11 +99,11 @@
       error = friendlyError(e, t('cameras.failedLoad'));
     } finally {
       loading = false;
-      // Show onboarding for first-time users (no cameras, no dismissed state)
       if (!loading && cameras.length === 0 && !sessionStorage.getItem('mibee_nvr_onboarding_dismissed')) {
         showOnboarding = true;
       }
     }
+    loadArchives();
   }
 
   function openAddForm() {
@@ -108,13 +133,6 @@
     const { camera, action } = confirmAction;
     confirmAction = null;
     switch (action) {
-      case 'delete':
-        try {
-          await deleteCamera(camera.id);
-          showToast(t('cameras.cameraDeleted'), 'success');
-          await loadCameras();
-        } catch (e) { console.warn('Failed to delete camera:', e); showToast(t('cameras.failedDelete'), 'error'); }
-        break;
       case 'stop':
         try {
           await stopCamera(camera.id);
@@ -151,6 +169,21 @@
     confirmAction = { camera, action: 'restart' };
   }
 
+  async function handleToggleCamera(camera: Camera) {
+    await loadCameras();
+  }
+
+  async function handleSaveName(camera: Camera, name: string) {
+    try {
+      await updateCamera(camera.id, { name });
+      showToast(t('cameras.nameUpdated'), 'success');
+      await loadCameras();
+    } catch (e) {
+      console.warn('Failed to update camera name:', e);
+      showToast(t('cameras.failedUpdate'), 'error');
+    }
+  }
+
   async function handleSyncCloud() {
     syncing = true;
     try {
@@ -164,25 +197,6 @@
     }
   }
 
-  function startInlineEdit(camera: Camera) {
-    editingNameId = camera.id;
-    inlineName = camera.name;
-  }
-
-  async function saveInlineEdit(camera: Camera) {
-    if (!inlineName.trim()) { editingNameId = null; return; }
-    try {
-      await updateCamera(camera.id, { name: inlineName.trim() });
-      camera.name = inlineName.trim();
-      showToast(t('cameras.nameUpdated'), 'success');
-    } catch (e) { console.warn('Failed to update camera name:', e); showToast(t('cameras.failedUpdate'), 'error'); }
-    editingNameId = null;
-  }
-
-  function cancelInlineEdit() {
-    editingNameId = null;
-  }
-
   onMount(async () => {
     loadCameras();
     try {
@@ -192,7 +206,6 @@
         protocolsMap = buildProtocolsMap(list);
       }
     } catch (e) { console.warn('Failed to load protocols:', e); }
-    // Probe xiaomi auth status for device list (used by CameraForm)
     try {
       const res = await xiaomiDevices();
       if (res.devices && res.devices.length > 0) {
@@ -203,8 +216,8 @@
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
-
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Page Header -->
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">
       <h2 class="text-2xl font-bold th-text-primary">{t('cameras.title')}</h2>
       <div class="flex gap-3">
@@ -243,9 +256,12 @@
       </div>
     </div>
 
+    <!-- Tab Bar -->
+    <Tab tabs={tabItems} {activeTab} onchange={(id) => activeTab = id} />
+
     <!-- Error -->
     {#if error}
-      <div class="card border th-border-danger p-8 text-center">
+      <div class="card border th-border-danger p-8 text-center mt-6">
         <div class="flex justify-center mb-4 th-color-danger">
           <AlertCircle size={48} />
         </div>
@@ -257,21 +273,28 @@
 
     <!-- Loading -->
     {#if loading}
-      <div class="card border th-border">
-        <div class="p-6 space-y-4">
-          {#each Array(3) as _}
-            <div class="flex gap-4 items-center">
-              <div class="h-4 w-32 th-bg-tertiary rounded animate-pulse"></div>
-              <div class="h-4 w-20 th-bg-tertiary rounded animate-pulse"></div>
-              <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
-              <div class="h-4 w-40 th-bg-tertiary rounded animate-pulse"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+        {#each Array(6) as _}
+          <div class="card border th-border p-4 space-y-3 animate-pulse">
+            <div class="flex items-center justify-between">
+              <div class="h-4 w-28 th-bg-tertiary rounded"></div>
+              <div class="h-5 w-16 th-bg-tertiary rounded-full"></div>
             </div>
-          {/each}
-        </div>
+            <div class="h-3 w-20 th-bg-tertiary rounded"></div>
+            <div class="h-3 w-full th-bg-tertiary rounded"></div>
+            <div class="border-t th-border pt-3 flex justify-between">
+              <div class="h-6 w-10 th-bg-tertiary rounded-full"></div>
+              <div class="flex gap-1">
+                <div class="h-6 w-6 th-bg-tertiary rounded"></div>
+                <div class="h-6 w-6 th-bg-tertiary rounded"></div>
+              </div>
+            </div>
+          </div>
+        {/each}
       </div>
     {:else}
-      <div class="space-y-6">
-
+      <!-- Active Tab -->
+      {#if activeTab === 'active'}
         <!-- Discovery Panel -->
         {#if activeDiscoveryProtocol}
           <DiscoveryPanel
@@ -294,81 +317,159 @@
           />
         {/if}
 
-        <!-- Confirmation Dialog (stop/restart/delete) -->
+        <!-- Confirmation Dialog (stop/restart) -->
         {#if confirmAction}
           <ConfirmDialog
-            title={confirmAction.action === 'delete' ? t('cameras.deleteTitle') : confirmAction.action === 'stop' ? t('cameras.stopTitle') : t('cameras.restartTitle')}
-            message={confirmAction.action === 'delete'
-              ? t('cameras.deleteMessage', { name: confirmAction.camera.name })
-              : confirmAction.action === 'stop'
-                ? t('cameras.stopMessage', { name: confirmAction.camera.name })
-                : t('cameras.restartMessage', { name: confirmAction.camera.name })}
-            confirmText={confirmAction.action === 'delete' ? t('cameras.deleteConfirm') : t('common.confirm')}
+            title={confirmAction.action === 'stop' ? t('cameras.stopTitle') : t('cameras.restartTitle')}
+            message={confirmAction.action === 'stop'
+              ? t('cameras.stopMessage', { name: confirmAction.camera.name })
+              : t('cameras.restartMessage', { name: confirmAction.camera.name })}
+            confirmText={t('common.confirm')}
             onconfirm={executeConfirmAction}
             oncancel={() => confirmAction = null}
-            variant={confirmAction.action === 'delete' ? 'danger' : 'primary'}
+            variant="primary"
           />
         {/if}
 
-        <!-- Camera Table -->
-        <div class="card border th-border overflow-hidden">
+        <!-- Camera Grid -->
         {#if cameras.length === 0}
-            <div class="p-12 text-center">
-              <div class="flex justify-center mb-4 th-text-muted">
-                <CameraIcon size={48} />
-              </div>
-              <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.noCameras')}</h3>
-              <p class="text-sm th-text-muted mb-4">{t('cameras.noCamerasHint')}</p>
-              <button onclick={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
+          <div class="card border th-border p-12 text-center mt-6">
+            <div class="flex justify-center mb-4 th-text-muted">
+              <CameraIcon size={48} />
             </div>
-          {:else}
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-[var(--border)]">
-                <thead>
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableName')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableStatus')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableProtocol')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableEncoding')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableUrl')}</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium th-text-muted uppercase tracking-wider">{t('cameras.tableActions')}</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-[var(--border)]">
-                  {#each cameras as camera (camera.id)}
-                    <CameraCard
-                      {camera}
-                      {protocolsMap}
-                      isEditingName={editingNameId === camera.id}
-                      {inlineName}
-                      {formatTimeAgo}
-                      onstart={handleStartCamera}
-                      onstop={handleStopCamera}
-                      onrestart={handleRestartCamera}
-                      onedit={openEditForm}
-                      ondelete={(c) => confirmAction = { camera: c, action: 'delete' }}
-                      onsavename={saveInlineEdit}
-                      onstarteditname={startInlineEdit}
-                      oncanceleditname={cancelInlineEdit}
-                      onnamedinput={(v) => inlineName = v}
-                    />
-                  {/each}
-                </tbody>
-              </table>
+            <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.noCameras')}</h3>
+            <p class="text-sm th-text-muted mb-4">{t('cameras.noCamerasHint')}</p>
+            <button onclick={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
+          </div>
+        {:else}
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+            {#each cameras as camera (camera.id)}
+              <CameraCard
+                {camera}
+                {protocolsMap}
+                onedit={openEditForm}
+                ondelete={(c) => archiveConfirm = c}
+                onstart={handleStartCamera}
+                onstop={handleStopCamera}
+                onrestart={handleRestartCamera}
+                ontoggle={handleToggleCamera}
+                onsaveName={handleSaveName}
+              />
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <!-- Archived Tab -->
+        {#if archives.length === 0}
+          <div class="card border th-border p-12 text-center mt-6">
+            <div class="flex justify-center mb-4 th-text-muted">
+              <ArchiveIcon size={48} />
             </div>
-          {/if}
-        </div>
+            <h3 class="text-lg font-medium th-text-primary mb-2">{t('cameras.archive.noArchives')}</h3>
+            <p class="text-sm th-text-muted mb-4">{t('cameras.archive.noArchivesHint')}</p>
+          </div>
+        {:else}
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+            {#each archives as archive (archive.id)}
+              <div class="card border th-border p-4 flex flex-col">
+                <!-- Header: Name + Date -->
+                <div class="flex items-start justify-between gap-2 mb-3">
+                  <h4 class="font-medium th-text-primary">{archive.name}</h4>
+                  <span class="text-xs th-text-tertiary whitespace-nowrap">
+                    {t('cameras.archive.archivedAt', { date: new Date(archive.archived_at).toLocaleDateString() })}
+                  </span>
+                </div>
 
-      </div>
+                <!-- Stats: Recordings + Size -->
+                <div class="space-y-1.5 mb-3">
+                  <div class="flex items-center gap-2 text-sm th-text-secondary">
+                    <HardDrive size={14} class="th-text-tertiary" />
+                    {t('cameras.archive.recordings', { count: archive.recording_count })}
+                  </div>
+                  <div class="flex items-center gap-2 text-sm th-text-secondary">
+                    <Clock size={14} class="th-text-tertiary" />
+                    {t('cameras.archive.size', { size: formatFileSize(archive.total_size) })}
+                  </div>
+                </div>
+
+                <!-- Retention -->
+                <div class="flex items-center gap-2 mb-3">
+                  <label class="text-xs th-text-tertiary">{t('cameras.archive.retentionDays')}</label>
+                  <input
+                    type="number"
+                    class="input py-0.5 px-2 text-sm w-20"
+                    value={archive.archive_retention_days || 0}
+                    min="0"
+                    onchange={(e) => {
+                      const val = parseInt((e.target as HTMLInputElement).value) || 0;
+                      handleRetentionChange(archive.id, val);
+                    }}
+                  />
+                  <span class="text-xs th-text-tertiary">{t('archives.retentionDays')}</span>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex items-center gap-2 mt-auto pt-3 border-t th-border">
+                  <a
+                    href="#/archives/{archive.id}"
+                    class="btn btn-ghost px-2 py-1 text-sm flex items-center gap-1"
+                  >
+                    <ExternalLink size={14} />
+                    {t('cameras.action.viewRecordings')}
+                  </a>
+                  <button
+                    class="btn btn-ghost px-2 py-1 text-sm th-color-danger flex items-center gap-1 ml-auto"
+                    onclick={() => confirmDeleteArchive = archive.id}
+                  >
+                    <Trash2 size={14} />
+                    {t('cameras.action.deleteAll')}
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {/if}
     {/if}
   </main>
 
-    <!-- Onboarding overlay for first-time users -->
-    {#if showOnboarding && cameras.length === 0}
-      <OnboardingOverlay
-        onaddcamera={openAddForm}
-        oncomplete={() => { showOnboarding = false; window.location.hash = '#/recordings'; }}
-        onskip={() => { showOnboarding = false; }}
-      />
-    {/if}
+  <!-- Archive Confirm Dialog -->
+  {#if archiveConfirm}
+    <ArchiveConfirmDialog
+      cameraName={archiveConfirm.name}
+      recordingCount={0}
+      totalSize="N/A"
+      onconfirm={async () => {
+        try {
+          await deleteCamera(archiveConfirm!.id);
+          showToast(t('cameras.cameraArchived'), 'success');
+          archiveConfirm = null;
+          await loadCameras();
+        } catch (e) {
+          showToast(t('cameras.failedArchive'), 'error');
+        }
+      }}
+      oncancel={() => archiveConfirm = null}
+    />
+  {/if}
+
+  <!-- Archive Delete Confirm Dialog -->
+  {#if confirmDeleteArchive}
+    <ConfirmDialog
+      title={t('cameras.action.deleteAll')}
+      message={t('cameras.archive.deleteAllConfirm')}
+      onconfirm={() => handleDeleteArchive(confirmDeleteArchive!)}
+      oncancel={() => confirmDeleteArchive = null}
+      variant="danger"
+    />
+  {/if}
+
+  <!-- Onboarding overlay for first-time users -->
+  {#if showOnboarding && cameras.length === 0}
+    <OnboardingOverlay
+      onaddcamera={openAddForm}
+      oncomplete={() => { showOnboarding = false; window.location.hash = '#/recordings'; }}
+      onskip={() => { showOnboarding = false; }}
+    />
+  {/if}
 </div>
