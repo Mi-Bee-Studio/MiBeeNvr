@@ -35,6 +35,8 @@ export {
   getCamera,
   updateCamera,
   deleteCamera,
+  enableCamera,
+  disableCamera,
   startCamera,
   stopCamera,
   getDashboardCameras,
