@@ -769,3 +769,69 @@ func TestValidateONVIFEndpointAutoPopulated(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestStreamingDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "hls", cfg.Streaming.DefaultProtocol)
+	require.NotNil(t, cfg.Streaming.WebRTC.Enabled)
+	require.True(t, *cfg.Streaming.WebRTC.Enabled)
+	require.Equal(t, 2, cfg.Streaming.WebRTC.MaxViewers)
+	require.Equal(t, "60s", cfg.Streaming.WebRTC.IdleTimeout)
+	require.NotNil(t, cfg.Streaming.FLV.Enabled)
+	require.True(t, *cfg.Streaming.FLV.Enabled)
+	require.Equal(t, 10, cfg.Streaming.FLV.MaxViewers)
+	require.Equal(t, "60s", cfg.Streaming.FLV.IdleTimeout)
+	require.Equal(t, 1, cfg.Streaming.FLV.GOPCacheSize)
+}
+
+func TestStreamingDefaultProtocolInvalid(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{DefaultProtocol: "rtmp"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.default_protocol")
+}
+
+func TestWebRTCMaxViewersTooLow(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{WebRTC: WebRTCConfig{MaxViewers: 0}}}
+	cfg.applyDefaults()
+	cfg.Streaming.WebRTC.MaxViewers = 0 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.webrtc.max_viewers")
+}
+
+func TestWebRTCMaxViewersTooHigh(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{WebRTC: WebRTCConfig{MaxViewers: 11}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.webrtc.max_viewers")
+}
+
+func TestFLVMaxViewersTooLow(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{MaxViewers: 0}}}
+	cfg.applyDefaults()
+	cfg.Streaming.FLV.MaxViewers = 0 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.flv.max_viewers")
+}
+
+func TestFLVMaxViewersTooHigh(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{MaxViewers: 51}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.flv.max_viewers")
+}
+
+func TestFLVGOPCacheSizeNegative(t *testing.T) {
+	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{GOPCacheSize: -1}}}
+	cfg.applyDefaults()
+	cfg.Streaming.FLV.GOPCacheSize = -1 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "streaming.flv.gop_cache_size")
+}
+
