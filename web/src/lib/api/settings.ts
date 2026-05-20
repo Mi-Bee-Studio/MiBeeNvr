@@ -30,10 +30,15 @@ export interface FLVStreamingConfig {
   gop_cache_size: number;
 }
 
+export interface HLSStreamingConfig {
+  low_latency: boolean;
+}
+
 export interface StreamingConfig {
   default_protocol: string; // webrtc | flv | hls | ll-hls
   webrtc: WebRTCConfig;
   flv: FLVStreamingConfig;
+  hls: HLSStreamingConfig;
 }
 
 export interface SettingsConfig {
