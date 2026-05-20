@@ -25,6 +25,7 @@ type Config struct {
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	WebDAV        WebDAVConfig        `yaml:"webdav"`
 	HLS           HLSConfig           `yaml:"hls"`
+	Streaming StreamingConfig `yaml:"streaming"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
 	Version       string              `yaml:"version"`
@@ -118,6 +119,28 @@ type HLSConfig struct {
 	MaxStreams       int    `yaml:"max_streams"`         // default 4 (RPi constraint)
 	LowLatency       bool   `yaml:"low_latency"`         // enable Low-Latency HLS (gohlslib MuxerVariantLowLatency)
 	PartMinDuration  string `yaml:"part_min_duration"`   // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
+}
+
+// StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
+type StreamingConfig struct {
+	DefaultProtocol string      `yaml:"default_protocol"` // webrtc | flv | hls | ll-hls (default "hls")
+	WebRTC         WebRTCConfig `yaml:"webrtc"`
+	FLV            FLVConfig    `yaml:"flv"`
+}
+
+// WebRTCConfig configures WebRTC WHEP streaming
+type WebRTCConfig struct {
+	Enabled     *bool  `yaml:"enabled"`      // default true
+	MaxViewers  int    `yaml:"max_viewers"`  // default 2, range [1,10]
+	IdleTimeout string `yaml:"idle_timeout"` // default "60s"
+}
+
+// FLVConfig configures HTTP-FLV streaming
+type FLVConfig struct {
+	Enabled      *bool  `yaml:"enabled"`        // default true
+	MaxViewers   int    `yaml:"max_viewers"`    // default 10, range [1,50]
+	IdleTimeout  string `yaml:"idle_timeout"`   // default "60s"
+	GOPCacheSize int    `yaml:"gop_cache_size"` // default 1
 }
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
@@ -320,6 +343,26 @@ func Validate(cfg *Config) error {
 	} else if partDur < 100*time.Millisecond || partDur > 1*time.Second {
 		return fmt.Errorf("hls.part_min_duration must be between 100ms and 1s, got %s", cfg.HLS.PartMinDuration)
 	}
+
+	// Validate streaming configuration
+	if cfg.Streaming.DefaultProtocol != "webrtc" && cfg.Streaming.DefaultProtocol != "flv" && cfg.Streaming.DefaultProtocol != "hls" && cfg.Streaming.DefaultProtocol != "ll-hls" {
+		return fmt.Errorf("streaming.default_protocol invalid: %s (must be webrtc/flv/hls/ll-hls)", cfg.Streaming.DefaultProtocol)
+	}
+	if cfg.Streaming.WebRTC.MaxViewers < 1 || cfg.Streaming.WebRTC.MaxViewers > 10 {
+		return fmt.Errorf("streaming.webrtc.max_viewers must be between 1 and 10, got %d", cfg.Streaming.WebRTC.MaxViewers)
+	}
+	if cfg.Streaming.FLV.MaxViewers < 1 || cfg.Streaming.FLV.MaxViewers > 50 {
+		return fmt.Errorf("streaming.flv.max_viewers must be between 1 and 50, got %d", cfg.Streaming.FLV.MaxViewers)
+	}
+	if cfg.Streaming.FLV.GOPCacheSize < 0 {
+		return fmt.Errorf("streaming.flv.gop_cache_size must be >= 0, got %d", cfg.Streaming.FLV.GOPCacheSize)
+	}
+	if _, err := time.ParseDuration(cfg.Streaming.WebRTC.IdleTimeout); err != nil {
+		return fmt.Errorf("streaming.webrtc.idle_timeout invalid: %w", err)
+	}
+	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
+		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)
+	}
 	return nil
 }
 
@@ -399,6 +442,34 @@ func (cfg *Config) applyDefaults() {
 	// LL-HLS: low_latency defaults to false (zero value)
 	if strings.TrimSpace(cfg.HLS.PartMinDuration) == "" {
 		cfg.HLS.PartMinDuration = "200ms"
+	}
+
+	// Streaming defaults
+	if strings.TrimSpace(cfg.Streaming.DefaultProtocol) == "" {
+		cfg.Streaming.DefaultProtocol = "hls"
+	}
+	if cfg.Streaming.WebRTC.Enabled == nil {
+		cfg.Streaming.WebRTC.Enabled = new(bool)
+		*cfg.Streaming.WebRTC.Enabled = true
+	}
+	if cfg.Streaming.WebRTC.MaxViewers <= 0 {
+		cfg.Streaming.WebRTC.MaxViewers = 2
+	}
+	if strings.TrimSpace(cfg.Streaming.WebRTC.IdleTimeout) == "" {
+		cfg.Streaming.WebRTC.IdleTimeout = "60s"
+	}
+	if cfg.Streaming.FLV.Enabled == nil {
+		cfg.Streaming.FLV.Enabled = new(bool)
+		*cfg.Streaming.FLV.Enabled = true
+	}
+	if cfg.Streaming.FLV.MaxViewers <= 0 {
+		cfg.Streaming.FLV.MaxViewers = 10
+	}
+	if strings.TrimSpace(cfg.Streaming.FLV.IdleTimeout) == "" {
+		cfg.Streaming.FLV.IdleTimeout = "60s"
+	}
+	if cfg.Streaming.FLV.GOPCacheSize <= 0 {
+		cfg.Streaming.FLV.GOPCacheSize = 1
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"

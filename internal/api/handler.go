@@ -12,11 +12,13 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -76,6 +78,8 @@ type Handler struct {
 	config          *config.Config
 	camMgr          *camera.CameraManager
 	hlsMgr          *hls.Manager
+	webrtcMgr       *webrtc.Manager
+	flvMgr          *flv.Manager
 	configPath      string
 	snapshotMu      sync.RWMutex
 	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
@@ -121,23 +125,30 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/", h.handleListCameras)
 			r.Post("/", h.handleCreateCamera)
       r.Post("/test-connection", h.handleTestConnection)
-			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", h.handleGetCamera)
-				r.Put("/", h.handleUpdateCamera)
-				r.Delete("/", h.handleDeleteCamera)
-				r.Get("/stream/*", h.handleHLSStream)
-				r.Delete("/stream", h.handleStopHLSStream)
-				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
-				r.Post("/ptz/move", h.handlePTZMove)
-				r.Post("/ptz/stop", h.handlePTZStop)
-				r.Get("/ptz/status", h.handlePTZStatus)
-				r.Get("/snapshot", h.handleSnapshot)
-				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
-				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
-				r.Post("/start", h.handleStartCamera)
-				r.Post("/stop", h.handleStopCamera)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.handleGetCamera)
+					r.Put("/", h.handleUpdateCamera)
+					r.Delete("/", h.handleDeleteCamera)
+					r.Get("/stream/*", h.handleHLSStream)
+					r.Delete("/stream", h.handleStopHLSStream)
+					// WebRTC WHEP endpoints
+					r.Post("/stream/webrtc", h.handleCreateWHEPSession)
+					r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
+					// HTTP-FLV stream
+					r.Get("/stream.flv", h.handleFLVStream)
+					// Per-camera protocols
+					r.Get("/protocols", h.handleCameraProtocols)
+					r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+					r.Post("/ptz/move", h.handlePTZMove)
+					r.Post("/ptz/stop", h.handlePTZStop)
+					r.Get("/ptz/status", h.handlePTZStatus)
+					r.Get("/snapshot", h.handleSnapshot)
+					r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
+					r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+					r.Post("/start", h.handleStartCamera)
+					r.Post("/stop", h.handleStopCamera)
+				})
 			})
-		})
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
@@ -255,4 +266,73 @@ func extractDIDFromURL(rawURL string) string {
 // strPtr returns a pointer to the given string.
 func strPtr(s string) *string {
 	return &s
+}
+
+// SetWebRTCManager sets the WebRTC manager on the handler.
+func (h *Handler) SetWebRTCManager(mgr *webrtc.Manager) {
+	h.webrtcMgr = mgr
+}
+
+// SetFLVManager sets the FLV manager on the handler.
+func (h *Handler) SetFLVManager(mgr *flv.Manager) {
+	h.flvMgr = mgr
+}
+
+// --- Per-camera streaming protocols endpoint ---
+
+// cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
+type cameraProtocolsResponse struct {
+	Protocols []string `json:"protocols"`
+	Encoding  string   `json:"encoding"`
+	Default   string   `json:"default"`
+}
+
+// handleCameraProtocols handles GET /api/cameras/{id}/protocols.
+// It returns the available streaming protocols for a specific camera
+// based on its encoding and the registered stream handlers.
+func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	cam, err := h.db.GetCamera(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		return
+	}
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	encoding := cam.Encoding
+	if encoding == "" {
+		encoding = cam.StreamEncoding
+	}
+
+	var protocols []string
+	if h.streamRegistry != nil {
+		protocols = h.streamRegistry.ProtocolsForCodec(model.Format(encoding))
+	}
+	if protocols == nil {
+		protocols = []string{}
+	}
+
+	// Determine default protocol preference
+	defaultProto := ""
+	for _, preferred := range []string{"webrtc", "flv", "hls"} {
+		for _, p := range protocols {
+			if p == preferred {
+				defaultProto = preferred
+				break
+			}
+		}
+		if defaultProto != "" {
+			break
+		}
+	}
+
+	writeJSON(w, http.StatusOK, cameraProtocolsResponse{
+		Protocols: protocols,
+		Encoding:  encoding,
+		Default:   defaultProto,
+	})
 }
