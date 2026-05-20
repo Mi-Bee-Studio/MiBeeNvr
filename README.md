@@ -1,37 +1,50 @@
 # MiBee NVR
 
-A lightweight Network Video Recorder (NVR) written in Go. Supports RTSP (H.264/H.265/MJPEG) and HTTP JPEG cameras, with a built-in Web UI, WebDAV, FTP, and MQTT integration. Compiles to a single static binary with an embedded SPA frontend.
+[![GitHub Release](https://img.shields.io/github/v/release/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Release)](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Mi-Bee-Studio/MiBeeNvr/ci.yml?style=flat&label=CI)](https://github.com/Mi-Bee-Studio/MiBeeNvr/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
+[![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry_Pi-A22846?style=flat&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+
+A lightweight, easy-to-use Network Video Recorder designed for simplicity. Single binary, zero config hassle — just run and go.
+
+Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **RTSP** (H.264/H.265/MJPEG), **HTTP JPEG**, **HLS** streaming, and **ONVIF** discovery. Future: RTMP, SRT, HTTP-FLV, WebRTC.
 
 [**中文**](README.zh.md)
 
 ## Screenshots
 
-![Recordings - Dark Theme](docs/images/recordings-dark.png)
-![Recordings - Light Theme](docs/images/recordings-light.png)
-![Cameras Management - Dark Theme](docs/images/cameras-dark.png)
-![Statistics - Dark Theme](docs/images/stats-dark.png)
-![Statistics - Light Theme](docs/images/stats-light.png)
-![Settings - Dark Theme](docs/images/settings-dark.png)
+![Login](docs/images/login-light.png)
+![Dashboard](docs/images/dashboard-light.png)
+![Settings](docs/images/settings-light.png)
 
-## Features
+## Core Features
 
-- RTSP (H.264/H.265/MJPEG), HTTP JPEG, and ONVIF camera support
-- **Xiaomi camera support** — CS2 P2P protocol, cloud auth, H.264/H.265 (built-in)
-- Automatic MP4 segment recording
-- Web UI with **dark/light theme** (auto-detects system preference)
-- **Chart.js-powered** storage trends and per-camera statistics
-- **Live view (HLS streaming)** - On-demand H.264/H.265 live streaming via Web UI
-- **lucide-svelte** icons throughout the interface
-- **i18n** support: English/Chinese language switching
-- **Responsive design** for mobile and desktop
-- WebDAV (configurable read-only/read-write) and FTP file access
-- MQTT trigger-based recording for smart home integration
-- Multi-camera concurrent recording
-- **Per-camera retention_days** - Each camera can have its own retention policy
-- Automatic cleanup with retention and disk threshold policies
-- **Segment merging** — Configurable auto-merge with global + per-camera settings, dashboard monitoring
-- SQLite metadata storage
-- Single static binary, no external dependencies (`CGO_ENABLED=0`)
+- **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
+- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention
+- **Live View**: On-demand HLS streaming for H.264/H.265 cameras
+- **Segment Merge**: Auto or manual merge, global + per-camera policies
+- **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
+- **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
+- **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
+- **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven, not core focus)
+
+## Roadmap
+
+| Status | Protocol / Feature | Notes |
+|--------|-------------------|-------|
+| ✅ Done | RTSP (H.264/H.265/MJPEG) | Core streaming protocol |
+| ✅ Done | HTTP JPEG | IP camera snapshot streaming |
+| ✅ Done | HLS | On-demand live streaming |
+| ✅ Done | ONVIF | Discovery, PTZ, stream URI |
+| ✅ Done | Xiaomi (CS2 P2P) | Cloud auth, H.264/H.265 — community support |
+| 🔜 Planned | RTMP | Push/pull streaming |
+| 🔜 Planned | SRT | Low-latency transport |
+| 🔜 Planned | HTTP-FLV | Browser-friendly live streaming |
+| 🔜 Planned | WebRTC | Sub-second latency live view |
 ## Quick Start
 
 ### Option 1: Pre-built Binary (Recommended)
