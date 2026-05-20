@@ -70,17 +70,18 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	db         *storage.DB
-	store      *storage.Manager
-	authMW     func(http.Handler) http.Handler
-	config     *config.Config
-	camMgr     *camera.CameraManager
-	hlsMgr     *hls.Manager
-	configPath string
-	snapshotMu sync.RWMutex
-	snapshots  map[string]*snapshotCache // cameraID -> cached snapshot
-	mergeMgr   *merge.MergeManager
-	cloudProxy CloudAuthProxy
+	db              *storage.DB
+	store           *storage.Manager
+	authMW          func(http.Handler) http.Handler
+	config          *config.Config
+	camMgr          *camera.CameraManager
+	hlsMgr          *hls.Manager
+	configPath      string
+	snapshotMu      sync.RWMutex
+	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
+	mergeMgr        *merge.MergeManager
+	cloudProxy      CloudAuthProxy
+	streamRegistry  *StreamRegistry
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
