@@ -51,7 +51,7 @@
       // Redirect to recordings on success
       window.location.hash = '#/recordings';
     } catch (e) {
-      error = e instanceof Error ? e.message : t('login.failed');
+      error = e instanceof Error && e.message === 'setup_required' ? t('login.setupRequired') : e instanceof Error ? e.message : t('login.failed');
     } finally {
       loading = false;
     }

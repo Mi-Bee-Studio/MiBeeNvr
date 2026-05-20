@@ -167,6 +167,10 @@ export async function login(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Invalid credentials' }));
+    // Check for setup required (no password configured)
+    if ((errorData as ApiError).code === 'SETUP_REQUIRED') {
+      throw new Error('setup_required');
+    }
     throw new Error((errorData as ApiError).error || 'Invalid credentials');
   }
 

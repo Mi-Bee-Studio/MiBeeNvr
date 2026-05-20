@@ -552,5 +552,6 @@
   "settings.unsavedTitle": "未保存的修改",
   "settings.unsavedMessage": "您有未保存的修改，离开后将丢失。确认放弃修改并离开？",
   "settings.unsavedDiscard": "放弃并离开",
-  "settings.diskRemaining": "剩余"
+  "settings.diskRemaining": "剩余",
+  "login.setupRequired": "需要初始化设置。请在配置文件中设置密码，或使用 NVR_PASSWORD 环境变量。"
 }
