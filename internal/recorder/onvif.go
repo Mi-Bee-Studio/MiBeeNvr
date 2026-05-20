@@ -37,7 +37,7 @@ type ONVIFRecorder struct {
 	onvifClient onvif.DeviceClient
 	store       SegmentStore
 	metrics     *metrics.Metrics
-	hlsFrameCb  func(pts int64, au [][]byte)
+	Hub         *model.StreamHub // Frame fan-out, passed to delegate recorders
 
 	// newRecorder is a function that creates the delegate recorder.
 	// Overridable in tests to inject a mock recorder.
@@ -251,9 +251,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:          r.cfg.DB,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
-		if r.hlsFrameCb != nil {
-			rec.OnHLSFrame = r.hlsFrameCb
-		}
+		rec.Hub = r.Hub
 		return rec
 	default: // H264 or unknown
 		cfg := H264Config{
@@ -268,9 +266,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:          r.cfg.DB,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
-		if r.hlsFrameCb != nil {
-			rec.OnHLSFrame = r.hlsFrameCb
-		}
+		rec.Hub = r.Hub
 		return rec
 	}
 }
