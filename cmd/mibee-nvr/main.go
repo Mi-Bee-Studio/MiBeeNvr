@@ -23,15 +23,19 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
@@ -324,8 +328,14 @@ type App struct {
 	cleanupMgr *cleanup.CleanupManager
 
 	// Optional network services (nil when disabled)
-	mqttClient *mqtt.Client
-	ftpServer  *ftp.Server
+	mqttClient  *mqtt.Client
+	ftpServer   *ftp.Server
+	rtmpServer  *rtmp.Server
+	srtListener *srt.Listener
+
+	// Streaming managers
+	webrtcMgr *webrtc.Manager
+	flvMgr    *flv.Manager
 
 	// HTTP server
 	httpServer *http.Server
@@ -427,6 +437,39 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		a.hlsMgr.SetLowLatency(true, partDur)
 	}
 
+	// Step 7.5: WebRTC manager (H.264 only)
+	if cfg.Streaming.WebRTC.Enabled != nil && *cfg.Streaming.WebRTC.Enabled {
+		idleTimeout, _ := time.ParseDuration(cfg.Streaming.WebRTC.IdleTimeout)
+		a.webrtcMgr = webrtc.NewManager(
+			webrtc.WithMaxPeers(cfg.Streaming.WebRTC.MaxViewers),
+			webrtc.WithIdleTimeout(idleTimeout),
+		)
+		slog.Info("WebRTC manager initialized", "max_viewers", cfg.Streaming.WebRTC.MaxViewers)
+	}
+
+	// Step 7.6: FLV manager
+	if cfg.Streaming.FLV.Enabled != nil && *cfg.Streaming.FLV.Enabled {
+		a.flvMgr = flv.NewManager(
+			flv.WithMaxViewers(cfg.Streaming.FLV.MaxViewers),
+		)
+		slog.Info("FLV manager initialized", "max_viewers", cfg.Streaming.FLV.MaxViewers)
+	}
+
+	// Step 7.7: RTMP server (optional)
+	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
+		a.rtmpServer = rtmp.NewServer(
+			rtmp.Config{Addr: fmt.Sprintf(":%d", cfg.RTMP.Port)},
+			nil, nil, nil, nil, // resolv, hubFn, onConn, onDisc — can be wired later
+		)
+		slog.Info("RTMP server configured", "port", cfg.RTMP.Port)
+	}
+
+	// Step 7.8: SRT listener (optional)
+	if cfg.SRT.Enabled != nil && *cfg.SRT.Enabled {
+		a.srtListener = srt.NewListener(cfg.SRT)
+		slog.Info("SRT listener configured", "port", cfg.SRT.Port)
+	}
+
 	// Step 8: Cleanup manager
 	a.cleanupMgr, err = cleanup.NewCleanupManager(db, store, cfg.Cleanup, a.metrics)
 	if err != nil {
@@ -460,6 +503,21 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.hlsMgr, a.configPath, a.mergeMgr, cloudProxy)
+
+	// Wire streaming managers
+	handler.SetWebRTCManager(a.webrtcMgr)
+	handler.SetFLVManager(a.flvMgr)
+
+	// Create and populate StreamRegistry for protocol discovery
+	reg := api.NewStreamRegistry()
+	reg.Register(&api.HLSStreamHandler{Mgr: a.hlsMgr})
+	if a.webrtcMgr != nil {
+		reg.Register(&api.WebRTCStreamHandler{})
+	}
+	if a.flvMgr != nil {
+		reg.Register(&api.FLVStreamHandler{})
+	}
+	handler.SetStreamRegistry(reg)
 
 	// WebDAV
 	var davHandler http.Handler
@@ -568,6 +626,24 @@ func (a *App) Start() error {
 		}()
 	}
 
+	// Start RTMP server (optional)
+	if a.rtmpServer != nil {
+		go func() {
+			if err := a.rtmpServer.Start(ctx); err != nil {
+				slog.Error("rtmp", "error", err)
+			}
+		}()
+	}
+
+	// Start SRT listener (optional)
+	if a.srtListener != nil {
+		go func() {
+			if err := a.srtListener.Start(); err != nil {
+				slog.Error("srt", "error", err)
+			}
+		}()
+	}
+
 	// Start HTTP server
 	go func() {
 		slog.Info("MiBee NVR listening", "version", appVersion, "addr", a.cfg.Server.Listen)
@@ -622,9 +698,27 @@ func (a *App) Stop() error {
 		if a.ftpServer != nil {
 			log.Info("stopping FTP server")
 			a.ftpServer.Close()
-		}
+	}
 
-		// 3. MQTT client
+	// 3. WebRTC manager
+	if a.webrtcMgr != nil {
+		log.Info("stopping WebRTC manager")
+		a.webrtcMgr.StopAll()
+	}
+
+	// 4. RTMP server
+	if a.rtmpServer != nil {
+		log.Info("stopping RTMP server")
+		_ = a.rtmpServer.Stop()
+	}
+
+	// 5. SRT listener
+	if a.srtListener != nil {
+		log.Info("stopping SRT listener")
+		_ = a.srtListener.Stop()
+	}
+
+	// 6. MQTT client
 		if a.mqttClient != nil {
 			log.Info("stopping MQTT client")
 			if err := a.mqttClient.Stop(); err != nil {

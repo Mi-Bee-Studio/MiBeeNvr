@@ -348,3 +348,47 @@ func (h *Handler) handleStopHLSStreamViaRegistry(w http.ResponseWriter, r *http.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
 	h.streamRegistry = reg
 }
+
+// --- WebRTCStreamHandler ---
+
+// WebRTCStreamHandler implements StreamHandler for WebRTC WHEP.
+// WebRTC streams start/stop on-demand via WHEP POST/DELETE, so StartStream
+// and StopStream are no-ops. This registration exists purely for protocol
+// discovery (so /api/cameras/{id}/protocols returns the correct list).
+type WebRTCStreamHandler struct{}
+
+func (h *WebRTCStreamHandler) Name() string { return "webrtc" }
+
+func (h *WebRTCStreamHandler) CanHandle(codec model.Format) bool {
+	return codec == model.FormatH264 // WebRTC only supports H.264
+}
+
+func (h *WebRTCStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
+	return nil // WebRTC streams start on-demand via WHEP POST
+}
+
+func (h *WebRTCStreamHandler) StopStream(camID string) error {
+	return nil // WebRTC streams stop via WHEP DELETE
+}
+
+// --- FLVStreamHandler ---
+
+// FLVStreamHandler implements StreamHandler for HTTP-FLV.
+// FLV streams start/stop on-demand via GET /stream.flv, so StartStream
+// and StopStream are no-ops. This registration exists purely for protocol
+// discovery (so /api/cameras/{id}/protocols returns the correct list).
+type FLVStreamHandler struct{}
+
+func (h *FLVStreamHandler) Name() string { return "flv" }
+
+func (h *FLVStreamHandler) CanHandle(codec model.Format) bool {
+	return codec == model.FormatH264 || codec == model.FormatH265
+}
+
+func (h *FLVStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
+	return nil // FLV streams start on-demand via GET /stream.flv
+}
+
+func (h *FLVStreamHandler) StopStream(camID string) error {
+	return nil // FLV streams stop when client disconnects
+}
