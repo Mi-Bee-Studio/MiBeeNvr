@@ -421,6 +421,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
 	a.hlsMgr = hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, a.metrics)
+	// Configure Low-Latency HLS if enabled
+	if cfg.HLS.LowLatency {
+		partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
+		a.hlsMgr.SetLowLatency(true, partDur)
+	}
 
 	// Step 8: Cleanup manager
 	a.cleanupMgr, err = cleanup.NewCleanupManager(db, store, cfg.Cleanup, a.metrics)
