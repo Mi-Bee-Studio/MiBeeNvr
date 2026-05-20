@@ -108,7 +108,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get all archived recordings to delete files from disk
+	// Get all archived recording IDs for batch DB deletion
 	trueVal := true
 	recordings, err := h.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID, Archived: &trueVal})
 	if err != nil {
@@ -116,16 +116,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Delete recording files from disk (non-fatal)
-	for _, rec := range recordings {
-		if rec.FilePath != "" {
-			if err := h.store.DeleteFile(rec.FilePath); err != nil {
-				logger.Warn("failed to delete archived recording file", "file_path", rec.FilePath, "error", err)
-			}
-		}
-	}
-
-	// Delete all recordings from DB
+	// Delete all recording rows from DB (single transaction)
 	ids := make([]string, len(recordings))
 	for i, rec := range recordings {
 		ids[i] = rec.ID
@@ -143,10 +134,11 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Remove camera directory from disk
+	// Remove entire camera directory from disk (handles all files at once)
 	if err := h.store.DeleteCameraDir(cameraID); err != nil {
 		logger.Warn("failed to remove camera directory", "camera_id", cameraID, "error", err)
 	}
+
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

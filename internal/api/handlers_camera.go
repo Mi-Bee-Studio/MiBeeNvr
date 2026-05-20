@@ -375,13 +375,31 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
+	// Already archived — idempotent success
+	if cam.Archived {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
+		return
+	}
 
 	// Archive the camera: stops recorder, merges segments, marks archived in DB, removes from config.
 	// This preserves the camera row and recordings for the archive view.
 	if h.camMgr != nil {
-		if err := h.camMgr.ArchiveCamera(ctx, id); err != nil {
-			// Camera may not be in config (orphaned DB-only) — archive directly in DB
-			logger.Warn("failed to archive camera via manager, archiving in DB", "camera_id", id, "error", err)
+		// Check if camera is managed (in config). Orphaned DB-only cameras skip the
+		// CameraManager mutex entirely to avoid blocking on merge/stop operations.
+		if h.camMgr.GetCameraConfig(id) != nil {
+			if err := h.camMgr.ArchiveCamera(ctx, id); err != nil {
+				logger.Warn("failed to archive camera via manager, archiving in DB", "camera_id", id, "error", err)
+				if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
+					writeError(w, http.StatusInternalServerError, "failed to archive camera")
+					return
+				}
+				if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
+					logger.Warn("failed to archive recordings", "camera_id", id, "error", recErr)
+				}
+			}
+		} else {
+			// Orphaned camera (not in config) — archive directly in DB, no mutex needed.
+			logger.Info("archiving orphaned camera directly in DB", "camera_id", id)
 			if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
 				writeError(w, http.StatusInternalServerError, "failed to archive camera")
 				return
