@@ -55,6 +55,7 @@ type HTTPJPEGRecorder struct {
 	curFinalPath string
 	segStart     time.Time
 	frameCount   int
+	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
 }
 
 // incActive increments the active recordings gauge if metrics is available.

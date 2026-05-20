@@ -77,9 +77,10 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
+	var rec model.Recorder
 	switch cam.Protocol {
 	case "xiaomi":
-		return new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
+		rec = new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):
@@ -91,7 +92,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur: segDur,
 				DB:         cm.db,
 			}
-			return recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
 				CameraID:   cam.ID,
@@ -101,7 +102,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur: segDur,
 				DB:         cm.db,
 			}
-			return recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
 			mjpegCfg := recorder.MJPEGConfig{
 				CameraID:       cam.ID,
@@ -110,7 +111,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SampleInterval: cam.SampleInterval,
 				DB:             cm.db,
 			}
-			return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
+			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:
 			return nil
 		}
@@ -126,7 +127,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			Password:   cam.Password,
 			DB:         cm.db,
 		}
-		return recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
+		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):
 		onvifEndpoint := cam.ONVIFEndpoint
 		if onvifEndpoint == "" {
@@ -142,9 +143,31 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			SegmentDur:     segDur,
 			DB:             cm.db,
 		}
-		return recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
+		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	default:
 		return nil
+	}
+
+	// Initialize StreamHub for frame fan-out on all recorders
+	initStreamHub(rec)
+	return rec
+}
+
+// initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
+func initStreamHub(rec model.Recorder) {
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		r.Hub = model.NewStreamHub()
+	case *recorder.H265Recorder:
+		r.Hub = model.NewStreamHub()
+	case *recorder.ONVIFRecorder:
+		r.Hub = model.NewStreamHub()
+	case *recorder.MJPEGRecorder:
+		r.Hub = model.NewStreamHub()
+	case *recorder.HTTPJPEGRecorder:
+		r.Hub = model.NewStreamHub()
+	case *xiaomi.XiaomiRecorder:
+		r.Hub = model.NewStreamHub()
 	}
 }
 

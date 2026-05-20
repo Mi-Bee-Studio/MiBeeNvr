@@ -88,10 +88,8 @@ type XiaomiRecorder struct {
 	vps     []byte // H265 only
 	codecOK bool   // true once codec type is determined
 
-	// HLS live streaming support
-	hlsMu      sync.Mutex
-	onHLSFrame func(pts int64, au [][]byte)
-	streamStart time.Time // For PTS rebase
+	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 }
 
 var _ model.Recorder = (*XiaomiRecorder)(nil)
@@ -169,13 +167,15 @@ func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte
 	return r.codec, r.sps, r.pps, r.vps
 }
 
-// SetOnHLSFrame registers a callback for HLS frame delivery.
-// The callback is non-blocking — frames are dropped if the HLS buffer is full.
+// SetOnHLSFrame subscribes a callback as an HLS frame consumer via StreamHub.
 // Implements model.HLSProvider.
+// Deprecated: use Hub.Subscribe() directly instead. This method is kept for
+// backward compatibility during migration and will be removed in a future version.
 func (r *XiaomiRecorder) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
-	r.hlsMu.Lock()
-	r.onHLSFrame = cb
-	r.hlsMu.Unlock()
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
+	_ = r.Hub.Subscribe("hls", cb)
 }
 
 // incActive increments the active recordings gauge if metrics is available.
@@ -511,14 +511,11 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	}
 }
 
-// forwardHLS sends a NALU to the HLS callback if set (non-blocking).
+// forwardHLS sends a NALU to all stream consumers via StreamHub (non-blocking).
 // For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended
 // so the HLS DTS extractor receives a complete access unit.
 func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
-	r.hlsMu.Lock()
-	cb := r.onHLSFrame
-	r.hlsMu.Unlock()
-	if cb == nil {
+	if r.Hub == nil || r.Hub.ConsumerCount() == 0 {
 		return
 	}
 	// Convert wall-clock duration to 90kHz ticks (RTP timestamp units).
@@ -531,21 +528,19 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
 		if naluType == 5 && r.sps != nil && r.pps != nil {
-			// IDR frame: prepend SPS+PPS for complete AU
-			cb(pts, [][]byte{r.sps, r.pps, nalu})
+			r.Hub.Broadcast(pts, [][]byte{r.sps, r.pps, nalu})
 		} else {
-			cb(pts, [][]byte{nalu})
+			r.Hub.Broadcast(pts, [][]byte{nalu})
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
 		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
-			// IDR frame: prepend VPS+SPS+PPS for complete AU
-			cb(pts, [][]byte{r.vps, r.sps, r.pps, nalu})
+			r.Hub.Broadcast(pts, [][]byte{r.vps, r.sps, r.pps, nalu})
 		} else {
-			cb(pts, [][]byte{nalu})
+			r.Hub.Broadcast(pts, [][]byte{nalu})
 		}
 	default:
-		cb(pts, [][]byte{nalu})
+		r.Hub.Broadcast(pts, [][]byte{nalu})
 	}
 }
 

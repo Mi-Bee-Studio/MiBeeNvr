@@ -260,10 +260,12 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	// IDR (type 5)
 	r.forwardHLS([]byte{0x65, 0x01, 0x02})
 
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.Len(t, receivedAU, 3, "H264 IDR should prepend SPS+PPS")
 	require.Equal(t, r.sps, receivedAU[0])
 	require.Equal(t, r.pps, receivedAU[1])
 	require.True(t, receivedPTS >= 0)
+	r.Hub.Unsubscribe("hls")
 }
 
 func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
@@ -284,10 +286,12 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 	// IDR_N_LP (type 20): (20 << 1) = 0x28
 	r.forwardHLS([]byte{0x28, 0x01})
 
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.Len(t, receivedAU, 4, "H265 IDR should prepend VPS+SPS+PPS")
 	require.Equal(t, r.vps, receivedAU[0])
 	require.Equal(t, r.sps, receivedAU[1])
 	require.Equal(t, r.pps, receivedAU[2])
+	r.Hub.Unsubscribe("hls")
 }
 
 func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
@@ -306,8 +310,10 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 
 	// Non-IDR (type 1)
 	r.forwardHLS([]byte{0x41, 0x01})
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, []byte{0x41, 0x01}, receivedAU[0])
+	r.Hub.Unsubscribe("hls")
 }
 
 func TestForwardHLSNoCallback(t *testing.T) {
@@ -651,7 +657,9 @@ func TestSetOnHLSFrameConcurrent(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		<-done
 	}
-	require.Equal(t, int32(10), calls.Load())
+
+	require.Eventually(t, func() bool { return calls.Load() == 10 }, 2*time.Second, 10*time.Millisecond)
+	r.Hub.Unsubscribe("hls")
 }
 
 // --- closeCurrentSegment removes temp file on muxer error ---

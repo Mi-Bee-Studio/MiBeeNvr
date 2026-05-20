@@ -364,10 +364,12 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	nalu := []byte{0x65, 0x01, 0x02}
 	r.forwardHLS(nalu)
 
-	// PTS is in 90kHz ticks; may be 0 for sub-millisecond durations (integer truncation)
+	// StreamHub delivers asynchronously — wait for callback
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.True(t, receivedPTS >= 0, "PTS should be non-negative")
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, nalu, receivedAU[0])
+	r.Hub.Unsubscribe("hls")
 }
 
 func TestXiaomiRecorderHLSFrameCallbackNil(t *testing.T) {
