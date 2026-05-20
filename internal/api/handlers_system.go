@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -152,12 +153,13 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Validate credentials by running through the auth middleware.
 	// If auth is disabled, any request succeeds; otherwise BasicAuth is checked.
+	// Use httptest.ResponseRecorder to capture middleware output without writing to client w.
 	done := make(chan int, 1)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		done <- http.StatusOK
 	})
-	rec := &middleware.StatusRecorder{ResponseWriter: w, Status: http.StatusUnauthorized}
+	rec := httptest.NewRecorder()
 	h.authMW(inner).ServeHTTP(rec, r)
 
 	select {
@@ -166,9 +168,15 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		}
 	default:
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+		// Forward the middleware's captured response (503 SETUP_REQUIRED, 401, etc.)
+		// without double-writing to the client.
+		for k, vv := range rec.Header() {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
 	}
 }
 
