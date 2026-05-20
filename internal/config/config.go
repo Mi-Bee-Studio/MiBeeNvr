@@ -28,6 +28,8 @@ type Config struct {
 	Streaming StreamingConfig `yaml:"streaming"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
+	RTMP          RTMPConfig         `yaml:"rtmp"`
+	SRT           SRTConfig          `yaml:"srt"`
 	Version       string              `yaml:"version"`
 }
 
@@ -148,6 +150,29 @@ type XiaomiConfig struct {
 	UserID string `yaml:"user_id"` // Xiaomi account user ID (from auth response)
 	Token  string `yaml:"token"`   // Xiaomi passToken for API access
 	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+}
+
+// SRTConfig configures the SRT listener for receiving MPEG-TS streams.
+type SRTConfig struct {
+	Enabled *bool          `yaml:"enabled"` // default false
+	Port    int            `yaml:"port"`    // default 9000
+	Streams []SRTStream    `yaml:"streams"`
+}
+
+// SRTStream configures a single SRT stream mapping.
+type SRTStream struct {
+	CameraID   string `yaml:"camera_id"`
+	Mode       string `yaml:"mode"`        // "listener" (receive pushes) or "caller" (pull from remote)
+	Address    string `yaml:"address"`     // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
+	Passphrase string `yaml:"passphrase"`  // AES encryption passphrase (optional)
+	StreamID   string `yaml:"stream_id"`   // SRT stream ID for caller mode (optional)
+}
+
+// RTMPConfig configures the RTMP ingest server.
+type RTMPConfig struct {
+	Enabled    *bool             `yaml:"enabled"`    // default false
+	Port       int               `yaml:"port"`       // default 1935
+	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -363,6 +388,21 @@ func Validate(cfg *Config) error {
 	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
 		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)
 	}
+	// Validate SRT configuration
+	if cfg.SRT.Port < 1 || cfg.SRT.Port > 65535 {
+		return fmt.Errorf("srt.port must be between 1 and 65535, got %d", cfg.SRT.Port)
+	}
+	for i, s := range cfg.SRT.Streams {
+		if strings.TrimSpace(s.CameraID) == "" {
+			return fmt.Errorf("srt.streams[%d].camera_id is required", i)
+		}
+		if s.Mode != "listener" && s.Mode != "caller" {
+			return fmt.Errorf("srt.streams[%d].mode must be 'listener' or 'caller', got %q", i, s.Mode)
+		}
+		if s.Mode == "caller" && strings.TrimSpace(s.Address) == "" {
+			return fmt.Errorf("srt.streams[%d].address is required for caller mode", i)
+		}
+	}
 	return nil
 }
 
@@ -489,6 +529,25 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
+	}
+	// RTMP defaults
+	if cfg.RTMP.Enabled == nil {
+		cfg.RTMP.Enabled = new(bool)
+		*cfg.RTMP.Enabled = false
+	}
+	if cfg.RTMP.Port <= 0 {
+		cfg.RTMP.Port = 1935
+	}
+	if cfg.RTMP.StreamKeys == nil {
+		cfg.RTMP.StreamKeys = make(map[string]string)
+	}
+	// SRT defaults
+	if cfg.SRT.Enabled == nil {
+		cfg.SRT.Enabled = new(bool)
+		*cfg.SRT.Enabled = false
+	}
+	if cfg.SRT.Port <= 0 {
+		cfg.SRT.Port = 9000
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {
