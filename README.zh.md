@@ -1,36 +1,50 @@
 # MiBee NVR
 
-轻量级网络视频录像机，使用 Go 编写。支持 RTSP (H.264/H.265/MJPEG) 和 HTTP JPEG 摄像头，内置 Web 管理界面、WebDAV、FTP 和 MQTT 集成。编译为单文件静态二进制，内嵌前端页面，无需外部依赖。
+[![GitHub Release](https://img.shields.io/github/v/release/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Release)](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Mi-Bee-Studio/MiBeeNvr/ci.yml?style=flat&label=CI)](https://github.com/Mi-Bee-Studio/MiBeeNvr/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev/)
+[![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry_Pi-A22846?style=flat&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+
+轻量级、易上手的网络视频录像机，单文件部署，零配置烦恼——下载即用。
+
+专为树莓派及低功耗设备打造。支持主流协议：**RTSP**（H.264/H.265/MJPEG）、**HTTP JPEG**、**HLS** 直播流、**ONVIF** 设备发现。后续规划：RTMP、SRT、HTTP-FLV、WebRTC。
 
 [**English**](README.md)
 
 ## 截图
 
-![录像列表 - 深色主题](docs/images/recordings-dark.png)
-![录像列表 - 浅色主题](docs/images/recordings-light.png)
-![摄像头管理 - 深色主题](docs/images/cameras-dark.png)
-![统计图表 - 深色主题](docs/images/stats-dark.png)
-![统计图表 - 浅色主题](docs/images/stats-light.png)
-![设置页面 - 深色主题](docs/images/settings-dark.png)
+![登录页](docs/images/login-light.png)
+![仪表盘](docs/images/dashboard-light.png)
+![设置页](docs/images/settings-light.png)
 
-## 功能特性
+## 核心功能
 
-- 支持 RTSP (H.264/H.265/MJPEG)、HTTP JPEG 和 ONVIF 摄像头
-- 自动将视频流封装为 MP4 片段存储
-- Web 管理界面，支持 **深色/浅色主题**（自动检测系统偏好）
-- **Chart.js** 驱动的存储趋势和单摄像头统计图表
-- **实时直播 (HLS流)** - 通过 Web UI 按需 H.264/H.265 直播流
-- **lucide-svelte** 图标贯穿整个界面
-- **i18n** 支持：中英文语言切换
-- **响应式设计**，适配移动端和桌面端
-- WebDAV（可配置只读/读写）和 FTP 文件访问
-- MQTT 消息触发录像，灵活集成智能家居
-- 多摄像头同时录像
-- **按摄像头保留天数** - 每个摄像头可以有自己的保留策略
-- 自动清理过期录像，支持磁盘空间阈值
-- **视频段合并** — 可配置的自动合并，支持全局 + 按摄像头策略，仪表盘监控
-- SQLite 存储元数据
-- 单文件部署，无外部依赖 (`CGO_ENABLED=0`)
+- **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理
+- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数
+- **实时直播**：按需 HLS 流，支持 H.264/H.265
+- **片段合并**：自动/手动合并，全局 + 按摄像头策略
+- **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
+- **智能家居**：MQTT 触发录像、WebDAV/FTP 文件访问
+- **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
+- **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动，非核心功能）
+
+## 开发路线
+
+| 状态 | 协议 / 功能 | 说明 |
+|------|------------|------|
+| ✅ 已完成 | RTSP（H.264/H.265/MJPEG） | 核心流媒体协议 |
+| ✅ 已完成 | HTTP JPEG | IP 摄像头快照流 |
+| ✅ 已完成 | HLS | 按需直播流 |
+| ✅ 已完成 | ONVIF | 设备发现、云台控制、流地址获取 |
+| ✅ 已完成 | 小米（CS2 P2P） | 云端认证、H.264/H.265 — 社区支持 |
+| 🔜 计划中 | RTMP | 推拉流 |
+| 🔜 计划中 | SRT | 低延迟传输 |
+| 🔜 计划中 | HTTP-FLV | 浏览器友好的直播流 |
+| 🔜 计划中 | WebRTC | 亚秒级延迟实时预览 |
 ## 快速开始
 
 ### 方式 1：预编译二进制（推荐）
