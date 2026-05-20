@@ -677,6 +677,47 @@ func TestApplyDefaultsHLS(t *testing.T) {
 	require.Equal(t, 10, cfg.HLS.SegmentMaxSizeMB)
 	require.Equal(t, 7, cfg.HLS.SegmentCount)
 	require.Equal(t, 4, cfg.HLS.MaxStreams)
+	require.False(t, cfg.HLS.LowLatency)
+	require.Equal(t, "200ms", cfg.HLS.PartMinDuration)
+}
+
+func TestHLSPartMinDurationValidation_Invalid(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "invalid"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.part_min_duration")
+}
+
+func TestHLSPartMinDurationValidation_TooLow(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "50ms"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.part_min_duration")
+}
+
+func TestHLSPartMinDurationValidation_TooHigh(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "2s"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.part_min_duration")
+}
+
+func TestHLSLowLatency_SegmentCountTooLow(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 5, LowLatency: true, PartMinDuration: "200ms"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hls.segment_count must be >= 7 when low_latency is enabled")
+}
+
+func TestHLSLowLatency_SegmentCount7(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, LowLatency: true, PartMinDuration: "200ms"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
 }
 
 func TestApplyDefaultsFTP(t *testing.T) {

@@ -112,10 +112,12 @@ type ObservabilityConfig struct {
 }
 
 type HLSConfig struct {
-	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
-	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
-	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
-	MaxStreams int `yaml:"max_streams"` // default 4 (RPi constraint)
+	WriteBufferSize  int    `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
+	SegmentMaxSizeMB int    `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
+	SegmentCount     int    `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
+	MaxStreams       int    `yaml:"max_streams"`         // default 4 (RPi constraint)
+	LowLatency       bool   `yaml:"low_latency"`         // enable Low-Latency HLS (gohlslib MuxerVariantLowLatency)
+	PartMinDuration  string `yaml:"part_min_duration"`   // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
 }
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
@@ -306,6 +308,18 @@ func Validate(cfg *Config) error {
 	if cfg.HLS.MaxStreams < 1 || cfg.HLS.MaxStreams > 20 {
 		return fmt.Errorf("hls.max_streams must be between 1 and 20, got %d", cfg.HLS.MaxStreams)
 	}
+	// Validate LL-HLS configuration
+	if cfg.HLS.LowLatency {
+		if cfg.HLS.SegmentCount < 7 {
+			return fmt.Errorf("hls.segment_count must be >= 7 when low_latency is enabled, got %d", cfg.HLS.SegmentCount)
+		}
+	}
+	// Validate hls.part_min_duration
+	if partDur, err := time.ParseDuration(cfg.HLS.PartMinDuration); err != nil {
+		return fmt.Errorf("hls.part_min_duration invalid: %w", err)
+	} else if partDur < 100*time.Millisecond || partDur > 1*time.Second {
+		return fmt.Errorf("hls.part_min_duration must be between 100ms and 1s, got %s", cfg.HLS.PartMinDuration)
+	}
 	return nil
 }
 
@@ -381,6 +395,10 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.HLS.MaxStreams <= 0 {
 		cfg.HLS.MaxStreams = 4
+	}
+	// LL-HLS: low_latency defaults to false (zero value)
+	if strings.TrimSpace(cfg.HLS.PartMinDuration) == "" {
+		cfg.HLS.PartMinDuration = "200ms"
 	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"
