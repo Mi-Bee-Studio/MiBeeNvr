@@ -5,6 +5,10 @@
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
+  import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
+  import FlvPlayer from '../components/FlvPlayer.svelte';
+  import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
+  import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import { t } from '$lib/i18n';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
@@ -15,6 +19,8 @@
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
+  let streamingProtocol = $state<StreamingProtocol>('hls');
+  let switchingProtocol = $state(false);
 
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
@@ -56,6 +62,13 @@
 
   function handleFullscreenChange() {
     isFullscreen = !!document.fullscreenElement;
+  }
+
+  function handleProtocolChange(protocol: StreamingProtocol) {
+    switchingProtocol = true;
+    streamingProtocol = protocol;
+    // Brief delay to show switching state, then mount new player
+    setTimeout(() => { switchingProtocol = false; }, 100);
   }
 
   onMount(() => {
@@ -114,6 +127,13 @@
           <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
           {#if isHlsSupported(camera)}
             <div class="flex-1"></div>
+            <!-- Protocol Switcher -->
+            <ProtocolSwitcher
+              cameraId={camera.id}
+              cameraEncoding={camera.encoding || camera.stream_encoding || ''}
+              selected={streamingProtocol}
+              onchange={handleProtocolChange}
+            />
             <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
               {#if isFullscreen}
                 <Minimize size={16} />
@@ -125,20 +145,44 @@
         </div>
 
         {#if isHlsSupported(camera)}
-          <!-- HLS Player -->
+          <!-- Player container -->
           <div
             class="card border th-border overflow-hidden"
             style="max-height: 80vh;"
             bind:this={playerContainer}
             onshrink={() => goBack()}
           >
-            <VideoPlayer
-              cameraId={camera.id}
-              cameraName={camera.name || camera.id}
-              streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
-              cameraProtocol={camera.protocol}
-              expanded={true}
-            />
+            {#if switchingProtocol}
+              <!-- Switching state -->
+              <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <div class="flex items-center gap-2">
+                    <div class="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                    <span class="text-white/50 text-xs">{t('live.protocol.switching')}</span>
+                  </div>
+                </div>
+              </div>
+            {:else if streamingProtocol === 'webrtc'}
+              <WebRTCPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={true}
+              />
+            {:else if streamingProtocol === 'flv'}
+              <FlvPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={true}
+              />
+            {:else}
+              <VideoPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
+                cameraProtocol={camera.protocol}
+                expanded={true}
+              />
+            {/if}
           </div>
         {:else}
           <!-- Unsupported protocol -->
