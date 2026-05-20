@@ -552,5 +552,6 @@
   "settings.unsavedTitle": "Unsaved Changes",
   "settings.unsavedMessage": "You have unsaved changes that will be lost. Discard changes and leave?",
   "settings.unsavedDiscard": "Discard & Leave",
-  "settings.diskRemaining": "remaining"
+  "settings.diskRemaining": "remaining",
+  "login.setupRequired": "Setup required. Please set a password in your config file or use the NVR_PASSWORD environment variable."
 }
