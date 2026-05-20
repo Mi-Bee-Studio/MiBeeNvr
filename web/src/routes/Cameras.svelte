@@ -20,8 +20,9 @@
   let activeTab = $state('active');
   let archives = $state<ArchiveGroup[]>([]);
   let archiveConfirm = $state<Camera | null>(null);
+  let archiveLoading = $state(false);
   let confirmDeleteArchive = $state<string | null>(null);
-
+  let deleteArchiveLoading = $state(false);
   // Archive expansion state
   let expandedArchiveId = $state<string | null>(null);
   let archiveRecordings = $state<Recording[]>([]);
@@ -93,6 +94,7 @@
   }
 
   async function handleDeleteArchive(archiveId: string) {
+    deleteArchiveLoading = true;
     try {
       await deleteArchiveGroup(archiveId);
       showToast(t('cameras.archive.deleteAllSuccess'), 'success');
@@ -100,6 +102,8 @@
       await loadArchives();
     } catch (e) {
       showToast(t('cameras.failedArchive'), 'error');
+    } finally {
+      deleteArchiveLoading = false;
     }
   }
 
@@ -662,7 +666,9 @@
       cameraName={archiveConfirm.name}
       recordingCount={0}
       totalSize="N/A"
+      loading={archiveLoading}
       onconfirm={async () => {
+        archiveLoading = true;
         try {
           await deleteCamera(archiveConfirm!.id);
           showToast(t('cameras.cameraArchived'), 'success');
@@ -670,9 +676,11 @@
           await loadCameras();
         } catch (e) {
           showToast(t('cameras.failedArchive'), 'error');
+        } finally {
+          archiveLoading = false;
         }
       }}
-      oncancel={() => archiveConfirm = null}
+      oncancel={() => { if (!archiveLoading) archiveConfirm = null; }}
     />
   {/if}
 
@@ -682,11 +690,11 @@
       title={t('cameras.action.deleteAll')}
       message={t('cameras.archive.deleteAllConfirm')}
       onconfirm={() => handleDeleteArchive(confirmDeleteArchive!)}
-      oncancel={() => confirmDeleteArchive = null}
+      oncancel={() => { if (!deleteArchiveLoading) confirmDeleteArchive = null; }}
       variant="danger"
+      loading={deleteArchiveLoading}
     />
   {/if}
-
   <!-- Retention dialog -->
   {#if showRetDialog && selectedArchiveGroup}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true">

@@ -11,6 +11,7 @@
     confirmText?: string;
     cancelText?: string;
     variant?: 'danger' | 'primary';
+    loading?: boolean;
   }
 
   let {
@@ -21,6 +22,7 @@
     confirmText,
     cancelText,
     variant = 'danger',
+    loading = false,
   }: Props = $props();
 
   // Use i18n defaults if not provided
@@ -83,6 +85,7 @@
       <button
         class="confirm-dialog-cancel btn btn-ghost"
         onclick={oncancel}
+        disabled={loading}
       >
         {_cancelText}
       </button>
@@ -92,8 +95,9 @@
           : 'btn btn-primary'
         }
         onclick={onconfirm}
+        disabled={loading}
       >
-        {_confirmText}
+        {loading ? t('common.loading') : _confirmText}
       </button>
     </div>
   </div>

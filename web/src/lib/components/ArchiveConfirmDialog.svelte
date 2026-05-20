@@ -6,11 +6,12 @@
     cameraName: string;
     recordingCount: number;
     totalSize: string;
+    loading?: boolean;
     onconfirm: () => void;
     oncancel: () => void;
   }
 
-  let { cameraName, recordingCount, totalSize, onconfirm, oncancel }: Props = $props();
+  let { cameraName, recordingCount, totalSize, loading = false, onconfirm, oncancel }: Props = $props();
 
   let step = $state(1);
   let confirmInput = $state('');
@@ -108,15 +109,16 @@
         <button
           class="btn btn-ghost"
           onclick={oncancel}
+          disabled={loading}
         >
           {t('common.cancel')}
         </button>
         <button
           class="px-4 py-2 th-bg-danger hover:th-bg-danger-light text-white rounded-md transition-colors text-sm font-medium"
-          disabled={!canConfirm}
+          disabled={!canConfirm || loading}
           onclick={onconfirm}
         >
-          {t('cameras.archive.confirm.step2.confirm')}
+          {loading ? t('common.loading') : t('cameras.archive.confirm.step2.confirm')}
         </button>
       </div>
     {/if}
