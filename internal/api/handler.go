@@ -156,6 +156,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Put("/api/settings", h.handleUpdateSettings)
 		r.Get("/api/settings/merge", h.handleGetMergeSettings)
 		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
+		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
+		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
 		r.Post("/api/backup", h.handleBackup)
 		r.Get("/api/backups", h.handleListBackups)
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)

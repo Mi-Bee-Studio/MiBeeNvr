@@ -327,6 +327,7 @@ function getAffectedCameraCount(protocol: string): number {
       streamingFlvEnabled = config.flv?.enabled ?? true;
       streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
       streamingFlvGopCache = config.flv?.gop_cache_size ?? 100;
+      streamingHlsLlHls = config.hls?.low_latency ?? false;
     } catch (e) { console.warn('Failed to load streaming settings:', e); }
   }
 
@@ -346,6 +347,7 @@ function getAffectedCameraCount(protocol: string): number {
           idle_timeout: '5m',
           gop_cache_size: streamingFlvGopCache,
         },
+        hls: { low_latency: streamingHlsLlHls },
       });
       showToast(t('settings.streaming.saved'), 'success');
     } catch (e) {
