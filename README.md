@@ -11,7 +11,7 @@
 
 A lightweight, easy-to-use Network Video Recorder designed for simplicity. Single binary, zero config hassle — just run and go.
 
-Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **RTSP** (H.264/H.265/MJPEG), **HTTP JPEG**, **HLS** streaming, and **ONVIF** discovery. Future: RTMP, SRT, HTTP-FLV, WebRTC.
+Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **RTSP** (H.264/H.265/MJPEG), **HTTP JPEG**, **HLS** streaming, **ONVIF** discovery, **WebRTC** (WHEP), **HTTP-FLV**, **RTMP** ingest, and **SRT** receiver.
 
 [**中文**](README.zh.md)
 
@@ -25,7 +25,7 @@ Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **R
 
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
 - **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention
-- **Live View**: On-demand HLS streaming for H.264/H.265 cameras
+- **Live View**: Multi-protocol streaming — HLS, WebRTC (WHEP), HTTP-FLV, RTMP ingest, SRT receiver
 - **Segment Merge**: Auto or manual merge, global + per-camera policies
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
@@ -41,10 +41,10 @@ Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **R
 | ✅ Done | HLS | On-demand live streaming |
 | ✅ Done | ONVIF | Discovery, PTZ, stream URI |
 | ✅ Done | Xiaomi (CS2 P2P) | Cloud auth, H.264/H.265 — community support |
-| 🔜 Planned | RTMP | Push/pull streaming |
-| 🔜 Planned | SRT | Low-latency transport |
-| 🔜 Planned | HTTP-FLV | Browser-friendly live streaming |
-| 🔜 Planned | WebRTC | Sub-second latency live view |
+| ✅ Done | RTMP | Push/pull streaming |
+| ✅ Done | SRT | Low-latency transport |
+| ✅ Done | HTTP-FLV | Browser-friendly live streaming |
+| ✅ Done | WebRTC | Sub-second latency live view |
 ## Quick Start
 
 ### Option 1: Pre-built Binary (Recommended)
