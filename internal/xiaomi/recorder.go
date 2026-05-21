@@ -130,6 +130,7 @@ func (r *XiaomiRecorder) Start(ctx context.Context) error {
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
 	r.incActive()
+	r.streamStart = time.Now() // Set PTS base for HLS — only once per Start() lifecycle
 	go r.run(ctx)
 	return nil
 }
@@ -292,7 +293,6 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) e
 	r.sps = nil
 	r.pps = nil
 	r.vps = nil
-	r.streamStart = time.Now() // Reset PTS base for HLS
 
 	var lastTimestamp uint64
 

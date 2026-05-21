@@ -17,6 +17,7 @@ export {
   apiRequest,
   apiRequestBlob,
   ApiRequestError,
+  setupApi,
 } from './client';
 
 export type {
@@ -26,6 +27,7 @@ export type {
   HealthCheck,
   HealthResponse,
   SystemStats,
+  SetupResponse,
 } from './client';
 
 // Cameras — CRUD, ONVIF, PTZ, protocols
@@ -63,6 +65,8 @@ export type {
   CreateCameraRequest,
   UpdateCameraRequest,
   DiscoveredDevice,
+  DiscoveryError,
+  DiscoveryResult,
   DeviceInfo,
   DeviceProfile,
   ONVIFDeviceDetail,

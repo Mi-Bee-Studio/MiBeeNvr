@@ -198,3 +198,34 @@ export async function healthCheck(signal?: AbortSignal): Promise<HealthResponse>
 export async function getSystemStats(signal?: AbortSignal): Promise<SystemStats> {
   return apiRequest<SystemStats>('/stats/system', { signal });
 }
+
+// Setup response
+export interface SetupResponse {
+  status: string;
+  token: string;
+}
+
+// First-time setup endpoint (no auth required)
+export async function setupApi(
+  username: string,
+  password: string,
+  language?: string,
+  storagePath?: string,
+): Promise<SetupResponse> {
+  const body: Record<string, string> = { username, password };
+  if (language) body.language = language;
+  if (storagePath) body.storage_path = storagePath;
+
+  const response = await fetch('/api/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: 'Setup failed' }));
+    throw new Error((errorData as ApiError).error || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}

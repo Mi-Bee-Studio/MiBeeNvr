@@ -6,6 +6,9 @@
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
+  import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
+  import FlvPlayer from '../components/FlvPlayer.svelte';
+  import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
 
@@ -44,6 +47,9 @@
   // Protocol capabilities for capability-based checks
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   const STORAGE_KEY = 'dashboard-selected-cameras';
+
+  // Default streaming protocol from settings
+  let defaultProtocol = $state<string>('hls');
 
 
   function loadSavedCameraIds(): string[] {
@@ -117,12 +123,17 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  type CameraMode = 'snapshot' | 'hls' | 'unsupported';
+  type CameraMode = 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
 
   function getCameraMode(camera: Camera): CameraMode {
-    if (isHlsSupported(camera)) return 'hls';
-    if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
-    return 'snapshot';
+    if (!isHlsSupported(camera)) {
+      if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
+      return 'snapshot';
+    }
+    if (defaultProtocol === 'webrtc') return 'webrtc';
+    if (defaultProtocol === 'flv') return 'flv';
+    // hls, ll-hls, or default
+    return 'hls';
   }
 
   // --- Expand / shrink ---
@@ -149,7 +160,6 @@
       expandToHls(camera.id);
     }
   }
-
   function handleCellDblClick(camera: Camera) {
     if (expandedCameraId === camera.id) {
       shrinkToGrid();
@@ -195,6 +205,15 @@
       }
     } catch (e) {
       console.warn('Failed to load protocol capabilities:', e);
+    }
+    // Load default streaming protocol from settings
+    try {
+      const config = await getStreamingSettings();
+      if (config.default_protocol) {
+        defaultProtocol = config.default_protocol;
+      }
+    } catch (e) {
+      console.warn('Failed to load streaming settings:', e);
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
@@ -391,6 +410,19 @@
                 expanded={expandedCameraId === camera.id}
               />
 
+            {:else if mode === 'webrtc'}
+              <WebRTCPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={expandedCameraId === camera.id}
+              />
+
+            {:else if mode === 'flv'}
+              <FlvPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={expandedCameraId === camera.id}
+              />
             {:else}
               <!-- Unsupported protocol (no snapshot, no HLS) -->
               <div class="absolute inset-0 flex items-center justify-center">
@@ -410,6 +442,15 @@
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
                 </div>
               </div>
+            {/if}
+
+            <!-- Streaming protocol badge -->
+            {#if mode !== 'unsupported'}
+              {@const protocolLabel = mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? 'HLS' : 'JPEG'}
+              {@const protocolColor = mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? 'bg-blue-500/60' : 'bg-gray-500/60'}
+              <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
+                {protocolLabel}
+              </span>
             {/if}
 
             <!-- PTZ Overlay for PTZ-capable cameras -->
