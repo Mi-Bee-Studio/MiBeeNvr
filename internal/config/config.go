@@ -25,8 +25,11 @@ type Config struct {
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	WebDAV        WebDAVConfig        `yaml:"webdav"`
 	HLS           HLSConfig           `yaml:"hls"`
+	Streaming StreamingConfig `yaml:"streaming"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
+	RTMP          RTMPConfig         `yaml:"rtmp"`
+	SRT           SRTConfig          `yaml:"srt"`
 	Version       string              `yaml:"version"`
 }
 
@@ -112,10 +115,34 @@ type ObservabilityConfig struct {
 }
 
 type HLSConfig struct {
-	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
-	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
-	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
-	MaxStreams int `yaml:"max_streams"` // default 4 (RPi constraint)
+	WriteBufferSize  int    `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
+	SegmentMaxSizeMB int    `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
+	SegmentCount     int    `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
+	MaxStreams       int    `yaml:"max_streams"`         // default 4 (RPi constraint)
+	LowLatency       bool   `yaml:"low_latency"`         // enable Low-Latency HLS (gohlslib MuxerVariantLowLatency)
+	PartMinDuration  string `yaml:"part_min_duration"`   // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
+}
+
+// StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
+type StreamingConfig struct {
+	DefaultProtocol string      `yaml:"default_protocol"` // webrtc | flv | hls | ll-hls (default "hls")
+	WebRTC         WebRTCConfig `yaml:"webrtc"`
+	FLV            FLVConfig    `yaml:"flv"`
+}
+
+// WebRTCConfig configures WebRTC WHEP streaming
+type WebRTCConfig struct {
+	Enabled     *bool  `yaml:"enabled"`      // default true
+	MaxViewers  int    `yaml:"max_viewers"`  // default 2, range [1,10]
+	IdleTimeout string `yaml:"idle_timeout"` // default "60s"
+}
+
+// FLVConfig configures HTTP-FLV streaming
+type FLVConfig struct {
+	Enabled      *bool  `yaml:"enabled"`        // default true
+	MaxViewers   int    `yaml:"max_viewers"`    // default 10, range [1,50]
+	IdleTimeout  string `yaml:"idle_timeout"`   // default "60s"
+	GOPCacheSize int    `yaml:"gop_cache_size"` // default 1
 }
 
 // XiaomiConfig holds Xiaomi cloud authentication settings.
@@ -123,6 +150,29 @@ type XiaomiConfig struct {
 	UserID string `yaml:"user_id"` // Xiaomi account user ID (from auth response)
 	Token  string `yaml:"token"`   // Xiaomi passToken for API access
 	Region string `yaml:"region"`  // Region code (e.g. "cn", "sg", "de")
+}
+
+// SRTConfig configures the SRT listener for receiving MPEG-TS streams.
+type SRTConfig struct {
+	Enabled *bool          `yaml:"enabled"` // default false
+	Port    int            `yaml:"port"`    // default 9000
+	Streams []SRTStream    `yaml:"streams"`
+}
+
+// SRTStream configures a single SRT stream mapping.
+type SRTStream struct {
+	CameraID   string `yaml:"camera_id"`
+	Mode       string `yaml:"mode"`        // "listener" (receive pushes) or "caller" (pull from remote)
+	Address    string `yaml:"address"`     // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
+	Passphrase string `yaml:"passphrase"`  // AES encryption passphrase (optional)
+	StreamID   string `yaml:"stream_id"`   // SRT stream ID for caller mode (optional)
+}
+
+// RTMPConfig configures the RTMP ingest server.
+type RTMPConfig struct {
+	Enabled    *bool             `yaml:"enabled"`    // default false
+	Port       int               `yaml:"port"`       // default 1935
+	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -306,6 +356,53 @@ func Validate(cfg *Config) error {
 	if cfg.HLS.MaxStreams < 1 || cfg.HLS.MaxStreams > 20 {
 		return fmt.Errorf("hls.max_streams must be between 1 and 20, got %d", cfg.HLS.MaxStreams)
 	}
+	// Validate LL-HLS configuration
+	if cfg.HLS.LowLatency {
+		if cfg.HLS.SegmentCount < 7 {
+			return fmt.Errorf("hls.segment_count must be >= 7 when low_latency is enabled, got %d", cfg.HLS.SegmentCount)
+		}
+	}
+	// Validate hls.part_min_duration
+	if partDur, err := time.ParseDuration(cfg.HLS.PartMinDuration); err != nil {
+		return fmt.Errorf("hls.part_min_duration invalid: %w", err)
+	} else if partDur < 100*time.Millisecond || partDur > 1*time.Second {
+		return fmt.Errorf("hls.part_min_duration must be between 100ms and 1s, got %s", cfg.HLS.PartMinDuration)
+	}
+
+	// Validate streaming configuration
+	if cfg.Streaming.DefaultProtocol != "webrtc" && cfg.Streaming.DefaultProtocol != "flv" && cfg.Streaming.DefaultProtocol != "hls" && cfg.Streaming.DefaultProtocol != "ll-hls" {
+		return fmt.Errorf("streaming.default_protocol invalid: %s (must be webrtc/flv/hls/ll-hls)", cfg.Streaming.DefaultProtocol)
+	}
+	if cfg.Streaming.WebRTC.MaxViewers < 1 || cfg.Streaming.WebRTC.MaxViewers > 10 {
+		return fmt.Errorf("streaming.webrtc.max_viewers must be between 1 and 10, got %d", cfg.Streaming.WebRTC.MaxViewers)
+	}
+	if cfg.Streaming.FLV.MaxViewers < 1 || cfg.Streaming.FLV.MaxViewers > 50 {
+		return fmt.Errorf("streaming.flv.max_viewers must be between 1 and 50, got %d", cfg.Streaming.FLV.MaxViewers)
+	}
+	if cfg.Streaming.FLV.GOPCacheSize < 0 {
+		return fmt.Errorf("streaming.flv.gop_cache_size must be >= 0, got %d", cfg.Streaming.FLV.GOPCacheSize)
+	}
+	if _, err := time.ParseDuration(cfg.Streaming.WebRTC.IdleTimeout); err != nil {
+		return fmt.Errorf("streaming.webrtc.idle_timeout invalid: %w", err)
+	}
+	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
+		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)
+	}
+	// Validate SRT configuration
+	if cfg.SRT.Port < 1 || cfg.SRT.Port > 65535 {
+		return fmt.Errorf("srt.port must be between 1 and 65535, got %d", cfg.SRT.Port)
+	}
+	for i, s := range cfg.SRT.Streams {
+		if strings.TrimSpace(s.CameraID) == "" {
+			return fmt.Errorf("srt.streams[%d].camera_id is required", i)
+		}
+		if s.Mode != "listener" && s.Mode != "caller" {
+			return fmt.Errorf("srt.streams[%d].mode must be 'listener' or 'caller', got %q", i, s.Mode)
+		}
+		if s.Mode == "caller" && strings.TrimSpace(s.Address) == "" {
+			return fmt.Errorf("srt.streams[%d].address is required for caller mode", i)
+		}
+	}
 	return nil
 }
 
@@ -382,6 +479,38 @@ func (cfg *Config) applyDefaults() {
 	if cfg.HLS.MaxStreams <= 0 {
 		cfg.HLS.MaxStreams = 4
 	}
+	// LL-HLS: low_latency defaults to false (zero value)
+	if strings.TrimSpace(cfg.HLS.PartMinDuration) == "" {
+		cfg.HLS.PartMinDuration = "200ms"
+	}
+
+	// Streaming defaults
+	if strings.TrimSpace(cfg.Streaming.DefaultProtocol) == "" {
+		cfg.Streaming.DefaultProtocol = "hls"
+	}
+	if cfg.Streaming.WebRTC.Enabled == nil {
+		cfg.Streaming.WebRTC.Enabled = new(bool)
+		*cfg.Streaming.WebRTC.Enabled = true
+	}
+	if cfg.Streaming.WebRTC.MaxViewers <= 0 {
+		cfg.Streaming.WebRTC.MaxViewers = 2
+	}
+	if strings.TrimSpace(cfg.Streaming.WebRTC.IdleTimeout) == "" {
+		cfg.Streaming.WebRTC.IdleTimeout = "60s"
+	}
+	if cfg.Streaming.FLV.Enabled == nil {
+		cfg.Streaming.FLV.Enabled = new(bool)
+		*cfg.Streaming.FLV.Enabled = true
+	}
+	if cfg.Streaming.FLV.MaxViewers <= 0 {
+		cfg.Streaming.FLV.MaxViewers = 10
+	}
+	if strings.TrimSpace(cfg.Streaming.FLV.IdleTimeout) == "" {
+		cfg.Streaming.FLV.IdleTimeout = "60s"
+	}
+	if cfg.Streaming.FLV.GOPCacheSize <= 0 {
+		cfg.Streaming.FLV.GOPCacheSize = 1
+	}
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"
 	}
@@ -400,6 +529,25 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
+	}
+	// RTMP defaults
+	if cfg.RTMP.Enabled == nil {
+		cfg.RTMP.Enabled = new(bool)
+		*cfg.RTMP.Enabled = false
+	}
+	if cfg.RTMP.Port <= 0 {
+		cfg.RTMP.Port = 1935
+	}
+	if cfg.RTMP.StreamKeys == nil {
+		cfg.RTMP.StreamKeys = make(map[string]string)
+	}
+	// SRT defaults
+	if cfg.SRT.Enabled == nil {
+		cfg.SRT.Enabled = new(bool)
+		*cfg.SRT.Enabled = false
+	}
+	if cfg.SRT.Port <= 0 {
+		cfg.SRT.Port = 9000
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {

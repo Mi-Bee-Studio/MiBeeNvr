@@ -116,6 +116,8 @@ export {
   getMergePending,
   getFeatures,
   updateFeatures,
+  getStreamingSettings,
+  updateStreamingSettings,
 } from './settings';
 
 export type {
@@ -125,6 +127,9 @@ export type {
   MergeStatus,
   MergePending,
   FeatureFlags,
+  StreamingConfig,
+  WebRTCConfig,
+  FLVStreamingConfig,
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync

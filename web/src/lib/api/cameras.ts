@@ -154,6 +154,20 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     builtIn: true,
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
   },
+  {
+    id: 'rtmp',
+    label: 'RTMP',
+    encodings: ['h264'],
+    builtIn: true,
+    capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
+    id: 'srt',
+    label: 'SRT',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
 ];
 
 // --- Camera CRUD ---

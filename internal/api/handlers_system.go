@@ -324,6 +324,109 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"default_protocol": h.config.Streaming.DefaultProtocol,
+		"webrtc": map[string]any{
+			"enabled":      h.config.Streaming.WebRTC.Enabled != nil && *h.config.Streaming.WebRTC.Enabled,
+			"max_viewers":  h.config.Streaming.WebRTC.MaxViewers,
+			"idle_timeout": h.config.Streaming.WebRTC.IdleTimeout,
+		},
+		"flv": map[string]any{
+			"enabled":        h.config.Streaming.FLV.Enabled != nil && *h.config.Streaming.FLV.Enabled,
+			"max_viewers":    h.config.Streaming.FLV.MaxViewers,
+			"idle_timeout":   h.config.Streaming.FLV.IdleTimeout,
+			"gop_cache_size": h.config.Streaming.FLV.GOPCacheSize,
+		},
+		"hls": map[string]any{
+			"low_latency": h.config.HLS.LowLatency,
+		},
+	})
+}
+
+func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	var body struct {
+		DefaultProtocol *string `json:"default_protocol"`
+		WebRTC          *struct {
+			Enabled     *bool   `json:"enabled"`
+			MaxViewers  *int    `json:"max_viewers"`
+			IdleTimeout *string `json:"idle_timeout"`
+		} `json:"webrtc"`
+		FLV *struct {
+			Enabled      *bool   `json:"enabled"`
+			MaxViewers   *int    `json:"max_viewers"`
+			IdleTimeout  *string `json:"idle_timeout"`
+			GOPCacheSize *int    `json:"gop_cache_size"`
+		} `json:"flv"`
+		HLS *struct {
+			LowLatency *bool `json:"low_latency"`
+		} `json:"hls"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.DefaultProtocol != nil {
+		h.config.Streaming.DefaultProtocol = *body.DefaultProtocol
+	}
+
+	if body.WebRTC != nil {
+		if body.WebRTC.Enabled != nil {
+			if h.config.Streaming.WebRTC.Enabled == nil {
+				h.config.Streaming.WebRTC.Enabled = new(bool)
+			}
+			*h.config.Streaming.WebRTC.Enabled = *body.WebRTC.Enabled
+		}
+		if body.WebRTC.MaxViewers != nil {
+			h.config.Streaming.WebRTC.MaxViewers = *body.WebRTC.MaxViewers
+		}
+		if body.WebRTC.IdleTimeout != nil {
+			h.config.Streaming.WebRTC.IdleTimeout = *body.WebRTC.IdleTimeout
+		}
+	}
+
+	if body.FLV != nil {
+		if body.FLV.Enabled != nil {
+			if h.config.Streaming.FLV.Enabled == nil {
+				h.config.Streaming.FLV.Enabled = new(bool)
+			}
+			*h.config.Streaming.FLV.Enabled = *body.FLV.Enabled
+		}
+		if body.FLV.MaxViewers != nil {
+			h.config.Streaming.FLV.MaxViewers = *body.FLV.MaxViewers
+		}
+		if body.FLV.IdleTimeout != nil {
+			h.config.Streaming.FLV.IdleTimeout = *body.FLV.IdleTimeout
+		}
+		if body.FLV.GOPCacheSize != nil {
+			h.config.Streaming.FLV.GOPCacheSize = *body.FLV.GOPCacheSize
+		}
+	}
+
+	if body.HLS != nil && body.HLS.LowLatency != nil {
+		h.config.HLS.LowLatency = *body.HLS.LowLatency
+	}
+
+	// Persist config to disk
+	if err := config.Save(h.configPath, h.config); err != nil {
+		logger.Warn("failed to save config", "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		writeError(w, http.StatusInternalServerError, "database not available")

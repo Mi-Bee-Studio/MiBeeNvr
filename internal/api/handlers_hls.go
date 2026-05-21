@@ -15,6 +15,23 @@ import (
 
 // --- HLS streaming endpoints ---
 
+// subscribeHLS registers an HLS consumer on the recorder's StreamHub.
+// It uses Hub.Subscribe with consumer ID "hls" so that the HLS manager
+// receives frames via the fan-out architecture.
+func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr *hls.Manager, isH265 bool) error {
+	if hub == nil {
+		return nil // no hub, no subscription (shouldn't happen in practice)
+	}
+	if isH265 {
+		return hub.Subscribe("hls", func(pts int64, au [][]byte) {
+			_ = hlsMgr.WriteH265(cameraID, pts, au)
+		})
+	}
+	return hub.Subscribe("hls", func(pts int64, au [][]byte) {
+		_ = hlsMgr.WriteH264(cameraID, pts, au)
+	})
+}
+
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -72,19 +89,15 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			// Check if sub-stream URL is configured
 			if camCfg != nil && camCfg.SubStreamURL != "" {
 				fallback := func() {
-					h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-						_ = h.hlsMgr.WriteH264(id, pts, au)
-					}
+					_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
 				}
 				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, false, fallback); subErr != nil {
 					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
 					fallback()
 				}
-				// Sub-stream reader is running — do NOT set OnHLSFrame on recorder
+				// Sub-stream reader is running — do NOT subscribe hub on recorder
 			} else {
-				h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH264(id, pts, au)
-				}
+				_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
 			}
 		} else if h265Rec, ok := rec.(*recorder.H265Recorder); ok {
 			vps := h265Rec.VPS()
@@ -109,18 +122,14 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			// Check if sub-stream URL is configured
 			if camCfg != nil && camCfg.SubStreamURL != "" {
 				fallback := func() {
-					h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-						_ = h.hlsMgr.WriteH265(id, pts, au)
-					}
+					_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
 				}
 				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, true, fallback); subErr != nil {
 					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
 					fallback()
 				}
 			} else {
-				h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH265(id, pts, au)
-				}
+				_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
 			}
 		} else if onvifRec, ok := rec.(*recorder.ONVIFRecorder); ok {
 			// ONVIF recorder delegates to H264/H265 internally
@@ -146,9 +155,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					}
 					return
 				}
-				h264Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH264(id, pts, au)
-				}
+				_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
 			} else if h265Rec, ok := delegate.(*recorder.H265Recorder); ok {
 				vps := h265Rec.VPS()
 				sps := h265Rec.SPS()
@@ -166,9 +173,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					}
 					return
 				}
-				h265Rec.OnHLSFrame = func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH265(id, pts, au)
-				}
+				_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
 			} else {
 				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 				return
@@ -241,8 +246,41 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Unsubscribe HLS consumer from StreamHub before stopping the stream
+	if h.camMgr != nil {
+		if rec := h.camMgr.GetRecorder(id); rec != nil {
+			hub := getRecorderHub(rec)
+			if hub != nil {
+				hub.Unsubscribe("hls")
+			}
+		}
+	}
+
 	h.hlsMgr.StopStream(id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// getRecorderHub extracts the StreamHub from any recorder type.
+// Returns nil if the recorder doesn't have a Hub.
+func getRecorderHub(rec model.Recorder) *model.StreamHub {
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		return r.Hub
+	case *recorder.H265Recorder:
+		return r.Hub
+	case *recorder.ONVIFRecorder:
+		// ONVIF passes Hub to delegate, but we unsubscribe from the delegate's hub
+		if delegate := r.Delegate(); delegate != nil {
+			return getRecorderHub(delegate)
+		}
+		return r.Hub
+	case *recorder.MJPEGRecorder:
+		return r.Hub
+	case *recorder.HTTPJPEGRecorder:
+		return r.Hub
+	default:
+		return nil
+	}
 }
 
 // --- Snapshot endpoint ---

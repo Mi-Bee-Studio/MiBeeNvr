@@ -54,6 +54,7 @@ type MJPEGRecorder struct {
 
 	frameCh chan []byte
 	dropped atomic.Int64
+	Hub *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
 }
 
 // incActive increments the active recordings gauge if metrics is available.

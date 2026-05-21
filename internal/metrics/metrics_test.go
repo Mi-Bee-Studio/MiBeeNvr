@@ -159,3 +159,43 @@ func TestHLSFramesDroppedCounter(t *testing.T) {
 	}
 	t.Fatal("expected nvr_hls_frames_dropped_total metric family")
 }
+
+func TestNewStreamingMetrics(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	require.NotNil(t, m.WebRTCActivePeers)
+	require.NotNil(t, m.WebRTCFramesSent)
+	require.NotNil(t, m.WebRTCFramesDropped)
+	require.NotNil(t, m.FLVActiveStreams)
+	require.NotNil(t, m.FLVFramesSent)
+	require.NotNil(t, m.FLVFramesDropped)
+	require.NotNil(t, m.FLVGOPCacheHits)
+}
+
+func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+
+	// Touch all streaming metrics to ensure they appear in registry
+	m.WebRTCActivePeers.WithLabelValues("cam1").Set(1)
+	m.WebRTCFramesSent.WithLabelValues("cam1").Inc()
+	m.WebRTCFramesDropped.WithLabelValues("cam1").Inc()
+	m.FLVActiveStreams.WithLabelValues("cam1").Set(1)
+	m.FLVFramesSent.WithLabelValues("cam1").Inc()
+	m.FLVFramesDropped.WithLabelValues("cam1").Inc()
+	m.FLVGOPCacheHits.WithLabelValues("cam1").Inc()
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	require.True(t, names["nvr_webrtc_active_peers"])
+	require.True(t, names["nvr_webrtc_frames_sent_total"])
+	require.True(t, names["nvr_webrtc_frames_dropped_total"])
+	require.True(t, names["nvr_flv_active_streams"])
+	require.True(t, names["nvr_flv_frames_sent_total"])
+	require.True(t, names["nvr_flv_frames_dropped_total"])
+	require.True(t, names["nvr_flv_gop_cache_hits_total"])
+}

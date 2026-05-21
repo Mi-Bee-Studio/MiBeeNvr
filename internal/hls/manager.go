@@ -66,6 +66,8 @@ type Manager struct {
 	segmentMaxSize  int
 	segmentCount    int
 	metrics         *metrics.Metrics
+	lowLatency      bool           // enable Low-Latency HLS (MuxerVariantLowLatency)
+	partMinDuration time.Duration   // LL-HLS partial segment duration (default 200ms)
 }
 
 // NewManager creates a new HLS Manager with default settings.
@@ -112,6 +114,18 @@ func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize, segmentCou
 	}
 }
 
+// SetLowLatency enables Low-Latency HLS mode with the given partial segment duration.
+// When enabled, the muxer uses MuxerVariantLowLatency (fMP4) for both H.264 and H.265,
+// producing partial segments for sub-second live latency.
+// partMinDuration controls the partial segment duration (default: 200ms).
+// Must be called before any StartStream calls.
+func (m *Manager) SetLowLatency(enabled bool, partMinDuration time.Duration) {
+	m.lowLatency = enabled
+	if partMinDuration > 0 {
+		m.partMinDuration = partMinDuration
+	}
+}
+
 // StartStream creates and starts an HLS muxer for the given camera.
 // The caller must provide the H264 SPS and PPS NAL units (without start bytes).
 func (m *Manager) StartStream(cameraID string, sps, pps []byte, maxFPS int) error {
@@ -144,10 +158,34 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		return err
 	}
 
+
 	var track *gohlslib.Track
 	var mux *gohlslib.Muxer
 
-	if isH265 {
+	if m.lowLatency {
+		// LL-HLS: use MuxerVariantLowLatency (fMP4) for both H.264 and H.265
+		// Shorter segment duration (1s) + partial segments for sub-second latency
+		if isH265 {
+			track = &gohlslib.Track{
+				Codec:     &codecs.H265{VPS: vps, SPS: sps, PPS: pps},
+				ClockRate: 90000,
+			}
+		} else {
+			track = &gohlslib.Track{
+				Codec:     &codecs.H264{SPS: sps, PPS: pps},
+				ClockRate: 90000,
+			}
+		}
+		mux = &gohlslib.Muxer{
+			Tracks:             []*gohlslib.Track{track},
+			Variant:            gohlslib.MuxerVariantLowLatency,
+			SegmentCount:       m.segmentCount,
+			SegmentMinDuration: 1 * time.Second,
+			PartMinDuration:    m.partMinDuration,
+			SegmentMaxSize:     uint64(m.segmentMaxSize),
+			Directory:          dirPath,
+		}
+	} else if isH265 {
 		track = &gohlslib.Track{
 			Codec:     &codecs.H265{VPS: vps, SPS: sps, PPS: pps},
 			ClockRate: 90000,
@@ -203,7 +241,11 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	if isH265 {
 		codecStr = "H265"
 	}
-	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr)
+	mode := "standard"
+	if m.lowLatency {
+		mode = "low-latency"
+	}
+	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr, "mode", mode)
 	return nil
 }
 

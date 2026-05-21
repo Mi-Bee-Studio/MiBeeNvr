@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras } from '$lib/api';
-  import type { SettingsConfig, FeatureFlags, StorageStats, Camera } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings } from '$lib/api';
+  import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import { t } from '$lib/i18n';
   import { AlertCircle, Settings as SettingsIcon, RefreshCw, CircleDot } from 'lucide-svelte';
@@ -30,6 +30,22 @@ let mergeWindowSize = $state('1h');
 let mergeMinSegments = $state(3);
 let mergeMinSegmentAge = $state('10m');
 let mergeBatchLimit = $state(100);
+
+// Streaming settings state
+let streamingDefaultProtocol = $state('hls');
+let streamingWebrtcEnabled = $state(true);
+let streamingWebrtcMaxViewers = $state(4);
+let streamingWebrtcIdleTimeout = $state('5m');
+let streamingFlvEnabled = $state(true);
+let streamingFlvMaxViewers = $state(10);
+let streamingFlvGopCache = $state(100);
+let streamingHlsLlHls = $state(false);
+let streamingRtmpEnabled = $state(false);
+let streamingRtmpPort = $state(1935);
+let streamingSrtEnabled = $state(false);
+let streamingSrtPort = $state(9000);
+let streamingSaving = $state(false);
+let expandedProtocolDoc = $state<string | null>(null);
 
 
 // Feature toggles state
@@ -257,6 +273,10 @@ function getAffectedCameraCount(protocol: string): number {
     loadFeatures();
     loadDiskInfo();
     loadCameraList();
+    loadStreamingConfig();
+    loadFeatures();
+    loadDiskInfo();
+    loadCameraList();
     window.addEventListener('hashchange', handleHashChange);
   });
 
@@ -299,6 +319,58 @@ function getAffectedCameraCount(protocol: string): number {
     try {
       allCameras = await listCameras();
     } catch (e) { /* non-critical */ }
+  }
+
+  async function loadStreamingConfig() {
+    try {
+      const config = await getStreamingSettings();
+      streamingDefaultProtocol = config.default_protocol || 'hls';
+      streamingWebrtcEnabled = config.webrtc?.enabled ?? true;
+      streamingWebrtcMaxViewers = config.webrtc?.max_viewers ?? 4;
+      streamingWebrtcIdleTimeout = config.webrtc?.idle_timeout || '5m';
+      streamingFlvEnabled = config.flv?.enabled ?? true;
+      streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
+      streamingFlvGopCache = config.flv?.gop_cache_size ?? 100;
+      streamingHlsLlHls = config.hls?.low_latency ?? false;
+      streamingRtmpEnabled = config.rtmp?.enabled ?? false;
+      streamingRtmpPort = config.rtmp?.port ?? 1935;
+      streamingSrtEnabled = config.srt?.enabled ?? false;
+      streamingSrtPort = config.srt?.port ?? 9000;
+    } catch (e) { console.warn('Failed to load streaming settings:', e); }
+  }
+
+  async function saveStreamingSettings() {
+    streamingSaving = true;
+    try {
+      await updateStreamingSettings({
+        default_protocol: streamingDefaultProtocol,
+        webrtc: {
+          enabled: streamingWebrtcEnabled,
+          max_viewers: streamingWebrtcMaxViewers,
+          idle_timeout: streamingWebrtcIdleTimeout,
+        },
+        flv: {
+          enabled: streamingFlvEnabled,
+          max_viewers: streamingFlvMaxViewers,
+          idle_timeout: '5m',
+          gop_cache_size: streamingFlvGopCache,
+        },
+        hls: { low_latency: streamingHlsLlHls },
+        rtmp: {
+          enabled: streamingRtmpEnabled,
+          port: streamingRtmpPort,
+        },
+        srt: {
+          enabled: streamingSrtEnabled,
+          port: streamingSrtPort,
+        },
+      });
+      showToast(t('settings.streaming.saved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.streaming.error'), 'error');
+    } finally {
+      streamingSaving = false;
+    }
   }
 
 </script>
@@ -583,6 +655,251 @@ function getAffectedCameraCount(protocol: string): number {
 
 
 
+
+        <!-- Streaming Protocols -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.streamingDesc')}</p>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Default Protocol -->
+            <div>
+              <label for="defaultProtocol" class="input-label">{t('settings.streaming.defaultProtocol')}</label>
+              <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
+                <option value="webrtc">WebRTC</option>
+                <option value="flv">HTTP-FLV</option>
+                <option value="hls">HLS</option>
+                <option value="ll-hls">LL-HLS</option>
+              </select>
+              <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.defaultProtocolHint')}</p>
+            </div>
+          </div>
+
+          <!-- WebRTC Settings -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.webrtc')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.webrtcDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.webrtc')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingWebrtcEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingWebrtcEnabled = !streamingWebrtcEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingWebrtcEnabled = !streamingWebrtcEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingWebrtcEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingWebrtcEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="webrtcMaxViewers" class="input-label">{t('settings.streaming.webrtc.maxViewers')}</label>
+                <input id="webrtcMaxViewers" type="number" class="input" bind:value={streamingWebrtcMaxViewers} min="1" max="20" />
+              </div>
+              <div>
+                <label for="webrtcIdleTimeout" class="input-label">{t('settings.streaming.webrtc.idleTimeout')}</label>
+                <select id="webrtcIdleTimeout" class="input" bind:value={streamingWebrtcIdleTimeout}>
+                  <option value="1m">1 min</option>
+                  <option value="5m">5 min</option>
+                  <option value="10m">10 min</option>
+                  <option value="30m">30 min</option>
+                </select>
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.webrtc.idleTimeoutHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- FLV Settings -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.flv')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.flvDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.flv')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingFlvEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingFlvEnabled = !streamingFlvEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingFlvEnabled = !streamingFlvEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingFlvEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingFlvEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="flvMaxViewers" class="input-label">{t('settings.streaming.flv.maxViewers')}</label>
+                <input id="flvMaxViewers" type="number" class="input" bind:value={streamingFlvMaxViewers} min="1" max="50" />
+              </div>
+              <div>
+                <label for="flvGopCache" class="input-label">{t('settings.streaming.flv.gopCache')}</label>
+                <input id="flvGopCache" type="number" class="input" bind:value={streamingFlvGopCache} min="0" max="1000" />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.flv.gopCacheHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- HLS Settings -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.hls')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.hlsDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.hls.llHls')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingHlsLlHls ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingHlsLlHls = !streamingHlsLlHls; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingHlsLlHls = !streamingHlsLlHls; } }}
+                    role="switch"
+                    aria-checked={streamingHlsLlHls}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingHlsLlHls ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.hls.llHlsHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- RTMP Ingest -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.rtmp')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.rtmpDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.rtmp')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingRtmpEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingRtmpEnabled = !streamingRtmpEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingRtmpEnabled = !streamingRtmpEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingRtmpEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingRtmpEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="rtmpPort" class="input-label">{t('settings.streaming.rtmp.port')}</label>
+                <input id="rtmpPort" type="number" class="input" bind:value={streamingRtmpPort} min="1" max="65535" />
+              </div>
+              <div>
+                <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.rtmp.pushHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- SRT Receiver -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.srt')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.srtDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.srt')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingSrtEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingSrtEnabled = !streamingSrtEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingSrtEnabled = !streamingSrtEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingSrtEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingSrtEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="srtPort" class="input-label">{t('settings.streaming.srt.port')}</label>
+                <input id="srtPort" type="number" class="input" bind:value={streamingSrtPort} min="1" max="65535" />
+              </div>
+              <div>
+                <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.srt.hint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resource Usage Estimates -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.resourceEstimate')}</h4>
+            <p class="text-xs th-text-tertiary mb-3">{t('settings.streaming.resourceEstimateDesc')}</p>
+            <div class="space-y-2">
+              <div class="flex items-center gap-2 text-xs th-text-secondary">
+                <span class="w-2 h-2 rounded-full bg-[var(--color-danger)]"></span>
+                <span>{t('settings.streaming.resource.webrtc')}</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs th-text-secondary">
+                <span class="w-2 h-2 rounded-full bg-[var(--color-warning)]"></span>
+                <span>{t('settings.streaming.resource.flv')}</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs th-text-secondary">
+                <span class="w-2 h-2 rounded-full bg-[var(--color-success)]"></span>
+                <span>{t('settings.streaming.resource.hls')}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Save streaming button -->
+          <div class="flex items-center gap-4 pt-4">
+            <button
+              onclick={saveStreamingSettings}
+              class="btn btn-primary btn-sm"
+              disabled={streamingSaving}
+            >
+              {#if streamingSaving}
+                <span class="spinner mr-2"></span>
+                {t('settings.streaming.saving')}
+              {:else}
+                {t('settings.featureToggles.save')}
+              {/if}
+            </button>
+          </div>
+        </div>
+
+        <!-- Protocol Guide -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.protocolDocs')}</h3>
+          <p class="text-sm th-text-tertiary mb-6">{t('settings.protocolDocsDesc')}</p>
+
+          <div class="space-y-3">
+            {#each ['webrtc', 'flv', 'hls', 'llHls'] as docKey (docKey)}
+              {@const isExpanded = expandedProtocolDoc === docKey}
+              <div class="border th-border rounded-lg overflow-hidden">
+                <button
+                  onclick={() => { expandedProtocolDoc = isExpanded ? null : docKey; }}
+                  class="w-full px-4 py-3 text-left flex items-center justify-between hover:th-bg-hover transition-colors"
+                >
+                  <span class="font-medium th-text-primary">{t(`settings.protocolDocs.${docKey}.title`)}</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {isExpanded ? 'rotate-180' : ''} th-text-tertiary"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                {#if isExpanded}
+                  <div class="px-4 pb-4 pt-0 space-y-3">
+                    <p class="text-sm th-text-secondary">{t(`settings.protocolDocs.${docKey}.desc`)}</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div class="p-3 rounded-md bg-[var(--color-success)]/5 border border-[var(--color-success)]/20">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-success)] mb-1">Pros</div>
+                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.pros`)}</p>
+                      </div>
+                      <div class="p-3 rounded-md bg-[var(--color-danger)]/5 border border-[var(--color-danger)]/20">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-danger)] mb-1">Cons</div>
+                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.cons`)}</p>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
         <!-- Feature Toggles -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.featureToggles.title')}</h3>
