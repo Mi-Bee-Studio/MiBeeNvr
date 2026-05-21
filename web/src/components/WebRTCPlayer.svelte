@@ -111,7 +111,7 @@
     zombieCount = 0;
 
     zombieInterval = setInterval(() => {
-      if (!videoEl) return;
+      if (!videoEl || !pc) return;
       const now = Date.now();
 
       // Check if video is stuck (readyState 0 for >20s or no playback progress for >60s)
@@ -121,7 +121,6 @@
           // ~20s stuck — reconnect
           console.warn(`WebRTC zombie detected for ${cameraId}, reconnecting`);
           zombieCount = 0;
-          reconnectAttempts = 0;
           destroyPeerConnection();
           initWebRTC();
           return;
