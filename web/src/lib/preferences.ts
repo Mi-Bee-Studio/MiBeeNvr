@@ -10,8 +10,8 @@ export const PREFERENCE_KEYS = {
   ITEMS_PER_PAGE: 'items_per_page',
   AUTO_REFRESH: 'auto_refresh',
   THEME: 'theme',
+  PROTOCOL: 'protocol',
 } as const;
-
 // Preference types
 export interface Preferences {
   items_per_page: number;
@@ -121,4 +121,23 @@ export function resetPreferences(): void {
   Object.entries(DEFAULT_PREFERENCES).forEach(([key, value]) => {
     setPreference(key, value);
   });
+}
+
+// Protocol preference (separate key for easy access from setup & live view)
+const PROTOCOL_KEY = 'mibee_nvr_protocol_pref';
+
+export function getProtocolPreference(): string {
+  try {
+    return localStorage.getItem(PROTOCOL_KEY) || 'hls';
+  } catch {
+    return 'hls';
+  }
+}
+
+export function setProtocolPreference(protocol: string): void {
+  try {
+    localStorage.setItem(PROTOCOL_KEY, protocol);
+  } catch (error) {
+    console.error('Failed to set protocol preference:', error);
+  }
 }
