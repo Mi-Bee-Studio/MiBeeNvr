@@ -51,7 +51,6 @@ let expandedProtocolDoc = $state<string | null>(null);
 
 // Feature toggles state
 let featureFlags = $state<Record<string, boolean>>({});
-let originalFeatureFlags = $state<Record<string, boolean>>({});
 let featuresLoading = $state(true);
 let featuresSaving = $state(false);
 
@@ -61,8 +60,9 @@ let allCameras = $state<Camera[]>([]);
 // Disk info from stats API
 let diskInfo = $state<StorageStats | null>(null);
 
-// Original values snapshot for dirty tracking
-let originalSnapshot = $state<Record<string, string>>('{}');
+// Original values snapshot for dirty tracking (cleanup + webdav + merge + streaming + features)
+let originalSnapshot = $state('');
+let originalFeatureFlags = $state<Record<string, boolean>>({});
 
 // Settings tab state
 let activeSettingsTab = $state('general');
@@ -70,7 +70,8 @@ let settingsTabs = $derived([
   { id: 'general', label: t('settings.tabs.general') },
   { id: 'advanced', label: t('settings.tabs.advanced') },
 ]);
-// Derived: is form dirty?
+
+// Derived: is any setting dirty?
 let isDirty = $derived(() => {
     if (loading) return false;
     const current = JSON.stringify({
@@ -78,14 +79,14 @@ let isDirty = $derived(() => {
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+      streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
+      streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
+      streamingFlvGopCache, streamingHlsLlHls, streamingRtmpEnabled,
+      streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
     });
-    return current !== originalSnapshot;
-  });
-
-// Features dirty state
-let isFeaturesDirty = $derived(() => {
-    if (featuresLoading) return false;
-    return JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags);
+    if (current !== originalSnapshot) return true;
+    if (JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags)) return true;
+    return false;
   });
 
 // Unsaved changes navigation guard
@@ -93,7 +94,7 @@ let showNavGuard = $state(false);
 let pendingHash = $state('');
 
 function handleHashChange(e: HashChangeEvent) {
-    const dirty = isDirty() || isFeaturesDirty();
+    const dirty = isDirty();
     if (dirty && !showNavGuard) {
       e.preventDefault();
       pendingHash = window.location.hash;
@@ -173,7 +174,12 @@ function getAffectedCameraCount(protocol: string): number {
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
+      streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
+      streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
+      streamingFlvGopCache, streamingHlsLlHls, streamingRtmpEnabled,
+      streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
     });
+    originalFeatureFlags = { ...featureFlags };
   }
 
   async function loadSettings() {
@@ -220,7 +226,6 @@ function getAffectedCameraCount(protocol: string): number {
 
   async function performSave() {
     saving = true;
-
     try {
       const payload: SettingsConfig = {
         cleanup: {
@@ -235,7 +240,7 @@ function getAffectedCameraCount(protocol: string): number {
         },
       };
 
-      const result = await updateSettings(payload);
+      await updateSettings(payload);
 
       // Save merge settings
       await updateMergeSettings({
@@ -247,6 +252,35 @@ function getAffectedCameraCount(protocol: string): number {
         batch_limit: mergeBatchLimit,
       });
 
+      // Save streaming settings
+      await updateStreamingSettings({
+        default_protocol: streamingDefaultProtocol,
+        webrtc: {
+          enabled: streamingWebrtcEnabled,
+          max_viewers: streamingWebrtcMaxViewers,
+          idle_timeout: streamingWebrtcIdleTimeout,
+        },
+        flv: {
+          enabled: streamingFlvEnabled,
+          max_viewers: streamingFlvMaxViewers,
+          idle_timeout: '5m',
+          gop_cache_size: streamingFlvGopCache,
+        },
+        hls: { low_latency: streamingHlsLlHls },
+        rtmp: {
+          enabled: streamingRtmpEnabled,
+          port: streamingRtmpPort,
+        },
+        srt: {
+          enabled: streamingSrtEnabled,
+          port: streamingSrtPort,
+        },
+      });
+
+      // Save feature toggles
+      await updateFeatures({ protocols: featureFlags });
+
+      // Refresh state
       settings = await getSettings();
       captureSnapshot();
       showToast(t('settings.saved'), 'success');
@@ -344,6 +378,7 @@ function getAffectedCameraCount(protocol: string): number {
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
     } catch (e) { console.warn('Failed to load streaming settings:', e); }
+    captureSnapshot();
   }
 
   async function saveStreamingSettings() {
@@ -895,21 +930,6 @@ function getAffectedCameraCount(protocol: string): number {
             </div>
           </div>
 
-          <!-- Save streaming button -->
-          <div class="flex items-center gap-4 pt-4">
-            <button
-              onclick={saveStreamingSettings}
-              class="btn btn-primary btn-sm"
-              disabled={streamingSaving}
-            >
-              {#if streamingSaving}
-                <span class="spinner mr-2"></span>
-                {t('settings.streaming.saving')}
-              {:else}
-                {t('settings.featureToggles.save')}
-              {/if}
-            </button>
-          </div>
         </div>
 
         <!-- Feature Toggles -->
@@ -951,20 +971,6 @@ function getAffectedCameraCount(protocol: string): number {
                   </div>
                 </div>
               {/each}
-            </div>
-            <div class="flex items-center gap-4 pt-4">
-              <button
-                onclick={saveFeatures}
-                class="btn btn-primary btn-sm"
-                disabled={featuresSaving || !isFeaturesDirty()}
-              >
-                {#if featuresSaving}
-                  <span class="spinner mr-2"></span>
-                  {t('settings.featureToggles.saving')}
-                {:else}
-                  {t('settings.featureToggles.save')}
-                {/if}
-              </button>
             </div>
           {/if}
         </div>
