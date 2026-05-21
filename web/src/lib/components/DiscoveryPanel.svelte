@@ -6,9 +6,11 @@
     xiaomiDevices,
     xiaomiCaptcha,
     xiaomiVerify,
-    createCamera
+    createCamera,
+    xiaomiSync
   } from '$lib/api';
   import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
+  import { RefreshCw } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   interface Props {
@@ -44,6 +46,7 @@
   let xiaomiVerifyTicket = $state('');
   let xiaomiVerifyTarget = $state('');
   let xiaomiVerifyType = $state<'phone' | 'email' | ''>('');
+  let syncing = $state(false);
 
   // Expose scan state for parent
   export function isScanning(): boolean {
@@ -222,6 +225,19 @@
       xiaomiDeviceList = res.devices || [];
       xiaomiLoggedIn = true;
     } catch (e) { console.warn('Failed to refresh Xiaomi devices:', e); xiaomiLoggedIn = false; xiaomiDeviceList = []; }
+  }
+
+  async function handleSyncCloud() {
+    syncing = true;
+    try {
+      const result = await xiaomiSync();
+      showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
+      await refreshXiaomiDevices();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.syncFailed'), 'error');
+    } finally {
+      syncing = false;
+    }
   }
 
   // Determine visibility
@@ -414,6 +430,10 @@
           <span class="text-sm th-text-secondary">{t('xiaomi.devicesFound').replace('{count}', String(xiaomiDeviceList.length))}</span>
           <button class="btn btn-ghost btn-sm" onclick={refreshXiaomiDevices}>{t('xiaomi.refresh')}</button>
         </div>
+        <button onclick={handleSyncCloud} class="btn btn-ghost btn-sm mb-3" disabled={syncing}>
+          <RefreshCw size={14} class={syncing ? 'animate-spin' : ''} />
+          {t('cameras.syncCloud')}
+        </button>
         {#if xiaomiDeviceList.length === 0}
           <p class="th-text-secondary text-sm py-2">{t('xiaomi.noDevices')}</p>
         {:else}
