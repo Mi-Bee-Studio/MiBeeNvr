@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiSync, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
-  import { AlertCircle, Camera as CameraIcon, RefreshCw, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings } from 'lucide-svelte';
+  import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
@@ -44,7 +44,6 @@
 
   // Xiaomi
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
-  let syncing = $state(false);
 
   // Protocol info
   let protocols = $state<ProtocolInfo[]>(DEFAULT_PROTOCOLS);
@@ -319,18 +318,6 @@
     }
   }
 
-  async function handleSyncCloud() {
-    syncing = true;
-    try {
-      const result = await xiaomiSync();
-      showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
-      await loadCameras();
-    } catch (e: any) {
-      showToast(e.message || t('cameras.syncFailed'), 'error');
-    } finally {
-      syncing = false;
-    }
-  }
 
   onMount(async () => {
     loadCameras();
@@ -383,10 +370,6 @@
         {/if}
         <button onclick={openAddForm} class="btn btn-primary">
           + {t('cameras.addCamera')}
-        </button>
-        <button onclick={handleSyncCloud} class="btn btn-ghost" disabled={syncing}>
-          <RefreshCw size={16} class={syncing ? 'animate-spin' : ''} />
-          {t('cameras.syncCloud')}
         </button>
       </div>
     </div>
