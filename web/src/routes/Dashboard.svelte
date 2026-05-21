@@ -412,6 +412,15 @@
               </div>
             {/if}
 
+            <!-- Streaming protocol badge -->
+            {#if mode !== 'unsupported'}
+              {@const protocolLabel = mode === 'hls' ? 'HLS' : 'JPEG'}
+              {@const protocolColor = mode === 'hls' ? 'bg-blue-500/60' : 'bg-gray-500/60'}
+              <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
+                {protocolLabel}
+              </span>
+            {/if}
+
             <!-- PTZ Overlay for PTZ-capable cameras -->
             {#if ptzOpenIndex === index && getProtocolCapabilities(camera.protocol, protocolsMap).ptz}
               <div
