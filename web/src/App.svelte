@@ -11,6 +11,7 @@
   import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
+  import Setup from './routes/Setup.svelte';
 
   import Header from './components/Header';
 
@@ -47,6 +48,10 @@
 
     if (segments[0] === 'login') {
       return { route: 'login', params: {} };
+    }
+
+    if (segments[0] === 'setup') {
+      return { route: 'setup', params: {} };
     }
 
     // All routes below require authentication
@@ -145,6 +150,8 @@
 
 {#if currentRoute === 'login'}
     <Login />
+  {:else if currentRoute === 'setup'}
+    <Setup />
   {:else}
     <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
     {#if currentRoute === 'recordings'}
