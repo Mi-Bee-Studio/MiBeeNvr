@@ -40,6 +40,10 @@ let streamingFlvEnabled = $state(true);
 let streamingFlvMaxViewers = $state(10);
 let streamingFlvGopCache = $state(100);
 let streamingHlsLlHls = $state(false);
+let streamingRtmpEnabled = $state(false);
+let streamingRtmpPort = $state(1935);
+let streamingSrtEnabled = $state(false);
+let streamingSrtPort = $state(9000);
 let streamingSaving = $state(false);
 let expandedProtocolDoc = $state<string | null>(null);
 
@@ -328,6 +332,10 @@ function getAffectedCameraCount(protocol: string): number {
       streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
       streamingFlvGopCache = config.flv?.gop_cache_size ?? 100;
       streamingHlsLlHls = config.hls?.low_latency ?? false;
+      streamingRtmpEnabled = config.rtmp?.enabled ?? false;
+      streamingRtmpPort = config.rtmp?.port ?? 1935;
+      streamingSrtEnabled = config.srt?.enabled ?? false;
+      streamingSrtPort = config.srt?.port ?? 9000;
     } catch (e) { console.warn('Failed to load streaming settings:', e); }
   }
 
@@ -348,6 +356,14 @@ function getAffectedCameraCount(protocol: string): number {
           gop_cache_size: streamingFlvGopCache,
         },
         hls: { low_latency: streamingHlsLlHls },
+        rtmp: {
+          enabled: streamingRtmpEnabled,
+          port: streamingRtmpPort,
+        },
+        srt: {
+          enabled: streamingSrtEnabled,
+          port: streamingSrtPort,
+        },
       });
       showToast(t('settings.streaming.saved'), 'success');
     } catch (e) {
@@ -748,6 +764,66 @@ function getAffectedCameraCount(protocol: string): number {
                   </button>
                 </div>
                 <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.hls.llHlsHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- RTMP Ingest -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.rtmp')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.rtmpDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.rtmp')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingRtmpEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingRtmpEnabled = !streamingRtmpEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingRtmpEnabled = !streamingRtmpEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingRtmpEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingRtmpEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="rtmpPort" class="input-label">{t('settings.streaming.rtmp.port')}</label>
+                <input id="rtmpPort" type="number" class="input" bind:value={streamingRtmpPort} min="1" max="65535" />
+              </div>
+              <div>
+                <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.rtmp.pushHint')}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- SRT Receiver -->
+          <div class="mt-6 pt-6 border-t th-border">
+            <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.srt')}</h4>
+            <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.srtDesc')}</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label class="input-label">{t('settings.streaming.srt')}</label>
+                <div class="flex items-center gap-3 mt-2">
+                  <button
+                    type="button"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingSrtEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                    onclick={() => { streamingSrtEnabled = !streamingSrtEnabled; }}
+                    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingSrtEnabled = !streamingSrtEnabled; } }}
+                    role="switch"
+                    aria-checked={streamingSrtEnabled}
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {streamingSrtEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="srtPort" class="input-label">{t('settings.streaming.srt.port')}</label>
+                <input id="srtPort" type="number" class="input" bind:value={streamingSrtPort} min="1" max="65535" />
+              </div>
+              <div>
+                <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.srt.hint')}</p>
               </div>
             </div>
           </div>

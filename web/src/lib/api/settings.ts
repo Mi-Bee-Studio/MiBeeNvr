@@ -34,11 +34,23 @@ export interface HLSStreamingConfig {
   low_latency: boolean;
 }
 
+export interface RTMPConfig {
+  enabled: boolean;
+  port: number;
+}
+
+export interface SRTConfig {
+  enabled: boolean;
+  port: number;
+}
+
 export interface StreamingConfig {
   default_protocol: string; // webrtc | flv | hls | ll-hls
   webrtc: WebRTCConfig;
   flv: FLVStreamingConfig;
   hls: HLSStreamingConfig;
+  rtmp?: RTMPConfig;
+  srt?: SRTConfig;
 }
 
 export interface SettingsConfig {
