@@ -240,16 +240,21 @@ func TestH264FrameExtraction(t *testing.T) {
 func TestFrameDistributionToStreamHub(t *testing.T) {
 	hub := model.NewStreamHub()
 
+	var mu sync.Mutex
 	consumer1Count := 0
 	consumer2Count := 0
 
 	err := hub.Subscribe("consumer1", func(pts int64, au [][]byte) {
+		mu.Lock()
 		consumer1Count++
+		mu.Unlock()
 	})
 	require.NoError(t, err)
 
 	err = hub.Subscribe("consumer2", func(pts int64, au [][]byte) {
+		mu.Lock()
 		consumer2Count++
+		mu.Unlock()
 	})
 	require.NoError(t, err)
 
@@ -261,12 +266,17 @@ func TestFrameDistributionToStreamHub(t *testing.T) {
 
 	// Wait for async delivery
 	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
 		return consumer1Count >= 1 && consumer2Count >= 1
 	}, 2*time.Second, 50*time.Millisecond)
 
+	mu.Lock()
 	require.Equal(t, 1, consumer1Count)
 	require.Equal(t, 1, consumer2Count)
+	mu.Unlock()
 }
+
 
 // TestDisconnectCleanup tests that disconnecting a publisher cleans up resources.
 func TestDisconnectCleanup(t *testing.T) {

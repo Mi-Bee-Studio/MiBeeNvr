@@ -400,21 +400,26 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 	r.sps = []byte{0x42, 0x01, 0x01}
 	r.pps = []byte{0x44, 0x01, 0xc1}
 
+	var mu sync.Mutex
 	var receivedAU [][]byte
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	// IDR_W_RADL (type 19): first byte = (19 << 1) = 38 = 0x26
 	idrNALU := []byte{0x26, 0x01, 0x02}
 	r.forwardHLS(idrNALU)
 
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.Len(t, receivedAU, 4, "H265 IDR should prepend VPS+SPS+PPS")
 	require.Equal(t, r.vps, receivedAU[0])
 	require.Equal(t, r.sps, receivedAU[1])
 	require.Equal(t, r.pps, receivedAU[2])
 	require.Equal(t, idrNALU, receivedAU[3])
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 
@@ -430,16 +435,21 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 	r.codecOK = true
 	r.streamStart = time.Now()
 
+	var mu sync.Mutex
 	var receivedAU [][]byte
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	nalu := []byte{0xAA, 0xBB}
 	r.forwardHLS(nalu)
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, nalu, receivedAU[0])
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 
