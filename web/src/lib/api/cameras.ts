@@ -73,6 +73,16 @@ export interface DiscoveredDevice {
   endpoint: string;
 }
 
+export interface DiscoveryError {
+  category: 'NETWORK' | 'TIMEOUT' | 'NO_DEVICES' | 'PARSE_ERROR';
+  message: string;
+}
+
+export interface DiscoveryResult {
+  devices: DiscoveredDevice[];
+  error: DiscoveryError | null;
+}
+
 export interface DeviceInfo {
   manufacturer: string;
   model: string;
@@ -355,13 +365,16 @@ export async function getPTZStatus(
 export async function discoverONVIFDevices(
   timeout: number = 5,
   signal?: AbortSignal
-): Promise<DiscoveredDevice[]> {
-  const result = await apiRequest<{ devices: DiscoveredDevice[] }>('/onvif/discover', {
+): Promise<DiscoveryResult> {
+  const result = await apiRequest<DiscoveryResult>('/onvif/discover', {
     method: 'POST',
     body: JSON.stringify({ timeout }),
     signal,
   });
-  return result.devices || [];
+  return {
+    devices: result.devices || [],
+    error: result.error || null,
+  };
 }
 
 export async function getONVIFDeviceDetail(

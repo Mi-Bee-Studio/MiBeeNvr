@@ -10,7 +10,7 @@
     xiaomiSync
   } from '$lib/api';
   import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
-  import { RefreshCw } from 'lucide-svelte';
+  import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   interface Props {
@@ -24,7 +24,7 @@
   // ONVIF state
   let scanning = $state(false);
   let scanDone = $state(false);
-  let scanError = $state('');
+  let scanError = $state<{category: string; message: string} | null>(null);
   let discoveredDevices = $state<DiscoveredDevice[]>([]);
   let addingDeviceId = $state<string | null>(null);
   let onvifUsername = $state('');
@@ -72,27 +72,30 @@
   export function dismiss() {
     scanning = false;
     scanDone = false;
-    scanError = '';
+    scanError = null;
     discoveredDevices = [];
     xiaomiExpanded = false;
   }
 
   async function scanONVIF() {
     scanning = true;
-    scanError = '';
+    scanError = null;
     discoveredDevices = [];
     scanDone = false;
     try {
-      const results = await discoverONVIFDevices(5);
+      const result = await discoverONVIFDevices(5);
       const existingEndpoints = new Set(
         cameras.filter(c => c.protocol === 'onvif' && c.url).map(c => c.url)
       );
-      discoveredDevices = results.filter(d => {
+      discoveredDevices = result.devices.filter(d => {
         const ep = d.endpoint || (d.xaddrs.length > 0 ? d.xaddrs[0] : '');
         return !existingEndpoints.has(ep);
       });
+      if (result.error) {
+        scanError = { category: result.error.category, message: result.error.message };
+      }
     } catch (e) {
-      scanError = e instanceof Error ? e.message : String(e);
+      scanError = { category: 'NETWORK', message: e instanceof Error ? e.message : String(e) };
     } finally {
       scanning = false;
       scanDone = true;
@@ -240,6 +243,22 @@
     }
   }
 
+  // Error display config derived from error category
+  let scanErrorDisplay = $derived.by(() => {
+    if (!scanError) return null;
+    const cat = scanError.category;
+    switch (cat) {
+      case 'TIMEOUT':
+        return { color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: Clock };
+      case 'NO_DEVICES':
+        return { color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: Search };
+      case 'NETWORK':
+        return { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: WifiOff };
+      default:
+        return { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: AlertTriangle };
+    }
+  });
+
   // Determine visibility
   let visible = $derived(protocol === 'onvif' ? (scanning || scanDone) : xiaomiExpanded);
 
@@ -286,8 +305,19 @@
           <span class="spinner"></span>
           <span>{t('onvif.discovering')}</span>
         </div>
-      {:else if scanError}
-        <div class="th-color-danger text-sm py-2">{scanError}</div>
+      {:else if scanError && scanErrorDisplay}
+        {@const ErrorIcon = scanErrorDisplay.icon}
+        <div class="rounded-md border p-4 {scanErrorDisplay.bg} {scanErrorDisplay.border}">
+          <div class="flex items-start gap-3">
+            <div class="{scanErrorDisplay.color} mt-0.5">
+              <ErrorIcon size={18} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium {scanErrorDisplay.color}">{t(`discovery.errors.${scanError.category.toLowerCase()}.title`)}</p>
+              <p class="text-xs mt-1 th-text-muted">{t(`discovery.errors.${scanError.category.toLowerCase()}.suggestion`)}</p>
+            </div>
+          </div>
+        </div>
       {:else if discoveredDevices.length === 0}
         <p class="th-text-secondary text-sm py-2">{t('onvif.noDevices')}</p>
       {:else}
