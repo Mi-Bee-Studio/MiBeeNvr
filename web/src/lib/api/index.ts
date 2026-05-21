@@ -65,6 +65,8 @@ export type {
   CreateCameraRequest,
   UpdateCameraRequest,
   DiscoveredDevice,
+  DiscoveryError,
+  DiscoveryResult,
   DeviceInfo,
   DeviceProfile,
   ONVIFDeviceDetail,
