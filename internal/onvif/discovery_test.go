@@ -21,9 +21,11 @@ func TestDiscover_NoNetwork_ReturnsEmptyList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	devices, err := Discover(ctx, 2*time.Second)
-	require.NoError(t, err, "Discover must not return error even without network")
-	require.NotNil(t, devices, "Discover must return non-nil slice")
+	result := Discover(ctx, 2*time.Second)
+	require.NotNil(t, result, "Discover must return non-nil result")
+	require.NotNil(t, result.Devices, "Discover must return non-nil devices slice")
+	// Error may be non-nil if discovery.Discover returns an error, which is fine
+	// The important thing is we always get a structured result with a devices array
 }
 
 func TestDiscover_DefaultTimeout(t *testing.T) {
@@ -32,9 +34,9 @@ func TestDiscover_DefaultTimeout(t *testing.T) {
 	defer cancel()
 
 	// Should not panic with 0 timeout (uses default 5s)
-	devices, err := Discover(ctx, 0)
-	require.NoError(t, err)
-	require.NotNil(t, devices)
+	result := Discover(ctx, 0)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Devices)
 }
 
 func TestDiscover_ContextCancelled_ReturnsImmediately(t *testing.T) {
@@ -43,11 +45,13 @@ func TestDiscover_ContextCancelled_ReturnsImmediately(t *testing.T) {
 	cancel() // Cancel immediately
 
 	start := time.Now()
-	devices, err := Discover(ctx, 10*time.Second)
+	result := Discover(ctx, 10*time.Second)
 	elapsed := time.Since(start)
 
-	require.NoError(t, err, "cancelled context must not return error")
-	require.NotNil(t, devices)
+	require.NotNil(t, result.Devices)
+	// Cancelled context should produce a TIMEOUT error
+	require.NotNil(t, result.Error, "cancelled context should produce a categorized error")
+	require.Equal(t, "TIMEOUT", result.Error.Category)
 	require.Less(t, elapsed, 2*time.Second, "cancelled context should return immediately")
 }
 

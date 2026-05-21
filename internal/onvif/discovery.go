@@ -53,8 +53,9 @@ type probeMatchEntry struct {
 }
 
 // Discover performs WS-Discovery to find ONVIF devices on the local network
-// via UDP multicast. Returns empty slice (not error) when no devices are found.
-func Discover(ctx context.Context, timeout time.Duration) ([]DiscoveredDevice, error) {
+// via UDP multicast. Returns a DiscoveryResult with categorized errors.
+// The result always contains a non-nil Devices slice (empty when no devices found).
+func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 	if timeout <= 0 {
 		timeout = defaultDiscoveryTimeout
 	}
@@ -63,13 +64,27 @@ func Discover(ctx context.Context, timeout time.Duration) ([]DiscoveredDevice, e
 
 	devices, err := discovery.Discover(ctx, timeout)
 	if err != nil {
-		logger.Warn("WS-Discovery returned error, returning empty results", "error", err)
-		return []DiscoveredDevice{}, nil
+		logger.Warn("WS-Discovery returned error", "error", err)
+		return &DiscoveryResult{
+			Devices: []DiscoveredDevice{},
+			Error:   categorizeDiscoveryError(ctx, err),
+		}
 	}
 
 	result := MapDiscoveredDevices(devices)
+	if len(result) == 0 {
+		logger.Info("ONVIF discovery completed, no devices found")
+		return &DiscoveryResult{
+			Devices: []DiscoveredDevice{},
+			Error: &DiscoveryError{
+				Category: "NO_DEVICES",
+				Message:  "no ONVIF devices found on the network",
+			},
+		}
+	}
+
 	logger.Info("ONVIF discovery completed", "device_count", len(result))
-	return result, nil
+	return &DiscoveryResult{Devices: result}
 }
 
 // ProbeDevice sends a direct WS-Discovery Probe via HTTP POST to a specific
@@ -166,4 +181,37 @@ func generateProbeUUID() string {
 	b[8] = (b[8] & 0x3f) | 0x80 // Variant 10
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// categorizeDiscoveryError maps a discovery error to a DiscoveryError category.
+func categorizeDiscoveryError(ctx context.Context, err error) *DiscoveryError {
+	if err == nil {
+		return nil
+	}
+
+	msg := err.Error()
+
+	ctxErr := ctx.Err()
+	if ctxErr == context.DeadlineExceeded {
+		return &DiscoveryError{Category: "TIMEOUT", Message: "discovery timed out: " + msg}
+	}
+	if ctxErr == context.Canceled {
+		return &DiscoveryError{Category: "TIMEOUT", Message: "discovery was cancelled"}
+	}
+	if strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "timeout") {
+		return &DiscoveryError{Category: "TIMEOUT", Message: "discovery timed out: " + msg}
+	}
+
+	// Check for network errors
+	if strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "dial ") ||
+		strings.Contains(msg, "resolve") ||
+		strings.Contains(msg, "DNS") {
+		return &DiscoveryError{Category: "NETWORK", Message: "network error: " + msg}
+	}
+
+	// Default to PARSE_ERROR for unexpected errors
+	return &DiscoveryError{Category: "PARSE_ERROR", Message: msg}
 }
