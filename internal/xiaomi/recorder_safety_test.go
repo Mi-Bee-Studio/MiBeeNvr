@@ -9,6 +9,7 @@ package xiaomi
 import (
 	"bytes"
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -250,21 +251,26 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	r.sps = []byte{0x67, 0x42}
 	r.pps = []byte{0x68, 0xce}
 
+	var mu sync.Mutex
 	var receivedAU [][]byte
 	var receivedPTS int64
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	// IDR (type 5)
 	r.forwardHLS([]byte{0x65, 0x01, 0x02})
 
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.Len(t, receivedAU, 3, "H264 IDR should prepend SPS+PPS")
 	require.Equal(t, r.sps, receivedAU[0])
 	require.Equal(t, r.pps, receivedAU[1])
 	require.True(t, receivedPTS >= 0)
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 
@@ -278,19 +284,24 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 	r.sps = []byte{0x42, 0x01}
 	r.pps = []byte{0x44, 0x01}
 
+	var mu sync.Mutex
 	var receivedAU [][]byte
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	// IDR_N_LP (type 20): (20 << 1) = 0x28
 	r.forwardHLS([]byte{0x28, 0x01})
 
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.Len(t, receivedAU, 4, "H265 IDR should prepend VPS+SPS+PPS")
 	require.Equal(t, r.vps, receivedAU[0])
 	require.Equal(t, r.sps, receivedAU[1])
 	require.Equal(t, r.pps, receivedAU[2])
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 
@@ -303,16 +314,21 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 	r.sps = []byte{0x67}
 	r.pps = []byte{0x68}
 
+	var mu sync.Mutex
 	var receivedAU [][]byte
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	// Non-IDR (type 1)
 	r.forwardHLS([]byte{0x41, 0x01})
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, []byte{0x41, 0x01}, receivedAU[0])
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 

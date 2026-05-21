@@ -353,11 +353,14 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	r.codecOK = true
 	r.streamStart = time.Now()
 
+	var mu sync.Mutex
 	var receivedPTS int64
 	var receivedAU [][]byte
 	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au
+		mu.Unlock()
 	})
 
 	// Trigger forwardHLS
@@ -365,10 +368,12 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	r.forwardHLS(nalu)
 
 	// StreamHub delivers asynchronously — wait for callback
-	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
 	require.True(t, receivedPTS >= 0, "PTS should be non-negative")
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, nalu, receivedAU[0])
+	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
 
