@@ -62,7 +62,7 @@ type H265Recorder struct {
 	vps []byte
 	sps []byte
 	pps []byte
-	OnHLSFrame func(pts int64, au [][]byte) // Called for each H265 access unit (non-blocking)
+	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 
 	frameCh chan []byte
 	dropped atomic.Int64
@@ -272,9 +272,9 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) error {
 			}
 			return
 		}
-		// Branch to HLS if callback is set
-		if r.OnHLSFrame != nil {
-			r.OnHLSFrame(int64(pkt.Timestamp), au)
+		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
+		if r.Hub != nil {
+			r.Hub.Broadcast(int64(pkt.Timestamp), au)
 		}
 		for _, nalu := range au {
 			data := make([]byte, 4+len(nalu))

@@ -17,9 +17,46 @@ export interface WebDAVConfig {
   read_write: boolean;
 }
 
+export interface WebRTCConfig {
+  enabled: boolean;
+  max_viewers: number;
+  idle_timeout: string;
+}
+
+export interface FLVStreamingConfig {
+  enabled: boolean;
+  max_viewers: number;
+  idle_timeout: string;
+  gop_cache_size: number;
+}
+
+export interface HLSStreamingConfig {
+  low_latency: boolean;
+}
+
+export interface RTMPConfig {
+  enabled: boolean;
+  port: number;
+}
+
+export interface SRTConfig {
+  enabled: boolean;
+  port: number;
+}
+
+export interface StreamingConfig {
+  default_protocol: string; // webrtc | flv | hls | ll-hls
+  webrtc: WebRTCConfig;
+  flv: FLVStreamingConfig;
+  hls: HLSStreamingConfig;
+  rtmp?: RTMPConfig;
+  srt?: SRTConfig;
+}
+
 export interface SettingsConfig {
   cleanup: CleanupConfig;
   webdav: WebDAVConfig;
+  streaming?: StreamingConfig;
 }
 
 export interface MergeStatus {
@@ -99,6 +136,23 @@ export async function updateFeatures(
   await apiRequest('/features', {
     method: 'PUT',
     body: JSON.stringify(features),
+    signal,
+  });
+}
+
+// --- Streaming settings ---
+
+export async function getStreamingSettings(signal?: AbortSignal): Promise<StreamingConfig> {
+  return apiRequest<StreamingConfig>('/settings/streaming', { signal });
+}
+
+export async function updateStreamingSettings(
+  config: StreamingConfig,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>('/settings/streaming', {
+    method: 'PUT',
+    body: JSON.stringify(config),
     signal,
   });
 }

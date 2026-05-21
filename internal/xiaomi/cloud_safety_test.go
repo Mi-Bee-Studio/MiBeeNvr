@@ -409,11 +409,13 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 	idrNALU := []byte{0x26, 0x01, 0x02}
 	r.forwardHLS(idrNALU)
 
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.Len(t, receivedAU, 4, "H265 IDR should prepend VPS+SPS+PPS")
 	require.Equal(t, r.vps, receivedAU[0])
 	require.Equal(t, r.sps, receivedAU[1])
 	require.Equal(t, r.pps, receivedAU[2])
 	require.Equal(t, idrNALU, receivedAU[3])
+	r.Hub.Unsubscribe("hls")
 }
 
 // --- XiaomiRecorder HLS with unknown codec ---
@@ -435,8 +437,10 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 
 	nalu := []byte{0xAA, 0xBB}
 	r.forwardHLS(nalu)
+	require.Eventually(t, func() bool { return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	require.Len(t, receivedAU, 1)
 	require.Equal(t, nalu, receivedAU[0])
+	r.Hub.Unsubscribe("hls")
 }
 
 // --- processNALU empty NALU ---

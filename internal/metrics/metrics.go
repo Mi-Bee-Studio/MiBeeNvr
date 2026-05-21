@@ -19,6 +19,13 @@ type Metrics struct {
 	RecordingCount     prometheus.Gauge
 	CameraErrors       *prometheus.CounterVec // labels: camera_id, error_type
 	HLSFramesDropped  *prometheus.CounterVec // labels: camera_id
+	WebRTCActivePeers   *prometheus.GaugeVec   // labels: camera_id
+	WebRTCFramesSent    *prometheus.CounterVec // labels: camera_id
+	WebRTCFramesDropped *prometheus.CounterVec // labels: camera_id
+	FLVActiveStreams    *prometheus.GaugeVec   // labels: camera_id
+	FLVFramesSent       *prometheus.CounterVec // labels: camera_id
+	FLVFramesDropped    *prometheus.CounterVec // labels: camera_id
+	FLVGOPCacheHits     *prometheus.CounterVec // labels: camera_id
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -84,6 +91,34 @@ func NewMetrics() *Metrics {
 		Help: "Total HLS frames dropped due to buffer full, partitioned by camera.",
 	}, []string{"camera_id"})
 
+	webrtcActivePeers := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_webrtc_active_peers",
+		Help: "Active WebRTC PeerConnections, partitioned by camera.",
+	}, []string{"camera_id"})
+	webrtcFramesSent := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_webrtc_frames_sent_total",
+		Help: "Total WebRTC frames sent, partitioned by camera.",
+	}, []string{"camera_id"})
+	webrtcFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_webrtc_frames_dropped_total",
+		Help: "Total WebRTC frames dropped due to buffer full, partitioned by camera.",
+	}, []string{"camera_id"})
+	flvActiveStreams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_flv_active_streams",
+		Help: "Active FLV streams, partitioned by camera.",
+	}, []string{"camera_id"})
+	flvFramesSent := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_flv_frames_sent_total",
+		Help: "Total FLV frames sent, partitioned by camera.",
+	}, []string{"camera_id"})
+	flvFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_flv_frames_dropped_total",
+		Help: "Total FLV frames dropped due to buffer full, partitioned by camera.",
+	}, []string{"camera_id"})
+	flvGOPCacheHits := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_flv_gop_cache_hits_total",
+		Help: "Total FLV GOP cache hits, partitioned by camera.",
+	}, []string{"camera_id"})
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -95,6 +130,13 @@ func NewMetrics() *Metrics {
 		recordingCount,
 		cameraErrors,
 		hlsFramesDropped,
+		webrtcActivePeers,
+		webrtcFramesSent,
+		webrtcFramesDropped,
+		flvActiveStreams,
+		flvFramesSent,
+		flvFramesDropped,
+		flvGOPCacheHits,
 	)
 
 	return &Metrics{
@@ -109,5 +151,12 @@ func NewMetrics() *Metrics {
 		RecordingCount:      recordingCount,
 		CameraErrors:        cameraErrors,
 		HLSFramesDropped:    hlsFramesDropped,
+		WebRTCActivePeers:   webrtcActivePeers,
+		WebRTCFramesSent:    webrtcFramesSent,
+		WebRTCFramesDropped: webrtcFramesDropped,
+		FLVActiveStreams:    flvActiveStreams,
+		FLVFramesSent:       flvFramesSent,
+		FLVFramesDropped:    flvFramesDropped,
+		FLVGOPCacheHits:     flvGOPCacheHits,
 	}
 }

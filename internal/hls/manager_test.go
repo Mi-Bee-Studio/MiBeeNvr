@@ -680,3 +680,78 @@ func TestSubStreamFallback_NilWhenNotProvided(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
+// --- LL-HLS Tests ---
+
+func TestSetLowLatency_Defaults(t *testing.T) {
+	mgr := newTestManager(t)
+	require.False(t, mgr.lowLatency)
+	require.Equal(t, time.Duration(0), mgr.partMinDuration)
+}
+
+func TestSetLowLatency_Enabled(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetLowLatency(true, 200*time.Millisecond)
+	require.True(t, mgr.lowLatency)
+	require.Equal(t, 200*time.Millisecond, mgr.partMinDuration)
+}
+
+func TestSetLowLatency_ZeroPartDuration(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetLowLatency(true, 0) // zero duration — should not override default
+	require.True(t, mgr.lowLatency)
+	require.Equal(t, time.Duration(0), mgr.partMinDuration)
+}
+
+func TestSetLowLatency_CustomPartDuration(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetLowLatency(true, 500*time.Millisecond)
+	require.True(t, mgr.lowLatency)
+	require.Equal(t, 500*time.Millisecond, mgr.partMinDuration)
+}
+
+func TestStartStream_LowLatency_H264(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
+	mgr.SetLowLatency(true, 200*time.Millisecond)
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("ll-cam-h264", sps, pps, 0)
+	require.NoError(t, err)
+	require.True(t, mgr.IsActive("ll-cam-h264"))
+	mgr.StopAll()
+}
+
+func TestStartStream_LowLatency_H265(t *testing.T) {
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
+	mgr.SetLowLatency(true, 200*time.Millisecond)
+
+	vps := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0x95, 0x98, 0x09}
+	sps := []byte{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0xa0, 0x03, 0xc0, 0x80, 0x10, 0xe5, 0x96, 0x56, 0x69, 0x24, 0xca, 0xe0, 0x10}
+	pps := []byte{0x44, 0x01, 0xc1, 0x72, 0xb4, 0x62, 0x40}
+	err := mgr.StartStreamH265("ll-cam-h265", vps, sps, pps, 0)
+	require.NoError(t, err)
+	require.True(t, mgr.IsActive("ll-cam-h265"))
+	mgr.StopAll()
+}
+
+func TestStartStream_LowLatency_SegmentCountTooLow(t *testing.T) {
+	// LL-HLS requires segment_count >= 7; gohlslib enforces this at Start()
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 3) // too low for LL-HLS
+	mgr.SetLowLatency(true, 200*time.Millisecond)
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("ll-cam-bad", sps, pps, 0)
+	require.Error(t, err) // gohlslib should reject segmentCount < 7 for LL-HLS
+}
+
+// --- LL-HLS Config Validation Tests (via config package) ---
+
+func TestLLHLSConfig_LowLatencyFalse_NoEffect(t *testing.T) {
+	// When low_latency is false, existing HLS behavior is unchanged
+	mgr := newTestManager(t)
+	// Default manager has lowLatency=false
+	require.False(t, mgr.lowLatency)
+	require.Equal(t, 3, mgr.segmentCount) // NewManager default
+}
+
