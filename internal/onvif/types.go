@@ -10,6 +10,20 @@ type DiscoveredDevice struct {
 	Endpoint string   `json:"endpoint"`
 }
 
+// DiscoveryError represents a categorized error from ONVIF device discovery.
+type DiscoveryError struct {
+	Category string `json:"category"` // NETWORK, TIMEOUT, NO_DEVICES, PARSE_ERROR
+	Message  string `json:"message"`
+}
+
+// DiscoveryResult holds the outcome of an ONVIF discovery operation.
+// Devices is always non-nil (empty slice when no devices found).
+// Error is nil on success, non-nil when a categorized error occurred.
+type DiscoveryResult struct {
+	Devices []DiscoveredDevice `json:"devices"`
+	Error   *DiscoveryError     `json:"error"`
+}
+
 // DeviceProfile represents a media profile from an ONVIF device.
 type DeviceProfile struct {
 	Token    string `json:"token"`

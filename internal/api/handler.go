@@ -107,6 +107,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/readyz", h.handleReadyz)
 	})
 	r.Post("/api/auth/login", h.handleLogin)
+	r.Post("/api/setup", h.handleSetup)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
