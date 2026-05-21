@@ -5,12 +5,12 @@
   import { t } from '$lib/i18n';
   import { Eye, EyeOff } from 'lucide-svelte';
 
-  let username = '';
-  let password = '';
-  let showPassword = false;
-  let error = '';
+  let username = $state('');
+  let password = $state('');
+  let showPassword = $state(false);
+  let error = $state('');
   let loginErrors = $state({ username: '', password: '' });
-  let loading = false;
+  let loading = $state(false);
   // Force re-render when language changes
 
 
@@ -83,7 +83,7 @@
       </div>
     {/if}
 
-    <form on:submit|preventDefault={handleSubmit} class="space-y-6">
+    <form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }} class="space-y-6">
       <div>
         <label for="username" class="input-label">{t('login.username')}</label>
         <input
@@ -93,9 +93,9 @@
           bind:value={username}
           placeholder={t('login.usernamePlaceholder')}
           disabled={loading}
-          on:keydown={handleKeydown}
-          on:blur={validateUsername}
-          on:input={onUsernameInput}
+          onkeydown={handleKeydown}
+          onblur={validateUsername}
+          oninput={onUsernameInput}
           autocomplete="username"
         />
         {#if loginErrors.username}
@@ -113,15 +113,15 @@
             bind:value={password}
             placeholder={t('login.passwordPlaceholder')}
             disabled={loading}
-            on:keydown={handleKeydown}
-            on:blur={validatePassword}
-            on:input={onPasswordInput}
+            onkeydown={handleKeydown}
+            onblur={validatePassword}
+            oninput={onPasswordInput}
             autocomplete="current-password"
           />
           <button
             type="button"
             class="absolute right-2 top-1/2 -translate-y-1/2 th-text-tertiary hover:th-text-primary transition-colors"
-            on:click={() => showPassword = !showPassword}
+            onclick={() => showPassword = !showPassword}
             aria-label={showPassword ? t('common.hidePassword') : t('common.showPassword')}
           >
             {#if showPassword}
