@@ -146,6 +146,11 @@
   async function initWebRTC() {
     if (!videoEl) return;
 
+    // Clear any stale zombie detector
+    if (zombieInterval) { clearInterval(zombieInterval); zombieInterval = null; }
+
+    if (!videoEl) return;
+
     streamState = 'loading';
     webrtcState = 'connecting';
 
