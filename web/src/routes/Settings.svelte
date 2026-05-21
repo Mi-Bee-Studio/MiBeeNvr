@@ -62,6 +62,7 @@ let diskInfo = $state<StorageStats | null>(null);
 
 // Original values snapshot for dirty tracking (cleanup + webdav + merge + streaming + features)
 let originalSnapshot = $state('');
+let originalRetentionDays = $state(0);
 let originalFeatureFlags = $state<Record<string, boolean>>({});
 
 // Settings tab state
@@ -179,6 +180,7 @@ function getAffectedCameraCount(protocol: string): number {
       streamingFlvGopCache, streamingHlsLlHls, streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
     });
+    originalRetentionDays = retentionDays;
     originalFeatureFlags = { ...featureFlags };
   }
 
