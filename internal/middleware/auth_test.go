@@ -12,7 +12,7 @@ import (
 
 func TestValidCredentials(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware("user", hash, "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -27,7 +27,7 @@ func TestValidCredentials(t *testing.T) {
 
 func TestInvalidPassword(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware("user", hash, "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -42,7 +42,7 @@ func TestInvalidPassword(t *testing.T) {
 
 func TestMissingAuthHeader(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware("user", hash, "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -56,7 +56,7 @@ func TestMissingAuthHeader(t *testing.T) {
 
 func TestMalformedAuth(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware("user", hash, "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -70,7 +70,7 @@ func TestMalformedAuth(t *testing.T) {
 }
 
 func TestEmptyHashReturnsSetupRequired(t *testing.T) {
-	mw, _ := NewAuthMiddleware("user", "", "")
+	mw, _ := NewAuthMiddleware(staticProvider("user", ""), "")
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -93,7 +93,7 @@ func TestHashCheckRoundTrip(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware("u", hash, "")
+    mw, _ := NewAuthMiddleware(staticProvider("u", hash), "")
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -122,8 +122,16 @@ func basic(user, pass string) string {
     return base64.StdEncoding.EncodeToString([]byte(s))
 }
 
+// staticProvider returns an AuthProvider with fixed values for testing.
+func staticProvider(username, hash string) AuthProvider {
+	return AuthProvider{
+		GetUsername: func() string { return username },
+		GetHash:     func() string { return hash },
+	}
+}
+
 func TestPlaintextPasswordAutoHash(t *testing.T) {
-	mw, effectiveHash := NewAuthMiddleware("admin", "", "mypassword")
+	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", ""), "mypassword")
 	require.NotEmpty(t, effectiveHash, "effectiveHash should be populated when plaintext is provided")
 	require.True(t, CheckPassword("mypassword", effectiveHash), "original password should authenticate against auto-hash")
 
@@ -141,7 +149,7 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 	preHashed, err := HashPassword("prehashed-pass")
 	require.NoError(t, err)
 
-	mw, effectiveHash := NewAuthMiddleware("admin", preHashed, "ignored-plaintext")
+	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", preHashed), "ignored-plaintext")
 	require.Equal(t, preHashed, effectiveHash, "pre-existing hash should take priority over plaintext")
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,4 +229,38 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSetupUpdatesHashDynamically(t *testing.T) {
+   t.Helper()
+	currentHash := ""
+	currentUsername := "admin"
+	provider := AuthProvider{
+		GetUsername: func() string { return currentUsername },
+		GetHash:     func() string { return currentHash },
+	}
+
+	mw, _ := NewAuthMiddleware(provider, "")
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Before setup: no hash configured → 503 SETUP_REQUIRED
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Contains(t, w.Body.String(), "setup required")
+
+	// Simulate setup: set hash in config
+	hash, err := HashPassword("newpassword123")
+	require.NoError(t, err)
+	currentHash = hash
+
+	// After setup: middleware picks up the new hash → 200 OK
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.Header.Set("Authorization", "Basic "+basic("admin", "newpassword123"))
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
 }

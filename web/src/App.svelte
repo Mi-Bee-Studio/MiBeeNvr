@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isAuthenticated } from '$lib/api';
+  import { isAuthenticated, healthCheck } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
   import Login from './routes/Login.svelte';
@@ -35,6 +35,19 @@
     if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     onlineBannerTimer = setTimeout(() => { showOnlineBanner = false; }, 3000);
   }
+
+  async function checkSetupRequired() {
+    if (isAuthenticated()) return;
+    try {
+      const health = await healthCheck();
+      if (health.setup_required && currentRoute === 'login') {
+        window.location.hash = '#/setup';
+      }
+    } catch {
+      // Health check failed — ignore, user stays on login page
+    }
+  }
+
 
   // Parse hash-based routes (hoisted — function declarations are available before this line)
   function parseRoute(hash: string) {
@@ -116,6 +129,7 @@
   // Listen for hash changes + network status
   onMount(() => {
     updateRoute();
+    checkSetupRequired();
     window.addEventListener('hashchange', updateRoute);
 
     // Network detection

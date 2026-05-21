@@ -36,6 +36,7 @@ export interface HealthResponse {
   status: 'ok' | 'degraded' | 'unhealthy';
   checks: Record<string, HealthCheck>;
   uptime: string;
+  setup_required?: boolean;
 }
 
 export interface SystemStats {

@@ -314,6 +314,18 @@ environment:
 - 使用 `docker compose`（带空格，v2 版本）
 - 不使用 `docker-compose`（带连字符，v1 版本，已过时）
 
+**ONVIF 设备发现在 Docker 中不工作**
+
+ONVIF 自动发现使用 WS-Discovery 协议（UDP 组播至 `239.255.255.250:3702`）。Docker 默认的 bridge 网络会阻止组播流量，因此自动发现无法找到设备。
+
+解决方案：
+
+1. **Host 网络模式**（推荐用于发现功能）：在 `docker-compose.yml` 中取消 `network_mode: host` 的注释，并删除 `ports` 段。容器将共享宿主机网络栈，从而支持组播。
+
+2. **手动探测**（任何网络模式下均可）：在 Web UI 的摄像头页面中，使用"手动探测"区域直接输入设备 IP 地址。此方式不依赖组播，在任何 Docker 配置下均可使用。
+
+3. **手动添加摄像头**：直接在摄像头表单中指定 ONVIF 端点 URL（如 `http://192.168.1.100/onvif/device_service`）。ONVIF 连接、PTZ 控制和流媒体在 bridge 模式下均正常工作——仅自动发现受影响。
+
 ### 手动安装
 
 如果你需要完全控制安装过程，或者安装脚本不适用于你的场景：

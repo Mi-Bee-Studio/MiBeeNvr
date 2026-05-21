@@ -166,3 +166,76 @@ func TestONVIFDeviceDetail_InvalidIP(t *testing.T) {
 		})
 	}
 }
+
+func TestONVIFProbeEndpoint(t *testing.T) {
+	h := TestHandler(nil, nil)
+	body := `{"host": "192.168.1.100", "port": 80}`
+	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	// In test env with no real device at that IP, probe fails → 502 BadGateway
+	require.Equal(t, http.StatusBadGateway, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var resp map[string]string
+	err := json.NewDecoder(w.Body).Decode(&resp)
+	require.NoError(t, err)
+	require.Contains(t, resp["error"], "probe failed")
+}
+
+func TestONVIFProbe_DefaultsApplied(t *testing.T) {
+	h := TestHandler(nil, nil)
+	// Empty body — defaults applied, tries to probe but no host → 400
+	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	err := json.NewDecoder(w.Body).Decode(&resp)
+	require.NoError(t, err)
+	require.Contains(t, resp["error"], "host is required")
+}
+
+func TestONVIFProbe_InvalidHost(t *testing.T) {
+	h := TestHandler(nil, nil)
+	invalidHosts := []string{
+		`{"host": "notanip"}`,
+		`{"host": "256.256.256.256"}`,
+		`{"host": "abc.def.ghi.jkl"}`,
+	}
+	for _, body := range invalidHosts {
+		t.Run(body, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			var resp map[string]string
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			require.Equal(t, "invalid IP address format", resp["error"])
+		})
+	}
+}
+
+func TestONVIFProbe_TimeoutTooLarge(t *testing.T) {
+	h := TestHandler(nil, nil)
+	body := `{"host": "192.168.1.1", "timeout": 100}`
+	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	err := json.NewDecoder(w.Body).Decode(&resp)
+	require.NoError(t, err)
+	require.Contains(t, resp["error"], "timeout")
+}

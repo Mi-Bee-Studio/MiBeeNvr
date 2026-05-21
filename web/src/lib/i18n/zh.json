@@ -396,6 +396,12 @@
   "onvif.noStreamUri": "获取流地址失败，请检查设备凭据"
 ,
   "onvif.failedGetDetails": "获取设备详情失败",
+  "onvif.manualProbe": "手动探测",
+  "onvif.manualProbeHint": "输入设备 IP 直接探测（Docker 环境可用）",
+  "onvif.probing": "探测中...",
+  "onvif.probeFailed": "探测失败",
+  "onvif.host": "IP 地址",
+  "onvif.port": "端口",
   "merge.10m": "10 分钟",
   "merge.1h": "1 小时",
   "merge.2h": "2 小时",

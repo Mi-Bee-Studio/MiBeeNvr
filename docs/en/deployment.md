@@ -314,6 +314,18 @@ environment:
 - Use `docker compose` (with space, v2)
 - Not `docker-compose` (with hyphen, v1, deprecated)
 
+**ONVIF device discovery doesn't work in Docker**
+
+ONVIF auto-discovery uses WS-Discovery (UDP multicast to `239.255.255.250:3702`). Docker's default bridge network blocks multicast traffic, so auto-discovery won't find devices.
+
+Solutions:
+
+1. **Host networking** (recommended for discovery): Uncomment `network_mode: host` in `docker-compose.yml` and remove the `ports` section. The container shares the host's network stack, enabling multicast.
+
+2. **Manual probe** (works in any network mode): In the Web UI camera page, use the "Manual Probe" section to enter a device IP address directly. This bypasses multicast and works in any Docker configuration.
+
+3. **Manual camera addition**: Add cameras by specifying the ONVIF endpoint URL directly (e.g., `http://192.168.1.100/onvif/device_service`) in the camera form. ONVIF connection, PTZ control, and streaming work normally in bridge mode — only auto-discovery is affected.
+
 ### Manual Installation
 
 If you prefer full control or the install script doesn't cover your use case:

@@ -25,13 +25,22 @@ type rateLimitEntry struct {
 
 var authFailures sync.Map
 
+// AuthProvider returns the current username and effective password hash.
+// Used by the auth middleware to dynamically read credentials (e.g. after setup).
+type AuthProvider struct {
+	GetUsername func() string
+	GetHash     func() string
+}
+
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
 // If passwordHash is empty but plaintextPassword is non-empty, it is auto-hashed via bcrypt.
 // Returns the middleware and the effective hash used (for config persistence).
 // If both are empty, all requests return 503 Service Unavailable with setup guidance.
-func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(http.Handler) http.Handler, string) {
-	effectiveHash := passwordHash
-	if strings.TrimSpace(passwordHash) == "" && strings.TrimSpace(plaintextPassword) != "" {
+// The provider is called on every request so changes (e.g. setup) take effect immediately.
+func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(http.Handler) http.Handler, string) {
+	initialHash := provider.GetHash()
+	effectiveHash := initialHash
+	if strings.TrimSpace(initialHash) == "" && strings.TrimSpace(plaintextPassword) != "" {
 		hash, err := HashPassword(plaintextPassword)
 		if err != nil {
 			logger.Error("failed to hash plaintext password", "error", err)
@@ -56,7 +65,15 @@ func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(h
 				}
 			}
 
-			if strings.TrimSpace(effectiveHash) == "" {
+			// Dynamic hash: prefer provider's current value (supports setup),
+			// fall back to auto-hashed value from initialization.
+			currentHash := provider.GetHash()
+			if strings.TrimSpace(currentHash) == "" {
+				currentHash = effectiveHash
+			}
+			currentUsername := provider.GetUsername()
+
+			if strings.TrimSpace(currentHash) == "" {
 				// No password configured — reject all requests with setup guidance
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
@@ -66,7 +83,7 @@ func NewAuthMiddleware(username, passwordHash, plaintextPassword string) (func(h
 			}
 
 			user, pass, ok := r.BasicAuth()
-			if !ok || user != username || !CheckPassword(pass, effectiveHash) {
+			if !ok || user != currentUsername || !CheckPassword(pass, currentHash) {
 				if v, ok := authFailures.Load(ip); ok {
 					entry := v.(rateLimitEntry)
 					if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {

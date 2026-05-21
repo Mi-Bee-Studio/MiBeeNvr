@@ -396,6 +396,12 @@
   "onvif.noStreamUri": "Failed to get stream URI. Check device credentials."
 ,
   "onvif.failedGetDetails": "Failed to get device details",
+  "onvif.manualProbe": "Manual Probe",
+  "onvif.manualProbeHint": "Enter device IP to probe directly (works in Docker)",
+  "onvif.probing": "Probing...",
+  "onvif.probeFailed": "Probe failed",
+  "onvif.host": "IP Address",
+  "onvif.port": "Port",
   "merge.10m": "10 minutes",
   "merge.1h": "1 hour",
   "merge.2h": "2 hours",
