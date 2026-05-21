@@ -31,6 +31,8 @@
   // Camera filter state
   let selectedCameras = $state<Set<string>>(new Set());
   let cameraChartCollapsed = $state(false);
+  let trendChartCollapsed = $state(false);
+  let lastTrends: any = null;
   let lastCameraTotals: Record<string, number> = {};
   let allCameraNames = $state<string[]>([]);
 
@@ -170,6 +172,7 @@
 
     // Store for filter rebuilds
     lastCameraTotals = cameraTotals;
+    lastTrends = trends;
     allCameraNames = Object.keys(cameraTotals);
     if (selectedCameras.size === 0 && allCameraNames.length > 0) {
       selectedCameras = new Set(allCameraNames);
@@ -195,6 +198,14 @@
     if (!cameraCtx) return;
 
     cameraChart = createCameraChart(ChartJs, cameraCtx, cameraTotals, allCameraNames, selectedCameras);
+  }
+
+  function rebuildTrendChart() {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    const trendCtx = document.getElementById('trendChart') as HTMLCanvasElement;
+    if (trendCtx && lastTrends) {
+      trendChart = createTrendChart(ChartJs, trendCtx, lastTrends);
+    }
   }
 
   function toggleCameraFilter(name: string) {
@@ -570,11 +581,35 @@
 
         <!-- Charts — Storage Trend & Recordings by Camera -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="card p-6 border th-border">
-            <h3 class="text-lg font-medium th-text-primary mb-4">{t('stats.storageTrend')}</h3>
-            <div class="h-48 sm:h-56 md:h-64">
-              <canvas id="trendChart"></canvas>
-            </div>
+          <div class="card border th-border overflow-hidden">
+            <button
+              class="w-full p-5 flex items-center justify-between hover:th-bg-hover transition-colors cursor-pointer"
+              onclick={() => {
+                trendChartCollapsed = !trendChartCollapsed;
+                if (trendChartCollapsed && trendChart) {
+                  trendChart.destroy();
+                  trendChart = null;
+                }
+                if (!trendChartCollapsed) {
+                  window.setTimeout(() => rebuildTrendChart(), 50);
+                }
+              }}
+            >
+              <h3 class="text-lg font-medium th-text-primary">{t('stats.storageTrend')}</h3>
+              {#if trendChartCollapsed}
+                <ChevronDown size={20} class="th-text-muted" />
+              {:else}
+                <ChevronUp size={20} class="th-text-muted" />
+              {/if}
+            </button>
+
+            {#if !trendChartCollapsed}
+              <div class="p-5">
+                <div class="h-48 sm:h-56 md:h-64">
+                  <canvas id="trendChart"></canvas>
+                </div>
+              </div>
+            {/if}
           </div>
           <div class="card border th-border overflow-hidden">
             <button
