@@ -669,5 +669,11 @@
   "setup.errors.passwordMinLength": "密码至少需要 8 个字符",
   "setup.errors.confirmRequired": "请确认密码",
   "setup.errors.passwordMismatch": "两次输入的密码不一致",
+  "settings.tabs.general": "常规",
+  "settings.tabs.advanced": "高级",
+  "settings.advanced.merge.description": "配置视频片段的合并方式。这些设置影响录像质量和文件大小。",
+  "settings.advanced.webdav.description": "WebDAV 提供对录像文件的直接访问。适用于外部媒体播放器或文件管理器。",
+  "settings.advanced.streaming.description": "微调流媒体协议行为。这些设置影响实时查看的画质和延迟。",
+  "settings.advanced.features.description": "启用或禁用实验性功能。更改在重启后生效。", 
   "setup.errors.failed": "设置失败，请重试。"
 }

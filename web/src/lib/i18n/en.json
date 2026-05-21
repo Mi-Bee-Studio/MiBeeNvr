@@ -669,5 +669,11 @@
   "setup.errors.passwordMinLength": "Password must be at least 8 characters",
   "setup.errors.confirmRequired": "Please confirm your password",
   "setup.errors.passwordMismatch": "Passwords do not match",
+  "settings.tabs.general": "General",
+  "settings.tabs.advanced": "Advanced",
+  "settings.advanced.merge.description": "Configure how video segments are merged. These settings affect recording quality and file sizes.",
+  "settings.advanced.webdav.description": "WebDAV provides file-level access to recordings. Useful for external media players or file managers.",
+  "settings.advanced.streaming.description": "Fine-tune streaming protocol behavior. These settings affect live view quality and latency.",
+  "settings.advanced.features.description": "Enable or disable experimental features. Changes take effect after restart.", 
   "setup.errors.failed": "Setup failed. Please try again."
 }

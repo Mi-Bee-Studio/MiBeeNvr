@@ -8,6 +8,7 @@
   import { AlertTriangle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import Tab from '$lib/components/Tab.svelte';
   let settings = $state<SettingsConfig | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -63,6 +64,12 @@ let diskInfo = $state<StorageStats | null>(null);
 // Original values snapshot for dirty tracking
 let originalSnapshot = $state<Record<string, string>>('{}');
 
+// Settings tab state
+let activeSettingsTab = $state('general');
+let settingsTabs = $derived([
+  { id: 'general', label: t('settings.tabs.general') },
+  { id: 'advanced', label: t('settings.tabs.advanced') },
+]);
 // Derived: is form dirty?
 let isDirty = $derived(() => {
     if (loading) return false;
@@ -425,7 +432,9 @@ function getAffectedCameraCount(protocol: string): number {
         </div>
       </div>
     {:else}
-      <div class="space-y-6">
+      <Tab tabs={settingsTabs} activeTab={activeSettingsTab} onchange={(id) => activeSettingsTab = id} />
+      <div class="space-y-6 mt-6">
+      {#if activeSettingsTab === 'general'}
         <!-- Cleanup Policy -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.cleanup')}</h3>
@@ -483,67 +492,94 @@ function getAffectedCameraCount(protocol: string): number {
           </div>
         </div>
 
-        <!-- WebDAV Settings -->
+        <!-- Frontend Preferences -->
         <div class="card p-8 border th-border">
-          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.webdav')}</h3>
-          <p class="text-sm th-text-tertiary mb-8">{t('settings.webdavDesc')}</p>
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.frontendPrefs')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.frontendPrefsDesc')}</p>
 
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <!-- Enable WebDAV -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Items Per Page -->
             <div>
-              <label class="input-label">{t('settings.webdavEnabled')}</label>
-              <div class="flex items-center gap-3 mt-2">
-                <button
-                  type="button"
-                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-                  onclick={() => { webdavEnabled = !webdavEnabled; }}
-                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
-                  role="switch"
-                  aria-checked={webdavEnabled}
-                >
-                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-                </button>
-                <span class="text-sm th-text-secondary">{webdavEnabled ? t('settings.webdavEnabledOn') : t('settings.webdavEnabledOff')}</span>
-              </div>
+              <label for="itemsPerPage" class="input-label">{t('settings.itemsPerPage')}</label>
+              <select id="itemsPerPage" class="input" bind:value={itemsPerPage} onchange={handleItemsPerPageChange}>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
             </div>
 
-            <!-- Path Prefix -->
+            <!-- Auto Refresh -->
             <div>
-              <label for="webdavPrefix" class="input-label">{t('settings.webdavPathPrefix')}</label>
-              <input
-                id="webdavPrefix"
-                type="text"
-                class="input"
-                bind:value={webdavPathPrefix}
-                placeholder="/dav"
-              />
-            </div>
-
-            <!-- Read-Write Mode -->
-            <div>
-              <label class="input-label">{t('settings.webdavReadWrite')}</label>
-              <div class="flex items-center gap-3 mt-2">
-                <button
-                  type="button"
-                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
-                  onclick={() => { webdavReadWrite = !webdavReadWrite; }}
-                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
-                  role="switch"
-                  aria-checked={webdavReadWrite}
-                >
-                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavReadWrite ? 'translate-x-6' : 'translate-x-1'}"></span>
-                </button>
-                <span class="text-sm th-text-secondary">{webdavReadWrite ? t('settings.webdavReadWriteOn') : t('settings.webdavReadWriteOff')}</span>
-              </div>
-              <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
+              <label for="autoRefresh" class="input-label">{t('settings.autoRefresh')}</label>
+              <select id="autoRefresh" class="input" bind:value={autoRefresh} onchange={handleAutoRefreshChange}>
+                <option value="30s">{t('settings.every30s')}</option>
+                <option value="60s">{t('settings.every60s')}</option>
+                <option value="120s">{t('settings.every2m')}</option>
+                <option value="off">{t('settings.off')}</option>
+              </select>
             </div>
           </div>
         </div>
 
+        <!-- Default Protocol Selector -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming.defaultProtocol')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.streaming.defaultProtocolHint')}</p>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <label for="defaultProtocol" class="input-label">{t('settings.streaming.defaultProtocol')}</label>
+              <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
+                <option value="webrtc">WebRTC</option>
+                <option value="flv">HTTP-FLV</option>
+                <option value="hls">HLS</option>
+                <option value="ll-hls">LL-HLS</option>
+              </select>
+              <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.defaultProtocolHint')}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Protocol Guide -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.protocolDocs')}</h3>
+          <p class="text-sm th-text-tertiary mb-6">{t('settings.protocolDocsDesc')}</p>
+
+          <div class="space-y-3">
+            {#each ['webrtc', 'flv', 'hls', 'llHls'] as docKey (docKey)}
+              {@const isExpanded = expandedProtocolDoc === docKey}
+              <div class="border th-border rounded-lg overflow-hidden">
+                <button
+                  onclick={() => { expandedProtocolDoc = isExpanded ? null : docKey; }}
+                  class="w-full px-4 py-3 text-left flex items-center justify-between hover:th-bg-hover transition-colors"
+                >
+                  <span class="font-medium th-text-primary">{t(`settings.protocolDocs.${docKey}.title`)}</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {isExpanded ? 'rotate-180' : ''} th-text-tertiary"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                {#if isExpanded}
+                  <div class="px-4 pb-4 pt-0 space-y-3">
+                    <p class="text-sm th-text-secondary">{t(`settings.protocolDocs.${docKey}.desc`)}</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div class="p-3 rounded-md bg-[var(--color-success)]/5 border border-[var(--color-success)]/20">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-success)] mb-1">Pros</div>
+                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.pros`)}</p>
+                      </div>
+                      <div class="p-3 rounded-md bg-[var(--color-danger)]/5 border border-[var(--color-danger)]/20">
+                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-danger)] mb-1">Cons</div>
+                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.cons`)}</p>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else}
         <!-- Merge Strategy -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('merge.title')}</h3>
-          <p class="text-sm th-text-tertiary mb-8">{t('merge.description')}</p>
+          <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.merge.description')}</p>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable Merge -->
@@ -624,59 +660,70 @@ function getAffectedCameraCount(protocol: string): number {
           </div>
         </div>
 
-        <!-- Frontend Preferences -->
+        <!-- WebDAV Settings -->
         <div class="card p-8 border th-border">
-          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.frontendPrefs')}</h3>
-          <p class="text-sm th-text-tertiary mb-8">{t('settings.frontendPrefsDesc')}</p>
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.webdav')}</h3>
+          <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.webdav.description')}</p>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Items Per Page -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Enable WebDAV -->
             <div>
-              <label for="itemsPerPage" class="input-label">{t('settings.itemsPerPage')}</label>
-              <select id="itemsPerPage" class="input" bind:value={itemsPerPage} onchange={handleItemsPerPageChange}>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
+              <label class="input-label">{t('settings.webdavEnabled')}</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { webdavEnabled = !webdavEnabled; }}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
+                  role="switch"
+                  aria-checked={webdavEnabled}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{webdavEnabled ? t('settings.webdavEnabledOn') : t('settings.webdavEnabledOff')}</span>
+              </div>
             </div>
 
-            <!-- Auto Refresh -->
+            <!-- Path Prefix -->
             <div>
-              <label for="autoRefresh" class="input-label">{t('settings.autoRefresh')}</label>
-              <select id="autoRefresh" class="input" bind:value={autoRefresh} onchange={handleAutoRefreshChange}>
-                <option value="30s">{t('settings.every30s')}</option>
-                <option value="60s">{t('settings.every60s')}</option>
-                <option value="120s">{t('settings.every2m')}</option>
-                <option value="off">{t('settings.off')}</option>
-              </select>
+              <label for="webdavPrefix" class="input-label">{t('settings.webdavPathPrefix')}</label>
+              <input
+                id="webdavPrefix"
+                type="text"
+                class="input"
+                bind:value={webdavPathPrefix}
+                placeholder="/dav"
+              />
+            </div>
+
+            <!-- Read-Write Mode -->
+            <div>
+              <label class="input-label">{t('settings.webdavReadWrite')}</label>
+              <div class="flex items-center gap-3 mt-2">
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
+                  onclick={() => { webdavReadWrite = !webdavReadWrite; }}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
+                  role="switch"
+                  aria-checked={webdavReadWrite}
+                >
+                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavReadWrite ? 'translate-x-6' : 'translate-x-1'}"></span>
+                </button>
+                <span class="text-sm th-text-secondary">{webdavReadWrite ? t('settings.webdavReadWriteOn') : t('settings.webdavReadWriteOff')}</span>
+              </div>
+              <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
             </div>
           </div>
         </div>
 
-
-
-
-        <!-- Streaming Protocols -->
+        <!-- Streaming Sub-protocol Details -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming')}</h3>
-          <p class="text-sm th-text-tertiary mb-8">{t('settings.streamingDesc')}</p>
-
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <!-- Default Protocol -->
-            <div>
-              <label for="defaultProtocol" class="input-label">{t('settings.streaming.defaultProtocol')}</label>
-              <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
-                <option value="webrtc">WebRTC</option>
-                <option value="flv">HTTP-FLV</option>
-                <option value="hls">HLS</option>
-                <option value="ll-hls">LL-HLS</option>
-              </select>
-              <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.defaultProtocolHint')}</p>
-            </div>
-          </div>
+          <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.streaming.description')}</p>
 
           <!-- WebRTC Settings -->
-          <div class="mt-6 pt-6 border-t th-border">
+          <div class="mt-2 pt-2">
             <h4 class="text-sm font-semibold th-text-primary mb-1">{t('settings.streaming.webrtc')}</h4>
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.webrtcDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -865,45 +912,10 @@ function getAffectedCameraCount(protocol: string): number {
           </div>
         </div>
 
-        <!-- Protocol Guide -->
-        <div class="card p-8 border th-border">
-          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.protocolDocs')}</h3>
-          <p class="text-sm th-text-tertiary mb-6">{t('settings.protocolDocsDesc')}</p>
-
-          <div class="space-y-3">
-            {#each ['webrtc', 'flv', 'hls', 'llHls'] as docKey (docKey)}
-              {@const isExpanded = expandedProtocolDoc === docKey}
-              <div class="border th-border rounded-lg overflow-hidden">
-                <button
-                  onclick={() => { expandedProtocolDoc = isExpanded ? null : docKey; }}
-                  class="w-full px-4 py-3 text-left flex items-center justify-between hover:th-bg-hover transition-colors"
-                >
-                  <span class="font-medium th-text-primary">{t(`settings.protocolDocs.${docKey}.title`)}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {isExpanded ? 'rotate-180' : ''} th-text-tertiary"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </button>
-                {#if isExpanded}
-                  <div class="px-4 pb-4 pt-0 space-y-3">
-                    <p class="text-sm th-text-secondary">{t(`settings.protocolDocs.${docKey}.desc`)}</p>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div class="p-3 rounded-md bg-[var(--color-success)]/5 border border-[var(--color-success)]/20">
-                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-success)] mb-1">Pros</div>
-                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.pros`)}</p>
-                      </div>
-                      <div class="p-3 rounded-md bg-[var(--color-danger)]/5 border border-[var(--color-danger)]/20">
-                        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-danger)] mb-1">Cons</div>
-                        <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.cons`)}</p>
-                      </div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
         <!-- Feature Toggles -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.featureToggles.title')}</h3>
-          <p class="text-sm th-text-tertiary mb-8">{t('settings.featureToggles.description')}</p>
+          <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.features.description')}</p>
 
           {#if featuresLoading}
             <div class="flex items-center gap-2 py-4 th-text-muted">
@@ -956,6 +968,7 @@ function getAffectedCameraCount(protocol: string): number {
             </div>
           {/if}
         </div>
+      {/if}
         <!-- Save button -->
         <div class="flex items-center gap-4 pt-2">
           <button
