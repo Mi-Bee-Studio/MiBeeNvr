@@ -81,10 +81,10 @@ export function formatChartValue(bytes: number): { value: number; unit: string; 
 export function getChartUnit(bytesArray: number[]): { divisor: number; unit: string } {
   const maxBytes = Math.max(...bytesArray, 0);
   const units = [
-    { threshold: 1024, divisor: 1, unit: 'B' },
-    { threshold: 1024 * 1024, divisor: 1024, unit: 'KB' },
-    { threshold: 1024 * 1024 * 1024, divisor: 1024 * 1024, unit: 'MB' },
-    { threshold: 1024 * 1024 * 1024 * 1024, divisor: 1024 * 1024 * 1024, unit: 'GB' },
+    { threshold: 1, divisor: 1, unit: 'B' },
+    { threshold: 1024, divisor: 1024, unit: 'KB' },
+    { threshold: 1024 * 1024, divisor: 1024 * 1024, unit: 'MB' },
+    { threshold: 1024 * 1024 * 1024, divisor: 1024 * 1024 * 1024, unit: 'GB' },
   ];
   
   // Default to TB for very large values

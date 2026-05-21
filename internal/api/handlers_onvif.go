@@ -49,15 +49,11 @@ func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.Timeout)*time.Second)
 	defer cancel()
 
-	devices, err := onvif.Discover(ctx, time.Duration(req.Timeout)*time.Second)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("discovery failed: %v", err))
-		return
+	result := onvif.Discover(ctx, time.Duration(req.Timeout)*time.Second)
+	if result.Devices == nil {
+		result.Devices = []onvif.DiscoveredDevice{}
 	}
-	if devices == nil {
-		devices = []onvif.DiscoveredDevice{}
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": devices})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request) {
