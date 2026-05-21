@@ -399,7 +399,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Step 4: Auth middleware
-	authMW, effectiveHash := authmw.NewAuthMiddleware(cfg.Auth.Username, cfg.Auth.PasswordHash, cfg.Auth.Password)
+	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
+		GetUsername: func() string { return cfg.Auth.Username },
+		GetHash:     func() string { return cfg.Auth.PasswordHash },
+	}, cfg.Auth.Password)
 	a.authMW = authMW
 	if effectiveHash != "" && cfg.Auth.PasswordHash == "" && cfg.Auth.Password != "" {
 		slog.Info("persisting auto-hashed password to config", "component", "main")

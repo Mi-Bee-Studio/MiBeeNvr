@@ -36,7 +36,8 @@ type HealthCheck struct {
 type HealthResponse struct {
 	Status string                 `json:"status"` // "ok" | "degraded" | "unhealthy"
 	Checks map[string]HealthCheck `json:"checks"`
-	Uptime string                 `json:"uptime"`
+	Uptime        string                 `json:"uptime"`
+	SetupRequired bool                   `json:"setup_required"`
 }
 
 // SystemStats is the response from /api/stats/system.
@@ -163,6 +164,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/backups", h.handleListBackups)
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
+		r.Post("/api/onvif/probe", h.handleONVIFProbe)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Get("/api/protocols", h.handleProtocols)
@@ -253,7 +255,10 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 
 // TestHandlerWithAuth creates a Handler with real auth middleware for testing.
 func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
-	authMW, _ := middleware.NewAuthMiddleware(username, passwordHash, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
+		GetUsername: func() string { return username },
+		GetHash:     func() string { return passwordHash },
+	}, "")
 	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
 }
 

@@ -2,6 +2,7 @@
   import { t } from '$lib/i18n';
   import {
     discoverONVIFDevices,
+    probeONVIFDevice,
     xiaomiAuth,
     xiaomiDevices,
     xiaomiCaptcha,
@@ -29,6 +30,13 @@
   let addingDeviceId = $state<string | null>(null);
   let onvifUsername = $state('');
   let onvifPassword = $state('');
+
+  // Manual probe state
+  let manualHost = $state('');
+  let manualPort = $state(80);
+  let probing = $state(false);
+  let probedDevice = $state<DiscoveredDevice | null>(null);
+  let probeError = $state('');
 
   // Xiaomi state
   let xiaomiExpanded = $state(false);
@@ -99,6 +107,25 @@
     } finally {
       scanning = false;
       scanDone = true;
+    }
+  }
+
+  async function probeManualDevice() {
+    if (!manualHost.trim()) return;
+    probing = true;
+    probeError = '';
+    probedDevice = null;
+    try {
+      const device = await probeONVIFDevice(manualHost.trim(), manualPort);
+      if (device) {
+        probedDevice = device;
+      } else {
+        probeError = t('onvif.probeFailed');
+      }
+    } catch (e) {
+      probeError = e instanceof Error ? e.message : String(e);
+    } finally {
+      probing = false;
     }
   }
 
@@ -345,6 +372,80 @@
           {/each}
         </div>
       {/if}
+
+      <!-- Manual Probe Section -->
+      {#if !scanning && (scanDone || probedDevice)}
+        <div class="mt-4 pt-4 border-t th-border">
+          <div class="flex items-center gap-2 mb-3">
+            <Search size={16} class="th-text-secondary" />
+            <h4 class="text-sm font-semibold th-text-primary">{t('onvif.manualProbe')}</h4>
+          </div>
+          <p class="text-xs th-text-muted mb-3">{t('onvif.manualProbeHint')}</p>
+          <div class="flex gap-2 items-end">
+            <div class="flex-1">
+              <label class="input-label text-xs">{t('onvif.host')}</label>
+              <input
+                type="text"
+                class="input py-1 text-sm"
+                bind:value={manualHost}
+                placeholder="192.168.1.100"
+              />
+            </div>
+            <div class="w-24">
+              <label class="input-label text-xs">{t('onvif.port')}</label>
+              <input
+                type="number"
+                class="input py-1 text-sm"
+                bind:value={manualPort}
+                placeholder="80"
+                min="1"
+                max="65535"
+              />
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm shrink-0"
+              onclick={probeManualDevice}
+              disabled={probing || !manualHost.trim()}
+            >
+              {#if probing}
+                <span class="spinner mr-1"></span>
+              {/if}
+              {probing ? t('onvif.probing') : t('onvif.manualProbe')}
+            </button>
+          </div>
+
+          {#if probeError}
+            <p class="text-sm mt-2 th-color-danger">{t('onvif.probeFailed')}: {probeError}</p>
+          {/if}
+
+          {#if probedDevice}
+            <div class="mt-3 flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
+              <div class="min-w-0 flex-1 mr-4">
+                <div class="font-medium th-text-primary truncate">{probedDevice.name || t('onvif.deviceName')}</div>
+                <div class="text-sm th-text-secondary truncate">{probedDevice.endpoint}</div>
+                {#if probedDevice.hardware}
+                  <div class="text-xs th-text-muted mt-0.5">{probedDevice.hardware}</div>
+                {/if}
+              </div>
+              <button
+                onclick={() => {
+                  addDiscoveredDevice(probedDevice);
+                  probedDevice = null;
+                }}
+                class="btn btn-primary btn-sm shrink-0"
+                disabled={addingDeviceId === probedDevice.uuid}
+              >
+                {#if addingDeviceId === probedDevice.uuid}
+                  <span class="spinner mr-1"></span>
+                {/if}
+                {t('onvif.addCamera')}
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if !scanning && scanDone}
         <div class="mt-4 flex justify-end">
           <button onclick={scanONVIF} class="btn btn-ghost btn-sm">

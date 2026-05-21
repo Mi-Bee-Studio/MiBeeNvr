@@ -31,6 +31,49 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 
 // --- ONVIF discovery endpoints ---
 
+// handleONVIFProbe probes a single ONVIF device by sending a WS-Discovery
+// probe via HTTP POST directly to host:port (no multicast needed).
+func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		Timeout int    `json:"timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Timeout = 5
+	}
+	if req.Host == "" {
+		writeError(w, http.StatusBadRequest, "host is required")
+		return
+	}
+	if !validateIP(req.Host) {
+		writeError(w, http.StatusBadRequest, "invalid IP address format")
+		return
+	}
+	if req.Port <= 0 {
+		req.Port = 80
+	}
+	if req.Timeout <= 0 {
+		req.Timeout = 5
+	}
+	if req.Timeout > 30 {
+		writeError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.Timeout)*time.Second)
+	defer cancel()
+
+	device, err := onvif.ProbeDevice(ctx, req.Host, req.Port, time.Duration(req.Timeout)*time.Second)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("probe failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"device": device,
+	})
+}
+
 func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Timeout int `json:"timeout"`

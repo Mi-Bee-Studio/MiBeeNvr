@@ -5,12 +5,26 @@
 #   3. Edit data/mibee-nvr.yaml (set password, add cameras)
 #   4. docker compose up -d
 #   5. Open http://localhost:9090
+#
+# Networking:
+#   By default, this uses bridge networking with port mapping.
+#   ONVIF WS-Discovery (UDP multicast) does NOT work in bridge mode.
+#   To enable ONVIF auto-discovery, uncomment "network_mode: host"
+#   and remove the "ports" section below.
 
 services:
   mibee-nvr:
     image: ghcr.io/mi-bee-studio/mibeenvr:latest
     container_name: mibee-nvr
     restart: unless-stopped
+
+    # Uncomment the line below to use host networking.
+    # This is required for ONVIF WS-Discovery auto-scan to work,
+    # and may improve WebRTC/FLV streaming performance.
+    # When using host mode, REMOVE the "ports" section below
+    # (port mappings are ignored in host mode).
+    # network_mode: host
+
     ports:
       - "9090:9090"   # Web UI / API
       - "2121:2121"   # FTP

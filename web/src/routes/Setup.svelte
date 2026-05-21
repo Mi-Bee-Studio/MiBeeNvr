@@ -21,13 +21,17 @@
 
   // Browser capability detection
   let capabilities = $state({
+    llhls: true,
     webrtc: false,
     flv: false,
     hls: false,
   });
-  let bestProtocol = $state('hls');
+  let bestProtocol = $state('llhls');
 
   $effect(() => {
+    // LL-HLS: hls.js bundled — always available
+    capabilities.llhls = true;
+
     // WebRTC: RTCPeerConnection available
     capabilities.webrtc = typeof RTCPeerConnection !== 'undefined';
 
@@ -42,8 +46,10 @@
       capabilities.hls = false;
     }
 
-    // Auto-select best available: WebRTC > FLV > LL-HLS > HLS
-    if (capabilities.webrtc) {
+    // Auto-select best available: LL-HLS > WebRTC > FLV > HLS
+    if (capabilities.llhls) {
+      bestProtocol = 'llhls';
+    } else if (capabilities.webrtc) {
       bestProtocol = 'webrtc';
     } else if (capabilities.flv) {
       bestProtocol = 'flv';
@@ -107,7 +113,8 @@
       setProtocolPreference(bestProtocol);
 
       // Show completion toast
-      const protocolLabel = bestProtocol === 'webrtc' ? 'WebRTC'
+      const protocolLabel = bestProtocol === 'llhls' ? 'LL-HLS'
+        : bestProtocol === 'webrtc' ? 'WebRTC'
         : bestProtocol === 'flv' ? 'HTTP-FLV' : 'HLS';
       showToast(t('setup.complete', { protocol: protocolLabel }), 'success');
 
@@ -238,6 +245,17 @@
         <h3 class="text-sm font-semibold th-text-primary">{t('setup.capabilities')}</h3>
         <div class="space-y-2">
           <div class="flex items-center gap-2 text-sm">
+            <span class="w-2.5 h-2.5 rounded-full {capabilities.llhls ? 'bg-green-500' : 'bg-gray-500'}"></span>
+            <span class="th-text-secondary">LL-HLS</span>
+            <span class="th-text-tertiary text-xs ml-auto">
+              {#if capabilities.llhls}
+                <span class="text-green-500">{t('setup.supported')}</span>
+              {:else}
+                {t('setup.notSupported')}
+              {/if}
+            </span>
+          </div>
+          <div class="flex items-center gap-2 text-sm">
             <span class="w-2.5 h-2.5 rounded-full {capabilities.webrtc ? 'bg-green-500' : 'bg-gray-500'}"></span>
             <span class="th-text-secondary">WebRTC</span>
             <span class="th-text-tertiary text-xs ml-auto">
@@ -271,7 +289,7 @@
             </span>
           </div>
         </div>
-        <p class="text-xs th-text-tertiary">{t('setup.bestProtocol', { protocol: bestProtocol === 'webrtc' ? 'WebRTC' : bestProtocol === 'flv' ? 'HTTP-FLV' : 'HLS' })}</p>
+        <p class="text-xs th-text-tertiary">{t('setup.bestProtocol', { protocol: bestProtocol === 'llhls' ? 'LL-HLS' : bestProtocol === 'webrtc' ? 'WebRTC' : bestProtocol === 'flv' ? 'HTTP-FLV' : 'HLS' })}</p>
       </div>
 
       <!-- Optional: Language -->
