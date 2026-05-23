@@ -51,4 +51,8 @@ type CloudAuthProxy interface {
 
 	// ListDevices returns the list of cloud devices for the authenticated user.
 	ListDevices(ctx context.Context) ([]CloudDeviceInfo, error)
+
+// CheckVendor determines the vendor protocol for a Xiaomi device by DID.
+// Returns vendor name ("cs2", "tutk", etc.) or error if unable to determine.
+CheckVendor(ctx context.Context, did string) (string, error)
 }

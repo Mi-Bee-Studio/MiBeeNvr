@@ -49,6 +49,7 @@ type CameraManager struct {
 	metrics    *metrics.Metrics
 	mergeMgr   *merge.MergeManager   // segment merge manager (nil = no merge)
 	mu         sync.RWMutex
+	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
 }
 
 // NewCameraManager creates a new CameraManager.
@@ -70,7 +71,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		configPath: configPath,
 		recorders:  make(map[string]model.Recorder),
 		metrics:    m,
-		mergeMgr:   mm,
+		mergeMgr:    mm,
+		errorDetails: make(map[string]*model.CameraErrorDetail),
 	}
 }
 
@@ -187,6 +189,8 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		delete(cm.recorders, cam.ID)
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
+	// Clear any previous error detail — a successful start means the camera is transitioning to recording
+	cm.errorDetails[cam.ID] = nil
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
 	}
@@ -298,6 +302,20 @@ func (cm *CameraManager) CameraStatus(cameraID string) model.RecorderStatus {
 		return model.StatusError
 	}
 	return rec.Status()
+}
+
+// SetErrorDetail sets the error detail for a camera. Thread-safe.
+func (cm *CameraManager) SetErrorDetail(cameraID string, detail *model.CameraErrorDetail) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.errorDetails[cameraID] = detail
+}
+
+// GetErrorDetail returns the error detail for a camera, or nil if none. Thread-safe.
+func (cm *CameraManager) GetErrorDetail(cameraID string) *model.CameraErrorDetail {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.errorDetails[cameraID]
 }
 
 // RecorderCount returns the number of managed recorders.

@@ -39,3 +39,11 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+    # 用户权限说明：
+    # 默认以 nonroot (UID 65534) 运行，安全性更高。
+    # 如果遇到 unable to open database file 等权限错误，
+    # 可取消注释下面这行以 root 用户运行：
+    # 注意：对于已存在的卷，若文件属主为 root，请先执行：
+    #   sudo chown -R 65534:65534 ./data
+    # user: "0:0"

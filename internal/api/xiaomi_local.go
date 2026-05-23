@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -99,6 +101,32 @@ func (a *LocalXiaomiAuth) ListDevices(_ context.Context) ([]CloudDeviceInfo, err
 		}
 	}
 	return cameras, nil
+}
+
+// CheckVendor checks the vendor protocol for a Xiaomi device by DID.
+func (a *LocalXiaomiAuth) CheckVendor(_ context.Context, did string) (string, error) {
+	if a.cfg == nil {
+		return "", fmt.Errorf("xiaomi config not available")
+	}
+	cloudCfg := xiaomi.XiaomiCloudConfig{
+		UserID: a.cfg.Xiaomi.UserID,
+		Token:  a.cfg.Xiaomi.Token,
+		Region: a.cfg.Xiaomi.Region,
+	}
+	missURL, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
+	if err != nil {
+		return "", err
+	}
+	// Parse the MISS URL to extract the vendor query parameter
+	u, err := url.Parse(missURL)
+	if err != nil {
+		return "", err
+	}
+	vendor := u.Query().Get("vendor")
+	if vendor == "" {
+		return "cs2", nil // default to cs2 if vendor not specified
+	}
+	return vendor, nil
 }
 
 // --- helpers ---

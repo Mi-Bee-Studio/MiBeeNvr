@@ -2341,6 +2341,9 @@ func (noopCloudProxy) SubmitVerify(_ context.Context, _, _ string) (*CloudAuthRe
 func (noopCloudProxy) ListDevices(_ context.Context) ([]CloudDeviceInfo, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (noopCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
+	return "", fmt.Errorf("not implemented")
+}
 
 func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 	t.Helper()

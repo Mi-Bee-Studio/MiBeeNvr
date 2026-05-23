@@ -185,6 +185,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/verify", h.handleXiaomiVerify)
 			r.Get("/devices", h.handleXiaomiDevices)
 			r.Post("/sync", h.handleXiaomiSync)
+			r.Get("/check-vendor", h.handleCheckVendor)
 		})
 	})
 

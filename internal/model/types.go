@@ -90,6 +90,14 @@ type RecordingFilter struct {
 
 type RecorderStatus string
 
+// CameraErrorDetail represents a camera error with type classification and message.
+// This is used to provide detailed error info to the frontend (e.g. TUTK errors).
+type CameraErrorDetail struct {
+	Type       string    `json:"type"`
+	Message    string    `json:"message"`
+	DetectedAt time.Time `json:"detected_at"`
+}
+
 type StorageStats struct {
 	TotalBytes     int64 `json:"total_bytes"`
 	UsedBytes      int64 `json:"used_bytes"`

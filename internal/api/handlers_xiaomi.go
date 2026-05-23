@@ -232,6 +232,53 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"vendor":     "unknown",
+			"compatible": true,
+		})
+		return
+	}
+	if h.config == nil || h.config.Xiaomi.Token == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"vendor":     "unknown",
+			"compatible": true,
+		})
+		return
+	}
+
+	did := r.URL.Query().Get("did")
+	if did == "" {
+		writeError(w, http.StatusBadRequest, "did parameter required")
+		return
+	}
+
+	vendor, err := h.cloudProxy.CheckVendor(r.Context(), did)
+	if err != nil {
+		// For errors, return unknown/compatible (don't block on uncertainty)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"vendor":     "unknown",
+			"compatible": true,
+		})
+		return
+	}
+
+	if vendor == "tutk" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"vendor":     "tutk",
+			"compatible": false,
+			"message":    "This device uses TUTK protocol which is not supported by MiBee NVR. Only CS2 protocol cameras are supported.",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"vendor":     "cs2",
+		"compatible": true,
+	})
+}
+
 // saveXiaomiToken persists auth result to config file.
 func (h *Handler) saveXiaomiToken(result *CloudAuthResult) {
 	if h.config == nil || result == nil {
