@@ -20,6 +20,8 @@ export interface Camera {
   model?: string;
   serial_number?: string;
   status?: string;
+  error_type?: string | null;
+  error_detail?: string | null;
   last_seen?: string;
   retention_days?: number;
   onvif_endpoint?: string;
@@ -429,4 +431,16 @@ export function getProtocolCapabilities(
   const info = protocolsMap.get(baseId);
   if (info) return info.capabilities;
   return { hls: false, ptz: false, snapshot: false, discovery: false, auth: false };
+}
+
+// --- Xiaomi Vendor Check ---
+
+export interface VendorCheckResult {
+  vendor: string;
+  compatible: boolean;
+  message?: string;
+}
+
+export async function checkVendor(did: string): Promise<VendorCheckResult> {
+  return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}`);
 }

@@ -57,9 +57,9 @@ export {
   normalizeProtocol,
   buildProtocolsMap,
   getProtocolCapabilities,
+  checkVendor,
   DEFAULT_PROTOCOLS,
 } from './cameras';
-
 export type {
   Camera,
   CreateCameraRequest,
@@ -77,6 +77,8 @@ export type {
   MergeConfig,
   TestConnectionRequest,
   TestConnectionResult,
+  VendorCheckResult,
+  PushTarget,
 } from './cameras';
 
 // Recordings — list, download, frames, stats, archives

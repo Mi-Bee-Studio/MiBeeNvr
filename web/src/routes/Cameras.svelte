@@ -3,6 +3,7 @@
   import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
   import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
@@ -229,6 +230,12 @@
     error = '';
     try {
       cameras = await listCameras();
+      const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
+      if (tutkCameras.length === 1) {
+        showToast(tutkCameras[0].name + ': ' + t('cameras.tutkIncompatible'), 'warning');
+      } else if (tutkCameras.length > 1) {
+        showToast(tutkCameras.length + ' ' + t('cameras.tutkToastTitle'), 'warning');
+      }
     } catch (e) {
       error = friendlyError(e, t('cameras.failedLoad'));
     } finally {

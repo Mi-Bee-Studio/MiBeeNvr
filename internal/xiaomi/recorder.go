@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,12 @@ type SegmentStore interface {
 type RecordingDB interface {
 	InsertRecording(ctx context.Context, r *model.Recording) error
 	InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error
+}
+
+// ErrorReporter abstracts camera error reporting to avoid circular imports.
+// CameraManager satisfies this interface.
+type ErrorReporter interface {
+	SetErrorDetail(cameraID string, detail *model.CameraErrorDetail)
 }
 
 const (
@@ -59,6 +66,7 @@ type XiaomiRecorderConfig struct {
 	MaxBackoff  time.Duration
 	InitBackoff time.Duration
 	DB          RecordingDB
+	ErrReporter ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -213,6 +221,40 @@ func (r *XiaomiRecorder) recordError(errorType string) {
 		r.metrics.CameraErrors.WithLabelValues(r.cfg.CameraID, errorType).Inc()
 	}
 }
+// reportVendorError checks if the error indicates an unsupported TUTK vendor
+// and, if so, reports a detailed CameraErrorDetail via the ErrorReporter.
+// This fires on every reconnect attempt so the frontend always has current state.
+func (r *XiaomiRecorder) reportVendorError(err error) {
+	if r.cfg.ErrReporter == nil || err == nil {
+		return
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "unsupported vendor") {
+		return
+	}
+	// Extract vendor name from error: "miss: unsupported vendor \"tutk\""
+	vendor := extractQuotedValue(errMsg)
+	msg := fmt.Sprintf("Camera uses unsupported transport vendor %q (TUTK). This camera model is not compatible.", vendor)
+	r.cfg.ErrReporter.SetErrorDetail(r.cfg.CameraID, &model.CameraErrorDetail{
+		Type:       "tutk_incompatible",
+		Message:    msg,
+		DetectedAt: time.Now(),
+	})
+	}
+
+// extractQuotedValue extracts the content between the first pair of double quotes in s.
+// Returns empty string if no quotes are found.
+func extractQuotedValue(s string) string {
+	start := strings.Index(s, `"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(s[start+1:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return s[start+1 : start+1+end]
+}
 
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {
@@ -234,6 +276,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			r.reportVendorError(err)
 			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
 			r.recordError("cloud_resolve")
 			r.setStatus(model.StatusReconnecting)

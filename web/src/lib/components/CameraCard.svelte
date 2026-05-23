@@ -132,7 +132,12 @@
       {/if}
     </div>
 
-    <div class="shrink-0">
+    <div class="shrink-0 flex items-center gap-1.5">
+      {#if camera.error_type === 'tutk_incompatible'}
+        <span class="badge badge-error" title={camera.error_detail || ''}>
+          {t('cameras.tutkCardBadge')}
+        </span>
+      {/if}
       {#if variant === 'disabled'}
         <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
       {:else if camera.status === 'recording'}

@@ -47,6 +47,15 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				cameras[i].Status = model.StatusStopped
 			}
 		}
+		// Inject error details from CameraManager
+		if h.camMgr != nil {
+			for i := range cameras {
+				if detail := h.camMgr.GetErrorDetail(cameras[i].ID); detail != nil {
+					cameras[i].ErrorType = &detail.Type
+					cameras[i].ErrorDetail = &detail.Message
+				}
+			}
+		}
 		// Inject last_seen from DB
 		lastSeenMap, err := h.db.GetAllLastRecordingTimes(r.Context())
 		if err == nil {

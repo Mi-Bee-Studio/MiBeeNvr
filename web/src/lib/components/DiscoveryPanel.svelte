@@ -8,7 +8,8 @@
     xiaomiCaptcha,
     xiaomiVerify,
     createCamera,
-    xiaomiSync
+    xiaomiSync,
+    checkVendor
   } from '$lib/api';
   import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
   import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
@@ -55,6 +56,9 @@
   let xiaomiVerifyTarget = $state('');
   let xiaomiVerifyType = $state<'phone' | 'email' | ''>('');
   let syncing = $state(false);
+
+  // TUTK vendor check dialog
+  let tutkWarningDevice = $state<XiaomiDevice | null>(null);
 
   // Expose scan state for parent
   export function isScanning(): boolean {
@@ -232,9 +236,24 @@
     return cameras.some(c => c.protocol === 'xiaomi' && c.url === `xiaomi://${did}`);
   }
 
-  async function addXiaomiDevice(device: XiaomiDevice) {
+  async function addXiaomiDevice(device: XiaomiDevice, skipVendorCheck = false) {
     xiaomiAddingDid = device.did;
     try {
+      // Check vendor compatibility before adding
+      if (!skipVendorCheck) {
+        try {
+          const result = await checkVendor(device.did);
+          if (!result.compatible) {
+            tutkWarningDevice = device;
+            xiaomiAddingDid = null;
+            return;
+          }
+        } catch (e) {
+          // Network error — don't block camera creation
+          console.warn('Vendor check failed, proceeding anyway:', e);
+        }
+      }
+
       await createCamera({
         name: device.name,
         protocol: 'xiaomi',
@@ -247,6 +266,18 @@
     } catch (e) { console.warn('Failed to add Xiaomi device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
       xiaomiAddingDid = null;
     }
+  }
+
+  function handleTutkContinueAnyway() {
+    if (tutkWarningDevice) {
+      const device = tutkWarningDevice;
+      tutkWarningDevice = null;
+      addXiaomiDevice(device, true);
+    }
+  }
+
+  function handleTutkCancel() {
+    tutkWarningDevice = null;
   }
 
   async function refreshXiaomiDevices() {
@@ -606,6 +637,51 @@
           <button class="btn btn-ghost btn-sm" onclick={() => { xiaomiLoggedIn = false; xiaomiDeviceList = []; xiaomiError = ''; }}>{t('xiaomi.signOut')}</button>
         </div>
       {/if}
+    </div>
+  {/if}
+
+  <!-- TUTK Vendor Warning Dialog -->
+  {#if tutkWarningDevice}
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center"
+      role="presentation"
+      onmousedown={(e) => { if (e.target === e.currentTarget) handleTutkCancel(); }}
+    >
+      <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true"></div>
+      <div
+        role="dialog"
+        aria-modal="true"
+        class="relative card p-6 border th-border max-w-md w-full mx-4"
+        onmousedown={(e) => e.stopPropagation()}
+      >
+        <div class="flex items-start gap-4">
+          <div class="flex-shrink-0 mt-0.5">
+            <AlertTriangle size={20} class="th-color-danger" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <h3 class="text-lg font-semibold th-text-primary mb-2">
+              {t('cameras.tutkInterceptTitle')}
+            </h3>
+            <p class="text-sm th-text-secondary">
+              {t('cameras.tutkInterceptMessage', { name: tutkWarningDevice.name })}
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center justify-end gap-3 mt-6">
+          <button
+            class="btn btn-ghost"
+            onclick={handleTutkCancel}
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            class="btn btn-primary"
+            onclick={handleTutkContinueAnyway}
+          >
+            {t('cameras.continueAnyway')}
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 {/if}

@@ -205,6 +205,9 @@ func (d *DB) Init(ctx context.Context) error {
 		('protocol.rtsp', 1),
 		('protocol.http', 1),
 		('protocol.onvif', 1);`)
+	// Migration v8 → v9: compound index for ListRecordings query pattern
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_time ON recordings(camera_id, started_at, ended_at, archived)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='9' WHERE key='schema_version'")
 
 	// Migration: add encoding column if missing
 	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")

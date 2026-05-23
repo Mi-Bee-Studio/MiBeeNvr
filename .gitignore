@@ -48,6 +48,7 @@ docs/private/
 # IDE / Editor
 .vscode/
 .idea/
+.omo/
 *.swp
 *.swo
 *.

@@ -27,6 +27,8 @@ type CameraRow struct {
 	SerialNumber string               `json:"serial_number"`
 	RetentionDays int                 `json:"retention_days"`
 	Status       model.RecorderStatus `json:"status"`
+	ErrorType    *string              `json:"error_type"`
+	ErrorDetail  *string              `json:"error_detail"`
 	LastSeen     *time.Time           `json:"last_seen,omitempty"`
 	Username     string               `json:"username"`
 	HasPassword  bool                 `json:"has_password"`
