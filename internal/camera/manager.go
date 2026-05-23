@@ -83,6 +83,10 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	switch cam.Protocol {
 	case "xiaomi":
 		rec = new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
+		// Wire ErrorReporter for TUTK vendor error detection
+		if xr, ok := rec.(*xiaomi.XiaomiRecorder); ok {
+			xr.SetErrorReporter(cm)
+		}
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):

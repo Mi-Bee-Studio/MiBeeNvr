@@ -126,6 +126,11 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 	}
 }
 
+// SetErrorReporter sets the error reporter for vendor error reporting.
+func (r *XiaomiRecorder) SetErrorReporter(reporter ErrorReporter) {
+	r.cfg.ErrReporter = reporter
+}
+
 // Start begins recording from the Xiaomi camera in a background goroutine.
 func (r *XiaomiRecorder) Start(ctx context.Context) error {
 	r.mu.Lock()
