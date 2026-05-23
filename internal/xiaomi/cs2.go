@@ -387,13 +387,27 @@ func (c *cs2UDPConn) RemoteAddr() net.Addr {
 }
 
 func (c *cs2UDPConn) WriteUntil(req []byte, ok func(res []byte) bool) ([]byte, error) {
-	var t *time.Timer
-	t = time.AfterFunc(1, func() {
-		if _, err := c.Write(req); err == nil && t != nil {
-			t.Reset(time.Second)
+	stopRetransmit := make(chan struct{})
+	defer close(stopRetransmit)
+
+	go func() {
+		time.Sleep(time.Nanosecond)
+		for {
+			select {
+			case <-stopRetransmit:
+				return
+			default:
+			}
+			if _, err := c.Write(req); err != nil {
+				return
+			}
+			select {
+			case <-stopRetransmit:
+				return
+			case <-time.After(time.Second):
+			}
 		}
-	})
-	defer t.Stop()
+	}()
 
 	buf := make([]byte, 1200)
 
