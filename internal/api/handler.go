@@ -85,6 +85,7 @@ type Handler struct {
 	snapshotMu      sync.RWMutex
 	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr        *merge.MergeManager
+	healthMgr       HealthManager
 	cloudProxy      CloudAuthProxy
 	streamRegistry  *StreamRegistry
 }
@@ -187,6 +188,10 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/sync", h.handleXiaomiSync)
 			r.Get("/check-vendor", h.handleCheckVendor)
 		})
+		// Health monitoring endpoints
+		r.Get("/api/health/status", h.handleGetHealthStatus)
+		r.Get("/api/health/events", h.handleGetHealthEvents)
+		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
 	})
 
 	return r
