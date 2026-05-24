@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -36,6 +37,7 @@ func (m *mockMessage) Payload() []byte                          { return m.paylo
 func (m *mockMessage) Ack()                                     {}
 
 func TestNewClient(t *testing.T) {
+	t.Helper()
 	cb := &mockCallback{}
 	c := NewClient("tcp://localhost:1883", "test-client", "mibee-nvr", "", "", cb.callback)
 
@@ -48,6 +50,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestParseActionStart(t *testing.T) {
+	t.Helper()
 	cb := &mockCallback{}
 	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
 
@@ -64,6 +67,7 @@ func TestParseActionStart(t *testing.T) {
 }
 
 func TestParseActionStop(t *testing.T) {
+	t.Helper()
 	cb := &mockCallback{}
 	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
 
@@ -80,11 +84,13 @@ func TestParseActionStop(t *testing.T) {
 }
 
 func TestIsConfigured(t *testing.T) {
+	t.Helper()
 	c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", nil)
 	assert.True(t, c.IsConfigured())
 }
 
 func TestNotConfiguredNoOp(t *testing.T) {
+	t.Helper()
 	c := NewClient("", "test", "mibee-nvr", "", "", nil)
 	assert.False(t, c.IsConfigured())
 
@@ -97,6 +103,7 @@ func TestNotConfiguredNoOp(t *testing.T) {
 // Ensure mockMessage satisfies mqtt.Message interface at compile time.
 
 func TestNewClientWithAuth(t *testing.T) {
+	t.Helper()
 	cb := &mockCallback{}
 	c := NewClient("tcp://localhost:1883", "test-client", "mibee-nvr", "mqtt-user", "mqtt-pass", cb.callback)
 
@@ -104,4 +111,89 @@ func TestNewClientWithAuth(t *testing.T) {
 	assert.Equal(t, "mqtt-pass", c.password)
 	assert.True(t, c.IsConfigured())
 }
+
 var _ mqtt.Message = (*mockMessage)(nil)
+
+// --- Publish tests ---
+
+// mockToken implements mqtt.Token for testing.
+type mockToken struct {
+	err error
+}
+
+func (t *mockToken) Wait() bool                          { return true }
+func (t *mockToken) WaitTimeout(d time.Duration) bool    { return true }
+func (t *mockToken) Done() <-chan struct{}               { return nil }
+func (t *mockToken) Error() error                        { return t.err }
+
+// mockPahoClient implements mqtt.Client for testing.
+type mockPahoClient struct {
+	connected    bool
+	publishToken mqtt.Token
+}
+
+func (m *mockPahoClient) IsConnected() bool                                              { return m.connected }
+func (m *mockPahoClient) IsConnectionOpen() bool                                         { return m.connected }
+func (m *mockPahoClient) Connect() mqtt.Token                                            { return nil }
+func (m *mockPahoClient) Disconnect(quiesce uint)                                        {}
+func (m *mockPahoClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token { return m.publishToken }
+func (m *mockPahoClient) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token      { return nil }
+func (m *mockPahoClient) SubscribeMultiple(filters map[string]byte, callback mqtt.MessageHandler) mqtt.Token { return nil }
+func (m *mockPahoClient) Unsubscribe(topics ...string) mqtt.Token                       { return nil }
+func (m *mockPahoClient) AddRoute(topic string, callback mqtt.MessageHandler)            {}
+func (m *mockPahoClient) OptionsReader() mqtt.ClientOptionsReader                        { return mqtt.ClientOptionsReader{} }
+
+func TestPublish_NilClient(t *testing.T) {
+	t.Helper()
+	var c *Client
+	err := c.Publish("test/topic", "hello")
+	assert.ErrorContains(t, err, "not connected")
+}
+
+func TestPublish_NilMQTTClient(t *testing.T) {
+	t.Helper()
+	c := &Client{topicPrefix: "test"}
+	err := c.Publish("test/topic", "hello")
+	assert.ErrorContains(t, err, "not connected")
+}
+
+func TestPublish_Disconnected(t *testing.T) {
+	t.Helper()
+	mockClient := &mockPahoClient{connected: false}
+	c := &Client{topicPrefix: "test", mqttClient: mockClient}
+	err := c.Publish("test/topic", "hello")
+	assert.ErrorContains(t, err, "not connected")
+}
+
+func TestPublish_MarshalError(t *testing.T) {
+	t.Helper()
+	mockClient := &mockPahoClient{connected: true}
+	c := &Client{topicPrefix: "test", mqttClient: mockClient}
+	// channel can't be marshaled to JSON
+	err := c.Publish("test/topic", make(chan int))
+	assert.ErrorContains(t, err, "marshal")
+}
+
+func TestPublish_PublishError(t *testing.T) {
+	t.Helper()
+	mockClient := &mockPahoClient{
+		connected:    true,
+		publishToken: &mockToken{err: assert.AnError},
+	}
+	c := &Client{topicPrefix: "test", mqttClient: mockClient}
+	err := c.Publish("test/topic", "hello")
+	assert.ErrorContains(t, err, "mqtt publish")
+}
+
+func TestPublish_Success(t *testing.T) {
+	t.Helper()
+	mockClient := &mockPahoClient{
+		connected:    true,
+		publishToken: &mockToken{},
+	}
+	c := &Client{topicPrefix: "test", mqttClient: mockClient}
+	err := c.Publish("test/topic", map[string]string{"key": "value"})
+	assert.NoError(t, err)
+}
+
+var _ mqtt.Client = (*mockPahoClient)(nil)

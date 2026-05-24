@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -99,4 +100,25 @@ func (c *Client) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 	if c.onAction != nil && tm.Action != "" {
 		c.onAction(cameraID, tm.Action)
 	}
+}
+
+// Publish sends a JSON payload to an MQTT topic with QoS 1.
+// The topic is prefixed with the client's topic prefix.
+func (c *Client) Publish(topic string, payload any) error {
+	if c == nil || c.mqttClient == nil || !c.mqttClient.IsConnected() {
+		return fmt.Errorf("mqtt client not connected")
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+
+	fullTopic := c.topicPrefix + "/" + topic
+	token := c.mqttClient.Publish(fullTopic, 1, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		return fmt.Errorf("mqtt publish: %w", token.Error())
+	}
+	return nil
 }
