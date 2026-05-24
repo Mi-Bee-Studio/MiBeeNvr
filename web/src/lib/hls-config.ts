@@ -7,16 +7,10 @@
 import { getCredentials } from '$lib/api';
 import type Hls from 'hls.js';
 
-/** RPi-optimized hls.js configuration. */
-export function createHlsConfig(): Partial<Hls.Config> {
-  return {
+/** RPi-optimized hls.js configuration. When protocol is 'll-hls', returns LL-HLS tuned config. */
+export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
+  const baseConfig = {
     enableWorker: false,
-    maxBufferLength: 10,
-    maxMaxBufferLength: 20,
-    maxBufferSize: 15 * 1024 * 1024, // 15 MB
-    backBufferLength: 3,
-    liveSyncDurationCount: 3,
-    liveMaxLatencyDurationCount: 7,
     liveDurationInfinity: true,
     progressive: true,
     xhrSetup: (xhr: XMLHttpRequest, url: string) => {
@@ -39,5 +33,28 @@ export function createHlsConfig(): Partial<Hls.Config> {
       }
       return new Request(context.url, initParams);
     },
+  };
+
+  if (protocol === 'll-hls') {
+    return {
+      ...baseConfig,
+      lowLatencyMode: true,
+      maxBufferLength: 6,
+      maxMaxBufferLength: 12,
+      maxBufferSize: 10 * 1024 * 1024,
+      backBufferLength: 0.5,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 5,
+    };
+  }
+
+  return {
+    ...baseConfig,
+    maxBufferLength: 10,
+    maxMaxBufferLength: 20,
+    maxBufferSize: 15 * 1024 * 1024, // 15 MB
+    backBufferLength: 3,
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: 7,
   };
 }

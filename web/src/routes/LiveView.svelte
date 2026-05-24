@@ -180,6 +180,7 @@
                 cameraName={camera.name || camera.id}
                 streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
                 cameraProtocol={camera.protocol}
+                protocol={streamingProtocol}
                 expanded={true}
               />
             {/if}

@@ -15,9 +15,15 @@
   }
 
   interface CameraProtocol {
-    protocol: string;
-    available: boolean;
-    reason?: string;
+    Protocol: string;
+    Available: boolean;
+    Reason: string;
+  }
+
+  interface ProtocolsResponse {
+    protocols: CameraProtocol[];
+    encoding: string;
+    default: string;
   }
 
   let {
@@ -73,10 +79,14 @@
   async function loadProtocols() {
     loading = true;
     try {
-      const result = await apiRequest<{ protocols: CameraProtocol[] }>(`/cameras/${cameraId}/protocols`);
+      const result = await apiRequest<ProtocolsResponse>(`/cameras/${cameraId}/protocols`);
       availableProtocols = result.protocols
-        .filter(p => p.available)
-        .map(p => p.protocol);
+        .filter(p => p.Available)
+        .map(p => p.Protocol);
+      // Auto-select the server's default if different from current selection
+      if (result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
+        onchange?.(result.default as StreamingProtocol);
+      }
     } catch (e) {
       console.warn('Failed to load protocols:', e);
       const encoding = (cameraEncoding || '').toLowerCase();
