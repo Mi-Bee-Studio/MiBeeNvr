@@ -835,3 +835,106 @@ func TestFLVGOPCacheSizeNegative(t *testing.T) {
 	require.Contains(t, err.Error(), "streaming.flv.gop_cache_size")
 }
 
+func TestHealthDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.Equal(t, "720h", cfg.Health.EventsRetention, "default events_retention should be 720h (30 days)")
+	require.Equal(t, "5m", cfg.Health.Alerts.Cooldown, "default cooldown should be 5m")
+	require.False(t, cfg.Health.Alerts.MQTT, "default mqtt alerts should be false")
+	require.Equal(t, "30s", cfg.Health.Layer1.OfflineThreshold, "default offline_threshold should be 30s")
+	require.Equal(t, 0.5, cfg.Health.Layer2.BitrateChangeThreshold, "default bitrate_change_threshold should be 0.5")
+	require.Equal(t, 5, cfg.Health.Layer2.MinFPS, "default min_fps should be 5")
+	require.Equal(t, "30s", cfg.Health.Layer2.MaxIDRInterval, "default max_idr_interval should be 30s")
+	require.Equal(t, "10s", cfg.Health.Layer2_5.FreezeTimeout, "default freeze_timeout should be 10s")
+}
+
+func TestHealthValidConfig(t *testing.T) {
+	cfg := &Config{
+		Health: HealthConfig{
+			Enabled: true,
+			EventsRetention: "360h",
+			Alerts: HealthAlertsConfig{
+				Cooldown: "10m",
+				MQTT:     true,
+			},
+			Layer1: HealthLayer1Config{
+				OfflineThreshold: "60s",
+			},
+			Layer2: HealthLayer2Config{
+				BitrateChangeThreshold: 0.3,
+				MinFPS:                 10,
+				MaxIDRInterval:         "15s",
+			},
+			Layer2_5: HealthLayer2_5Config{
+				FreezeTimeout: "20s",
+			},
+		},
+	}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestHealthValidationInvalidEventsRetention(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, EventsRetention: "not-a-duration"}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health.events_retention")
+}
+
+func TestHealthValidationInvalidCooldown(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Alerts: HealthAlertsConfig{Cooldown: "bad"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health.alerts.cooldown")
+}
+
+func TestHealthValidationInvalidOfflineThreshold(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Layer1: HealthLayer1Config{OfflineThreshold: "bad"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health.layer1.offline_threshold")
+}
+
+func TestHealthValidationInvalidBitrateChangeThreshold(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{BitrateChangeThreshold: 1.5}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bitrate_change_threshold")
+}
+
+func TestHealthValidationInvalidMinFPS(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{MinFPS: 0}}}
+	cfg.applyDefaults()
+	cfg.Health.Layer2.MinFPS = 0 // override default
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "min_fps")
+}
+
+func TestHealthValidationInvalidMaxIDRInterval(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{MaxIDRInterval: "bad"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health.layer2.max_idr_interval")
+}
+
+func TestHealthValidationInvalidFreezeTimeout(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2_5: HealthLayer2_5Config{FreezeTimeout: "bad"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health.layer2_5.freeze_timeout")
+}
+
+func TestHealthValidationDisabledSkips(t *testing.T) {
+	cfg := &Config{Health: HealthConfig{Enabled: false, EventsRetention: "bad", Layer1: HealthLayer1Config{OfflineThreshold: "bad"}}}
+	cfg.applyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err, "validation should be skipped when health is disabled")
+}

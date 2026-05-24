@@ -30,6 +30,7 @@ type Config struct {
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
 	RTMP          RTMPConfig         `yaml:"rtmp"`
 	SRT           SRTConfig          `yaml:"srt"`
+	Health        HealthConfig       `yaml:"health"`
 	Version       string              `yaml:"version"`
 }
 
@@ -173,6 +174,35 @@ type RTMPConfig struct {
 	Enabled    *bool             `yaml:"enabled"`    // default false
 	Port       int               `yaml:"port"`       // default 1935
 	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
+}
+
+// HealthConfig configures the camera health monitoring system.
+type HealthConfig struct {
+	Enabled         bool                `yaml:"enabled"`
+	EventsRetention string              `yaml:"events_retention"`
+	Alerts          HealthAlertsConfig  `yaml:"alerts"`
+	Layer1          HealthLayer1Config  `yaml:"layer1"`
+	Layer2          HealthLayer2Config  `yaml:"layer2"`
+	Layer2_5        HealthLayer2_5Config `yaml:"layer2_5"`
+}
+
+type HealthAlertsConfig struct {
+	Cooldown string `yaml:"cooldown"`
+	MQTT     bool   `yaml:"mqtt"`
+}
+
+type HealthLayer1Config struct {
+	OfflineThreshold string `yaml:"offline_threshold"`
+}
+
+type HealthLayer2Config struct {
+	BitrateChangeThreshold float64 `yaml:"bitrate_change_threshold"`
+	MinFPS                 int     `yaml:"min_fps"`
+	MaxIDRInterval         string  `yaml:"max_idr_interval"`
+}
+
+type HealthLayer2_5Config struct {
+	FreezeTimeout string `yaml:"freeze_timeout"`
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -403,6 +433,31 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("srt.streams[%d].address is required for caller mode", i)
 		}
 	}
+
+	// Validate health configuration
+	if cfg.Health.Enabled {
+		if _, err := time.ParseDuration(cfg.Health.EventsRetention); err != nil {
+			return fmt.Errorf("health.events_retention invalid duration: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.Health.Alerts.Cooldown); err != nil {
+			return fmt.Errorf("health.alerts.cooldown invalid duration: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.Health.Layer1.OfflineThreshold); err != nil {
+			return fmt.Errorf("health.layer1.offline_threshold invalid duration: %w", err)
+		}
+		if cfg.Health.Layer2.BitrateChangeThreshold <= 0 || cfg.Health.Layer2.BitrateChangeThreshold > 1 {
+			return fmt.Errorf("health.layer2.bitrate_change_threshold must be between 0 and 1")
+		}
+		if cfg.Health.Layer2.MinFPS < 1 {
+			return fmt.Errorf("health.layer2.min_fps must be >= 1")
+		}
+		if _, err := time.ParseDuration(cfg.Health.Layer2.MaxIDRInterval); err != nil {
+			return fmt.Errorf("health.layer2.max_idr_interval invalid duration: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.Health.Layer2_5.FreezeTimeout); err != nil {
+			return fmt.Errorf("health.layer2_5.freeze_timeout invalid duration: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -548,6 +603,29 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.SRT.Port <= 0 {
 		cfg.SRT.Port = 9000
+	}
+
+	// Health defaults
+	if cfg.Health.EventsRetention == "" {
+		cfg.Health.EventsRetention = "720h" // 30 days
+	}
+	if cfg.Health.Alerts.Cooldown == "" {
+		cfg.Health.Alerts.Cooldown = "5m"
+	}
+	if cfg.Health.Layer1.OfflineThreshold == "" {
+		cfg.Health.Layer1.OfflineThreshold = "30s"
+	}
+	if cfg.Health.Layer2.BitrateChangeThreshold == 0 {
+		cfg.Health.Layer2.BitrateChangeThreshold = 0.5
+	}
+	if cfg.Health.Layer2.MinFPS == 0 {
+		cfg.Health.Layer2.MinFPS = 5
+	}
+	if cfg.Health.Layer2.MaxIDRInterval == "" {
+		cfg.Health.Layer2.MaxIDRInterval = "30s"
+	}
+	if cfg.Health.Layer2_5.FreezeTimeout == "" {
+		cfg.Health.Layer2_5.FreezeTimeout = "10s"
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {
