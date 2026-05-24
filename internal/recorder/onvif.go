@@ -49,6 +49,9 @@ type ONVIFRecorder struct {
 	rtspURL  string // Cached RTSP URL from ONVIF
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *ONVIFRecorder) GetHub() *model.StreamHub { return r.Hub }
+
 // Compile-time check.
 var _ model.Recorder = (*ONVIFRecorder)(nil)
 

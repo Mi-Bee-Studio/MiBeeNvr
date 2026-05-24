@@ -68,6 +68,9 @@ type H265Recorder struct {
 	dropped atomic.Int64
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *H265Recorder) GetHub() *model.StreamHub { return r.Hub }
+
 // VPS returns the current H265 Video Parameter Set NAL unit (without start bytes).
 func (r *H265Recorder) VPS() []byte { return r.vps }
 

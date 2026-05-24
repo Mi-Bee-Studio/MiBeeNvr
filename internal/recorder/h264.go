@@ -89,6 +89,9 @@ type H264Recorder struct {
 	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *H264Recorder) GetHub() *model.StreamHub { return r.Hub }
+
 // SPS returns the current H264 Sequence Parameter Set NAL unit (without start bytes).
 func (r *H264Recorder) SPS() []byte { return r.sps }
 

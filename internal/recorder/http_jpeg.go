@@ -58,6 +58,9 @@ type HTTPJPEGRecorder struct {
 	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *HTTPJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
+
 // incActive increments the active recordings gauge if metrics is available.
 func (r *HTTPJPEGRecorder) incActive() {
 	if r.metrics != nil {

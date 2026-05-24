@@ -57,6 +57,9 @@ type MJPEGRecorder struct {
 	Hub *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *MJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
+
 // incActive increments the active recordings gauge if metrics is available.
 func (r *MJPEGRecorder) incActive() {
 	if r.metrics != nil {

@@ -100,6 +100,9 @@ type XiaomiRecorder struct {
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 }
 
+// GetHub returns the StreamHub for frame fan-out.
+func (r *XiaomiRecorder) GetHub() *model.StreamHub { return r.Hub }
+
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 var _ model.HLSProvider = (*XiaomiRecorder)(nil)
 
