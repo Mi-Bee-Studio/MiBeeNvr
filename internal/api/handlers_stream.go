@@ -8,6 +8,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -64,6 +65,37 @@ func (r *StreamRegistry) ProtocolsForCodec(codec model.Format) []string {
 	for _, h := range r.handlers {
 		if h.CanHandle(codec) {
 			result = append(result, h.Name())
+		}
+	}
+	return result
+}
+
+// ProtocolDetail describes a protocol's availability for the API response.
+type ProtocolDetail struct {
+	Protocol  string
+	Available bool
+	Reason    string
+}
+
+// ProtocolsDetailForCodec returns detailed protocol availability for the given codec.
+// Each handler contributes its availability and optional reason if unavailable.
+func (r *StreamRegistry) ProtocolsDetailForCodec(codec model.Format) []ProtocolDetail {
+	var result []ProtocolDetail
+	for _, h := range r.handlers {
+		if h.CanHandle(codec) {
+			result = append(result, ProtocolDetail{
+				Protocol:  h.Name(),
+				Available: true,
+			})
+		} else if dis, ok := h.(ConditionalHandler); ok {
+			// Handler supports this codec but is conditionally unavailable
+			if dis.SupportedCodec(codec) {
+				result = append(result, ProtocolDetail{
+					Protocol:  h.Name(),
+					Available: false,
+					Reason:    dis.UnavailabilityReason(codec),
+				})
+			}
 		}
 	}
 	return result
@@ -259,6 +291,53 @@ func unwrapDelegate(rec model.Recorder) model.Recorder {
 	}
 }
 
+// getCodecParams extracts codec parameters from a recorder.
+// Uses HLSProvider interface first, then falls back to concrete type access.
+func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
+	if provider, ok := rec.(model.HLSProvider); ok {
+		codec, sps, pps, vps = provider.CodecParams()
+		return
+	}
+
+	actualRec := unwrapDelegate(rec)
+	switch r := actualRec.(type) {
+	case *recorder.H264Recorder:
+		codec = model.FormatH264
+		sps = r.SPS()
+		pps = r.PPS()
+	case *recorder.H265Recorder:
+		codec = model.FormatH265
+		vps = r.VPS()
+		sps = r.SPS()
+		pps = r.PPS()
+	}
+	return
+}
+
+// getStreamHub extracts the StreamHub from a recorder.
+// Returns nil if the recorder doesn't have a Hub or it's not set.
+func getStreamHub(rec model.Recorder) *model.StreamHub {
+	if h, ok := rec.(interface{ GetHub() *model.StreamHub }); ok {
+		return h.GetHub()
+	}
+	actualRec := unwrapDelegate(rec)
+	switch r := actualRec.(type) {
+	case *recorder.H264Recorder:
+		return r.Hub
+	case *recorder.H265Recorder:
+		return r.Hub
+	case *recorder.MJPEGRecorder:
+		return r.Hub
+	case *recorder.HTTPJPEGRecorder:
+		return r.Hub
+	case *recorder.ONVIFRecorder:
+		return r.Hub
+	case *xiaomi.XiaomiRecorder:
+		return r.Hub
+	}
+	return nil
+}
+
 // --- HTTP handler for /api/cameras/{id}/stream/* (HLS proxy) ---
 
 // handleHLSStreamViaRegistry is the registry-based HLS stream handler.
@@ -391,4 +470,45 @@ func (h *FLVStreamHandler) StartStream(camID string, rec model.Recorder, opts St
 
 func (h *FLVStreamHandler) StopStream(camID string) error {
 	return nil // FLV streams stop when client disconnects
+}
+
+// --- ConditionalHandler interface ---
+
+// ConditionalHandler is an optional interface for StreamHandlers that may be
+// unavailable even for supported codecs (e.g., LL-HLS when low-latency is disabled).
+type ConditionalHandler interface {
+	// SupportedCodec returns true if this handler would normally support the codec,
+	// regardless of current availability state.
+	SupportedCodec(codec model.Format) bool
+	// UnavailabilityReason returns a human-readable reason why the protocol is unavailable.
+	UnavailabilityReason(codec model.Format) string
+}
+
+// --- LLHLSStreamHandler ---
+
+// LLHLSStreamHandler implements StreamHandler for Low-Latency HLS.
+// It wraps HLSStreamHandler but is registered separately in the StreamRegistry
+// so the frontend can discover LL-HLS as a distinct protocol.
+// When low-latency is disabled, it appears as unavailable with a reason.
+type LLHLSStreamHandler struct {
+	HLSStreamHandler
+	LowLatencyEnabled bool
+}
+
+func (h *LLHLSStreamHandler) Name() string { return "ll-hls" }
+
+// CanHandle returns true only when low-latency is actually enabled.
+// When disabled, the ConditionalHandler interface provides the "greyed out" UX.
+func (h *LLHLSStreamHandler) CanHandle(codec model.Format) bool {
+	return h.LowLatencyEnabled && (codec == model.FormatH264 || codec == model.FormatH265)
+}
+
+// SupportedCodec returns true for codecs that LL-HLS would support if enabled.
+func (h *LLHLSStreamHandler) SupportedCodec(codec model.Format) bool {
+	return codec == model.FormatH264 || codec == model.FormatH265
+}
+
+// UnavailabilityReason returns why LL-HLS is not available.
+func (h *LLHLSStreamHandler) UnavailabilityReason(_ model.Format) string {
+	return "Enable low-latency HLS in Settings"
 }

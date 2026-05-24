@@ -16,6 +16,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// containsProtocol checks if the protocol list contains a named available protocol.
+func containsProtocol(t *testing.T, protocols []ProtocolDetail, name string) bool {
+	t.Helper()
+	for _, p := range protocols {
+		if p.Protocol == name && p.Available {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUnavailableProtocol checks if the protocol list contains a named unavailable protocol.
+func hasUnavailableProtocol(t *testing.T, protocols []ProtocolDetail, name string) bool {
+	t.Helper()
+	for _, p := range protocols {
+		if p.Protocol == name && !p.Available {
+			return true
+		}
+	}
+	return false
+}
+
 // --- WHEP endpoint tests ---
 
 func TestWHEP_AuthRequired(t *testing.T) {
@@ -224,11 +246,12 @@ func TestCameraProtocols_H264Camera(t *testing.T) {
 	var resp cameraProtocolsResponse
 	require.NoError(t, parseJSONBody(t, rr, &resp))
 	require.Equal(t, "h264", resp.Encoding)
-	require.Contains(t, resp.Protocols, "hls")
-	require.Contains(t, resp.Protocols, "webrtc")
-	require.Contains(t, resp.Protocols, "flv")
-	require.Equal(t, "webrtc", resp.Default) // WebRTC is preferred
+	require.True(t, containsProtocol(t, resp.Protocols, "hls"), "hls should be available")
+	require.True(t, containsProtocol(t, resp.Protocols, "webrtc"), "webrtc should be available")
+	require.True(t, containsProtocol(t, resp.Protocols, "flv"), "flv should be available")
+require.Equal(t, "webrtc", resp.Default) // WebRTC is preferred
 }
+
 
 func TestCameraProtocols_H265Camera(t *testing.T) {
 	t.Helper()
@@ -252,11 +275,12 @@ func TestCameraProtocols_H265Camera(t *testing.T) {
 	var resp cameraProtocolsResponse
 	require.NoError(t, parseJSONBody(t, rr, &resp))
 	require.Equal(t, "h265", resp.Encoding)
-	require.Contains(t, resp.Protocols, "hls")
-	require.Contains(t, resp.Protocols, "flv")
-	require.NotContains(t, resp.Protocols, "webrtc", "WebRTC should not be available for H.265")
-	require.Equal(t, "flv", resp.Default) // FLV is preferred after WebRTC (unavailable)
+	require.True(t, containsProtocol(t, resp.Protocols, "hls"), "hls should be available")
+	require.True(t, containsProtocol(t, resp.Protocols, "flv"), "flv should be available")
+	require.False(t, containsProtocol(t, resp.Protocols, "webrtc"), "WebRTC should not be available for H.265")
+require.Equal(t, "flv", resp.Default) // FLV is preferred after WebRTC (unavailable)
 }
+
 
 func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	t.Helper()
@@ -325,8 +349,9 @@ func TestCameraProtocols_UsesStreamEncoding(t *testing.T) {
 	var resp cameraProtocolsResponse
 	require.NoError(t, parseJSONBody(t, rr, &resp))
 	require.Equal(t, "h264", resp.Encoding)
-	require.Contains(t, resp.Protocols, "hls")
+require.True(t, containsProtocol(t, resp.Protocols, "hls"), "hls should be available")
 }
+
 
 // --- Route wiring verification ---
 
