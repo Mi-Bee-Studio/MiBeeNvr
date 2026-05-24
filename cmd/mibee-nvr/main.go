@@ -531,6 +531,11 @@ func (a *App) buildRouter() http.Handler {
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: a.hlsMgr})
+	// Always register LL-HLS so it appears as greyed-out when disabled
+	reg.Register(&api.LLHLSStreamHandler{
+		HLSStreamHandler:  api.HLSStreamHandler{Mgr: a.hlsMgr},
+		LowLatencyEnabled: cfg.HLS.LowLatency,
+	})
 	if a.webrtcMgr != nil {
 		reg.Register(&api.WebRTCStreamHandler{})
 	}
