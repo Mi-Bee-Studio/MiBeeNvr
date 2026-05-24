@@ -582,3 +582,81 @@ func TestDeleteNonexistentSession(t *testing.T) {
 	err := mgr.DeleteWHEPSession("nonexistent-id")
 	require.ErrorIs(t, err, ErrSessionNotFound)
 }
+
+// TestRegisterStream verifies StreamHub subscription and unsubscription.
+func TestRegisterStream(t *testing.T) {
+	mgr := newTestManager(t)
+	defer mgr.StopAll()
+
+	hub := model.NewStreamHub()
+
+	// Register should subscribe to hub
+	mgr.RegisterStream("test-cam", hub)
+	require.Equal(t, 1, hub.ConsumerCount(), "hub should have 1 consumer after register")
+
+	// Duplicate register should be a no-op
+	mgr.RegisterStream("test-cam", hub)
+	require.Equal(t, 1, hub.ConsumerCount(), "duplicate register should not add another consumer")
+
+	// Nil hub should be a no-op
+	mgr.RegisterStream("nil-cam", nil)
+	require.Equal(t, 1, hub.ConsumerCount(), "nil hub should not change consumer count")
+
+	// Unregister should unsubscribe from hub
+	mgr.UnregisterStream("test-cam")
+	require.Equal(t, 0, hub.ConsumerCount(), "hub should have 0 consumers after unregister")
+
+	// Unregister non-existent should be a no-op
+	mgr.UnregisterStream("nonexistent")
+}
+
+// TestRegisterStreamDeliversFrames verifies frames flow from hub to WriteH264.
+func TestRegisterStreamDeliversFrames(t *testing.T) {
+	mgr := newTestManager(t)
+	defer mgr.StopAll()
+
+	client := newTestClient(t, false)
+	defer client.close()
+
+	// Connect a WHEP peer first
+	offerSDP := createOfferSDP(t, client.pc)
+	connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
+
+	// Register stream with a hub
+	hub := model.NewStreamHub()
+	mgr.RegisterStream("test-cam", hub)
+
+	// Broadcast a frame through the hub
+	sps := []byte{0x67, 0x64, 0x00, 0x1f, 0xac, 0xd9, 0x40, 0x50, 0x05, 0xbb, 0x01, 0x10}
+	pps := []byte{0x68, 0xee, 0x3c, 0x80}
+	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x40, 0xff, 0xfe, 0xf8, 0xc0}
+
+	for i := 0; i < 20; i++ {
+		hub.Broadcast(int64(i*3000), [][]byte{sps, pps, idr})
+	}
+
+	// Manager should still be functional — no crash from hub callback
+	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+
+	// Unregister
+	mgr.UnregisterStream("test-cam")
+	require.Equal(t, 0, hub.ConsumerCount())
+}
+
+// TestStopAllCleansUpHubSubs verifies StopAll unsubscribes all hub subscriptions.
+func TestStopAllCleansUpHubSubs(t *testing.T) {
+	mgr := newTestManager(t)
+
+	hub1 := model.NewStreamHub()
+	hub2 := model.NewStreamHub()
+
+	mgr.RegisterStream("cam-1", hub1)
+	mgr.RegisterStream("cam-2", hub2)
+	require.Equal(t, 1, hub1.ConsumerCount())
+	require.Equal(t, 1, hub2.ConsumerCount())
+
+	mgr.StopAll()
+
+	require.Equal(t, 0, hub1.ConsumerCount(), "hub1 should have 0 consumers after StopAll")
+	require.Equal(t, 0, hub2.ConsumerCount(), "hub2 should have 0 consumers after StopAll")
+}

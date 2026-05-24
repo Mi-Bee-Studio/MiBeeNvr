@@ -49,6 +49,17 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// On-demand StreamHub registration for WebRTC
+	if h.camMgr != nil {
+		rec := h.camMgr.GetRecorder(id)
+		if rec != nil {
+			hub := getStreamHub(rec)
+			if hub != nil {
+				h.webrtcMgr.RegisterStream(id, hub)
+			}
+		}
+	}
+
 	// Create WHEP session
 	answerSDP, sessionID, err := h.webrtcMgr.CreateWHEPSession(id, offerSDP)
 	if err != nil {

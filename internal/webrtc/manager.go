@@ -54,10 +54,17 @@ type Manager struct {
 	mu           sync.RWMutex
 	peers        map[string]*peerEntry // sessionID -> entry
 	camPeers     map[string][]string   // camID -> []sessionID
+	hubSubs      map[string]*hubSubscription // camID -> subscription info
 	api          *webrtc.API
 	maxPeers     int
 	idleTimeout  time.Duration
 	frameBufSize int
+}
+
+// hubSubscription tracks a StreamHub subscription for a camera.
+type hubSubscription struct {
+	hub   *model.StreamHub
+	subID string
 }
 
 // ManagerOption configures a Manager.
@@ -117,6 +124,7 @@ func NewManager(opts ...ManagerOption) *Manager {
 	m := &Manager{
 		peers:        make(map[string]*peerEntry),
 		camPeers:     make(map[string][]string),
+		hubSubs:      make(map[string]*hubSubscription),
 		api:          api,
 		maxPeers:     defaultMaxPeers,
 		idleTimeout:  defaultIdleTimeout,
@@ -134,6 +142,39 @@ func NewManager(opts ...ManagerOption) *Manager {
 // Only H.264 is supported (no H.265, no MJPEG).
 func (m *Manager) CanHandle(codec model.Format) bool {
 	return codec == model.FormatH264
+}
+
+// RegisterStream subscribes to the recorder's StreamHub for live frames.
+// If hub is nil, this is a no-op. Safe to call multiple times for the same camID.
+func (m *Manager) RegisterStream(camID string, hub *model.StreamHub) {
+	if hub == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.hubSubs[camID]; ok {
+		return // already registered
+	}
+	subID := "webrtc-" + camID
+	_ = hub.Subscribe(subID, func(pts int64, au [][]byte) {
+		m.WriteH264(camID, pts, au)
+	})
+	m.hubSubs[camID] = &hubSubscription{hub: hub, subID: subID}
+	logger.Info("WebRTC stream registered", "camera_id", camID)
+}
+
+// UnregisterStream unsubscribes from the recorder's StreamHub.
+func (m *Manager) UnregisterStream(camID string) {
+	m.mu.Lock()
+	sub, ok := m.hubSubs[camID]
+	if ok {
+		delete(m.hubSubs, camID)
+	}
+	m.mu.Unlock()
+	if ok {
+		sub.hub.Unsubscribe(sub.subID)
+		logger.Info("WebRTC stream unregistered", "camera_id", camID)
+	}
 }
 
 // WriteH264 queues an H.264 access unit for async writing to all WHEP peers
@@ -326,8 +367,22 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 	if len(m.camPeers[entry.camID]) == 0 {
 		delete(m.camPeers, entry.camID)
 	}
+	camID := entry.camID
 	m.mu.Unlock()
 
+	// Check if we should unregister from StreamHub
+	if _, ok := m.hubSubs[camID]; ok {
+		// Schedule cleanup — don't unsubscribe immediately in case a new peer connects
+		go func() {
+			time.Sleep(5 * time.Second)
+			m.mu.RLock()
+			remaining := len(m.camPeers[camID])
+			m.mu.RUnlock()
+			if remaining == 0 {
+				m.UnregisterStream(camID)
+			}
+	}()
+	}
 	// Clean up outside the lock to avoid deadlock with OnConnectionStateChange
 	entry.cancel()
 	if entry.pc != nil {
@@ -360,6 +415,12 @@ func (m *Manager) StopAll() {
 		entries = append(entries, entry)
 		delete(m.peers, sid)
 	}
+	// Collect hub subscriptions to clean up outside lock
+	hubSubs := make(map[string]*hubSubscription)
+	for id, sub := range m.hubSubs {
+		hubSubs[id] = sub
+	}
+	m.hubSubs = make(map[string]*hubSubscription)
 	m.camPeers = make(map[string][]string)
 	m.mu.Unlock()
 
@@ -369,6 +430,11 @@ func (m *Manager) StopAll() {
 		if entry.pc != nil {
 			_ = entry.pc.Close()
 		}
+	}
+
+	// Unsubscribe from all StreamHubs
+	for _, sub := range hubSubs {
+		sub.hub.Unsubscribe(sub.subID)
 	}
 }
 
