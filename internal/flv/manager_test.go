@@ -22,12 +22,12 @@ func newTestManager(t *testing.T) *Manager {
 	return NewManager(WithMaxViewers(3), WithWriteBufSize(10))
 }
 
-// newTestManagerWithHub creates a Manager with a StreamHub for integration testing.
-func newTestManagerWithHub(t *testing.T) (*Manager, *model.StreamHub) {
+// newTestManagerWithHub creates a Manager and a StreamHub for integration testing.
+// The hub is passed to RegisterStream per-stream, not set on the Manager.
+	func newTestManagerWithHub(t *testing.T) (*Manager, *model.StreamHub) {
 	t.Helper()
 	hub := model.NewStreamHub()
 	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(10))
-	mgr.SetStreamHub(hub)
 	return mgr, hub
 }
 
@@ -198,30 +198,30 @@ func TestVideoFrameTag_NonKeyframe(t *testing.T) {
 
 func TestRegisterStream_H264(t *testing.T) {
 	mgr := newTestManager(t)
-	err := mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	err := mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 	require.NoError(t, err)
 	require.True(t, mgr.IsActive("cam1"))
 }
 
 func TestRegisterStream_H265(t *testing.T) {
 	mgr := newTestManager(t)
-	err := mgr.RegisterStream("cam1", model.FormatH265, minimalH265SPS, minimalH265PPS, minimalVPS)
+	err := mgr.RegisterStream("cam1", model.FormatH265, minimalH265SPS, minimalH265PPS, minimalVPS, nil)
 	require.NoError(t, err)
 	require.True(t, mgr.IsActive("cam1"))
 }
 
 func TestRegisterStream_Duplicate(t *testing.T) {
 	mgr := newTestManager(t)
-	err := mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	err := mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 	require.NoError(t, err)
 
-	err = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	err = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 	require.ErrorIs(t, err, ErrStreamExists)
 }
 
 func TestUnregisterStream(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 	require.True(t, mgr.IsActive("cam1"))
 
 	mgr.UnregisterStream("cam1")
@@ -238,7 +238,7 @@ func TestUnregisterStream_NotActive(t *testing.T) {
 
 func TestMaxViewers_Enforced(t *testing.T) {
 	mgr := NewManager(WithMaxViewers(2), WithWriteBufSize(10))
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// First 2 viewers should succeed
 	for i := 0; i < 2; i++ {
@@ -266,7 +266,7 @@ func TestMaxViewers_Enforced(t *testing.T) {
 
 func TestClientDisconnect_Cleanup(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -296,7 +296,7 @@ func TestClientDisconnect_Cleanup(t *testing.T) {
 
 func TestNonBlockingWrite_DropsFrames(t *testing.T) {
 	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(2)) // tiny buffer
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Start a viewer that never reads (blocking writer)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -338,7 +338,7 @@ func TestWriteH265_InactiveStream(t *testing.T) {
 
 func TestGOPCache_NewClientGetsCachedKeyframe(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Write IDR (keyframe) + P-frames
 	mgr.WriteH264("cam1", 0, [][]byte{idrNALU})          // IDR - should be cached
@@ -390,7 +390,7 @@ func TestGOPCache_NewClientGetsCachedKeyframe(t *testing.T) {
 
 func TestGOPCache_UpdatedOnNewKeyframe(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Write first keyframe + deltas
 	mgr.WriteH264("cam1", 0, [][]byte{idrNALU})
@@ -428,7 +428,7 @@ func TestServeFLV_StreamNotActive(t *testing.T) {
 
 func TestServeFLV_SetsCorrectHeaders(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -449,7 +449,7 @@ func TestServeFLV_SetsCorrectHeaders(t *testing.T) {
 
 func TestServeFLV_WritesFLVHeader(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -479,10 +479,10 @@ func TestServeFLV_WritesFLVHeader(t *testing.T) {
 
 func TestStreamHubIntegration_SubscribeOnFirstViewer(t *testing.T) {
 	mgr, hub := newTestManagerWithHub(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, hub)
 
-	// No viewers yet — hub should have no consumer
-	require.Equal(t, 0, hub.ConsumerCount())
+	// After registration with hub, consumer should be subscribed immediately
+	require.Equal(t, 1, hub.ConsumerCount())
 
 	// Start a viewer
 	ctx, cancel := context.WithCancel(context.Background())
@@ -495,15 +495,11 @@ func TestStreamHubIntegration_SubscribeOnFirstViewer(t *testing.T) {
 		_ = mgr.ServeFLV("cam1", w, r)
 	}()
 
-	// After viewer connects, hub should have a consumer
-	require.Eventually(t, func() bool {
-		return hub.ConsumerCount() > 0
-	}, 2*time.Second, 50*time.Millisecond)
-
 	cancel()
 	<-viewerDone
 
-	// After disconnect, consumer should be cleaned up
+	// After unregister, consumer should be cleaned up
+	mgr.UnregisterStream("cam1")
 	require.Eventually(t, func() bool {
 		return hub.ConsumerCount() == 0
 	}, 2*time.Second, 50*time.Millisecond)
@@ -513,7 +509,7 @@ func TestStreamHubIntegration_SubscribeOnFirstViewer(t *testing.T) {
 
 func TestViewerCount(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	require.Equal(t, 0, mgr.ViewerCount("cam1"))
 
@@ -549,7 +545,7 @@ func TestViewerCount_InactiveStream(t *testing.T) {
 
 func TestConcurrentWrites(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	var wg sync.WaitGroup
 	for g := 0; g < 5; g++ {
@@ -569,8 +565,8 @@ func TestConcurrentWrites(t *testing.T) {
 
 func TestStopAll(t *testing.T) {
 	mgr := newTestManager(t)
-	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil)
-	_ = mgr.RegisterStream("cam2", model.FormatH264, minimalSPS, minimalPPS, nil)
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
+	_ = mgr.RegisterStream("cam2", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	require.True(t, mgr.IsActive("cam1"))
 	require.True(t, mgr.IsActive("cam2"))

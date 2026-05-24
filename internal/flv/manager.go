@@ -45,6 +45,8 @@ type streamEntry struct {
 	viewerMu   sync.Mutex
 	frameCh    chan frameMsg
 	cancel     context.CancelFunc
+	hub        *model.StreamHub
+	hubSubID   string
 }
 
 type frameMsg struct {
@@ -69,7 +71,6 @@ type Manager struct {
 	streams      map[string]*streamEntry
 	maxViewers   int
 	writeBufSize int
-	hub          *model.StreamHub
 }
 
 // Option configures a Manager.
@@ -106,15 +107,9 @@ func NewManager(opts ...Option) *Manager {
 	return m
 }
 
-// SetStreamHub sets the StreamHub for auto-subscribe/unsubscribe.
-func (m *Manager) SetStreamHub(hub *model.StreamHub) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.hub = hub
-}
-
 // RegisterStream registers a camera stream for FLV output.
-func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte) error {
+// The recorder's StreamHub is used to receive live frames.
+func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -141,12 +136,22 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		viewers:   make(map[int64]*viewerConn),
 		frameCh:   make(chan frameMsg, m.writeBufSize),
 		cancel:    cancel,
+		hub:       hub,
+	}
+
+	// Subscribe to recorder's StreamHub for live frames
+	if hub != nil {
+		hubSubID := "flv-" + camID
+		entry.hubSubID = hubSubID
+		_ = hub.Subscribe(hubSubID, func(pts int64, au [][]byte) {
+			m.writeFrame(camID, pts, au)
+		})
 	}
 
 	m.streams[camID] = entry
 	go m.writeLoop(ctx, camID, entry)
 
-	flvLogger.Info("FLV stream registered", "camera_id", camID, "codec", string(codec))
+	flvLogger.Info("FLV stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
 	return nil
 }
 
@@ -160,6 +165,10 @@ func (m *Manager) UnregisterStream(camID string) {
 	m.mu.Unlock()
 
 	if ok {
+	// Unsubscribe from recorder's StreamHub
+		if entry.hub != nil && entry.hubSubID != "" {
+			entry.hub.Unsubscribe(entry.hubSubID)
+		}
 		entry.cancel()
 		entry.viewerMu.Lock()
 		for _, v := range entry.viewers {
@@ -357,39 +366,12 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 	entry.viewers[viewerID] = viewer
 	entry.viewerMu.Unlock()
 
-	// Subscribe to StreamHub if configured
-	var hubConsumerID string
-	m.mu.RLock()
-	hub := m.hub
-	m.mu.RUnlock()
-	if hub != nil {
-		hubConsumerID = "flv-" + camID
-		_ = hub.Subscribe(hubConsumerID, func(pts int64, au [][]byte) {
-			if len(au) == 0 {
-				return
-			}
-			_ = isKeyframeNALU(au[0])
-			// Reuse writeFrame path for proper GOP caching
-			m.writeFrame(camID, pts, au)
-		})
-	}
-
 	// Cleanup on exit
 	defer func() {
 		entry.viewerMu.Lock()
 		delete(entry.viewers, viewerID)
 		close(viewer.done)
 		entry.viewerMu.Unlock()
-
-		// Unsubscribe from StreamHub if this was the last viewer
-		if hub != nil && hubConsumerID != "" {
-			entry.viewerMu.Lock()
-			remaining := len(entry.viewers)
-			entry.viewerMu.Unlock()
-			if remaining == 0 {
-				hub.Unsubscribe(hubConsumerID)
-			}
-		}
 
 		flvLogger.Debug("FLV viewer disconnected", "camera_id", camID, "viewer_id", viewerID)
 	}()

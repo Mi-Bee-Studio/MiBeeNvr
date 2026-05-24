@@ -31,6 +31,34 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// On-demand registration: if FLV stream not registered, register it
+	if !h.flvMgr.IsActive(id) {
+		if h.camMgr == nil {
+			writeError(w, http.StatusNotFound, "FLV stream not active")
+			return
+		}
+		rec := h.camMgr.GetRecorder(id)
+		if rec == nil {
+			writeError(w, http.StatusBadRequest, "camera recorder not running")
+			return
+		}
+
+		codec, sps, pps, vps := getCodecParams(rec)
+		if sps == nil || pps == nil {
+			writeError(w, http.StatusServiceUnavailable, "waiting for video stream")
+			return
+		}
+
+		hub := getStreamHub(rec)
+		if err := h.flvMgr.RegisterStream(id, codec, sps, pps, vps, hub); err != nil {
+			if !errors.Is(err, flv.ErrStreamExists) {
+				logger.Error("failed to register FLV stream", "camera_id", id, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to register FLV stream")
+				return
+			}
+		}
+	}
+
 	// Serve FLV stream (blocks until client disconnects)
 	if err := h.flvMgr.ServeFLV(id, w, r); err != nil {
 		if errors.Is(err, flv.ErrStreamNotActive) {
