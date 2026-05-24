@@ -39,7 +39,6 @@ let streamingWebrtcMaxViewers = $state(4);
 let streamingWebrtcIdleTimeout = $state('5m');
 let streamingFlvEnabled = $state(true);
 let streamingFlvMaxViewers = $state(10);
-let streamingFlvGopCache = $state(100);
 let streamingHlsLlHls = $state(false);
 let streamingRtmpEnabled = $state(false);
 let streamingRtmpPort = $state(1935);
@@ -47,6 +46,12 @@ let streamingSrtEnabled = $state(false);
 let streamingSrtPort = $state(9000);
 let streamingSaving = $state(false);
 let expandedProtocolDoc = $state<string | null>(null);
+
+// RTMP stream key mappings
+let rtmpStreamKeys = $state<{key: string, cameraId: string}[]>([]);
+
+// SRT stream configurations
+let srtStreams = $state<{streamId: string, cameraId: string, mode: string, address: string, passphrase: string}[]>([]);
 
 
 // Feature toggles state
@@ -82,8 +87,9 @@ let isDirty = $derived(() => {
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
-      streamingFlvGopCache, streamingHlsLlHls, streamingRtmpEnabled,
+      streamingHlsLlHls, streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
+      rtmpStreamKeys, srtStreams,
     });
     if (current !== originalSnapshot) return true;
     if (JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags)) return true;
@@ -177,8 +183,9 @@ function getAffectedCameraCount(protocol: string): number {
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
       streamingDefaultProtocol, streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
-      streamingFlvGopCache, streamingHlsLlHls, streamingRtmpEnabled,
+      streamingHlsLlHls, streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
+      rtmpStreamKeys, srtStreams,
     });
     originalRetentionDays = retentionDays;
     originalFeatureFlags = { ...featureFlags };
@@ -266,16 +273,23 @@ function getAffectedCameraCount(protocol: string): number {
           enabled: streamingFlvEnabled,
           max_viewers: streamingFlvMaxViewers,
           idle_timeout: '5m',
-          gop_cache_size: streamingFlvGopCache,
         },
         hls: { low_latency: streamingHlsLlHls },
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,
+          stream_keys: Object.fromEntries(rtmpStreamKeys.map(sk => [sk.key, sk.cameraId])),
         },
         srt: {
           enabled: streamingSrtEnabled,
           port: streamingSrtPort,
+          streams: srtStreams.map(s => ({
+            stream_id: s.streamId,
+            camera_id: s.cameraId,
+            mode: s.mode,
+            address: s.address,
+            passphrase: s.passphrase,
+          })),
         },
       });
 
@@ -373,12 +387,27 @@ function getAffectedCameraCount(protocol: string): number {
       streamingWebrtcIdleTimeout = config.webrtc?.idle_timeout || '5m';
       streamingFlvEnabled = config.flv?.enabled ?? true;
       streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
-      streamingFlvGopCache = config.flv?.gop_cache_size ?? 100;
       streamingHlsLlHls = config.hls?.low_latency ?? false;
       streamingRtmpEnabled = config.rtmp?.enabled ?? false;
       streamingRtmpPort = config.rtmp?.port ?? 1935;
+      // Load RTMP stream keys from map to array
+      const rtmpKeys = config.rtmp?.stream_keys;
+      rtmpStreamKeys = rtmpKeys
+        ? Object.entries(rtmpKeys).map(([key, cameraId]) => ({ key, cameraId: String(cameraId) }))
+        : [];
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
+      // Load SRT streams
+      const srtStreamList = config.srt?.streams;
+      srtStreams = srtStreamList
+        ? srtStreamList.map((s) => ({
+            streamId: s.stream_id || '',
+            cameraId: s.camera_id || '',
+            mode: s.mode || 'listener',
+            address: s.address || '',
+            passphrase: s.passphrase || '',
+          }))
+        : [];
     } catch (e) { console.warn('Failed to load streaming settings:', e); }
     captureSnapshot();
   }
@@ -397,16 +426,23 @@ function getAffectedCameraCount(protocol: string): number {
           enabled: streamingFlvEnabled,
           max_viewers: streamingFlvMaxViewers,
           idle_timeout: '5m',
-          gop_cache_size: streamingFlvGopCache,
         },
         hls: { low_latency: streamingHlsLlHls },
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,
+          stream_keys: Object.fromEntries(rtmpStreamKeys.map(sk => [sk.key, sk.cameraId])),
         },
         srt: {
           enabled: streamingSrtEnabled,
           port: streamingSrtPort,
+          streams: srtStreams.map(s => ({
+            stream_id: s.streamId,
+            camera_id: s.cameraId,
+            mode: s.mode,
+            address: s.address,
+            passphrase: s.passphrase,
+          })),
         },
       });
       showToast(t('settings.streaming.saved'), 'success');
@@ -820,11 +856,6 @@ function getAffectedCameraCount(protocol: string): number {
                 <label for="flvMaxViewers" class="input-label">{t('settings.streaming.flv.maxViewers')}</label>
                 <input id="flvMaxViewers" type="number" class="input" bind:value={streamingFlvMaxViewers} min="1" max="50" />
               </div>
-              <div>
-                <label for="flvGopCache" class="input-label">{t('settings.streaming.flv.gopCache')}</label>
-                <input id="flvGopCache" type="number" class="input" bind:value={streamingFlvGopCache} min="0" max="1000" />
-                <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.flv.gopCacheHint')}</p>
-              </div>
             </div>
           </div>
 
@@ -880,6 +911,35 @@ function getAffectedCameraCount(protocol: string): number {
                 <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.rtmp.pushHint')}</p>
               </div>
             </div>
+
+            <!-- RTMP Stream Key Mappings (visible when enabled) -->
+            {#if streamingRtmpEnabled}
+              <div class="mt-4 pt-4 border-t th-border">
+                <h5 class="text-sm font-medium th-text-primary mb-1">{t('settings.streaming.rtmp.streamKeys')}</h5>
+                <p class="text-xs th-text-tertiary mb-3">{t('settings.streaming.rtmp.streamKeysHint')}</p>
+                {#if rtmpStreamKeys.length > 0}
+                  <div class="space-y-2">
+                    {#each rtmpStreamKeys as entry, i}
+                      <div class="flex items-center gap-2">
+                        <div class="flex-1 grid grid-cols-2 gap-2">
+                          <input type="text" class="input text-sm" placeholder={t('settings.streaming.rtmp.streamKey')} bind:value={entry.key} />
+                          <input type="text" class="input text-sm" placeholder={t('settings.streaming.rtmp.cameraId')} bind:value={entry.cameraId} />
+                        </div>
+                        <button type="button" class="p-1.5 rounded-md th-text-tertiary hover:text-red-400 transition-colors" onclick={() => { rtmpStreamKeys.splice(i, 1); rtmpStreamKeys = [...rtmpStreamKeys]; }} title={t('common.dismiss')}>
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                      </div>
+                      {#if entry.key}
+                        <p class="text-xs th-text-tertiary">{t('settings.streaming.rtmp.pushUrl')}: <code class="th-bg-tertiary px-1 py-0.5 rounded text-xs">rtmp://host:{streamingRtmpPort}/live/{entry.key}</code></p>
+                      {/if}
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="text-xs th-text-tertiary italic">{t('settings.streaming.rtmp.noKeys')}</p>
+                {/if}
+                <button type="button" class="mt-3 text-xs font-medium text-blue-500 hover:text-blue-400 transition-colors" onclick={() => { rtmpStreamKeys = [...rtmpStreamKeys, { key: '', cameraId: '' }]; }}>+ {t('settings.streaming.rtmp.addKey')}</button>
+              </div>
+            {/if}
           </div>
 
           <!-- SRT Receiver -->
@@ -910,6 +970,55 @@ function getAffectedCameraCount(protocol: string): number {
                 <p class="text-xs th-text-tertiary mt-6">{t('settings.streaming.srt.hint')}</p>
               </div>
             </div>
+
+            <!-- SRT Stream Configurations (visible when enabled) -->
+            {#if streamingSrtEnabled}
+              <div class="mt-4 pt-4 border-t th-border">
+                <h5 class="text-sm font-medium th-text-primary mb-1">{t('settings.streaming.srt.streams')}</h5>
+                <p class="text-xs th-text-tertiary mb-3">{t('settings.streaming.srt.streamsHint')}</p>
+                {#if srtStreams.length > 0}
+                  <div class="space-y-3">
+                    {#each srtStreams as stream, i}
+                      <div class="p-3 rounded-lg th-bg-secondary border th-border">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.streamId')}</label>
+                            <input type="text" class="input text-sm mt-1" placeholder="live/my-stream" bind:value={stream.streamId} />
+                          </div>
+                          <div>
+                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.cameraId')}</label>
+                            <input type="text" class="input text-sm mt-1" placeholder="front-door" bind:value={stream.cameraId} />
+                          </div>
+                          <div>
+                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.mode')}</label>
+                            <select class="input text-sm mt-1" bind:value={stream.mode}>
+                              <option value="listener">{t('settings.streaming.srt.modeListener')}</option>
+                              <option value="caller">{t('settings.streaming.srt.modeCaller')}</option>
+                            </select>
+                          </div>
+                          {#if stream.mode === 'caller'}
+                            <div>
+                              <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.address')}</label>
+                              <input type="text" class="input text-sm mt-1" placeholder="192.168.1.100:9000" bind:value={stream.address} />
+                            </div>
+                          {/if}
+                          <div>
+                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.passphrase')}</label>
+                            <input type="password" class="input text-sm mt-1" placeholder="......" bind:value={stream.passphrase} />
+                          </div>
+                        </div>
+                        <div class="flex justify-end mt-2">
+                          <button type="button" class="text-xs th-text-tertiary hover:text-red-400 transition-colors" onclick={() => { srtStreams.splice(i, 1); srtStreams = [...srtStreams]; }}>{t('common.dismiss')}</button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="text-xs th-text-tertiary italic">{t('settings.streaming.srt.noStreams')}</p>
+                {/if}
+                <button type="button" class="mt-3 text-xs font-medium text-blue-500 hover:text-blue-400 transition-colors" onclick={() => { srtStreams = [...srtStreams, { streamId: '', cameraId: '', mode: 'listener', address: '', passphrase: '' }]; }}>+ {t('settings.streaming.srt.addStream')}</button>
+              </div>
+            {/if}
           </div>
 
           <!-- Resource Usage Estimates -->

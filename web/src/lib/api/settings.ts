@@ -37,11 +37,21 @@ export interface HLSStreamingConfig {
 export interface RTMPConfig {
   enabled: boolean;
   port: number;
+  stream_keys?: Record<string, string>; // stream_key → camera_id
+}
+
+export interface SRTStreamConfig {
+  stream_id: string;
+  camera_id: string;
+  mode: string;       // "listener" or "caller"
+  address: string;
+  passphrase: string;
 }
 
 export interface SRTConfig {
   enabled: boolean;
   port: number;
+  streams?: SRTStreamConfig[];
 }
 
 export interface StreamingConfig {

@@ -136,6 +136,9 @@ export type {
   StreamingConfig,
   WebRTCConfig,
   FLVStreamingConfig,
+  RTMPConfig,
+  SRTStreamConfig,
+  SRTConfig,
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync
