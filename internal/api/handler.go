@@ -65,6 +65,20 @@ type NetworkStats struct {
 	BytesRecv uint64 `json:"bytes_recv"`
 }
 
+// capabilitiesResponse is the response for GET /api/capabilities.
+type capabilitiesResponse struct {
+	Ingest ingestCapabilities `json:"ingest"`
+}
+
+type ingestCapabilities struct {
+	RTMP *protocolCapability `json:"rtmp,omitempty"`
+	SRT  *protocolCapability `json:"srt,omitempty"`
+}
+
+type protocolCapability struct {
+	Enabled bool `json:"enabled"`
+	Port    int  `json:"port"`
+}
 type snapshotCache struct {
 	data      []byte
 	timestamp time.Time
@@ -107,6 +121,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(rl)
 		r.Get("/api/health", h.handleHealth)
 		r.Get("/api/readyz", h.handleReadyz)
+		r.Get("/api/capabilities", h.handleCapabilities)
 	})
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
@@ -301,9 +316,9 @@ func (h *Handler) SetHealthManager(mgr HealthManager) {
 
 // cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
 type cameraProtocolsResponse struct {
-	Protocols []string `json:"protocols"`
-	Encoding  string   `json:"encoding"`
-	Default   string   `json:"default"`
+	Protocols []ProtocolDetail `json:"protocols"`
+	Encoding  string           `json:"encoding"`
+	Default   string           `json:"default"`
 }
 
 // handleCameraProtocols handles GET /api/cameras/{id}/protocols.
@@ -327,25 +342,35 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = cam.StreamEncoding
 	}
 
-	var protocols []string
+	var protocols []ProtocolDetail
 	if h.streamRegistry != nil {
-		protocols = h.streamRegistry.ProtocolsForCodec(model.Format(encoding))
+		protocols = h.streamRegistry.ProtocolsDetailForCodec(model.Format(encoding))
 	}
 	if protocols == nil {
-		protocols = []string{}
+		protocols = []ProtocolDetail{}
 	}
 
-	// Determine default protocol preference
+	// Determine default protocol: prefer user-configured default, then fallback order
 	defaultProto := ""
-	for _, preferred := range []string{"webrtc", "flv", "hls"} {
+	if h.config != nil && h.config.Streaming.DefaultProtocol != "" {
 		for _, p := range protocols {
-			if p == preferred {
-				defaultProto = preferred
+			if p.Protocol == h.config.Streaming.DefaultProtocol && p.Available {
+				defaultProto = h.config.Streaming.DefaultProtocol
 				break
 			}
 		}
-		if defaultProto != "" {
-			break
+	}
+	if defaultProto == "" {
+		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls"} {
+			for _, p := range protocols {
+				if p.Protocol == preferred && p.Available {
+					defaultProto = preferred
+					break
+				}
+			}
+			if defaultProto != "" {
+				break
+			}
 		}
 	}
 
@@ -354,4 +379,36 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		Encoding:  encoding,
 		Default:   defaultProto,
 	})
+}
+
+// handleCapabilities handles GET /api/capabilities.
+// It returns the server's ingest capabilities (RTMP, SRT).
+func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	resp := capabilitiesResponse{}
+	
+	if h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled {
+		resp.Ingest.RTMP = &protocolCapability{
+			Enabled: true,
+			Port:    h.config.RTMP.Port,
+		}
+	} else {
+		resp.Ingest.RTMP = &protocolCapability{
+			Enabled: false,
+			Port:    h.config.RTMP.Port,
+		}
+	}
+	
+	if h.config.SRT.Enabled != nil && *h.config.SRT.Enabled {
+		resp.Ingest.SRT = &protocolCapability{
+			Enabled: true,
+			Port:    h.config.SRT.Port,
+		}
+	} else {
+		resp.Ingest.SRT = &protocolCapability{
+			Enabled: false,
+			Port:    h.config.SRT.Port,
+		}
+	}
+	
+	writeJSON(w, http.StatusOK, resp)
 }
