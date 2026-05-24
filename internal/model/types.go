@@ -125,6 +125,54 @@ const (
 	StatusReconnecting RecorderStatus = "reconnecting"
 )
 
+// HealthStatus represents the health status of a camera or component.
+type HealthStatus string
+
+// Health status constants.
+const (
+	HealthStatusHealthy HealthStatus = "healthy"
+	HealthStatusWarning HealthStatus = "warning"
+	HealthStatusError   HealthStatus = "error"
+	HealthStatusUnknown HealthStatus = "unknown"
+)
+
+// HealthEventType represents the type of a health monitoring event.
+type HealthEventType string
+
+// Health event type constants.
+const (
+	HealthEventConnectionLost     HealthEventType = "connection_lost"
+	HealthEventConnectionRestored HealthEventType = "connection_restored"
+	HealthEventStreamAnomaly      HealthEventType = "stream_anomaly"
+	HealthEventFreezeDetected     HealthEventType = "freeze_detected"
+	HealthEventFreezeRecovered    HealthEventType = "freeze_recovered"
+)
+
+// HealthEvent represents a single health monitoring event.
+type HealthEvent struct {
+	ID        int64          `json:"id"`
+	CameraID  string         `json:"camera_id"`
+	EventType string         `json:"event_type"`
+	Status    string         `json:"status"`
+	Message   string         `json:"message,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt string         `json:"created_at"`
+}
+
+// CameraHealth represents the current health status of a camera.
+type CameraHealth struct {
+	CameraID  string       `json:"camera_id"`
+	Status    string       `json:"status"`
+	LastEvent *HealthEvent `json:"last_event,omitempty"`
+	UpdatedAt string       `json:"updated_at"`
+}
+
+// HealthReporter is the interface for reporting health events.
+// Implementations must be safe for concurrent use.
+type HealthReporter interface {
+	ReportHealth(cameraID string, event HealthEvent)
+}
+
 // Protocol implementations
 const (
 	ProtoRTSPH264  Protocol = "rtsp_h264"
