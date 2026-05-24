@@ -152,3 +152,19 @@ export type {
   XiaomiDevicesResponse,
   XiaomiAuthResponse,
 } from './xiaomi';
+
+// Health — camera health status and events
+export {
+  getHealthStatus,
+  getHealthEvents,
+  getCameraHealth,
+} from './health';
+export type {
+  HealthStatus,
+  HealthEventType,
+  HealthEvent,
+  CameraHealth,
+  HealthStatusResponse,
+  HealthEventsResponse,
+  HealthEventsParams,
+} from './health';
