@@ -526,6 +526,7 @@ func (a *App) buildRouter() http.Handler {
 	// Wire streaming managers
 	handler.SetWebRTCManager(a.webrtcMgr)
 	handler.SetFLVManager(a.flvMgr)
+	handler.SetHealthManager(a.healthMgr)
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

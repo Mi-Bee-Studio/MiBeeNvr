@@ -292,6 +292,11 @@ func (h *Handler) SetFLVManager(mgr *flv.Manager) {
 	h.flvMgr = mgr
 }
 
+// SetHealthManager sets the health manager on the handler.
+func (h *Handler) SetHealthManager(mgr HealthManager) {
+	h.healthMgr = mgr
+}
+
 // --- Per-camera streaming protocols endpoint ---
 
 // cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
