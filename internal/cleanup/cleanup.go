@@ -18,12 +18,14 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db            *storage.DB
-	store         *storage.Manager
-	retention     time.Duration
-	diskThreshold int // percent
-	interval      time.Duration
-	metrics        *metrics.Metrics
+	db              *storage.DB
+	store           *storage.Manager
+	retention       time.Duration
+	diskThreshold   int // percent
+	interval        time.Duration
+	metrics         *metrics.Metrics
+	healthEnabled   bool
+	healthRetention time.Duration
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -49,6 +51,12 @@ func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.Cleanu
 		metrics:       m,
 	}, nil
 }
+
+// SetHealthConfig enables or disables health event retention cleanup.
+func (cm *CleanupManager) SetHealthConfig(enabled bool, retention time.Duration) {
+	cm.healthEnabled = enabled
+	cm.healthRetention = retention
+}
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
@@ -67,7 +75,7 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce performs a single cleanup pass: time-based, archived, then disk-threshold.
+// RunOnce performs a single cleanup pass: time-based, archived, disk-threshold, then health retention.
 func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	if err := cm.timeBasedCleanup(ctx); err != nil {
 		logger.Error("time-based cleanup error", "error", err)
@@ -76,6 +84,7 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	if err := cm.diskThresholdCleanup(ctx); err != nil {
 		logger.Error("disk-threshold cleanup error", "error", err)
 	}
+	cm.healthRetentionCleanup(ctx)
 	return nil
 }
 
@@ -238,5 +247,24 @@ func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {
 			}
 			logger.Info("cleaned up empty archive group", "camera_id", cam.ID)
 		}
+	}
+}
+
+// healthRetentionCleanup deletes expired health events older than the retention period.
+func (cm *CleanupManager) healthRetentionCleanup(ctx context.Context) {
+	if !cm.healthEnabled {
+		return
+	}
+	if cm.healthRetention <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-cm.healthRetention)
+	deleted, err := cm.db.DeleteHealthEventsBefore(ctx, cutoff)
+	if err != nil {
+		logger.Warn("health event retention cleanup failed", "error", err)
+		return
+	}
+	if deleted > 0 {
+		logger.Info("health events cleaned up", "deleted", deleted)
 	}
 }

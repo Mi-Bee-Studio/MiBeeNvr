@@ -487,6 +487,14 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("cleanup: %w", err)
 	}
+	if cfg.Health.Enabled {
+		healthRetention, err := time.ParseDuration(cfg.Health.EventsRetention)
+		if err != nil {
+			slog.Warn("invalid health events_retention, disabling health cleanup", "error", err)
+		} else {
+			a.cleanupMgr.SetHealthConfig(true, healthRetention)
+		}
+	}
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {

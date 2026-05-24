@@ -360,3 +360,92 @@ func TestRun_ContextCancellation(t *testing.T) {
 		t.Fatal("Run did not stop after context cancellation")
 	}
 }
+
+func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	// Enable health with 1 hour retention
+	cm.SetHealthConfig(true, time.Hour)
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Insert old health events (2 hours ago - past retention)
+	for i := 0; i < 3; i++ {
+		event := model.HealthEvent{
+			CameraID: "cam1",
+			EventType: "offline",
+			Status: "critical",
+			Message: "camera disconnected",
+			CreatedAt: now.Add(-2 * time.Hour),
+		}
+		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
+	}
+
+	// Insert recent health events (30 min ago - within retention)
+	for i := 0; i < 2; i++ {
+		event := model.HealthEvent{
+			CameraID: "cam1",
+			EventType: "online",
+			Status: "ok",
+			Message: "camera reconnected",
+			CreatedAt: now.Add(-30 * time.Minute),
+		}
+		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
+	}
+
+	// Run cleanup
+	err = cm.RunOnce(ctx)
+	require.NoError(t, err)
+
+	// Verify: only recent events remain
+	filter := storage.HealthEventsFilter{CameraID: "cam1"}
+	events, total, err := env.db.ListHealthEvents(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 2, total, "expected 2 recent events to remain")
+	require.Len(t, events, 2)
+	for _, e := range events {
+		require.Equal(t, "online", e.EventType, "remaining events should be recent online events")
+	}
+}
+
+func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	// Health disabled (default)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Insert old health events
+	for i := 0; i < 3; i++ {
+		event := model.HealthEvent{
+			CameraID: "cam1",
+			EventType: "offline",
+			Status: "critical",
+			Message: "camera disconnected",
+			CreatedAt: now.Add(-48 * time.Hour),
+		}
+		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
+	}
+
+	// Run cleanup
+	err = cm.RunOnce(ctx)
+	require.NoError(t, err)
+
+	// Verify: all events still exist (health cleanup skipped)
+	filter := storage.HealthEventsFilter{CameraID: "cam1"}
+	_, total, err := env.db.ListHealthEvents(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 3, total, "expected all events to remain when health cleanup disabled")
+}
+
