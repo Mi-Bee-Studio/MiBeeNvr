@@ -135,8 +135,8 @@
         hasAudio: false,
         hasVideo: true,
         cors: false,
-        headers: authHeader ? { Authorization: authHeader } : undefined,
       }, {
+        headers: authHeader ? { Authorization: authHeader } : undefined,
         enableStashBuffer: false,
         stashInitialSize: 128,
         lazyLoadMaxDuration: 3 * 60,

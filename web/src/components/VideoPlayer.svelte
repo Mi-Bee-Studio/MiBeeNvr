@@ -19,12 +19,14 @@
     streamUrl,
     cameraProtocol,
     expanded = false,
+    protocol = 'hls',
   }: {
     cameraId: string;
     cameraName: string;
     streamUrl: string;
     cameraProtocol: string;
     expanded?: boolean;
+    protocol?: string;
   } = $props();
 
   let streamState: StreamState | 'loading' = $state('loading');
@@ -141,7 +143,7 @@
       }
 
       HlsConstructor = Hls;
-      const hls = new Hls(createHlsConfig());
+      const hls = new Hls(createHlsConfig(protocol));
       hlsInstance = hls;
       streamState = 'buffering';
       recreateAttempts.value = 0;
