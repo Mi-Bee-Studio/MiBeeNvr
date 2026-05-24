@@ -2,6 +2,7 @@ package api
 
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -175,6 +177,17 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			enc = "h264"
 		case "http":
 			enc = "jpeg"
+		case "onvif":
+			// Auto-detect encoding from ONVIF device profiles
+			if body.StreamEncoding == "" {
+				if detected := probeONVIFEncoding(r.Context(), body.ONVIFEndpoint, body.Username, body.Password); detected != "" {
+					body.StreamEncoding = detected
+					enc = strings.ToLower(detected)
+					logger.Info("auto-detected ONVIF encoding", "camera", body.Name, "encoding", enc)
+				}
+			} else {
+				enc = strings.ToLower(body.StreamEncoding)
+			}
 		}
 	}
 
@@ -562,4 +575,18 @@ func stripScheme(rawURL string) string {
     u = u + ":554"
   }
   return u
+}
+
+// probeONVIFEncoding connects to an ONVIF device and retrieves the encoding
+// from the first media profile. Returns "H264" or "H265", or empty string on failure.
+func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
+	client := onvif.NewClient(endpoint, username, password)
+	if err := client.Connect(ctx); err != nil {
+		return ""
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil || len(profiles) == 0 {
+		return ""
+	}
+	return profiles[0].Encoding
 }

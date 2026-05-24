@@ -342,6 +342,16 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = cam.StreamEncoding
 	}
 
+	// If encoding still unknown (e.g. ONVIF auto-detect), probe the running recorder
+	if encoding == "" && h.camMgr != nil {
+		if rec := h.camMgr.GetRecorder(id); rec != nil {
+			codec, _, _, _ := getCodecParams(rec)
+			if codec != "" {
+				encoding = string(codec)
+			}
+		}
+	}
+
 	var protocols []ProtocolDetail
 	if h.streamRegistry != nil {
 		protocols = h.streamRegistry.ProtocolsDetailForCodec(model.Format(encoding))
