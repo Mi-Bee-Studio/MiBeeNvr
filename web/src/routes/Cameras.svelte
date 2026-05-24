@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording } from '$lib/api';
-  import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus } from '$lib/api';
+  import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
@@ -35,6 +35,7 @@
   let showRetDialog = $state(false);
   let selectedArchiveGroup = $state<ArchiveGroup | null>(null);
   let retentionDays = $state(30);
+  let healthData = $state<Record<string, CameraHealth>>({});
 
   // Form state
   let showForm = $state(false);
@@ -245,6 +246,16 @@
       }
     }
     loadArchives();
+    loadHealth();
+  }
+
+  async function loadHealth() {
+    try {
+      const res = await getHealthStatus();
+      healthData = res;
+    } catch (e) {
+      console.warn('Failed to load health:', e);
+    }
   }
 
   function openAddForm() {
@@ -328,6 +339,7 @@
 
   onMount(async () => {
     loadCameras();
+    loadHealth();
     try {
       const list = await listProtocols();
       if (list && list.length > 0) {
@@ -341,6 +353,9 @@
         xiaomiDeviceList = res.devices;
       }
     } catch (e) { console.warn('Xiaomi not authenticated:', e); }
+
+    const healthInterval = window.setInterval(() => loadHealth(), 30000);
+    return () => clearInterval(healthInterval);
   });
 </script>
 
@@ -472,6 +487,7 @@
               <CameraCard
                 {camera}
                 {protocolsMap}
+                health={healthData[camera.id]}
                 onedit={openEditForm}
                 ondelete={(c) => archiveConfirm = c}
                 onstart={handleStartCamera}

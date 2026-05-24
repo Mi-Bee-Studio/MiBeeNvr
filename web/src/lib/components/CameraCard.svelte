@@ -2,11 +2,13 @@
   import { t } from '$lib/i18n';
   import { normalizeProtocol, enableCamera, disableCamera } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
+  import type { CameraHealth } from '$lib/api/health';
   import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
     protocolsMap: Map<string, ProtocolInfo>;
+    health?: CameraHealth;
     onedit: (camera: Camera) => void;
     ondelete: (camera: Camera) => void;
     onstart: (camera: Camera) => void;
@@ -19,6 +21,7 @@
   let {
     camera,
     protocolsMap,
+    health,
     onedit,
     ondelete,
     onstart,
@@ -53,6 +56,13 @@
   let encodingLabel = $derived(
     camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : ''
   );
+
+  function getHealthColor(status?: string): string {
+    if (status === 'healthy') return 'bg-emerald-400';
+    if (status === 'warning') return 'bg-amber-400';
+    if (status === 'error') return 'bg-red-500';
+    return 'bg-gray-400';
+  }
 
   function closeMenu() {
     menuOpen = false;
@@ -131,8 +141,20 @@
         </button>
       {/if}
     </div>
-
     <div class="shrink-0 flex items-center gap-1.5">
+      {#if health}
+        <div class="relative group" title={health.last_event?.message || health.status}>
+          <span class="inline-block h-2.5 w-2.5 rounded-full {getHealthColor(health.status)}"></span>
+          <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+            <div class="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap shadow-lg">
+              <div class="font-medium capitalize">{health.status}</div>
+              {#if health.last_event}
+                <div class="text-gray-400">{health.last_event.message}</div>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
       {#if camera.error_type === 'tutk_incompatible'}
         <span class="badge badge-error" title={camera.error_detail || ''}>
           {t('cameras.tutkCardBadge')}
