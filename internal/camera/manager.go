@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -48,6 +49,7 @@ type CameraManager struct {
 	recorders  map[string]model.Recorder // camera_id → Recorder
 	metrics    *metrics.Metrics
 	mergeMgr   *merge.MergeManager   // segment merge manager (nil = no merge)
+	healthMgr  *health.Manager // health monitoring (nil when disabled)
 	mu         sync.RWMutex
 	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
 }
@@ -74,6 +76,12 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:    mm,
 		errorDetails: make(map[string]*model.CameraErrorDetail),
 	}
+}
+
+// SetHealthManager sets the health manager for camera health monitoring.
+// Can be called with nil to disable health monitoring.
+func (cm *CameraManager) SetHealthManager(m *health.Manager) {
+	cm.healthMgr = m
 }
 
 // createRecorder creates a recorder for the given camera config.
@@ -198,6 +206,8 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
 	}
+	// Notify health manager of new camera
+	cm.healthMgr.OnCameraAdded(cam.ID, rec)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
 	return nil
 }
@@ -244,6 +254,8 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
 				} else {
 					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
+					// Notify health manager of new camera
+					cm.healthMgr.OnCameraAdded(cam.ID, rec)
 				}
 			}
 		case string(model.ProtoONVIF):
@@ -418,6 +430,8 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
+		// Notify health manager of camera removal
+		cm.healthMgr.OnCameraRemoved(cameraID, rec)
 		delete(cm.recorders, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
@@ -460,6 +474,8 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
+		// Notify health manager of camera removal
+		cm.healthMgr.OnCameraRemoved(cameraID, rec)
 		delete(cm.recorders, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
