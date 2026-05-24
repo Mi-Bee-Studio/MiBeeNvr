@@ -148,6 +148,7 @@ func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder) {
 	// Initialize connection monitoring
 	m.conn.OnStatusChange(cameraID, string(model.StatusRecording))
 	m.freeze.SetRecording(cameraID, true)
+	m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
 
 	m.knownStatuses[cameraID] = string(model.StatusRecording)
 	slog.Info("health monitoring started for camera", "camera_id", cameraID)
@@ -170,6 +171,7 @@ func (m *Manager) OnCameraRemoved(cameraID string, recorder model.Recorder) {
 	m.conn.RemoveCamera(cameraID)
 	m.collector.RemoveCamera(cameraID)
 	m.freeze.RemoveCamera(cameraID)
+	m.pipeline.SetCameraStatus(cameraID, "")
 	delete(m.knownStatuses, cameraID)
 
 	slog.Info("health monitoring stopped for camera", "camera_id", cameraID)
@@ -185,8 +187,12 @@ func (m *Manager) OnStatusChange(cameraID string, status string) {
 	// Update freeze detector recording state
 	isRecording := status == string(model.StatusRecording)
 	m.freeze.SetRecording(cameraID, isRecording)
-}
 
+	// Update pipeline status for API queries
+	if isRecording {
+		m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
+	}
+}
 // GetCameraHealth returns the current health status for a camera.
 func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 	if m == nil {

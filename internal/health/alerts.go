@@ -124,3 +124,10 @@ func (p *AlertPipeline) GetAllStatuses() map[string]string {
 	}
 	return result
 }
+
+// SetCameraStatus initializes the health status for a camera.
+func (p *AlertPipeline) SetCameraStatus(cameraID, status string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cameraStatus[cameraID] = status
+}
