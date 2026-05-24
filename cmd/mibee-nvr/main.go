@@ -26,6 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -326,6 +327,7 @@ type App struct {
 	camMgr     *camera.CameraManager
 	hlsMgr     *hls.Manager
 	cleanupMgr *cleanup.CleanupManager
+	healthMgr  *health.Manager
 
 	// Optional network services (nil when disabled)
 	mqttClient  *mqtt.Client
@@ -430,6 +432,12 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 6: Camera manager
 	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr)
+
+	// Step 6.5: Health manager (after camera manager, before streaming)
+	a.healthMgr = health.NewManager(cfg.Health)
+	if a.healthMgr != nil {
+		a.camMgr.SetHealthManager(a.healthMgr)
+	}
 
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -600,6 +608,13 @@ func (a *App) Start() error {
 		}
 	}()
 
+	// Start health manager (optional, after camera manager)
+	if a.healthMgr != nil {
+		if err := a.healthMgr.Start(ctx); err != nil {
+			slog.Error("health manager", "error", err)
+		}
+	}
+
 	// Start merge manager
 	go func() {
 		if a.cfg.Merge.Enabled {
@@ -740,6 +755,12 @@ func (a *App) Stop() error {
 		// 7. HLS manager
 		log.Info("stopping HLS streams")
 		a.hlsMgr.StopAll()
+
+		// 7.5. Health manager (before camera manager)
+		if a.healthMgr != nil {
+			log.Info("stopping health manager")
+			a.healthMgr.Stop()
+		}
 
 		// 8. Camera manager
 		log.Info("stopping camera manager")
