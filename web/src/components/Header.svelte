@@ -61,6 +61,7 @@
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
+    { href: '#/health', labelKey: 'health.title', route: '/health' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ];
 

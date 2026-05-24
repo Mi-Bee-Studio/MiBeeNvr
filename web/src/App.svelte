@@ -12,6 +12,7 @@
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Setup from './routes/Setup.svelte';
+  import HealthHistory from './routes/HealthHistory.svelte';
 
   import Header from './components/Header';
 
@@ -96,6 +97,11 @@
     if (segments[0] === 'stats') {
       return { route: 'stats', params: {} };
     }
+
+    if (segments[0] === 'health') {
+      return { route: 'health', params: {} };
+    }
+
 
 
 
@@ -184,6 +190,8 @@
       <Settings />
     {:else if currentRoute === 'dashboard'}
       <Dashboard />
+    {:else if currentRoute === 'health'}
+      <HealthHistory />
     {/if}
   {/if}
 
