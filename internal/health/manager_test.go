@@ -383,3 +383,61 @@ func TestManagerDoubleStart(t *testing.T) {
 	}
 	m.Stop()
 }
+
+func TestManager_StatusPolling(t *testing.T) {
+	t.Helper()
+
+	// Shared mutable status map for the closure
+	statuses := map[string]string{"cam-1": "recording"}
+
+	m := newTestManager(t, newTestManagerConfig())
+	m.SetStatusFunc(func() map[string]string {
+		return statuses
+	})
+
+	// Add camera (sets initial status in conn and knownStatuses)
+	rec := newMockRecorderWithHub()
+	m.OnCameraAdded("cam-1", rec)
+
+	// Initial poll — no transition expected
+	m.pollStatuses()
+
+	// Verify initial state
+	m.conn.mu.Lock()
+	state := m.conn.cameras["cam-1"]
+	m.conn.mu.Unlock()
+	if state == nil {
+		t.Fatal("expected camera state to exist")
+	}
+	if state.currentStatus != string(model.StatusRecording) {
+		t.Errorf("expected status %s, got %s", model.StatusRecording, state.currentStatus)
+	}
+
+	// Simulate status change to error
+	statuses["cam-1"] = "error"
+
+	// Poll — should detect transition
+	m.pollStatuses()
+
+	// Verify connection monitor updated
+	m.conn.mu.Lock()
+	state = m.conn.cameras["cam-1"]
+	m.conn.mu.Unlock()
+	if state == nil {
+		t.Fatal("expected camera state to exist after change")
+	}
+	if state.currentStatus != string(model.StatusError) {
+		t.Errorf("expected status %s, got %s", model.StatusError, state.currentStatus)
+	}
+
+	// Verify freeze detector updated
+	m.freeze.mu.Lock()
+	freezeState := m.freeze.cameras["cam-1"]
+	m.freeze.mu.Unlock()
+	if freezeState == nil {
+		t.Fatal("expected freeze state to exist")
+	}
+	if freezeState.isRecording.Load() {
+		t.Error("expected isRecording=false when status is error")
+	}
+}

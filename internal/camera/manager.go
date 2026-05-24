@@ -82,6 +82,17 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 // Can be called with nil to disable health monitoring.
 func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 	cm.healthMgr = m
+	if m != nil {
+		m.SetStatusFunc(func() map[string]string {
+			cm.mu.RLock()
+			defer cm.mu.RUnlock()
+			result := make(map[string]string, len(cm.recorders))
+			for id, rec := range cm.recorders {
+				result[id] = string(rec.Status())
+			}
+			return result
+		})
+	}
 }
 
 // createRecorder creates a recorder for the given camera config.

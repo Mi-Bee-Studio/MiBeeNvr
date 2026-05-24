@@ -15,6 +15,8 @@ import (
 //   - Layer 2: StreamStatsCollector — detects bitrate/FPS/IDR anomalies
 //   - Layer 2.5: FreezeDetector — detects frozen video streams
 //   - AlertPipeline — deduplicates and dispatches events to storage + MQTT
+// StatusFunc returns current camera statuses as map[cameraID]status.
+type StatusFunc func() map[string]string
 type Manager struct {
 	cfg config.HealthConfig
 
@@ -22,6 +24,9 @@ type Manager struct {
 	collector *StreamStatsCollector
 	freeze    *FreezeDetector
 	pipeline  *AlertPipeline
+
+	statusFn      StatusFunc
+	knownStatuses map[string]string
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -65,10 +70,12 @@ func NewManager(cfg config.HealthConfig) *Manager {
 		collector: collector,
 		freeze:    freeze,
 		pipeline:  pipeline,
+		knownStatuses: make(map[string]string),
 		done:      make(chan struct{}),
 	}
-}
 
+
+}
 // Start begins the periodic health check loop.
 func (m *Manager) Start(ctx context.Context) error {
 	if m == nil {
@@ -97,8 +104,10 @@ func (m *Manager) run(ctx context.Context) {
 			m.conn.Check()
 			m.collector.CheckAndReset()
 			m.freeze.Check()
+			m.pollStatuses()
 		}
 	}
+
 }
 
 // Stop shuts down the health manager.
@@ -109,6 +118,14 @@ func (m *Manager) Stop() {
 	m.cancel()
 	<-m.done
 	slog.Info("health manager stopped")
+}
+
+// SetStatusFunc sets the function used to poll camera statuses.
+func (m *Manager) SetStatusFunc(fn StatusFunc) {
+	if m == nil {
+		return
+	}
+	m.statusFn = fn
 }
 
 // OnCameraAdded starts monitoring a newly added camera.
@@ -132,6 +149,7 @@ func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder) {
 	m.conn.OnStatusChange(cameraID, string(model.StatusRecording))
 	m.freeze.SetRecording(cameraID, true)
 
+	m.knownStatuses[cameraID] = string(model.StatusRecording)
 	slog.Info("health monitoring started for camera", "camera_id", cameraID)
 }
 
@@ -152,6 +170,7 @@ func (m *Manager) OnCameraRemoved(cameraID string, recorder model.Recorder) {
 	m.conn.RemoveCamera(cameraID)
 	m.collector.RemoveCamera(cameraID)
 	m.freeze.RemoveCamera(cameraID)
+	delete(m.knownStatuses, cameraID)
 
 	slog.Info("health monitoring stopped for camera", "camera_id", cameraID)
 }
@@ -205,4 +224,18 @@ func getHub(recorder model.Recorder) *model.StreamHub {
 		return h.GetHub()
 	}
 	return nil
+}
+
+// pollStatuses checks camera statuses and forwards transitions to connection monitor.
+func (m *Manager) pollStatuses() {
+	if m.statusFn == nil {
+		return
+	}
+	statuses := m.statusFn()
+	for cameraID, status := range statuses {
+		if prev, ok := m.knownStatuses[cameraID]; ok && prev != status {
+			m.OnStatusChange(cameraID, status)
+		}
+		m.knownStatuses[cameraID] = status
+	}
 }
