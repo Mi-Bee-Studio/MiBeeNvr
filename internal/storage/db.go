@@ -209,6 +209,21 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_time ON recordings(camera_id, started_at, ended_at, archived)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='9' WHERE key='schema_version'")
 
+	// Migration v9 → v10: camera_health_events table
+	healthSQL := `CREATE TABLE IF NOT EXISTS camera_health_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		camera_id TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		status TEXT NOT NULL,
+		message TEXT DEFAULT '',
+		metadata TEXT DEFAULT '{}',
+		created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+	);`
+	if _, err := d.db.ExecContext(ctx, healthSQL); err != nil { return err }
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_camera_id ON camera_health_events(camera_id)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_created_at ON camera_health_events(created_at)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='10' WHERE key='schema_version'")
+
 	// Migration: add encoding column if missing
 	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
 	// Migration: normalize legacy protocol values + populate encoding

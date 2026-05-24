@@ -148,25 +148,6 @@ const (
 	HealthEventFreezeRecovered    HealthEventType = "freeze_recovered"
 )
 
-// HealthEvent represents a single health monitoring event.
-type HealthEvent struct {
-	ID        int64          `json:"id"`
-	CameraID  string         `json:"camera_id"`
-	EventType string         `json:"event_type"`
-	Status    string         `json:"status"`
-	Message   string         `json:"message,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	CreatedAt string         `json:"created_at"`
-}
-
-// CameraHealth represents the current health status of a camera.
-type CameraHealth struct {
-	CameraID  string       `json:"camera_id"`
-	Status    string       `json:"status"`
-	LastEvent *HealthEvent `json:"last_event,omitempty"`
-	UpdatedAt string       `json:"updated_at"`
-}
-
 // HealthReporter is the interface for reporting health events.
 // Implementations must be safe for concurrent use.
 type HealthReporter interface {
@@ -244,4 +225,24 @@ func ValidateProtocolEncoding(protocol, encoding string) error {
 		}
 	}
 	return fmt.Errorf("encoding %q not valid for protocol %q", encoding, protocol)
+}
+
+// HealthEvent represents a single camera health check result stored in camera_health_events.
+type HealthEvent struct {
+	ID        int64     `json:"id"`
+	CameraID  string    `json:"camera_id"`
+	EventType string    `json:"event_type"`
+	Status    string    `json:"status"`
+	Message   string    `json:"message"`
+	Metadata  string    `json:"metadata"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CameraHealth represents the latest health status summary for a camera.
+type CameraHealth struct {
+	CameraID      string    `json:"camera_id"`
+	LatestStatus  string    `json:"latest_status"`
+	LatestEvent   string    `json:"latest_event"`
+	LatestMessage string    `json:"latest_message"`
+	LastEventAt   time.Time `json:"last_event_at"`
 }
