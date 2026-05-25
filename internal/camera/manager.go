@@ -110,22 +110,24 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		switch cam.Encoding {
 		case string(model.FormatH264):
 			h264Cfg := recorder.H264Config{
-				CameraID:   cam.ID,
-				RTSPURL:    cam.URL,
-				Username:   cam.Username,
-				Password:   cam.Password,
-				SegmentDur: segDur,
-				DB:         cm.db,
+				CameraID:     cam.ID,
+				RTSPURL:      cam.URL,
+				Username:     cam.Username,
+				Password:     cam.Password,
+				SegmentDur:   segDur,
+				DB:           cm.db,
+				AudioEnabled: cam.AudioEnabled,
 			}
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
-				CameraID:   cam.ID,
-				RTSPURL:    cam.URL,
-				Username:   cam.Username,
-				Password:   cam.Password,
-				SegmentDur: segDur,
-				DB:         cm.db,
+				CameraID:     cam.ID,
+				RTSPURL:      cam.URL,
+				Username:     cam.Username,
+				Password:     cam.Password,
+				SegmentDur:   segDur,
+				DB:           cm.db,
+				AudioEnabled: cam.AudioEnabled,
 			}
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
@@ -167,6 +169,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			Password:       cam.Password,
 			SegmentDur:     segDur,
 			DB:             cm.db,
+			AudioEnabled:   cam.AudioEnabled,
 		}
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	default:

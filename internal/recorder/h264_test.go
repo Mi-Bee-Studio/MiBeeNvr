@@ -15,6 +15,8 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -501,4 +503,268 @@ func (h *reconnHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (
 ) {
 	h.once.Do(func() { close(h.playCh) })
 	return &base.Response{StatusCode: base.StatusOK}, nil
+}
+
+// --- Audio Test Helpers ---
+
+// testRTSPServerWithAudio wraps testRTSPServer with an additional AAC audio media.
+type testRTSPServerWithAudio struct {
+	*testRTSPServer
+	audioMedia  *description.Media
+	audioForma  *format.MPEG4Audio
+	audioEnc    *rtpmpeg4audio.Encoder
+}
+
+func newTestRTSPServerWithAudio(t *testing.T) *testRTSPServerWithAudio {
+	t.Helper()
+	port := findPort(t)
+	time.Sleep(5 * time.Millisecond)
+
+	videoForma := &format.H264{
+		PayloadTyp:        96,
+		PacketizationMode: 1,
+		SPS:               testSPS,
+		PPS:               testPPS,
+	}
+	audioForma := &format.MPEG4Audio{
+		PayloadTyp: 97,
+		Config: &mpeg4audio.AudioSpecificConfig{
+			Type:          mpeg4audio.ObjectTypeAACLC,
+			SampleRate:    48000,
+			ChannelConfig: 2,
+			ChannelCount:  2,
+		},
+		SizeLength:       13,
+		IndexLength:      3,
+		IndexDeltaLength: 3,
+	}
+	desc := &description.Session{
+		Medias: []*description.Media{
+			{
+				Type:    description.MediaTypeVideo,
+				Formats: []format.Format{videoForma},
+			},
+			{
+				Type:    description.MediaTypeAudio,
+				Formats: []format.Format{audioForma},
+			},
+		},
+	}
+
+	s := &testRTSPServer{playCh: make(chan struct{})}
+	s.media = desc.Medias[0]
+
+	videoEnc, err := videoForma.CreateEncoder()
+	require.NoError(t, err)
+	s.rtpEnc = videoEnc
+
+	s.server = &gortsplib.Server{
+		Handler:     s,
+		RTSPAddress: fmt.Sprintf("127.0.0.1:%d", port),
+	}
+	require.NoError(t, s.server.Start())
+
+	s.stream = &gortsplib.ServerStream{Server: s.server, Desc: desc}
+	require.NoError(t, s.stream.Initialize())
+
+	s.rtspURL = fmt.Sprintf("rtsp://127.0.0.1:%d/test", port)
+
+	audioEnc, err := audioForma.CreateEncoder()
+	require.NoError(t, err)
+
+	return &testRTSPServerWithAudio{
+		testRTSPServer: s,
+		audioMedia:     desc.Medias[1],
+		audioForma:     audioForma,
+		audioEnc:       audioEnc,
+	}
+}
+
+func (s *testRTSPServerWithAudio) sendAudioFrame(data []byte) {
+	pkts, err := s.audioEnc.Encode([][]byte{data})
+	if err != nil {
+		return
+	}
+	for _, pkt := range pkts {
+		s.stream.WritePacketRTP(s.audioMedia, pkt)
+	}
+}
+
+// audioCollector is a test helper that collects audio frames from StreamHub.
+type audioCollector struct {
+	mu     sync.Mutex
+	frames []model.AudioFrame
+	done   chan struct{}
+}
+
+func newAudioCollector(hub *model.StreamHub, id string) *audioCollector {
+	c := &audioCollector{done: make(chan struct{})}
+	hub.SubscribeAudio(id, func(pts int64, codec model.AudioCodec, data []byte) {
+		c.mu.Lock()
+		c.frames = append(c.frames, model.AudioFrame{PTS: pts, Codec: codec, Data: data})
+		c.mu.Unlock()
+	})
+	return c
+}
+
+func (c *audioCollector) waitFrames(t *testing.T, min int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		n := len(c.frames)
+		c.mu.Unlock()
+		if n >= min {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.mu.Lock()
+	n := len(c.frames)
+	c.mu.Unlock()
+	t.Fatalf("timed out waiting for %d audio frames, got %d", min, n)
+}
+
+func (c *audioCollector) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.frames)
+}
+
+func (c *audioCollector) close(hub *model.StreamHub, id string) {
+	hub.UnsubscribeAudio(id)
+}
+
+// --- Audio Tests ---
+
+func TestH264Recorder_AudioBroadcast(t *testing.T) {
+	srv := newTestRTSPServerWithAudio(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+	hub := model.NewStreamHub()
+
+	rec := NewH264Recorder(H264Config{
+		CameraID:     "cam-audio",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		RingBufCap:   100,
+		AudioEnabled: true,
+	}, mgr)
+	rec.Hub = hub
+
+	collector := newAudioCollector(hub, "test-audio")
+	defer collector.close(hub, "test-audio")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send video frames to start segment.
+	srv.sendFrames(3, 20*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send audio frames.
+	for i := 0; i < 5; i++ {
+		srv.sendAudioFrame([]byte{0x01, 0x02, 0x03, 0x04})
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+
+	collector.waitFrames(t, 1, 2*time.Second)
+	frames := collector.count()
+	require.GreaterOrEqual(t, frames, 1, "expected at least 1 audio frame via BroadcastAudio")
+
+	// Verify all frames are AAC.
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	for _, f := range collector.frames {
+		require.Equal(t, model.AudioAAC, f.Codec, "audio codec should be AAC")
+	}
+}
+
+func TestH264Recorder_AudioDisabled_StillRecordsVideo(t *testing.T) {
+	srv := newTestRTSPServerWithAudio(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+	hub := model.NewStreamHub()
+
+	rec := NewH264Recorder(H264Config{
+		CameraID:     "cam-noaudio",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		RingBufCap:   100,
+		AudioEnabled: false,
+	}, mgr)
+	rec.Hub = hub
+
+	collector := newAudioCollector(hub, "test-noaudio")
+	defer collector.close(hub, "test-noaudio")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+
+	// Send audio — should be ignored.
+	for i := 0; i < 3; i++ {
+		srv.sendAudioFrame([]byte{0xAA, 0xBB})
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	require.Equal(t, model.StatusStopped, rec.Status())
+
+	// Video should still be recorded.
+	files, err := mgr.ListFiles("cam-noaudio")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected video recording even with audio disabled")
+
+	// No audio frames should have been broadcast.
+	require.Equal(t, 0, collector.count(), "no audio frames should be broadcast when AudioEnabled=false")
+}
+
+func TestH264Recorder_AudioEnabled_NoAudioInStream(t *testing.T) {
+	// Server provides video only (no AAC media).
+	srv := newTestRTSPServer(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+
+	rec := NewH264Recorder(H264Config{
+		CameraID:     "cam-videoonly",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		RingBufCap:   100,
+		AudioEnabled: true,
+	}, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	require.Equal(t, model.StatusStopped, rec.Status())
+
+	files, err := mgr.ListFiles("cam-videoonly")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected video recording even when no audio in stream")
 }

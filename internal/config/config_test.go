@@ -1039,3 +1039,61 @@ func TestAutoRemediationValidation(t *testing.T) {
 		require.NoError(t, err, "validation should pass when auto_remediation is disabled")
 	})
 }
+
+func TestAudioEnabledDefaultFalse(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID: "c1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
+	}}}
+	cfg.applyDefaults()
+	require.False(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to false")
+}
+
+func TestAudioEnabledRejectedForMJPEG(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID: "c1", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://192.168.1.10/stream",
+		AudioEnabled: true,
+	}}}
+	cfg.applyDefaults()
+	require.False(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras have no audio source")
+}
+
+func TestAudioEnabledRejectedForHTTPJPEG(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID: "c1", Protocol: "http", Encoding: "jpeg", URL: "http://192.168.1.10/capture",
+		AudioEnabled: true,
+	}}}
+	cfg.applyDefaults()
+	require.False(t, cfg.Cameras[0].AudioEnabled, "HTTP-JPEG cameras have no audio source")
+}
+
+func TestAudioEnabledAllowedForRTSPH264(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID: "c1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
+		AudioEnabled: true,
+	}}}
+	cfg.applyDefaults()
+	require.True(t, cfg.Cameras[0].AudioEnabled, "RTSP H.264 cameras should support audio")
+}
+
+func TestAudioEnabledAllowedForONVIF(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "onvif", Encoding: "h264", URL: "http://192.168.1.100/onvif/device_service",
+			AudioEnabled: true,
+		}},
+	}
+	cfg.applyDefaults()
+	require.True(t, cfg.Cameras[0].AudioEnabled, "ONVIF H.264 cameras should support audio")
+}
+
+func TestAudioEnabledAllowedForXiaomi(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device",
+			AudioEnabled: true,
+		}},
+		Xiaomi: XiaomiConfig{Token: "test", Region: "cn"},
+	}
+	cfg.applyDefaults()
+	require.True(t, cfg.Cameras[0].AudioEnabled, "Xiaomi cameras should support audio")
+}

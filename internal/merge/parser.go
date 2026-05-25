@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -11,25 +12,55 @@ import (
 
 // SegmentInfo contains parsed metadata and sample table from an MP4 segment.
 type SegmentInfo struct {
-	Codec         string        // "h264" or "h265"
-	SPS           []byte        // H.264 only
-	PPS           []byte        // H.264 only
-	VPS           []byte        // H.265 only
+	Codec         string // "h264" or "h265"
+	SPS           []byte // H.264 only
+	PPS           []byte // H.264 only
+	VPS           []byte // H.265 only
 	Timescale     uint32
 	SampleCount   int
 	TotalDuration time.Duration
 	MdatOffset    int64 // file offset of mdat box header
 	MdatSize      int64 // total mdat box size including header
 	Samples       []SampleEntry
-	FilePath      string        // source file path for data reading
+	FilePath      string // source file path for data reading
+
+	// Audio track fields (populated when segment contains audio).
+	HasAudio         bool
+	AudioConfig      []byte // AAC AudioSpecificConfig bytes
+	AudioTimescale   uint32
+	AudioSampleCount int
+	AudioSamples     []SampleEntry
 }
 
 // SampleEntry describes a single media sample within mdat.
 type SampleEntry struct {
-	Offset     int64  // absolute file offset of sample data (after 4-byte NAL length prefix)
-	Size       uint32 // size of sample data (including 4-byte NAL length prefix)
+	Offset     int64  // absolute file offset of sample data
+	Size       uint32 // size of sample data
 	Duration   uint32 // in timescale units
 	IsKeyFrame bool
+}
+
+// trackAccum collects per-track data during MP4 box structure walking.
+type trackAccum struct {
+	handlerType [4]byte // 'vide' or 'soun'
+	timescale   uint32
+
+	// Video codec fields
+	codec    string
+	sps, pps []byte
+	vps      []byte
+
+	// Audio codec fields
+	audioConfig []byte
+
+	// Sample table fields
+	sttsEntries []mp4.SttsEntry
+	stszSizes   []uint32 // per-sample sizes (used when SampleSize == 0)
+	stszUniform uint32   // uniform size (when SampleSize != 0)
+	sampleCount uint32
+	stscEntries []mp4.StscEntry
+	stcoOffsets []uint32
+	co64Offsets []uint64
 }
 
 // ParseSegment reads an MP4 file and extracts codec config, sample tables,
@@ -48,21 +79,12 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	}
 	fileSize := fileInfo.Size()
 
-	// Accumulators for box data collected during the walk.
+	// Per-track accumulators.
 	var (
-		timescale   uint32
-		mdatOffset  int64
-		mdatSize    int64
-		codec       string
-		sps, pps    []byte
-		vps         []byte
-		sttsEntries []mp4.SttsEntry
-		stszSizes   []uint32 // per-sample sizes (used when SampleSize == 0)
-		stszUniform uint32   // uniform size (when SampleSize != 0)
-		sampleCount uint32
-		stscEntries []mp4.StscEntry
-		stcoOffsets []uint32
-		co64Offsets []uint64
+		mdatOffset int64
+		mdatSize   int64
+		tracks     []*trackAccum
+		current    *trackAccum
 	)
 
 	_, err = mp4.ReadBoxStructure(f, func(h *mp4.ReadHandle) (interface{}, error) {
@@ -76,6 +98,14 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 				mdatSize = int64(h.BoxInfo.Size)
 			}
 			return nil, nil
+		}
+
+		// Track new trak boxes — creates a new accumulator per trak.
+		// DFS order ensures children of trak N are processed before trak N+1.
+		if boxType == "trak" {
+			current = &trackAccum{}
+			tracks = append(tracks, current)
+			return h.Expand()
 		}
 
 		// Validate box size against file size to catch corrupted headers.
@@ -93,43 +123,51 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 			return nil, err
 		}
 
+		// Only accumulate data when inside a trak.
+		if current == nil {
+			return h.Expand()
+		}
+
 		switch b := box.(type) {
+		case *mp4.Hdlr:
+			current.handlerType = b.HandlerType
+
 		case *mp4.Mdhd:
-			timescale = b.Timescale
+			current.timescale = b.Timescale
 
 		case *mp4.Stts:
-			sttsEntries = b.Entries
+			current.sttsEntries = b.Entries
 
 		case *mp4.Stsz:
-			sampleCount = b.SampleCount
+			current.sampleCount = b.SampleCount
 			if b.SampleSize != 0 {
-				stszUniform = b.SampleSize
+				current.stszUniform = b.SampleSize
 			} else {
-				stszSizes = b.EntrySize
+				current.stszSizes = b.EntrySize
 			}
 
 		case *mp4.Stsc:
-			stscEntries = b.Entries
+			current.stscEntries = b.Entries
 
 		case *mp4.Stco:
-			stcoOffsets = b.ChunkOffset
+			current.stcoOffsets = b.ChunkOffset
 
 		case *mp4.Co64:
-			co64Offsets = b.ChunkOffset
+			current.co64Offsets = b.ChunkOffset
 
 		case *mp4.AVCDecoderConfiguration:
-			codec = "h264"
+			current.codec = "h264"
 			if len(b.SequenceParameterSets) > 0 {
-				sps = make([]byte, len(b.SequenceParameterSets[0].NALUnit))
-				copy(sps, b.SequenceParameterSets[0].NALUnit)
+				current.sps = make([]byte, len(b.SequenceParameterSets[0].NALUnit))
+				copy(current.sps, b.SequenceParameterSets[0].NALUnit)
 			}
 			if len(b.PictureParameterSets) > 0 {
-				pps = make([]byte, len(b.PictureParameterSets[0].NALUnit))
-				copy(pps, b.PictureParameterSets[0].NALUnit)
+				current.pps = make([]byte, len(b.PictureParameterSets[0].NALUnit))
+				copy(current.pps, b.PictureParameterSets[0].NALUnit)
 			}
 
 		case *mp4.HvcC:
-			codec = "h265"
+			current.codec = "h265"
 			for _, arr := range b.NaluArrays {
 				if len(arr.Nalus) == 0 {
 					continue
@@ -137,14 +175,22 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 				nal := arr.Nalus[0].NALUnit
 				switch arr.NaluType {
 				case 32: // VPS
-					vps = make([]byte, len(nal))
-					copy(vps, nal)
+					current.vps = make([]byte, len(nal))
+					copy(current.vps, nal)
 				case 33: // SPS
-					sps = make([]byte, len(nal))
-					copy(sps, nal)
+					current.sps = make([]byte, len(nal))
+					copy(current.sps, nal)
 				case 34: // PPS
-					pps = make([]byte, len(nal))
-					copy(pps, nal)
+					current.pps = make([]byte, len(nal))
+					copy(current.pps, nal)
+				}
+			}
+
+		case *mp4.Esds:
+			for _, d := range b.Descriptors {
+				if d.Tag == mp4.DecSpecificInfoTag && len(d.Data) > 0 {
+					current.audioConfig = make([]byte, len(d.Data))
+					copy(current.audioConfig, d.Data)
 				}
 			}
 		}
@@ -155,63 +201,100 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("parse MP4: %w", err)
 	}
 
-	if timescale == 0 {
+	// Identify video and audio tracks.
+	var videoTrack, audioTrack *trackAccum
+	for _, tr := range tracks {
+		if bytes.Equal(tr.handlerType[:], []byte("soun")) {
+			audioTrack = tr
+		} else {
+			// Default to video for 'vide' or any unrecognized handler.
+			videoTrack = tr
+		}
+	}
+
+	if videoTrack == nil {
+		return nil, fmt.Errorf("no video track found")
+	}
+	if videoTrack.timescale == 0 {
 		return nil, fmt.Errorf("no mdhd box found")
 	}
-	if sampleCount == 0 {
+	if videoTrack.sampleCount == 0 {
 		return nil, fmt.Errorf("no samples in segment")
 	}
 
+	// Build video sample entries.
+	videoSamples, err := buildTrackSamples(videoTrack)
+	if err != nil {
+		return nil, fmt.Errorf("build video samples: %w", err)
+	}
+
+	// Detect keyframes in video samples.
+	if err := detectKeyframes(f, videoSamples, videoTrack.codec); err != nil {
+		return nil, fmt.Errorf("detect keyframes: %w", err)
+	}
+
+	// Calculate total video duration from stts.
+	totalDur := time.Duration(0)
+	for _, e := range videoTrack.sttsEntries {
+		totalDur += time.Duration(e.SampleCount) * time.Duration(e.SampleDelta) * time.Second / time.Duration(videoTrack.timescale)
+	}
+
+	info := &SegmentInfo{
+		Codec:         videoTrack.codec,
+		SPS:           videoTrack.sps,
+		PPS:           videoTrack.pps,
+		VPS:           videoTrack.vps,
+		Timescale:     videoTrack.timescale,
+		SampleCount:   len(videoSamples),
+		TotalDuration: totalDur,
+		MdatOffset:    mdatOffset,
+		MdatSize:      mdatSize,
+		Samples:       videoSamples,
+		FilePath:      filePath,
+	}
+
+	// Build audio sample entries if audio track present.
+	if audioTrack != nil && audioTrack.sampleCount > 0 && len(audioTrack.audioConfig) > 0 {
+		audioSamples, err := buildTrackSamples(audioTrack)
+		if err != nil {
+			return nil, fmt.Errorf("build audio samples: %w", err)
+		}
+
+		info.HasAudio = true
+		info.AudioConfig = audioTrack.audioConfig
+		info.AudioTimescale = audioTrack.timescale
+		info.AudioSampleCount = len(audioSamples)
+		info.AudioSamples = audioSamples
+	}
+
+	return info, nil
+}
+
+// buildTrackSamples builds per-sample file offsets, sizes, and durations
+// from a track accumulator's sample tables.
+func buildTrackSamples(tr *trackAccum) ([]SampleEntry, error) {
 	// Build per-sample size array.
-	if stszUniform != 0 {
-		stszSizes = make([]uint32, sampleCount)
+	stszSizes := tr.stszSizes
+	if tr.stszUniform != 0 {
+		stszSizes = make([]uint32, tr.sampleCount)
 		for i := range stszSizes {
-			stszSizes[i] = stszUniform
+			stszSizes[i] = tr.stszUniform
 		}
 	}
 
 	// Merge chunk offsets: prefer stco, fallback to co64.
-	chunkOffsets := make([]int64, 0, len(stcoOffsets)+len(co64Offsets))
-	for _, off := range stcoOffsets {
+	chunkOffsets := make([]int64, 0, len(tr.stcoOffsets)+len(tr.co64Offsets))
+	for _, off := range tr.stcoOffsets {
 		chunkOffsets = append(chunkOffsets, int64(off))
 	}
-	if len(co64Offsets) > 0 {
+	if len(tr.co64Offsets) > 0 {
 		chunkOffsets = chunkOffsets[:0]
-		for _, off := range co64Offsets {
+		for _, off := range tr.co64Offsets {
 			chunkOffsets = append(chunkOffsets, int64(off))
 		}
 	}
 
-	// Build sample entries from the sample tables.
-	samples, err := buildSampleEntries(stszSizes, stscEntries, chunkOffsets, sttsEntries)
-	if err != nil {
-		return nil, fmt.Errorf("build sample entries: %w", err)
-	}
-
-	// Calculate total duration from stts.
-	totalDur := time.Duration(0)
-	for _, e := range sttsEntries {
-		totalDur += time.Duration(e.SampleCount) * time.Duration(e.SampleDelta) * time.Second / time.Duration(timescale)
-	}
-
-	// Detect keyframes by reading NAL headers from file.
-	if err := detectKeyframes(f, samples, codec); err != nil {
-		return nil, fmt.Errorf("detect keyframes: %w", err)
-	}
-
-	return &SegmentInfo{
-		Codec:         codec,
-		SPS:           sps,
-		PPS:           pps,
-		VPS:           vps,
-		Timescale:     timescale,
-		SampleCount:   len(samples),
-		TotalDuration: totalDur,
-		MdatOffset:    mdatOffset,
-		MdatSize:      mdatSize,
-		Samples:       samples,
-		FilePath:      filePath,
-	}, nil
+	return buildSampleEntries(stszSizes, tr.stscEntries, chunkOffsets, tr.sttsEntries)
 }
 
 // buildSampleEntries computes per-sample file offsets, sizes, and durations

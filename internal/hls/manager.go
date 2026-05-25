@@ -22,14 +22,15 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 var hlsLogger = slog.Default().With("component", "hls-manager")
 
 const (
-	defaultIdleTimeout  = 60 * time.Second
-	defaultMaxStreams   = 4
-	defaultWriteBufSize = 100 // buffered frames per stream (~5s at 20fps)
+	defaultIdleTimeout    = 60 * time.Second
+	defaultMaxStreams     = 4
+	defaultWriteBufSize   = 180              // buffered frames per stream (~9s at 20fps)
 	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
 )
 
@@ -41,7 +42,7 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
-	mu              sync.Mutex // protects lastUsed and lastFrameTime
+	mu              sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
 	mux             *gohlslib.Muxer
 	track           *gohlslib.Track
 	dirPath         string
@@ -52,7 +53,9 @@ type streamEntry struct {
 	subStreamCancel context.CancelFunc // cancels the sub-stream RTSP reader goroutine
 	maxFPS          int
 	lastFrameTime   time.Time
-	drops          uint64 // atomic: total frames dropped due to buffer full
+	fpsCredit       time.Duration // accumulated frame time credit for smooth FPS throttling
+	drops           uint64        // atomic: total frames dropped (FPS throttle + buffer full)
+	idrReceived     bool          // true after first IDR frame is received
 }
 
 // Manager manages on-demand HLS streams for cameras.
@@ -61,26 +64,26 @@ type Manager struct {
 	streams         map[string]*streamEntry // cameraID -> entry
 	dataDir         string
 	idleTimeout     time.Duration
-	maxStreams       int
+	maxStreams      int
 	writeBufSize    int
 	segmentMaxSize  int
 	segmentCount    int
 	metrics         *metrics.Metrics
-	lowLatency      bool           // enable Low-Latency HLS (MuxerVariantLowLatency)
-	partMinDuration time.Duration   // LL-HLS partial segment duration (default 200ms)
+	lowLatency      bool          // enable Low-Latency HLS (MuxerVariantLowLatency)
+	partMinDuration time.Duration // LL-HLS partial segment duration (default 200ms)
 }
 
 // NewManager creates a new HLS Manager with default settings.
 // Use NewManagerWithOpts for custom buffer/segment sizes.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		streams:       make(map[string]*streamEntry),
-		dataDir:       dataDir,
-		idleTimeout:   defaultIdleTimeout,
+		streams:        make(map[string]*streamEntry),
+		dataDir:        dataDir,
+		idleTimeout:    defaultIdleTimeout,
 		maxStreams:     defaultMaxStreams,
-		writeBufSize:  defaultWriteBufSize,
+		writeBufSize:   defaultWriteBufSize,
 		segmentMaxSize: defaultSegmentMaxSize,
-		segmentCount:  3,
+		segmentCount:   3,
 	}
 }
 
@@ -103,14 +106,14 @@ func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize, segmentCou
 		m = opts[0]
 	}
 	return &Manager{
-		streams:       make(map[string]*streamEntry),
-		dataDir:       dataDir,
-		idleTimeout:   defaultIdleTimeout,
+		streams:        make(map[string]*streamEntry),
+		dataDir:        dataDir,
+		idleTimeout:    defaultIdleTimeout,
 		maxStreams:     defaultMaxStreams,
-		writeBufSize:  writeBufSize,
+		writeBufSize:   writeBufSize,
 		segmentMaxSize: segmentMaxSize,
-		segmentCount:  segmentCount,
-		metrics:       m,
+		segmentCount:   segmentCount,
+		metrics:        m,
 	}
 }
 
@@ -157,7 +160,6 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return err
 	}
-
 
 	var track *gohlslib.Track
 	var mux *gohlslib.Muxer
@@ -430,6 +432,14 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 		case <-ctx.Done():
 			return
 		case frame := <-entry.frameCh:
+			// Wait for IDR frame before writing to avoid black frames.
+			// Non-IDR frames before the first IDR are skipped.
+			if !entry.idrReceived {
+				if !isFirstNalIDR(frame.au, entry.isH265) {
+					continue
+				}
+				entry.idrReceived = true
+			}
 			var err error
 			if entry.isH265 {
 				err = entry.mux.WriteH265(entry.track, time.Now(), frame.pts, frame.au)
@@ -441,6 +451,23 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 			}
 		}
 	}
+}
+
+// isFirstNalIDR checks if the first NAL unit in an access unit is an IDR frame.
+// For H.264, NAL unit type 5 = IDR.
+// For H.265, NAL unit types 19 (IDR_W_RADL) and 20 (IDR_N_LP) = IDR.
+func isFirstNalIDR(au [][]byte, isH265 bool) bool {
+	if len(au) == 0 || len(au[0]) == 0 {
+		return false
+	}
+	if isH265 {
+		// HEVC: forbidden_zero_bit(1) | nal_unit_type(6) | nuh_layer_id(6) | nuh_temporal_id_plus1(3)
+		naluType := (au[0][0] >> 1) & 0x3F
+		return naluType == 19 || naluType == 20
+	}
+	// H.264: first byte is NAL unit type
+	naluType := au[0][0] & 0x1F
+	return naluType == 5
 }
 
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
@@ -517,15 +544,37 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	entry.mu.Lock()
 	entry.lastUsed = time.Now()
 
-	// Frame rate limiting for live preview bandwidth optimization
+	// Credit-based FPS throttling: accumulate elapsed time between frames,
+	// send only when enough credit has accumulated for one interval.
+	// This produces consistent frame intervals instead of jittery drops.
 	if entry.maxFPS > 0 {
 		minInterval := time.Second / time.Duration(entry.maxFPS)
-		if time.Since(entry.lastFrameTime) < minInterval {
-			entry.mu.Unlock()
-			return nil // drop frame to stay within target FPS
+		now := time.Now()
+		if entry.lastFrameTime.IsZero() {
+			// First frame always passes — initialize timestamp
+			entry.lastFrameTime = now
+			entry.fpsCredit = 0
+		} else {
+			elapsed := now.Sub(entry.lastFrameTime)
+			entry.lastFrameTime = now
+			entry.fpsCredit += elapsed
+			if entry.fpsCredit < minInterval {
+				// Insufficient credit — drop frame
+				if m.metrics != nil {
+					m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
+				}
+				atomic.AddUint64(&entry.drops, 1)
+				entry.mu.Unlock()
+				return nil
+			}
+			// Consume one interval of credit; cap surplus to prevent burst
+			entry.fpsCredit -= minInterval
+			if entry.fpsCredit > minInterval*2 {
+				entry.fpsCredit = minInterval * 2
+			}
 		}
-		entry.lastFrameTime = time.Now()
 	}
+
 	entry.mu.Unlock()
 
 	// Non-blocking send — drop frame if buffer full to protect recording pipeline
@@ -588,6 +637,27 @@ func (m *Manager) StopAll() {
 	for id := range m.streams {
 		m.stopStreamLocked(id)
 	}
+}
+
+// SubscribeToHub subscribes the HLS manager to a StreamHub for the given camera.
+// It sets the HLS consumer callback ("hls") and configures the OnDrop callback
+// to increment the hls_frames_dropped_total Prometheus counter.
+func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 bool) error {
+	if m.metrics != nil {
+		hub.OnDrop = func(id string) {
+			if id == "hls" {
+				m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
+			}
+		}
+	}
+	if isH265 {
+		return hub.Subscribe("hls", func(pts int64, au [][]byte) {
+			_ = m.WriteH265(cameraID, pts, au)
+		})
+	}
+	return hub.Subscribe("hls", func(pts int64, au [][]byte) {
+		_ = m.WriteH264(cameraID, pts, au)
+	})
 }
 
 func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {

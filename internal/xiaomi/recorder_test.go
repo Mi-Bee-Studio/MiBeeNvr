@@ -612,3 +612,153 @@ func TestAnnexBToAVCCRoundTrip(t *testing.T) {
 		require.True(t, bytes.Equal(nalu, parsed[i]), "NALU %d mismatch", i)
 	}
 }
+
+// --- Audio support tests ---
+
+func TestMissCodecToAudio(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name     string
+		codecID  uint32
+		want     model.AudioCodec
+		wantOK   bool
+	}{
+		{"PCMA (G.711 A-law)", missCodecPCMA, model.AudioG711, true},
+		{"PCMU (G.711 mu-law)", missCodecPCMU, model.AudioG711, true},
+		{"PCM raw", missCodecPCM, model.AudioG711, true},
+		{"OPUS", missCodecOPUS, "", false},
+		{"unknown high", 2000, "", false},
+		{"unknown low", 3, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			got, ok := missCodecToAudio(tt.codecID)
+			require.Equal(t, tt.wantOK, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestXiaomiRecorderAudioForwardWhenEnabled(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:     "test-cam",
+		DID:          "test-device",
+		AudioEnabled: true,
+	}, &noopSegmentStore{})
+
+	r.Hub = model.NewStreamHub()
+	r.streamStart = time.Now()
+	r.codec = model.FormatH264
+	r.codecOK = true
+
+	var mu sync.Mutex
+	var receivedCodec model.AudioCodec
+	var receivedData []byte
+	var receivedPTS int64
+	err := r.Hub.SubscribeAudio("test", func(pts int64, codec model.AudioCodec, data []byte) {
+		mu.Lock()
+		receivedPTS = pts
+		receivedCodec = codec
+		receivedData = data
+		mu.Unlock()
+	})
+	require.NoError(t, err)
+	defer r.Hub.UnsubscribeAudio("test")
+
+	// Simulate a PCMA audio packet.
+	audioData := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+	r.forwardAudio(missCodecPCMA, audioData)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return receivedData != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	require.Equal(t, model.AudioG711, receivedCodec)
+	require.Equal(t, audioData, receivedData)
+	require.True(t, receivedPTS >= 0)
+	mu.Unlock()
+}
+
+func TestXiaomiRecorderAudioSkippedWhenDisabled(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:     "test-cam",
+		DID:          "test-device",
+		AudioEnabled: false,
+	}, &noopSegmentStore{})
+
+	r.Hub = model.NewStreamHub()
+	r.streamStart = time.Now()
+	r.codec = model.FormatH264
+	r.codecOK = true
+
+	var mu sync.Mutex
+	var audioCount int
+	err := r.Hub.SubscribeAudio("test", func(pts int64, codec model.AudioCodec, data []byte) {
+		mu.Lock()
+		audioCount++
+		mu.Unlock()
+	})
+	require.NoError(t, err)
+	defer r.Hub.UnsubscribeAudio("test")
+
+	// forwardAudio should not broadcast when AudioEnabled is false.
+	r.forwardAudio(missCodecPCMA, []byte{0x01, 0x02})
+
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	require.Equal(t, 0, audioCount, "no audio should be broadcast when AudioEnabled=false")
+	mu.Unlock()
+}
+
+func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:     "test-cam",
+		DID:          "test-device",
+		AudioEnabled: true,
+	}, &noopSegmentStore{})
+
+	r.Hub = model.NewStreamHub()
+	r.streamStart = time.Now()
+	r.codec = model.FormatH264
+	r.codecOK = true
+
+	var mu sync.Mutex
+	var audioCount int
+	err := r.Hub.SubscribeAudio("test", func(pts int64, codec model.AudioCodec, data []byte) {
+		mu.Lock()
+		audioCount++
+		mu.Unlock()
+	})
+	require.NoError(t, err)
+	defer r.Hub.UnsubscribeAudio("test")
+
+	// Unknown codec (OPUS) should be silently skipped.
+	r.forwardAudio(missCodecOPUS, []byte{0x01, 0x02})
+
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	require.Equal(t, 0, audioCount, "unknown audio codec should be skipped")
+	mu.Unlock()
+}
+
+func TestXiaomiRecorderAudioNilHub(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:     "test-cam",
+		DID:          "test-device",
+		AudioEnabled: true,
+	}, &noopSegmentStore{})
+
+	r.codec = model.FormatH264
+	r.codecOK = true
+	// Hub is nil — should not panic.
+	r.forwardAudio(missCodecPCMA, []byte{0x01, 0x02})
+}
+

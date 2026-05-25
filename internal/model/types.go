@@ -85,7 +85,7 @@ type RecordingFilter struct {
 	Offset    int
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
-	Archived  *bool // nil = all, true = archived only, false = not archived
+	Archived  *bool  // nil = all, true = archived only, false = not archived
 }
 
 type RecorderStatus string
@@ -159,9 +159,9 @@ const (
 	ProtoRTSPH264  Protocol = "rtsp_h264"
 	ProtoRTSPMJPEG Protocol = "rtsp_mjpeg"
 	ProtoHTTPJPEG  Protocol = "http_jpeg"
-	ProtoRTSPH265 Protocol = "rtsp_h265"
-	ProtoONVIF    Protocol = "onvif"
-	ProtoXiaomi Protocol = "xiaomi"
+	ProtoRTSPH265  Protocol = "rtsp_h265"
+	ProtoONVIF     Protocol = "onvif"
+	ProtoXiaomi    Protocol = "xiaomi"
 )
 
 // Transport-only protocol constants
@@ -182,11 +182,32 @@ const (
 	FormatH265  Format = "h265"
 )
 
+// Audio format constants
+const (
+	FormatAAC  Format = "aac"  // AAC audio
+	FormatG711 Format = "g711" // G.711 mu-law/a-law audio
+)
+
+// AudioCodec represents the audio codec type for AudioFrame.
+type AudioCodec string
+
+const (
+	AudioAAC  AudioCodec = "aac"  // AAC audio codec
+	AudioG711 AudioCodec = "g711" // G.711 mu-law (PCMU) and a-law (PCMA)
+)
+
+// AudioFrame represents a single audio frame for distribution through StreamHub.
+type AudioFrame struct {
+	PTS   int64      // Presentation timestamp (same clock as video)
+	Codec AudioCodec // Audio codec type
+	Data  []byte     // Encoded audio data (AAC frames, G.711 samples, etc.)
+}
+
 // ValidEncodingsForProtocol maps transport protocol to supported encodings
 var ValidEncodingsForProtocol = map[string][]string{
-	string(ProtoRTSP):  {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
-	string(ProtoHTTP):  {string(EncJPEG)},
-	string(ProtoONVIF): {string(FormatH264), string(FormatH265)},
+	string(ProtoRTSP):   {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
+	string(ProtoHTTP):   {string(EncJPEG)},
+	string(ProtoONVIF):  {string(FormatH264), string(FormatH265)},
 	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
 }
 

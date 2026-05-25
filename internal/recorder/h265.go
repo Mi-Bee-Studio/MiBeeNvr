@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net/url"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
-	"net/url"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -28,21 +31,22 @@ var h265Logger = slog.Default().With("component", "h265-recorder")
 
 // H265Config holds configuration for the H265 recorder.
 type H265Config struct {
-	CameraID    string
-	RTSPURL     string
-	Username    string
-	Password    string
-	SegmentDur  time.Duration
-	RingBufCap  int
-	MaxBackoff  time.Duration
-	InitBackoff time.Duration
-	DB RecordingDB
+	CameraID     string
+	RTSPURL      string
+	Username     string
+	Password     string
+	SegmentDur   time.Duration
+	RingBufCap   int
+	MaxBackoff   time.Duration
+	InitBackoff  time.Duration
+	DB           RecordingDB
+	AudioEnabled bool
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
 type H265Recorder struct {
-	cfg   H265Config
-	store SegmentStore
+	cfg     H265Config
+	store   SegmentStore
 	metrics *metrics.Metrics
 
 	mu     sync.Mutex
@@ -50,14 +54,18 @@ type H265Recorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	muxer   *muxer.MP4Muxer
-	trackID int
-
-	curFinalPath string
-	curTempPath  string
-	segStart     time.Time
-	frameCount   int
-	lastFrameTime time.Time
+	muxer            *muxer.MP4Muxer
+	trackID          int
+	audioTrackID     int
+	audioMuxerConfig []byte // AudioSpecificConfig for AAC muxer track
+	audioCodec       string // "aac" or "g711"
+	g711MULaw        bool   // true=μ-law, false=A-law
+	g711SampleRate   int    // typically 8000
+	curFinalPath     string
+	curTempPath      string
+	segStart         time.Time
+	frameCount       int
+	lastFrameTime    time.Time
 
 	vps []byte
 	sps []byte
@@ -251,6 +259,68 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) error {
 		return fmt.Errorf("SETUP: %w", err)
 	}
 
+	// Audio setup: find AAC or G.711 format if AudioEnabled.
+	var audioDec *rtpmpeg4audio.Decoder
+	var audioForma *format.MPEG4Audio
+	var g711Dec *rtplpcm.Decoder
+	var g711Forma *format.G711
+	var audioMedi *description.Media
+	if r.cfg.AudioEnabled {
+		// Try AAC first
+		audioMedi = desc.FindFormat(&audioForma)
+		if audioMedi != nil {
+			ad, err := audioForma.CreateDecoder()
+			if err != nil {
+				h265Logger.Warn("audio decoder creation failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
+			} else {
+				audioDec = ad
+				if _, err := client.Setup(desc.BaseURL, audioMedi, 0, 1); err != nil {
+					h265Logger.Warn("audio SETUP failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
+					audioDec = nil
+				} else {
+					if audioForma.Config != nil {
+						if enc, err := audioForma.Config.Marshal(); err == nil {
+							r.audioMuxerConfig = enc
+						}
+					}
+					r.audioCodec = "aac"
+					h265Logger.Info("AAC audio track detected", "camera_id", r.cfg.CameraID)
+				}
+			}
+		}
+		// If no AAC, try G.711
+		if audioDec == nil {
+			audioMedi = desc.FindFormat(&g711Forma)
+			if audioMedi != nil {
+				dec := &rtplpcm.Decoder{BitDepth: 8, ChannelCount: 1}
+				if err := dec.Init(); err != nil {
+					h265Logger.Warn("G.711 decoder init failed", "camera_id", r.cfg.CameraID, "error", err)
+				} else {
+					g711Dec = dec
+					if _, err := client.Setup(desc.BaseURL, audioMedi, 0, 1); err != nil {
+						h265Logger.Warn("G.711 audio SETUP failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
+						g711Dec = nil
+					} else {
+						r.audioCodec = "g711"
+						r.g711MULaw = g711Forma.MULaw
+						r.g711SampleRate = g711Forma.SampleRate
+						// Build config for muxer: 1 byte muLaw flag + 4 bytes sample rate
+						muLawByte := byte(0)
+						if g711Forma.MULaw {
+							muLawByte = 1
+						}
+						rate := g711Forma.SampleRate
+						r.audioMuxerConfig = []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)}
+						h265Logger.Info("G.711 audio track detected", "camera_id", r.cfg.CameraID, "mulaw", g711Forma.MULaw, "rate", rate)
+					}
+				}
+			}
+		}
+		if audioDec == nil && g711Dec == nil {
+			h265Logger.Debug("no supported audio format found in stream", "camera_id", r.cfg.CameraID)
+		}
+	}
+
 	// Store initial parameter sets from SDP
 	if forma.VPS != nil {
 		r.vps = append([]byte(nil), forma.VPS...)
@@ -293,6 +363,69 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) error {
 			}
 		}
 	})
+
+	// Audio RTP handler.
+	if audioDec != nil {
+		// AAC handler
+		client.OnPacketRTP(audioMedi, audioForma, func(pkt *rtp.Packet) {
+			aus, err := audioDec.Decode(pkt)
+			if err != nil {
+				if err != rtpmpeg4audio.ErrMorePacketsNeeded {
+					h265Logger.Error("audio RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+				}
+				return
+			}
+			for _, aacData := range aus {
+				if r.Hub != nil {
+					r.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioAAC, aacData)
+				}
+				r.mu.Lock()
+				m := r.muxer
+				aid := r.audioTrackID
+				start := r.segStart
+				r.mu.Unlock()
+				if m != nil && aid > 0 {
+					pts := time.Since(start)
+					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
+					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
+						if err.Error() != "muxer is closed" {
+							h265Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+						}
+					}
+				}
+			}
+		})
+	} else if g711Dec != nil {
+		// G.711 handler — raw PCM, no complex decoding needed
+		client.OnPacketRTP(audioMedi, g711Forma, func(pkt *rtp.Packet) {
+			data, err := g711Dec.Decode(pkt)
+			if err != nil {
+				h265Logger.Error("G.711 RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+				return
+			}
+			if r.Hub != nil {
+				r.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioG711, data)
+			}
+			r.mu.Lock()
+			m := r.muxer
+			aid := r.audioTrackID
+			start := r.segStart
+			r.mu.Unlock()
+			if m != nil && aid > 0 {
+				pts := time.Since(start)
+				// G.711: 8kHz, 8-bit, mono. Duration = len(data) / 8000 seconds.
+				dur := time.Duration(len(data)) * time.Second / time.Duration(r.g711SampleRate)
+				if dur < time.Millisecond {
+					dur = time.Millisecond
+				}
+				if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
+					if err.Error() != "muxer is closed" {
+						h265Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
+					}
+				}
+			}
+		})
+	}
 
 	r.setStatus(model.StatusRecording)
 	if _, err := client.Play(nil); err != nil {
@@ -378,19 +511,30 @@ func (r *H265Recorder) writeFrames(done chan struct{}) {
 				h265Logger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 				continue
 			}
-			r.muxer = muxer.NewMP4Muxer(tempPath)
-			trackID, err := r.muxer.AddH265Track(r.vps, r.sps, r.pps)
+			m := muxer.NewMP4Muxer(tempPath)
+			trackID, err := m.AddH265Track(r.vps, r.sps, r.pps)
 			if err != nil {
 				h265Logger.Error("failed to add H265 track", "camera_id", r.cfg.CameraID, "error", err)
-				r.muxer = nil
 				// Clean up empty temp file on muxer init failure
 				os.Remove(tempPath)
 				continue
 			}
 			r.trackID = trackID
+			// Add audio track if audio config is available.
+			if len(r.audioMuxerConfig) > 0 && r.audioCodec != "" {
+				aID, err := m.AddAudioTrack(r.audioCodec, r.audioMuxerConfig)
+				if err != nil {
+					h265Logger.Error("failed to add audio track", "camera_id", r.cfg.CameraID, "codec", r.audioCodec, "error", err)
+				} else {
+					r.audioTrackID = aID
+				}
+			}
+			r.mu.Lock()
+			r.muxer = m
+			r.segStart = time.Now()
+			r.mu.Unlock()
 			r.curTempPath = tempPath
 			r.curFinalPath = finalPath
-			r.segStart = time.Now()
 			r.lastFrameTime = r.segStart
 			r.frameCount = 0
 		}
@@ -421,7 +565,10 @@ func (r *H265Recorder) closeCurrentSegment() {
 		if r.curTempPath != "" {
 			os.Remove(r.curTempPath)
 		}
+		r.mu.Lock()
 		r.muxer = nil
+		r.audioTrackID = 0
+		r.mu.Unlock()
 		r.curTempPath = ""
 		r.curFinalPath = ""
 		r.frameCount = 0
@@ -467,7 +614,10 @@ func (r *H265Recorder) closeCurrentSegment() {
 		}
 	}
 
+	r.mu.Lock()
 	r.muxer = nil
+	r.audioTrackID = 0
+	r.mu.Unlock()
 	r.curTempPath = ""
 	r.curFinalPath = ""
 	r.frameCount = 0

@@ -17,6 +17,37 @@ type frameMsg struct {
 	au  [][]byte
 }
 
+// AudioCallback is called for each decoded audio frame.
+// Implementations MUST be non-blocking — if the internal buffer is full,
+// frames are dropped silently to protect the recording/streaming pipeline.
+type AudioCallback func(pts int64, codec AudioCodec, data []byte)
+
+// audioFrameMsg is an internal audio frame representation passed through consumer channels.
+type audioFrameMsg struct {
+	pts   int64
+	codec AudioCodec
+	data  []byte
+}
+
+// audioConsumer holds a subscribed audio consumer with its own buffered channel,
+// drain goroutine, and per-consumer drop counter.
+type audioConsumer struct {
+	cb     AudioCallback
+	ch     chan audioFrameMsg
+	done   chan struct{}
+	drops  atomic.Int64
+	sendMu sync.RWMutex
+	closed bool
+}
+
+// drain reads audio frames from the consumer's channel and calls the callback.
+func (c *audioConsumer) drain() {
+	defer close(c.done)
+	for msg := range c.ch {
+		c.cb(msg.pts, msg.codec, msg.data)
+	}
+}
+
 // consumerEntry holds a subscribed consumer with its own buffered channel,
 // drain goroutine, and per-consumer drop counter.
 type consumerEntry struct {
@@ -43,14 +74,23 @@ func (e *consumerEntry) drain() {
 //
 // All methods are safe for concurrent use.
 type StreamHub struct {
-	mu        sync.Mutex
-	consumers map[string]*consumerEntry
+	mu                 sync.Mutex
+	consumers          map[string]*consumerEntry
+	audioConsumers     map[string]*audioConsumer
+	consumerBufferSize int // buffered channel size per video consumer (default: 150)
+
+	// OnDrop is an optional callback invoked when a frame is dropped for a consumer
+	// due to buffer overflow. The consumerID identifies which consumer's buffer was full.
+	// This can be used for observability (e.g., Prometheus counters).
+	OnDrop func(consumerID string)
 }
 
 // NewStreamHub creates a new StreamHub with no consumers.
 func NewStreamHub() *StreamHub {
 	return &StreamHub{
-		consumers: make(map[string]*consumerEntry),
+		consumers:          make(map[string]*consumerEntry),
+		audioConsumers:     make(map[string]*audioConsumer),
+		consumerBufferSize: 150, // ~7.5s at 20fps, reduces StreamHub-level drops
 	}
 }
 
@@ -68,7 +108,7 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 
 	entry := &consumerEntry{
 		cb:   cb,
-		ch:   make(chan frameMsg, 100), // ~5s at 20fps, matches HLS writeBufSize
+		ch:   make(chan frameMsg, h.consumerBufferSize),
 		done: make(chan struct{}),
 	}
 	h.consumers[id] = entry
@@ -104,25 +144,33 @@ func (h *StreamHub) Unsubscribe(id string) {
 // Broadcast does NOT wait for any consumer to process the frame.
 func (h *StreamHub) Broadcast(pts int64, au [][]byte) {
 	h.mu.Lock()
-	// Snapshot entries to avoid holding hub lock during sends
-	entries := make([]*consumerEntry, 0, len(h.consumers))
-	for _, entry := range h.consumers {
-		entries = append(entries, entry)
+	// Snapshot entries with IDs to avoid holding hub lock during sends
+	// and to allow the OnDrop callback to reference the consumer ID.
+	type entryWithID struct {
+		id    string
+		entry *consumerEntry
+	}
+	entries := make([]entryWithID, 0, len(h.consumers))
+	for id, entry := range h.consumers {
+		entries = append(entries, entryWithID{id: id, entry: entry})
 	}
 	h.mu.Unlock()
 
-	for _, entry := range entries {
-		entry.sendMu.RLock()
-		if entry.closed {
-			entry.sendMu.RUnlock()
+	for _, e := range entries {
+		e.entry.sendMu.RLock()
+		if e.entry.closed {
+			e.entry.sendMu.RUnlock()
 			continue
 		}
 		select {
-		case entry.ch <- frameMsg{pts: pts, au: au}:
+		case e.entry.ch <- frameMsg{pts: pts, au: au}:
 		default:
-			entry.drops.Add(1)
+			e.entry.drops.Add(1)
+			if h.OnDrop != nil {
+				h.OnDrop(e.id)
+			}
 		}
-		entry.sendMu.RUnlock()
+		e.entry.sendMu.RUnlock()
 	}
 }
 
@@ -144,4 +192,102 @@ func (h *StreamHub) ConsumerCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.consumers)
+}
+
+// SubscribeAudio registers an audio consumer with the given unique ID and callback.
+// Returns an error if a consumer with the same ID already exists.
+// The callback is called from a dedicated goroutine — it may block without
+// affecting other consumers or the BroadcastAudio caller.
+func (h *StreamHub) SubscribeAudio(id string, cb AudioCallback) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if _, ok := h.audioConsumers[id]; ok {
+		return fmt.Errorf("audio consumer %q already subscribed", id)
+	}
+
+	entry := &audioConsumer{
+		cb:   cb,
+		ch:   make(chan audioFrameMsg, 50), // audio frames smaller than video, 50 frames buffer
+		done: make(chan struct{}),
+	}
+	h.audioConsumers[id] = entry
+	go entry.drain()
+	return nil
+}
+
+// UnsubscribeAudio removes the audio consumer with the given ID.
+// It waits for the consumer's drain goroutine to finish processing buffered frames.
+// If the consumer does not exist, UnsubscribeAudio is a no-op.
+func (h *StreamHub) UnsubscribeAudio(id string) {
+	h.mu.Lock()
+	entry, ok := h.audioConsumers[id]
+	if ok {
+		delete(h.audioConsumers, id)
+	}
+	h.mu.Unlock()
+
+	if ok {
+		entry.sendMu.Lock()
+		entry.closed = true
+		entry.sendMu.Unlock()
+		close(entry.ch) // signal drain goroutine to stop
+		<-entry.done    // wait for drain to finish
+	}
+}
+
+// BroadcastAudio sends an audio frame to all subscribed audio consumers.
+// This is non-blocking — it uses a non-blocking channel send per consumer.
+// If a consumer's buffer is full, the frame is dropped and the consumer's
+// drop counter is incremented atomically.
+//
+// BroadcastAudio does NOT wait for any consumer to process the frame.
+func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
+	h.mu.Lock()
+	type entryWithID struct {
+		id    string
+		entry *audioConsumer
+	}
+	entries := make([]entryWithID, 0, len(h.audioConsumers))
+	for id, entry := range h.audioConsumers {
+		entries = append(entries, entryWithID{id: id, entry: entry})
+	}
+	h.mu.Unlock()
+
+	for _, e := range entries {
+		e.entry.sendMu.RLock()
+		if e.entry.closed {
+			e.entry.sendMu.RUnlock()
+			continue
+		}
+		select {
+		case e.entry.ch <- audioFrameMsg{pts: pts, codec: codec, data: data}:
+		default:
+			e.entry.drops.Add(1)
+			if h.OnDrop != nil {
+				h.OnDrop(e.id)
+			}
+		}
+		e.entry.sendMu.RUnlock()
+	}
+}
+
+// AudioDrops returns the total number of audio frames dropped for the given consumer
+// due to buffer overflow. Returns 0 for non-existent consumers.
+func (h *StreamHub) AudioDrops(id string) int64 {
+	h.mu.Lock()
+	entry, ok := h.audioConsumers[id]
+	h.mu.Unlock()
+
+	if !ok {
+		return 0
+	}
+	return entry.drops.Load()
+}
+
+// AudioConsumerCount returns the number of currently subscribed audio consumers.
+func (h *StreamHub) AudioConsumerCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.audioConsumers)
 }

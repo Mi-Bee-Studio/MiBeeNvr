@@ -213,3 +213,170 @@ func TestAddH264TrackParsesResolution(t *testing.T) {
 	assert.Equal(t, 1280, m.tracks[0].width)
 	assert.Equal(t, 720, m.tracks[0].height)
 }
+
+func TestMP4MuxerAudio(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio_video.mp4")
+
+	m := NewMP4Muxer(path)
+
+	// Add H.264 video track
+	videoTrackID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+	assert.Equal(t, 1, videoTrackID)
+
+	// Add AAC audio track
+	// AudioSpecificConfig for AAC-LC, 44100Hz, stereo: 0x12 0x10
+	aacConfig := []byte{0x12, 0x10}
+	audioTrackID, err := m.AddAudioTrack("aac", aacConfig)
+	require.NoError(t, err)
+	assert.Equal(t, 2, audioTrackID)
+
+	// Write video samples
+	idrNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x40}
+	nonIDRNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, 0x24}
+
+	err = m.WriteSample(videoTrackID, idrNAL, 0, 33*time.Millisecond)
+	require.NoError(t, err)
+	err = m.WriteSample(videoTrackID, nonIDRNAL, 33*time.Millisecond, 33*time.Millisecond)
+	require.NoError(t, err)
+
+	// Write audio samples (raw AAC frames, no length prefix)
+	aacFrame1 := []byte{0x21, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}
+	aacFrame2 := []byte{0x21, 0x10, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00}
+
+	err = m.WriteAudioSample(audioTrackID, aacFrame1, 0, 23*time.Millisecond)
+	require.NoError(t, err)
+	err = m.WriteAudioSample(audioTrackID, aacFrame2, 23*time.Millisecond, 23*time.Millisecond)
+	require.NoError(t, err)
+
+	err = m.Close()
+	require.NoError(t, err)
+
+	// Verify the file exists and has content
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+
+	// Verify the file starts with ftyp box
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(data), 8)
+	assert.True(t, bytes.HasPrefix(data[4:8], []byte("ftyp")),
+		"File should start with ftyp box, got: %x", data[4:8])
+
+	// Verify the muxer has 2 tracks
+	assert.Len(t, m.tracks, 2)
+
+	// Verify track types
+	assert.False(t, m.tracks[0].isAudio, "track 0 should be video")
+	assert.True(t, m.tracks[1].isAudio, "track 1 should be audio")
+
+	// Verify total duration (video: 66ms, audio: 46ms → total 112ms)
+	assert.Equal(t, 112*time.Millisecond, m.Duration())
+}
+
+func TestG711AudioTrack(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "g711_video.mp4")
+
+	m := NewMP4Muxer(path)
+
+	// Add H.264 video track
+	videoTrackID, err := m.AddH264Track(testSPS, testPPS)
+	require.NoError(t, err)
+	assert.Equal(t, 1, videoTrackID)
+
+	// Add G.711 μ-law audio track
+	// config: 1 byte muLaw flag (1=μ-law) + 4 bytes sample rate (8000 = 0x00001F40)
+	g711Config := []byte{0x01, 0x00, 0x00, 0x1F, 0x40}
+	audioTrackID, err := m.AddAudioTrack("g711", g711Config)
+	require.NoError(t, err)
+	assert.Equal(t, 2, audioTrackID)
+
+	// Write video samples
+	idrNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x28, 0x01, 0xAF, 0x09}
+	err = m.WriteSample(videoTrackID, idrNAL, 0, 33*time.Millisecond)
+	require.NoError(t, err)
+
+	// Write G.711 audio samples (raw PCM, 8kHz, 8-bit)
+	g711Data := make([]byte, 160) // 20ms at 8kHz
+	for i := range g711Data {
+		g711Data[i] = byte(i % 256)
+	}
+	err = m.WriteAudioSample(audioTrackID, g711Data, 0, 20*time.Millisecond)
+	require.NoError(t, err)
+
+	err = m.Close()
+	require.NoError(t, err, "G.711 muxer Close must succeed")
+
+	// Verify file
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+
+	// Verify file starts with ftyp
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(data), 8)
+	assert.True(t, bytes.HasPrefix(data[4:8], []byte("ftyp")))
+
+	// Verify track types
+	assert.Len(t, m.tracks, 2)
+	assert.False(t, m.tracks[0].isAudio)
+	assert.True(t, m.tracks[1].isAudio)
+	assert.Equal(t, "g711", m.tracks[1].audioCodec)
+	assert.True(t, m.tracks[1].g711MULaw)
+	assert.Equal(t, 8000, m.tracks[1].g711Rate)
+}
+
+func TestAddAudioTrackInvalidCodec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.mp4")
+
+	m := NewMP4Muxer(path)
+
+	// Only "aac" is supported for now
+	_, err := m.AddAudioTrack("opus", []byte{0x00})
+	assert.Error(t, err)
+}
+
+func TestWriteAudioSampleInvalidTrack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.mp4")
+
+	m := NewMP4Muxer(path)
+
+	aacConfig := []byte{0x12, 0x10}
+	audioTrackID, err := m.AddAudioTrack("aac", aacConfig)
+	require.NoError(t, err)
+
+	// Writing to a non-existent audio track should error
+	err = m.WriteAudioSample(audioTrackID+99, []byte{0x00}, 0, 23*time.Millisecond)
+	assert.Error(t, err)
+}
+
+func TestAudioOnlyMP4(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio_only.mp4")
+
+	m := NewMP4Muxer(path)
+
+	aacConfig := []byte{0x12, 0x10}
+	audioTrackID, err := m.AddAudioTrack("aac", aacConfig)
+	require.NoError(t, err)
+
+	aacFrame := []byte{0x21, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}
+	err = m.WriteAudioSample(audioTrackID, aacFrame, 0, 23*time.Millisecond)
+	require.NoError(t, err)
+	err = m.WriteAudioSample(audioTrackID, aacFrame, 23*time.Millisecond, 23*time.Millisecond)
+	require.NoError(t, err)
+
+	err = m.Close()
+	require.NoError(t, err)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+}

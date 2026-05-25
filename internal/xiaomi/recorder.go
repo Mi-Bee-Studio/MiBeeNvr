@@ -58,15 +58,16 @@ type XiaomiCloudConfig struct {
 
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
-	CameraID    string
-	DID         string             // Device ID extracted from xiaomi:// URL (e.g. "655448418")
-	Model       string             // Camera model (e.g. ModelC200, ModelC300)
-	CloudCfg    XiaomiCloudConfig   // Cloud API credentials for MISS URL resolution
-	SegmentDur  time.Duration
-	MaxBackoff  time.Duration
-	InitBackoff time.Duration
-	DB          RecordingDB
-	ErrReporter ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	CameraID     string
+	DID          string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model        string            // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
+	SegmentDur   time.Duration
+	MaxBackoff   time.Duration
+	InitBackoff  time.Duration
+	DB           RecordingDB
+	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -80,13 +81,13 @@ type XiaomiRecorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	muxer   *muxer.MP4Muxer
-	trackID int
-
-	curFinalPath string
-	curTempPath  string
-	segStart     time.Time
-	frameCount   int
+	muxer       *muxer.MP4Muxer
+	trackID     int
+	audioTrackID int
+	curFinalPath  string
+	curTempPath   string
+	segStart      time.Time
+	frameCount    int
 	lastFrameTime time.Time
 
 	// Codec state (probed from first packets)
@@ -95,6 +96,9 @@ type XiaomiRecorder struct {
 	pps     []byte
 	vps     []byte // H265 only
 	codecOK bool   // true once codec type is determined
+
+	// Audio state (probed from first audio packet)
+	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
 
 	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
@@ -229,6 +233,7 @@ func (r *XiaomiRecorder) recordError(errorType string) {
 		r.metrics.CameraErrors.WithLabelValues(r.cfg.CameraID, errorType).Inc()
 	}
 }
+
 // reportVendorError checks if the error indicates an unsupported TUTK vendor
 // and, if so, reports a detailed CameraErrorDetail via the ErrorReporter.
 // This fires on every reconnect attempt so the frontend always has current state.
@@ -248,7 +253,7 @@ func (r *XiaomiRecorder) reportVendorError(err error) {
 		Message:    msg,
 		DetectedAt: time.Now(),
 	})
-	}
+}
 
 // extractQuotedValue extracts the content between the first pair of double quotes in s.
 // Returns empty string if no quotes are found.
@@ -344,6 +349,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) e
 	r.sps = nil
 	r.pps = nil
 	r.vps = nil
+	r.audioCodecID = 0
 
 	var lastTimestamp uint64
 
@@ -361,7 +367,15 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) e
 			return fmt.Errorf("miss read: %w", err)
 		}
 
-		// Skip non-video packets (audio codecs are >= 1024).
+		// Handle audio packets when AudioEnabled.
+		if pkt.CodecID >= 1024 {
+			if r.cfg.AudioEnabled {
+				r.forwardAudio(pkt.CodecID, pkt.Payload)
+			}
+			continue
+		}
+
+		// Skip other non-video packets.
 		if pkt.CodecID != missCodecH264 && pkt.CodecID != missCodecH265 {
 			continue
 		}
@@ -448,6 +462,22 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			return
 		}
 		r.trackID = trackID
+
+		// Add audio track if audio codec detected.
+		// Currently only AAC is supported by the muxer; G.711 (PCMA/PCMU/PCM)
+		// will be skipped with a debug log. When G.711 muxer support is added,
+		// audioTrackID will be set and forwardAudio will write to the segment.
+		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
+			_, ok := missCodecToAudio(r.audioCodecID)
+			if ok {
+				aID, err := r.muxer.AddAudioTrack("aac", nil)
+				if err != nil {
+					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
+				} else {
+					r.audioTrackID = aID
+				}
+			}
+		}
 		r.curTempPath = tempPath
 		r.curFinalPath = finalPath
 		r.segStart = time.Now()
@@ -533,6 +563,19 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			return
 		}
 		r.trackID = trackID
+
+		// Add audio track if audio codec detected (same as H264 path).
+		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
+			_, ok := missCodecToAudio(r.audioCodecID)
+			if ok {
+				aID, err := r.muxer.AddAudioTrack("aac", nil)
+				if err != nil {
+					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
+				} else {
+					r.audioTrackID = aID
+				}
+			}
+		}
 		r.curTempPath = tempPath
 		r.curFinalPath = finalPath
 		r.segStart = time.Now()
@@ -595,6 +638,63 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 	}
 }
 
+// missCodecToAudio maps a MISS audio codec ID to a model.AudioCodec.
+// Returns (codec, true) for known codecs, ("", false) for unknown/unsupported.
+func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
+	switch codecID {
+	case missCodecPCMA, missCodecPCMU, missCodecPCM:
+		return model.AudioG711, true
+	default:
+		return "", false
+	}
+}
+
+// forwardAudio broadcasts audio data via StreamHub (non-blocking)
+// and writes to the MP4 muxer when an audio track is available.
+// Skips silently when AudioEnabled is false.
+// Unknown codec IDs are skipped with a warning log.
+func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
+	if !r.cfg.AudioEnabled {
+		return
+	}
+	audioCodec, ok := missCodecToAudio(codecID)
+	if !ok {
+		xiaomiLogger.Warn("skipping unknown audio codec", "camera_id", r.cfg.CameraID, "codec_id", codecID)
+		return
+	}
+
+	// Remember the audio codec ID for muxer track creation.
+	if r.audioCodecID == 0 {
+		r.audioCodecID = codecID
+		xiaomiLogger.Info("audio codec detected", "camera_id", r.cfg.CameraID, "codec_id", codecID, "codec", audioCodec)
+	}
+
+	// Broadcast to live consumers via StreamHub.
+	if r.Hub != nil && r.Hub.AudioConsumerCount() > 0 {
+		pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
+		r.Hub.BroadcastAudio(pts, audioCodec, payload)
+	}
+
+	// Write audio to MP4 muxer if audio track is available.
+	// Note: The muxer currently only supports AAC tracks, so audioTrackID
+	// remains 0 for G.711. When G.711 muxer support is added, this will
+	// automatically write audio samples to the segment file.
+	r.mu.Lock()
+	m := r.muxer
+	aid := r.audioTrackID
+	start := r.segStart
+	r.mu.Unlock()
+	if m != nil && aid > 0 {
+		pts := time.Since(start)
+		// G.711 audio: 20ms frames at 8kHz = 160 samples per frame.
+		// Duration per frame: 20ms.
+		dur := 20 * time.Millisecond
+		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
+			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+		}
+	}
+}
+
 // closeCurrentSegment finalizes the current MP4 segment.
 func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {
@@ -652,6 +752,8 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 	}
 
 	r.muxer = nil
+	r.trackID = 0
+	r.audioTrackID = 0
 	r.curTempPath = ""
 	r.curFinalPath = ""
 	r.frameCount = 0
