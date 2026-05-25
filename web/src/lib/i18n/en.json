@@ -285,13 +285,9 @@
   "recording.format.h265": "MP4 (HEVC)",
   "recording.format.h264": "MP4",
   "recording.format.mjpeg": "JPEG",
-  "pagination": {
-    "jumpToPage": "Go to page",
-    "of": "of"
-  },
-  "backToTop": {
-    "common.backToTop": "Back to top"
-  },
+  "pagination.jumpToPage": "Go to page",
+  "pagination.of": "of",
+  "common.backToTop": "Back to top",
   "settings.webdav": "WebDAV Settings",
   "settings.webdavDesc": "Configure WebDAV file access and upload service.",
   "settings.webdavEnabled": "Enable WebDAV",
@@ -389,6 +385,7 @@
   "dashboard.errorState": "Error",
   "dashboard.live": "Live",
   "dashboard.snapshotMode": "Snapshot mode",
+  "dashboard.healthScore": "Health Score: {score}",
   "onvif.credentials": "ONVIF Credentials (optional)",
   "onvif.username": "Username",
   "onvif.password": "Password",
@@ -733,5 +730,21 @@
   "settings.streaming.srt.noStreams": "No SRT streams configured",
   "settings.streaming.srt.noStreamsHint": "Add a stream to receive video over SRT.",
   "settings.streaming.srt.modeListener": "Listener",
-  "settings.streaming.srt.modeCaller": "Caller"
+  "settings.streaming.srt.modeCaller": "Caller",
+  "health.score": "Health Score",
+  "health.score.excellent": "Excellent",
+  "health.score.good": "Good",
+  "health.score.poor": "Poor",
+  "health.noCameras": "No cameras found",
+  "health.uptime": "Uptime",
+  "health.failures": "Failures",
+  "health.trend": "Trend",
+  "health.trend.stable": "Stable",
+  "health.trend.improving": "Improving",
+  "health.trend.degrading": "Degrading",
+  "health.filter.allTypes": "All Types",
+  "health.status.recording": "Recording",
+  "health.status.reconnecting": "Reconnecting",
+  "health.status.error": "Error",
+  "health.status.unknown": "Unknown"
 }

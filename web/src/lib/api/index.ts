@@ -161,6 +161,8 @@ export {
   getHealthStatus,
   getHealthEvents,
   getCameraHealth,
+  getHealthCameras,
+  getStabilityData,
 } from './health';
 export type {
   HealthStatus,
@@ -170,4 +172,8 @@ export type {
   HealthStatusResponse,
   HealthEventsResponse,
   HealthEventsParams,
+  CameraHealthDetail,
+  HealthCamerasResponse,
+  StabilityMetrics,
+  StabilityDataResponse,
 } from './health';

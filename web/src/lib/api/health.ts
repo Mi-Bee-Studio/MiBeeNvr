@@ -51,6 +51,7 @@ export interface HealthEventsResponse {
 // Query parameters for health events
 export interface HealthEventsParams {
   camera_id?: string;
+  event_type?: HealthEventType;
   since?: string;
   limit?: number;
   offset?: number;
@@ -67,6 +68,7 @@ export async function getHealthStatus(): Promise<HealthStatusResponse> {
 export async function getHealthEvents(params?: HealthEventsParams): Promise<HealthEventsResponse> {
   const query = new URLSearchParams();
   if (params?.camera_id) query.set('camera_id', params.camera_id);
+  if (params?.event_type) query.set('event_type', params.event_type);
   if (params?.since) query.set('since', params.since);
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.offset !== undefined) query.set('offset', String(params.offset));
@@ -79,4 +81,46 @@ export async function getHealthEvents(params?: HealthEventsParams): Promise<Heal
 // Fetch health status for a single camera
 export async function getCameraHealth(cameraId: string): Promise<CameraHealth> {
   return apiRequest<CameraHealth>(`/cameras/${cameraId}/health`);
+}
+
+// Camera health detail with score
+export interface CameraHealthDetail {
+  camera_id: string;
+  latest_status: string;
+  score: number;
+  score_factors?: Record<string, number>;
+}
+
+// Health cameras response (map of camera ID to detail)
+export interface HealthCamerasResponse {
+  [cameraId: string]: CameraHealthDetail;
+}
+
+// Per-camera stability metrics
+export interface StabilityMetrics {
+  uptime_percent: number;
+  total_failures: number;
+  mtbf: string;
+  avg_session: string;
+  trend: string;
+  current_status: string;
+}
+
+// Stability data response (map of camera ID to metrics)
+export interface StabilityDataResponse {
+  cameras: { [cameraId: string]: StabilityMetrics };
+}
+
+// Fetch health cameras (public, no auth required)
+export async function getHealthCameras(): Promise<HealthCamerasResponse> {
+  const response = await fetch('/api/health/cameras');
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+// Fetch stability data (auth required)
+export async function getStabilityData(): Promise<StabilityDataResponse> {
+  return apiRequest<StabilityDataResponse>('/health/stability');
 }

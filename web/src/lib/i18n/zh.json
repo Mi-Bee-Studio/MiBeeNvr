@@ -285,13 +285,9 @@
   "recording.format.h265": "MP4 (HEVC)",
   "recording.format.h264": "MP4",
   "recording.format.mjpeg": "JPEG",
-  "pagination": {
-    "jumpToPage": "跳转到",
-    "of": "/"
-  },
-  "backToTop": {
-    "common.backToTop": "回到顶部"
-  },
+  "pagination.jumpToPage": "跳转到",
+  "pagination.of": "/",
+  "common.backToTop": "回到顶部",
   "settings.webdav": "WebDAV 配置",
   "settings.webdavDesc": "配置 WebDAV 文件访问和上传服务。",
   "settings.webdavEnabled": "启用 WebDAV",
@@ -389,6 +385,7 @@
   "dashboard.errorState": "错误",
   "dashboard.live": "实时",
   "dashboard.snapshotMode": "快照模式",
+  "dashboard.healthScore": "健康分：{score}",
   "onvif.credentials": "ONVIF 凭据（可选）",
   "onvif.username": "用户名",
   "onvif.password": "密码",
@@ -733,5 +730,21 @@
   "settings.streaming.srt.noStreams": "未配置 SRT 流",
   "settings.streaming.srt.noStreamsHint": "添加流以通过 SRT 接收视频。",
   "settings.streaming.srt.modeListener": "监听模式",
-  "settings.streaming.srt.modeCaller": "呼叫模式"
+  "settings.streaming.srt.modeCaller": "呼叫模式",
+  "health.score": "健康评分",
+  "health.score.excellent": "优秀",
+  "health.score.good": "良好",
+  "health.score.poor": "较差",
+  "health.noCameras": "未找到摄像头",
+  "health.uptime": "在线率",
+  "health.failures": "故障次数",
+  "health.trend": "趋势",
+  "health.trend.stable": "稳定",
+  "health.trend.improving": "改善中",
+  "health.trend.degrading": "恶化中",
+  "health.filter.allTypes": "所有类型",
+  "health.status.recording": "录制中",
+  "health.status.reconnecting": "重连中",
+  "health.status.error": "异常",
+  "health.status.unknown": "未知"
 }

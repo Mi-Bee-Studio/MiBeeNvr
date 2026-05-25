@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
+  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -11,6 +11,26 @@
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
+  import Tab from '$lib/components/Tab.svelte';
+  import HealthHistory from './HealthHistory.svelte';
+
+  // Tab state
+  let { initialTab = 'dashboard' }: { initialTab?: string } = $props();
+  let activeTab = $state('dashboard');
+
+  $effect(() => {
+    activeTab = initialTab;
+  });
+
+  let tabs = $derived([
+    { id: 'dashboard', label: t('nav.dashboard'), icon: Video },
+    { id: 'health', label: t('health.title'), icon: Activity },
+  ]);
+
+  function handleTabChange(tabId: string) {
+    activeTab = tabId;
+    window.location.hash = tabId === 'health' ? '#/dashboard/health' : '#/dashboard';
+  }
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -28,6 +48,7 @@
   let snapshotUrls = $state<Record<string, string>>({});
   let snapshotLoading = $state<Record<string, boolean>>({});
   let snapshotTransientErrors = $state<Record<string, boolean>>({});
+  let healthScores = $state<Record<string, number>>({});
 
   // Snapshot manager — handles fetch, interval, and cleanup lifecycle
   const snapshotMgr = createSnapshotManager({
@@ -197,6 +218,17 @@
     } finally {
       loading = false;
     }
+    // Fetch camera health scores (public, no auth)
+    try {
+      const healthData = await getHealthCameras();
+      const scores: Record<string, number> = {};
+      for (const [id, detail] of Object.entries(healthData)) {
+        scores[id] = detail.score;
+      }
+      healthScores = scores;
+    } catch (e) {
+      console.warn('Failed to load camera health scores:', e);
+    }
     // Load protocol capabilities
     try {
       const list = await listProtocols();
@@ -261,6 +293,10 @@
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
   <main class="mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6" style="max-width: 100%;">
+    <!-- Tab bar -->
+    <Tab {tabs} {activeTab} onchange={handleTabChange} />
+
+    {#if activeTab === 'dashboard'}
     <!-- Header -->
     <div class="flex items-center justify-between mb-4 sm:mb-6">
       <h1 class="text-lg sm:text-xl font-bold th-text-primary flex items-center gap-2">
@@ -454,6 +490,19 @@
               </span>
             {/if}
 
+            <!-- Health indicator dot + score -->
+            {#if healthScores[camera.id] !== undefined}
+              {@const hs = healthScores[camera.id]}
+              {@const healthColor = hs >= 80 ? 'var(--color-success)' : hs >= 30 ? 'var(--color-warning)' : 'var(--color-danger)'}
+              <span
+                class="absolute top-2 left-2 z-10 flex items-center gap-1 bg-black/60 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full select-none"
+                title={t('dashboard.healthScore', { score: hs })}
+              >
+                <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {healthColor}"></span>
+                {hs}
+              </span>
+            {/if}
+
             <!-- PTZ Overlay for PTZ-capable cameras -->
             {#if ptzOpenIndex === index && getProtocolCapabilities(camera.protocol, protocolsMap).ptz}
               <div
@@ -477,6 +526,11 @@
       </div>
     {/if}
 
+    {:else if activeTab === 'health'}
+      <div class="health-tab-content">
+        <HealthHistory />
+      </div>
+    {/if}
   </main>
 </div>
 
@@ -506,5 +560,10 @@
       opacity: 1;
       transform: scale(1);
     }
+  }
+
+  /* Override HealthHistory's header padding when embedded in Dashboard tab */
+  .health-tab-content > :global(:first-child) {
+    padding-top: 0 !important;
   }
 </style>

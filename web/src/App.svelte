@@ -12,7 +12,6 @@
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Setup from './routes/Setup.svelte';
-  import HealthHistory from './routes/HealthHistory.svelte';
 
   import Header from './components/Header';
 
@@ -98,20 +97,13 @@
       return { route: 'stats', params: {} };
     }
 
-    if (segments[0] === 'health') {
-      return { route: 'health', params: {} };
-    }
-
-
-
-
-
     if (segments[0] === 'settings') {
       return { route: 'settings', params: {} };
     }
 
     if (segments[0] === 'dashboard') {
-      return { route: 'dashboard', params: {} };
+      const tab = segments[1] === 'health' ? 'health' : 'dashboard';
+      return { route: 'dashboard', params: { tab } };
     }
 
     // Default to login for unknown routes
@@ -120,6 +112,11 @@
 
   // Current route — initialize from hash synchronously to prevent
   // Login component from redirecting to recordings before onMount runs
+  // Redirect legacy #/health route
+  if (typeof window !== 'undefined' && window.location.hash === '#/health') {
+    window.location.replace('#/dashboard/health');
+  }
+
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
   let currentRoute = $state(initialRoute.route);
   let params: Record<string, string> = $state(initialRoute.params);
@@ -127,6 +124,11 @@
 
   function updateRoute() {
     const hash = window.location.hash;
+    // Redirect legacy #/health route
+    if (hash === '#/health') {
+      window.location.replace('#/dashboard/health');
+      return;
+    }
     const { route, params: routeParams } = parseRoute(hash);
     currentRoute = route;
     params = routeParams;
@@ -189,9 +191,7 @@
     {:else if currentRoute === 'settings'}
       <Settings />
     {:else if currentRoute === 'dashboard'}
-      <Dashboard />
-    {:else if currentRoute === 'health'}
-      <HealthHistory />
+      <Dashboard initialTab={params.tab || 'dashboard'} />
     {/if}
   {/if}
 
