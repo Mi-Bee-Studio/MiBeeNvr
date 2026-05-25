@@ -4,10 +4,17 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
+
+// StabilityProvider provides camera stability quality data.
+type StabilityProvider interface {
+	GetAllStability() map[string]*health.StabilityData
+	GetStability(cameraID string) *health.StabilityData
+}
 
 // HealthManager provides camera health status data.
 type HealthManager interface {
@@ -33,8 +40,9 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 	q := r.URL.Query()
 
 	filter := storage.HealthEventsFilter{
-		CameraID: q.Get("camera_id"),
-		Since:    q.Get("since"),
+		CameraID:  q.Get("camera_id"),
+		EventType: q.Get("event_type"),
+		Since:     q.Get("since"),
 	}
 
 	if v := q.Get("limit"); v != "" {
@@ -91,4 +99,39 @@ func (h *Handler) handleGetCameraHealth(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, health)
+}
+
+// handleGetStability returns stability quality data for all cameras.
+func (h *Handler) handleGetStability(w http.ResponseWriter, r *http.Request) {
+	if h.stabilityProvider == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"cameras": map[string]*health.StabilityData{}})
+		return
+	}
+	all := h.stabilityProvider.GetAllStability()
+	if all == nil {
+		all = map[string]*health.StabilityData{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"cameras": all})
+}
+
+// handleGetCameraStability returns stability quality data for a single camera.
+func (h *Handler) handleGetCameraStability(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "camera_id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "missing camera id")
+		return
+	}
+
+	if h.stabilityProvider == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	data := h.stabilityProvider.GetStability(cameraID)
+	if data == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, data)
 }

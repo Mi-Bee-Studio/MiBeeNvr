@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 )
 
 // --- mock HealthManager ---
@@ -278,4 +279,338 @@ func newTestAuthMiddleware(username, password string) (func(http.Handler) http.H
 		})
 	}
 	return authMW, func() {}
+}
+
+// --- /api/health camera aggregation tests ---
+
+func TestHealth_CameraAggregation(t *testing.T) {
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "reconnecting", Score: 40},
+			"cam-3": {CameraID: "cam-3", LatestStatus: "error", Score: 10},
+		},
+	}
+	h := setupHealthHandler(t, mgr)
+
+	// Seed cameras in DB so names are available
+	ctx := context.Background()
+	h.db.UpsertCamera(ctx, "cam-1", "Front Door", "rtsp", "h264", "rtsp://x", "", "", true, "", "", "")
+	h.db.UpsertCamera(ctx, "cam-2", "Back Yard", "rtsp", "h264", "rtsp://x", "", "", true, "", "", "")
+	h.db.UpsertCamera(ctx, "cam-3", "Garage", "rtsp", "h264", "rtsp://x", "", "", true, "", "", "")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.NotNil(t, body.Cameras)
+	require.Equal(t, 3, body.Cameras.Total)
+	require.Equal(t, 1, body.Cameras.Recording)
+	require.Equal(t, 1, body.Cameras.Reconnecting)
+	require.Equal(t, 1, body.Cameras.Error)
+	require.Equal(t, 0, body.Cameras.Offline)
+	require.Len(t, body.Cameras.Details, 3)
+
+	// Verify details contain expected camera data
+	detailMap := map[string]CameraHealthDetail{}
+	for _, d := range body.Cameras.Details {
+		detailMap[d.ID] = d
+	}
+	require.Equal(t, "Front Door", detailMap["cam-1"].Name)
+	require.Equal(t, 100, detailMap["cam-1"].Score)
+	require.Equal(t, "healthy", detailMap["cam-1"].Status)
+}
+
+func TestHealth_CameraAggregation_NilManager(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	// No healthMgr set
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.Nil(t, body.Cameras)
+}
+
+func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{},
+	}
+	h := setupHealthHandler(t, mgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.NotNil(t, body.Cameras)
+	require.Equal(t, 0, body.Cameras.Total)
+	require.Empty(t, body.Cameras.Details)
+}
+
+func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-1": {CameraID: "cam-1", LatestStatus: "disabled", Score: 0},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "unknown", Score: 0},
+		},
+	}
+	h := setupHealthHandler(t, mgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var body HealthResponse
+	parseJSON(t, rr, &body)
+	require.NotNil(t, body.Cameras)
+	require.Equal(t, 2, body.Cameras.Total)
+	require.Equal(t, 0, body.Cameras.Recording)
+	require.Equal(t, 0, body.Cameras.Reconnecting)
+	require.Equal(t, 0, body.Cameras.Error)
+	require.Equal(t, 2, body.Cameras.Offline)
+}
+
+// --- /api/health/cameras endpoint tests ---
+
+func TestHealthCameras_OK(t *testing.T) {
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100, ScoreFactors: []string{"recording"}},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "error", Score: 10, ScoreFactors: []string{"connection_lost"}},
+		},
+	}
+	h := setupHealthHandler(t, mgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]*model.CameraHealth
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp, 2)
+	require.NotNil(t, resp["cam-1"])
+	require.Equal(t, 100, resp["cam-1"].Score)
+	require.Equal(t, "healthy", resp["cam-1"].LatestStatus)
+}
+
+func TestHealthCameras_NilManager(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]*model.CameraHealth
+	parseJSON(t, rr, &resp)
+	require.Equal(t, map[string]*model.CameraHealth{}, resp)
+}
+
+func TestHealthCameras_NilHealth(t *testing.T) {
+	mgr := &mockHealthManager{
+		allHealth: nil,
+	}
+	h := setupHealthHandler(t, mgr)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]*model.CameraHealth
+	parseJSON(t, rr, &resp)
+	require.Equal(t, map[string]*model.CameraHealth{}, resp)
+}
+
+func TestHealthCameras_PublicEndpoint(t *testing.T) {
+	// Verify /api/health/cameras is accessible without auth
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100},
+		},
+	}
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	authMW, _ := createTestAuthMW(t)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h.healthMgr = mgr
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+// --- mock StabilityProvider ---
+
+type mockStabilityProvider struct {
+	allStability   map[string]*health.StabilityData
+	cameraStability map[string]*health.StabilityData
+}
+
+func (m *mockStabilityProvider) GetAllStability() map[string]*health.StabilityData {
+	return m.allStability
+}
+
+func (m *mockStabilityProvider) GetStability(cameraID string) *health.StabilityData {
+	return m.cameraStability[cameraID]
+}
+
+// setupStabilityHandler creates a Handler with a mock StabilityProvider for testing.
+func setupStabilityHandler(t *testing.T, provider StabilityProvider) *Handler {
+	t.Helper()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	h.stabilityProvider = provider
+	return h
+}
+
+// --- handleGetStability tests ---
+
+func TestStability_All_OK(t *testing.T) {
+	provider := &mockStabilityProvider{
+		allStability: map[string]*health.StabilityData{
+			"cam1": {
+				UptimePercent: 95.8,
+				TotalFailures: 12,
+				MTBF:          "2h30m0s",
+				AvgSession:    "45m0s",
+				CurrentStatus: "online",
+				Trend:         "stable",
+			},
+			"cam2": {
+				UptimePercent: 80.0,
+				TotalFailures: 25,
+				MTBF:          "1h0m0s",
+				AvgSession:    "20m0s",
+				CurrentStatus: "offline",
+				Trend:         "degrading",
+			},
+		},
+	}
+	h := setupStabilityHandler(t, provider)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Cameras map[string]*health.StabilityData `json:"cameras"`
+	}
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp.Cameras, 2)
+
+	cam1, ok := resp.Cameras["cam1"]
+	require.True(t, ok)
+	require.Equal(t, 95.8, cam1.UptimePercent)
+	require.Equal(t, 12, cam1.TotalFailures)
+	require.Equal(t, "2h30m0s", cam1.MTBF)
+	require.Equal(t, "45m0s", cam1.AvgSession)
+	require.Equal(t, "online", cam1.CurrentStatus)
+	require.Equal(t, "stable", cam1.Trend)
+
+	cam2, ok := resp.Cameras["cam2"]
+	require.True(t, ok)
+	require.Equal(t, "degrading", cam2.Trend)
+}
+
+func TestStability_All_NilProvider(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	// No stabilityProvider set
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Cameras map[string]*health.StabilityData `json:"cameras"`
+	}
+	parseJSON(t, rr, &resp)
+	require.Empty(t, resp.Cameras)
+}
+
+func TestStability_All_EmptyResult(t *testing.T) {
+	provider := &mockStabilityProvider{
+		allStability: map[string]*health.StabilityData{},
+	}
+	h := setupStabilityHandler(t, provider)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Cameras map[string]*health.StabilityData `json:"cameras"`
+	}
+	parseJSON(t, rr, &resp)
+	require.Empty(t, resp.Cameras)
+}
+
+// --- handleGetCameraStability tests ---
+
+func TestStability_Camera_OK(t *testing.T) {
+	provider := &mockStabilityProvider{
+		cameraStability: map[string]*health.StabilityData{
+			"front-door": {
+				UptimePercent: 99.5,
+				TotalFailures: 2,
+				MTBF:          "12h0m0s",
+				AvgSession:    "6h0m0s",
+				LastFailure:   "2026-05-25T10:00:00Z",
+				CurrentStatus: "online",
+				Trend:         "improving",
+			},
+		},
+	}
+	h := setupStabilityHandler(t, provider)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability/front-door", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp health.StabilityData
+	parseJSON(t, rr, &resp)
+	require.Equal(t, 99.5, resp.UptimePercent)
+	require.Equal(t, 2, resp.TotalFailures)
+	require.Equal(t, "12h0m0s", resp.MTBF)
+	require.Equal(t, "online", resp.CurrentStatus)
+	require.Equal(t, "improving", resp.Trend)
+}
+
+func TestStability_Camera_NotFound(t *testing.T) {
+	provider := &mockStabilityProvider{
+		cameraStability: map[string]*health.StabilityData{},
+	}
+	h := setupStabilityHandler(t, provider)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability/nonexistent", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestStability_Camera_NilProvider(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability/cam1", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestStability_Camera_RequiresAuth(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+
+	authMW, _ := createTestAuthMW(t)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h.stabilityProvider = &mockStabilityProvider{
+		cameraStability: map[string]*health.StabilityData{
+			"cam1": {UptimePercent: 100, CurrentStatus: "online", Trend: "stable"},
+		},
+	}
+
+	// No auth → should get 401
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/stability/cam1", nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// With auth → 200
+	rr = doRequest(t, h.Routes(), "GET", "/api/health/stability/cam1", nil, "admin", "password123")
+	require.Equal(t, http.StatusOK, rr.Code)
 }

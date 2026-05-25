@@ -76,6 +76,23 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Checks["goroutines"] = HealthCheck{Status: "ok", Message: fmt.Sprintf("%d goroutines", numGoroutines)}
 	}
 
+	// Camera health aggregation (influences overall status)
+	if h.healthMgr != nil {
+		camHealth := h.aggregateCameraHealth(r)
+		resp.Cameras = camHealth
+		if camHealth != nil {
+			if camHealth.Error > 0 {
+				hasWarning = true // any camera in error = degraded
+			}
+			if camHealth.Reconnecting > 0 {
+				hasWarning = true // any reconnecting = degraded
+			}
+			if camHealth.Total > 0 && camHealth.Offline > camHealth.Total/2 {
+				hasError = true // majority offline = error
+			}
+		}
+	}
+
 	// Overall status
 	switch {
 	case hasError:
@@ -92,6 +109,63 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// SetupRequired — true when no password is configured
 	resp.SetupRequired = h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// aggregateCameraHealth builds a CameraHealthSummary from the health manager and camera DB.
+func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
+	allHealth := h.healthMgr.GetAllHealth()
+	if allHealth == nil {
+		allHealth = map[string]*model.CameraHealth{}
+	}
+
+	// Build camera name lookup from DB
+	nameLookup := map[string]string{}
+	if h.db != nil {
+		cameras, err := h.db.ListCameras(r.Context())
+		if err == nil {
+			for _, c := range cameras {
+				nameLookup[c.ID] = c.Name
+			}
+		}
+	}
+
+	summary := &CameraHealthSummary{Total: len(allHealth)}
+	for id, ch := range allHealth {
+		detail := CameraHealthDetail{
+			ID:     id,
+			Name:   nameLookup[id],
+			Score:  ch.Score,
+			Status: ch.LatestStatus,
+		}
+		summary.Details = append(summary.Details, detail)
+
+		switch ch.LatestStatus {
+		case "healthy", "recording":
+			summary.Recording++
+		case "reconnecting":
+			summary.Reconnecting++
+		case "error", "unhealthy":
+			summary.Error++
+		default:
+			summary.Offline++
+		}
+	}
+
+	return summary
+}
+
+// handleHealthCameras returns full camera health map with scores.
+// Public endpoint — no auth required.
+func (h *Handler) handleHealthCameras(w http.ResponseWriter, r *http.Request) {
+	if h.healthMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]*model.CameraHealth{})
+		return
+	}
+	health := h.healthMgr.GetAllHealth()
+	if health == nil {
+		health = map[string]*model.CameraHealth{}
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {

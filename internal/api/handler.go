@@ -38,6 +38,25 @@ type HealthResponse struct {
 	Checks map[string]HealthCheck `json:"checks"`
 	Uptime        string                 `json:"uptime"`
 	SetupRequired bool                   `json:"setup_required"`
+	Cameras       *CameraHealthSummary   `json:"cameras,omitempty"`
+}
+
+// CameraHealthSummary provides aggregated camera health in the /api/health response.
+type CameraHealthSummary struct {
+	Total        int                  `json:"total"`
+	Recording    int                  `json:"recording"`
+	Reconnecting int                  `json:"reconnecting"`
+	Error        int                  `json:"error"`
+	Offline      int                  `json:"offline"`
+	Details      []CameraHealthDetail `json:"details"`
+}
+
+// CameraHealthDetail is a per-camera summary included in /api/health.
+type CameraHealthDetail struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Score  int    `json:"score"`
 }
 
 // SystemStats is the response from /api/stats/system.
@@ -100,6 +119,7 @@ type Handler struct {
 	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr        *merge.MergeManager
 	healthMgr       HealthManager
+	stabilityProvider StabilityProvider
 	cloudProxy      CloudAuthProxy
 	streamRegistry  *StreamRegistry
 }
@@ -120,6 +140,7 @@ func (h *Handler) Routes() http.Handler {
 		})
 		r.Use(rl)
 		r.Get("/api/health", h.handleHealth)
+		r.Get("/api/health/cameras", h.handleHealthCameras)
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
 	})
@@ -206,6 +227,8 @@ func (h *Handler) Routes() http.Handler {
 		// Health monitoring endpoints
 		r.Get("/api/health/status", h.handleGetHealthStatus)
 		r.Get("/api/health/events", h.handleGetHealthEvents)
+		r.Get("/api/health/stability", h.handleGetStability)
+		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
 	})
 
@@ -310,6 +333,11 @@ func (h *Handler) SetFLVManager(mgr *flv.Manager) {
 // SetHealthManager sets the health manager on the handler.
 func (h *Handler) SetHealthManager(mgr HealthManager) {
 	h.healthMgr = mgr
+}
+
+// SetStabilityProvider sets the stability data provider on the handler.
+func (h *Handler) SetStabilityProvider(p StabilityProvider) {
+	h.stabilityProvider = p
 }
 
 // --- Per-camera streaming protocols endpoint ---
