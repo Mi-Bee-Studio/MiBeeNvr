@@ -130,6 +130,8 @@ func cs2Handshake(host, transport string) (net.Conn, error) {
 }
 
 func (c *CS2Conn) worker() {
+	defer c.workerExitGuard()
+
 	defer func() {
 		c.channels[0].Close()
 		c.channels[2].Close()
@@ -203,7 +205,6 @@ func (c *CS2Conn) worker() {
 			}
 
 		case cs2MsgPing:
-			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPong, 0, 0})
 		case cs2MsgPong, cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
 		case cs2MsgDrwAck: // only for UDP
 			if c.cmdAck != nil {
@@ -246,6 +247,18 @@ func (c *CS2Conn) Error() error {
 		return c.getErr()
 	}
 	return io.EOF
+}
+
+// workerExitGuard ensures c.err is set when worker() exits.
+// Must be called as a defer in worker(). Handles panic recovery and
+// ensures a descriptive error is always present (never bare io.EOF).
+func (c *CS2Conn) workerExitGuard() {
+	if r := recover(); r != nil {
+		c.setErr(fmt.Errorf("cs2: panic: %v", r))
+	}
+	if c.getErr() == nil {
+		c.setErr(fmt.Errorf("cs2: connection closed"))
+	}
 }
 
 // ReadCommand reads a command response from channel 0.

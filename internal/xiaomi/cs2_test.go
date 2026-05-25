@@ -10,8 +10,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"sync"
 	"testing"
 	"time"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -362,4 +365,183 @@ func TestCS2DialWithIdleTimeout(t *testing.T) {
 
 	// Verify it is not the default.
 	require.NotEqual(t, defaultIdleTimeout, c.idleTimeout)
+}
+
+// mockCS2Conn implements net.Conn for testing, recording all writes.
+type mockCS2Conn struct {
+	reads   [][]byte
+	readIdx int
+	writes  [][]byte
+	err     error
+	mu      sync.Mutex
+}
+
+func (m *mockCS2Conn) Read(b []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readIdx >= len(m.reads) {
+		return 0, m.err
+	}
+	data := m.reads[m.readIdx]
+	m.readIdx++
+	return copy(b, data), nil
+}
+
+func (m *mockCS2Conn) Write(b []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	buf := make([]byte, len(b))
+	copy(buf, b)
+	m.writes = append(m.writes, buf)
+	return len(b), nil
+}
+
+func (m *mockCS2Conn) Close() error { return nil }
+
+type mockAddr struct{}
+
+func (mockAddr) Network() string { return "mock" }
+func (mockAddr) String() string  { return "mock" }
+
+func (m *mockCS2Conn) LocalAddr() net.Addr  { return mockAddr{} }
+func (m *mockCS2Conn) RemoteAddr() net.Addr { return mockAddr{} }
+func (m *mockCS2Conn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockCS2Conn) SetReadDeadline(t time.Time) error   { return nil }
+func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error  { return nil }
+
+func TestCS2WorkerNoPongOnPing(t *testing.T) {
+	t.Parallel()
+
+	// Simulate a PING packet as the camera would send it.
+	pingPacket := []byte{cs2Magic, cs2MsgPing, 0, 0}
+	wantErr := fmt.Errorf("mock read error")
+	mock := &mockCS2Conn{
+		reads: [][]byte{pingPacket},
+		err:   wantErr,
+	}
+
+	c := &CS2Conn{
+		Conn:        mock,
+		isTCP:       false,
+		idleTimeout: time.Minute,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		c.worker()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit in time")
+	}
+
+	// Worker should have exited with our mocked error.
+	cerr := c.Error()
+	require.Error(t, cerr)
+	require.Contains(t, cerr.Error(), "mock read error")
+
+	// Verify no PONG was written in response to PING.
+	for _, w := range mock.writes {
+		if len(w) >= 2 && w[1] == cs2MsgPong {
+			t.Errorf("worker wrote unexpected PONG on PING: %x", w)
+		}
+	}
+}
+
+// newTestCS2Conn creates a CS2Conn suitable for unit tests.
+func newTestCS2Conn(t *testing.T, conn net.Conn) *CS2Conn {
+	t.Helper()
+	return &CS2Conn{
+		Conn: conn,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+		idleTimeout: defaultIdleTimeout,
+	}
+}
+
+// panicOnReadConn causes a panic on every Read call.
+type panicOnReadConn struct {
+	net.Conn
+}
+
+func (p *panicOnReadConn) Read(b []byte) (int, error) {
+	panic("worker panic test")
+}
+
+func TestCS2ConnErrorReturnsActualError(t *testing.T) {
+	t.Parallel()
+
+	// When worker() exits (simulated by closing the pipe), Error() should return
+	// a descriptive wrapped error, not bare io.EOF.
+	server, client := net.Pipe()
+	defer server.Close()
+
+	c := newTestCS2Conn(t, client)
+	go c.worker()
+
+	// Close server side to make worker's Read return an error.
+	server.Close()
+
+	// Wait for worker to exit (channels close in defer).
+	require.Eventually(t, func() bool {
+		_, ok := c.channels[0].Pop(time.Millisecond)
+		return !ok // channel is closed
+	}, time.Second, 10*time.Millisecond)
+
+	err := c.Error()
+	require.Error(t, err)
+	require.NotEqual(t, io.EOF, err)
+	require.Contains(t, err.Error(), "cs2:")
+}
+
+func TestCS2ConnErrorOnCleanClose(t *testing.T) {
+	t.Parallel()
+
+	// When worker() exits without an explicit error,
+	// Error() should return "cs2: connection closed", not io.EOF.
+	c := newTestCS2Conn(t, nil)
+	c.channels[0].Close()
+	c.channels[2].Close()
+
+	// Simulate worker exit guard (runs as defer in worker()).
+	c.workerExitGuard()
+
+	err := c.Error()
+	require.Error(t, err)
+	require.NotEqual(t, io.EOF, err)
+	require.Contains(t, err.Error(), "cs2: connection closed")
+}
+
+func TestCS2WorkerPanicRecovery(t *testing.T) {
+	t.Parallel()
+
+	// If worker() panics, the defer should recover and set c.err.
+	server, client := net.Pipe()
+	defer server.Close()
+
+	c := newTestCS2Conn(t, &panicOnReadConn{Conn: client})
+
+	done := make(chan struct{})
+	go func() {
+		c.worker()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// worker exited (panic was recovered)
+	case <-time.After(time.Second):
+		t.Fatal("worker did not exit after panic recovery")
+	}
+
+	err := c.Error()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cs2: panic:")
 }

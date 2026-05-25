@@ -762,3 +762,43 @@ func TestXiaomiRecorderAudioNilHub(t *testing.T) {
 	r.forwardAudio(missCodecPCMA, []byte{0x01, 0x02})
 }
 
+// --- Backoff and jitter tests ---
+
+func TestBackoffJitterNoPanic(t *testing.T) {
+	t.Helper()
+	// InitBackoff=1ns causes backoff/2=0, which panics in rand.Int63n(0) without the guard.
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:    "jitter-test",
+		DID:         "test-device",
+		InitBackoff: 1, // 1 nanosecond
+		MaxBackoff:  1,
+	}, &noopSegmentStore{})
+
+	ctx := context.Background()
+	err := r.Start(ctx)
+	require.NoError(t, err)
+
+	// Let it cycle through cloud resolve loop a few times with tiny backoff.
+	time.Sleep(100 * time.Millisecond)
+
+	err = r.Stop()
+	require.NoError(t, err)
+}
+
+func TestBackoffResetOnSuccessfulConnection(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID: "test-cam",
+		DID:      "test-device",
+	}, &noopSegmentStore{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Pre-cancelled — connectAndRecord should fail early
+
+	// connectAndRecord should return (error, bool) where bool=false when
+	// connection fails before reaching StatusRecording.
+	err, connected := r.connectAndRecord(ctx, "invalid://url")
+	require.Error(t, err)
+	require.False(t, connected, "connected should be false when connection fails before StatusRecording")
+}
+

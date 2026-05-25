@@ -273,6 +273,18 @@ func extractQuotedValue(s string) string {
 	return s[start+1 : start+1+end]
 }
 
+// expandBackoff increases backoff duration with jitter, capped at MaxBackoff.
+// Uses max(1, backoff/2) to prevent panic from rand.Int63n(0) when backoff < 2ns.
+func (r *XiaomiRecorder) expandBackoff(backoff time.Duration) time.Duration {
+	half := max(1, int64(backoff/2))
+	jitter := time.Duration(rand.Int63n(half))
+	backoff = backoff*2 + jitter
+	if backoff > r.cfg.MaxBackoff {
+		backoff = r.cfg.MaxBackoff
+	}
+	return backoff
+}
+
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {
 	defer func() {
@@ -302,17 +314,16 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 				return
 			case <-time.After(backoff):
 			}
-			jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-			backoff = backoff*2 + jitter
-			if backoff > r.cfg.MaxBackoff {
-				backoff = r.cfg.MaxBackoff
-			}
+			backoff = r.expandBackoff(backoff)
 			continue
 		}
 
-		err = r.connectAndRecord(ctx, missURL)
+		err, connected := r.connectAndRecord(ctx, missURL)
 		if ctx.Err() != nil {
 			return
+		}
+		if connected {
+			backoff = r.cfg.InitBackoff
 		}
 		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
 		r.recordError("connection")
@@ -322,25 +333,21 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-		backoff = backoff*2 + jitter
-		if backoff > r.cfg.MaxBackoff {
-			backoff = r.cfg.MaxBackoff
-		}
+		backoff = r.expandBackoff(backoff)
 	}
 }
 
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
-func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) error {
+func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
 	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
 	if err != nil {
-		return fmt.Errorf("miss connect: %w", err)
+		return fmt.Errorf("miss connect: %w", err), false
 	}
 	defer client.Conn.Close()
 
 	// Start HD video stream.
 	if err := client.StartMedia("", "hd"); err != nil {
-		return fmt.Errorf("miss start media: %w", err)
+		return fmt.Errorf("miss start media: %w", err), false
 	}
 	defer func() {
 		_ = client.StopMedia()
@@ -361,14 +368,14 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) e
 		select {
 		case <-ctx.Done():
 			r.closeCurrentSegment()
-			return ctx.Err()
+			return ctx.Err(), true
 		default:
 		}
 
 		pkt, err := client.ReadPacket()
 		if err != nil {
 			r.closeCurrentSegment()
-			return fmt.Errorf("miss read: %w", err)
+			return fmt.Errorf("miss read: %w", err), true
 		}
 
 		// Handle audio packets when AudioEnabled.
