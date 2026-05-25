@@ -68,6 +68,7 @@ type XiaomiRecorderConfig struct {
 	DB           RecordingDB
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
+	IdleTimeout  time.Duration
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -124,6 +125,9 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 	}
 	if cfg.InitBackoff == 0 {
 		cfg.InitBackoff = defaultInitBackoff
+	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = defaultIdleTimeout
 	}
 	return &XiaomiRecorder{
 		cfg:     cfg,
@@ -328,7 +332,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) error {
-	client, err := NewMISSClient(missURL)
+	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err)
 	}

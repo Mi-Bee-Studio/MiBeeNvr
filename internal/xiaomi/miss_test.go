@@ -351,20 +351,20 @@ func TestMISSNewClientUnsupportedVendor(t *testing.T) {
 		"miss://192.168.1.1?vendor=tutk&device_public=%s&client_private=%s&client_public=%s&sign=test",
 		pubHex, privHex, pubHex,
 	)
-	_, err = NewMISSClient(url)
+	_, err = NewMISSClient(url, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported vendor")
 }
 
 func TestMISSNewClientBadURL(t *testing.T) {
 	t.Helper()
-	_, err := NewMISSClient("://bad-url")
+	_, err := NewMISSClient("://bad-url", 0)
 	require.Error(t, err)
 }
 
 func TestMISSNewClientMissingKeys(t *testing.T) {
 	t.Helper()
-	_, err := NewMISSClient("miss://192.168.1.1?vendor=cs2")
+	_, err := NewMISSClient("miss://192.168.1.1?vendor=cs2", 0)
 	require.Error(t, err)
 }
 

@@ -412,13 +412,13 @@ func TestCloseCurrentSegmentTwice(t *testing.T) {
 
 func TestMISSURLMissingVendor(t *testing.T) {
 	t.Helper()
-	_, err := NewMISSClient("miss://192.168.1.1?device_public=abc&client_private=def&client_public=ghi&sign=x")
+	_, err := NewMISSClient("miss://192.168.1.1?device_public=abc&client_private=def&client_public=ghi&sign=x", 0)
 	require.Error(t, err)
 }
 
 func TestMISSURLEmptyHost(t *testing.T) {
 	t.Helper()
-	_, err := NewMISSClient("miss://?vendor=cs2&device_public=abc&client_private=def&client_public=ghi&sign=x")
+	_, err := NewMISSClient("miss://?vendor=cs2&device_public=abc&client_private=def&client_public=ghi&sign=x", 0)
 	// Will fail on key calculation or connection
 	require.Error(t, err)
 }

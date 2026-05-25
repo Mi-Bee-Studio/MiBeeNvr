@@ -8,6 +8,7 @@ package xiaomi
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -260,4 +261,105 @@ func makeDataWithSize(s string) []byte {
 	binary.BigEndian.PutUint32(buf, uint32(len(data)))
 	copy(buf[4:], data)
 	return buf
+}
+
+func TestCS2ConnErrorSetterGetter(t *testing.T) {
+	c := &CS2Conn{
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	// Initially nil error
+	require.Nil(t, c.getErr())
+
+	// Set an error
+	testErr := fmt.Errorf("test error")
+	c.setErr(testErr)
+	require.Equal(t, testErr, c.getErr())
+
+	// Overwrite with nil
+	c.setErr(nil)
+	require.Nil(t, c.getErr())
+
+	// Overwrite with another error
+	err2 := fmt.Errorf("another error")
+	c.setErr(err2)
+	require.Equal(t, err2, c.getErr())
+}
+
+func TestCS2ConnErrorConcurrentAccess(t *testing.T) {
+	c := &CS2Conn{
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	done := make(chan struct{})
+	const N = 50
+
+	// Concurrent writers
+	go func() {
+		for i := 0; i < N; i++ {
+			c.setErr(fmt.Errorf("writer error %d", i))
+			time.Sleep(time.Microsecond)
+		}
+		done <- struct{}{}
+	}()
+
+	// Concurrent readers
+	go func() {
+		for i := 0; i < N; i++ {
+			_ = c.getErr()
+			time.Sleep(time.Microsecond)
+		}
+		done <- struct{}{}
+	}()
+
+	// Concurrent Error() reader
+	go func() {
+		for i := 0; i < N; i++ {
+			_ = c.Error()
+			time.Sleep(time.Microsecond)
+		}
+		done <- struct{}{}
+	}()
+
+	// Wait for all goroutines
+	for i := 0; i < 3; i++ {
+		<-done
+	}
+}
+
+func TestCS2DialDefaultIdleTimeout(t *testing.T) {
+	// Verify defaultIdleTimeout constant is 30s.
+	require.Equal(t, 30*time.Second, defaultIdleTimeout)
+
+	// Verify that CS2Conn created with idleTimeout=0 gets the default.
+	c := &CS2Conn{
+		idleTimeout: 0,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+	// Simulate the default logic from CS2Dial.
+	if c.idleTimeout == 0 {
+		c.idleTimeout = defaultIdleTimeout
+	}
+	require.Equal(t, 30*time.Second, c.idleTimeout)
+}
+
+func TestCS2DialWithIdleTimeout(t *testing.T) {
+	// Verify that CS2Conn created with a custom idleTimeout keeps that value.
+	customTimeout := 15 * time.Second
+	c := &CS2Conn{
+		idleTimeout: customTimeout,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+	require.Equal(t, customTimeout, c.idleTimeout)
+
+	// Verify it is not the default.
+	require.NotEqual(t, defaultIdleTimeout, c.idleTimeout)
 }

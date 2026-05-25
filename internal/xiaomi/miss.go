@@ -89,7 +89,7 @@ func (p *MISSPacket) SampleRate() uint32 {
 
 // NewMISSClient parses a MISS URL, establishes a CS2 connection, and performs login.
 // URL format: miss://host?vendor=cs2&device_public=...&client_private=...&client_public=...&sign=...&model=...
-func NewMISSClient(rawURL string) (*MISSClient, error) {
+func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func NewMISSClient(rawURL string) (*MISSClient, error) {
 	var conn MISSConn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
-		conn, err = CS2Dial(u.Host, query.Get("transport"))
+		conn, err = CS2Dial(u.Host, query.Get("transport"), idleTimeout)
 	default:
 		err = fmt.Errorf("miss: unsupported vendor %q", s)
 	}

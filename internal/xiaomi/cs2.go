@@ -20,7 +20,7 @@ import (
 
 // CS2Dial establishes a CS2 P2P connection to a Xiaomi device.
 // transport: "udp" (default), "tcp", or "" (tries both).
-func CS2Dial(host, transport string) (*CS2Conn, error) {
+func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error) {
 	conn, err := cs2Handshake(host, transport)
 	if err != nil {
 		return nil, err
@@ -35,6 +35,11 @@ func CS2Dial(host, transport string) (*CS2Conn, error) {
 			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
 		},
 	}
+	if idleTimeout == 0 {
+		c.idleTimeout = defaultIdleTimeout
+	} else {
+		c.idleTimeout = idleTimeout
+	}
 	go c.worker()
 	return c, nil
 }
@@ -43,7 +48,9 @@ func CS2Dial(host, transport string) (*CS2Conn, error) {
 type CS2Conn struct {
 	net.Conn
 	isTCP bool
+	idleTimeout time.Duration
 
+	mu   sync.Mutex
 	err    error
 	seqCh0 uint16
 	seqCh3 uint16
@@ -69,6 +76,7 @@ const (
 	cs2MsgClose     = 0xF0
 	cs2MsgCloseAck  = 0xF1
 )
+const defaultIdleTimeout = 30 * time.Second
 
 const cs2HdrSize = 32
 
@@ -129,9 +137,7 @@ func (c *CS2Conn) worker() {
 
 	const (
 		pingInterval = 1 * time.Second
-		idleTimeout  = 30 * time.Second
 	)
-
 	var keepaliveTS time.Time // only for TCP
 	lastData := time.Now()
 	buf := make([]byte, 1200)
@@ -142,7 +148,7 @@ func (c *CS2Conn) worker() {
 		if c.isTCP {
 			_ = c.Conn.SetReadDeadline(time.Now().Add(pingInterval))
 		} else {
-			_ = c.Conn.SetReadDeadline(time.Now().Add(idleTimeout))
+			_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
 		}
 
 		n, err := c.Conn.Read(buf)
@@ -155,13 +161,13 @@ func (c *CS2Conn) worker() {
 				}
 
 				// Detect truly dead connection: no data for idleTimeout.
-				if time.Since(lastData) > idleTimeout {
-					c.err = fmt.Errorf("cs2: no data for %v", idleTimeout)
+				if time.Since(lastData) > c.idleTimeout {
+					c.setErr(fmt.Errorf("cs2: no data for %v", c.idleTimeout))
 					return
 				}
 				continue
 			}
-			c.err = fmt.Errorf("cs2: %w", err)
+			c.setErr(fmt.Errorf("cs2: %w", err))
 			return
 		}
 
@@ -192,7 +198,7 @@ func (c *CS2Conn) worker() {
 			}
 
 			if err != nil {
-				c.err = fmt.Errorf("cs2: %w", err)
+				c.setErr(fmt.Errorf("cs2: %w", err))
 				return
 			}
 
@@ -222,10 +228,22 @@ func (c *CS2Conn) Version() string {
 	return "CS2"
 }
 
+func (c *CS2Conn) setErr(err error) {
+	c.mu.Lock()
+	c.err = err
+	c.mu.Unlock()
+}
+
+func (c *CS2Conn) getErr() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
 // Error returns the connection error, or io.EOF if cleanly closed.
 func (c *CS2Conn) Error() error {
-	if c.err != nil {
-		return c.err
+	if c.getErr() != nil {
+		return c.getErr()
 	}
 	return io.EOF
 }
@@ -234,8 +252,8 @@ func (c *CS2Conn) Error() error {
 func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
 	buf, ok := c.channels[0].Pop(cs2ReadTimeout)
 	if !ok {
-		if c.err != nil {
-			return 0, nil, c.err
+		if c.getErr() != nil {
+			return 0, nil, c.getErr()
 		}
 		return 0, nil, fmt.Errorf("cs2: no command data for %v", cs2ReadTimeout)
 	}
@@ -287,8 +305,8 @@ func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
 func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
 	data, ok := c.channels[2].Pop(cs2ReadTimeout)
 	if !ok {
-		if c.err != nil {
-			return nil, nil, c.err
+		if c.getErr() != nil {
+			return nil, nil, c.getErr()
 		}
 		return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
 	}
