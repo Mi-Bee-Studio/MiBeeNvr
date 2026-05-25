@@ -24,17 +24,18 @@
 ## 核心功能
 
 - **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理
-- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数
+- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数、音频录制（AAC + G.711）
 - **实时直播**：HLS / WebRTC（WHEP）/ HTTP-FLV 多协议直播，RTMP 接入 + SRT 接收器
 - **片段合并**：自动/手动合并，全局 + 按摄像头策略
 - **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
 - **智能家居**：MQTT 触发录像、WebDAV/FTP 文件访问
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
 - **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动，非核心功能）
+- **健康监控**：多层摄像头健康检测、自动修复、质量评分
 
 ## 开发路线
 
-| 状态 | 协议 / 功能 | 说明 |
+|| 状态 | 协议 / 功能 | 说明 |
 |------|------------|------|
 | ✅ 已完成 | RTSP（H.264/H.265/MJPEG） | 核心流媒体协议 |
 | ✅ 已完成 | HTTP JPEG | IP 摄像头快照流 |
@@ -45,6 +46,8 @@
 | ✅ 已完成 | SRT | 低延迟传输 |
 | ✅ 已完成 | HTTP-FLV | 浏览器友好的直播流 |
 | ✅ 已完成 | WebRTC | 亚秒级延迟实时预览 |
+| ✅ 已完成 | 音频录制 | AAC + G.711，按摄像头开关 |
+| ✅ 已完成 | 健康监控 | 多层检测、自动修复 |
 ## 快速开始
 
 ### 方式 1：预编译二进制（推荐）
@@ -59,6 +62,10 @@ chmod +x mibee-nvr-amd64
 # ARM64（树莓派等）
 wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
 chmod +x mibee-nvr-arm64
+
+# ARMv7（树莓派 2/3 等）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-armv7
+chmod +x mibee-nvr-armv7
 ```
 
 初始化配置并启动：

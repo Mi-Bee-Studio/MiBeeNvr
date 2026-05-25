@@ -261,7 +261,16 @@ cameras:
 - **选项**: `"cs2"`（默认）
 - **示例**: `"cs2"`
 
-### `cameras[].did`
+### `cameras[].audio_enabled`
+
+#ZV|- **类型**: boolean
+#MK|- **默认**: `false`
+#VB|- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像
+#QM|- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）
+#ZX|- **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
+#RN|- **示例**: `true`, `false
+
+
 - **类型**: string
 - **可选**: 是（小米摄像头必需）
 - **描述**: 来自云服务的小米设备 ID

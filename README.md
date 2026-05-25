@@ -24,17 +24,18 @@ Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **R
 ## Core Features
 
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
-- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention
+- **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention, audio capture (AAC + G.711)
 - **Live View**: Multi-protocol streaming — HLS, WebRTC (WHEP), HTTP-FLV, RTMP ingest, SRT receiver
 - **Segment Merge**: Auto or manual merge, global + per-camera policies
 - **Web UI**: Dark/light theme, responsive, i18n (EN/ZH), Chart.js dashboards
 - **Smart Home**: MQTT trigger-based recording, WebDAV/FTP file access
 - **Single Binary**: Zero dependencies, embedded SPA, `CGO_ENABLED=0`
 - **Xiaomi Support**: CS2 P2P protocol, cloud auth (community-driven, not core focus)
+- **Health Monitoring**: Multi-layer camera health detection, auto-remediation, quality scoring
 
 ## Roadmap
 
-| Status | Protocol / Feature | Notes |
+|| Status | Protocol / Feature | Notes |
 |--------|-------------------|-------|
 | ✅ Done | RTSP (H.264/H.265/MJPEG) | Core streaming protocol |
 | ✅ Done | HTTP JPEG | IP camera snapshot streaming |
@@ -45,7 +46,8 @@ Built for Raspberry Pi and low-power devices. Supports mainstream protocols: **R
 | ✅ Done | SRT | Low-latency transport |
 | ✅ Done | HTTP-FLV | Browser-friendly live streaming |
 | ✅ Done | WebRTC | Sub-second latency live view |
-## Quick Start
+| ✅ Done | Audio Recording | AAC + G.711, per-camera toggle |
+| ✅ Done | Health Monitoring | Multi-layer detection, auto-remediation |
 
 ### Option 1: Pre-built Binary (Recommended)
 
@@ -59,6 +61,10 @@ chmod +x mibee-nvr-amd64
 # ARM64 (Raspberry Pi, etc.)
 wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
 chmod +x mibee-nvr-arm64
+
+# ARMv7 (Raspberry Pi 2/3, etc.)
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-armv7
+chmod +x mibee-nvr-armv7
 ```
 
 Initialize config and start:

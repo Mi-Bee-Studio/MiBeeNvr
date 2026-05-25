@@ -261,7 +261,16 @@ cameras:
 - **Options**: `"cs2"` (default)
 - **Example**: `"cs2"`
 
-### `cameras[].did`
+### `cameras[].audio_enabled`
+
+#SS|- **Type**: boolean
+#TT|- **Default**: `false`
+#BY|- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording.
+#MV|- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras)
+#YR|- **Note**: Not supported for MJPEG or HTTP-JPEG cameras
+#TM|- **Example**: `true`, `false
+
+
 - **Type**: string
 - **Optional**: Yes (required for Xiaomi cameras)
 - **Description**: Xiaomi Device ID from cloud service
