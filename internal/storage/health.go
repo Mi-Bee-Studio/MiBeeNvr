@@ -12,10 +12,11 @@ import (
 
 // HealthEventsFilter defines query parameters for listing health events.
 type HealthEventsFilter struct {
-	CameraID string
-	Since    string // time.Time formatted as UTC string, filters created_at >= since
-	Limit    int
-	Offset   int
+	CameraID  string
+	EventType string
+	Since     string // time.Time formatted as UTC string, filters created_at >= since
+	Limit     int
+	Offset    int
 }
 
 // InsertHealthEvent inserts a new camera health event.
@@ -38,6 +39,10 @@ func (d *DB) ListHealthEvents(ctx context.Context, filter HealthEventsFilter) ([
 	if filter.Since != "" {
 		where = append(where, "created_at>=?")
 		args = append(args, filter.Since)
+	}
+	if filter.EventType != "" {
+		where = append(where, "event_type=?")
+		args = append(args, filter.EventType)
 	}
 
 	whereClause := ""
@@ -105,6 +110,17 @@ func (d *DB) GetLatestCameraHealth(ctx context.Context, cameraID string) (*model
 func (d *DB) DeleteHealthEventsBefore(ctx context.Context, before time.Time) (int64, error) {
 	q := `DELETE FROM camera_health_events WHERE created_at < ?;`
 	result, err := d.db.ExecContext(ctx, q, formatTime(before))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// DeleteHealthEventsByType deletes health events of a given type older than the given time.
+// Returns the number of rows deleted.
+func (d *DB) DeleteHealthEventsByType(ctx context.Context, eventType string, before time.Time) (int64, error) {
+	q := `DELETE FROM camera_health_events WHERE event_type = ? AND created_at < ?;`
+	result, err := d.db.ExecContext(ctx, q, eventType, formatTime(before))
 	if err != nil {
 		return 0, err
 	}
