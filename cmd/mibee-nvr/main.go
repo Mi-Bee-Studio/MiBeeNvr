@@ -434,9 +434,17 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr)
 
 	// Step 6.5: Health manager (after camera manager, before streaming)
-	a.healthMgr = health.NewManager(cfg.Health)
+	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
 		a.camMgr.SetHealthManager(a.healthMgr)
+	}
+	// Wire auto-remediation into health manager
+	if a.healthMgr != nil && a.camMgr != nil {
+		a.healthMgr.SetRestarter(a.camMgr.RestartRecorder)
+		a.healthMgr.SetCameraEnabledFn(func(cameraID string) bool {
+			cam := a.camMgr.GetCameraConfig(cameraID)
+			return cam != nil && cam.Enabled
+		})
 	}
 
 	// Step 7: HLS manager
@@ -501,6 +509,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		a.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, nil)
 	}
 
+	// Wire MQTT client into health manager for event publishing
+	if a.healthMgr != nil && a.mqttClient != nil {
+		a.healthMgr.SetMQTTClient(a.mqttClient)
+	}
+
 	// Step 10: Optional FTP server
 	if cfg.FTP.Enabled != nil && *cfg.FTP.Enabled {
 		ftpAddr := fmt.Sprintf(":%d", cfg.FTP.Port)
@@ -527,6 +540,7 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetWebRTCManager(a.webrtcMgr)
 	handler.SetFLVManager(a.flvMgr)
 	handler.SetHealthManager(a.healthMgr)
+	handler.SetStabilityProvider(a.healthMgr)
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

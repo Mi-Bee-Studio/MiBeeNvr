@@ -14,8 +14,8 @@ import (
 
 // mockRecorder implements model.Recorder and supports GetHub().
 type mockRecorder struct {
-	hub   *model.StreamHub
-	mu    sync.Mutex
+	hub    *model.StreamHub
+	mu     sync.Mutex
 	status model.RecorderStatus
 }
 
@@ -24,7 +24,7 @@ func (r *mockRecorder) GetHub() *model.StreamHub {
 }
 
 func (r *mockRecorder) Start(_ context.Context) error { return nil }
-func (r *mockRecorder) Stop() error                    { return nil }
+func (r *mockRecorder) Stop() error                   { return nil }
 func (r *mockRecorder) Status() model.RecorderStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,7 +42,7 @@ func newMockRecorderWithHub() *mockRecorder {
 type mockRecorderNoHub struct{}
 
 func (r *mockRecorderNoHub) Start(_ context.Context) error { return nil }
-func (r *mockRecorderNoHub) Stop() error                    { return nil }
+func (r *mockRecorderNoHub) Stop() error                   { return nil }
 func (r *mockRecorderNoHub) Status() model.RecorderStatus  { return model.StatusRecording }
 
 // --- Helpers ---
@@ -78,7 +78,7 @@ func newDisabledConfig() config.HealthConfig {
 // newTestManager creates a Manager with mock deps for testing.
 func newTestManager(t *testing.T, cfg config.HealthConfig) *Manager {
 	t.Helper()
-	return NewManager(cfg)
+	return NewManager(cfg, nil)
 }
 
 // --- Tests ---
@@ -439,5 +439,103 @@ func TestManager_StatusPolling(t *testing.T) {
 	}
 	if freezeState.isRecording.Load() {
 		t.Error("expected isRecording=false when status is error")
+	}
+}
+
+func TestManagerOnStatusChangeResetsCollector(t *testing.T) {
+	t.Helper()
+	m := newTestManager(t, newTestManagerConfig())
+	rec := newMockRecorderWithHub()
+	m.OnCameraAdded("cam-1", rec)
+
+	// Simulate frames to set lastIDRTime on the collector
+	cb := m.collector.OnFrame("cam-1")
+	for i := 0; i < 5; i++ {
+		au := makeH264Frame(t, 1, 500) // non-IDR
+		cb(int64(i), au)
+	}
+	// Feed IDR frame to set lastIDRTime
+	idrAU := makeH264Frame(t, 5, 500)
+	cb(10, idrAU)
+
+	// Wait a moment so old time is measurably in the past
+	time.Sleep(2 * time.Millisecond)
+
+	oldStats := m.collector.GetStats("cam-1")
+	oldIDRTime := oldStats.LastIDRTime
+
+	// Simulate status transition: recording → error → recording (reconnect)
+	m.OnStatusChange("cam-1", string(model.StatusError))
+	m.OnStatusChange("cam-1", string(model.StatusRecording))
+
+	// Verify collector was reset — lastIDRTime should be refreshed
+	newStats := m.collector.GetStats("cam-1")
+	if newStats.LastIDRTime.Before(oldIDRTime) || newStats.LastIDRTime.Equal(oldIDRTime) {
+		t.Error("expected lastIDRTime to be reset to current time after reconnect")
+	}
+
+	// Verify counters were reset
+	if newStats.FrameCount != 0 {
+		t.Errorf("expected frame count 0 after reset, got %d", newStats.FrameCount)
+	}
+}
+
+func TestManagerAutoRemediation(t *testing.T) {
+	t.Helper()
+
+	cfg := newTestManagerConfig()
+	cfg.AutoRemediation = config.HealthAutoRemediationConfig{
+		Enabled:            true,
+		MaxRestartsPerHour: 10,
+		CooldownMinutes:    1,
+		BlacklistHours:     1,
+		GlobalMaxPerMin:    10,
+	}
+	m := newTestManager(t, cfg)
+	if m == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	if m.autoRemediate == nil {
+		t.Fatal("expected autoRemediate to be created when Enabled=true")
+	}
+
+	var mu sync.Mutex
+	var restartCalled bool
+
+	m.SetRestarter(func(_ context.Context, cameraID string) error {
+		mu.Lock()
+		restartCalled = true
+		mu.Unlock()
+		return nil
+	})
+
+	m.SetCameraEnabledFn(func(cameraID string) bool {
+		return true
+	})
+
+	// Simulate camera with StatusError — should trigger restart
+	m.knownStatuses["cam-1"] = string(model.StatusError)
+	m.autoRemediate.CheckAll(m.knownStatuses)
+
+	mu.Lock()
+	called := restartCalled
+	mu.Unlock()
+
+	if !called {
+		t.Error("expected restarter to be called for camera with StatusError")
+	}
+
+	// Reset and test with non-error status — should NOT trigger restart
+	restartCalled = false
+	delete(m.knownStatuses, "cam-1")
+	m.knownStatuses["cam-1"] = string(model.StatusReconnecting)
+	m.autoRemediate.CheckAll(m.knownStatuses)
+
+	mu.Lock()
+	called = restartCalled
+	mu.Unlock()
+
+	if called {
+		t.Error("expected restarter NOT to be called for StatusReconnecting")
 	}
 }
