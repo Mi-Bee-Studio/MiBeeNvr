@@ -410,7 +410,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 		pkt, err := client.ReadPacket()
 		if err != nil {
 			r.closeCurrentSegment()
-			return fmt.Errorf("miss read: %w", err), true
+			return fmt.Errorf("miss read: %w", err), false
 		}
 
 		// Handle audio packets when AudioEnabled.
