@@ -25,7 +25,9 @@ type Metrics struct {
 	FLVActiveStreams    *prometheus.GaugeVec   // labels: camera_id
 	FLVFramesSent       *prometheus.CounterVec // labels: camera_id
 	FLVFramesDropped    *prometheus.CounterVec // labels: camera_id
-	FLVGOPCacheHits     *prometheus.CounterVec // labels: camera_id
+	FLVGOPCacheHits         *prometheus.CounterVec // labels: camera_id
+	XiaomiDisconnects       *prometheus.CounterVec // labels: camera_id, reason
+	XiaomiReconnects        *prometheus.CounterVec // labels: camera_id
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -119,6 +121,15 @@ func NewMetrics() *Metrics {
 		Name: "nvr_flv_gop_cache_hits_total",
 		Help: "Total FLV GOP cache hits, partitioned by camera.",
 	}, []string{"camera_id"})
+
+	xiaomiDisconnects := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_xiaomi_disconnects_total",
+		Help: "Total Xiaomi camera disconnects, partitioned by camera and reason.",
+	}, []string{"camera_id", "reason"})
+	xiaomiReconnects := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_xiaomi_reconnects_total",
+		Help: "Total Xiaomi camera reconnects, partitioned by camera.",
+	}, []string{"camera_id"})
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -137,6 +148,8 @@ func NewMetrics() *Metrics {
 		flvFramesSent,
 		flvFramesDropped,
 		flvGOPCacheHits,
+		xiaomiDisconnects,
+		xiaomiReconnects,
 	)
 
 	return &Metrics{
@@ -158,5 +171,7 @@ func NewMetrics() *Metrics {
 		FLVFramesSent:       flvFramesSent,
 		FLVFramesDropped:    flvFramesDropped,
 		FLVGOPCacheHits:     flvGOPCacheHits,
+		XiaomiDisconnects:       xiaomiDisconnects,
+		XiaomiReconnects:        xiaomiReconnects,
 	}
 }

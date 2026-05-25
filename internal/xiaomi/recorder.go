@@ -238,6 +238,38 @@ func (r *XiaomiRecorder) recordError(errorType string) {
 	}
 }
 
+// classifyDisconnectReason maps an error to a disconnect reason label.
+func classifyDisconnectReason(err error) string {
+	if err == nil {
+		return "network"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no data") {
+		return "idle_timeout"
+	}
+	if strings.Contains(msg, "EOF") || strings.Contains(msg, "connection closed") {
+		return "eof"
+	}
+	if strings.Contains(msg, "cloud") || strings.Contains(msg, "resolve") {
+		return "cloud_resolve"
+	}
+	return "network"
+}
+
+// recordXiaomiDisconnect increments the Xiaomi disconnect counter if metrics is available.
+func (r *XiaomiRecorder) recordXiaomiDisconnect(reason string) {
+	if r.metrics != nil && r.metrics.XiaomiDisconnects != nil {
+		r.metrics.XiaomiDisconnects.WithLabelValues(r.cfg.CameraID, reason).Inc()
+	}
+}
+
+// recordXiaomiReconnect increments the Xiaomi reconnect counter if metrics is available.
+func (r *XiaomiRecorder) recordXiaomiReconnect() {
+	if r.metrics != nil && r.metrics.XiaomiReconnects != nil {
+		r.metrics.XiaomiReconnects.WithLabelValues(r.cfg.CameraID).Inc()
+	}
+}
+
 // reportVendorError checks if the error indicates an unsupported TUTK vendor
 // and, if so, reports a detailed CameraErrorDetail via the ErrorReporter.
 // This fires on every reconnect attempt so the frontend always has current state.
@@ -308,6 +340,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			r.reportVendorError(err)
 			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
 			r.recordError("cloud_resolve")
+			r.recordXiaomiDisconnect("cloud_resolve")
 			r.setStatus(model.StatusReconnecting)
 			select {
 			case <-ctx.Done():
@@ -324,9 +357,11 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 		}
 		if connected {
 			backoff = r.cfg.InitBackoff
+			r.recordXiaomiReconnect()
 		}
 		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
 		r.recordError("connection")
+		r.recordXiaomiDisconnect(classifyDisconnectReason(err))
 		r.setStatus(model.StatusReconnecting)
 		select {
 		case <-ctx.Done():

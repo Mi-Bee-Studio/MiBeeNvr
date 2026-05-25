@@ -6,7 +6,10 @@ require (
 	github.com/0x524a/onvif-go v1.1.4
 	github.com/abema/go-mp4 v1.5.0
 	github.com/bluenviron/gohlslib/v2 v2.3.1
+	github.com/bluenviron/gortmplib v0.3.2
 	github.com/bluenviron/gortsplib/v5 v5.5.2
+	github.com/bluenviron/mediacommon/v2 v2.8.3
+	github.com/datarhei/gosrt v0.11.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fclairamb/ftpserverlib v0.30.0
 	github.com/go-chi/chi/v5 v5.2.2
@@ -28,13 +31,11 @@ require (
 	github.com/asticode/go-astits v1.15.0 // indirect
 	github.com/benburkert/openpgp v0.0.0-20160410205803-c2471f86866c // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bluenviron/gortmplib v0.3.2 // indirect
-	github.com/bluenviron/mediacommon/v2 v2.8.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/datarhei/gosrt v0.11.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

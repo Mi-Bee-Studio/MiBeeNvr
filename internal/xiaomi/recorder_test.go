@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -802,3 +804,73 @@ func TestBackoffResetOnSuccessfulConnection(t *testing.T) {
 	require.False(t, connected, "connected should be false when connection fails before StatusRecording")
 }
 
+// --- Xiaomi connection metrics tests ---
+
+func TestClassifyDisconnectReason(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"idle_timeout", fmt.Errorf("miss read: no data received within timeout"), "idle_timeout"},
+		{"eof", fmt.Errorf("miss read: EOF"), "eof"},
+		{"connection_closed", fmt.Errorf("connection closed by peer"), "eof"},
+		{"cloud_resolve", fmt.Errorf("failed to resolve cloud API"), "cloud_resolve"},
+		{"cloud_unavailable", fmt.Errorf("cloud service unavailable"), "cloud_resolve"},
+		{"network_generic", fmt.Errorf("miss connect: connection refused"), "network"},
+		{"network_random", fmt.Errorf("some random error"), "network"},
+		{"nil_error", nil, "network"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			got := classifyDisconnectReason(tt.err)
+			require.Equal(t, tt.reason, got)
+		})
+	}
+}
+
+func TestXiaomiMetricsDisconnectCounter(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID: "test-cam",
+		DID:      "test-device",
+	}, &noopSegmentStore{}, m)
+
+	r.recordXiaomiDisconnect("network")
+	r.recordXiaomiDisconnect("eof")
+	r.recordXiaomiDisconnect("network")
+
+	require.Equal(t, 2.0, testutil.ToFloat64(m.XiaomiDisconnects.WithLabelValues("test-cam", "network")))
+	require.Equal(t, 1.0, testutil.ToFloat64(m.XiaomiDisconnects.WithLabelValues("test-cam", "eof")))
+	require.Equal(t, 0.0, testutil.ToFloat64(m.XiaomiDisconnects.WithLabelValues("test-cam", "idle_timeout")))
+}
+
+func TestXiaomiMetricsReconnectCounter(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID: "test-cam",
+		DID:      "test-device",
+	}, &noopSegmentStore{}, m)
+
+	r.recordXiaomiReconnect()
+	r.recordXiaomiReconnect()
+	r.recordXiaomiReconnect()
+
+	require.Equal(t, 3.0, testutil.ToFloat64(m.XiaomiReconnects.WithLabelValues("test-cam")))
+}
+
+func TestXiaomiMetricsNilSafe(t *testing.T) {
+	t.Helper()
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID: "test-cam",
+		DID:      "test-device",
+	}, &noopSegmentStore{}) // No metrics
+
+	// Should not panic
+	r.recordXiaomiDisconnect("network")
+	r.recordXiaomiReconnect()
+}
