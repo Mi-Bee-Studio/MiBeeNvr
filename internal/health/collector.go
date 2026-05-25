@@ -82,7 +82,7 @@ func (s *StreamStatsCollector) OnFrame(cameraID string) func(pts int64, au [][]b
 		// H.265: nal_unit_type = (nalu[0] >> 1) & 0x3F, IDR_W_RADL = 19, IDR_N_LP = 20
 		if len(au) > 0 && len(au[0]) > 0 {
 			naluType := au[0][0] & 0x1F // H.264
-			if naluType == 5 {           // H.264 IDR
+			if naluType == 5 {          // H.264 IDR
 				now := time.Now()
 				stats.lastIDRTime.Store(now)
 				stats.idrCount.Add(1)
@@ -212,7 +212,7 @@ func (s *StreamStatsCollector) CheckAndReset() {
 						EventType: string(model.HealthEventStreamAnomaly),
 						Status:    string(model.HealthStatusWarning),
 						Message:   "IDR interval too long",
-						Metadata:  mustJSON(map[string]any{
+						Metadata: mustJSON(map[string]any{
 							"idr_interval": since.String(),
 							"max":          s.maxIDRInterval.String(),
 						}),
@@ -227,6 +227,25 @@ func (s *StreamStatsCollector) CheckAndReset() {
 func (s *StreamStatsCollector) RemoveCamera(cameraID string) {
 	s.mu.Lock()
 	delete(s.cameras, cameraID)
+	delete(s.prevBitrate, cameraID)
+	s.mu.Unlock()
+}
+
+// ResetCameraState resets per-camera state on reconnect.
+// It resets lastIDRTime, clears prevBitrate, and zeroes atomic counters
+// to prevent false "IDR interval too long" alerts after reconnection.
+func (s *StreamStatsCollector) ResetCameraState(cameraID string) {
+	stats := s.getOrCreateStats(cameraID)
+
+	// Reset lastIDRTime to now (same pattern as freeze.go:65)
+	stats.lastIDRTime.Store(time.Now())
+
+	// Reset atomic counters
+	stats.frameCount.Store(0)
+	stats.byteCount.Store(0)
+
+	// Clear prevBitrate entry
+	s.mu.Lock()
 	delete(s.prevBitrate, cameraID)
 	s.mu.Unlock()
 }

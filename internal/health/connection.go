@@ -103,6 +103,18 @@ func (m *ConnectionMonitor) RemoveCamera(cameraID string) {
 	delete(m.cameras, cameraID)
 }
 
+// GetOfflineDuration returns how long the given camera has been in an offline state.
+// Returns 0 if the camera is recording, unknown, or not tracked.
+func (m *ConnectionMonitor) GetOfflineDuration(cameraID string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.cameras[cameraID]
+	if !ok || !isOfflineStatus(state.currentStatus) {
+		return 0
+	}
+	return time.Since(state.statusSince)
+}
+
 // isOfflineStatus returns true if the status represents a disconnected state.
 func isOfflineStatus(status string) bool {
 	return status == string(model.StatusError) || status == string(model.StatusReconnecting)

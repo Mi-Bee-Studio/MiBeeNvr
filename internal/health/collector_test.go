@@ -51,7 +51,7 @@ func makeH265IDRFrame(t *testing.T, nalType byte, payloadSize int) [][]byte {
 	// H.265 NAL header: forbidden_zero_bit(1) + nal_unit_type(6) + nuh_layer_id(6) + nuh_temporal_id_plus1(3)
 	nalu := make([]byte, 2+payloadSize)
 	nalu[0] = (nalType << 1) & 0x7E // set NAL type in bits 1-6
-	nalu[1] = 1                      // temporal_id_plus1 = 1
+	nalu[1] = 1                     // temporal_id_plus1 = 1
 	return [][]byte{nalu}
 }
 
@@ -423,5 +423,95 @@ func TestCollectorNoAnomalyWhenDisabled(t *testing.T) {
 		if e.Message == "Low FPS detected" {
 			t.Error("should not emit low FPS event when minFPS is 0")
 		}
+	}
+}
+
+func TestCollectorResetOnReconnect(t *testing.T) {
+	windowSize := 1 * time.Second
+	c, _ := newCollector(t, windowSize)
+
+	cb := c.OnFrame("cam-1")
+
+	// Feed frames including an IDR frame to set lastIDRTime
+	for i := 0; i < 10; i++ {
+		au := makeH264Frame(t, 1, 500) // non-IDR
+		cb(int64(i), au)
+	}
+	// Feed IDR frame
+	idrAU := makeH264Frame(t, 5, 500)
+	cb(10, idrAU)
+
+	// Set prevBitrate for this camera to simulate prior window
+	c.mu.Lock()
+	c.prevBitrate["cam-1"] = 1000.0
+	c.mu.Unlock()
+
+	// Record the old lastIDRTime
+	oldStats := c.GetStats("cam-1")
+	oldIDRTime := oldStats.LastIDRTime
+
+	// Wait a moment so we can verify reset changed the time
+	time.Sleep(2 * time.Millisecond)
+
+	// Reset camera state (simulates reconnect)
+	c.ResetCameraState("cam-1")
+
+	// Verify lastIDRTime is fresh (reset to ~now)
+	newStats := c.GetStats("cam-1")
+	if newStats.LastIDRTime.Before(oldIDRTime) || newStats.LastIDRTime.Equal(oldIDRTime) {
+		t.Error("expected lastIDRTime to be reset to current time after reset")
+	}
+
+	// Verify prevBitrate entry is deleted
+	c.mu.Lock()
+	_, hasPrev := c.prevBitrate["cam-1"]
+	c.mu.Unlock()
+	if hasPrev {
+		t.Error("expected prevBitrate entry to be deleted after reset")
+	}
+
+	// Verify atomic counters are reset
+	if newStats.FrameCount != 0 {
+		t.Errorf("expected frame count 0 after reset, got %d", newStats.FrameCount)
+	}
+	if newStats.TotalBytes != 0 {
+		t.Errorf("expected byte count 0 after reset, got %d", newStats.TotalBytes)
+	}
+}
+
+func TestCollectorResetPreventsFalseIDRAlert(t *testing.T) {
+	windowSize := 1 * time.Second
+	c, events := newCollector(t, windowSize)
+	c.maxIDRInterval = 1 * time.Millisecond // very short threshold
+
+	cb := c.OnFrame("cam-1")
+
+	// Feed only non-IDR frames (lastIDRTime from init)
+	for i := 0; i < 5; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(i), au)
+	}
+
+	// Wait for IDR interval to exceed threshold
+	time.Sleep(5 * time.Millisecond)
+
+	// Before reset, CheckAndReset should trigger IDR alert
+	c.CheckAndReset()
+
+	preResetCount := len(getCollectorEvents(t, events))
+	if preResetCount == 0 {
+		t.Fatal("expected at least one event (IDR alert) before reset")
+	}
+
+	// Reset camera state — refreshes lastIDRTime to now
+	c.ResetCameraState("cam-1")
+
+	// CheckAndReset again — should NOT emit new IDR alert
+	c.CheckAndReset()
+
+	// Event count should be unchanged (no new events after reset)
+	postResetCount := len(getCollectorEvents(t, events))
+	if postResetCount != preResetCount {
+		t.Errorf("expected no new events after reset, got %d new events", postResetCount-preResetCount)
 	}
 }

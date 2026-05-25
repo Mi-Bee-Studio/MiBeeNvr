@@ -28,6 +28,10 @@ func (m *mockStorage) GetLatestCameraHealth(_ context.Context, _ string) (*model
 	return nil, nil
 }
 
+func (m *mockStorage) DeleteHealthEventsByType(_ context.Context, _ string, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockStorage) insertedEvents(t *testing.T) []model.HealthEvent {
 	t.Helper()
 	m.mu.Lock()
@@ -375,5 +379,72 @@ func TestAlertStatusUpdateOnNewEvent(t *testing.T) {
 	_ = pipeline.HandleEvent("cam-1", makeEvent(t, "cam-1", string(model.HealthEventConnectionRestored), string(model.HealthStatusHealthy), "Restored"))
 	if s := pipeline.GetCameraStatus("cam-1"); s != string(model.HealthStatusHealthy) {
 		t.Fatalf("expected healthy status, got %s", s)
+	}
+}
+
+func TestAlertPipelinePerMessageCooldown(t *testing.T) {
+	t.Helper()
+	cooldown := 5 * time.Minute
+	pipeline, store, _ := newTestPipeline(t, cooldown, true)
+
+	event1 := makeEvent(t, "cam-1", string(model.HealthEventStreamAnomaly), string(model.HealthStatusWarning), "IDR interval too long")
+	event2 := makeEvent(t, "cam-1", string(model.HealthEventStreamAnomaly), string(model.HealthStatusWarning), "Low FPS detected")
+
+	// First event — should dispatch
+	if err := pipeline.HandleEvent("cam-1", event1); err != nil {
+		t.Fatalf("first HandleEvent returned error: %v", err)
+	}
+
+	// Different message within same cooldown — should NOT be suppressed
+	if err := pipeline.HandleEvent("cam-1", event2); err != nil {
+		t.Fatalf("second HandleEvent (different message) returned error: %v", err)
+	}
+
+	stored := store.insertedEvents(t)
+	if len(stored) != 2 {
+		t.Fatalf("expected 2 stored events (different messages under same event type), got %d", len(stored))
+	}
+	if stored[0].Message != "IDR interval too long" {
+		t.Errorf("expected first event message 'IDR interval too long', got %s", stored[0].Message)
+	}
+	if stored[1].Message != "Low FPS detected" {
+		t.Errorf("expected second event message 'Low FPS detected', got %s", stored[1].Message)
+	}
+}
+
+func TestAlertPipelineSeverityEscalation(t *testing.T) {
+	t.Helper()
+	cooldown := 50 * time.Millisecond
+	pipeline, store, _ := newTestPipeline(t, cooldown, true)
+
+	event := makeEvent(t, "cam-1", string(model.HealthEventStreamAnomaly), string(model.HealthStatusWarning), "IDR interval too long")
+
+	// First emit — should stay warning
+	if err := pipeline.HandleEvent("cam-1", event); err != nil {
+		t.Fatalf("first HandleEvent returned error: %v", err)
+	}
+
+	stored := store.insertedEvents(t)
+	if len(stored) != 1 {
+		t.Fatalf("expected 1 stored event, got %d", len(stored))
+	}
+	if stored[0].Status != string(model.HealthStatusWarning) {
+		t.Errorf("expected first event status %s, got %s", model.HealthStatusWarning, stored[0].Status)
+	}
+
+	// Wait for cooldown to expire
+	time.Sleep(cooldown + 50*time.Millisecond)
+
+	// Second emit — same message, should escalate to error
+	if err := pipeline.HandleEvent("cam-1", event); err != nil {
+		t.Fatalf("second HandleEvent returned error: %v", err)
+	}
+
+	stored = store.insertedEvents(t)
+	if len(stored) != 2 {
+		t.Fatalf("expected 2 stored events, got %d", len(stored))
+	}
+	if stored[1].Status != string(model.HealthStatusError) {
+		t.Errorf("expected second event status %s (escalated), got %s", model.HealthStatusError, stored[1].Status)
 	}
 }
