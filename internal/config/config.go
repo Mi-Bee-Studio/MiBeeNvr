@@ -183,7 +183,8 @@ type HealthConfig struct {
 	Alerts          HealthAlertsConfig  `yaml:"alerts"`
 	Layer1          HealthLayer1Config  `yaml:"layer1"`
 	Layer2          HealthLayer2Config  `yaml:"layer2"`
-	Layer2_5        HealthLayer2_5Config `yaml:"layer2_5"`
+	Layer2_5        HealthLayer2_5Config        `yaml:"layer2_5"`
+	AutoRemediation HealthAutoRemediationConfig `yaml:"auto_remediation"`
 }
 
 type HealthAlertsConfig struct {
@@ -203,6 +204,14 @@ type HealthLayer2Config struct {
 
 type HealthLayer2_5Config struct {
 	FreezeTimeout string `yaml:"freeze_timeout"`
+}
+
+type HealthAutoRemediationConfig struct {
+	Enabled            bool `yaml:"enabled"`
+	MaxRestartsPerHour int  `yaml:"max_restarts_per_hour"`
+	CooldownMinutes    int  `yaml:"cooldown_minutes"`
+	BlacklistHours     int  `yaml:"blacklist_hours"`
+	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -457,6 +466,14 @@ func Validate(cfg *Config) error {
 		if _, err := time.ParseDuration(cfg.Health.Layer2_5.FreezeTimeout); err != nil {
 			return fmt.Errorf("health.layer2_5.freeze_timeout invalid duration: %w", err)
 		}
+		if cfg.Health.AutoRemediation.Enabled {
+			if cfg.Health.AutoRemediation.MaxRestartsPerHour <= 0 {
+				return fmt.Errorf("health.auto_remediation.max_restarts_per_hour must be > 0")
+			}
+			if cfg.Health.AutoRemediation.CooldownMinutes < 1 {
+				return fmt.Errorf("health.auto_remediation.cooldown_minutes must be >= 1")
+			}
+		}
 	}
 	return nil
 }
@@ -626,6 +643,20 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.Health.Layer2_5.FreezeTimeout == "" {
 		cfg.Health.Layer2_5.FreezeTimeout = "10s"
+	}
+
+	// Auto-remediation defaults
+	if cfg.Health.AutoRemediation.MaxRestartsPerHour == 0 {
+		cfg.Health.AutoRemediation.MaxRestartsPerHour = 3
+	}
+	if cfg.Health.AutoRemediation.CooldownMinutes == 0 {
+		cfg.Health.AutoRemediation.CooldownMinutes = 5
+	}
+	if cfg.Health.AutoRemediation.BlacklistHours == 0 {
+		cfg.Health.AutoRemediation.BlacklistHours = 1
+	}
+	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
+		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {

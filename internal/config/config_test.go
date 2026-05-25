@@ -846,6 +846,12 @@ func TestHealthDefaults(t *testing.T) {
 	require.Equal(t, 5, cfg.Health.Layer2.MinFPS, "default min_fps should be 5")
 	require.Equal(t, "30s", cfg.Health.Layer2.MaxIDRInterval, "default max_idr_interval should be 30s")
 	require.Equal(t, "10s", cfg.Health.Layer2_5.FreezeTimeout, "default freeze_timeout should be 10s")
+	require.Equal(t, "10s", cfg.Health.Layer2_5.FreezeTimeout, "default freeze_timeout should be 10s")
+	require.False(t, cfg.Health.AutoRemediation.Enabled, "default auto_remediation should be disabled")
+	require.Equal(t, 3, cfg.Health.AutoRemediation.MaxRestartsPerHour, "default max_restarts_per_hour should be 3")
+	require.Equal(t, 5, cfg.Health.AutoRemediation.CooldownMinutes, "default cooldown_minutes should be 5")
+	require.Equal(t, 1, cfg.Health.AutoRemediation.BlacklistHours, "default blacklist_hours should be 1")
+	require.Equal(t, 10, cfg.Health.AutoRemediation.GlobalMaxPerMin, "default global_max_per_min should be 10")
 }
 
 func TestHealthValidConfig(t *testing.T) {
@@ -867,6 +873,13 @@ func TestHealthValidConfig(t *testing.T) {
 			},
 			Layer2_5: HealthLayer2_5Config{
 				FreezeTimeout: "20s",
+			},
+			AutoRemediation: HealthAutoRemediationConfig{
+				Enabled:            true,
+				MaxRestartsPerHour: 5,
+				CooldownMinutes:    10,
+				BlacklistHours:     2,
+				GlobalMaxPerMin:    20,
 			},
 		},
 	}
@@ -937,4 +950,92 @@ func TestHealthValidationDisabledSkips(t *testing.T) {
 	cfg.applyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err, "validation should be skipped when health is disabled")
+}
+
+func TestAutoRemediationDefaults(t *testing.T) {
+	// When no auto_remediation section in YAML, defaults should apply
+	cfg := &Config{}
+	cfg.applyDefaults()
+	require.False(t, cfg.Health.AutoRemediation.Enabled, "auto_remediation should be disabled by default")
+	require.Equal(t, 3, cfg.Health.AutoRemediation.MaxRestartsPerHour)
+	require.Equal(t, 5, cfg.Health.AutoRemediation.CooldownMinutes)
+	require.Equal(t, 1, cfg.Health.AutoRemediation.BlacklistHours)
+	require.Equal(t, 10, cfg.Health.AutoRemediation.GlobalMaxPerMin)
+}
+
+func TestAutoRemediationConfig(t *testing.T) {
+	// When auto_remediation section has explicit values, they should be preserved
+	cfg := &Config{
+		Health: HealthConfig{
+			AutoRemediation: HealthAutoRemediationConfig{
+				Enabled:            true,
+				MaxRestartsPerHour: 5,
+				CooldownMinutes:    10,
+				BlacklistHours:     2,
+				GlobalMaxPerMin:    20,
+			},
+		},
+	}
+	cfg.applyDefaults()
+	require.True(t, cfg.Health.AutoRemediation.Enabled)
+	require.Equal(t, 5, cfg.Health.AutoRemediation.MaxRestartsPerHour)
+	require.Equal(t, 10, cfg.Health.AutoRemediation.CooldownMinutes)
+	require.Equal(t, 2, cfg.Health.AutoRemediation.BlacklistHours)
+	require.Equal(t, 20, cfg.Health.AutoRemediation.GlobalMaxPerMin)
+}
+
+func TestAutoRemediationValidation(t *testing.T) {
+	t.Run("max_restarts_per_hour = 0 with enabled", func(t *testing.T) {
+		cfg := &Config{
+			Health: HealthConfig{
+				Enabled: true,
+				AutoRemediation: HealthAutoRemediationConfig{
+					Enabled:            true,
+					MaxRestartsPerHour: 0,
+					CooldownMinutes:    5,
+					BlacklistHours:     1,
+					GlobalMaxPerMin:    10,
+				},
+			},
+		}
+		cfg.applyDefaults()
+		cfg.Health.AutoRemediation.MaxRestartsPerHour = 0 // override default
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "max_restarts_per_hour")
+	})
+
+	t.Run("cooldown_minutes = 0 with enabled", func(t *testing.T) {
+		cfg := &Config{
+			Health: HealthConfig{
+				Enabled: true,
+				AutoRemediation: HealthAutoRemediationConfig{
+					Enabled:            true,
+					MaxRestartsPerHour: 3,
+					CooldownMinutes:    0,
+					BlacklistHours:     1,
+					GlobalMaxPerMin:    10,
+				},
+			},
+		}
+		cfg.applyDefaults()
+		cfg.Health.AutoRemediation.CooldownMinutes = 0 // override default
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cooldown_minutes")
+	})
+
+	t.Run("disabled with zero values passes", func(t *testing.T) {
+		cfg := &Config{
+			Health: HealthConfig{
+				Enabled: true,
+				AutoRemediation: HealthAutoRemediationConfig{
+					Enabled: false,
+				},
+			},
+		}
+		cfg.applyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "validation should pass when auto_remediation is disabled")
+	})
 }
