@@ -55,6 +55,7 @@ type Manager struct {
 	peers        map[string]*peerEntry // sessionID -> entry
 	camPeers     map[string][]string   // camID -> []sessionID
 	hubSubs      map[string]*hubSubscription // camID -> subscription info
+	stopped      bool
 	api          *webrtc.API
 	maxPeers     int
 	idleTimeout  time.Duration
@@ -368,20 +369,24 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 		delete(m.camPeers, entry.camID)
 	}
 	camID := entry.camID
+	_, hasSub := m.hubSubs[camID]
 	m.mu.Unlock()
 
-	// Check if we should unregister from StreamHub
-	if _, ok := m.hubSubs[camID]; ok {
+	if hasSub {
 		// Schedule cleanup — don't unsubscribe immediately in case a new peer connects
 		go func() {
 			time.Sleep(5 * time.Second)
 			m.mu.RLock()
+			if m.stopped {
+				m.mu.RUnlock()
+				return
+			}
 			remaining := len(m.camPeers[camID])
 			m.mu.RUnlock()
 			if remaining == 0 {
 				m.UnregisterStream(camID)
 			}
-	}()
+		}()
 	}
 	// Clean up outside the lock to avoid deadlock with OnConnectionStateChange
 	entry.cancel()
@@ -410,6 +415,7 @@ func (m *Manager) TotalPeerCount() int {
 // StopAll closes all active WHEP sessions and releases resources.
 func (m *Manager) StopAll() {
 	m.mu.Lock()
+	m.stopped = true
 	entries := make([]*peerEntry, 0, len(m.peers))
 	for sid, entry := range m.peers {
 		entries = append(entries, entry)
