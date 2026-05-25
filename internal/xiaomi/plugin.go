@@ -49,11 +49,12 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:   cfg.ID,
-		DID:        did,
-		CloudCfg:   cloudCfg,
-		SegmentDur: 30 * time.Second,
-		DB:         db,
+		CameraID:     cfg.ID,
+		DID:          did,
+		CloudCfg:     cloudCfg,
+		SegmentDur:   30 * time.Second,
+		DB:           db,
+		AudioEnabled: cfg.AudioEnabled,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

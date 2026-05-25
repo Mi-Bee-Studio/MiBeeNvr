@@ -36,12 +36,14 @@ cameras: []
 #     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
 #     url: "rtsp://192.168.1.100:554/stream"
 #     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false)
 #   - id: "backyard"
 #     name: "Back Yard"
 #     protocol: "http"
 #     encoding: "jpeg"
 #     url: "http://192.168.1.101/capture"
 #     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false). Not supported for MJPEG/HTTP-JPEG.
 #   - id: "xiaomi-cam"
 #     name: "Xiaomi Camera"
 #     protocol: "xiaomi"
@@ -49,6 +51,7 @@ cameras: []
 #     did: "xiaomi_device_id"      # Xiaomi Device ID
 #     vendor: "cs2"                # Transport vendor: "cs2" (default)
 #     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false)
 
 # Xiaomi cloud account settings (required for xiaomi cameras)
 # xiaomi:

@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,12 +25,12 @@ type Config struct {
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	WebDAV        WebDAVConfig        `yaml:"webdav"`
 	HLS           HLSConfig           `yaml:"hls"`
-	Streaming StreamingConfig `yaml:"streaming"`
+	Streaming     StreamingConfig     `yaml:"streaming"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
-	RTMP          RTMPConfig         `yaml:"rtmp"`
-	SRT           SRTConfig          `yaml:"srt"`
-	Health        HealthConfig       `yaml:"health"`
+	RTMP          RTMPConfig          `yaml:"rtmp"`
+	SRT           SRTConfig           `yaml:"srt"`
+	Health        HealthConfig        `yaml:"health"`
 	Version       string              `yaml:"version"`
 }
 
@@ -60,6 +60,7 @@ type CameraConfig struct {
 	SampleInterval int          `yaml:"sample_interval"`
 	HLSMaxFPS      int          `yaml:"hls_max_fps"`
 	Merge          *MergeConfig `yaml:"merge"`
+	AudioEnabled   bool         `yaml:"audio_enabled"`
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
@@ -126,9 +127,9 @@ type HLSConfig struct {
 
 // StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
 type StreamingConfig struct {
-	DefaultProtocol string      `yaml:"default_protocol"` // webrtc | flv | hls | ll-hls (default "hls")
-	WebRTC         WebRTCConfig `yaml:"webrtc"`
-	FLV            FLVConfig    `yaml:"flv"`
+	DefaultProtocol string       `yaml:"default_protocol"` // webrtc | flv | hls | ll-hls (default "hls")
+	WebRTC          WebRTCConfig `yaml:"webrtc"`
+	FLV             FLVConfig    `yaml:"flv"`
 }
 
 // WebRTCConfig configures WebRTC WHEP streaming
@@ -155,34 +156,34 @@ type XiaomiConfig struct {
 
 // SRTConfig configures the SRT listener for receiving MPEG-TS streams.
 type SRTConfig struct {
-	Enabled *bool          `yaml:"enabled"` // default false
-	Port    int            `yaml:"port"`    // default 9000
-	Streams []SRTStream    `yaml:"streams"`
+	Enabled *bool       `yaml:"enabled"` // default false
+	Port    int         `yaml:"port"`    // default 9000
+	Streams []SRTStream `yaml:"streams"`
 }
 
 // SRTStream configures a single SRT stream mapping.
 type SRTStream struct {
 	CameraID   string `yaml:"camera_id"`
-	Mode       string `yaml:"mode"`        // "listener" (receive pushes) or "caller" (pull from remote)
-	Address    string `yaml:"address"`     // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
-	Passphrase string `yaml:"passphrase"`  // AES encryption passphrase (optional)
-	StreamID   string `yaml:"stream_id"`   // SRT stream ID for caller mode (optional)
+	Mode       string `yaml:"mode"`       // "listener" (receive pushes) or "caller" (pull from remote)
+	Address    string `yaml:"address"`    // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
+	Passphrase string `yaml:"passphrase"` // AES encryption passphrase (optional)
+	StreamID   string `yaml:"stream_id"`  // SRT stream ID for caller mode (optional)
 }
 
 // RTMPConfig configures the RTMP ingest server.
 type RTMPConfig struct {
-	Enabled    *bool             `yaml:"enabled"`    // default false
-	Port       int               `yaml:"port"`       // default 1935
+	Enabled    *bool             `yaml:"enabled"`     // default false
+	Port       int               `yaml:"port"`        // default 1935
 	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
 }
 
 // HealthConfig configures the camera health monitoring system.
 type HealthConfig struct {
-	Enabled         bool                `yaml:"enabled"`
-	EventsRetention string              `yaml:"events_retention"`
-	Alerts          HealthAlertsConfig  `yaml:"alerts"`
-	Layer1          HealthLayer1Config  `yaml:"layer1"`
-	Layer2          HealthLayer2Config  `yaml:"layer2"`
+	Enabled         bool                        `yaml:"enabled"`
+	EventsRetention string                      `yaml:"events_retention"`
+	Alerts          HealthAlertsConfig          `yaml:"alerts"`
+	Layer1          HealthLayer1Config          `yaml:"layer1"`
+	Layer2          HealthLayer2Config          `yaml:"layer2"`
 	Layer2_5        HealthLayer2_5Config        `yaml:"layer2_5"`
 	AutoRemediation HealthAutoRemediationConfig `yaml:"auto_remediation"`
 }
@@ -679,6 +680,11 @@ func (cfg *Config) applyDefaults() {
 			case "onvif":
 				cam.Encoding = "" // ONVIF auto-detects
 			}
+		}
+		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)
+		if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
+			slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
+			cam.AudioEnabled = false
 		}
 	}
 }

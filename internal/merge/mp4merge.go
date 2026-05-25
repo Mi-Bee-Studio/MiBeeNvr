@@ -48,6 +48,22 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		}
 	}
 
+	// Validate audio consistency.
+	hasAudio := false
+	audioConfig := first.AudioConfig
+	for i, seg := range segments {
+		if i == 0 {
+			hasAudio = seg.HasAudio
+			continue
+		}
+		if seg.HasAudio != hasAudio {
+			return fmt.Errorf("segment %d: audio presence mismatch — cannot merge segments with mixed audio", i)
+		}
+		if seg.HasAudio && !bytes.Equal(seg.AudioConfig, audioConfig) {
+			return fmt.Errorf("segment %d: audio config mismatch", i)
+		}
+	}
+
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("create output: %w", err)
@@ -61,36 +77,58 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	}
 
 	// Step 2: Calculate moov size by writing to a buffer with placeholder offsets.
-	// Count total samples across all segments.
-	var totalSamples int
+	// Count total video samples across all segments.
+	var totalVideoSamples int
 	for _, seg := range segments {
-		totalSamples += seg.SampleCount
+		totalVideoSamples += seg.SampleCount
 	}
 
-	tmpTrack := &mergeTrack{
+	videoTrack := &mergeTrack{
 		isH265:       codec == "h265",
 		sps:          first.SPS,
 		pps:          first.PPS,
 		vps:          first.VPS,
 		timescale:    first.Timescale,
-		totalSamples: totalSamples,
+		totalSamples: totalVideoSamples,
 	}
 	// Populate placeholder samples so the size calculation includes per-sample tables.
-	tmpTrack.samples = make([]mergedSample, totalSamples)
-	for i := range tmpTrack.samples {
-		tmpTrack.samples[i].duration = 33 // placeholder
+	videoTrack.samples = make([]mergedSample, totalVideoSamples)
+	for i := range videoTrack.samples {
+		videoTrack.samples[i].duration = 33 // placeholder
+	}
+
+	// Build audio track placeholder for size calculation.
+	var audioTrack *mergeTrack
+	if hasAudio {
+		var totalAudioSamples int
+		for _, seg := range segments {
+			totalAudioSamples += seg.AudioSampleCount
+		}
+		audioTrack = &mergeTrack{
+			isAudio:      true,
+			audioConfig:  audioConfig,
+			timescale:    first.AudioTimescale,
+			totalSamples: totalAudioSamples,
+		}
+		audioTrack.samples = make([]mergedSample, totalAudioSamples)
+		for i := range audioTrack.samples {
+			audioTrack.samples[i].duration = 23 // placeholder
+		}
 	}
 
 	// Write moov to a buffer to get its exact size.
 	moovBuf := &bytesWriter{}
 	moovW := mp4.NewWriter(moovBuf)
-	if err := writeMergeMoov(moovW, tmpTrack, 0); err != nil {
+	if err := writeMergeMoov(moovW, videoTrack, audioTrack, 0, 0); err != nil {
 		return fmt.Errorf("calculate moov size: %w", err)
 	}
 	moovSize := moovBuf.len()
 
 	// Clear placeholder samples; real ones will be set after streaming mdat.
-	tmpTrack.samples = nil
+	videoTrack.samples = nil
+	if audioTrack != nil {
+		audioTrack.samples = nil
+	}
 
 	// Step 3: Write placeholder moov at the correct position.
 	moovOffset := ftypSize
@@ -111,7 +149,7 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	// Step 5: Stream sample data from each segment into the output.
 	buf := make([]byte, mergeBufferSize)
 	var currentOffset int64
-	var allSamples []mergedSample
+	var allVideoSamples []mergedSample
 
 	for _, seg := range segments {
 		if seg.FilePath == "" {
@@ -132,7 +170,7 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 				return fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
 			}
 
-			allSamples = append(allSamples, mergedSample{
+			allVideoSamples = append(allVideoSamples, mergedSample{
 				offset:     sampleAbsOffset,
 				size:       s.Size,
 				duration:   s.Duration,
@@ -142,6 +180,39 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		}
 
 		src.Close()
+	}
+
+	// Stream audio samples after video samples.
+	var allAudioSamples []mergedSample
+	if hasAudio {
+		for _, seg := range segments {
+			if len(seg.AudioSamples) == 0 {
+				continue
+			}
+			src, err := os.Open(seg.FilePath)
+			if err != nil {
+				return fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
+			}
+
+			for _, s := range seg.AudioSamples {
+				sampleAbsOffset := currentOffset + mdatDataStart
+
+				_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
+				if copyErr != nil {
+					src.Close()
+					return fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
+				}
+
+				allAudioSamples = append(allAudioSamples, mergedSample{
+					offset:   sampleAbsOffset,
+					size:     s.Size,
+					duration: s.Duration,
+				})
+				currentOffset += int64(s.Size)
+			}
+
+			src.Close()
+		}
 	}
 
 	// Step 6: Patch mdat box size.
@@ -160,19 +231,37 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		return fmt.Errorf("seek to moov: %w", err)
 	}
 
-	// Calculate total duration in timescale units.
-	var totalDuration uint32
-	for _, s := range allSamples {
-		totalDuration += s.duration
+	// Calculate total video duration in timescale units.
+	var totalVideoDuration uint32
+	for _, s := range allVideoSamples {
+		totalVideoDuration += s.duration
 	}
-	tmpTrack.duration = totalDuration
-	tmpTrack.samples = allSamples
+	videoTrack.duration = totalVideoDuration
+	videoTrack.samples = allVideoSamples
+
+	// Set real audio track data.
+	if hasAudio {
+		var totalAudioDuration uint32
+		for _, s := range allAudioSamples {
+			totalAudioDuration += s.duration
+		}
+		audioTrack.duration = totalAudioDuration
+		audioTrack.samples = allAudioSamples
+	}
 
 	// Use a limited writer to prevent overflow into mdat.
 	moovOut := &limitedWriter{w: out, remaining: moovSize, pos: moovOffset}
 	moovWriter := mp4.NewWriter(moovOut)
-	chunkOffset := mdatDataStart
-	if err := writeMergeMoov(moovWriter, tmpTrack, chunkOffset); err != nil {
+	// Video chunk starts at mdatDataStart; audio chunk starts after video data.
+	videoChunkOffset := mdatDataStart
+	var audioChunkOffset int64
+	if hasAudio {
+		audioChunkOffset = mdatDataStart
+		for _, s := range allVideoSamples {
+			audioChunkOffset += int64(s.size)
+		}
+	}
+	if err := writeMergeMoov(moovWriter, videoTrack, audioTrack, videoChunkOffset, audioChunkOffset); err != nil {
 		return fmt.Errorf("write moov: %w", err)
 	}
 
@@ -220,9 +309,11 @@ func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte)
 // mergeTrack holds track info for building the merged moov box.
 type mergeTrack struct {
 	isH265       bool
+	isAudio      bool
 	sps          []byte
 	pps          []byte
 	vps          []byte
+	audioConfig  []byte
 	timescale    uint32
 	totalSamples int
 	duration     uint32
@@ -230,32 +321,41 @@ type mergeTrack struct {
 }
 
 // writeMergeMoov writes a complete moov box for the merged output.
-func writeMergeMoov(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
+func writeMergeMoov(w *mp4.Writer, videoTrack *mergeTrack, audioTrack *mergeTrack, videoChunkOffset, audioChunkOffset int64) error {
 	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("moov")})
 	if err != nil {
 		return err
 	}
-	if err := writeMergeMvhd(w, tr); err != nil {
+	if err := writeMergeMvhd(w, videoTrack, audioTrack != nil); err != nil {
 		return err
 	}
-	if err := writeMergeTrak(w, tr, chunkOffset); err != nil {
+	if err := writeMergeTrak(w, videoTrack, videoChunkOffset); err != nil {
 		return err
+	}
+	if audioTrack != nil {
+		if err := writeMergeTrak(w, audioTrack, audioChunkOffset); err != nil {
+			return err
+		}
 	}
 	_, err = w.EndBox()
 	return err
 }
 
-func writeMergeMvhd(w *mp4.Writer, tr *mergeTrack) error {
+func writeMergeMvhd(w *mp4.Writer, tr *mergeTrack, hasAudio bool) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mvhd")})
 	if err != nil {
 		return err
+	}
+	nextTrackID := uint32(2)
+	if hasAudio {
+		nextTrackID = 3
 	}
 	mvhd := &mp4.Mvhd{
 		Timescale:   tr.timescale,
 		DurationV0:  tr.duration,
 		Rate:        0x00010000,
 		Volume:      0x0100,
-		NextTrackID: 2,
+		NextTrackID: nextTrackID,
 		Matrix: [9]int32{
 			0x00010000, 0, 0,
 			0, 0x00010000, 0,
@@ -280,8 +380,12 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	if err != nil {
 		return err
 	}
+	trackID := uint32(1)
+	if tr.isAudio {
+		trackID = 2
+	}
 	tkhd := &mp4.Tkhd{
-		TrackID:    1,
+		TrackID:    trackID,
 		DurationV0: tr.duration,
 		Width:      0,
 		Height:     0,
@@ -333,9 +437,17 @@ func writeMergeMdia(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	if err != nil {
 		return err
 	}
-	hdlr := &mp4.Hdlr{
-		HandlerType: [4]byte{'v', 'i', 'd', 'e'},
-		Name:        "VideoHandler\x00",
+	var hdlr *mp4.Hdlr
+	if tr.isAudio {
+		hdlr = &mp4.Hdlr{
+			HandlerType: [4]byte{'s', 'o', 'u', 'n'},
+			Name:        "SoundHandler\x00",
+		}
+	} else {
+		hdlr = &mp4.Hdlr{
+			HandlerType: [4]byte{'v', 'i', 'd', 'e'},
+			Name:        "VideoHandler\x00",
+		}
 	}
 	if _, err := mp4.Marshal(w, hdlr, mp4.Context{}); err != nil {
 		return err
@@ -358,18 +470,34 @@ func writeMergeMinf(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	if err != nil {
 		return err
 	}
-	// vmhd
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("vmhd")})
-	if err != nil {
-		return err
+	// vmhd or smhd
+	if tr.isAudio {
+		// smhd
+		bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("smhd")})
+		if err != nil {
+			return err
+		}
+		if _, err := mp4.Marshal(w, &mp4.Smhd{}, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi2
+	} else {
+		// vmhd
+		bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("vmhd")})
+		if err != nil {
+			return err
+		}
+		if _, err := mp4.Marshal(w, &mp4.Vmhd{Graphicsmode: 0}, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi2
 	}
-	if _, err := mp4.Marshal(w, &mp4.Vmhd{Graphicsmode: 0}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
 	// dinf > dref > url
 	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("dinf")})
 	if err != nil {
@@ -426,7 +554,11 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	if _, err := mp4.Marshal(w, &mp4.Stsd{EntryCount: 1}, mp4.Context{}); err != nil {
 		return err
 	}
-	if tr.isH265 {
+	if tr.isAudio {
+		if err := writeMergeAudioSampleEntry(w, tr); err != nil {
+			return err
+		}
+	} else if tr.isH265 {
 		if err := writeMergeH265SampleEntry(w, tr); err != nil {
 			return err
 		}
@@ -517,6 +649,117 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	_, err = w.EndBox()
 	_ = bi
 	return err
+}
+
+// writeMergeAudioSampleEntry writes mp4a + esds boxes for AAC audio.
+func writeMergeAudioSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mp4a")})
+	if err != nil {
+		return err
+	}
+
+	// Parse AudioSpecificConfig for channel count and sample rate.
+	channelCount, sampleRate := parseAudioConfig(tr.audioConfig)
+
+	mp4a := &mp4.AudioSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("mp4a")},
+			DataReferenceIndex: 1,
+		},
+		EntryVersion: 0,
+		ChannelCount: channelCount,
+		SampleSize:   16,
+		SampleRate:   sampleRate << 16, // fixed-point 16.16
+	}
+	if _, err := mp4.Marshal(w, mp4a, mp4.Context{}); err != nil {
+		return err
+	}
+
+	// esds box
+	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("esds")})
+	if err != nil {
+		return err
+	}
+	esds := buildMergeEsds(tr.audioConfig)
+	if _, err := mp4.Marshal(w, esds, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi2
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi
+	return nil
+}
+
+// parseAudioConfig extracts channel count and sample rate from an AAC AudioSpecificConfig.
+func parseAudioConfig(config []byte) (uint16, uint32) {
+	channelCount := uint16(2)
+	sampleRate := uint32(44100)
+
+	if len(config) >= 2 {
+		sampleRateIndex := (config[0] >> 3) & 0x0F
+		if sampleRateIndex == 0x0F && len(config) >= 4 {
+			sampleRate = uint32(config[1])<<16 | uint32(config[2])<<8 | uint32(config[3]&0xFC)<<4>>4
+		} else if sampleRateIndex < 15 {
+			sampleRates := [...]uint32{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+			if int(sampleRateIndex) < len(sampleRates) {
+				sampleRate = sampleRates[sampleRateIndex]
+			}
+		}
+		channelConfig := ((config[0] & 0x01) << 2) | ((config[1] >> 6) & 0x03)
+		if channelConfig > 0 {
+			channelCount = uint16(channelConfig)
+		}
+	}
+
+	return channelCount, sampleRate
+}
+
+// buildMergeEsds constructs an esds (Elementary Stream Descriptor) box for AAC.
+// Same structure as internal/muxer buildEsds.
+func buildMergeEsds(audioConfig []byte) *mp4.Esds {
+	return &mp4.Esds{
+		FullBox: mp4.FullBox{Version: 0},
+		Descriptors: []mp4.Descriptor{
+			{
+				Tag:  mp4.ESDescrTag,
+				Size: uint32(25 + len(audioConfig)),
+				ESDescriptor: &mp4.ESDescriptor{
+					ESID:           1,
+					StreamPriority: 0,
+				},
+				DecoderConfigDescriptor: nil,
+			},
+			{
+				Tag:  mp4.DecoderConfigDescrTag,
+				Size: uint32(13 + len(audioConfig)),
+				DecoderConfigDescriptor: &mp4.DecoderConfigDescriptor{
+					ObjectTypeIndication: 0x40, // Audio ISO/IEC 14496-3 (AAC)
+					StreamType:           0x05, // AudioStream
+					UpStream:             false,
+					Reserved:             true,
+					BufferSizeDB:         0,
+					MaxBitrate:           128000,
+					AvgBitrate:           128000,
+				},
+			},
+			{
+				Tag:  mp4.DecSpecificInfoTag,
+				Size: uint32(len(audioConfig)),
+				Data: audioConfig,
+			},
+			{
+				Tag:  mp4.SLConfigDescrTag,
+				Size: 1,
+				Data: []byte{0x02}, // predefined: use timestamps
+			},
+		},
+	}
 }
 
 // writeMergeH264SampleEntry writes avc1 + avcC boxes for H.264.

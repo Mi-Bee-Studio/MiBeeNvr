@@ -22,14 +22,7 @@ func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr *hls.Manager, is
 	if hub == nil {
 		return nil // no hub, no subscription (shouldn't happen in practice)
 	}
-	if isH265 {
-		return hub.Subscribe("hls", func(pts int64, au [][]byte) {
-			_ = hlsMgr.WriteH265(cameraID, pts, au)
-		})
-	}
-	return hub.Subscribe("hls", func(pts int64, au [][]byte) {
-		_ = hlsMgr.WriteH264(cameraID, pts, au)
-	})
+	return hlsMgr.SubscribeToHub(cameraID, hub, isH265)
 }
 
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {

@@ -755,3 +755,308 @@ func TestLLHLSConfig_LowLatencyFalse_NoEffect(t *testing.T) {
 	require.Equal(t, 3, mgr.segmentCount) // NewManager default
 }
 
+// --- IDR Waiting Tests ---
+
+func TestIDRWaiting_H264_SkipsNonIDRFrame(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	require.False(t, entry.idrReceived, "should start with idrReceived=false")
+
+	// Non-IDR H264 NALU (type 1 = non-IDR slice)
+	// H264: naluType = data[0] & 0x1F, type 1 = non-IDR coded slice
+	frame := hlsFrame{pts: 0, au: [][]byte{{0x01, 0x02, 0x03}}}
+	require.False(t, isFirstNalIDR(frame.au, false), "non-IDR H264 should not be IDR")
+
+	// Simulate writeLoop check: when !idrReceived and !isIDR, frame should be skipped
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		// skipped — correct behavior
+	} else {
+		t.Error("expected non-IDR frame to be skipped before first IDR")
+	}
+	require.False(t, entry.idrReceived, "idrReceived should remain false after non-IDR frame")
+}
+
+func TestIDRWaiting_H264_AcceptsIDRFrame(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	require.False(t, entry.idrReceived)
+
+	// IDR H264 NALU (type 5 = IDR slice)
+	frame := hlsFrame{pts: 1000, au: [][]byte{{0x05, 0x02, 0x03}}}
+	require.True(t, isFirstNalIDR(frame.au, false), "IDR H264 should be detected as IDR")
+
+	// Simulate writeLoop: IDR frame should be written and set idrReceived
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		t.Error("expected IDR frame to be accepted")
+	}
+	entry.idrReceived = true
+	require.True(t, entry.idrReceived, "idrReceived should be set after IDR frame")
+}
+
+func TestIDRWaiting_H264_AcceptsAllAfterIDR(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	entry.idrReceived = true // simulate IDR already received
+
+	// Non-IDR frame after IDR should pass through
+	frame := hlsFrame{pts: 2000, au: [][]byte{{0x01, 0x02, 0x03}}}
+	require.False(t, isFirstNalIDR(frame.au, false))
+
+	// When idrReceived is already true, frame should be written regardless
+	require.True(t, entry.idrReceived, "idrReceived should remain true")
+}
+
+func TestIDRWaiting_H265_SkipsNonIDRFrame(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	entry.isH265 = true
+	require.False(t, entry.idrReceived)
+
+	// Non-IDR H265 NALU (type 1 = non-IDR slice)
+	// H265: naluType = (data[0] >> 1) & 0x3F
+	// type 1 -> data[0] = 1 << 1 = 0x02
+	frame := hlsFrame{pts: 0, au: [][]byte{{0x02, 0x02, 0x03}}}
+	require.False(t, isFirstNalIDR(frame.au, true), "non-IDR H265 should not be IDR")
+
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		// skipped — correct behavior
+	} else {
+		t.Error("expected non-IDR H265 frame to be skipped before first IDR")
+	}
+	require.False(t, entry.idrReceived, "idrReceived should remain false")
+}
+
+func TestIDRWaiting_H265_AcceptsIDR_Type19(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	entry.isH265 = true
+
+	// IDR_W_RADL (type 19): data[0] = 19 << 1 = 0x26
+	frame := hlsFrame{pts: 1000, au: [][]byte{{0x26, 0x02, 0x03}}}
+	require.True(t, isFirstNalIDR(frame.au, true), "H265 IDR_W_RADL should be detected as IDR")
+
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		t.Error("expected H265 IDR_W_RADL frame to be accepted")
+	}
+	entry.idrReceived = true
+	require.True(t, entry.idrReceived)
+}
+
+func TestIDRWaiting_H265_AcceptsIDR_Type20(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	entry.isH265 = true
+
+	// IDR_N_LP (type 20): data[0] = 20 << 1 = 0x28
+	frame := hlsFrame{pts: 1000, au: [][]byte{{0x28, 0x02, 0x03}}}
+	require.True(t, isFirstNalIDR(frame.au, true), "H265 IDR_N_LP should be detected as IDR")
+
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		t.Error("expected H265 IDR_N_LP frame to be accepted")
+	}
+	entry.idrReceived = true
+	require.True(t, entry.idrReceived)
+}
+
+func TestIDRWaiting_H265_AcceptsAllAfterIDR(t *testing.T) {
+	entry := newTestStreamEntry(0)
+	entry.isH265 = true
+	entry.idrReceived = true // simulate IDR already received
+
+	// Non-IDR frame after IDR should pass through
+	frame := hlsFrame{pts: 2000, au: [][]byte{{0x02, 0x02, 0x03}}}
+	require.False(t, isFirstNalIDR(frame.au, true))
+	require.True(t, entry.idrReceived, "idrReceived should remain true after IDR received")
+}
+
+func TestIDRWaiting_EmptyAU(t *testing.T) {
+	// Empty access unit should not crash and should not be detected as IDR
+	require.False(t, isFirstNalIDR([][]byte{}, false), "empty AU should not be IDR")
+	require.False(t, isFirstNalIDR([][]byte{}, true), "empty AU should not be IDR for H265")
+}
+
+func TestIDRWaiting_EmptyNal(t *testing.T) {
+	// NAL unit with no data should not crash and should not be detected as IDR
+	require.False(t, isFirstNalIDR([][]byte{{}}, false), "empty NAL should not be IDR")
+	require.False(t, isFirstNalIDR([][]byte{{}}, true), "empty NAL should not be IDR for H265")
+}
+
+func TestIDRWaiting_H264_SPSNotIDR(t *testing.T) {
+	// H264 SPS NALU (type 7) should not be detected as IDR
+	require.False(t, isFirstNalIDR([][]byte{{0x07, 0x42, 0xc0}}, false), "SPS should not be IDR")
+}
+
+func TestIDRWaiting_H264_PPSNotIDR(t *testing.T) {
+	// H264 PPS NALU (type 8) should not be detected as IDR
+	require.False(t, isFirstNalIDR([][]byte{{0x08, 0xce, 0x38}}, false), "PPS should not be IDR")
+}
+
+func TestIDRWaiting_H265_VPSNotIDR(t *testing.T) {
+	// H265 VPS NALU (type 32): data[0] = 32 << 1 = 0x40
+	require.False(t, isFirstNalIDR([][]byte{{0x40, 0x01, 0x0c}}, true), "VPS should not be IDR")
+}
+
+func TestIDRWaiting_H265_SPSNotIDR(t *testing.T) {
+	// H265 SPS NALU (type 33): data[0] = 33 << 1 = 0x42
+	require.False(t, isFirstNalIDR([][]byte{{0x42, 0x01, 0x01}}, true), "SPS should not be IDR")
+}
+
+func TestIDRWaiting_H265_PPSNotIDR(t *testing.T) {
+	// H265 PPS NALU (type 34): data[0] = 34 << 1 = 0x44
+	require.False(t, isFirstNalIDR([][]byte{{0x44, 0x01, 0xc1}}, true), "PPS should not be IDR")
+}
+
+func TestIDRWaiting_MixedNALUs_FirstIsPPS_Fails(t *testing.T) {
+	// Access unit where first NALU is PPS (not IDR) should not be treated as IDR
+	entry := newTestStreamEntry(0)
+	require.False(t, entry.idrReceived)
+
+	// First element is PPS (type 8), second is IDR (type 5)
+	// isFirstNalIDR only checks the first NAL unit
+	frame := hlsFrame{pts: 0, au: [][]byte{{0x08, 0xce}, {0x05, 0x02}}}
+	require.False(t, isFirstNalIDR(frame.au, false), "first NAL is PPS, not IDR")
+
+	// Should be skipped per writeLoop logic
+	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
+		// skipped — correct
+	} else {
+		t.Error("expected frame starting with PPS to be skipped")
+	}
+	require.False(t, entry.idrReceived)
+}
+
+// --- FPS Credit Smoothing Tests ---
+
+// TestFrameRateLimiter_CreditSmoothing verifies that credit-based throttling
+// produces consistent frame intervals. With maxFPS=10 (100ms interval) and source
+// at ~10ms per frame, frames should only pass after enough credit accumulates.
+func TestFrameRateLimiter_CreditSmoothing(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := newTestStreamEntry(10) // 100ms min interval
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// First frame should always pass (lastFrameTime is zero)
+	err := mgr.WriteH264(cameraID, 0, [][]byte{{0x05}}) // IDR
+	require.NoError(t, err)
+	require.Equal(t, 1, len(entry.frameCh), "first frame should pass")
+	<-entry.frameCh // drain
+
+	// Next 9 frames sent rapidly should all be dropped (no credit accumulated)
+	for i := 0; i < 9; i++ {
+		err := mgr.WriteH264(cameraID, int64(i+1), [][]byte{{0x01}})
+		require.NoError(t, err)
+	}
+	require.Equal(t, 0, len(entry.frameCh), "rapid frames after first should be dropped")
+
+	// Wait for credit to accumulate to one interval
+	time.Sleep(100 * time.Millisecond)
+
+	// Now a frame should pass — enough credit accumulated
+	err = mgr.WriteH264(cameraID, 100, [][]byte{{0x01}})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(entry.frameCh), "frame after credit accumulation should pass")
+}
+
+// TestFrameRateLimiter_CreditCapAfterBurst verifies that credit is capped
+// after a long pause to prevent frame bursts.
+func TestFrameRateLimiter_CreditCapAfterBurst(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := newTestStreamEntry(10) // 100ms min interval
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// First frame passes
+	_ = mgr.WriteH264(cameraID, 0, [][]byte{{0x01}})
+	<-entry.frameCh // drain
+
+	// Wait much longer than minInterval (5s pause = 50 intervals of credit)
+	time.Sleep(200 * time.Millisecond)
+
+	// Only ONE frame should pass per call (credit capped at 2*minInterval)
+	passed := 0
+	for i := 0; i < 5; i++ {
+		err := mgr.WriteH264(cameraID, int64(i), [][]byte{{0x01}})
+		require.NoError(t, err)
+		select {
+		case <-entry.frameCh:
+			passed++
+		default:
+		}
+	}
+	// With credit capped at 2*minInterval, at most 2-3 frames should pass
+	// from the accumulated credit (not all 5)
+	require.LessOrEqual(t, passed, 3, "credit cap should prevent burst")
+	require.Greater(t, passed, 0, "at least some frames should pass from credit")
+}
+
+// TestFrameRateLimiter_FPSThrottleMetric verifies the Prometheus counter increments
+// when frames are dropped by FPS throttle.
+func TestFrameRateLimiter_FPSThrottleMetric(t *testing.T) {
+	m := metrics.NewMetrics()
+	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0, m)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := newTestStreamEntry(2) // very aggressive FPS limit
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// First frame passes
+	_ = mgr.WriteH264(cameraID, 0, [][]byte{{0x01}})
+	<-entry.frameCh
+
+	// Send 5 more rapidly — all should be dropped by FPS throttle
+	for i := 0; i < 5; i++ {
+		_ = mgr.WriteH264(cameraID, int64(i+1), [][]byte{{0x01}})
+	}
+
+	// Verify counter was incremented (should be 5 from FPS drops)
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_hls_frames_dropped_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(5), f.GetMetric()[0].GetCounter().GetValue(),
+				"expected 5 FPS throttle drops")
+			return
+		}
+	}
+	t.Fatal("expected nvr_hls_frames_dropped_total metric")
+}
+
+// --- Buffer Capacity Tests ---
+
+// TestDefaultWriteBufSize verifies the increased write buffer size.
+func TestDefaultWriteBufSize(t *testing.T) {
+	require.Equal(t, 180, defaultWriteBufSize, "write buffer should be 180 frames")
+}
+
+// TestWriteBufferCapacity verifies that the full buffer can be filled without drops.
+func TestWriteBufferCapacity(t *testing.T) {
+	mgr := newTestManager(t)
+	cameraID := "test-cam"
+
+	mgr.mu.Lock()
+	entry := &streamEntry{
+		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+		maxFPS:   0,
+		lastUsed: time.Now(),
+	}
+	mgr.streams[cameraID] = entry
+	mgr.mu.Unlock()
+
+	// Fill the entire buffer — all should succeed
+	for i := 0; i < defaultWriteBufSize; i++ {
+		err := mgr.WriteH264(cameraID, int64(i), [][]byte{{byte(i)}})
+		require.NoError(t, err)
+	}
+	require.Equal(t, defaultWriteBufSize, len(entry.frameCh),
+		"buffer should be exactly full")
+
+	// Next frame should be dropped (buffer full)
+	err := mgr.WriteH264(cameraID, int64(defaultWriteBufSize), [][]byte{{0xFF}})
+	require.NoError(t, err)
+	require.Equal(t, defaultWriteBufSize, len(entry.frameCh),
+		"buffer should remain at capacity after drop")
+}

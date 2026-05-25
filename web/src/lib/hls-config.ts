@@ -39,11 +39,11 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
     return {
       ...baseConfig,
       lowLatencyMode: true,
-      maxBufferLength: 6,
+      maxBufferLength: 10,
       maxMaxBufferLength: 12,
       maxBufferSize: 10 * 1024 * 1024,
-      backBufferLength: 0.5,
-      liveSyncDurationCount: 2,
+      backBufferLength: 2.0,
+      liveSyncDurationCount: 3,
       liveMaxLatencyDurationCount: 5,
     };
   }

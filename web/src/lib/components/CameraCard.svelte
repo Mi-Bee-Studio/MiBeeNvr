@@ -114,7 +114,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {variant === 'disabled' ? 'is-disabled' : ''}"
+  class="card camera-card border th-border p-4 transition-all {variant === 'disabled' ? 'is-disabled' : ''} {menuOpen ? 'is-menu-open' : ''}"
 >
   <!-- Top: Name + Status -->
   <div class="flex items-start justify-between gap-2 mb-3">
@@ -279,6 +279,11 @@
   .camera-card {
     display: flex;
     flex-direction: column;
+    position: relative;
+  }
+
+  .camera-card.is-menu-open {
+    z-index: 100;
   }
 
   .camera-card.is-disabled {
@@ -339,8 +344,8 @@
     background-color: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-md);
-    z-index: 50;
+    box-shadow: var(--shadow-lg);
+    z-index: 9999;
     padding: 0.25rem 0;
     animation: dropdown-enter 0.12s var(--ease-out);
   }

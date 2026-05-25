@@ -16,14 +16,19 @@ const defaultTimescale = 1000
 
 // track holds per-track state for the MP4 muxer.
 type track struct {
-	id     int
-	sps    []byte
-	pps    []byte
-	vps    []byte
-	isH265 bool
-	width  int
-	height int
-	samples []sample
+	id          int
+	sps         []byte
+	pps         []byte
+	vps         []byte
+	isH265      bool
+	isAudio     bool
+	audioCodec  string    // "aac" or "g711"
+	audioConfig []byte    // AAC AudioSpecificConfig bytes
+	g711MULaw   bool      // true=μ-law, false=A-law
+	g711Rate    int       // sample rate (typically 8000)
+	width       int
+	height      int
+	samples     []sample
 }
 
 // sample represents a single media sample (one NAL unit).
@@ -42,13 +47,13 @@ type sample struct {
 //	m.WriteSample(trackID, nalData, pts, duration)
 //	m.Close()
 type MP4Muxer struct {
-	filePath     string
-	file         *os.File
-	mu           sync.Mutex
-	tracks       []*track
-	nextTrackID  int
+	filePath      string
+	file          *os.File
+	mu            sync.Mutex
+	tracks        []*track
+	nextTrackID   int
 	totalDuration time.Duration
-	closed       bool
+	closed        bool
 }
 
 // NewMP4Muxer creates a new MP4 muxer that will write to filePath.
@@ -75,9 +80,9 @@ func (m *MP4Muxer) AddH264Track(sps, pps []byte) (int, error) {
 	copy(ppsCopy, pps)
 
 	t := &track{
-		id:     m.nextTrackID,
-		sps:    spsCopy,
-		pps:   ppsCopy,
+		id:  m.nextTrackID,
+		sps: spsCopy,
+		pps: ppsCopy,
 	}
 	t.width, t.height = parseSPSResolution(spsCopy)
 
@@ -106,8 +111,8 @@ func (m *MP4Muxer) AddH265Track(vps, sps, pps []byte) (int, error) {
 	t := &track{
 		id:     m.nextTrackID,
 		sps:    spsCopy,
-		pps:   ppsCopy,
-		vps:   vpsCopy,
+		pps:    ppsCopy,
+		vps:    vpsCopy,
 		isH265: true,
 	}
 	t.width, t.height = parseHEVCSPSResolution(spsCopy)
@@ -115,6 +120,51 @@ func (m *MP4Muxer) AddH265Track(vps, sps, pps []byte) (int, error) {
 	m.tracks = append(m.tracks, t)
 	m.nextTrackID++
 
+	return t.id, nil
+}
+
+// AddAudioTrack adds an audio track for the given codec.
+// Supported codecs: "aac" (AudioSpecificConfig required), "g711" (audioConfig ignored).
+// For G.711, muLaw=true selects μ-law (PT=0), muLaw=false selects A-law (PT=8).
+// sampleRate is typically 8000 for G.711.
+// Returns the track ID (1-based) or an error.
+func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return 0, errors.New("muxer is closed")
+	}
+
+	if codec != "aac" && codec != "g711" {
+		return 0, fmt.Errorf("unsupported audio codec: %s (only aac and g711 are supported)", codec)
+	}
+
+	t := &track{
+		id:         m.nextTrackID,
+		isAudio:    true,
+		audioCodec: codec,
+	}
+
+	if codec == "aac" {
+		configCopy := make([]byte, len(audioConfig))
+		copy(configCopy, audioConfig)
+		t.audioConfig = configCopy
+	} else {
+		// G.711: parse muLaw flag from config. config format: 1 byte (0=A-law, 1=μ-law) + 4 bytes sample rate (big-endian uint32)
+		if len(audioConfig) >= 1 {
+			t.g711MULaw = audioConfig[0] != 0
+		}
+		if len(audioConfig) >= 5 {
+			t.g711Rate = int(audioConfig[1])<<24 | int(audioConfig[2])<<16 | int(audioConfig[3])<<8 | int(audioConfig[4])
+		}
+		if t.g711Rate == 0 {
+			t.g711Rate = 8000 // default
+		}
+	}
+
+	m.tracks = append(m.tracks, t)
+	m.nextTrackID++
 	return t.id, nil
 }
 
@@ -136,6 +186,42 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 	}
 	if t == nil {
 		return fmt.Errorf("track %d not found", trackID)
+	}
+
+	dataCopy := make([]byte, len(data))
+	copy(dataCopy, data)
+
+	t.samples = append(t.samples, sample{
+		data:     dataCopy,
+		pts:      pts,
+		duration: duration,
+	})
+
+	m.totalDuration += duration
+	return nil
+}
+
+// WriteAudioSample writes a raw AAC frame as a sample to the specified audio track.
+func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration, duration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return errors.New("muxer is closed")
+	}
+
+	var t *track
+	for _, tr := range m.tracks {
+		if tr.id == trackID {
+			t = tr
+			break
+		}
+	}
+	if t == nil {
+		return fmt.Errorf("track %d not found", trackID)
+	}
+	if !t.isAudio {
+		return fmt.Errorf("track %d is not an audio track", trackID)
 	}
 
 	dataCopy := make([]byte, len(data))
@@ -238,6 +324,9 @@ func writeFtyp(w *mp4.Writer, tracks []*track) (int64, error) {
 	hasH264 := false
 	hasH265 := false
 	for _, tr := range tracks {
+		if tr.isAudio {
+			continue
+		}
 		if tr.isH265 {
 			hasH265 = true
 		} else {
@@ -276,11 +365,18 @@ func writeMoov(w *mp4.Writer, tracks []*track, chunkOffset int64) error {
 	if err := writeMvhd(w, tracks); err != nil {
 		return err
 	}
+
+	// Calculate per-track chunk offsets within mdat.
+	// Samples are written in track order, so each track's
+	// data follows the previous track's data.
+	off := chunkOffset
 	for _, tr := range tracks {
-		if err := writeTrak(w, tr, chunkOffset); err != nil {
+		if err := writeTrak(w, tr, off); err != nil {
 			return err
 		}
+		off += int64(trackMdatSize(tr))
 	}
+
 	_, err = w.EndBox()
 	return err
 }
@@ -396,6 +492,10 @@ func writeMdia(w *mp4.Writer, tr *track, chunkOffset int64) error {
 		HandlerType: [4]byte{'v', 'i', 'd', 'e'},
 		Name:        "VideoHandler\x00",
 	}
+	if tr.isAudio {
+		hdlr.HandlerType = [4]byte{'s', 'o', 'u', 'n'}
+		hdlr.Name = "SoundHandler\x00"
+	}
 	if _, err := mp4.Marshal(w, hdlr, mp4.Context{}); err != nil {
 		return err
 	}
@@ -420,18 +520,32 @@ func writeMinf(w *mp4.Writer, tr *track, chunkOffset int64) error {
 		return err
 	}
 
-	// vmhd
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("vmhd")})
-	if err != nil {
-		return err
+	// vmhd (video) or smhd (audio)
+	if tr.isAudio {
+		bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("smhd")})
+		if err != nil {
+			return err
+		}
+		if _, err := mp4.Marshal(w, &mp4.Smhd{}, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi2
+	} else {
+		bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("vmhd")})
+		if err != nil {
+			return err
+		}
+		if _, err := mp4.Marshal(w, &mp4.Vmhd{Graphicsmode: 0}, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi2
 	}
-	if _, err := mp4.Marshal(w, &mp4.Vmhd{Graphicsmode: 0}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
 
 	// dinf > dref > url
 	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("dinf")})
@@ -489,7 +603,17 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	if _, err := mp4.Marshal(w, &mp4.Stsd{EntryCount: 1}, mp4.Context{}); err != nil {
 		return err
 	}
-	if tr.isH265 {
+	if tr.isAudio {
+		if tr.audioCodec == "g711" {
+			if err := writeG711SampleEntry(w, tr); err != nil {
+				return err
+			}
+		} else {
+			if err := writeAACSampleEntry(w, tr); err != nil {
+				return err
+			}
+		}
+	} else if tr.isH265 {
 		if err := writeH265SampleEntry(w, tr); err != nil {
 			return err
 		}
@@ -549,7 +673,11 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	}
 	sizes := make([]uint32, len(tr.samples))
 	for i, s := range tr.samples {
-		sizes[i] = uint32(len(s.data)) + 4
+		sz := uint32(len(s.data))
+		if !tr.isAudio {
+			sz += 4 // 4-byte NAL length prefix for video
+		}
+		sizes[i] = sz
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stsz{SampleSize: 0, SampleCount: uint32(len(sizes)), EntrySize: sizes}, mp4.Context{}); err != nil {
 		return err
@@ -581,6 +709,7 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	_ = bi
 	return err
 }
+
 // writeH264SampleEntry writes avc1 + avcC boxes for H.264 tracks.
 func writeH264SampleEntry(w *mp4.Writer, tr *track) error {
 	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avc1")})
@@ -678,6 +807,158 @@ func writeH265SampleEntry(w *mp4.Writer, tr *track) error {
 	return nil
 }
 
+// writeAACSampleEntry writes mp4a + esds boxes for AAC audio tracks.
+// The esds box contains the AudioSpecificConfig from audioConfig.
+func writeAACSampleEntry(w *mp4.Writer, tr *track) error {
+	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mp4a")})
+	if err != nil {
+		return err
+	}
+
+	// Parse AudioSpecificConfig to extract channel count and sample rate.
+	// For AAC-LC: 2 bytes. Format: audioObjectType(5) + samplingFreqIndex(4) + channelConfig(4) + ...
+	channelCount := uint16(2) // default stereo
+	sampleRate := uint32(44100)
+	if len(tr.audioConfig) >= 2 {
+		sampleRateIndex := (tr.audioConfig[0] >> 3) & 0x0F
+		if sampleRateIndex == 0xF && len(tr.audioConfig) >= 3 {
+			sampleRate = uint32(tr.audioConfig[1]&0x07)<<8 | uint32(tr.audioConfig[2])
+		} else if sampleRateIndex < 15 {
+			sampleRates := [...]uint32{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+			if int(sampleRateIndex) < len(sampleRates) {
+				sampleRate = sampleRates[sampleRateIndex]
+			}
+		}
+		channelConfig := ((tr.audioConfig[0] & 0x01) << 2) | ((tr.audioConfig[1] >> 6) & 0x03)
+		if channelConfig > 0 {
+			channelCount = uint16(channelConfig)
+		}
+	}
+
+	mp4a := &mp4.AudioSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("mp4a")},
+			DataReferenceIndex: 1,
+		},
+		EntryVersion: 0,
+		ChannelCount: channelCount,
+		SampleSize:   16,
+		SampleRate:   sampleRate << 16, // fixed-point 16.16
+	}
+	if _, err := mp4.Marshal(w, mp4a, mp4.Context{}); err != nil {
+		return err
+	}
+
+	// esds box
+	bi4, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("esds")})
+	if err != nil {
+		return err
+	}
+	esds := buildEsds(tr.audioConfig)
+	if _, err := mp4.Marshal(w, esds, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi4
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi3
+	return nil
+}
+
+// writeG711SampleEntry writes ulaw (μ-law) or alaw (A-law) sample entry for G.711 audio.
+// G.711 is raw PCM — no esds or codec config boxes needed.
+// Written as raw bytes since go-mp4 only registers AudioSampleEntry for mp4a/enca.
+func writeG711SampleEntry(w *mp4.Writer, tr *track) error {
+	boxType := mp4.StrToBoxType("ulaw")
+	if !tr.g711MULaw {
+		boxType = mp4.StrToBoxType("alaw")
+	}
+
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: boxType})
+	if err != nil {
+		return err
+	}
+
+	sampleRate := uint32(tr.g711Rate)
+	if sampleRate == 0 {
+		sampleRate = 8000
+	}
+
+	// Write AudioSampleEntry fields manually (same layout as mp4a without esds):
+	// reserved[6] + data_reference_index[2] + entry_version[2] + reserved[6] +
+	// channel_count[2] + sample_size[2] + pre_defined[2] + reserved[2] + sample_rate[4]
+	buf := make([]byte, 28)
+	// bytes 6-7: data_reference_index = 1
+	buf[7] = 0x01
+	// bytes 16-17: channel_count = 1
+	buf[17] = 0x01
+	// bytes 18-19: sample_size = 8
+	buf[19] = 0x08
+	// bytes 24-27: sample_rate = fixed-point 16.16
+	rateFixed := sampleRate << 16
+	buf[24] = byte(rateFixed >> 24)
+	buf[25] = byte(rateFixed >> 16)
+	buf[26] = byte(rateFixed >> 8)
+	buf[27] = byte(rateFixed)
+
+	if _, err := w.Write(buf); err != nil {
+		return err
+	}
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi
+	return nil
+}
+
+// buildEsds constructs an esds (Elementary Stream Descriptor) box for AAC.
+// Structure: ES_Descriptor > DecoderConfigDescriptor > DecSpecificInfoTag(AudioSpecificConfig) + SLConfigDescriptor
+func buildEsds(audioConfig []byte) *mp4.Esds {
+	return &mp4.Esds{
+		FullBox: mp4.FullBox{Version: 0},
+		Descriptors: []mp4.Descriptor{
+			{
+				Tag:  mp4.ESDescrTag,
+				Size: uint32(25 + len(audioConfig)),
+				ESDescriptor: &mp4.ESDescriptor{
+					ESID:           1,
+					StreamPriority: 0,
+				},
+				DecoderConfigDescriptor: nil,
+			},
+			{
+				Tag:  mp4.DecoderConfigDescrTag,
+				Size: uint32(13 + len(audioConfig)),
+				DecoderConfigDescriptor: &mp4.DecoderConfigDescriptor{
+					ObjectTypeIndication: 0x40, // Audio ISO/IEC 14496-3 (AAC)
+					StreamType:           0x05, // AudioStream
+					UpStream:             false,
+					Reserved:             true,
+					BufferSizeDB:         0,
+					MaxBitrate:           128000,
+					AvgBitrate:           128000,
+				},
+			},
+			{
+				Tag:  mp4.DecSpecificInfoTag,
+				Size: uint32(len(audioConfig)),
+				Data: audioConfig,
+			},
+			{
+				Tag:  mp4.SLConfigDescrTag,
+				Size: 1,
+				Data: []byte{0x02}, // predefined: use timestamps
+			},
+		},
+	}
+}
+
 // buildHvcC constructs an HvcC (HEVCDecoderConfigurationRecord) from VPS, SPS, PPS.
 func buildHvcC(vps, sps, pps []byte) *mp4.HvcC {
 	profile := uint8(0)
@@ -719,7 +1000,22 @@ func buildHvcC(vps, sps, pps []byte) *mp4.HvcC {
 		},
 	}
 }
+
 // --- Helpers ---
+
+// trackMdatSize returns the total bytes this track's samples occupy in the mdat box.
+// Video samples include a 4-byte NAL length prefix per sample.
+func trackMdatSize(tr *track) int {
+	total := 0
+	for _, s := range tr.samples {
+		if tr.isAudio {
+			total += len(s.data)
+		} else {
+			total += 4 + len(s.data) // 4-byte NAL length prefix
+		}
+	}
+	return total
+}
 
 func trackDurationMs(tr *track) uint32 {
 	d := uint32(0)
@@ -734,9 +1030,15 @@ func collectMdatData(tracks []*track) []byte {
 	var lenBuf [4]byte
 	for _, tr := range tracks {
 		for _, s := range tr.samples {
-			binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s.data)))
-			buf = append(buf, lenBuf[:]...)
-			buf = append(buf, s.data...)
+			if tr.isAudio {
+				// Audio samples are written raw (no length prefix)
+				buf = append(buf, s.data...)
+			} else {
+				// Video samples get a 4-byte big-endian NAL length prefix
+				binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s.data)))
+				buf = append(buf, lenBuf[:]...)
+				buf = append(buf, s.data...)
+			}
 		}
 	}
 	return buf
@@ -881,8 +1183,8 @@ func parseSPSResolution(sps []byte) (width, height int) {
 		if chromaFormatIDC == 3 {
 			r.readBit() // separate_colour_plane_flag
 		}
-		r.readUE() // bit_depth_luma_minus8
-		r.readUE() // bit_depth_chroma_minus8
+		r.readUE()  // bit_depth_luma_minus8
+		r.readUE()  // bit_depth_chroma_minus8
 		r.readBit() // qpprime_y_zero_transform_bypass_flag
 		scalingPresent := r.readBit()
 		if scalingPresent == 1 {
@@ -920,8 +1222,8 @@ func parseSPSResolution(sps []byte) (width, height int) {
 		r.readUE() // log2_max_pic_order_cnt_lsb_minus4
 	} else if picOrderCntType == 1 {
 		r.readBit() // delta_pic_order_always_zero_flag
-		r.readSE() // offset_for_non_ref_pic
-		r.readSE() // offset_for_top_to_bottom_field
+		r.readSE()  // offset_for_non_ref_pic
+		r.readSE()  // offset_for_top_to_bottom_field
 		numRefFrames := r.readUE()
 		for i := 0; i < numRefFrames; i++ {
 			r.readSE()

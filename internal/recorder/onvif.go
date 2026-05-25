@@ -28,6 +28,7 @@ type ONVIFConfig struct {
 	Password       string
 	SegmentDur     time.Duration
 	DB             RecordingDB
+	AudioEnabled   bool
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -242,34 +243,36 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	encoding := r.detectEncoding(context.Background())
 	switch encoding {
 	case "H265":
-		cfg := H265Config{
-			CameraID:    r.cfg.CameraID,
-			RTSPURL:     rtspURL,
-			Username:    r.cfg.Username,
-			Password:    r.cfg.Password,
-			SegmentDur:  r.cfg.SegmentDur,
-			RingBufCap:  DefaultRingBufCap,
-			MaxBackoff:  DefaultMaxBackoff,
-			InitBackoff: DefaultInitBackoff,
-			DB:          r.cfg.DB,
-		}
-		rec := NewH265Recorder(cfg, r.store, r.metrics)
-		rec.Hub = r.Hub
-		return rec
+	cfg := H265Config{
+		CameraID:     r.cfg.CameraID,
+		RTSPURL:      rtspURL,
+		Username:     r.cfg.Username,
+		Password:     r.cfg.Password,
+		SegmentDur:   r.cfg.SegmentDur,
+		RingBufCap:   DefaultRingBufCap,
+		MaxBackoff:   DefaultMaxBackoff,
+		InitBackoff:  DefaultInitBackoff,
+		DB:           r.cfg.DB,
+		AudioEnabled: r.cfg.AudioEnabled,
+	}
+	rec := NewH265Recorder(cfg, r.store, r.metrics)
+	rec.Hub = r.Hub
+	return rec
 	default: // H264 or unknown
-		cfg := H264Config{
-			CameraID:    r.cfg.CameraID,
-			RTSPURL:     rtspURL,
-			Username:    r.cfg.Username,
-			Password:    r.cfg.Password,
-			SegmentDur:  r.cfg.SegmentDur,
-			RingBufCap:  DefaultRingBufCap,
-			MaxBackoff:  DefaultMaxBackoff,
-			InitBackoff: DefaultInitBackoff,
-			DB:          r.cfg.DB,
-		}
-		rec := NewH264Recorder(cfg, r.store, r.metrics)
-		rec.Hub = r.Hub
-		return rec
+	cfg := H264Config{
+		CameraID:     r.cfg.CameraID,
+		RTSPURL:      rtspURL,
+		Username:     r.cfg.Username,
+		Password:     r.cfg.Password,
+		SegmentDur:   r.cfg.SegmentDur,
+		RingBufCap:   DefaultRingBufCap,
+		MaxBackoff:   DefaultMaxBackoff,
+		InitBackoff:  DefaultInitBackoff,
+		DB:           r.cfg.DB,
+		AudioEnabled: r.cfg.AudioEnabled,
+	}
+	rec := NewH264Recorder(cfg, r.store, r.metrics)
+	rec.Hub = r.Hub
+	return rec
 	}
 }
