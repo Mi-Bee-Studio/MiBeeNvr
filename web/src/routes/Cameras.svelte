@@ -755,7 +755,7 @@
   <!-- Onboarding overlay for first-time users -->
   {#if showOnboarding && cameras.length === 0}
     <OnboardingOverlay
-      onaddcamera={openAddForm}
+      onaddcamera={() => { showOnboarding = false; openAddForm(); }}
       oncomplete={() => { showOnboarding = false; window.location.hash = '#/recordings'; }}
       onskip={() => { showOnboarding = false; }}
     />
