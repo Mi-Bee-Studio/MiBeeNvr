@@ -33,16 +33,19 @@ ARG VERSION=dev
 RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/mibee-nvr/
 
 # ---- Stage 3: Minimal runtime image ----
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.21
+
+RUN apk add --no-cache su-exec
 
 # Default data and config directories
 # These can be overridden via volume mounts
 ENV NVR_DATA_DIR=/data
+ENV NVR_UID=1000
+ENV NVR_GID=1000
 
 COPY --from=backend /mibee-nvr /usr/local/bin/mibee-nvr
-
-# Non-root user (distroless nonroot UID 65534)
-USER nonroot:nonroot
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Config is expected at /data/mibee-nvr.yaml via volume mount
 # Recordings stored in /data by default (configurable in YAML)
@@ -52,5 +55,5 @@ EXPOSE 9090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["mibee-nvr", "health"]
 
-ENTRYPOINT ["mibee-nvr"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["-config", "/data/mibee-nvr.yaml"]
