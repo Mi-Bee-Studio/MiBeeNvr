@@ -19,8 +19,8 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "${NVR_UID}:${NVR_GID}" /data 2>/dev/null || true
 
     # Drop privileges and exec the binary
-    exec su-exec "${NVR_UID}:${NVR_GID}" "$@"
+    exec su-exec "${NVR_UID}:${NVR_GID}" /usr/local/bin/mibee-nvr "$@"
 fi
 
 # Already non-root, run directly
-exec "$@"
+exec /usr/local/bin/mibee-nvr "$@"
