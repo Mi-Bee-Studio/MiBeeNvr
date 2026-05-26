@@ -355,6 +355,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		configPath: configPath,
 	}
 
+	// Step 0: Ensure storage root directory exists
+	if err := os.MkdirAll(cfg.Storage.RootDir, 0755); err != nil {
+		return nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)
+	}
+
 	// Step 1: Open database
 	dbPath := filepath.Join(cfg.Storage.RootDir, "mibee-nvr.db")
 	db, err := storage.New(dbPath)

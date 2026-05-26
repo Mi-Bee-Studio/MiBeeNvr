@@ -23,7 +23,10 @@ if [ "$(id -u)" = "0" ]; then
 
     echo "[entrypoint] running as UID ${NVR_UID} GID ${NVR_GID}"
     echo "[entrypoint] /data permissions: $(ls -ld /data)"
+    echo "[entrypoint] /data contents: $(ls -la /data/)"
+    echo "[entrypoint] /data permissions: $(ls -ld /data)"
 
+    echo "[entrypoint] config: $(cat /data/mibee-nvr.yaml 2>/dev/null | grep -E 'root_dir|storage' || echo 'no config found')"
     # Drop privileges and exec the binary
     exec su-exec "${NVR_UID}:${NVR_GID}" /usr/local/bin/mibee-nvr "$@"
 fi

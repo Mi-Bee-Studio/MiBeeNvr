@@ -47,10 +47,6 @@ COPY --from=backend /mibee-nvr /usr/local/bin/mibee-nvr
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Config is expected at /data/mibee-nvr.yaml via volume mount
-# Recordings stored in /data by default (configurable in YAML)
-VOLUME ["/data"]
-
 EXPOSE 9090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["mibee-nvr", "health"]
