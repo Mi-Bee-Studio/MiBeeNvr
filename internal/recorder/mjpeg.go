@@ -3,7 +3,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,8 +30,8 @@ type MJPEGConfig struct {
 	SegmentDur     time.Duration
 	SampleInterval int // if >1, only save every Nth frame
 	DB             RecordingDB
-	MaxBackoff     time.Duration
-	InitBackoff    time.Duration
+	MaxBackoff     time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff    time.Duration // Deprecated: no longer used, tiered backoff is used instead
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -165,13 +164,18 @@ func (r *MJPEGRecorder) setStatus(s model.RecorderStatus) {
 func (r *MJPEGRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
-	backoff := r.cfg.InitBackoff
+	var retryCount int
 	for {
-		err := r.connectAndRecord(ctx)
+		err, connected := r.connectAndRecord(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		mjpegLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		if connected {
+			retryCount = 0
+		}
+		retryCount++
+		backoff := TieredBackoffWithJitter(retryCount)
+		mjpegLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 		select {
@@ -179,49 +183,46 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-		backoff = backoff*2 + jitter
-		if backoff > r.cfg.MaxBackoff {
-			backoff = r.cfg.MaxBackoff
-		}
 	}
 }
 
-func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
+func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	u, err := base.ParseURL(r.cfg.RTSPURL)
 	if err != nil {
-		return fmt.Errorf("invalid RTSP URL: %w", err)
+		return fmt.Errorf("invalid RTSP URL: %w", err), false
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:   u.Scheme,
-		Host:     u.Host,
-		Protocol: &tcp,
+		Scheme:      u.Scheme,
+		Host:        u.Host,
+		Protocol:    &tcp,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
-		return fmt.Errorf("client start: %w", err)
+		return fmt.Errorf("client start: %w", err), false
 	}
 	defer client.Close()
 
 
 	desc, _, err := client.Describe(u)
 	if err != nil {
-		return fmt.Errorf("DESCRIBE: %w", err)
+		return fmt.Errorf("DESCRIBE: %w", err), false
 	}
 
 	var forma *format.MJPEG
 	medi := desc.FindFormat(&forma)
 	if medi == nil {
-		return fmt.Errorf("MJPEG media not found in stream")
+		return fmt.Errorf("MJPEG media not found in stream"), false
 	}
 
 	rtpDec, err := forma.CreateDecoder()
 	if err != nil {
-		return fmt.Errorf("create RTP decoder: %w", err)
+		return fmt.Errorf("create RTP decoder: %w", err), false
 	}
 
 	if _, err := client.Setup(desc.BaseURL, medi, 0, 0); err != nil {
-		return fmt.Errorf("SETUP: %w", err)
+		return fmt.Errorf("SETUP: %w", err), false
 	}
 
 	r.frameCh = make(chan []byte, DefaultRingBufCap)
@@ -251,7 +252,7 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 	if _, err := client.Play(nil); err != nil {
 		close(r.frameCh)
 		<-writerDone
-		return fmt.Errorf("PLAY: %w", err)
+		return fmt.Errorf("PLAY: %w", err), false
 	}
 
 	errCh := make(chan error, 1)
@@ -262,13 +263,13 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) error {
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
-		return err
+		return err, true
 	case <-ctx.Done():
 		client.Close()
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
-		return ctx.Err()
+		return ctx.Err(), true
 	}
 }
 

@@ -213,9 +213,11 @@ func (r *ONVIFRecorder) probeRTSPEncoding() string {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:   u.Scheme,
-		Host:     u.Host,
-		Protocol: &tcp,
+		Scheme:      u.Scheme,
+		Host:        u.Host,
+		Protocol:    &tcp,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
 		return ""

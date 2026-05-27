@@ -21,6 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 )
 
 var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
@@ -45,8 +46,8 @@ type ErrorReporter interface {
 
 const (
 	defaultSegmentDur  = 10 * time.Minute
-	defaultMaxBackoff  = 60 * time.Second
-	defaultInitBackoff = 1 * time.Second
+	defaultMaxBackoff  = 60 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
+	defaultInitBackoff = 1 * time.Second   // Deprecated: no longer used, kept for config backward compatibility
 )
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
@@ -63,8 +64,8 @@ type XiaomiRecorderConfig struct {
 	Model        string            // Camera model (e.g. ModelC200, ModelC300)
 	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
 	SegmentDur   time.Duration
-	MaxBackoff   time.Duration
-	InitBackoff  time.Duration
+	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	DB           RecordingDB
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
@@ -305,8 +306,8 @@ func extractQuotedValue(s string) string {
 	return s[start+1 : start+1+end]
 }
 
-// expandBackoff increases backoff duration with jitter, capped at MaxBackoff.
-// Uses max(1, backoff/2) to prevent panic from rand.Int63n(0) when backoff < 2ns.
+// expandBackoff is deprecated: the recorder now uses TieredBackoff from the recorder package.
+// Kept for backward compatibility — no longer used in the reconnect loop.
 func (r *XiaomiRecorder) expandBackoff(backoff time.Duration) time.Duration {
 	half := max(1, int64(backoff/2))
 	jitter := time.Duration(rand.Int63n(half))
@@ -329,7 +330,7 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
 
-	backoff := r.cfg.InitBackoff
+	var retryCount int
 	for {
 		// Resolve xiaomi://deviceID to miss://... URL via cloud API.
 		missURL, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
@@ -337,8 +338,10 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			retryCount++
+			backoff := recorder.TieredBackoffWithJitter(retryCount)
 			r.reportVendorError(err)
-			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 			r.recordError("cloud_resolve")
 			r.recordXiaomiDisconnect("cloud_resolve")
 			r.setStatus(model.StatusReconnecting)
@@ -347,7 +350,6 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 				return
 			case <-time.After(backoff):
 			}
-			backoff = r.expandBackoff(backoff)
 			continue
 		}
 
@@ -356,10 +358,12 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			return
 		}
 		if connected {
-			backoff = r.cfg.InitBackoff
+			retryCount = 0
 			r.recordXiaomiReconnect()
 		}
-		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		retryCount++
+		backoff := recorder.TieredBackoffWithJitter(retryCount)
+		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.recordXiaomiDisconnect(classifyDisconnectReason(err))
 		r.setStatus(model.StatusReconnecting)
@@ -368,7 +372,6 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		backoff = r.expandBackoff(backoff)
 	}
 }
 

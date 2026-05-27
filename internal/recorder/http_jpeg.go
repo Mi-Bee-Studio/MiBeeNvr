@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,8 +31,8 @@ type HTTPJPEGConfig struct {
 	Username   string // for basic auth (optional)
 	Password   string // for basic auth (optional)
 	DB         RecordingDB
-	MaxBackoff time.Duration
-	InitBackoff time.Duration
+	MaxBackoff time.Duration   // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff time.Duration  // Deprecated: no longer used, tiered backoff is used instead
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -176,13 +175,13 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 	defer r.setStatus(model.StatusStopped)
 	defer r.closeCurrentSegment()
 
-	backoff := r.cfg.InitBackoff
+	var retryCount int
 	for {
 		streamCtx, streamCancel := context.WithCancel(ctx)
 		r.mu.Lock()
 		r.cancelStream = streamCancel
 		r.mu.Unlock()
-		err := r.connectAndStream(streamCtx)
+		err, connected := r.connectAndStream(streamCtx)
 		r.mu.Lock()
 		r.cancelStream = nil
 		r.mu.Unlock()
@@ -191,7 +190,12 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		httpJpegLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		if connected {
+			retryCount = 0
+		}
+		retryCount++
+		backoff := TieredBackoffWithJitter(retryCount)
+		httpJpegLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 
@@ -199,11 +203,6 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
-		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-		backoff = backoff*2 + jitter
-		if backoff > r.cfg.MaxBackoff {
-			backoff = r.cfg.MaxBackoff
 		}
 	}
 }
@@ -238,7 +237,7 @@ func (r *HTTPJPEGRecorder) idleWatchdog(ctx context.Context) {
 }
 
 // connectAndStream opens an HTTP connection to the MJPEG stream and parses frames.
-func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
+func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 	defer func() {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
@@ -249,7 +248,7 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.URL, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf("create request: %w", err), false
 	}
 	if r.cfg.Username != "" {
 		req.SetBasicAuth(r.cfg.Username, r.cfg.Password)
@@ -258,17 +257,17 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 	httpJpegLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http connect: %w", err)
+		return fmt.Errorf("http connect: %w", err), false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("http status %d", resp.StatusCode)
+		return fmt.Errorf("http status %d", resp.StatusCode), false
 	}
 
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "multipart/x-mixed-replace") {
-		return fmt.Errorf("unexpected content-type %q, expected multipart/x-mixed-replace", ct)
+		return fmt.Errorf("unexpected content-type %q, expected multipart/x-mixed-replace", ct), false
 	}
 	boundary := extractBoundary(ct)
 
@@ -278,19 +277,19 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), true
 		default:
 		}
 
 		// Read until boundary marker
 		if err := r.skipToBoundary(reader, boundary); err != nil {
-			return fmt.Errorf("read boundary: %w", err)
+			return fmt.Errorf("read boundary: %w", err), true
 		}
 
 		// Read part headers to get Content-Length
 		contentLength, err := r.readPartHeaders(reader)
 		if err != nil {
-			return fmt.Errorf("read part headers: %w", err)
+			return fmt.Errorf("read part headers: %w", err), true
 		}
 
 		// Read JPEG body
@@ -298,14 +297,14 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 		if contentLength > 0 {
 			data = make([]byte, contentLength)
 			if _, err := io.ReadFull(reader, data); err != nil {
-				return fmt.Errorf("read jpeg body: %w", err)
+				return fmt.Errorf("read jpeg body: %w", err), true
 			}
 		} else {
 			// Content-Length missing: read until next boundary
 			var buf bytes.Buffer
 			boundaryMarker := []byte("--" + boundary)
 			if data, err = readUntilBoundary(reader, &buf, boundaryMarker); err != nil {
-				return fmt.Errorf("read jpeg body (no content-length): %w", err)
+				return fmt.Errorf("read jpeg body (no content-length): %w", err), true
 			}
 		}
 
@@ -319,7 +318,7 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 		if r.curTempPath == "" {
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
 			if err != nil {
-				return fmt.Errorf("create segment: %w", err)
+				return fmt.Errorf("create segment: %w", err), true
 			}
 			r.curTempPath = tempPath
 			r.curFinalPath = finalPath
@@ -329,11 +328,11 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) error {
 
 		n, err := r.store.WriteFrame(r.curTempPath, data)
 		if err != nil {
-			return fmt.Errorf("write frame: %w", err)
+			return fmt.Errorf("write frame: %w", err), true
 		}
-	r.frameCount++
-	r.recordBytes(int64(n))
-	r.lastFrameTime.Store(time.Now().Unix())
+		r.frameCount++
+		r.recordBytes(int64(n))
+		r.lastFrameTime.Store(time.Now().Unix())
 
 		// Check if segment duration elapsed
 		if time.Since(r.segStart) >= r.cfg.SegmentDur {

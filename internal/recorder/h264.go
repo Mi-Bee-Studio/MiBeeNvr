@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"net/url"
 	"os"
 	"runtime"
@@ -46,8 +45,8 @@ type RecordingDB interface {
 const (
 	DefaultSegmentDur  = 10 * time.Minute
 	DefaultRingBufCap  = 300
-	DefaultMaxBackoff  = 60 * time.Second
-	DefaultInitBackoff = 1 * time.Second
+	DefaultMaxBackoff  = 60 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
+	DefaultInitBackoff = 1 * time.Second   // Deprecated: no longer used, kept for config backward compatibility
 )
 
 // H264Config holds configuration for the H264 recorder.
@@ -58,8 +57,8 @@ type H264Config struct {
 	Password     string
 	SegmentDur   time.Duration
 	RingBufCap   int
-	MaxBackoff   time.Duration
-	InitBackoff  time.Duration
+	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	DB           RecordingDB
 	AudioEnabled bool
 }
@@ -219,13 +218,18 @@ func (r *H264Recorder) run(ctx context.Context) {
 	}()
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
-	backoff := r.cfg.InitBackoff
+	var retryCount int
 	for {
-		err := r.connectAndRecord(ctx)
+		err, connected := r.connectAndRecord(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		h264Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff)
+		if connected {
+			retryCount = 0
+		}
+		retryCount++
+		backoff := TieredBackoffWithJitter(retryCount)
+		h264Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 		select {
@@ -233,18 +237,13 @@ func (r *H264Recorder) run(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
-		backoff = backoff*2 + jitter
-		if backoff > r.cfg.MaxBackoff {
-			backoff = r.cfg.MaxBackoff
-		}
 	}
 }
 
-func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
+func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	u, err := base.ParseURL(r.cfg.RTSPURL)
 	if err != nil {
-		return fmt.Errorf("invalid RTSP URL: %w", err)
+		return fmt.Errorf("invalid RTSP URL: %w", err), false
 	}
 	// Inject credentials from config if URL doesn't have them.
 	if u.User == nil && r.cfg.Username != "" {
@@ -252,30 +251,32 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:   u.Scheme,
-		Host:     u.Host,
-		Protocol: &tcp,
+		Scheme:      u.Scheme,
+		Host:        u.Host,
+		Protocol:    &tcp,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
-		return fmt.Errorf("client start: %w", err)
+		return fmt.Errorf("client start: %w", err), false
 	}
 	defer client.Close()
 
 	desc, _, err := client.Describe(u)
 	if err != nil {
-		return fmt.Errorf("DESCRIBE: %w", err)
+		return fmt.Errorf("DESCRIBE: %w", err), false
 	}
 	var forma *format.H264
 	medi := desc.FindFormat(&forma)
 	if medi == nil {
-		return fmt.Errorf("H264 media not found in stream")
+		return fmt.Errorf("H264 media not found in stream"), false
 	}
 	rtpDec, err := forma.CreateDecoder()
 	if err != nil {
-		return fmt.Errorf("create RTP decoder: %w", err)
+		return fmt.Errorf("create RTP decoder: %w", err), false
 	}
 	if _, err := client.Setup(desc.BaseURL, medi, 0, 0); err != nil {
-		return fmt.Errorf("SETUP: %w", err)
+		return fmt.Errorf("SETUP: %w", err), false
 	}
 
 	// Audio setup: find AAC or G.711 format if AudioEnabled.
@@ -437,24 +438,22 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) error {
 	if _, err := client.Play(nil); err != nil {
 		close(r.frameCh)
 		<-writerDone
-		return fmt.Errorf("PLAY: %w", err)
+		return fmt.Errorf("PLAY: %w", err), false
 	}
-
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Wait() }()
-
 	select {
 	case err := <-errCh:
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
-		return err
+		return err, true
 	case <-ctx.Done():
 		client.Close()
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
-		return ctx.Err()
+		return ctx.Err(), true
 	}
 }
 
