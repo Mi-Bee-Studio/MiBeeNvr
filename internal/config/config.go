@@ -61,10 +61,21 @@ type CameraConfig struct {
 	HLSMaxFPS      int          `yaml:"hls_max_fps"`
 	Merge          *MergeConfig `yaml:"merge"`
 	AudioEnabled   bool         `yaml:"audio_enabled"`
+	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
+	}
+
+	// HealthOverrides allows per-camera health monitoring threshold overrides.
+	// When set, non-zero values take precedence over global health config.
+	type HealthOverrides struct {
+	MaxIDRInterval         string  `yaml:"max_idr_interval,omitempty"`
+	BitrateChangeThreshold float64 `yaml:"bitrate_change_threshold,omitempty"`
+	MinFPS                 int     `yaml:"min_fps,omitempty"`
+	OfflineThreshold       string  `yaml:"offline_threshold,omitempty"`
+	FreezeTimeout          string  `yaml:"freeze_timeout,omitempty"`
 }
 
 type CleanupConfig struct {
@@ -337,6 +348,29 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+		}
+
+		// Validate per-camera health overrides
+		if c.HealthOverrides.MaxIDRInterval != "" {
+			if _, err := time.ParseDuration(c.HealthOverrides.MaxIDRInterval); err != nil {
+				return fmt.Errorf("camera[%d].health_overrides.max_idr_interval invalid duration: %w", i, err)
+			}
+		}
+		if c.HealthOverrides.OfflineThreshold != "" {
+			if _, err := time.ParseDuration(c.HealthOverrides.OfflineThreshold); err != nil {
+				return fmt.Errorf("camera[%d].health_overrides.offline_threshold invalid duration: %w", i, err)
+			}
+		}
+		if c.HealthOverrides.FreezeTimeout != "" {
+			if _, err := time.ParseDuration(c.HealthOverrides.FreezeTimeout); err != nil {
+				return fmt.Errorf("camera[%d].health_overrides.freeze_timeout invalid duration: %w", i, err)
+			}
+		}
+		if c.HealthOverrides.BitrateChangeThreshold < 0 || c.HealthOverrides.BitrateChangeThreshold > 1 {
+			return fmt.Errorf("camera[%d].health_overrides.bitrate_change_threshold must be between 0 and 1", i)
+		}
+		if c.HealthOverrides.MinFPS < 0 {
+			return fmt.Errorf("camera[%d].health_overrides.min_fps must be >= 0", i)
 		}
 	}
 	// Validate Xiaomi configuration
@@ -640,7 +674,7 @@ func (cfg *Config) applyDefaults() {
 		cfg.Health.Layer2.MinFPS = 5
 	}
 	if cfg.Health.Layer2.MaxIDRInterval == "" {
-		cfg.Health.Layer2.MaxIDRInterval = "30s"
+		cfg.Health.Layer2.MaxIDRInterval = "60s"
 	}
 	if cfg.Health.Layer2_5.FreezeTimeout == "" {
 		cfg.Health.Layer2_5.FreezeTimeout = "10s"
@@ -716,6 +750,45 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
 	}
 	return result
+}
+
+// ResolveHealthOverrides returns the effective health thresholds for a camera.
+// Per-camera overrides take precedence over global health config when set.
+// Duration strings are left as-is (empty string means "use global").
+func ResolveHealthOverrides(global HealthConfig, overrides HealthOverrides) ResolvedHealthOverrides {
+	result := ResolvedHealthOverrides{
+		MaxIDRInterval:         global.Layer2.MaxIDRInterval,
+		BitrateChangeThreshold: global.Layer2.BitrateChangeThreshold,
+		MinFPS:                 global.Layer2.MinFPS,
+		OfflineThreshold:       global.Layer1.OfflineThreshold,
+		FreezeTimeout:          global.Layer2_5.FreezeTimeout,
+	}
+	if overrides.MaxIDRInterval != "" {
+		result.MaxIDRInterval = overrides.MaxIDRInterval
+	}
+	if overrides.BitrateChangeThreshold > 0 {
+		result.BitrateChangeThreshold = overrides.BitrateChangeThreshold
+	}
+	if overrides.MinFPS > 0 {
+		result.MinFPS = overrides.MinFPS
+	}
+	if overrides.OfflineThreshold != "" {
+		result.OfflineThreshold = overrides.OfflineThreshold
+	}
+	if overrides.FreezeTimeout != "" {
+		result.FreezeTimeout = overrides.FreezeTimeout
+	}
+	return result
+}
+
+// ResolvedHealthOverrides holds fully-resolved health threshold values
+// (duration strings ready for time.ParseDuration).
+type ResolvedHealthOverrides struct {
+	MaxIDRInterval         string
+	BitrateChangeThreshold float64
+	MinFPS                 int
+	OfflineThreshold       string
+	FreezeTimeout          string
 }
 
 // EncryptConfigFile loads a config file, encrypts all sensitive fields, and saves it back.

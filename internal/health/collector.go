@@ -9,6 +9,16 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+const (
+	// minConsecutiveChecks is the number of consecutive anomalous checks required
+	// before emitting a stream_anomaly event. This eliminates transient spikes.
+	minConsecutiveChecks = 2
+
+	anomalyKeyFPS     = "fps"
+	anomalyKeyBitrate = "bitrate"
+	anomalyKeyIDR     = "idr"
+)
+
 // StreamStats holds computed statistics for a camera stream.
 type StreamStats struct {
 	FPS         float64
@@ -39,10 +49,20 @@ type StreamStatsCollector struct {
 
 	mu      sync.Mutex
 	cameras map[string]*cameraStats
-
 	prevBitrate map[string]float64
+	consecutiveAnomaly map[string]map[string]int // cameraID → anomalyKey → count
+
+	// Per-camera threshold overrides
+	cameraOverrides map[string]*collectorOverride
 
 	eventHandler func(cameraID string, event model.HealthEvent)
+}
+
+// collectorOverride holds per-camera threshold overrides for the collector.
+type collectorOverride struct {
+	bitrateChangeThreshold float64
+	minFPS                 float64
+	maxIDRInterval         time.Duration
 }
 
 // NewStreamStatsCollector creates a new stats collector.
@@ -58,9 +78,11 @@ func NewStreamStatsCollector(
 		minFPS:                 minFPS,
 		maxIDRInterval:         maxIDRInterval,
 		windowSize:             windowSize,
-		cameras:                make(map[string]*cameraStats),
-		prevBitrate:            make(map[string]float64),
-		eventHandler:           handler,
+		cameras:         make(map[string]*cameraStats),
+		prevBitrate:     make(map[string]float64),
+		cameraOverrides: make(map[string]*collectorOverride),
+		consecutiveAnomaly: make(map[string]map[string]int),
+		eventHandler:    handler,
 	}
 }
 
@@ -154,6 +176,10 @@ func (s *StreamStatsCollector) CheckAndReset() {
 	for id, cs := range s.cameras {
 		snapshot[id] = cs
 	}
+	overrides := make(map[string]*collectorOverride, len(s.cameraOverrides))
+	for id, co := range s.cameraOverrides {
+		overrides[id] = co
+	}
 	s.mu.Unlock()
 
 	windowSeconds := s.windowSize.Seconds()
@@ -162,6 +188,22 @@ func (s *StreamStatsCollector) CheckAndReset() {
 	}
 
 	for cameraID, stats := range snapshot {
+		// Resolve per-camera thresholds, falling back to global
+		btcThreshold := s.bitrateChangeThreshold
+		minFPS := s.minFPS
+		maxIDR := s.maxIDRInterval
+		if co, ok := overrides[cameraID]; ok {
+			if co.bitrateChangeThreshold > 0 {
+				btcThreshold = co.bitrateChangeThreshold
+			}
+			if co.minFPS > 0 {
+				minFPS = co.minFPS
+			}
+			if co.maxIDRInterval > 0 {
+				maxIDR = co.maxIDRInterval
+			}
+		}
+
 		frameCount := stats.frameCount.Swap(0)
 		byteCount := stats.byteCount.Swap(0)
 
@@ -169,14 +211,19 @@ func (s *StreamStatsCollector) CheckAndReset() {
 		bitrate := float64(byteCount*8) / windowSeconds
 
 		// Check FPS threshold
-		if s.minFPS > 0 && fps < s.minFPS && frameCount > 0 {
-			s.emitEvent(cameraID, model.HealthEvent{
-				CameraID:  cameraID,
-				EventType: string(model.HealthEventStreamAnomaly),
-				Status:    string(model.HealthStatusWarning),
-				Message:   "Low FPS detected",
-				Metadata:  mustJSON(map[string]any{"fps": fps, "threshold": s.minFPS}),
-			})
+		if minFPS > 0 && fps < minFPS && frameCount > 0 {
+			streak := s.incrementAnomalyStreak(cameraID, anomalyKeyFPS)
+			if streak >= minConsecutiveChecks {
+				s.emitEvent(cameraID, model.HealthEvent{
+					CameraID:  cameraID,
+					EventType: string(model.HealthEventStreamAnomaly),
+					Status:    string(model.HealthStatusWarning),
+					Message:   "Low FPS detected",
+					Metadata:  mustJSON(map[string]any{"fps": fps, "threshold": minFPS}),
+				})
+			}
+		} else {
+			s.resetAnomalyStreak(cameraID, anomalyKeyFPS)
 		}
 
 		// Check bitrate change
@@ -185,42 +232,66 @@ func (s *StreamStatsCollector) CheckAndReset() {
 		s.prevBitrate[cameraID] = bitrate
 		s.mu.Unlock()
 
-		if had && prevBps > 0 {
+		// Only compare bitrate when both values are non-zero.
+		// A zero bitrate means the stream dropped (connection_lost handles this).
+		bitrateAnomalous := false
+		if had && prevBps > 0 && bitrate > 0 {
 			change := bitrate - prevBps
 			if change < 0 {
 				change = -change
 			}
 			change /= prevBps
-			if change > s.bitrateChangeThreshold {
-				s.emitEvent(cameraID, model.HealthEvent{
-					CameraID:  cameraID,
-					EventType: string(model.HealthEventStreamAnomaly),
-					Status:    string(model.HealthStatusWarning),
-					Message:   "Bitrate anomaly detected",
-					Metadata:  mustJSON(map[string]any{"bitrate": bitrate, "prev": prevBps, "change": change}),
-				})
+			if change > btcThreshold {
+				bitrateAnomalous = true
+				streak := s.incrementAnomalyStreak(cameraID, anomalyKeyBitrate)
+				if streak >= minConsecutiveChecks {
+					s.emitEvent(cameraID, model.HealthEvent{
+						CameraID:  cameraID,
+						EventType: string(model.HealthEventStreamAnomaly),
+						Status:    string(model.HealthStatusWarning),
+						Message:   "Bitrate anomaly detected",
+						Metadata:  mustJSON(map[string]any{"bitrate": bitrate, "prev": prevBps, "change": change}),
+					})
+				}
 			}
+		}
+		if !bitrateAnomalous {
+			s.resetAnomalyStreak(cameraID, anomalyKeyBitrate)
 		}
 
 		// Check IDR interval
 		if v := stats.lastIDRTime.Load(); v != nil {
 			if lastIDR, ok := v.(time.Time); ok {
 				since := time.Since(lastIDR)
-				if since > s.maxIDRInterval {
-					s.emitEvent(cameraID, model.HealthEvent{
-						CameraID:  cameraID,
-						EventType: string(model.HealthEventStreamAnomaly),
-						Status:    string(model.HealthStatusWarning),
-						Message:   "IDR interval too long",
-						Metadata: mustJSON(map[string]any{
-							"idr_interval": since.String(),
-							"max":          s.maxIDRInterval.String(),
-						}),
-					})
+				if since > maxIDR {
+					streak := s.incrementAnomalyStreak(cameraID, anomalyKeyIDR)
+					if streak >= minConsecutiveChecks {
+						s.emitEvent(cameraID, model.HealthEvent{
+							CameraID:  cameraID,
+							EventType: string(model.HealthEventStreamAnomaly),
+							Status:    string(model.HealthStatusWarning),
+							Message:   "IDR interval too long",
+							Metadata: mustJSON(map[string]any{
+								"idr_interval": since.String(),
+								"max":          maxIDR.String(),
+							}),
+						})
+					}
+				} else {
+					s.resetAnomalyStreak(cameraID, anomalyKeyIDR)
 				}
 			}
 		}
 	}
+
+	// Prune debounce entries for cameras that no longer exist.
+	s.mu.Lock()
+	for id := range s.consecutiveAnomaly {
+		if _, ok := snapshot[id]; !ok {
+			delete(s.consecutiveAnomaly, id)
+		}
+	}
+	s.mu.Unlock()
 }
 
 // RemoveCamera removes tracking for a camera.
@@ -228,7 +299,20 @@ func (s *StreamStatsCollector) RemoveCamera(cameraID string) {
 	s.mu.Lock()
 	delete(s.cameras, cameraID)
 	delete(s.prevBitrate, cameraID)
+	delete(s.cameraOverrides, cameraID)
+	delete(s.consecutiveAnomaly, cameraID)
 	s.mu.Unlock()
+}
+
+// SetCameraOverride sets per-camera threshold overrides for the collector.
+func (s *StreamStatsCollector) SetCameraOverride(cameraID string, btcThreshold float64, minFPS float64, maxIDR time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cameraOverrides[cameraID] = &collectorOverride{
+		bitrateChangeThreshold: btcThreshold,
+		minFPS:                 minFPS,
+		maxIDRInterval:         maxIDR,
+	}
 }
 
 // ResetCameraState resets per-camera state on reconnect.
@@ -244,10 +328,31 @@ func (s *StreamStatsCollector) ResetCameraState(cameraID string) {
 	stats.frameCount.Store(0)
 	stats.byteCount.Store(0)
 
-	// Clear prevBitrate entry
+	// Clear prevBitrate and anomaly debounce state
 	s.mu.Lock()
 	delete(s.prevBitrate, cameraID)
+	delete(s.consecutiveAnomaly, cameraID)
 	s.mu.Unlock()
+}
+
+// incrementAnomalyStreak increments the consecutive anomaly counter and returns the new count.
+func (s *StreamStatsCollector) incrementAnomalyStreak(cameraID, key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.consecutiveAnomaly[cameraID] == nil {
+		s.consecutiveAnomaly[cameraID] = make(map[string]int)
+	}
+	s.consecutiveAnomaly[cameraID][key]++
+	return s.consecutiveAnomaly[cameraID][key]
+}
+
+// resetAnomalyStreak clears the consecutive anomaly counter for a given anomaly type.
+func (s *StreamStatsCollector) resetAnomalyStreak(cameraID, key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.consecutiveAnomaly[cameraID]; ok {
+		delete(m, key)
+	}
 }
 
 func (s *StreamStatsCollector) emitEvent(cameraID string, event model.HealthEvent) {

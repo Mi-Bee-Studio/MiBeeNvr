@@ -20,18 +20,20 @@ type cameraFreezeState struct {
 // FreezeDetector detects frozen video streams by monitoring frame timestamps.
 // It operates in Layer 2.5 of the health monitoring system.
 type FreezeDetector struct {
-	mu            sync.Mutex
-	freezeTimeout time.Duration
-	cameras       map[string]*cameraFreezeState
-	eventHandler  func(cameraID string, event model.HealthEvent)
+	mu             sync.Mutex
+	freezeTimeout  time.Duration
+	cameraOverrides map[string]time.Duration // per-camera freeze timeout overrides
+	cameras        map[string]*cameraFreezeState
+	eventHandler   func(cameraID string, event model.HealthEvent)
 }
 
 // NewFreezeDetector creates a new freeze detector.
 func NewFreezeDetector(freezeTimeout time.Duration, handler func(string, model.HealthEvent)) *FreezeDetector {
 	return &FreezeDetector{
-		freezeTimeout: freezeTimeout,
-		cameras:       make(map[string]*cameraFreezeState),
-		eventHandler:  handler,
+		freezeTimeout:   freezeTimeout,
+		cameraOverrides: make(map[string]time.Duration),
+		cameras:         make(map[string]*cameraFreezeState),
+		eventHandler:    handler,
 	}
 }
 
@@ -87,7 +89,12 @@ func (f *FreezeDetector) Check() {
 
 		elapsed := now.Sub(lastFrame)
 
-		if !state.frozen && elapsed > f.freezeTimeout {
+		timeout := f.freezeTimeout
+		if t, ok := f.cameraOverrides[cameraID]; ok && t > 0 {
+			timeout = t
+		}
+
+		if !state.frozen && elapsed > timeout {
 			state.frozen = true
 			state.freezeSince = lastFrame
 			meta, _ := json.Marshal(map[string]any{"frozen_for": elapsed.String()})
@@ -130,4 +137,12 @@ func (f *FreezeDetector) RemoveCamera(cameraID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.cameras, cameraID)
+	delete(f.cameraOverrides, cameraID)
+}
+
+// SetCameraOverride sets the per-camera freeze timeout override.
+func (f *FreezeDetector) SetCameraOverride(cameraID string, timeout time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cameraOverrides[cameraID] = timeout
 }

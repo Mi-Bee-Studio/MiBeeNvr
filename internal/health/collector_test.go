@@ -190,13 +190,18 @@ func TestCollectorLowFPSAnomaly(t *testing.T) {
 
 	cb := c.OnFrame("cam-1")
 
-	// Feed only 2 frames in the window (below minFPS=5)
+	// First check: feed only 2 frames (below minFPS=5) — streak=1, no emit
 	for i := 0; i < 2; i++ {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
+	c.CheckAndReset()
 
-	// Check and reset triggers anomaly detection
+	// Second check: feed 2 more frames — streak=2, should emit
+	for i := 0; i < 2; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(2+i), au)
+	}
 	c.CheckAndReset()
 
 	evts := getCollectorEvents(t, events)
@@ -245,10 +250,17 @@ func TestCollectorBitrateAnomaly(t *testing.T) {
 	}
 	c.CheckAndReset()
 
-	// Window 2: feed 10 frames with large payload → high bitrate (>50% change)
+	// Window 2: high bitrate (>50% change) — streak=1, no emit
 	for i := 0; i < 10; i++ {
 		au := makeH264Frame(t, 1, 10000) // 10001 bytes each
 		cb(int64(10+i), au)
+	}
+	c.CheckAndReset()
+
+	// Window 3: back to low bitrate → another >50% change — streak=2, emit
+	for i := 0; i < 10; i++ {
+		au := makeH264Frame(t, 1, 100) // 101 bytes each
+		cb(int64(20+i), au)
 	}
 	c.CheckAndReset()
 
@@ -288,9 +300,12 @@ func TestCollectorIDRIntervalAnomaly(t *testing.T) {
 		cb(int64(i), au)
 	}
 
-	// Wait for IDR interval to exceed threshold
+	// First check: IDR interval exceeded — streak=1, no emit
 	time.Sleep(5 * time.Millisecond)
+	c.CheckAndReset()
 
+	// Second check: IDR interval still exceeded — streak=2, should emit
+	time.Sleep(5 * time.Millisecond)
 	c.CheckAndReset()
 
 	evts := getCollectorEvents(t, events)
@@ -495,7 +510,11 @@ func TestCollectorResetPreventsFalseIDRAlert(t *testing.T) {
 	// Wait for IDR interval to exceed threshold
 	time.Sleep(5 * time.Millisecond)
 
-	// Before reset, CheckAndReset should trigger IDR alert
+	// First check: IDR interval exceeded — streak=1
+	c.CheckAndReset()
+
+	// Second check: still exceeded — streak=2, emit event
+	time.Sleep(5 * time.Millisecond)
 	c.CheckAndReset()
 
 	preResetCount := len(getCollectorEvents(t, events))
@@ -513,5 +532,101 @@ func TestCollectorResetPreventsFalseIDRAlert(t *testing.T) {
 	postResetCount := len(getCollectorEvents(t, events))
 	if postResetCount != preResetCount {
 		t.Errorf("expected no new events after reset, got %d new events", postResetCount-preResetCount)
+	}
+}
+
+func TestCollectorDebounceSuppressesSingleCheck(t *testing.T) {
+	t.Helper()
+	windowSize := 1 * time.Second
+	c, events := newCollector(t, windowSize)
+
+	cb := c.OnFrame("cam-1")
+
+	// Feed only 2 frames in the window (below minFPS=5)
+	for i := 0; i < 2; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(i), au)
+	}
+
+	// Single CheckAndReset — should NOT emit (needs 2 consecutive)
+	c.CheckAndReset()
+
+	evts := getCollectorEvents(t, events)
+	for _, e := range evts {
+		if e.Message == "Low FPS detected" {
+			t.Error("should not emit low FPS event after only one anomalous check")
+		}
+	}
+}
+
+func TestCollectorDebounceResetsOnRecovery(t *testing.T) {
+	t.Helper()
+	windowSize := 1 * time.Second
+	c, events := newCollector(t, windowSize)
+
+	cb := c.OnFrame("cam-1")
+
+	// First check: low FPS — streak=1
+	for i := 0; i < 2; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(i), au)
+	}
+	c.CheckAndReset()
+
+	// Second check: normal FPS — resets streak
+	for i := 0; i < 20; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(2+i), au)
+	}
+	c.CheckAndReset()
+
+	// Third check: low FPS again — streak=1 (reset happened)
+	for i := 0; i < 2; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(22+i), au)
+	}
+	c.CheckAndReset()
+
+	evts := getCollectorEvents(t, events)
+	for _, e := range evts {
+		if e.Message == "Low FPS detected" {
+			t.Error("should not emit low FPS event — streak was reset by recovery")
+		}
+	}
+}
+
+func TestCollectorDebounceResetOnReconnect(t *testing.T) {
+	t.Helper()
+	windowSize := 1 * time.Second
+	c, events := newCollector(t, windowSize)
+	c.maxIDRInterval = 1 * time.Millisecond
+
+	cb := c.OnFrame("cam-1")
+
+	// First check: IDR interval exceeded — streak=1
+	for i := 0; i < 5; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(i), au)
+	}
+	time.Sleep(5 * time.Millisecond)
+	c.CheckAndReset()
+
+	// Reset camera state (reconnect) — clears debounce
+	c.ResetCameraState("cam-1")
+
+	// Feed frames again, still no IDR
+	for i := 0; i < 5; i++ {
+		au := makeH264Frame(t, 1, 500)
+		cb(int64(5+i), au)
+	}
+	time.Sleep(5 * time.Millisecond)
+	c.CheckAndReset()
+
+	// Only 1 check after reconnect — no event expected
+	evts := getCollectorEvents(t, events)
+	for _, e := range evts {
+		if e.Message == "IDR interval too long" {
+			t.Error("should not emit IDR event — debounce reset on reconnect, only 1 check since")
+		}
 	}
 }

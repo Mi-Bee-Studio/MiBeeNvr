@@ -113,8 +113,9 @@ func (p *AlertPipeline) HandleEvent(cameraID string, event model.HealthEvent) er
 	}
 
 	// Increment count and escalate if this is a repeat
+	// Never escalate positive events (connection_restored, freeze_recovered) to error
 	state.count++
-	if state.count > 1 {
+	if state.count > 1 && !isPositiveEvent(event.EventType) {
 		event.Status = string(model.HealthStatusError)
 	}
 
@@ -217,4 +218,10 @@ func (p *AlertPipeline) CleanStaleAnomalies() {
 // isAnomalyEvent returns true if the event type is a stream anomaly.
 func isAnomalyEvent(eventType string) bool {
 	return eventType == string(model.HealthEventStreamAnomaly) || eventType == string(model.HealthEventFreezeDetected)
+}
+
+// isPositiveEvent returns true if the event type represents a recovery/positive state.
+// These events should never be escalated to error status.
+func isPositiveEvent(eventType string) bool {
+	return eventType == string(model.HealthEventConnectionRestored) || eventType == string(model.HealthEventFreezeRecovered)
 }

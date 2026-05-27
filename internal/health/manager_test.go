@@ -116,7 +116,7 @@ func TestManagerOnCameraAdded(t *testing.T) {
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
 
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 
 	// Verify StreamHub has subscribers
 	if count := rec.hub.ConsumerCount(); count != 2 {
@@ -146,7 +146,7 @@ func TestManagerOnCameraAddedNoHub(t *testing.T) {
 	rec := &mockRecorderNoHub{}
 
 	// Should not panic when recorder has no hub
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 
 	// Connection monitor should still track the camera
 	m.conn.mu.Lock()
@@ -163,7 +163,7 @@ func TestManagerOnCameraRemoved(t *testing.T) {
 	rec := newMockRecorderWithHub()
 
 	// Add first
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 	if count := rec.hub.ConsumerCount(); count != 2 {
 		t.Fatalf("expected 2 consumers after add, got %d", count)
 	}
@@ -205,7 +205,7 @@ func TestManagerOnStatusChange(t *testing.T) {
 	t.Helper()
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 
 	// Simulate status change to error
 	m.OnStatusChange("cam-1", string(model.StatusError))
@@ -274,7 +274,7 @@ func TestManagerStartStopNil(t *testing.T) {
 func TestManagerOnCameraAddedNil(t *testing.T) {
 	t.Helper()
 	var m *Manager
-	m.OnCameraAdded("cam-1", newMockRecorderWithHub()) // Should not panic
+	m.OnCameraAdded("cam-1", newMockRecorderWithHub(), nil) // Should not panic
 }
 
 func TestManagerOnCameraRemovedNil(t *testing.T) {
@@ -397,7 +397,7 @@ func TestManager_StatusPolling(t *testing.T) {
 
 	// Add camera (sets initial status in conn and knownStatuses)
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 
 	// Initial poll — no transition expected
 	m.pollStatuses()
@@ -446,7 +446,7 @@ func TestManagerOnStatusChangeResetsCollector(t *testing.T) {
 	t.Helper()
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec)
+	m.OnCameraAdded("cam-1", rec, nil)
 
 	// Simulate frames to set lastIDRTime on the collector
 	cb := m.collector.OnFrame("cam-1")

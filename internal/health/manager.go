@@ -182,12 +182,24 @@ func (m *Manager) SetCameraEnabledFn(fn IsCameraEnabledFunc) {
 }
 
 // OnCameraAdded starts monitoring a newly added camera.
-func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder) {
+// If overrides is non-nil, per-camera thresholds are applied.
+func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder, overrides *config.ResolvedHealthOverrides) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Apply per-camera overrides if provided
+	if overrides != nil {
+		offlineThreshold, _ := time.ParseDuration(overrides.OfflineThreshold)
+		maxIDR, _ := time.ParseDuration(overrides.MaxIDRInterval)
+		freezeTimeout, _ := time.ParseDuration(overrides.FreezeTimeout)
+
+		m.conn.SetCameraOverride(cameraID, offlineThreshold)
+		m.collector.SetCameraOverride(cameraID, overrides.BitrateChangeThreshold, float64(overrides.MinFPS), maxIDR)
+		m.freeze.SetCameraOverride(cameraID, freezeTimeout)
+	}
 
 	// Subscribe to StreamHub for stats and freeze detection
 	if hub := getHub(recorder); hub != nil {

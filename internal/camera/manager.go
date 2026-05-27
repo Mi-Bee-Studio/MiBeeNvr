@@ -220,8 +220,13 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
 	}
-	// Notify health manager of new camera
-	cm.healthMgr.OnCameraAdded(cam.ID, rec)
+	// Notify health manager of new camera with per-camera overrides
+	var overrides *config.ResolvedHealthOverrides
+	if cm.cfg.Health.Enabled {
+		resolved := config.ResolveHealthOverrides(cm.cfg.Health, cam.HealthOverrides)
+		overrides = &resolved
+	}
+	cm.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
 	return nil
 }
@@ -268,8 +273,13 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
 				} else {
 					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
-					// Notify health manager of new camera
-					cm.healthMgr.OnCameraAdded(cam.ID, rec)
+					// Notify health manager of new camera with per-camera overrides
+					var hOverrides *config.ResolvedHealthOverrides
+					if cm.cfg.Health.Enabled {
+						resolved := config.ResolveHealthOverrides(cm.cfg.Health, cam.HealthOverrides)
+						hOverrides = &resolved
+					}
+					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
 				}
 			}
 		case string(model.ProtoONVIF):

@@ -20,6 +20,7 @@ type cameraConnState struct {
 type ConnectionMonitor struct {
 	mu               sync.Mutex
 	offlineThreshold time.Duration
+	cameraOverrides  map[string]time.Duration // per-camera offline threshold overrides
 	cameras          map[string]*cameraConnState
 	eventHandler     func(cameraID string, event model.HealthEvent)
 }
@@ -29,11 +30,11 @@ type ConnectionMonitor struct {
 func NewConnectionMonitor(offlineThreshold time.Duration, handler func(string, model.HealthEvent)) *ConnectionMonitor {
 	return &ConnectionMonitor{
 		offlineThreshold: offlineThreshold,
+		cameraOverrides:  make(map[string]time.Duration),
 		cameras:          make(map[string]*cameraConnState),
 		eventHandler:     handler,
 	}
 }
-
 // OnStatusChange is called when a camera's recorder status changes.
 func (m *ConnectionMonitor) OnStatusChange(cameraID string, status string) {
 	m.mu.Lock()
@@ -82,7 +83,11 @@ func (m *ConnectionMonitor) Check() {
 	now := time.Now()
 	for cameraID, state := range m.cameras {
 		if isOfflineStatus(state.currentStatus) && !state.alerted {
-			if now.Sub(state.statusSince) >= m.offlineThreshold {
+			threshold := m.offlineThreshold
+			if t, ok := m.cameraOverrides[cameraID]; ok && t > 0 {
+				threshold = t
+			}
+			if now.Sub(state.statusSince) >= threshold {
 				state.alerted = true
 				m.eventHandler(cameraID, model.HealthEvent{
 					CameraID:  cameraID,
@@ -96,11 +101,19 @@ func (m *ConnectionMonitor) Check() {
 	}
 }
 
+// SetCameraOverride sets the per-camera offline threshold override.
+func (m *ConnectionMonitor) SetCameraOverride(cameraID string, threshold time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cameraOverrides[cameraID] = threshold
+}
+
 // RemoveCamera removes tracking for a camera.
 func (m *ConnectionMonitor) RemoveCamera(cameraID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.cameras, cameraID)
+	delete(m.cameraOverrides, cameraID)
 }
 
 // GetOfflineDuration returns how long the given camera has been in an offline state.

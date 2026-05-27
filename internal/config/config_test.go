@@ -844,7 +844,7 @@ func TestHealthDefaults(t *testing.T) {
 	require.Equal(t, "30s", cfg.Health.Layer1.OfflineThreshold, "default offline_threshold should be 30s")
 	require.Equal(t, 0.5, cfg.Health.Layer2.BitrateChangeThreshold, "default bitrate_change_threshold should be 0.5")
 	require.Equal(t, 5, cfg.Health.Layer2.MinFPS, "default min_fps should be 5")
-	require.Equal(t, "30s", cfg.Health.Layer2.MaxIDRInterval, "default max_idr_interval should be 30s")
+	require.Equal(t, "60s", cfg.Health.Layer2.MaxIDRInterval, "default max_idr_interval should be 60s")
 	require.Equal(t, "10s", cfg.Health.Layer2_5.FreezeTimeout, "default freeze_timeout should be 10s")
 	require.Equal(t, "10s", cfg.Health.Layer2_5.FreezeTimeout, "default freeze_timeout should be 10s")
 	require.False(t, cfg.Health.AutoRemediation.Enabled, "default auto_remediation should be disabled")
