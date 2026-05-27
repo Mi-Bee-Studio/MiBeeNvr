@@ -132,6 +132,15 @@
     const { route, params: routeParams } = parseRoute(hash);
     currentRoute = route;
     params = routeParams;
+
+    // When auth guard redirects to login, sync the hash so that
+    // post-login hash change actually triggers hashchange.
+    // Without this, if hash was already #/recordings when auth expired,
+    // setting hash to #/recordings after login won't fire hashchange.
+    if (route === 'login' && hash !== '#/login' && hash !== '' && hash !== '#') {
+      window.location.hash = '#/login';
+      return;
+    }
   }
 
   // Listen for hash changes + network status
