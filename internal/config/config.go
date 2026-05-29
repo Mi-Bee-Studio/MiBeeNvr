@@ -259,7 +259,7 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	// apply defaults
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 
 	// Decrypt sensitive fields if encryption key is available
 	if key := GetEncryptionKey(); key != nil {
@@ -567,7 +567,7 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
-func (cfg *Config) applyDefaults() {
+func (cfg *Config) ApplyDefaults() {
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		cfg.Server.Listen = ":9090"

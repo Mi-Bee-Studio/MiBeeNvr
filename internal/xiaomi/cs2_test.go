@@ -210,7 +210,7 @@ ch := newCS2DataChannel(0, 10)
 }
 
 func TestCS2DataChannelPopBufferFull(t *testing.T) {
-ch := newCS2DataChannel(0, 1) // pop buffer size 1
+	ch := newCS2DataChannel(0, 1) // pop buffer size 1
 
 	// Push one message
 	sizeBuf := make([]byte, 4)
@@ -218,9 +218,14 @@ ch := newCS2DataChannel(0, 1) // pop buffer size 1
 	err := ch.Push(append(sizeBuf, "abc"...))
 	require.NoError(t, err)
 
-	// Push another — pop buffer full
+	// Push another — pop buffer full, should drain oldest and succeed
 	err = ch.Push(append(sizeBuf, "def"...))
-	require.Equal(t, err.Error(), "cs2: pop buffer is full")
+	require.NoError(t, err)
+
+	// Pop with small timeout (not 0, as time.After(0) races with channel receive)
+	data, ok := ch.Pop(10 * time.Millisecond)
+	require.True(t, ok)
+	require.Equal(t, string(data), "def")
 }
 
 func TestCS2ConnStructFields(t *testing.T) {

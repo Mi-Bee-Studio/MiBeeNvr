@@ -18,28 +18,28 @@ func TestLoadValidConfig(t *testing.T) {
 
 func TestValidateMissingCameraID(t *testing.T) {
     cfg := &Config{Cameras: []CameraConfig{{ID: "", URL: "rtsp://x"}}}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     err := Validate(cfg)
     require.Error(t, err)
 }
 
 func TestValidateInvalidProtocol(t *testing.T) {
     cfg := &Config{Cameras: []CameraConfig{{ID: "c1", URL: "rtsp://a", Protocol: "invalid"}}}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     err := Validate(cfg)
     require.Error(t, err)
 }
 
 func TestPortRangeValidation(t *testing.T) {
     cfg := &Config{FTP: FTPConfig{Port: 70000}}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     err := Validate(cfg)
     require.Error(t, err)
 }
 
 func TestDefaultsApplied(t *testing.T) {
     cfg := &Config{}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     require.Equal(t, ":9090", cfg.Server.Listen)
     require.Equal(t, "/var/lib/mibee-nvr", cfg.Storage.RootDir)
     require.Equal(t, "30s", cfg.Storage.SegmentDuration)
@@ -60,7 +60,7 @@ func TestLoadNonExistentFile(t *testing.T) {
 func TestFTPExplicitlyDisabled(t *testing.T) {
     cfg := &Config{FTP: FTPConfig{Enabled: new(bool)}}
     *cfg.FTP.Enabled = false // explicitly set to false
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     require.NotNil(t, cfg.FTP.Enabled)
     require.Equal(t, false, *cfg.FTP.Enabled) // should remain false
 }
@@ -68,21 +68,21 @@ func TestFTPExplicitlyDisabled(t *testing.T) {
 func TestWebDAVExplicitlyDisabled(t *testing.T) {
     cfg := &Config{WebDAV: WebDAVConfig{Enabled: new(bool)}}
     *cfg.WebDAV.Enabled = false // explicitly set to false
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     require.NotNil(t, cfg.WebDAV.Enabled)
     require.Equal(t, false, *cfg.WebDAV.Enabled) // should remain false
 }
 
 func TestFTPNotConfigured(t *testing.T) {
     cfg := &Config{}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     require.NotNil(t, cfg.FTP.Enabled)
     require.Equal(t, true, *cfg.FTP.Enabled) // should default to true
 }
 
 func TestWebDAVNotConfigured(t *testing.T) {
     cfg := &Config{}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
     require.NotNil(t, cfg.WebDAV.Enabled)
     require.Equal(t, true, *cfg.WebDAV.Enabled) // should default to true
 }
@@ -106,7 +106,7 @@ func TestSave(t *testing.T) {
 	        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee", Username: "mqttuser", Password: "mqttpass"},
         WebDAV:  WebDAVConfig{Enabled: &webdavEnabled, PathPrefix: "/files"},
     }
-    original.applyDefaults()
+    original.ApplyDefaults()
 
     err := Save(path, original)
     require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestSaveAtomic(t *testing.T) {
     require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
     cfg := &Config{Server: ServerConfig{Listen: ":9090"}}
-    cfg.applyDefaults()
+    cfg.ApplyDefaults()
 
     err := Save(path, cfg)
     require.NoError(t, err)
@@ -176,11 +176,11 @@ func TestSaveOverwrite(t *testing.T) {
     path := filepath.Join(dir, "mibee-nvr.yaml")
 
     first := &Config{Server: ServerConfig{Listen: ":7070"}, Storage: StorageConfig{RootDir: "/old"}}
-    first.applyDefaults()
+    first.ApplyDefaults()
     require.NoError(t, Save(path, first))
 
     second := &Config{Server: ServerConfig{Listen: ":3333"}, Storage: StorageConfig{RootDir: "/new"}}
-    second.applyDefaults()
+    second.ApplyDefaults()
     require.NoError(t, Save(path, second))
 
     loaded, err := Load(path)
@@ -190,7 +190,7 @@ func TestSaveOverwrite(t *testing.T) {
 }
 func TestValidateOnvifProtocol(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", ONVIFEndpoint: "http://192.168.1.100/onvif/device_service", Protocol: "onvif"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -261,7 +261,7 @@ func TestResolveMergeConfig_AllFieldsOverridden(t *testing.T) {
 
 func TestHLSSegmentCountDefault(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, 7, cfg.HLS.SegmentCount)
 	require.Equal(t, 100, cfg.HLS.WriteBufferSize)
 }
@@ -269,7 +269,7 @@ func TestHLSSegmentCountDefault(t *testing.T) {
 func TestHLSSegmentCountValidation_Valid(t *testing.T) {
 	for _, sc := range []int{3, 5, 7, 10} {
 		cfg := &Config{HLS: HLSConfig{SegmentCount: sc}}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "segment_count=%d should be valid", sc)
 	}
@@ -277,7 +277,7 @@ func TestHLSSegmentCountValidation_Valid(t *testing.T) {
 
 func TestHLSSegmentCountValidation_TooLow(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 2}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.segment_count")
@@ -285,7 +285,7 @@ func TestHLSSegmentCountValidation_TooLow(t *testing.T) {
 
 func TestHLSSegmentCountValidation_TooHigh(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 11}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.segment_count")
@@ -293,13 +293,13 @@ func TestHLSSegmentCountValidation_TooHigh(t *testing.T) {
 
 func TestXiaomiConfigDefaults(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "cn", cfg.Xiaomi.Region)
 }
 
 func TestXiaomiConfigValidationRequiresToken(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "xiaomi.token")
@@ -310,7 +310,7 @@ func TestXiaomiConfigValidationWithToken(t *testing.T) {
 		Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}},
 		Xiaomi:  XiaomiConfig{Token: "test-token", Region: "cn"},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -327,7 +327,7 @@ func TestCameraConfigXiaomiFields(t *testing.T) {
 		}},
 		Xiaomi: XiaomiConfig{Token: "test-token", Region: "cn"},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 	require.Equal(t, "12345678", cfg.Cameras[0].DID)
@@ -350,7 +350,7 @@ func TestDuplicateCameraID(t *testing.T) {
 			{ID: "cam1", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
 		},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate id")
@@ -363,7 +363,7 @@ func TestUniqueCameraIDPasses(t *testing.T) {
 			{ID: "cam2", Protocol: "rtsp", URL: "rtsp://192.168.1.11/stream"},
 		},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -381,7 +381,7 @@ func TestCameraURLInvalidFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: tt.url}}}
-			cfg.applyDefaults()
+			cfg.ApplyDefaults()
 			err := Validate(cfg)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "url has invalid format")
@@ -404,11 +404,11 @@ func TestCameraURLValidFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.protocol == "xiaomi" {
 				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: tt.url}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
-				cfg.applyDefaults()
+				cfg.ApplyDefaults()
 				require.NoError(t, Validate(cfg))
 			} else {
 				cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: tt.protocol, URL: tt.url}}}
-				cfg.applyDefaults()
+				cfg.ApplyDefaults()
 				require.NoError(t, Validate(cfg))
 			}
 		})
@@ -417,7 +417,7 @@ func TestCameraURLValidFormat(t *testing.T) {
 
 func TestONVIFEndpointInvalidFormat(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", ONVIFEndpoint: "no-scheme"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "onvif_endpoint has invalid format")
@@ -425,7 +425,7 @@ func TestONVIFEndpointInvalidFormat(t *testing.T) {
 
 func TestFTPPortZeroRejected(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.FTP.Port = 0 // override default to test validation
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -434,7 +434,7 @@ func TestFTPPortZeroRejected(t *testing.T) {
 
 func TestSegmentDurationExceeds30s(t *testing.T) {
 	cfg := &Config{Storage: StorageConfig{SegmentDuration: "60s"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must be <= 30s")
@@ -442,7 +442,7 @@ func TestSegmentDurationExceeds30s(t *testing.T) {
 
 func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "30s", cfg.Storage.SegmentDuration)
 	err := Validate(cfg)
 	require.NoError(t, err)
@@ -450,14 +450,14 @@ func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {
 
 func TestHLSMaxStreamsDefault(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, 4, cfg.HLS.MaxStreams)
 }
 
 func TestHLSMaxStreamsValidation_Valid(t *testing.T) {
 	for _, ms := range []int{1, 4, 10, 20} {
 		cfg := &Config{HLS: HLSConfig{MaxStreams: ms, SegmentCount: 7}}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "max_streams=%d should be valid", ms)
 	}
@@ -465,7 +465,7 @@ func TestHLSMaxStreamsValidation_Valid(t *testing.T) {
 
 func TestHLSMaxStreamsValidation_TooLow(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{MaxStreams: 0, SegmentCount: 7}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.HLS.MaxStreams = 0 // override default to test validation
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -473,7 +473,7 @@ func TestHLSMaxStreamsValidation_TooLow(t *testing.T) {
 }
 func TestHLSMaxStreamsValidation_TooHigh(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{MaxStreams: 21, SegmentCount: 7}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.max_streams")
@@ -487,7 +487,7 @@ func TestValidateNilConfig(t *testing.T) {
 
 func TestValidateRetentionDaysTooLow(t *testing.T) {
 	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 0}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	// Default applies 30, so this should pass
 	require.NoError(t, err)
@@ -495,7 +495,7 @@ func TestValidateRetentionDaysTooLow(t *testing.T) {
 
 func TestValidateRetentionDaysTooHigh(t *testing.T) {
 	cfg := &Config{Cleanup: CleanupConfig{RetentionDays: 4000}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "retention_days")
@@ -503,7 +503,7 @@ func TestValidateRetentionDaysTooHigh(t *testing.T) {
 
 func TestValidateDiskThresholdTooLow(t *testing.T) {
 	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 40}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disk_threshold_percent")
@@ -511,7 +511,7 @@ func TestValidateDiskThresholdTooLow(t *testing.T) {
 
 func TestValidateDiskThresholdTooHigh(t *testing.T) {
 	cfg := &Config{Cleanup: CleanupConfig{DiskThresholdPercent: 100}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disk_threshold_percent")
@@ -519,7 +519,7 @@ func TestValidateDiskThresholdTooHigh(t *testing.T) {
 
 func TestValidateLogLevelInvalid(t *testing.T) {
 	cfg := &Config{Observability: ObservabilityConfig{LogLevel: "verbose"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "log_level")
@@ -527,7 +527,7 @@ func TestValidateLogLevelInvalid(t *testing.T) {
 
 func TestValidateLogFormatInvalid(t *testing.T) {
 	cfg := &Config{Observability: ObservabilityConfig{LogFormat: "xml"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "log_format")
@@ -536,7 +536,7 @@ func TestValidateLogFormatInvalid(t *testing.T) {
 func TestValidateLogLevelValid(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		cfg := &Config{Observability: ObservabilityConfig{LogLevel: level, LogFormat: "json"}}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		require.NoError(t, Validate(cfg), "log_level=%s should be valid", level)
 	}
 }
@@ -544,14 +544,14 @@ func TestValidateLogLevelValid(t *testing.T) {
 func TestValidateLogFormatValid(t *testing.T) {
 	for _, format := range []string{"json", "text"} {
 		cfg := &Config{Observability: ObservabilityConfig{LogFormat: format}}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		require.NoError(t, Validate(cfg), "log_format=%s should be valid", format)
 	}
 }
 
 func TestValidateMergeEnabledInvalidInterval(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "not-a-duration", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "merge check_interval")
@@ -559,7 +559,7 @@ func TestValidateMergeEnabledInvalidInterval(t *testing.T) {
 
 func TestValidateMergeEnabledInvalidWindowSize(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "bad", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "merge window_size")
@@ -567,7 +567,7 @@ func TestValidateMergeEnabledInvalidWindowSize(t *testing.T) {
 
 func TestValidateMergeEnabledZeroBatchLimit(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 0, MinSegmentAge: "5m", MinSegmentsToMerge: 3}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Merge.BatchLimit = 0 // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -576,7 +576,7 @@ func TestValidateMergeEnabledZeroBatchLimit(t *testing.T) {
 
 func TestValidateMergeEnabledInvalidMinSegmentAge(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "bad", MinSegmentsToMerge: 3}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "min_segment_age")
@@ -584,7 +584,7 @@ func TestValidateMergeEnabledInvalidMinSegmentAge(t *testing.T) {
 
 func TestValidateMergeEnabledTooFewSegments(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: true, CheckInterval: "1h", WindowSize: "1h", BatchLimit: 10, MinSegmentAge: "5m", MinSegmentsToMerge: 1}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "min_segments_to_merge")
@@ -592,14 +592,14 @@ func TestValidateMergeEnabledTooFewSegments(t *testing.T) {
 
 func TestValidateMergeDisabledSkipsValidation(t *testing.T) {
 	cfg := &Config{Merge: MergeConfig{Enabled: false, CheckInterval: "bad"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err) // merge disabled, so invalid fields ignored
 }
 
 func TestValidateSegmentDurationInvalid(t *testing.T) {
 	cfg := &Config{Storage: StorageConfig{SegmentDuration: "not-a-duration"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Storage.SegmentDuration = "not-a-duration" // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -608,21 +608,21 @@ func TestValidateSegmentDurationInvalid(t *testing.T) {
 
 func TestValidateFTPPortNegative(t *testing.T) {
 	cfg := &Config{FTP: FTPConfig{Port: -1}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 }
 
 func TestCameraWhitespaceID(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "   ", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 }
 
 func TestCameraMissingURLXiaomiExempt(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}, Xiaomi: XiaomiConfig{Token: "test", Region: "cn"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -636,7 +636,7 @@ func TestSaveNilConfig(t *testing.T) {
 
 func TestSaveEmptyPath(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Save("", cfg)
 	require.Error(t, err)
 }
@@ -648,7 +648,7 @@ func TestLoadEmptyPath(t *testing.T) {
 
 func TestApplyDefaultsMergeFields(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, 200, cfg.Merge.BatchLimit)
 	require.Equal(t, "1h", cfg.Merge.CheckInterval)
 	require.Equal(t, "1h", cfg.Merge.WindowSize)
@@ -658,7 +658,7 @@ func TestApplyDefaultsMergeFields(t *testing.T) {
 
 func TestApplyDefaultsObservability(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "info", cfg.Observability.LogLevel)
 	require.Equal(t, "text", cfg.Observability.LogFormat)
 	require.Equal(t, false, cfg.Observability.EnablePprof)
@@ -666,13 +666,13 @@ func TestApplyDefaultsObservability(t *testing.T) {
 
 func TestApplyDefaultsVersion(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "1.0", cfg.Version)
 }
 
 func TestApplyDefaultsHLS(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, 100, cfg.HLS.WriteBufferSize)
 	require.Equal(t, 10, cfg.HLS.SegmentMaxSizeMB)
 	require.Equal(t, 7, cfg.HLS.SegmentCount)
@@ -683,7 +683,7 @@ func TestApplyDefaultsHLS(t *testing.T) {
 
 func TestHLSPartMinDurationValidation_Invalid(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "invalid"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.part_min_duration")
@@ -691,7 +691,7 @@ func TestHLSPartMinDurationValidation_Invalid(t *testing.T) {
 
 func TestHLSPartMinDurationValidation_TooLow(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "50ms"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.part_min_duration")
@@ -699,7 +699,7 @@ func TestHLSPartMinDurationValidation_TooLow(t *testing.T) {
 
 func TestHLSPartMinDurationValidation_TooHigh(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, PartMinDuration: "2s"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.part_min_duration")
@@ -707,7 +707,7 @@ func TestHLSPartMinDurationValidation_TooHigh(t *testing.T) {
 
 func TestHLSLowLatency_SegmentCountTooLow(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 5, LowLatency: true, PartMinDuration: "200ms"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.segment_count must be >= 7 when low_latency is enabled")
@@ -715,14 +715,14 @@ func TestHLSLowLatency_SegmentCountTooLow(t *testing.T) {
 
 func TestHLSLowLatency_SegmentCount7(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, LowLatency: true, PartMinDuration: "200ms"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
 
 func TestApplyDefaultsFTP(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, 2121, cfg.FTP.Port)
 	require.Equal(t, "2122-2140", cfg.FTP.PassivePortRange)
 	require.NotNil(t, cfg.FTP.Enabled)
@@ -731,47 +731,47 @@ func TestApplyDefaultsFTP(t *testing.T) {
 
 func TestCameraProtocolNormalization_RtspH264(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_h264", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
 	require.Equal(t, "h264", cfg.Cameras[0].Encoding)
 }
 
 func TestCameraProtocolNormalization_RtspMjpeg(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_mjpeg", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
 	require.Equal(t, "mjpeg", cfg.Cameras[0].Encoding)
 }
 
 func TestCameraProtocolNormalization_HttpJpeg(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http_jpeg", URL: "http://192.168.1.10/capture"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "http", cfg.Cameras[0].Protocol)
 	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding)
 }
 
 func TestCameraEncodingDefault_Rtsp(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "h264", cfg.Cameras[0].Encoding) // default for rtsp
 }
 
 func TestCameraEncodingDefault_Http(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http", URL: "http://192.168.1.10/capture"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding) // default for http
 }
 
 func TestValidateONVIFEndpointAutoPopulated(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "onvif", URL: "http://192.168.1.100/onvif/device_service"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
 
 func TestStreamingDefaults(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "hls", cfg.Streaming.DefaultProtocol)
 	require.NotNil(t, cfg.Streaming.WebRTC.Enabled)
 	require.True(t, *cfg.Streaming.WebRTC.Enabled)
@@ -786,7 +786,7 @@ func TestStreamingDefaults(t *testing.T) {
 
 func TestStreamingDefaultProtocolInvalid(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{DefaultProtocol: "rtmp"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "streaming.default_protocol")
@@ -794,7 +794,7 @@ func TestStreamingDefaultProtocolInvalid(t *testing.T) {
 
 func TestWebRTCMaxViewersTooLow(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{WebRTC: WebRTCConfig{MaxViewers: 0}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Streaming.WebRTC.MaxViewers = 0 // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -803,7 +803,7 @@ func TestWebRTCMaxViewersTooLow(t *testing.T) {
 
 func TestWebRTCMaxViewersTooHigh(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{WebRTC: WebRTCConfig{MaxViewers: 11}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "streaming.webrtc.max_viewers")
@@ -811,7 +811,7 @@ func TestWebRTCMaxViewersTooHigh(t *testing.T) {
 
 func TestFLVMaxViewersTooLow(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{MaxViewers: 0}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Streaming.FLV.MaxViewers = 0 // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -820,7 +820,7 @@ func TestFLVMaxViewersTooLow(t *testing.T) {
 
 func TestFLVMaxViewersTooHigh(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{MaxViewers: 51}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "streaming.flv.max_viewers")
@@ -828,7 +828,7 @@ func TestFLVMaxViewersTooHigh(t *testing.T) {
 
 func TestFLVGOPCacheSizeNegative(t *testing.T) {
 	cfg := &Config{Streaming: StreamingConfig{FLV: FLVConfig{GOPCacheSize: -1}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Streaming.FLV.GOPCacheSize = -1 // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -837,7 +837,7 @@ func TestFLVGOPCacheSizeNegative(t *testing.T) {
 
 func TestHealthDefaults(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.Equal(t, "720h", cfg.Health.EventsRetention, "default events_retention should be 720h (30 days)")
 	require.Equal(t, "5m", cfg.Health.Alerts.Cooldown, "default cooldown should be 5m")
 	require.False(t, cfg.Health.Alerts.MQTT, "default mqtt alerts should be false")
@@ -883,14 +883,14 @@ func TestHealthValidConfig(t *testing.T) {
 			},
 		},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
 
 func TestHealthValidationInvalidEventsRetention(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, EventsRetention: "not-a-duration"}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "health.events_retention")
@@ -898,7 +898,7 @@ func TestHealthValidationInvalidEventsRetention(t *testing.T) {
 
 func TestHealthValidationInvalidCooldown(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Alerts: HealthAlertsConfig{Cooldown: "bad"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "health.alerts.cooldown")
@@ -906,7 +906,7 @@ func TestHealthValidationInvalidCooldown(t *testing.T) {
 
 func TestHealthValidationInvalidOfflineThreshold(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Layer1: HealthLayer1Config{OfflineThreshold: "bad"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "health.layer1.offline_threshold")
@@ -914,7 +914,7 @@ func TestHealthValidationInvalidOfflineThreshold(t *testing.T) {
 
 func TestHealthValidationInvalidBitrateChangeThreshold(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{BitrateChangeThreshold: 1.5}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bitrate_change_threshold")
@@ -922,7 +922,7 @@ func TestHealthValidationInvalidBitrateChangeThreshold(t *testing.T) {
 
 func TestHealthValidationInvalidMinFPS(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{MinFPS: 0}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Health.Layer2.MinFPS = 0 // override default
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -931,7 +931,7 @@ func TestHealthValidationInvalidMinFPS(t *testing.T) {
 
 func TestHealthValidationInvalidMaxIDRInterval(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2: HealthLayer2Config{MaxIDRInterval: "bad"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "health.layer2.max_idr_interval")
@@ -939,7 +939,7 @@ func TestHealthValidationInvalidMaxIDRInterval(t *testing.T) {
 
 func TestHealthValidationInvalidFreezeTimeout(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: true, Layer2_5: HealthLayer2_5Config{FreezeTimeout: "bad"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "health.layer2_5.freeze_timeout")
@@ -947,7 +947,7 @@ func TestHealthValidationInvalidFreezeTimeout(t *testing.T) {
 
 func TestHealthValidationDisabledSkips(t *testing.T) {
 	cfg := &Config{Health: HealthConfig{Enabled: false, EventsRetention: "bad", Layer1: HealthLayer1Config{OfflineThreshold: "bad"}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err, "validation should be skipped when health is disabled")
 }
@@ -955,7 +955,7 @@ func TestHealthValidationDisabledSkips(t *testing.T) {
 func TestAutoRemediationDefaults(t *testing.T) {
 	// When no auto_remediation section in YAML, defaults should apply
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.False(t, cfg.Health.AutoRemediation.Enabled, "auto_remediation should be disabled by default")
 	require.Equal(t, 3, cfg.Health.AutoRemediation.MaxRestartsPerHour)
 	require.Equal(t, 5, cfg.Health.AutoRemediation.CooldownMinutes)
@@ -976,7 +976,7 @@ func TestAutoRemediationConfig(t *testing.T) {
 			},
 		},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.True(t, cfg.Health.AutoRemediation.Enabled)
 	require.Equal(t, 5, cfg.Health.AutoRemediation.MaxRestartsPerHour)
 	require.Equal(t, 10, cfg.Health.AutoRemediation.CooldownMinutes)
@@ -998,7 +998,7 @@ func TestAutoRemediationValidation(t *testing.T) {
 				},
 			},
 		}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		cfg.Health.AutoRemediation.MaxRestartsPerHour = 0 // override default
 		err := Validate(cfg)
 		require.Error(t, err)
@@ -1018,7 +1018,7 @@ func TestAutoRemediationValidation(t *testing.T) {
 				},
 			},
 		}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		cfg.Health.AutoRemediation.CooldownMinutes = 0 // override default
 		err := Validate(cfg)
 		require.Error(t, err)
@@ -1034,7 +1034,7 @@ func TestAutoRemediationValidation(t *testing.T) {
 				},
 			},
 		}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "validation should pass when auto_remediation is disabled")
 	})
@@ -1044,7 +1044,7 @@ func TestAudioEnabledDefaultFalse(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "c1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 	}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.False(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to false")
 }
 
@@ -1053,7 +1053,7 @@ func TestAudioEnabledRejectedForMJPEG(t *testing.T) {
 		ID: "c1", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://192.168.1.10/stream",
 		AudioEnabled: true,
 	}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.False(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras have no audio source")
 }
 
@@ -1062,7 +1062,7 @@ func TestAudioEnabledRejectedForHTTPJPEG(t *testing.T) {
 		ID: "c1", Protocol: "http", Encoding: "jpeg", URL: "http://192.168.1.10/capture",
 		AudioEnabled: true,
 	}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.False(t, cfg.Cameras[0].AudioEnabled, "HTTP-JPEG cameras have no audio source")
 }
 
@@ -1071,7 +1071,7 @@ func TestAudioEnabledAllowedForRTSPH264(t *testing.T) {
 		ID: "c1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		AudioEnabled: true,
 	}}}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.True(t, cfg.Cameras[0].AudioEnabled, "RTSP H.264 cameras should support audio")
 }
 
@@ -1082,7 +1082,7 @@ func TestAudioEnabledAllowedForONVIF(t *testing.T) {
 			AudioEnabled: true,
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.True(t, cfg.Cameras[0].AudioEnabled, "ONVIF H.264 cameras should support audio")
 }
 
@@ -1094,6 +1094,6 @@ func TestAudioEnabledAllowedForXiaomi(t *testing.T) {
 		}},
 		Xiaomi: XiaomiConfig{Token: "test", Region: "cn"},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.True(t, cfg.Cameras[0].AudioEnabled, "Xiaomi cameras should support audio")
 }

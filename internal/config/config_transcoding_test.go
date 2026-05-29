@@ -8,7 +8,7 @@ import (
 
 func TestTranscodingConfig_Defaults(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 
 	require.False(t, cfg.Transcoding.Enabled, "transcoding.enabled should default to false")
 	require.Equal(t, 1, cfg.Transcoding.MaxWorkers, "transcoding.max_workers should default to 1")
@@ -19,7 +19,7 @@ func TestTranscodingConfig_Defaults(t *testing.T) {
 
 func TestTranscodingConfig_InvalidMaxWorkers(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = 5 // > 4
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -28,7 +28,7 @@ func TestTranscodingConfig_InvalidMaxWorkers(t *testing.T) {
 
 func TestTranscodingConfig_InvalidMaxWorkersZero(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = 0 // < 1
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -37,7 +37,7 @@ func TestTranscodingConfig_InvalidMaxWorkersZero(t *testing.T) {
 
 func TestTranscodingConfig_InvalidMaxWorkersNegative(t *testing.T) {
 	cfg := &Config{}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = -1 // < 0
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -51,7 +51,7 @@ func TestTranscodingConfig_InvalidTargetCodec(t *testing.T) {
 			Transcoding: &CameraTranscodingConfig{TargetCodec: "invalid"},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "target_codec")
@@ -64,7 +64,7 @@ func TestTranscodingConfig_InvalidPreset(t *testing.T) {
 			Transcoding: &CameraTranscodingConfig{Preset: "veryfast"},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "preset")
@@ -87,7 +87,7 @@ func TestTranscodingConfig_ValidConfig(t *testing.T) {
 			},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -106,7 +106,7 @@ func TestTranscodingConfig_ValidEmptyPerCamera(t *testing.T) {
 			},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -119,7 +119,7 @@ func TestResolveTranscodingConfig_GlobalOnly(t *testing.T) {
 			// No Transcoding override
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	result := cfg.ResolveTranscodingConfig("cam1")
 	require.NotNil(t, result)
 	require.True(t, result.Enabled) // inherits global
@@ -141,7 +141,7 @@ func TestResolveTranscodingConfig_PerCameraOverride(t *testing.T) {
 			},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	result := cfg.ResolveTranscodingConfig("cam1")
 	require.NotNil(t, result)
 	require.True(t, result.Enabled) // per-camera overrides global
@@ -160,7 +160,7 @@ func TestResolveTranscodingConfig_PerCameraDisabled(t *testing.T) {
 			},
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	result := cfg.ResolveTranscodingConfig("cam1")
 	require.NotNil(t, result)
 	require.False(t, result.Enabled) // per-camera overrides to disabled
@@ -170,7 +170,7 @@ func TestResolveTranscodingConfig_NonExistentCamera(t *testing.T) {
 	cfg := &Config{
 		Transcoding: TranscodingConfig{Enabled: true, MaxWorkers: 2},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	result := cfg.ResolveTranscodingConfig("nonexistent")
 	require.NotNil(t, result)
 	require.True(t, result.Enabled)
@@ -188,7 +188,7 @@ func TestTranscodingEnabledFalse_ValidatesClean(t *testing.T) {
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		}},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
@@ -196,7 +196,7 @@ func TestTranscodingEnabledFalse_ValidatesClean(t *testing.T) {
 func TestTranscodingConfig_ValidMaxWorkersRange(t *testing.T) {
 	for _, w := range []int{1, 2, 3, 4} {
 		cfg := &Config{Transcoding: TranscodingConfig{MaxWorkers: w}}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "max_workers=%d should be valid", w)
 	}
@@ -210,7 +210,7 @@ func TestTranscodingConfig_ValidCodecs(t *testing.T) {
 				Transcoding: &CameraTranscodingConfig{TargetCodec: codec},
 			}},
 		}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "target_codec=%s should be valid", codec)
 	}
@@ -224,7 +224,7 @@ func TestTranscodingConfig_ValidPresets(t *testing.T) {
 				Transcoding: &CameraTranscodingConfig{Preset: preset},
 			}},
 		}
-		cfg.applyDefaults()
+		cfg.ApplyDefaults()
 		err := Validate(cfg)
 		require.NoError(t, err, "preset=%s should be valid", preset)
 	}

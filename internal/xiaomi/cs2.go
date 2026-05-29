@@ -533,7 +533,18 @@ func (c *cs2DataChannel) Push(b []byte) error {
 		select {
 		case c.popBuf <- c.waitData[:c.waitSize]:
 		default:
-			return fmt.Errorf("cs2: pop buffer is full")
+			// Drop oldest frame to make room for new one.
+			// For video streams, dropping a frame is far better than
+			// disconnecting and reconnecting the entire P2P session.
+			select {
+			case <-c.popBuf:
+			default:
+			}
+			select {
+			case c.popBuf <- c.waitData[:c.waitSize]:
+			default:
+				return fmt.Errorf("cs2: pop buffer still full after drain")
+			}
 		}
 
 		c.waitData = c.waitData[c.waitSize:]
