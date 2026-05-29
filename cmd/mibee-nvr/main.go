@@ -75,6 +75,8 @@ func autoInitConfig(configPath string) *config.Config {
 		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
 		Version:       "1.0",
 	}
+	// Apply defaults so all fields (HLS, etc.) are populated before saving
+	cfg.ApplyDefaults()
 
 	if password != "" {
 		if len(password) < 8 {

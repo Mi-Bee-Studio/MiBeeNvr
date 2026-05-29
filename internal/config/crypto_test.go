@@ -374,7 +374,7 @@ func TestSaveLoadWithEncryption(t *testing.T) {
 		},
 		FTP: FTPConfig{Enabled: &ftpEnabled, Port: 2121},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 
 	// Save (should encrypt)
 	err := Save(path, cfg)
@@ -419,7 +419,7 @@ func TestSaveLoadWithoutEncryption(t *testing.T) {
 		Cameras: []CameraConfig{{ID: "cam1", Password: "cam-plain"}},
 		FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 
 	err := Save(path, cfg)
 	require.NoError(t, err)
@@ -526,7 +526,7 @@ func TestEncryptConfigFile(t *testing.T) {
 		Cameras: []CameraConfig{{ID: "c1", Password: "cam-pass", URL: "rtsp://x", Protocol: "rtsp", Encoding: "h264"}},
 		FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.NoError(t, Save(path, cfg))
 
 	// Save without key first to write plaintext
@@ -580,7 +580,7 @@ func TestEncryptConfigFileAlreadyEncrypted(t *testing.T) {
 		Auth:    AuthConfig{Password: "pass"},
 		FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121},
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	require.NoError(t, Save(path, cfg)) // Save will encrypt
 
 	// Second encrypt will find plaintext fields (they were decrypted on load), re-encrypt them
