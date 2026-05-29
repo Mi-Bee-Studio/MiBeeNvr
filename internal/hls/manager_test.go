@@ -900,23 +900,23 @@ func TestIDRWaiting_H265_PPSNotIDR(t *testing.T) {
 	require.False(t, isFirstNalIDR([][]byte{{0x44, 0x01, 0xc1}}, true), "PPS should not be IDR")
 }
 
-func TestIDRWaiting_MixedNALUs_FirstIsPPS_Fails(t *testing.T) {
-	// Access unit where first NALU is PPS (not IDR) should not be treated as IDR
+func TestIDRWaiting_MixedNALUs_PrependedParams(t *testing.T) {
+	// Access unit where parameter sets are prepended before IDR:
+	// [PPS, IDR] — the IDR is at index 1, not 0.
+	// isFirstNalIDR scans all NALUs so it correctly detects IDR anywhere in the AU.
+	// This is the standard format from Xiaomi and ONVIF cameras which prepend
+	// VPS/SPS/PPS before the IDR slice.
 	entry := newTestStreamEntry(0)
 	require.False(t, entry.idrReceived)
 
-	// First element is PPS (type 8), second is IDR (type 5)
-	// isFirstNalIDR only checks the first NAL unit
+	// H264: PPS (type 8) + IDR (type 5)
 	frame := hlsFrame{pts: 0, au: [][]byte{{0x08, 0xce}, {0x05, 0x02}}}
-	require.False(t, isFirstNalIDR(frame.au, false), "first NAL is PPS, not IDR")
+	require.True(t, isFirstNalIDR(frame.au, false), "AU contains IDR despite PPS being first")
 
-	// Should be skipped per writeLoop logic
+	// Should NOT be skipped — IDR detected in the AU
 	if !entry.idrReceived && !isFirstNalIDR(frame.au, entry.isH265) {
-		// skipped — correct
-	} else {
-		t.Error("expected frame starting with PPS to be skipped")
+		t.Error("expected IDR to be detected in mixed NALU access unit")
 	}
-	require.False(t, entry.idrReceived)
 }
 
 // --- FPS Credit Smoothing Tests ---

@@ -6,6 +6,9 @@ import { onMount, onDestroy } from 'svelte';
     deleteRecording,
     batchDeleteRecordings
   } from '$lib/api';
+  import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
+  import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
+  import { downloadRecording } from '$lib/api';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
   import type { Recording, Camera } from '$lib/api';
@@ -13,7 +16,7 @@ import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, GitMerge } from 'lucide-svelte';
+  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle } from 'lucide-svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -48,6 +51,11 @@ import { onMount, onDestroy } from 'svelte';
   let deleteConfirm = $state<Recording | null>(null);
   let showBackToTop = $state(false);
   let abortController: AbortController | null = null;
+
+  // Transcoding state
+  let transcodingStatus = $state<ManagerStatus | null>(null);
+  let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
+  let transcodeTargetMap = $state<Record<string, string>>({}); // recording_id -> target_codec
 
   function toggleSelectAll() {
     if (selectedIds.size === recordings.length) {
@@ -173,10 +181,124 @@ import { onMount, onDestroy } from 'svelte';
     window.location.hash = `#/recordings/${recording.id}`;
   }
 
+  // --- Transcoding ---
+  async function loadTranscodingStatus() {
+    try {
+      transcodingStatus = await getTranscodingStatus();
+    } catch (e) {
+      // Silently fail — not critical
+    }
+  }
+
+  function startTranscodingPoll() {
+    stopTranscodingPoll();
+    loadTranscodingStatus();
+    transcodingPollInterval = setInterval(loadTranscodingStatus, 2000);
+  }
+
+  function stopTranscodingPoll() {
+    if (transcodingPollInterval) {
+      clearInterval(transcodingPollInterval);
+      transcodingPollInterval = null;
+    }
+  }
+
+  function isTranscodingRecording(recordingId: string): TranscodeTask | undefined {
+    if (!transcodingStatus?.recent_results) return undefined;
+    return transcodingStatus.recent_results.find(
+      (t) => t.recording_id === recordingId && (t.status === 'running' || t.status === 'pending')
+    );
+  }
+
+  function getCompletedTranscodeTask(recordingId: string): TranscodeTask | undefined {
+    if (!transcodingStatus?.recent_results) return undefined;
+    return transcodingStatus.recent_results.find(
+      (t) => t.recording_id === recordingId && t.status === 'completed'
+    );
+  }
+
+  function getFailedTranscodeTask(recordingId: string): TranscodeTask | undefined {
+    if (!transcodingStatus?.recent_results) return undefined;
+    return transcodingStatus.recent_results.find(
+      (t) => t.recording_id === recordingId && t.status === 'failed' && t.error
+    );
+  }
+
+  async function handleTranscode(recording: Recording) {
+    const targetCodec = transcodeTargetMap[recording.id];
+    if (!targetCodec) {
+      showToast(t('transcoding.recordings.selectTargetCodec'), 'error');
+      return;
+    }
+    try {
+      await enqueueTranscodeTask({
+        camera_id: recording.camera_id,
+        recording_id: recording.id,
+        target_codec: targetCodec,
+        replace_original: true,
+      });
+      showToast(t('transcoding.recordings.transcodeSuccess', { camera: getCameraName(recording.camera_id) }), 'success');
+      delete transcodeTargetMap[recording.id];
+      transcodeTargetMap = { ...transcodeTargetMap };
+      loadTranscodingStatus();
+    } catch (e) {
+      showToast(t('transcoding.recordings.transcodeFailed'), 'error');
+    }
+  }
+
+  async function handleBatchTranscode() {
+    const selectedRecordings = recordings.filter(r => selectedIds.has(r.id));
+    if (selectedRecordings.length === 0) return;
+    if (!transcodingStatus?.enabled) {
+      showToast(t('transcoding.warning_global_disabled'), 'error');
+      return;
+    }
+    let queued = 0;
+    let failed = 0;
+    for (const rec of selectedRecordings) {
+      // Skip recordings already being transcoded
+      if (isTranscodingRecording(rec.id)) continue;
+      const target = rec.format === 'h264' ? 'h265' : rec.format === 'h265' ? 'h264' : 'h264';
+      try {
+        await enqueueTranscodeTask({
+          camera_id: rec.camera_id,
+          recording_id: rec.id,
+          target_codec: target,
+          replace_original: true,
+        });
+        queued++;
+      } catch {
+        failed++;
+      }
+    }
+    if (queued > 0) {
+      showToast(t('transcoding.batch_queued', { count: String(queued) }), 'success');
+      selectedIds = new Set();
+      loadTranscodingStatus();
+    }
+    if (failed > 0) {
+      showToast(t('transcoding.recordings.transcodeFailed'), 'error');
+    }
+  }
+
+  async function handleCancelTranscode(task: TranscodeTask) {
+    if (!confirm(t('transcoding.cancel_confirm'))) return;
+    try {
+      await cancelTranscodeTask(task.id);
+      showToast(t('transcoding.task_cancelled'), 'success');
+      loadTranscodingStatus();
+    } catch {
+      showToast(t('common.error'), 'error');
+    }
+  }
+
+
+
   // Lifecycle
   onMount(() => {
     loadCameras();
     loadRecordings();
+    startTranscodingPoll();
 
     // Auto-refresh using preference
     refreshInterval = window.setInterval(() => {
@@ -192,6 +314,7 @@ import { onMount, onDestroy } from 'svelte';
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
       window.removeEventListener('scroll', handleScroll);
+      stopTranscodingPoll();
     };
   });
 
@@ -467,7 +590,19 @@ import { onMount, onDestroy } from 'svelte';
                       {:else}
                         <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
                       {/if}
-                    </div>
+                      {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}
+                        <span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse">{t('transcoding.running')}</span>
+                      {/if}
+                      {#if transcodingStatus?.enabled}
+                        {@const completedTask = getCompletedTranscodeTask(recording.id)}
+                        {#if completedTask}
+                          {#if completedTask.original_deleted}
+                            <span class="badge badge-info">{t('transcoding.original_replaced')}</span>
+                          {:else}
+                            <span class="badge badge-success">{t('transcoding.transcoded')}</span>
+                          {/if}
+                        {/if}
+                      {/if}
                   </td>
                   <td class="text-right">
                     <div class="flex justify-end gap-1">
@@ -479,6 +614,31 @@ import { onMount, onDestroy } from 'svelte';
                         <span class="hidden sm:inline">{t('recordings.view')}</span>
                         <Eye size={16} class="sm:hidden" />
                       </button>
+                      {#if transcodingStatus?.enabled && !isTranscodingRecording(recording.id)}
+                        <div class="relative group">
+                          <button
+                            onclick={() => {
+                              const target = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
+                              transcodeTargetMap[recording.id] = target;
+                              transcodeTargetMap = { ...transcodeTargetMap };
+                              handleTranscode(recording);
+                            }}
+                            class="btn btn-ghost px-2 py-1.5 text-sm th-text-secondary hover:text-blue-500 transition-all duration-200"
+                            title={t('transcoding.recordings.transcodeBtn')}
+                          >
+                            <RefreshCw size={16} />
+                          </button>
+                        </div>
+                      {/if}
+                      {#if transcodingStatus?.enabled && getCompletedTranscodeTask(recording.id) && !getCompletedTranscodeTask(recording.id)!.original_deleted}
+                        <button
+                          onclick={() => downloadRecording(recording.id)}
+                          class="btn btn-ghost px-2 py-1.5 text-sm th-text-secondary hover:text-green-500 transition-all duration-200"
+                          title={t('transcoding.download_transcoded')}
+                        >
+                          <Download size={16} />
+                        </button>
+                      {/if}
                       <button
                         onclick={() => deleteConfirm = recording}
                         class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger transition-all duration-200"
@@ -486,9 +646,46 @@ import { onMount, onDestroy } from 'svelte';
                       >
                         <Trash2 size={16} />
                       </button>
-                    </div>
                   </td>
                 </tr>
+                {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}
+                  {@const task = isTranscodingRecording(recording.id)}
+                  <tr class="th-bg-hover/50">
+                    <td colspan="8" class="py-1 px-4">
+                      <div class="flex items-center gap-3">
+                        <span class="text-xs th-text-secondary">{t('transcoding.recordings.transcodingProgress', { percent: String(task?.progress ?? 0) })}</span>
+                        <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
+                          <div
+                            class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
+                            style="width: {Math.max(task?.progress ?? 0, 2)}%"
+                          ></div>
+                        </div>
+                        <button
+                          onclick={() => task && handleCancelTranscode(task)}
+                          class="btn btn-ghost px-1 py-0.5 text-xs th-color-danger hover:text-red-600 transition-colors"
+                          title={t('transcoding.cancel')}
+                        >
+                          <XCircle size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
+                {#if transcodingStatus?.enabled && getFailedTranscodeTask(recording.id)}
+                  {@const failedTask = getFailedTranscodeTask(recording.id)}
+                  <tr class="th-bg-hover/50">
+                    <td colspan="8" class="py-1 px-4">
+                      <details class="group">
+                        <summary class="flex items-center gap-2 cursor-pointer text-xs th-color-danger select-none">
+                          <AlertCircle size={12} />
+                          <span>{t('transcoding.error_details')}</span>
+                          <span class="text-[10px] th-text-tertiary group-open:rotate-180 transition-transform">▼</span>
+                        </summary>
+                        <pre class="mt-1 p-2 rounded text-[11px] th-bg-tertiary th-text-secondary whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{failedTask?.error}</pre>
+                      </details>
+                    </td>
+                  </tr>
+                {/if}
               {/each}
             </tbody>
           </table>
@@ -534,6 +731,14 @@ import { onMount, onDestroy } from 'svelte';
       >
         {t('recordings.deleteSelected')}
       </button>
+      {#if transcodingStatus?.enabled}
+        <button
+          onclick={handleBatchTranscode}
+          class="btn btn-primary btn-sm"
+        >
+          {t('transcoding.transcode_selected')}
+        </button>
+      {/if}
       <button
         onclick={() => selectedIds = new Set()}
         class="btn btn-ghost btn-sm"

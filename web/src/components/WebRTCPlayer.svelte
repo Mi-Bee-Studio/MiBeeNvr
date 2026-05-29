@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
+  import { captureFrame } from '$lib/freeze-frame';
   import type { StreamState } from '$lib/hls-errors';
 
   let {
@@ -31,6 +32,30 @@
   let zombieInterval: ReturnType<typeof setInterval> | null = null;
   let lastPlaybackTime = 0;
   let zombieCount = 0;
+let destroyed = false;
+
+  // Freeze frame — prevents black flash during reconnection
+  let frozenFrameUrl: string | null = $state(null);
+  let showFrozenFrame = $state(false);
+  let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function captureFreezeFrame() {
+    if (frozenFrameUrl) return;
+    const frame = captureFrame(videoEl ?? null);
+    if (frame) {
+      frozenFrameUrl = frame;
+      showFrozenFrame = true;
+    }
+  }
+
+  function clearFreezeFrame() {
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    showFrozenFrame = false;
+    freezeClearTimer = setTimeout(() => {
+      frozenFrameUrl = null;
+      freezeClearTimer = null;
+    }, 350);
+  }
 
   function dispatchStateChange(state: StreamState | 'loading') {
     const event = new CustomEvent('statechange', {
@@ -45,13 +70,18 @@
   });
 
   function updateStreamState() {
+    const prevState = streamState;
     if (webrtcState === 'connected') {
       streamState = 'playing';
+      if (prevState !== 'playing' && frozenFrameUrl) clearFreezeFrame();
     } else if (webrtcState === 'connecting') {
+      if (prevState === 'playing') captureFreezeFrame();
       streamState = 'buffering';
     } else if (webrtcState === 'disconnected') {
+      if (prevState === 'playing') captureFreezeFrame();
       streamState = 'buffering';
     } else {
+      if (prevState === 'playing') captureFreezeFrame();
       streamState = 'error';
     }
   }
@@ -67,6 +97,7 @@
 
   function scheduleReconnect() {
     if (reconnectAttempts >= maxReconnectAttempts) return;
+    captureFreezeFrame();
     reconnectAttempts++;
     const delay = getBackoffDelay();
     reconnectTimer = setTimeout(() => {
@@ -121,6 +152,7 @@
           // ~20s stuck — reconnect
           console.warn(`WebRTC zombie detected for ${cameraId}, reconnecting`);
           zombieCount = 0;
+          captureFreezeFrame();
           destroyPeerConnection();
           initWebRTC();
           return;
@@ -135,6 +167,7 @@
           console.warn(`WebRTC zombie (no progress) for ${cameraId}, reconnecting`);
           zombieCount = 0;
           reconnectAttempts = 0;
+          captureFreezeFrame();
           destroyPeerConnection();
           initWebRTC();
           return;
@@ -150,6 +183,7 @@
     if (zombieInterval) { clearInterval(zombieInterval); zombieInterval = null; }
 
     if (!videoEl) return;
+    if (destroyed) return;
 
     streamState = 'loading';
     webrtcState = 'connecting';
@@ -200,6 +234,7 @@
       // Create offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
+      if (destroyed) return;
 
       // Wait for ICE gathering to complete
       await new Promise<void>((resolve) => {
@@ -218,6 +253,7 @@
           setTimeout(resolve, 5000);
         }
       });
+      if (destroyed) return;
 
       // Send SDP offer to WHEP endpoint
       const authHeader = getAuthHeader();
@@ -236,6 +272,7 @@
         const errorText = await response.text().catch(() => 'Unknown error');
         throw new Error(`WHEP server error: ${response.status} ${errorText}`);
       }
+      if (destroyed) return;
 
       // Parse Location header for session URL (for DELETE on cleanup)
       const location = response.headers.get('Location');
@@ -246,6 +283,7 @@
 
       // Parse SDP answer
       const answerSDP = await response.text();
+      if (destroyed) return;
       const answer = new RTCSessionDescription({
         type: 'answer',
         sdp: answerSDP,
@@ -262,6 +300,7 @@
   function handleReconnect() {
     reconnectAttempts = 0;
     webrtcState = 'connecting';
+    captureFreezeFrame();
     destroyPeerConnection();
     initWebRTC();
   }
@@ -292,6 +331,7 @@
       } else if (wasHidden) {
         wasHidden = false;
         reconnectAttempts = 0;
+        captureFreezeFrame();
         destroyPeerConnection();
         initWebRTC();
       }
@@ -304,6 +344,9 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    frozenFrameUrl = null;
     destroyPeerConnection();
   });
 
@@ -342,6 +385,16 @@
 
 <!-- svelte-ignore binding_property_non_reactive -->
 <div class="relative w-full h-full bg-black overflow-hidden group">
+  <!-- Freeze frame — last good frame shown during reconnection -->
+  {#if frozenFrameUrl}
+    <img
+      src={frozenFrameUrl}
+      alt=""
+      class="absolute inset-0 w-full h-full object-contain transition-opacity duration-300 {showFrozenFrame ? 'opacity-100' : 'opacity-0 pointer-events-none'}"
+      aria-hidden="true"
+    />
+  {/if}
+
   <video
     bind:this={videoEl}
     class="w-full h-full object-contain"

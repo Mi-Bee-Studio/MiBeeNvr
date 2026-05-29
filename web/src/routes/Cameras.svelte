@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -50,6 +50,10 @@
   // Protocol info
   let protocols = $state<ProtocolInfo[]>(DEFAULT_PROTOCOLS);
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
+
+  // Global transcoding state
+  let globalTranscodingEnabled = $state(false);
+  let h265Available = $state(true);
 
   // Discovery panel
   let discoveryPanel: ReturnType<typeof DiscoveryPanel> | null = $state(null);
@@ -353,6 +357,17 @@
         xiaomiDeviceList = res.devices;
       }
     } catch (e) { console.warn('Xiaomi not authenticated:', e); }
+    try {
+      const ts = await getTranscodingSettings();
+      globalTranscodingEnabled = ts.enabled;
+      // Check hardware H.265 capability
+      if (ts.enabled) {
+        try {
+          const check = await getTranscodingCheck();
+          h265Available = check.h265_encoder_type !== 'software';
+        } catch (e) { h265Available = false; }
+      }
+    } catch (e) { /* Transcoding may not be available */ }
 
     const healthInterval = window.setInterval(() => loadHealth(), 30000);
     return () => clearInterval(healthInterval);
@@ -452,6 +467,8 @@
             {protocols}
             {protocolsMap}
             {xiaomiDeviceList}
+            globalTranscodingEnabled={globalTranscodingEnabled}
+            h265Available={h265Available}
             onsave={handleFormSave}
             oncancel={handleFormCancel}
           />

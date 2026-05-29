@@ -5,6 +5,13 @@ import { apiRequest, getAuthHeader, API_BASE } from './client';
 
 // --- Types ---
 
+export interface CameraTranscodingConfig {
+  enabled: boolean;
+  target_codec: string;
+  preset: string;
+  bitrate: string;
+}
+
 export interface Camera {
   id: string;
   name: string;
@@ -27,6 +34,7 @@ export interface Camera {
   onvif_endpoint?: string;
   profile_token?: string;
   stream_encoding?: string;
+  transcoding?: CameraTranscodingConfig;
 }
 
 export interface CreateCameraRequest {
@@ -45,6 +53,7 @@ export interface CreateCameraRequest {
   onvif_endpoint?: string;
   profile_token?: string;
   stream_encoding?: string;
+  transcoding?: CameraTranscodingConfig;
 }
 
 export interface UpdateCameraRequest {
@@ -64,6 +73,7 @@ export interface UpdateCameraRequest {
   onvif_endpoint?: string;
   profile_token?: string;
   stream_encoding?: string;
+  transcoding?: CameraTranscodingConfig;
 }
 
 export interface DiscoveredDevice {

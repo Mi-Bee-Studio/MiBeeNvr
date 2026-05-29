@@ -122,6 +122,8 @@ type Handler struct {
 	stabilityProvider StabilityProvider
 	cloudProxy      CloudAuthProxy
 	streamRegistry  *StreamRegistry
+	downloader      TranscodeDownloader
+	transcodeMgr    TranscodeManagerAPI
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -197,6 +199,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
+		r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
+		r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
 		r.Post("/api/backup", h.handleBackup)
 		r.Get("/api/backups", h.handleListBackups)
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
@@ -230,6 +234,16 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/stability", h.handleGetStability)
 		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
+		// Transcoding endpoints
+		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
+		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
+		r.Post("/api/transcoding/ffmpeg/download", h.handleFFmpegDownload)
+		r.Post("/api/transcoding/ffmpeg/download/retry", h.handleFFmpegDownloadRetry)
+		r.Get("/api/transcoding/status", h.handleTranscodingStatus)
+		r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
+		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
+		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
+		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
 	})
 
 	return r
@@ -338,6 +352,11 @@ func (h *Handler) SetHealthManager(mgr HealthManager) {
 // SetStabilityProvider sets the stability data provider on the handler.
 func (h *Handler) SetStabilityProvider(p StabilityProvider) {
 	h.stabilityProvider = p
+}
+
+// SetDownloader sets the FFmpeg downloader on the handler.
+func (h *Handler) SetDownloader(d TranscodeDownloader) {
+	h.downloader = d
 }
 
 // --- Per-camera streaming protocols endpoint ---

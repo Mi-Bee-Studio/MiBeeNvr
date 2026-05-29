@@ -1,0 +1,435 @@
+# Docker Hardware Transcoding Guide
+
+## Overview
+
+Hardware passthrough is essential for optimal transcoding performance in Docker containers. MiBee NVR supports multiple hardware acceleration paths: V4L2 M2M for Raspberry Pi, VAAPI for Intel/AMD GPUs, and NVENC for NVIDIA GPUs. This guide explains how to configure Docker to expose hardware devices to the container for maximum transcoding efficiency.
+
+## Raspberry Pi V4L2 M2M
+
+V4L2 Memory-to-Memory (M2M) acceleration provides hardware-accelerated H.264/H.265 encoding on Raspberry Pi devices, significantly improving performance compared to software encoding.
+
+### Device Mapping
+
+Raspberry Pi cameras or USB capture cards typically appear as `/dev/video10`, `/dev/video11`, `/dev/video12` in the host system. Your device numbers may vary.
+
+#### Check Available Devices
+
+```bash
+# List video devices on the host
+ls -la /dev/video*
+
+# Check device capabilities
+v4l2-ctl -d /dev/video10 --list-formats-ext
+```
+
+#### Docker Compose Configuration
+
+Add device mapping to your `docker-compose.yml`:
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    
+    # Map video devices for hardware acceleration
+    devices:
+      - /dev/video10:/dev/video10
+      - /dev/video11:/dev/video11
+      - /dev/video12:/dev/video12
+    
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+### Verification
+
+Check if devices are accessible inside the container:
+
+```bash
+# Enter container shell (if available)
+docker exec -it mibee-nvr sh
+
+# List video devices inside container
+ls -la /dev/video*
+
+# Test V4L2 capabilities
+v4l2-ctl -d /dev/video10 --list-formats-ext
+```
+
+### Known Issues
+
+- **Kernel 6.6.63+**: There's a V4L2 M2M bug in newer kernels that may cause encoding failures. Consider downgrading to kernel 6.6.62 or earlier if you encounter issues.
+- **Device Permissions**: Ensure your user has access to video devices. Add yourself to the `video` group: `sudo usermod -a -G video $USER`
+- **Device Conflicts**: Avoid using the same video device for both Docker host and other applications simultaneously.
+
+## Intel/AMD VAAPI
+
+Video Acceleration API (VAAPI) provides hardware acceleration for Intel and AMD GPUs, enabling efficient H.264/H.265 transcoding.
+
+### Device Mapping
+
+VAAPI requires access to the entire `/dev/dri` device group which includes render and card devices.
+
+#### Check Available Devices
+
+```bash
+# List DRI devices
+ls -la /dev/dri/*
+
+# Check GPU capabilities
+ vainfo
+```
+
+#### Docker Compose Configuration
+
+Add DRI device mapping:
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    
+    # Map DRI devices for VAAPI acceleration
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri/card0:/dev/dri/card0
+    
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+      - LIBVA_DRIVER_NAME=i965  # For Intel GPUs
+      # - LIBVA_DRIVER_NAME=radeonsi  # For AMD GPUs
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+### Verification
+
+Test VAAPI functionality inside the container:
+
+```bash
+# Enter container
+docker exec -it mibee-nvr sh
+
+# Check VAAPI info
+vainfo
+```
+
+You should see output listing available VAAPI drivers and formats if hardware acceleration is working correctly.
+
+## NVIDIA
+
+NVIDIA GPUs provide NVENC hardware acceleration for H.264/H.265 encoding with excellent performance and quality.
+
+### Prerequisites
+
+Install the NVIDIA Container Toolkit:
+
+```bash
+# Add the NVIDIA Container Toolkit repository
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+
+# Install the toolkit
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Restart Docker
+sudo systemctl restart docker
+```
+
+#### Docker Compose Configuration
+
+Use NVIDIA runtime for GPU access:
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    
+    # Use NVIDIA runtime for GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+#### Alternative Device Mapping
+
+If you prefer device mapping over the deploy configuration:
+
+```yaml
+services:
+  mibee-nvr:
+    # ... other configuration ...
+    
+    runtime: nvidia
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia1:/dev/nvidia1
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+    
+    # ... rest of configuration ...
+```
+
+### Verification
+
+Check if the GPU is accessible:
+
+```bash
+# Check GPU access in container
+docker exec mibee-nvr nvidia-smi
+
+# Test NVENC capability
+docker exec mibee-nvr ffmpeg -encoders | grep nvenc
+```
+
+## Software-only Fallback
+
+When hardware acceleration is not available or desired, MiBee NVR falls back to software encoding using libx264/libx265.
+
+### Configuration
+
+No device mapping is required:
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+### Performance Expectations
+
+| Hardware | Encoding | Performance Notes |
+|----------|----------|------------------|
+| Raspberry Pi 3B | Software H.264 | ~1-2 FPS per stream, CPU intensive |
+| Raspberry Pi 4 | Software H.264 | ~3-5 FPS per stream, moderate CPU usage |
+| Intel NUC | Software H.264 | ~15-30 FPS per stream, moderate CPU usage |
+| Desktop CPU | Software H.264 | ~30-60 FPS per stream, CPU intensive |
+
+### When to Use Software vs Hardware
+
+**Use hardware acceleration when:**
+- You need higher frame rates (>5 FPS)
+- CPU resources are limited
+- You have many concurrent streams
+- Power efficiency is important
+
+**Use software encoding when:**
+- Hardware devices are not available
+- You need maximum compatibility
+- Quality settings need fine-tuning
+- Development/testing without special hardware
+
+## FFmpeg Inside Docker
+
+MiBee NVR downloads and uses static FFmpeg builds from johnvansickle for ARM64/ARMv7 architectures at runtime.
+
+### FFmpeg Download and Storage
+
+FFmpeg is downloaded to `{StorageConfig.RootDir}/tools/` inside the container:
+
+```bash
+# Default location inside container
+/data/tools/ffmpeg
+
+# Check available FFmpeg version
+docker exec mibee-nvr /data/tools/ffmpeg -version
+```
+
+### Persistent Storage Recommendation
+
+For better performance and to avoid re-downloading FFmpeg, mount a persistent volume:
+
+```yaml
+services:
+  mibee-nvr:
+    # ... other configuration ...
+    
+    volumes:
+      - ./data:/data
+      - ./tools:/data/tools  # Persistent FFmpeg storage
+    
+    environment:
+      - NVR_DATA_DIR=/data
+      - NVR_FFMPEG_PATH=/data/tools/ffmpeg  # Optional: specify custom FFmpeg path
+```
+
+### Custom FFmpeg Build
+
+If you need a custom FFmpeg build, place it in the tools directory:
+
+```bash
+# Download custom FFmpeg
+wget -O ./tools/ffmpeg https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+
+# Make executable
+chmod +x ./tools/ffmpeg
+```
+
+## Troubleshooting Checklist
+
+### Device Access Issues
+
+**Problem**: `Permission denied` when accessing devices
+```bash
+# Fix device permissions
+sudo usermod -a -G video $USER
+newgrp video
+
+# For Docker-specific permissions
+sudo chown -R 65534:65534 ./data
+```
+
+**Problem**: Device not found in container
+```bash
+# Check host devices
+ls -la /dev/video*
+
+# Verify device mapping
+docker exec mibee-nvr ls -la /dev/video*
+```
+
+### Performance Issues
+
+**Problem**: High CPU usage with software encoding
+- Add hardware acceleration if available
+- Reduce segment duration to 30s
+- Limit concurrent streams based on CPU cores
+
+**Problem**: Poor transcoding quality
+- Check encoder settings in configuration
+- Consider using appropriate bitrates for your resolution
+- Monitor hardware utilization
+
+### VAAPI Issues
+
+**Problem**: `vainfo` shows no drivers
+- Verify GPU is installed and working on host
+- Check LIBVA_DRIVER_NAME environment variable
+- Ensure correct DRI devices are mapped
+
+**Problem**: Black video output
+- Check GPU drivers are up to date
+- Verify render device permissions
+- Test with simple FFmpeg command first
+
+### NVIDIA Issues
+
+**Problem**: `nvidia-smi` not found in container
+- Install NVIDIA Container Toolkit
+- Verify Docker runtime is set to `nvidia`
+- Check GPU device mapping
+
+**Problem**: NVENC encoder not available
+- Verify GPU supports NVENC
+- Check NVIDIA drivers are up to date
+- Test with FFmpeg: `ffmpeg -encoders | grep nvenc`
+
+### General Docker Issues
+
+**Problem**: Container restarts continuously
+- Check Docker logs: `docker compose logs mibee-nvr`
+- Verify configuration syntax
+- Check disk space and permissions
+
+**Problem**: Health check fails
+- Test manual health check: `docker exec mibee-nvr mibee-nvr health`
+- Check if binary exists and is executable
+- Verify data directory permissions
+
+### Debug Commands
+
+```bash
+# View container logs
+docker compose logs -f mibee-nvr
+
+# Check resource usage
+docker stats mibee-nvr
+
+# Test health check
+docker exec mibee-nvr mibee-nvr health
+
+# Check FFmpeg availability
+docker exec mibee-nvr /data/tools/ffmpeg -version
+
+# List available encoders
+docker exec mibee-nvr /data/tools/ffmpeg -encoders | grep -E "(h264|h265|nvenc|vaapi|v4l2)"
+```
+
+## Additional Tips
+
+1. **Start Simple**: Begin with software-only configuration to verify basic functionality
+2. **Test Incrementally**: Add one hardware component at a time
+3. **Monitor Resources**: Use `docker stats` to monitor CPU, memory, and I/O
+4. **Update Regularly**: Keep Docker images and drivers up to date
+5. **Back Up Config**: Always backup your `docker-compose.yml` before major changes

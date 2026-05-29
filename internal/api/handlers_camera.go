@@ -16,6 +16,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -64,6 +65,17 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			for i := range cameras {
 				if t, ok := lastSeenMap[cameras[i].ID]; ok {
 					cameras[i].LastSeen = t
+				}
+			}
+		}
+	}
+	// Inject per-camera transcoding config from config (not stored in DB)
+	if h.config != nil {
+		for i := range cameras {
+			for _, cam := range h.config.Cameras {
+				if cam.ID == cameras[i].ID && cam.Transcoding != nil {
+					cameras[i].Transcoding = cam.Transcoding
+					break
 				}
 			}
 		}
@@ -267,6 +279,15 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
+	// Inject per-camera transcoding config
+	if h.config != nil {
+		for _, cam := range h.config.Cameras {
+			if cam.ID == id && cam.Transcoding != nil {
+				row.Transcoding = cam.Transcoding
+				break
+			}
+		}
+	}
 	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
 }
@@ -294,7 +315,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RetentionDays  *int    `json:"retention_days"`
 		ONVIFEndpoint  *string `json:"onvif_endpoint"`
 		ProfileToken   *string `json:"profile_token"`
-		StreamEncoding *string `json:"stream_encoding"`
+		StreamEncoding *string                          `json:"stream_encoding"`
+		Transcoding    *config.CameraTranscodingConfig  `json:"transcoding"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -309,6 +331,19 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	password := body.Password
 	if password != nil && *password == "" {
 		password = nil
+	}
+
+	// Validate transcoding config against hardware capabilities
+	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
+		ffmpegPath := ""
+		if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
+			ffmpegPath = h.config.Transcoding.FFmpegPath
+		}
+		caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
+		if caps.H265EncoderType == transcoding.EncoderSoftware {
+			writeError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
+			return
+		}
 	}
 
 	updates := camera.CameraUpdate{
@@ -328,6 +363,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
+		Transcoding:    body.Transcoding,
 	}
 
 	// Validate URL format if URL is being updated
@@ -375,6 +411,15 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
 		if err == nil {
 			row.LastSeen = lastSeen
+		}
+		// Inject per-camera transcoding config
+		if h.config != nil {
+			for _, cam := range h.config.Cameras {
+				if cam.ID == id && cam.Transcoding != nil {
+					row.Transcoding = cam.Transcoding
+					break
+				}
+			}
 		}
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusOK, row)

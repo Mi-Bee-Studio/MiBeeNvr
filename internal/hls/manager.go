@@ -453,21 +453,32 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 	}
 }
 
-// isFirstNalIDR checks if the first NAL unit in an access unit is an IDR frame.
+// isFirstNalIDR checks if any NAL unit in an access unit is an IDR frame.
+// Checks all NALUs (not just the first) because some recorders prepend
+// parameter sets (VPS/SPS/PPS) before the IDR slice, making au[0] a
+// non-IDR NALU. This is the standard format from Xiaomi and ONVIF cameras.
 // For H.264, NAL unit type 5 = IDR.
 // For H.265, NAL unit types 19 (IDR_W_RADL) and 20 (IDR_N_LP) = IDR.
 func isFirstNalIDR(au [][]byte, isH265 bool) bool {
-	if len(au) == 0 || len(au[0]) == 0 {
-		return false
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		if isH265 {
+			// HEVC: forbidden_zero_bit(1) | nal_unit_type(6) | nuh_layer_id(6) | nuh_temporal_id_plus1(3)
+			naluType := (nalu[0] >> 1) & 0x3F
+			if naluType == 19 || naluType == 20 {
+				return true
+			}
+		} else {
+			// H.264: forbidden_zero_bit(1) | nal_ref_idc(2) | nal_unit_type(5)
+			naluType := nalu[0] & 0x1F
+			if naluType == 5 {
+				return true
+			}
+		}
 	}
-	if isH265 {
-		// HEVC: forbidden_zero_bit(1) | nal_unit_type(6) | nuh_layer_id(6) | nuh_temporal_id_plus1(3)
-		naluType := (au[0][0] >> 1) & 0x3F
-		return naluType == 19 || naluType == 20
-	}
-	// H.264: first byte is NAL unit type
-	naluType := au[0][0] & 0x1F
-	return naluType == 5
+	return false
 }
 
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
@@ -614,6 +625,8 @@ func (m *Manager) GetStreamStatus(cameraID string) (active bool) {
 
 // Handle proxies an HTTP request to the HLS muxer for the given camera.
 // Returns false if the stream is not active.
+// Includes a 30s timeout to prevent indefinite blocking when the muxer
+// has no segments (e.g. stale Hub consumer after idle eviction).
 func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request) bool {
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
@@ -626,8 +639,25 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	entry.mu.Lock()
 	entry.lastUsed = time.Now()
 	entry.mu.Unlock()
-	entry.mux.Handle(w, r)
-	return true
+
+	// Guard against muxer blocking forever when no frames arrive.
+	// The muxer blocks on m3u8 requests until the first segment is ready.
+	// If no frames reach the muxer (e.g. Hub subscription failed), this
+	// timeout ensures the HTTP request eventually returns.
+	const handleTimeout = 30 * time.Second
+	done := make(chan struct{})
+	go func() {
+		entry.mux.Handle(w, r)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(handleTimeout):
+		hlsLogger.Warn("HLS Handle timed out, stream may have no frames", "camera_id", cameraID, "timeout", handleTimeout)
+		return true
+	}
 }
 
 // StopAll stops all active HLS streams.

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	Health        HealthConfig        `yaml:"health"`
+	Transcoding TranscodingConfig `yaml:"transcoding"`
 	Version       string              `yaml:"version"`
 }
 
@@ -60,6 +62,7 @@ type CameraConfig struct {
 	SampleInterval int          `yaml:"sample_interval"`
 	HLSMaxFPS      int          `yaml:"hls_max_fps"`
 	Merge          *MergeConfig `yaml:"merge"`
+	Transcoding   *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
 	AudioEnabled   bool         `yaml:"audio_enabled"`
 	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
 
@@ -91,6 +94,22 @@ type MergeConfig struct {
 	BatchLimit         int    `yaml:"batch_limit"`
 	MinSegmentAge      string `yaml:"min_segment_age"`
 	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
+}
+
+type TranscodingConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`                            // default false
+	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`           // auto-detected or user-specified
+	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`           // default 1, max 4
+	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"` // default false
+	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`          // auto-populated per platform
+	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`            // per-job timeout, default "30m", max 4h
+}
+
+ type CameraTranscodingConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`                        // default false
+	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"`    // h264, h265
+	Preset      string `yaml:"preset,omitempty" json:"preset"`                // ultrafast, faster, medium
+	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`              // e.g. "2M"
 }
 
 type AuthConfig struct {
@@ -422,6 +441,41 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
 		}
 	}
+	// Validate transcoding configuration
+	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {
+		return fmt.Errorf("transcoding.max_workers must be between 1 and 4, got %d", cfg.Transcoding.MaxWorkers)
+	}
+	if cfg.Transcoding.JobTimeout != "" {
+		jobTimeout, err := time.ParseDuration(cfg.Transcoding.JobTimeout)
+		if err != nil {
+			return fmt.Errorf("transcoding.job_timeout invalid duration: %w", err)
+		}
+		if jobTimeout < time.Second {
+			return fmt.Errorf("transcoding.job_timeout must be at least 1s, got %s", cfg.Transcoding.JobTimeout)
+		}
+		if jobTimeout > 4*time.Hour {
+			return fmt.Errorf("transcoding.job_timeout must be <= 4h, got %s", cfg.Transcoding.JobTimeout)
+		}
+	}
+	for _, cam := range cfg.Cameras {
+		if cam.Transcoding == nil {
+			continue
+		}
+		if cam.Transcoding.TargetCodec != "" && cam.Transcoding.TargetCodec != "h264" && cam.Transcoding.TargetCodec != "h265" {
+			return fmt.Errorf("cameras.%s.transcoding.target_codec must be h264 or h265, got %q", cam.ID, cam.Transcoding.TargetCodec)
+		}
+		validPresets := map[string]bool{"": true, "ultrafast": true, "faster": true, "medium": true}
+		if !validPresets[cam.Transcoding.Preset] {
+			return fmt.Errorf("cameras.%s.transcoding.preset must be ultrafast, faster, or medium, got %q", cam.ID, cam.Transcoding.Preset)
+		}
+
+		if cam.Transcoding.Bitrate != "" {
+			matched, err := regexp.MatchString(`^(0|\d+(\.\d+)?[kMG])$`, cam.Transcoding.Bitrate)
+			if err != nil || !matched {
+				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
+			}
+		}
+	}
 	// Validate hls.segment_count
 	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
 		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)
@@ -637,6 +691,13 @@ func (cfg *Config) applyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
+	// Transcoding defaults
+	if cfg.Transcoding.MaxWorkers == 0 {
+		cfg.Transcoding.MaxWorkers = 1
+	}
+	if cfg.Transcoding.JobTimeout == "" {
+		cfg.Transcoding.JobTimeout = "30m"
+	}
 	// RTMP defaults
 	if cfg.RTMP.Enabled == nil {
 		cfg.RTMP.Enabled = new(bool)
@@ -748,6 +809,31 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	return result
+}
+
+// ResolveTranscodingConfig returns the effective transcoding config for a camera.
+// If per-camera config is nil, the global enabled state is used.
+// If per-camera config is set, its fields override the global enabled state.
+func (c *Config) ResolveTranscodingConfig(cameraID string) *CameraTranscodingConfig {
+	result := &CameraTranscodingConfig{
+		Enabled: c.Transcoding.Enabled,
+	}
+	for i := range c.Cameras {
+		cam := &c.Cameras[i]
+		if cam.ID == cameraID && cam.Transcoding != nil {
+			result.Enabled = cam.Transcoding.Enabled
+			if cam.Transcoding.TargetCodec != "" {
+				result.TargetCodec = cam.Transcoding.TargetCodec
+			}
+			if cam.Transcoding.Preset != "" {
+				result.Preset = cam.Transcoding.Preset
+			}
+			if cam.Transcoding.Bitrate != "" {
+				result.Bitrate = cam.Transcoding.Bitrate
+			}
+		}
 	}
 	return result
 }

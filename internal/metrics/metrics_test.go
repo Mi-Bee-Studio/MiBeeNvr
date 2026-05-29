@@ -199,3 +199,104 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	require.True(t, names["nvr_flv_frames_dropped_total"])
 	require.True(t, names["nvr_flv_gop_cache_hits_total"])
 }
+
+func TestTranscodingMetrics_Registration(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	require.NotNil(t, m.TranscodingJobsTotal)
+	require.NotNil(t, m.TranscodingActiveJobs)
+	require.NotNil(t, m.TranscodingDurationSeconds)
+	require.NotNil(t, m.TranscodingBytesProcessed)
+	require.NotNil(t, m.TranscodingFFmpegStatus)
+}
+
+func TestTranscodingMetrics_CounterIncrement(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Inc()
+	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Add(4)
+	m.TranscodingJobsTotal.WithLabelValues("hevc", "h264", "failed").Inc()
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_transcoding_jobs_total" {
+			require.Len(t, f.GetMetric(), 2)
+			return
+		}
+	}
+	t.Fatal("expected nvr_transcoding_jobs_total metric family")
+}
+
+func TestTranscodingMetrics_GaugeUpdate(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.TranscodingActiveJobs.Set(3)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_transcoding_active_jobs" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(3), f.GetMetric()[0].GetGauge().GetValue())
+			return
+		}
+	}
+	t.Fatal("expected nvr_transcoding_active_jobs metric family")
+}
+
+func TestTranscodingMetrics_HistogramObserve(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.TranscodingDurationSeconds.WithLabelValues("h264", "hevc").Observe(42.5)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_transcoding_duration_seconds" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, uint64(1), f.GetMetric()[0].GetHistogram().GetSampleCount())
+			return
+		}
+	}
+	t.Fatal("expected nvr_transcoding_duration_seconds metric family")
+}
+
+func TestTranscodingMetrics_BytesCounter(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.TranscodingBytesProcessed.Add(1048576)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_transcoding_bytes_processed" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1048576), f.GetMetric()[0].GetCounter().GetValue())
+			return
+		}
+	}
+	t.Fatal("expected nvr_transcoding_bytes_processed metric family")
+}
+
+func TestTranscodingMetrics_FFmpegStatus(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+
+	// status 0 = not_installed, 1 = downloading, 2 = available
+	m.TranscodingFFmpegStatus.Set(0)
+	m.TranscodingFFmpegStatus.Set(1)
+	m.TranscodingFFmpegStatus.Set(2)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() == "nvr_transcoding_ffmpeg_status" {
+			// gauge always overwrites, so only 1 value (the last set)
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(2), f.GetMetric()[0].GetGauge().GetValue())
+			return
+		}
+	}
+	t.Fatal("expected nvr_transcoding_ffmpeg_status metric family")
+}

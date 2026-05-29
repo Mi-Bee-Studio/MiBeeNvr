@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
+  import { captureFrame } from '$lib/freeze-frame';
   import type { StreamState } from '$lib/hls-errors';
 
   let {
@@ -27,6 +28,30 @@
   let zombieInterval: ReturnType<typeof setInterval> | null = null;
   let lastPlaybackTime = 0;
   let zombieCount = 0;
+let destroyed = false;
+
+  // Freeze frame — prevents black flash during reconnection
+  let frozenFrameUrl: string | null = $state(null);
+  let showFrozenFrame = $state(false);
+  let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function captureFreezeFrame() {
+    if (frozenFrameUrl) return;
+    const frame = captureFrame(videoEl ?? null);
+    if (frame) {
+      frozenFrameUrl = frame;
+      showFrozenFrame = true;
+    }
+  }
+
+  function clearFreezeFrame() {
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    showFrozenFrame = false;
+    freezeClearTimer = setTimeout(() => {
+      frozenFrameUrl = null;
+      freezeClearTimer = null;
+    }, 350);
+  }
 
   function dispatchStateChange(state: StreamState | 'loading') {
     const event = new CustomEvent('statechange', {
@@ -47,6 +72,7 @@
 
   function scheduleReconnect() {
     if (reconnectAttempts >= maxReconnectAttempts) return;
+    captureFreezeFrame();
     reconnectAttempts++;
     const delay = getBackoffDelay();
     reconnectTimer = setTimeout(() => {
@@ -65,6 +91,12 @@
       clearInterval(zombieInterval);
       zombieInterval = null;
     }
+    if (videoEl) {
+      if (boundOnPlaying) { videoEl.removeEventListener('playing', boundOnPlaying); }
+      if (boundOnWaiting) { videoEl.removeEventListener('waiting', boundOnWaiting); }
+    }
+    boundOnPlaying = null;
+    boundOnWaiting = null;
     if (mpegtsPlayer) {
       try {
         mpegtsPlayer.pause();
@@ -86,10 +118,11 @@
 
       if (videoEl.readyState === 0) {
         zombieCount++;
-        if (zombieCount >= 4) {
+      if (zombieCount >= 4) {
           console.warn(`FLV zombie detected for ${cameraId}, reconnecting`);
           zombieCount = 0;
           reconnectAttempts = 0;
+          captureFreezeFrame();
           destroyPlayer();
           initFlv();
           return;
@@ -103,6 +136,7 @@
           console.warn(`FLV zombie (no progress) for ${cameraId}, reconnecting`);
           zombieCount = 0;
           reconnectAttempts = 0;
+          captureFreezeFrame();
           destroyPlayer();
           initFlv();
           return;
@@ -113,11 +147,13 @@
 
   async function initFlv() {
     if (!videoEl) return;
+    if (destroyed) return;
 
     streamState = 'loading';
 
     try {
       const mpegts = await import('mpegts.js');
+      if (destroyed) return;
 
       if (!mpegts.default.isSupported()) {
         console.warn('mpegts.js not supported');
@@ -182,22 +218,25 @@
       player.on(mpegts.default.Events.STATISTICS_INFO, () => {
         // Detect playing state from video element
         if (videoEl && videoEl.readyState >= 2) {
+          if (frozenFrameUrl) clearFreezeFrame();
           streamState = 'playing';
           startZombieDetector();
         }
       });
 
       // Fallback: detect playing via video events
-      const onPlaying = () => {
+      boundOnPlaying = () => {
+        if (frozenFrameUrl) clearFreezeFrame();
         streamState = 'playing';
         startZombieDetector();
       };
-      const onWaiting = () => {
+      boundOnWaiting = () => {
+        if (streamState === 'playing') captureFreezeFrame();
         if (streamState !== 'error') streamState = 'buffering';
       };
 
-      videoEl.addEventListener('playing', onPlaying);
-      videoEl.addEventListener('waiting', onWaiting);
+      videoEl.addEventListener('playing', boundOnPlaying);
+      videoEl.addEventListener('waiting', boundOnWaiting);
     } catch (e) {
       console.warn('FLV init failed:', e);
       streamState = 'error';
@@ -207,6 +246,7 @@
 
   function handleReconnect() {
     reconnectAttempts = 0;
+    captureFreezeFrame();
     destroyPlayer();
     initFlv();
   }
@@ -236,6 +276,7 @@
       } else if (wasHidden) {
         wasHidden = false;
         reconnectAttempts = 0;
+        captureFreezeFrame();
         destroyPlayer();
         initFlv();
       }
@@ -248,6 +289,9 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    frozenFrameUrl = null;
     destroyPlayer();
   });
 
@@ -286,6 +330,16 @@
 
 <!-- svelte-ignore binding_property_non_reactive -->
 <div class="relative w-full h-full bg-black overflow-hidden group">
+  <!-- Freeze frame — last good frame shown during reconnection -->
+  {#if frozenFrameUrl}
+    <img
+      src={frozenFrameUrl}
+      alt=""
+      class="absolute inset-0 w-full h-full object-contain transition-opacity duration-300 {showFrozenFrame ? 'opacity-100' : 'opacity-0 pointer-events-none'}"
+      aria-hidden="true"
+    />
+  {/if}
+
   <video
     bind:this={videoEl}
     class="w-full h-full object-contain"

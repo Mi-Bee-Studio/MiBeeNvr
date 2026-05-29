@@ -1,4 +1,5 @@
-BUILD_TARGET ?= mibee-nvr
+BUILD_DIR  ?= build
+BUILD_TARGET ?= $(BUILD_DIR)/mibee-nvr
 
 RPi_HOST ?= user@your-rpi-host
 RPi_BIN  := /mnt/data/nvr/bin/mibee-nvr
@@ -16,6 +17,7 @@ frontend:
 	cp -r web/dist/* internal/ui/static/
 
 build: frontend
+	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BUILD_TARGET) ./cmd/mibee-nvr/
 
 
@@ -24,22 +26,22 @@ test:
 	go test ./... -v
 
 cross: frontend
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/mibee-nvr-arm64 ./cmd/mibee-nvr/
 
 
 cross-armv7: frontend
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o mibee-nvr-armv7 ./cmd/mibee-nvr/
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o $(BUILD_DIR)/mibee-nvr-armv7 ./cmd/mibee-nvr/
 
 lint:
 	go vet ./...
 
 clean:
-	rm -f mibee-nvr mibee-nvr-arm64 mibee-nvr-armv7
-	rm -rf web/dist .build-tmp
-
+	rm -rf $(BUILD_DIR) web/dist .build-tmp
 install: build
 	mkdir -p /mnt/data/nvr/bin
-	cp mibee-nvr /mnt/data/nvr/bin/
+	cp $(BUILD_TARGET) /mnt/data/nvr/bin/
 
 install-service: install
 	cp deploy/mibee-nvr.service /etc/systemd/system/
@@ -62,7 +64,7 @@ docker-build:
 # Uses scratch base image — Go binary is statically linked, no runtime deps
 docker-build-arm64: cross
 	@mkdir -p .build-tmp
-	cp mibee-nvr-arm64 .build-tmp/mibee-nvr
+	cp $(BUILD_DIR)/mibee-nvr-arm64 .build-tmp/mibee-nvr
 	$(CONTAINER_RUNTIME) build --platform linux/arm64 -f Dockerfile.arm64 \
 		-t $(DOCKER_REGISTRY):$(VERSION)-arm64 .
 	@rm -rf .build-tmp
@@ -88,7 +90,7 @@ deploy: cross
 	@echo "=== Deploying to $(RPi_HOST) ==="
 	ssh $(RPi_HOST) "sudo systemctl stop $(RPi_SRV) || true"
 	ssh $(RPi_HOST) "cp $(RPi_BIN) $(RPi_BIN).bak || true"
-	scp mibee-nvr-arm64 $(RPi_HOST):/tmp/mibee-nvr-new
+	scp $(BUILD_DIR)/mibee-nvr-arm64 $(RPi_HOST):/tmp/mibee-nvr-new
 	ssh $(RPi_HOST) "mv /tmp/mibee-nvr-new $(RPi_BIN) && chmod +x $(RPi_BIN)"
 	ssh $(RPi_HOST) "sudo systemctl start $(RPi_SRV)"
 	@echo "=== Deploy complete. Checking... ==="

@@ -16,7 +16,8 @@
 - [ONVIF API](#onvif-api)
 - [Xiaomi API](#xiaomi-api)
 - [Merge API](#merge-api)
-- [Features API](#features-api)
+- [Transcoding API](#transcoding-api)
+
 - [Error Responses](#error-responses)
 - [HTTP Status Codes](#http-status-codes)
 - [Quick Start](#quick-start)
@@ -1631,3 +1632,60 @@ curl -u admin:password \
 curl -u admin:password \
   "http://localhost:9090/api/xiaomi/devices"
 ```
+
+# Transcoding API
+
+## Self-Check
+
+**Endpoint:** `GET /api/transcoding/check`
+
+Performs a self-check of system transcoding capabilities including hardware validation, FFmpeg availability, and performance estimation.
+
+**Request:**
+
+```bash
+curl -u admin:password \
+  "http://localhost:9090/api/transcoding/check"
+```
+
+**Response:**
+
+```json
+{
+  "supported": true,
+  "ffmpeg_status": "available",
+  "encoders": {
+    "h264": "libx264",
+    "h265": "libx265"
+  },
+  "warnings": [],
+  "max_concurrent": 2,
+  "estimated_fps": 3.5,
+  "total_cores": 4,
+  "total_memory_mb": 1024,
+  "h264_encoder_type": "software",
+  "h265_encoder_type": "software",
+  "devices": [
+    {
+      "type": "cpu",
+      "name": "ARMv7 Processor rev 5 (v7l)"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `supported` | boolean | Whether transcoding is supported |
+| `ffmpeg_status` | string | FFmpeg status: "available", "downloading", "not_installed", "failed" |
+| `encoders` | object | Available encoder libraries (h264, h265) |
+| `warnings` | array[] | Human-readable warnings about limitations |
+| `max_concurrent` | integer | Estimated maximum concurrent transcoding streams |
+| `estimated_fps` | float | Estimated transcoding FPS on this hardware |
+| `total_cores` | integer | Total CPU cores available |
+| `total_memory_mb` | integer | Total system memory in MB |
+| `h264_encoder_type` | string | "software", "hardware", or "unknown" |
+| `h265_encoder_type` | string | "software", "hardware", or "unknown" |
+| `devices` | array[] | Hardware device information |

@@ -28,6 +28,11 @@ type Metrics struct {
 	FLVGOPCacheHits         *prometheus.CounterVec // labels: camera_id
 	XiaomiDisconnects       *prometheus.CounterVec // labels: camera_id, reason
 	XiaomiReconnects        *prometheus.CounterVec // labels: camera_id
+	TranscodingJobsTotal       *prometheus.CounterVec   // labels: codec_from, codec_to, status
+	TranscodingActiveJobs      prometheus.Gauge
+	TranscodingDurationSeconds *prometheus.HistogramVec // labels: codec_from, codec_to
+	TranscodingBytesProcessed  prometheus.Counter
+	TranscodingFFmpegStatus    prometheus.Gauge
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -130,6 +135,32 @@ func NewMetrics() *Metrics {
 		Name: "nvr_xiaomi_reconnects_total",
 		Help: "Total Xiaomi camera reconnects, partitioned by camera.",
 	}, []string{"camera_id"})
+
+	transcodingJobsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_transcoding_jobs_total",
+		Help: "Total number of transcoding jobs by codec conversion and status",
+	}, []string{"codec_from", "codec_to", "status"})
+
+	transcodingActiveJobs := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_transcoding_active_jobs",
+		Help: "Number of currently active transcoding jobs",
+	})
+
+	transcodingDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_transcoding_duration_seconds",
+		Help:    "Duration of transcoding jobs in seconds",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"codec_from", "codec_to"})
+
+	transcodingBytesProcessed := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_transcoding_bytes_processed",
+		Help: "Total bytes processed by transcoding jobs",
+	})
+
+	transcodingFFmpegStatus := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_transcoding_ffmpeg_status",
+		Help: "FFmpeg status: 0=not_installed, 1=downloading, 2=available",
+	})
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -150,6 +181,11 @@ func NewMetrics() *Metrics {
 		flvGOPCacheHits,
 		xiaomiDisconnects,
 		xiaomiReconnects,
+		transcodingJobsTotal,
+		transcodingActiveJobs,
+		transcodingDurationSeconds,
+		transcodingBytesProcessed,
+		transcodingFFmpegStatus,
 	)
 
 	return &Metrics{
@@ -172,6 +208,12 @@ func NewMetrics() *Metrics {
 		FLVFramesDropped:    flvFramesDropped,
 		FLVGOPCacheHits:     flvGOPCacheHits,
 		XiaomiDisconnects:       xiaomiDisconnects,
-		XiaomiReconnects:        xiaomiReconnects,
-	}
+		XiaomiReconnects:           xiaomiReconnects,
+		TranscodingJobsTotal:       transcodingJobsTotal,
+		TranscodingActiveJobs:      transcodingActiveJobs,
+		TranscodingDurationSeconds: transcodingDurationSeconds,
+		TranscodingBytesProcessed:  transcodingBytesProcessed,
+		TranscodingFFmpegStatus:    transcodingFFmpegStatus,
+}
+
 }

@@ -26,6 +26,7 @@ type CleanupManager struct {
 	metrics         *metrics.Metrics
 	healthEnabled   bool
 	healthRetention time.Duration
+	transcodeOrphanFn func(ctx context.Context) error
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -57,6 +58,12 @@ func (cm *CleanupManager) SetHealthConfig(enabled bool, retention time.Duration)
 	cm.healthEnabled = enabled
 	cm.healthRetention = retention
 }
+
+// SetTranscodeOrphanCleanup registers a function to clean up orphaned transcoded files.
+// The function is called once per cleanup cycle (typically daily).
+func (cm *CleanupManager) SetTranscodeOrphanCleanup(fn func(ctx context.Context) error) {
+	cm.transcodeOrphanFn = fn
+}
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
@@ -85,6 +92,11 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 		logger.Error("disk-threshold cleanup error", "error", err)
 	}
 	cm.healthRetentionCleanup(ctx)
+	if cm.transcodeOrphanFn != nil {
+		if err := cm.transcodeOrphanFn(ctx); err != nil {
+			logger.Error("transcode orphan cleanup error", "error", err)
+		}
+	}
 	return nil
 }
 
