@@ -7,11 +7,14 @@
     loadRecordingVideoBlob,
     listRecordings
   } from '$lib/api';
+  import { getTranscodingStatus, enqueueTranscodeTask } from '$lib/api/transcoding';
+  import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { Recording } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
+  import { showToast } from '$lib/toast';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
@@ -27,6 +30,10 @@
   let nextRecordingId = $state<string | null>(null);
   let nextBlobUrl = $state<string | null>(null);
   let isTransitioning = $state(false);
+  // Transcoding state
+  let transcodingStatus = $state<ManagerStatus | null>(null);
+  let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
+  let transcodeTask = $derived(findTranscodeTask());
 
   async function loadRecording() {
     loading = true;
@@ -125,6 +132,51 @@
     finally { isDownloading = false; downloadProgress = 0; }
   }
 
+  // --- Transcoding ---
+  async function loadTranscodingStatus() {
+    try {
+      transcodingStatus = await getTranscodingStatus();
+    } catch (e) {
+      // Silently fail — not critical
+    }
+  }
+
+  function startTranscodingPoll() {
+    stopTranscodingPoll();
+    loadTranscodingStatus();
+    transcodingPollInterval = setInterval(loadTranscodingStatus, 5000);
+  }
+
+  function stopTranscodingPoll() {
+    if (transcodingPollInterval) {
+      clearInterval(transcodingPollInterval);
+      transcodingPollInterval = null;
+    }
+  }
+
+  function findTranscodeTask(): TranscodeTask | undefined {
+    if (!transcodingStatus?.recent_results) return undefined;
+    return transcodingStatus.recent_results.find(
+      (t) => t.recording_id === currentId
+    );
+  }
+
+  async function handleTranscode() {
+    if (!recording) return;
+    const targetCodec = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
+    try {
+      await enqueueTranscodeTask({
+        camera_id: recording.camera_id,
+        recording_id: recording.id,
+        target_codec: targetCodec,
+        replace_original: false,
+      });
+      showToast(t('transcoding.recordings.transcodeSuccess', { camera: recording.camera_id }), 'success');
+      loadTranscodingStatus();
+    } catch (e) {
+      showToast(t('transcoding.recordings.transcodeFailed'), 'error');
+    }
+  }
   function handleKeydown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -162,8 +214,12 @@
     currentId = recordingId;
     if (!currentId) { error = t('detail.recordingIdRequired'); loading = false; return; }
     loadRecording();
+    startTranscodingPoll();
     window.addEventListener('keydown', handleKeydown);
-    return () => { window.removeEventListener('keydown', handleKeydown); };
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+      stopTranscodingPoll();
+    };
   });
 </script>
 <div class="min-h-screen th-bg-primary pt-[68px]">
@@ -285,6 +341,12 @@
                   {t('detail.download')}
                 </button>
               {/if}
+              {#if transcodingStatus?.enabled && !transcodeTask}
+                <button onclick={handleTranscode} class="btn btn-secondary" title={t('transcoding.recordings.transcodeBtn')}>
+                  <RefreshCw size={16} />
+                  {t('transcoding.recordings.transcodeBtn')}
+                </button>
+              {/if}
             </div>
             <div class="flex gap-3 ml-auto">
               <button
@@ -295,6 +357,39 @@
               </button>
             </div>
           </div>
+
+          {#if transcodingStatus?.enabled && transcodeTask}
+            <div class="mt-3 border-t th-border pt-4">
+              {#if transcodeTask.status === 'running' || transcodeTask.status === 'pending'}
+                <div class="flex items-center gap-3">
+                  <span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse text-xs">{t('transcoding.running')}</span>
+                  <span class="text-xs th-text-secondary">
+                    {t('transcoding.recordings.transcodingProgress', { percent: String(transcodeTask.progress ?? 0) })}
+                  </span>
+                  <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
+                    <div
+                      class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
+                      style="width: {Math.max(transcodeTask.progress ?? 0, 2)}%"
+                    ></div>
+                  </div>
+                </div>
+              {:else if transcodeTask.status === 'completed'}
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-success text-xs">{t('transcoding.completed')}</span>
+                  <span class="text-xs th-text-secondary">{t('transcoding.queue.codecConversion', { input: transcodeTask.input_format?.toUpperCase() || '?', output: transcodeTask.output_format?.toUpperCase() || '?' })}</span>
+                </div>
+              {:else if transcodeTask.status === 'failed'}
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-danger text-xs">{t('transcoding.failed')}</span>
+                  <span class="text-xs th-text-secondary">{transcodeTask.error || ''}</span>
+                </div>
+              {:else}
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-neutral text-xs">{t('transcoding.pending')}</span>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
       </div>
     {/if}

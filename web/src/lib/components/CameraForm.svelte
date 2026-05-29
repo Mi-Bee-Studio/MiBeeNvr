@@ -11,6 +11,7 @@
   } from '$lib/api';
   import type {
     Camera,
+    CameraTranscodingConfig,
     CreateCameraRequest,
     UpdateCameraRequest,
     MergeConfig,
@@ -29,6 +30,8 @@
     xiaomiDeviceList?: XiaomiDevice[];
     onsave: () => void;
     oncancel: () => void;
+    globalTranscodingEnabled?: boolean;
+    h265Available?: boolean;
   }
 
   let {
@@ -36,6 +39,8 @@
     protocols,
     protocolsMap,
     xiaomiDeviceList = [],
+    globalTranscodingEnabled = false,
+    h265Available = true,
     onsave,
     oncancel,
   }: Props = $props();
@@ -57,6 +62,11 @@
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
+  // Transcoding config
+  let formTranscodingEnabled = $state(false);
+  let formTranscodingCodec = $state('h264');
+  let formTranscodingPreset = $state('ultrafast');
+  let formTranscodingBitrate = $state('2M');
   let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -113,6 +123,10 @@
     formSerialNumber = '';
     formRetentionDays = 0;
     formStreamEncoding = '';
+    formTranscodingEnabled = false;
+    formTranscodingCodec = 'h264';
+    formTranscodingPreset = 'ultrafast';
+    formTranscodingBitrate = '2M';
     validationErrors = {};
   }
 
@@ -137,6 +151,10 @@
     formSerialNumber = camera.serial_number || '';
     formRetentionDays = camera.retention_days || 0;
     formStreamEncoding = camera.stream_encoding || '';
+    formTranscodingEnabled = camera.transcoding?.enabled ?? false;
+    formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
+    formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
+    formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
     validationErrors = {};
   }
 
@@ -205,7 +223,13 @@
           serial_number: formSerialNumber || undefined,
           retention_days: formRetentionDays,
           stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-          encoding: formEncoding
+          encoding: formEncoding,
+          transcoding: {
+            enabled: formTranscodingEnabled,
+            target_codec: formTranscodingCodec,
+            preset: formTranscodingPreset,
+            bitrate: formTranscodingBitrate,
+          },
         };
         if (formUsername && formUsername !== editingCamera.username) {
           data.username = formUsername;
@@ -237,7 +261,13 @@
           model: formModel || undefined,
           serial_number: formSerialNumber || undefined,
           stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-          encoding: formEncoding
+          encoding: formEncoding,
+          transcoding: {
+            enabled: formTranscodingEnabled,
+            target_codec: formTranscodingCodec,
+            preset: formTranscodingPreset,
+            bitrate: formTranscodingBitrate,
+          },
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -444,6 +474,80 @@
       onchange={(config) => mergeConfig = config}
       ondelete={() => mergeConfig = null}
     />
+  {/if}
+
+  <!-- Transcoding Config (edit mode only, when global enabled) -->
+  {#if editingCamera}
+    {#if globalTranscodingEnabled}
+      <details class="mt-6 border th-border rounded-lg" open={formTranscodingEnabled ? true : undefined}>
+        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+          {t('transcoding.per_camera_config')}
+          {#if formTranscodingEnabled}
+            <span class="text-xs th-text-muted ml-2">{t('transcoding.enabled')}</span>
+          {:else}
+            <span class="text-xs th-text-muted ml-2">{t('merge.usingDefault')}</span>
+          {/if}
+        </summary>
+
+        <div class="px-4 pb-4 pt-2">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Enabled toggle -->
+            <div class="md:col-span-2 flex items-center gap-2">
+              <input
+                id="transcode-enabled"
+                type="checkbox"
+                class="accent-[var(--color-accent)]"
+                bind:checked={formTranscodingEnabled}
+              />
+              <label for="transcode-enabled" class="th-text-secondary text-sm">{t('transcoding.enabled')}</label>
+            </div>
+
+            {#if formTranscodingEnabled}
+              <!-- Target Codec -->
+              <div>
+                <label for="transcode-codec" class="input-label">{t('transcoding.target_codec')}</label>
+                <select id="transcode-codec" class="input" bind:value={formTranscodingCodec}>
+                  <option value="h264">{t('transcoding.codec_h264')}</option>
+                  <option value="h265" disabled={!h265Available}>{t('transcoding.codec_h265')}{!h265Available ? ` (${t('transcoding.unavailable')})` : ''}</option>
+                </select>
+                {#if !h265Available}
+                  <p class="mt-1 text-xs text-[var(--color-danger)]">{t('transcoding.h265_not_available')}</p>
+                {:else if formTranscodingCodec === 'h265'}
+                  <p class="mt-1 text-xs text-[var(--color-warning)]">{t('transcoding.warning_h265_slow')}</p>
+                {/if}
+              </div>
+
+              <!-- Preset -->
+              <div>
+                <label for="transcode-preset" class="input-label">{t('transcoding.preset')}</label>
+                <select id="transcode-preset" class="input" bind:value={formTranscodingPreset}>
+                  <option value="ultrafast">{t('transcoding.preset_ultrafast')}</option>
+                  <option value="faster">{t('transcoding.preset_faster')}</option>
+                  <option value="medium">{t('transcoding.preset_medium')}</option>
+                </select>
+              </div>
+
+              <!-- Bitrate -->
+              <div>
+                <label for="transcode-bitrate" class="input-label">{t('transcoding.bitrate')}</label>
+                <input
+                  id="transcode-bitrate"
+                  type="text"
+                  class="input"
+                  bind:value={formTranscodingBitrate}
+                  placeholder="2M"
+                />
+              </div>
+            {/if}
+          </div>
+        </div>
+      </details>
+    {:else}
+      <div class="mt-6 p-3 rounded-md th-bg-hover border th-border text-sm th-text-muted flex items-center gap-2">
+        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        {t('transcoding.warning_global_disabled')}
+      </div>
+    {/if}
   {/if}
 
   <div class="flex items-center gap-3 mt-6">

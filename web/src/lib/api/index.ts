@@ -61,6 +61,7 @@ export {
   DEFAULT_PROTOCOLS,
 } from './cameras';
 export type {
+  CameraTranscodingConfig,
   Camera,
   CreateCameraRequest,
   UpdateCameraRequest,
@@ -177,3 +178,27 @@ export type {
   StabilityMetrics,
   StabilityDataResponse,
 } from './health';
+
+// Transcoding — hardware check, FFmpeg, task management
+export {
+  getTranscodingCheck,
+  getFFmpegStatus,
+  downloadFFmpeg,
+  retryDownload,
+  getTranscodingStatus,
+  getTranscodingTasks,
+  enqueueTranscodeTask,
+  cancelTranscodeTask,
+  getTranscodingCameras,
+  getTranscodingSettings,
+  updateTranscodingSettings,
+} from './transcoding';
+
+export type {
+  HardwareCapabilities,
+  SelfCheckResult,
+  DownloadStatus,
+  TranscodeTask,
+  ManagerStatus,
+  TranscodingSettings,
+} from './transcoding';

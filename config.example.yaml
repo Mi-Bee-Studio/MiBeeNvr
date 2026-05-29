@@ -113,3 +113,23 @@ observability:
   log_level: "info"                # Log level: debug, info, warn, error (default: info)
   log_format: "text"               # Log format: json or text (default: text)
   # enable_pprof: false            # Enable pprof debug endpoints (default: false)
+
+# Transcoding — optional video transcoding via FFmpeg
+# Used to reduce bitrate, change codec format, or adjust quality
+# Requires ffmpeg to be installed on the system
+# transcoding:
+#   enabled: false              # Enable transcoding (default: false)
+#   ffmpeg_path: ""              # Path to ffmpeg binary (empty = auto-detect)
+#   max_workers: 1               # Max concurrent transcoding jobs (range: 1-4, default: 1)
+#   replace_original: false      # Replace original recordings with transcoded versions
+#   download_url: ""             # Auto-populated FFmpeg download URL per platform
+#
+# Per-camera transcoding overrides:
+#   cameras:
+#     - id: "front-door"
+#       ...
+#       transcoding:
+#         enabled: true           # Override global enabled for this camera
+#         target_codec: "h264"    # Target codec: h264, h265 (default: same as source)
+#         preset: "ultrafast"     # FFmpeg preset: ultrafast, faster, medium (default: ultrafast)
+#         bitrate: "2M"           # Target bitrate (e.g. "1M", "2M", "500K")

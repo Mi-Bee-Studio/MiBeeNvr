@@ -503,6 +503,60 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":          h.config.Transcoding.Enabled,
+		"max_workers":       h.config.Transcoding.MaxWorkers,
+		"replace_original": h.config.Transcoding.ReplaceOriginal,
+	})
+}
+
+func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	var body struct {
+		Enabled         *bool `json:"enabled"`
+		MaxWorkers      *int  `json:"max_workers"`
+		ReplaceOriginal *bool `json:"replace_original"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.MaxWorkers != nil {
+		if *body.MaxWorkers < 1 || *body.MaxWorkers > 4 {
+			writeError(w, http.StatusBadRequest, "max_workers must be between 1 and 4")
+			return
+		}
+		h.config.Transcoding.MaxWorkers = *body.MaxWorkers
+	}
+
+	if body.Enabled != nil {
+		h.config.Transcoding.Enabled = *body.Enabled
+	}
+
+	if body.ReplaceOriginal != nil {
+		h.config.Transcoding.ReplaceOriginal = *body.ReplaceOriginal
+	}
+
+	// Persist config to disk
+	if err := config.Save(h.configPath, h.config); err != nil {
+		logger.Warn("failed to save config", "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		writeError(w, http.StatusInternalServerError, "database not available")

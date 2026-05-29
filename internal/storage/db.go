@@ -224,6 +224,35 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_created_at ON camera_health_events(created_at)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='10' WHERE key='schema_version'")
 
+	// Migration v10 → v11: transcoding_tasks table
+	transcodeSQL := `CREATE TABLE IF NOT EXISTS transcoding_tasks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		camera_id TEXT NOT NULL,
+		recording_id TEXT NOT NULL,
+		input_path TEXT NOT NULL,
+		input_format TEXT NOT NULL,
+		output_path TEXT NOT NULL,
+		output_format TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		progress REAL NOT NULL DEFAULT 0.0,
+		error TEXT,
+		created_at DATETIME NOT NULL,
+		started_at DATETIME,
+		completed_at DATETIME,
+		original_deleted BOOLEAN NOT NULL DEFAULT 0
+	);`
+	if _, err := d.db.ExecContext(ctx, transcodeSQL); err != nil { return err }
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_tasks(status)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_created ON transcoding_tasks(created_at)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='11' WHERE key='schema_version'")
+
+	// Migration v11 → v12: transcoding_tasks indexes
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_camera ON transcoding_tasks(camera_id)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_recording ON transcoding_tasks(recording_id)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_status_created ON transcoding_tasks(status, created_at)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_camera_status ON transcoding_tasks(camera_id, status)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='12' WHERE key='schema_version'")
+
 	// Migration: add encoding column if missing
 	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
 	// Migration: normalize legacy protocol values + populate encoding

@@ -18,10 +18,13 @@ import (
 // subscribeHLS registers an HLS consumer on the recorder's StreamHub.
 // It uses Hub.Subscribe with consumer ID "hls" so that the HLS manager
 // receives frames via the fan-out architecture.
+// It first unsubscribes any stale "hls" consumer left over from a previous
+// session (e.g. after idle eviction), then subscribes with the new callback.
 func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr *hls.Manager, isH265 bool) error {
 	if hub == nil {
 		return nil // no hub, no subscription (shouldn't happen in practice)
 	}
+	hub.Unsubscribe("hls") // clean up stale consumer from previous session
 	return hlsMgr.SubscribeToHub(cameraID, hub, isH265)
 }
 

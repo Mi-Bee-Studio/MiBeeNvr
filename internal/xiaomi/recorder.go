@@ -201,6 +201,7 @@ func (r *XiaomiRecorder) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
 	if r.Hub == nil {
 		r.Hub = model.NewStreamHub()
 	}
+	r.Hub.Unsubscribe("hls") // clean up stale consumer from previous session
 	_ = r.Hub.Subscribe("hls", cb)
 }
 

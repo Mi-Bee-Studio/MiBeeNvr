@@ -37,7 +37,7 @@
 
   // Hash change listener to keep activeRoute in sync
   function handleHashChange() {
-    const hash = window.location.hash.replace('#', '') || '/recordings';
+    const hash = window.location.hash.replace('#', '') || '/surveillance';
     activeRoute = hash;
   }
 
@@ -58,9 +58,9 @@
   // Navigation items
   const navItems = [
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
-    { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
-    { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
+    { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
+    { href: '#/status', labelKey: 'nav.status', route: '/status' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ];
 

@@ -13,6 +13,9 @@
   import Dashboard from './routes/Dashboard.svelte';
   import Setup from './routes/Setup.svelte';
 
+  import TranscodingHistory from './routes/TranscodingHistory.svelte';
+  import Surveillance from './routes/Surveillance.svelte';
+  import Status from './routes/Status.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -93,12 +96,25 @@
       return { route: 'cameras', params: {} };
     }
 
+    if (segments[0] === 'surveillance') {
+      const tab = segments[1] === 'recordings' ? 'recordings' : 'cameras';
+      return { route: 'surveillance', params: { tab } };
+    }
+
+    if (segments[0] === 'status') {
+      const tab = segments[1] === 'transcoding' ? 'transcoding' : 'health';
+      return { route: 'status', params: { tab } };
+    }
     if (segments[0] === 'stats') {
       return { route: 'stats', params: {} };
     }
 
     if (segments[0] === 'settings') {
       return { route: 'settings', params: {} };
+    }
+
+    if (segments[0] === 'transcoding-history') {
+      return { route: 'transcoding-history', params: {} };
     }
 
     if (segments[0] === 'dashboard') {
@@ -114,7 +130,7 @@
   // Login component from redirecting to recordings before onMount runs
   // Redirect legacy #/health route
   if (typeof window !== 'undefined' && window.location.hash === '#/health') {
-    window.location.replace('#/dashboard/health');
+    window.location.replace('#/status');
   }
 
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
@@ -126,7 +142,7 @@
     const hash = window.location.hash;
     // Redirect legacy #/health route
     if (hash === '#/health') {
-      window.location.replace('#/dashboard/health');
+      window.location.replace('#/status');
       return;
     }
     const { route, params: routeParams } = parseRoute(hash);
@@ -195,12 +211,18 @@
       <Cameras />
     {:else if currentRoute === 'live'}
       <LiveView cameraId={params.id} />
+    {:else if currentRoute === 'surveillance'}
+      <Surveillance initialTab={params.tab || 'cameras'} />
+    {:else if currentRoute === 'status'}
+      <Status initialTab={params.tab || 'health'} />
     {:else if currentRoute === 'stats'}
       <Stats />
     {:else if currentRoute === 'settings'}
       <Settings />
     {:else if currentRoute === 'dashboard'}
       <Dashboard initialTab={params.tab || 'dashboard'} />
+    {:else if currentRoute === 'transcoding-history'}
+      <TranscodingHistory />
     {/if}
   {/if}
 

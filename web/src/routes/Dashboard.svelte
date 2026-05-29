@@ -3,7 +3,7 @@
   import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert, Activity } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -11,26 +11,6 @@
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
-  import Tab from '$lib/components/Tab.svelte';
-  import HealthHistory from './HealthHistory.svelte';
-
-  // Tab state
-  let { initialTab = 'dashboard' }: { initialTab?: string } = $props();
-  let activeTab = $state('dashboard');
-
-  $effect(() => {
-    activeTab = initialTab;
-  });
-
-  let tabs = $derived([
-    { id: 'dashboard', label: t('nav.dashboard'), icon: Video },
-    { id: 'health', label: t('health.title'), icon: Activity },
-  ]);
-
-  function handleTabChange(tabId: string) {
-    activeTab = tabId;
-    window.location.hash = tabId === 'health' ? '#/dashboard/health' : '#/dashboard';
-  }
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -293,10 +273,7 @@
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
   <main class="mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6" style="max-width: 100%;">
-    <!-- Tab bar -->
-    <Tab {tabs} {activeTab} onchange={handleTabChange} />
 
-    {#if activeTab === 'dashboard'}
     <!-- Header -->
     <div class="flex items-center justify-between mb-4 sm:mb-6">
       <h1 class="text-lg sm:text-xl font-bold th-text-primary flex items-center gap-2">
@@ -525,12 +502,6 @@
         {/each}
       </div>
     {/if}
-
-    {:else if activeTab === 'health'}
-      <div class="health-tab-content">
-        <HealthHistory />
-      </div>
-    {/if}
   </main>
 </div>
 
@@ -562,8 +533,4 @@
     }
   }
 
-  /* Override HealthHistory's header padding when embedded in Dashboard tab */
-  .health-tab-content > :global(:first-child) {
-    padding-top: 0 !important;
-  }
 </style>

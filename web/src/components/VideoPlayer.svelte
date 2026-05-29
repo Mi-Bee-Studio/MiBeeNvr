@@ -12,6 +12,7 @@
     createAutoRetryScheduler,
   } from '$lib/hls-errors';
   import type { StreamState } from '$lib/hls-errors';
+  import { captureFrame } from '$lib/freeze-frame';
 
   let {
     cameraId,
@@ -37,6 +38,30 @@
   let zombieCleanup: (() => void) | null = null;
   let autoRetry: ReturnType<typeof createAutoRetryScheduler> | null = null;
   let visibilityCleanup: (() => void) | null = null;
+  let destroyed = false;
+
+  // Freeze frame — prevents black flash during reconnection
+  let frozenFrameUrl: string | null = $state(null);
+  let showFrozenFrame = $state(false);
+  let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function captureFreezeFrame() {
+    if (frozenFrameUrl) return;
+    const frame = captureFrame(videoEl ?? null);
+    if (frame) {
+      frozenFrameUrl = frame;
+      showFrozenFrame = true;
+    }
+  }
+
+  function clearFreezeFrame() {
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    showFrozenFrame = false;
+    freezeClearTimer = setTimeout(() => {
+      frozenFrameUrl = null;
+      freezeClearTimer = null;
+    }, 350);
+  }
 
   function dispatchStateChange(state: StreamState | 'loading') {
     // Svelte 5 custom events via bubbling — parent reads detail from DOM event
@@ -56,6 +81,14 @@
 
   function updateState(cameraId_: string, state: StreamState) {
     if (cameraId_ === cameraId) {
+      // Capture frame before leaving 'playing' state
+      if (streamState === 'playing' && state !== 'playing') {
+        captureFreezeFrame();
+      }
+      // Fade out freeze frame after stream resumes
+      if (state === 'playing' && frozenFrameUrl) {
+        clearFreezeFrame();
+      }
       if (state === 'playing' && autoRetry) {
         autoRetry.clear();
         autoRetry = null;
@@ -66,6 +99,7 @@
 
   function handleZombie(id: string) {
     if (id !== cameraId || !hlsInstance || !HlsConstructor || !videoEl) return;
+    captureFreezeFrame();
     const config = buildErrorConfig();
     const newHls = destroyAndRecreate(
       hlsInstance,
@@ -82,6 +116,7 @@
 
   function handleReconnect() {
     if (autoRetry) { autoRetry.clear(); autoRetry = null; }
+    captureFreezeFrame();
     recreateAttempts.value = 0;
     streamState = 'loading';
     destroyCurrentHls();
@@ -125,9 +160,11 @@
 
   async function initHls() {
     if (!videoEl || !streamUrl) return;
+    if (destroyed) return;
 
     // Check if stream endpoint is available
     const available = await checkStreamAvailable(streamUrl);
+    if (destroyed) return;
     if (!available) {
       streamState = 'error';
       return;
@@ -135,6 +172,7 @@
 
     try {
       const HlsModule = await import('hls.js');
+      if (destroyed) return;
       const Hls = HlsModule.default;
 
       if (!Hls.isSupported()) {
@@ -195,6 +233,7 @@ streamState = 'error';
       () => [cameraId],
       (id: string) => {
         if (id !== cameraId) return;
+        captureFreezeFrame();
         recreateAttempts.value = 0;
         destroyCurrentHls();
         streamState = 'loading';
@@ -211,6 +250,9 @@ streamState = 'error';
   });
 
   onDestroy(() => {
+    destroyed = true;
+    if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
+    frozenFrameUrl = null;
     destroyCurrentHls();
     if (visibilityCleanup) {
       visibilityCleanup();
@@ -254,6 +296,16 @@ streamState = 'error';
 
 <!-- svelte-ignore binding_property_non_reactive -->
 <div class="relative w-full h-full bg-black overflow-hidden group">
+  <!-- Freeze frame — last good frame shown during reconnection -->
+  {#if frozenFrameUrl}
+    <img
+      src={frozenFrameUrl}
+      alt=""
+      class="absolute inset-0 w-full h-full object-contain transition-opacity duration-300 {showFrozenFrame ? 'opacity-100' : 'opacity-0 pointer-events-none'}"
+      aria-hidden="true"
+    />
+  {/if}
+
   <!-- Video element -->
   <video
     bind:this={videoEl}

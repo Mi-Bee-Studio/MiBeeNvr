@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -42,10 +43,11 @@ type CameraRow struct {
 	ONVIFEndpoint           string  `json:"onvif_endpoint"`
 	ProfileToken            string  `json:"profile_token"`
 	StreamEncoding          string  `json:"stream_encoding"`
-	// Archive fields
-	Archived             bool       `json:"archived"`
-	ArchivedAt           *time.Time `json:"archived_at,omitempty"`
-	ArchiveRetentionDays int        `json:"archive_retention_days"`
+	Archived             bool                         `json:"archived"`
+	ArchivedAt           *time.Time                    `json:"archived_at,omitempty"`
+	ArchiveRetentionDays int                           `json:"archive_retention_days"`
+	// Transcoding config injected from YAML at API response time
+	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {

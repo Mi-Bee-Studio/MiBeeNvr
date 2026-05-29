@@ -7,6 +7,7 @@
 /mibee-nvr
 /mibee-nvr-arm64
 *-arm64
+*-armv7
 
 # Database files
 *.db
@@ -18,10 +19,12 @@ mibee-nvr.yaml
 web/node_modules/
 web/dist/
 
+# Embedded frontend build output
+internal/ui/static/assets/
+internal/ui/static/index.html
+
 # Legacy / unused directories
 web_embed/
-
-
 # Project management / tooling
 .sisyphus/
 .rtk/
@@ -53,4 +56,7 @@ docs/private/
 *.swo
 *.
 .DS_Store
+
+# Build output
+build/
 .build-tmp/
