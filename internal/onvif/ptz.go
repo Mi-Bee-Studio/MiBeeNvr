@@ -75,6 +75,56 @@ func (p *PTZControllerImpl) GetStatus(ctx context.Context) (position PTZVector, 
 	return fromOnvifPTZStatus(status)
 }
 
+// GetPresets returns all PTZ presets on the camera.
+func (p *PTZControllerImpl) GetPresets(ctx context.Context) ([]PTZPreset, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	presets, err := p.client.GetPresets(ctx, p.profileToken)
+	if err != nil {
+		return nil, fmt.Errorf("get PTZ presets failed: %w", err)
+	}
+	result := make([]PTZPreset, len(presets))
+	for i, preset := range presets {
+		result[i] = PTZPreset{
+			Token: preset.Token,
+			Name:  preset.Name,
+		}
+		if preset.PTZPosition != nil {
+			result[i].Position = fromOnvifPTZVector(preset.PTZPosition)
+		}
+	}
+	return result, nil
+}
+
+// SetPreset creates a new PTZ preset at the current position.
+func (p *PTZControllerImpl) SetPreset(ctx context.Context, name string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	token, err := p.client.SetPreset(ctx, p.profileToken, name, "")
+	if err != nil {
+		return "", fmt.Errorf("set PTZ preset failed: %w", err)
+	}
+	return token, nil
+}
+
+// GoToPreset moves the camera to a saved preset position.
+func (p *PTZControllerImpl) GoToPreset(ctx context.Context, token string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.client.GotoPreset(ctx, p.profileToken, token, nil)
+}
+
+// RemovePreset deletes a PTZ preset.
+func (p *PTZControllerImpl) RemovePreset(ctx context.Context, token string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.client.RemovePreset(ctx, p.profileToken, token)
+}
+
 // --- Type conversion helpers ---
 
 func toOnvifPTZVector(v PTZVector) *onvifgo.PTZVector {

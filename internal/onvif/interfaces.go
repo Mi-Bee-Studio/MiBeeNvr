@@ -27,6 +27,10 @@ type PTZController interface {
 	RelativeMove(ctx context.Context, displacement PTZVector) error
 	Stop(ctx context.Context, stopPanTilt, stopZoom bool) error
 	GetStatus(ctx context.Context) (position PTZVector, moving bool, err error)
+	GetPresets(ctx context.Context) ([]PTZPreset, error)
+	SetPreset(ctx context.Context, name string) (string, error)
+	GoToPreset(ctx context.Context, token string) error
+	RemovePreset(ctx context.Context, token string) error
 }
 
 // ImagingController controls imaging parameters on an ONVIF device.

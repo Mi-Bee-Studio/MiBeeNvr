@@ -97,6 +97,13 @@ type MockPTZController struct {
 	RelativeMoveCalls   int
 	StopCalls           int
 	GetStatusCalls      int
+	GetPresetsCalls     int
+	SetPresetCalls      int
+	GoToPresetCalls     int
+	RemovePresetCalls   int
+
+	Presets       []PTZPreset
+	SetPresetToken string
 }
 
 func (m *MockPTZController) ContinuousMove(ctx context.Context, velocity PTZVector) error {
@@ -136,6 +143,35 @@ func (m *MockPTZController) GetStatus(ctx context.Context) (PTZVector, bool, err
 	m.GetStatusCalls++
 	return m.Position, m.Moving, m.Error
 }
+
+func (m *MockPTZController) GetPresets(ctx context.Context) ([]PTZPreset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetPresetsCalls++
+	return m.Presets, m.Error
+}
+
+func (m *MockPTZController) SetPreset(ctx context.Context, name string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SetPresetCalls++
+	return m.SetPresetToken, m.Error
+}
+
+func (m *MockPTZController) GoToPreset(ctx context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GoToPresetCalls++
+	return m.Error
+}
+
+func (m *MockPTZController) RemovePreset(ctx context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RemovePresetCalls++
+	return m.Error
+}
+
 
 // MockImagingController is a testable ImagingController.
 type MockImagingController struct {
