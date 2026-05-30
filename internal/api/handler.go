@@ -304,8 +304,12 @@ func validateURL(rawURL string) bool {
 	return true
 }
 
-// validateIP checks that a string is a valid IPv4 address.
+// validateIP checks that a string is a valid IPv4 or IPv6 address, supporting ip:port format.
 func validateIP(ip string) bool {
+	// Support ip:port format (e.g., "192.168.63.162:8080")
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return net.ParseIP(host) != nil
+	}
 	return net.ParseIP(ip) != nil
 }
 
