@@ -242,3 +242,43 @@ func (c *Client) NewPTZController(profileToken string) PTZController {
 	}
 	return NewPTZController(c.client, profileToken)
 }
+
+// NewImagingController creates an ImagingController backed by this client's onvif-go connection.
+// Requires Connect() to have been called first. Returns nil if not connected.
+func (c *Client) NewImagingController(profileToken string) *ImagingControllerImpl {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	ctrl := NewImagingController(c.client, profileToken)
+	ctrl.SetCredentials(c.username, c.password)
+	return ctrl
+}
+
+// GetEndpoint returns the device service endpoint URL.
+func (c *Client) GetEndpoint() string {
+	return c.endpoint
+}
+
+// NewSnapshotProvider creates a SnapshotProvider backed by this client's onvif-go connection.
+// Requires Connect() to have been called first. Returns nil if not connected.
+func (c *Client) NewSnapshotProvider(profileToken string) SnapshotProvider {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	return NewSnapshotProvider(c.client, profileToken)
+}
+
+// NewEventSubscriber creates an EventSubscriber backed by this client's onvif-go connection.
+// Requires Connect() to have been called first. Returns nil if not connected.
+func (c *Client) NewEventSubscriber(opts ...EventSubscriberOption) EventSubscriber {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	return NewEventSubscriber(c.client, opts...)
+}
