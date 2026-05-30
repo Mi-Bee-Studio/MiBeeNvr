@@ -950,6 +950,20 @@ func (cm *CameraManager) GetSnapshotProvider(ctx context.Context, cameraID strin
 	return client.NewSnapshotProvider(profiles[0].Token), nil
 }
 
+// GetDeviceManager returns a DeviceManager for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetDeviceManager(ctx context.Context, cameraID string) (onvif.DeviceManager, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	dm := client.NewDeviceManager()
+	if dm == nil {
+		return nil, fmt.Errorf("failed to create device manager for camera %q", cameraID)
+	}
+	return dm, nil
+}
+
 // strPtrOrEmpty returns the string value of a *string pointer, or empty string if nil.
 func strPtrOrEmpty(s *string) string {
 	if s == nil {

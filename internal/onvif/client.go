@@ -282,3 +282,14 @@ func (c *Client) NewEventSubscriber(opts ...EventSubscriberOption) EventSubscrib
 	}
 	return NewEventSubscriber(c.client, opts...)
 }
+
+// NewDeviceManager creates a DeviceManager backed by this client's onvif-go connection.
+// Requires Connect() to have been called first. Returns nil if not connected.
+func (c *Client) NewDeviceManager() DeviceManager {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	return NewDeviceManager(c.client)
+}
