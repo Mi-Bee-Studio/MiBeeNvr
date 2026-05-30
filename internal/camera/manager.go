@@ -58,6 +58,7 @@ type CameraManager struct {
 	onvifClients map[string]*onvif.Client // camera_id → cached ONVIF client
 	onvifMu      sync.Mutex               // protects onvifClients
 	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	eventSubscribers map[string]onvif.EventSubscriber // camera_id → event subscriber
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -85,6 +86,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		transcodeMgr: tm,
 		errorDetails: make(map[string]*model.CameraErrorDetail),
 		onvifClients: make(map[string]*onvif.Client),
+		eventSubscribers: make(map[string]onvif.EventSubscriber),
 	}
 }
 
@@ -994,4 +996,60 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 			}
 		}
 	}
+}
+
+// SubscribeONVIFEvents subscribes to PullPoint events for the given camera.
+// The eventCallback is invoked when events are received.
+// Returns error if camera is not found, not ONVIF, or subscription fails.
+func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID string, eventCallback onvif.EventCallback) error {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return err
+	}
+
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	if _, exists := cm.eventSubscribers[cameraID]; exists {
+		return nil // Already subscribed
+	}
+
+	sub := client.NewEventSubscriber(onvif.WithEventCallback(eventCallback))
+	if sub == nil {
+		return fmt.Errorf("camera %q: failed to create event subscriber", cameraID)
+	}
+	if err := sub.Subscribe(ctx, cameraID); err != nil {
+		return fmt.Errorf("camera %q: subscribe to events: %w", cameraID, err)
+	}
+	cm.eventSubscribers[cameraID] = sub
+	logger.Info("subscribed to ONVIF events", "camera_id", cameraID)
+	return nil
+}
+
+// UnsubscribeONVIFEvents unsubscribes from PullPoint events for the given camera.
+func (cm *CameraManager) UnsubscribeONVIFEvents(ctx context.Context, cameraID string) error {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	sub, exists := cm.eventSubscribers[cameraID]
+	if !exists {
+		return nil
+	}
+
+	if err := sub.Unsubscribe(ctx, cameraID); err != nil {
+		logger.Warn("failed to unsubscribe from events", "camera_id", cameraID, "error", err)
+	}
+	delete(cm.eventSubscribers, cameraID)
+	logger.Info("unsubscribed from ONVIF events", "camera_id", cameraID)
+	return nil
+}
+
+// StopAllONVIFEvents unsubscribes from all ONVIF event subscriptions.
+func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
+	cm.onvifMu.Lock()
+	for id, sub := range cm.eventSubscribers {
+		_ = sub.Unsubscribe(ctx, id)
+	}
+	cm.eventSubscribers = make(map[string]onvif.EventSubscriber)
+	cm.onvifMu.Unlock()
 }
