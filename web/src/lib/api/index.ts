@@ -59,6 +59,19 @@ export {
   getProtocolCapabilities,
   checkVendor,
   DEFAULT_PROTOCOLS,
+  // Imaging
+  getImagingSettings,
+  setImagingSettings,
+  getImagingOptions,
+  // PTZ Presets
+  getPTZPresets,
+  createPTZPreset,
+  goToPTZPreset,
+  deletePTZPreset,
+  // Snapshot URI
+  getSnapshotUri,
+  // Device Capabilities
+  getDeviceCapabilities,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -80,6 +93,16 @@ export type {
   TestConnectionResult,
   VendorCheckResult,
   PushTarget,
+  // Imaging
+  ImagingSettings,
+  ImagingOptionRange,
+  ImagingOptions,
+  // PTZ Presets
+  PTZPreset,
+  // Snapshot URI
+  SnapshotUriResponse,
+  // Device Capabilities
+  DeviceCapabilitiesInfo,
 } from './cameras';
 
 // Recordings — list, download, frames, stats, archives

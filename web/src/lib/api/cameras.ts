@@ -454,3 +454,245 @@ export interface VendorCheckResult {
 export async function checkVendor(did: string): Promise<VendorCheckResult> {
   return apiRequest<VendorCheckResult>(`/xiaomi/check-vendor?did=${encodeURIComponent(did)}`);
 }
+
+// --- Imaging ---
+
+export interface ImagingSettings {
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  sharpness?: number;
+  exposure?: {
+    mode: string;
+    exposure_time?: number;
+    gain?: number;
+  };
+  white_balance?: {
+    mode: string;
+    color_temperature?: number;
+  };
+}
+
+export interface ImagingOptionRange {
+  min: number;
+  max: number;
+}
+
+export interface ImagingOptions {
+  brightness?: ImagingOptionRange;
+  contrast?: ImagingOptionRange;
+  saturation?: ImagingOptionRange;
+  sharpness?: ImagingOptionRange;
+  exposure_time?: ImagingOptionRange;
+  gain?: ImagingOptionRange;
+  color_temperature?: ImagingOptionRange;
+}
+
+export async function getImagingSettings(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<ImagingSettings> {
+  return apiRequest<ImagingSettings>(`/cameras/${cameraId}/imaging/settings`, { signal });
+}
+
+export async function setImagingSettings(
+  cameraId: string,
+  settings: Partial<ImagingSettings>,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/imaging/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+    signal,
+  });
+}
+
+export async function getImagingOptions(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<ImagingOptions> {
+  return apiRequest<ImagingOptions>(`/cameras/${cameraId}/imaging/options`, { signal });
+}
+
+// --- PTZ Presets ---
+
+export interface PTZPreset {
+  token: string;
+  name: string;
+}
+
+export async function getPTZPresets(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<PTZPreset[]> {
+  return apiRequest<PTZPreset[]>(`/cameras/${cameraId}/ptz/presets`, { signal });
+}
+
+export async function createPTZPreset(
+  cameraId: string,
+  name: string,
+  signal?: AbortSignal
+): Promise<PTZPreset> {
+  return apiRequest<PTZPreset>(`/cameras/${cameraId}/ptz/presets`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+    signal,
+  });
+}
+
+export async function goToPTZPreset(
+  cameraId: string,
+  token: string,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/presets/${encodeURIComponent(token)}/goto`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function deletePTZPreset(
+  cameraId: string,
+  token: string,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/presets/${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+    signal,
+  });
+}
+
+// --- Snapshot URI ---
+
+export interface SnapshotUriResponse {
+  uri: string;
+}
+
+export async function getSnapshotUri(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<SnapshotUriResponse> {
+  return apiRequest<SnapshotUriResponse>(`/cameras/${cameraId}/snapshot/uri`, { signal });
+}
+
+// --- Device Capabilities ---
+
+export interface DeviceCapabilitiesInfo {
+  ptz: boolean;
+  imaging: boolean;
+  events: boolean;
+  snapshot: boolean;
+  streaming: boolean;
+  device_info?: {
+    manufacturer?: string;
+    model?: string;
+    firmware?: string;
+    serial_number?: string;
+    hardware_id?: string;
+  };
+}
+
+export async function getDeviceCapabilities(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<DeviceCapabilitiesInfo> {
+  return apiRequest<DeviceCapabilitiesInfo>(`/cameras/${cameraId}/onvif/capabilities`, { signal });
+}
+
+// --- Device Management ---
+
+export interface NetworkIPv4 {
+  enabled: boolean;
+  dhcp: boolean;
+  address?: string;
+  netmask?: string;
+  gateway?: string;
+}
+
+export interface NetworkIPv6 {
+  enabled: boolean;
+  dhcp: boolean;
+  address?: string;
+  prefix?: number;
+  gateway?: string;
+}
+
+export interface NetworkNTP {
+  manual?: string[];
+  dhcp: boolean;
+}
+
+export interface NetworkInterface {
+  name: string;
+  enabled: boolean;
+  ipv4: NetworkIPv4;
+  ipv6?: NetworkIPv6;
+  dns?: string[];
+  ntp?: NetworkNTP;
+}
+
+export interface ONVIFDeviceUser {
+  username: string;
+  password?: string;
+  level: string; // "Administrator", "Operator", "User", "Anonymous"
+}
+
+export async function rebootDevice(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/reboot`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function getNetworkInterfaces(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<{ interfaces: NetworkInterface[] }> {
+  return apiRequest<{ interfaces: NetworkInterface[] }>(`/cameras/${cameraId}/onvif/network`, { signal });
+}
+
+export async function setNetworkInterfaces(
+  cameraId: string,
+  interfaces: NetworkInterface[],
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/network`, {
+    method: 'PUT',
+    body: JSON.stringify({ interfaces }),
+    signal,
+  });
+}
+
+export async function getDeviceUsers(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<{ users: ONVIFDeviceUser[] }> {
+  return apiRequest<{ users: ONVIFDeviceUser[] }>(`/cameras/${cameraId}/onvif/users`, { signal });
+}
+
+export async function createDeviceUsers(
+  cameraId: string,
+  users: ONVIFDeviceUser[],
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/users`, {
+    method: 'POST',
+    body: JSON.stringify({ users }),
+    signal,
+  });
+}
+
+export async function deleteDeviceUsers(
+  cameraId: string,
+  usernames: string[],
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/users`, {
+    method: 'DELETE',
+    body: JSON.stringify({ usernames }),
+    signal,
+  });
+}
