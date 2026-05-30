@@ -79,13 +79,21 @@ Open `http://localhost:9090` to access the Web UI.
 ### Option 2: Docker
 
 ```bash
-mkdir -p data
-cp config.example.yaml data/mibee-nvr.yaml
-# Edit data/mibee-nvr.yaml — set password, add cameras
 docker compose up -d
 ```
 
-Open `http://localhost:9090` to access the Web UI. See [`docker-compose.yml`](docker-compose.yml) for details.
+Open `http://localhost:9090` to access the Web UI.
+
+To store recordings on an external drive, edit the volume mount in `docker-compose.yml`:
+
+```yaml
+    volumes:
+      - /mnt/external/nvr:/data    # ← change to your host path
+    environment:
+      - NVR_DATA_DIR=/data          # must match the volume mount
+```
+
+See [`docker-compose.yml`](docker-compose.yml) for full details.
 
 ### Option 3: One-click Install
 

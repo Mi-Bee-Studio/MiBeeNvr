@@ -80,13 +80,21 @@ chmod +x mibee-nvr-armv7
 ### 方式 2：Docker
 
 ```bash
-mkdir -p data
-cp config.example.yaml data/mibee-nvr.yaml
-# 编辑 data/mibee-nvr.yaml — 设置密码、添加摄像头
 docker compose up -d
 ```
 
-打开 `http://localhost:9090` 即可访问管理界面。详见 [`docker-compose.yml`](docker-compose.yml)。
+打开 `http://localhost:9090` 即可访问管理界面。
+
+如需将录像存储到外部硬盘，请修改 `docker-compose.yml` 中的卷挂载：
+
+```yaml
+    volumes:
+      - /mnt/external/nvr:/data    # ← 改为宿主机路径
+    environment:
+      - NVR_DATA_DIR=/data          # 必须与卷挂载一致
+```
+
+详见 [`docker-compose.yml`](docker-compose.yml)。
 
 ### 方式 3：一键安装脚本
 

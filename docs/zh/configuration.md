@@ -90,9 +90,11 @@ version: "1.0"
 
 ### `storage.root_dir`
 - **类型**: string
-- **默认**: `/var/lib/mibee-nvr`
-- **描述**: 存储录像和临时文件的根目录
-- **示例**: `/var/lib/mibee-nvr`
+- **默认**: `/var/lib/mibee-nvr`（二进制）或 `/data`（Docker）
+- **描述**: 存储录像、数据库和临时文件的根目录。所有摄像头录像存储在 `{root_dir}/{camera_id}/` 下。
+- **Docker**: 在 Docker 中运行时，通过 `NVR_DATA_DIR` 环境变量设置。卷挂载和 `NVR_DATA_DIR` 必须一致。
+- **二进制**: 可通过 `mibee-nvr init --data-dir` 参数设置，或直接在 YAML 配置中指定。
+- **示例**: `/var/lib/mibee-nvr`、`/mnt/external/nvr`、`/data`
 
 ### `storage.segment_duration`
 - **类型**: string

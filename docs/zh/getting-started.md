@@ -48,6 +48,23 @@ docker compose up -d
 
 > **注意**：无需准备配置文件！MiBee NVR 在没有配置文件的情况下启动时会自动初始化。
 
+#### 修改录像存储位置
+
+默认情况下，录像存储在宿主机的 `./data` 目录（映射到容器内的 `/data`）。
+如果要将录像存储到外部硬盘或其他目录，请修改 `docker-compose.yml`：
+
+```yaml
+    volumes:
+      - /mnt/external/nvr:/data    # ← 改为你的宿主机路径
+    environment:
+      - NVR_DATA_DIR=/data          # 必须与卷挂载的右侧一致
+      # - NVR_UID=1000               # 与宿主机目录所有者的 UID 一致
+      # - NVR_GID=1000               # 与宿主机目录所有者的 GID 一致
+```
+
+> **重要**：卷挂载的右侧（`:data`）和 `NVR_DATA_DIR` 必须始终一致。
+> 如果容器无法启动或不断重启，请检查宿主机目录是否存在，以及配置的 UID/GID（默认 1000:1000）是否有写入权限。
+
 ### 方式三：一键安装脚本
 
 ```bash

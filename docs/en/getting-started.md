@@ -48,6 +48,24 @@ Open http://localhost:9090 in your browser.
 
 > **Note**: No config preparation needed! MiBee NVR auto-initializes when started without a config file.
 
+#### Changing the Storage Location
+
+By default, recordings are stored in `./data` on the host (mapped to `/data` inside the container).
+To store recordings on an external drive or a different directory, edit `docker-compose.yml`:
+
+```yaml
+    volumes:
+      - /mnt/external/nvr:/data    # ← change to your host path
+    environment:
+      - NVR_DATA_DIR=/data          # must match the right side of the volume mount
+      # - NVR_UID=1000               # match the UID that owns the host directory
+      # - NVR_GID=1000               # match the GID that owns the host directory
+```
+
+> **Important**: The right side of the volume mount (`:data`) and `NVR_DATA_DIR` must always match.
+> If the container fails to start or keeps restarting, check that the host directory exists and is
+> writable by the configured UID/GID (default: 1000:1000).
+
 ### Option 3: One-click Install Script
 
 ```bash

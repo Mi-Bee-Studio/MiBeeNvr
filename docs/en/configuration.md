@@ -90,9 +90,11 @@ version: "1.0"
 
 ### `storage.root_dir`
 - **Type**: string
-- **Default**: `/var/lib/mibee-nvr`
-- **Description**: Root directory for storing recordings and temporary files
-- **Example**: `/var/lib/mibee-nvr`
+- **Default**: `/var/lib/mibee-nvr` (binary) or `/data` (Docker)
+- **Description**: Root directory for storing recordings, database, and temporary files. All camera recordings are stored under `{root_dir}/{camera_id}/`.
+- **Docker**: When running in Docker, this is set via the `NVR_DATA_DIR` environment variable. The volume mount and `NVR_DATA_DIR` must match.
+- **Binary**: Can be set via `--data-dir` flag with `mibee-nvr init`, or directly in the YAML config.
+- **Example**: `/var/lib/mibee-nvr`, `/mnt/external/nvr`, `/data`
 
 ### `storage.segment_duration`
 - **Type**: string
