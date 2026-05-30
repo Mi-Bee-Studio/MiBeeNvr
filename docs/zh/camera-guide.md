@@ -2,6 +2,8 @@
 
 MiBee NVR 通过多种协议支持广泛的 IP 摄像头，包括 RTSP（H.264/H.265/MJPEG）、HTTP JPEG 和 ONVIF。本指南提供主流摄像头品牌的全面兼容性信息，包括支持的协议、配置示例和故障排除技巧。
 
+#RW|**ONVIF 集成**：有关全面的 ONVIF 摄像头支持、发现方法、PTZ 控制和故障排除，请参阅 [ONVIF 指南](./onvif-guide.md)。
+#RW|
 ## 快速入门（Top 3 品牌）
 
 ### Hikvision

@@ -117,6 +117,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
 | [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile |
 | [Xiaomi Setup](docs/en/xiaomi-setup.md) | Xiaomi cloud camera integration |
+#BZ|| [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ control, troubleshooting |
 
 ```bash
 make build              # Local build (current architecture)
