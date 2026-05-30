@@ -17,18 +17,64 @@ import (
 
 func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID is required")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
-	// For now, return empty profiles (actual implementation needs ONVIF client)
+	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+
+	profiles, err := client.GetProfiles(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get profiles: %v", err))
+		return
+	}
+
+	caps, err := client.GetCapabilities(r.Context())
+	if err != nil {
+		caps = &onvif.DeviceCapabilities{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"profiles":     []interface{}{},
-		"capabilities": map[string]bool{"ptz": false, "streaming": false},
+		"profiles":     profiles,
+		"capabilities": caps,
 	})
 }
 
+func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+
+	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+
+	caps, err := client.GetCapabilities(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, onvif.DeviceCapabilitiesDetailed{
+		PTZ:       caps.PTZ,
+		Streaming: caps.Streaming,
+	})
+}
 // --- ONVIF discovery endpoints ---
 
 // handleONVIFProbe probes a single ONVIF device by sending a WS-Discovery

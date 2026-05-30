@@ -180,6 +180,7 @@ func (h *Handler) Routes() http.Handler {
 					// Per-camera protocols
 					r.Get("/protocols", h.handleCameraProtocols)
 					r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+					r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
 					r.Post("/ptz/move", h.handlePTZMove)
 					r.Post("/ptz/stop", h.handlePTZStop)
 					r.Get("/ptz/status", h.handlePTZStatus)
