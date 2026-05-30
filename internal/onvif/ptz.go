@@ -36,7 +36,9 @@ func (p *PTZControllerImpl) ContinuousMove(ctx context.Context, velocity PTZVect
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), nil)
+	// Provide default timeout — some cameras reject ContinuousMove without it
+	timeout := "PT10S"
+	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
 }
 
 // AbsoluteMove moves PTZ to an absolute position.
