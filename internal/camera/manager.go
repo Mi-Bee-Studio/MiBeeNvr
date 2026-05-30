@@ -2,8 +2,9 @@ package camera
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
+"fmt"
+"log/slog"
+"strings"
 	"sync"
 	"time"
 
@@ -54,7 +55,10 @@ type CameraManager struct {
 	transcodeMgr *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr  *health.Manager            // health monitoring (nil when disabled)
 	mu         sync.RWMutex
+	onvifClients map[string]*onvif.Client // camera_id → cached ONVIF client
+	onvifMu      sync.Mutex               // protects onvifClients
 	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	eventSubscribers map[string]onvif.EventSubscriber // camera_id → event subscriber
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -81,6 +85,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:     mm,
 		transcodeMgr: tm,
 		errorDetails: make(map[string]*model.CameraErrorDetail),
+		onvifClients: make(map[string]*onvif.Client),
+		eventSubscribers: make(map[string]onvif.EventSubscriber),
 	}
 }
 
@@ -367,9 +373,10 @@ func (cm *CameraManager) Stop() error {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
 	}
 
+	cm.closeAllONVIFClients()
+
 	return nil
 }
-
 // Status returns the status of all managed recorders.
 func (cm *CameraManager) Status() map[string]model.RecorderStatus {
 	cm.mu.RLock()
@@ -832,25 +839,63 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 	return nil
 }
 
-// GetONVIFPTZController returns a PTZController for the given ONVIF camera.
-// Returns error if camera is not found, not ONVIF, or client creation fails.
-func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
-	cm.mu.RLock()
+// getOrCreateONVIFClient returns a cached ONVIF client for the given camera,
+// creating one if it doesn't exist in the cache.
+// Camera config lookup is done OUTSIDE the onvifMu lock to avoid deadlock with cm.mu.
+func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID string) (*onvif.Client, error) {
 	cam := cm.GetCameraConfig(cameraID)
-	cm.mu.RUnlock()
 	if cam == nil {
-	return nil, &model.CameraNotFoundError{CameraID: cameraID}
+		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Protocol != string(model.ProtoONVIF) {
-	return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
+		return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
 	}
 	endpoint := cam.ONVIFEndpoint
 	if endpoint == "" {
 		endpoint = cam.URL
 	}
+
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	if cached, ok := cm.onvifClients[cameraID]; ok {
+		return cached, nil
+	}
+
 	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
 	if err := client.Connect(ctx); err != nil {
 		return nil, &model.ONVIFConnectionError{CameraID: cameraID, Err: err}
+	}
+	cm.onvifClients[cameraID] = client
+	return client, nil
+}
+
+// CloseONVIFClient removes a cached ONVIF client for the given camera.
+func (cm *CameraManager) CloseONVIFClient(cameraID string) {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	delete(cm.onvifClients, cameraID)
+}
+
+// GetONVIFClient returns a cached ONVIF client for the given camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetONVIFClient(ctx context.Context, cameraID string) (*onvif.Client, error) {
+	return cm.getOrCreateONVIFClient(ctx, cameraID)
+}
+
+// closeAllONVIFClients clears the entire ONVIF client cache.
+func (cm *CameraManager) closeAllONVIFClients() {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	cm.onvifClients = make(map[string]*onvif.Client)
+}
+
+// GetONVIFPTZController returns a PTZController for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
 	}
 	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
@@ -860,6 +905,63 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
 	return client.NewPTZController(profiles[0].Token), nil
+}
+
+// GetImagingController returns an ImagingController for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID string) (onvif.ImagingController, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
+	}
+	if len(profiles) == 0 {
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
+	}
+	ctrl := client.NewImagingController(profiles[0].Token)
+	if ctrl == nil {
+		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)
+	}
+	// Use device endpoint as imaging service base — most cameras serve imaging
+	// on the same host with /onvif/imaging_service path.
+	endpoint := client.GetEndpoint()
+	imgEndpoint := strings.TrimSuffix(endpoint, "/device_service") + "/imaging_service"
+	ctrl.SetImagingEndpoint(imgEndpoint)
+	return ctrl, nil
+}
+
+// GetSnapshotProvider returns a SnapshotProvider for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetSnapshotProvider(ctx context.Context, cameraID string) (onvif.SnapshotProvider, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
+	}
+	if len(profiles) == 0 {
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
+	}
+	return client.NewSnapshotProvider(profiles[0].Token), nil
+}
+
+// GetDeviceManager returns a DeviceManager for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetDeviceManager(ctx context.Context, cameraID string) (onvif.DeviceManager, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	dm := client.NewDeviceManager()
+	if dm == nil {
+		return nil, fmt.Errorf("failed to create device manager for camera %q", cameraID)
+	}
+	return dm, nil
 }
 
 // strPtrOrEmpty returns the string value of a *string pointer, or empty string if nil.
@@ -908,4 +1010,60 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 			}
 		}
 	}
+}
+
+// SubscribeONVIFEvents subscribes to PullPoint events for the given camera.
+// The eventCallback is invoked when events are received.
+// Returns error if camera is not found, not ONVIF, or subscription fails.
+func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID string, eventCallback onvif.EventCallback) error {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return err
+	}
+
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	if _, exists := cm.eventSubscribers[cameraID]; exists {
+		return nil // Already subscribed
+	}
+
+	sub := client.NewEventSubscriber(onvif.WithEventCallback(eventCallback))
+	if sub == nil {
+		return fmt.Errorf("camera %q: failed to create event subscriber", cameraID)
+	}
+	if err := sub.Subscribe(ctx, cameraID); err != nil {
+		return fmt.Errorf("camera %q: subscribe to events: %w", cameraID, err)
+	}
+	cm.eventSubscribers[cameraID] = sub
+	logger.Info("subscribed to ONVIF events", "camera_id", cameraID)
+	return nil
+}
+
+// UnsubscribeONVIFEvents unsubscribes from PullPoint events for the given camera.
+func (cm *CameraManager) UnsubscribeONVIFEvents(ctx context.Context, cameraID string) error {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	sub, exists := cm.eventSubscribers[cameraID]
+	if !exists {
+		return nil
+	}
+
+	if err := sub.Unsubscribe(ctx, cameraID); err != nil {
+		logger.Warn("failed to unsubscribe from events", "camera_id", cameraID, "error", err)
+	}
+	delete(cm.eventSubscribers, cameraID)
+	logger.Info("unsubscribed from ONVIF events", "camera_id", cameraID)
+	return nil
+}
+
+// StopAllONVIFEvents unsubscribes from all ONVIF event subscriptions.
+func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
+	cm.onvifMu.Lock()
+	for id, sub := range cm.eventSubscribers {
+		_ = sub.Unsubscribe(ctx, id)
+	}
+	cm.eventSubscribers = make(map[string]onvif.EventSubscriber)
+	cm.onvifMu.Unlock()
 }

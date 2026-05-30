@@ -36,7 +36,9 @@ func (p *PTZControllerImpl) ContinuousMove(ctx context.Context, velocity PTZVect
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), nil)
+	// Provide default timeout — some cameras reject ContinuousMove without it
+	timeout := "PT10S"
+	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
 }
 
 // AbsoluteMove moves PTZ to an absolute position.
@@ -73,6 +75,56 @@ func (p *PTZControllerImpl) GetStatus(ctx context.Context) (position PTZVector, 
 		return PTZVector{}, false, fmt.Errorf("get PTZ status failed: %w", err)
 	}
 	return fromOnvifPTZStatus(status)
+}
+
+// GetPresets returns all PTZ presets on the camera.
+func (p *PTZControllerImpl) GetPresets(ctx context.Context) ([]PTZPreset, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	presets, err := p.client.GetPresets(ctx, p.profileToken)
+	if err != nil {
+		return nil, fmt.Errorf("get PTZ presets failed: %w", err)
+	}
+	result := make([]PTZPreset, len(presets))
+	for i, preset := range presets {
+		result[i] = PTZPreset{
+			Token: preset.Token,
+			Name:  preset.Name,
+		}
+		if preset.PTZPosition != nil {
+			result[i].Position = fromOnvifPTZVector(preset.PTZPosition)
+		}
+	}
+	return result, nil
+}
+
+// SetPreset creates a new PTZ preset at the current position.
+func (p *PTZControllerImpl) SetPreset(ctx context.Context, name string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	token, err := p.client.SetPreset(ctx, p.profileToken, name, "")
+	if err != nil {
+		return "", fmt.Errorf("set PTZ preset failed: %w", err)
+	}
+	return token, nil
+}
+
+// GoToPreset moves the camera to a saved preset position.
+func (p *PTZControllerImpl) GoToPreset(ctx context.Context, token string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.client.GotoPreset(ctx, p.profileToken, token, nil)
+}
+
+// RemovePreset deletes a PTZ preset.
+func (p *PTZControllerImpl) RemovePreset(ctx context.Context, token string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.client.RemovePreset(ctx, p.profileToken, token)
 }
 
 // --- Type conversion helpers ---
@@ -115,46 +167,4 @@ func fromOnvifPTZStatus(s *onvifgo.PTZStatus) (PTZVector, bool, error) {
 		}
 	}
 	return pos, moving, nil
-}
-
-// --- Client PTZ stubs (legacy, to be wired in T13) ---
-
-// PTZContinuousMove starts continuous PTZ movement.
-func (c *Client) PTZContinuousMove(ctx context.Context, profileToken string, velocity PTZVector) error {
-	if !c.ready {
-		return fmt.Errorf("onvif client not connected, call Connect() first")
-	}
-	return fmt.Errorf("PTZ continuous move not yet implemented")
-}
-
-// PTZAbsoluteMove moves to an absolute PTZ position.
-func (c *Client) PTZAbsoluteMove(ctx context.Context, profileToken string, position PTZVector) error {
-	if !c.ready {
-		return fmt.Errorf("onvif client not connected, call Connect() first")
-	}
-	return fmt.Errorf("PTZ absolute move not yet implemented")
-}
-
-// PTZRelativeMove moves by a relative PTZ displacement.
-func (c *Client) PTZRelativeMove(ctx context.Context, profileToken string, displacement PTZVector) error {
-	if !c.ready {
-		return fmt.Errorf("onvif client not connected, call Connect() first")
-	}
-	return fmt.Errorf("PTZ relative move not yet implemented")
-}
-
-// PTZStop stops all PTZ movement.
-func (c *Client) PTZStop(ctx context.Context, profileToken string) error {
-	if !c.ready {
-		return fmt.Errorf("onvif client not connected, call Connect() first")
-	}
-	return fmt.Errorf("PTZ stop not yet implemented")
-}
-
-// PTZGetStatus returns the current PTZ position.
-func (c *Client) PTZGetStatus(ctx context.Context, profileToken string) (*PTZVector, error) {
-	if !c.ready {
-		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
-	}
-	return nil, fmt.Errorf("PTZ get status not yet implemented")
 }

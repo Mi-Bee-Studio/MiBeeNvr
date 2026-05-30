@@ -17,18 +17,64 @@ import (
 
 func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID is required")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
-	// For now, return empty profiles (actual implementation needs ONVIF client)
+	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+
+	profiles, err := client.GetProfiles(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get profiles: %v", err))
+		return
+	}
+
+	caps, err := client.GetCapabilities(r.Context())
+	if err != nil {
+		caps = &onvif.DeviceCapabilities{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"profiles":     []interface{}{},
-		"capabilities": map[string]bool{"ptz": false, "streaming": false},
+		"profiles":     profiles,
+		"capabilities": caps,
 	})
 }
 
+func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+
+	client, err := h.camMgr.GetONVIFClient(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+
+	caps, err := client.GetCapabilities(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, onvif.DeviceCapabilitiesDetailed{
+		PTZ:       caps.PTZ,
+		Streaming: caps.Streaming,
+	})
+}
 // --- ONVIF discovery endpoints ---
 
 // handleONVIFProbe probes a single ONVIF device by sending a WS-Discovery
@@ -242,6 +288,112 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- PTZ preset endpoints ---
+
+func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	presets, err := ptz.GetPresets(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get PTZ presets failed: %v", err))
+		return
+	}
+	if presets == nil {
+		presets = []onvif.PTZPreset{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"presets": presets,
+	})
+}
+
+func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	token, err := ptz.SetPreset(r.Context(), req.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create PTZ preset failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	token := chi.URLParam(r, "token")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	if err := ptz.GoToPreset(r.Context(), token); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("go to PTZ preset failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	token := chi.URLParam(r, "token")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	if err := ptz.RemovePreset(r.Context(), token); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("delete PTZ preset failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // handleONVIFPTZError maps ONVIF PTZ controller errors to appropriate HTTP responses.
 func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
@@ -255,5 +407,330 @@ func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 		writeAPIError(w, http.StatusNotFound, err)
 	default:
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ operation failed for camera %q: %v", cameraID, err))
+	}
+}
+
+// --- Snapshot URI endpoint ---
+
+// handleSnapshotGetUri returns the ONVIF snapshot URI for a camera.
+func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	provider, err := h.camMgr.GetSnapshotProvider(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	uri, err := provider.GetSnapshotUri(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get snapshot URI failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"uri": uri})
+}
+
+// --- Imaging endpoints ---
+
+// handleImagingGetSettings returns current imaging settings for a camera.
+func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	settings, err := img.GetImagingSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging settings failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+// handleImagingSetSettings applies imaging parameter changes for a camera.
+func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req onvif.ImagingSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	if err := img.SetImagingSettings(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("set imaging settings failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleImagingGetOptions returns supported imaging parameter ranges for a camera.
+func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	options, err := img.GetImagingOptions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging options failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, options)
+}
+
+// handleONVIFImagingError maps ONVIF imaging controller errors to appropriate HTTP responses.
+func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) {
+	switch {
+	case errors.As(err, new(*model.CameraNotFoundError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, new(*model.ONVIFNotCameraError)):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, new(*model.ONVIFConnectionError)):
+		writeAPIError(w, http.StatusBadGateway, err)
+	case errors.As(err, new(*model.ONVIFNoProfilesError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	default:
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("imaging operation failed for camera %q: %v", cameraID, err))
+	}
+}
+
+// --- Device Management endpoints ---
+
+// handleONVIFReboot reboots the target ONVIF camera.
+func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	if err := dm.SystemReboot(r.Context()); err != nil {
+		if errors.Is(err, onvif.ErrUnsupported) {
+			writeError(w, http.StatusNotImplemented, "reboot not supported by device")
+			return
+		}
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("reboot failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleONVIFGetNetwork returns network interface configuration.
+func (h *Handler) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	ifaces, err := dm.GetNetworkInterfaces(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get network interfaces failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"interfaces": ifaces})
+}
+
+// handleONVIFSetNetwork configures network interfaces on the target camera.
+func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req struct {
+		Interfaces []onvif.NetworkInterface `json:"interfaces"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	if err := dm.SetNetworkInterfaces(r.Context(), req.Interfaces); err != nil {
+		if errors.Is(err, onvif.ErrUnsupported) {
+			writeError(w, http.StatusNotImplemented, "set network interfaces not supported by device")
+			return
+		}
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("set network interfaces failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleONVIFGetUsers returns user accounts on the target camera.
+func (h *Handler) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	users, err := dm.GetUsers(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get users failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"users": users})
+}
+
+// handleONVIFCreateUsers creates user accounts on the target camera.
+func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req struct {
+		Users []onvif.ONVIFUser `json:"users"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	if err := dm.CreateUsers(r.Context(), req.Users); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("create users failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleONVIFDeleteUsers deletes user accounts from the target camera.
+func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req struct {
+		Usernames []string `json:"usernames"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	if err := dm.DeleteUsers(r.Context(), req.Usernames); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("delete users failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleONVIFSetUser modifies a user account on the target camera.
+func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	username := chi.URLParam(r, "username")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFDeviceMgmtError(w, cameraID, err)
+		return
+	}
+	if err := dm.SetUser(r.Context(), username, req.Password); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("set user failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleONVIFDeviceMgmtError maps ONVIF device management errors to appropriate HTTP responses.
+func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err error) {
+	switch {
+	case errors.As(err, new(*model.CameraNotFoundError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, new(*model.ONVIFNotCameraError)):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, new(*model.ONVIFConnectionError)):
+		writeAPIError(w, http.StatusBadGateway, err)
+	default:
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("device management operation failed for camera %q: %v", cameraID, err))
 	}
 }

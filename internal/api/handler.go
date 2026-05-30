@@ -180,9 +180,26 @@ func (h *Handler) Routes() http.Handler {
 					// Per-camera protocols
 					r.Get("/protocols", h.handleCameraProtocols)
 					r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+					r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
 					r.Post("/ptz/move", h.handlePTZMove)
 					r.Post("/ptz/stop", h.handlePTZStop)
 					r.Get("/ptz/status", h.handlePTZStatus)
+					r.Get("/ptz/presets", h.handlePTZGetPresets)
+					r.Post("/ptz/presets", h.handlePTZCreatePreset)
+					r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
+					r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
+					r.Get("/snapshot/uri", h.handleSnapshotGetUri)
+					r.Get("/imaging/settings", h.handleImagingGetSettings)
+					r.Put("/imaging/settings", h.handleImagingSetSettings)
+					r.Get("/imaging/options", h.handleImagingGetOptions)
+					// Device management
+					r.Post("/onvif/reboot", h.handleONVIFReboot)
+					r.Get("/onvif/network", h.handleONVIFGetNetwork)
+					r.Put("/onvif/network", h.handleONVIFSetNetwork)
+					r.Get("/onvif/users", h.handleONVIFGetUsers)
+					r.Post("/onvif/users", h.handleONVIFCreateUsers)
+					r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
+					r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
 					r.Get("/snapshot", h.handleSnapshot)
 					r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 					r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
@@ -287,8 +304,12 @@ func validateURL(rawURL string) bool {
 	return true
 }
 
-// validateIP checks that a string is a valid IPv4 address.
+// validateIP checks that a string is a valid IPv4 or IPv6 address, supporting ip:port format.
 func validateIP(ip string) bool {
+	// Support ip:port format (e.g., "192.168.63.162:8080")
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return net.ParseIP(host) != nil
+	}
 	return net.ParseIP(ip) != nil
 }
 

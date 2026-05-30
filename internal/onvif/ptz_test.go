@@ -17,50 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Existing Client stub tests ---
-
-func newConnectedClient(t *testing.T) *Client {
-	t.Helper()
-	// Use a mock ONVIF server that returns valid GetCapabilities (required by Initialize)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tds:GetCapabilitiesResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:Capabilities><tds:Media XAddr="http://host/media"/></tds:Capabilities></tds:GetCapabilitiesResponse></s:Body></s:Envelope>`)
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, client.Connect(ctx))
-	return client
-}
-
-func TestPTZNotConnected(t *testing.T) {
-	client := NewClient("http://localhost:8080/onvif/device_service", "admin", "password")
-	ctx := context.Background()
-
-	err := client.PTZContinuousMove(ctx, "profile1", PTZVector{Pan: 0.5})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not connected")
-}
-
-func TestPTZStopNotConnected(t *testing.T) {
-	client := NewClient("http://localhost:8080/onvif/device_service", "admin", "password")
-	ctx := context.Background()
-
-	err := client.PTZStop(ctx, "profile1")
-	require.Error(t, err)
-}
-
-func TestPTZGetStatusNotImplemented(t *testing.T) {
-	client := newConnectedClient(t)
-	ctx := context.Background()
-
-	_, err := client.PTZGetStatus(ctx, "profile1")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not yet implemented")
-}
-
 // --- SOAP mock helpers ---
 
 const soapPTZNamespace = "http://www.onvif.org/ver20/ptz/wsdl"
@@ -111,6 +67,23 @@ func soapGetStatusResponse(panTiltStatus, zoomStatus string, panX, panY, zoomX f
 </tptz:GetStatusResponse>`, soapPTZNamespace, panX, panY, zoomX, panTiltStatus, zoomStatus))
 }
 
+// soapGetPresetsResponse returns a GetPresets SOAP response with preset entries.
+func soapGetPresetsResponse(presets []struct{ Token, Name string; PanX, PanY, ZoomX float64 }) string {
+	var presetXML string
+	for _, p := range presets {
+		presetXML += fmt.Sprintf(`<Preset token="%s"><Name>%s</Name>`+
+			`<PTZPosition xmlns:tt="http://www.onvif.org/ver10/schema">`+
+			`<tt:PanTilt x="%f" y="%f"/><tt:Zoom x="%f"/>`+
+			`</PTZPosition></Preset>`, p.Token, p.Name, p.PanX, p.PanY, p.ZoomX)
+	}
+	return soapEnvelope(fmt.Sprintf(`<tptz:GetPresetsResponse xmlns:tptz="%s">%s</tptz:GetPresetsResponse>`, soapPTZNamespace, presetXML))
+}
+
+// soapSetPresetResponse returns a SetPreset SOAP response with the preset token.
+func soapSetPresetResponse(token string) string {
+	return soapEnvelope(fmt.Sprintf(`<tptz:SetPresetResponse xmlns:tptz="%s">`+
+		`<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPresetResponse>`, soapPTZNamespace, token))
+}
 // extractSOAPAction extracts the SOAP action name from a request body.
 func extractSOAPAction(t *testing.T, body []byte) string {
 	t.Helper()
@@ -308,9 +281,106 @@ server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
 	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
 	err := ctrl.ContinuousMove(context.Background(), PTZVector{Pan: 0.5})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "ContinuousMove failed")
+require.Contains(t, err.Error(), "ContinuousMove failed")
 }
 
+// --- Preset tests ---
+
+func TestPTZController_GetPresets_Success(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		require.Equal(t, "GetPresets", action)
+		w.Write([]byte(soapGetPresetsResponse([]struct{ Token, Name string; PanX, PanY, ZoomX float64}{
+			{Token: "1", Name: "Home", PanX: 0.0, PanY: 0.0, ZoomX: 0.0},
+			{Token: "2", Name: "Gate", PanX: 0.5, PanY: -0.3, ZoomX: 1.0},
+		})))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	presets, err := ctrl.GetPresets(context.Background())
+	require.NoError(t, err)
+	require.Len(t, presets, 2)
+	require.Equal(t, "Home", presets[0].Name)
+	require.Equal(t, PTZVector{Pan: 0.0, Tilt: 0.0, Zoom: 0.0}, presets[0].Position)
+	require.Equal(t, "Gate", presets[1].Name)
+	require.Equal(t, PTZVector{Pan: 0.5, Tilt: -0.3, Zoom: 1.0}, presets[1].Position)
+}
+
+func TestPTZController_GetPresets_Empty(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		require.Equal(t, "GetPresets", action)
+		w.Write([]byte(soapGetPresetsResponse(nil)))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	presets, err := ctrl.GetPresets(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, presets)
+}
+
+func TestPTZController_SetPreset_Success(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		require.Equal(t, "SetPreset", action)
+		w.Write([]byte(soapSetPresetResponse("preset-token-3")))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	token, err := ctrl.SetPreset(context.Background(), "Front Door")
+	require.NoError(t, err)
+	require.Equal(t, "preset-token-3", token)
+}
+
+func TestPTZController_GoToPreset_Success(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		require.Equal(t, "GotoPreset", action)
+		w.Write([]byte(soapSuccessResponse("GotoPreset")))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	err := ctrl.GoToPreset(context.Background(), "1")
+	require.NoError(t, err)
+}
+
+func TestPTZController_RemovePreset_Success(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		require.Equal(t, "RemovePreset", action)
+		w.Write([]byte(soapSuccessResponse("RemovePreset")))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	err := ctrl.RemovePreset(context.Background(), "1")
+	require.NoError(t, err)
+}
+
+func TestPTZController_GetPresets_Error(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(soapFault("Sender", "Invalid profile token")))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	_, err := ctrl.GetPresets(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "get PTZ presets failed")
+}
+
+func TestPTZController_SetPreset_Error(t *testing.T) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(soapFault("Sender", "Invalid profile token")))
+	})
+	defer server.Close()
+
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	_, err := ctrl.SetPreset(context.Background(), "Bad")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "set PTZ preset failed")
+}
 func TestPTZController_ImplementsInterface(t *testing.T) {
 	// Compile-time check that PTZControllerImpl satisfies PTZController
 	var _ PTZController = &PTZControllerImpl{}

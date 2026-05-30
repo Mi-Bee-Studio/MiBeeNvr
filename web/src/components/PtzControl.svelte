@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ptzMove, ptzStop } from '$lib/api';
+  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset } from '$lib/api';
+  import type { PTZPreset } from '$lib/api';
   import { t } from '$lib/i18n';
   import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-svelte';
 
@@ -7,42 +8,36 @@
 
   let moving = $state<string | null>(null);
   let error = $state('');
+  let presets = $state<PTZPreset[]>([]);
+  let selectedPreset = $state('');
+  let goingToPreset = $state(false);
 
-  async function handleMoveStart(direction: string, speed: number = 0.5) {
-    if (moving) return;
-    error = '';
-    moving = direction;
+  // Load presets when enabled
+  $effect(() => {
+    if (enabled && cameraId) {
+      loadPresets();
+    }
+  });
 
+  async function loadPresets() {
     try {
-      await ptzMove(cameraId, { speed, direction });
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'PTZ move failed';
-      moving = null;
+      presets = await getPTZPresets(cameraId);
+    } catch {
+      presets = [];
     }
   }
 
-  async function handleMoveStop() {
-    if (!moving) return;
-    const wasMoving = moving;
-    moving = null;
-
+  async function handleGoToPreset() {
+    if (!selectedPreset) return;
+    goingToPreset = true;
     try {
-      await ptzStop(cameraId);
+      await goToPTZPreset(cameraId, selectedPreset);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'PTZ stop failed';
+      error = e instanceof Error ? e.message : 'Preset goto failed';
+    } finally {
+      goingToPreset = false;
+      selectedPreset = '';
     }
-  }
-
-  function onPointerDown(direction: string, speed?: number) {
-    return (e: PointerEvent) => {
-      e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      handleMoveStart(direction, speed);
-    };
-  }
-
-  function onPointerUp(_e: PointerEvent) {
-    handleMoveStop();
   }
 </script>
 
@@ -134,6 +129,22 @@
         <span class="ptz-btn-label">{t('ptz.zoomOut')}</span>
       </button>
     </div>
+    <!-- Preset quick-access -->
+    {#if presets.length > 0}
+      <div class="ptz-presets">
+        <select
+          class="ptz-preset-select"
+          bind:value={selectedPreset}
+          onchange={handleGoToPreset}
+          disabled={goingToPreset}
+        >
+          <option value="">Go to preset...</option>
+          {#each presets as preset (preset.token)}
+            <option value={preset.token}>{preset.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -249,5 +260,40 @@
   .ptz-btn-label {
     font-size: 0.6875rem;
     font-weight: 500;
+  }
+
+  .ptz-presets {
+    width: 100%;
+    padding-top: 0.375rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .ptz-preset-select {
+    width: 100%;
+    padding: 0.375rem 0.5rem;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-out);
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    padding-right: 1.5rem;
+  }
+
+  .ptz-preset-select:hover {
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+  }
+
+  .ptz-preset-select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: var(--focus-ring);
   }
 </style>

@@ -59,6 +59,26 @@ export {
   getProtocolCapabilities,
   checkVendor,
   DEFAULT_PROTOCOLS,
+  // Imaging
+  getImagingSettings,
+  setImagingSettings,
+  getImagingOptions,
+  // PTZ Presets
+  getPTZPresets,
+  createPTZPreset,
+  goToPTZPreset,
+  deletePTZPreset,
+  // Snapshot URI
+  getSnapshotUri,
+  // Device Capabilities
+  getDeviceCapabilities,
+  // Device Management
+  rebootDevice,
+  getNetworkInterfaces,
+  setNetworkInterfaces,
+  getDeviceUsers,
+  createDeviceUsers,
+  deleteDeviceUsers,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -80,6 +100,22 @@ export type {
   TestConnectionResult,
   VendorCheckResult,
   PushTarget,
+  // Imaging
+  ImagingSettings,
+  ImagingOptionRange,
+  ImagingOptions,
+  // PTZ Presets
+  PTZPreset,
+  // Snapshot URI
+  SnapshotUriResponse,
+  // Device Capabilities
+  DeviceCapabilitiesInfo,
+  // Device Management
+  NetworkIPv4,
+  NetworkIPv6,
+  NetworkNTP,
+  NetworkInterface as ONVIFNetworkInterface,
+  ONVIFDeviceUser,
 } from './cameras';
 
 // Recordings — list, download, frames, stats, archives

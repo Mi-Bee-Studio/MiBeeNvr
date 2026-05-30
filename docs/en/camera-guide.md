@@ -2,6 +2,8 @@
 #KM|
 #RW|MiBee NVR supports a wide range of IP cameras through various protocols including RTSP (H.264/H.265/MJPEG), HTTP JPEG, and ONVIF. This guide provides comprehensive compatibility information for popular camera brands, including supported protocols, configuration examples, and troubleshooting tips.
 #SY|
+#BV|#KM|**ONVIF Integration**: For comprehensive ONVIF camera support, discovery methods, PTZ control, and troubleshooting, see the [ONVIF Guide](./onvif-guide.md).
+#BV|#KM|
 #PX|## Quick Start (Top 3 Brands)
 #JW|
 #QW|### Hikvision

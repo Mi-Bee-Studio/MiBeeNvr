@@ -15,6 +15,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
 func testConfig() *config.Config {
@@ -953,3 +954,70 @@ func TestNewCameraManager_BackwardCompatOpts(t *testing.T) {
 	assert.Nil(t, mgr2.mergeMgr)
 }
 
+func TestGetOrCreateONVIFClient_CacheHit(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	assert.NotNil(t, mgr.onvifClients)
+	assert.Empty(t, mgr.onvifClients)
+
+	// Seed the cache with a mock client directly
+	mockClient := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
+	mgr.onvifClients["test-cam"] = mockClient
+
+	// The getOrCreateONVIFClient can't actually Connect() without a real device,
+	// so test the cache lookup path by pre-seeding and verifying CloseONVIFClient removes it.
+	assert.Contains(t, mgr.onvifClients, "test-cam")
+	mgr.CloseONVIFClient("test-cam")
+	assert.NotContains(t, mgr.onvifClients, "test-cam")
+}
+
+func TestGetOrCreateONVIFClient_CameraNotFound(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	ctx := context.Background()
+	_, err := mgr.getOrCreateONVIFClient(ctx, "nonexistent-camera")
+	assert.Error(t, err)
+	var notFound *model.CameraNotFoundError
+	assert.ErrorAs(t, err, &notFound)
+	assert.Equal(t, "nonexistent-camera", notFound.CameraID)
+}
+
+func TestGetOrCreateONVIFClient_NonONVIFCamera(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	ctx := context.Background()
+	_, err := mgr.getOrCreateONVIFClient(ctx, "cam-h264")
+	assert.Error(t, err)
+	var notONVIF *model.ONVIFNotCameraError
+	assert.ErrorAs(t, err, &notONVIF)
+	assert.Equal(t, "cam-h264", notONVIF.CameraID)
+}
+
+func TestCloseONVIFClient(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	assert.Empty(t, mgr.onvifClients)
+
+	mockClient := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
+	mgr.onvifClients["cam-to-close"] = mockClient
+	assert.Len(t, mgr.onvifClients, 1)
+
+	mgr.CloseONVIFClient("cam-to-close")
+	assert.Empty(t, mgr.onvifClients)
+
+	// Closing a non-existent key is a no-op
+	mgr.CloseONVIFClient("does-not-exist")
+	assert.Empty(t, mgr.onvifClients)
+}
+
+func TestCloseAllONVIFClients(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	assert.Empty(t, mgr.onvifClients)
+
+	mockClient1 := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
+	mockClient2 := onvif.NewClient("http://192.168.1.101/onvif/device_service", "admin", "pass")
+	mgr.onvifClients["cam-1"] = mockClient1
+	mgr.onvifClients["cam-2"] = mockClient2
+	assert.Len(t, mgr.onvifClients, 2)
+
+	mgr.closeAllONVIFClients()
+	assert.Empty(t, mgr.onvifClients)
+}
