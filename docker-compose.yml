@@ -1,17 +1,27 @@
 # MiBee NVR — Docker Compose
 # Usage:
-#   1. mkdir -p data
-#   2. cp config.example.yaml data/mibee-nvr.yaml
-#   3. Edit data/mibee-nvr.yaml (set password, add cameras)
-#   4. docker compose up -d
-#   5. Open http://localhost:9090
+#   1. docker compose up -d
+#   2. Open http://localhost:9090
+#   3. Complete the setup wizard in the browser
+#
+# Storage:
+#   Recordings and database are stored inside /data in the container.
+#   The default volume mount maps ./data on the host to /data in the container.
+#   To use a different host directory (e.g. external drive):
+#     volumes:
+#       - /mnt/external/nvr:/data    # ← change left side to your host path
+#   The right side (:data) and NVR_DATA_DIR must always match.
+#
+# Permissions:
+#   The container runs as UID/GID 1000 by default.
+#   Make sure the host directory is writable by that user, or set NVR_UID/NVR_GID
+#   to match the owner of the host directory.
 #
 # Networking:
 #   By default, this uses bridge networking with port mapping.
 #   ONVIF WS-Discovery (UDP multicast) does NOT work in bridge mode.
 #   To enable ONVIF auto-discovery, uncomment "network_mode: host"
 #   and remove the "ports" section below.
-
 services:
   mibee-nvr:
     image: ghcr.io/mi-bee-studio/mibeenvr:latest

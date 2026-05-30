@@ -11,8 +11,11 @@ server:
   listen: ":9090"
 
 # Storage settings
+# root_dir: where recordings, database, and HLS segments are stored.
+# Docker: set via NVR_DATA_DIR env var (default /data). See docker-compose.yml.
+# Binary: set via --data-dir flag or directly in YAML.
 storage:
-  root_dir: "/var/lib/mibee-nvr"   # Recording storage directory
+  root_dir: "/var/lib/mibee-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
   segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
 
 # Authentication
