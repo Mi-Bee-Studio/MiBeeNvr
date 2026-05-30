@@ -72,6 +72,13 @@ export {
   getSnapshotUri,
   // Device Capabilities
   getDeviceCapabilities,
+  // Device Management
+  rebootDevice,
+  getNetworkInterfaces,
+  setNetworkInterfaces,
+  getDeviceUsers,
+  createDeviceUsers,
+  deleteDeviceUsers,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -103,6 +110,12 @@ export type {
   SnapshotUriResponse,
   // Device Capabilities
   DeviceCapabilitiesInfo,
+  // Device Management
+  NetworkIPv4,
+  NetworkIPv6,
+  NetworkNTP,
+  NetworkInterface as ONVIFNetworkInterface,
+  ONVIFDeviceUser,
 } from './cameras';
 
 // Recordings — list, download, frames, stats, archives
