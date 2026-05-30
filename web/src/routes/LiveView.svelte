@@ -1,14 +1,18 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities } from '$lib/api';
-  import type { Camera, ProtocolInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
+  import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
+  import SnapshotButton from '../components/SnapshotButton.svelte';
+  import ImagingPanel from '$lib/components/ImagingPanel.svelte';
+  import PresetManager from '$lib/components/PresetManager.svelte';
+  import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
@@ -22,12 +26,39 @@
   let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
 
+  // ONVIF capabilities
+  let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
+  let capsLoading = $state(false);
+  let showImaging = $state(false);
+  let showPresets = $state(false);
+  let showEvents = $state(false);
+
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
   }
 
   function isPtzSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).ptz;
+  }
+
+  function isOnvifCamera(cam: Camera): boolean {
+    return normalizeProtocol(cam.protocol) === 'onvif';
+  }
+
+  async function loadCapabilities() {
+    if (!camera || !isOnvifCamera(camera)) {
+      deviceCaps = null;
+      return;
+    }
+    capsLoading = true;
+    try {
+      deviceCaps = await getDeviceCapabilities(camera.id);
+    } catch (e) {
+      console.warn('Failed to load device capabilities:', e);
+      deviceCaps = null;
+    } finally {
+      capsLoading = false;
+    }
   }
 
   async function loadCamera() {
@@ -70,6 +101,13 @@
     // Brief delay to show switching state, then mount new player
     setTimeout(() => { switchingProtocol = false; }, 100);
   }
+
+  // Fetch capabilities when camera loads
+  $effect(() => {
+    if (camera && isOnvifCamera(camera)) {
+      loadCapabilities();
+    }
+  });
 
   onMount(() => {
     if (!cameraId) {
@@ -116,7 +154,7 @@
     {:else if camera}
       <div class="space-y-4">
         <!-- Header with camera name -->
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
             <ArrowLeft size={16} />
             {t('nav.cameras')}
@@ -125,6 +163,12 @@
             {camera.name || camera.id}
           </h2>
           <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
+
+          <!-- ONVIF controls shown for all ONVIF cameras -->
+          {#if isOnvifCamera(camera)}
+            <SnapshotButton cameraId={camera.id} />
+          {/if}
+
           {#if isHlsSupported(camera)}
             <div class="flex-1"></div>
             <!-- Protocol Switcher -->
@@ -206,7 +250,116 @@
             <PtzControl {cameraId} enabled={true} />
           </div>
         {/if}
+
+        <!-- ONVIF collapsible panels -->
+        {#if isOnvifCamera(camera) && !capsLoading}
+          <!-- Imaging Panel (collapsible) -->
+          {#if deviceCaps?.imaging}
+            <details class="onvif-collapsible" bind:open={showImaging}>
+              <summary class="onvif-collapsible-summary">
+                <div class="onvif-collapsible-title-row">
+                  {#if showImaging}
+                    <ChevronDown size={16} />
+                  {:else}
+                    <ChevronRight size={16} />
+                  {/if}
+                  <Image size={16} />
+                  <span>{t('onvif.imaging.title')}</span>
+                </div>
+              </summary>
+              <div class="onvif-collapsible-body">
+                <ImagingPanel cameraId={camera.id} />
+              </div>
+            </details>
+          {/if}
+
+          <!-- Preset Manager (collapsible) -->
+          {#if deviceCaps?.ptz}
+            <details class="onvif-collapsible" bind:open={showPresets}>
+              <summary class="onvif-collapsible-summary">
+                <div class="onvif-collapsible-title-row">
+                  {#if showPresets}
+                    <ChevronDown size={16} />
+                  {:else}
+                    <ChevronRight size={16} />
+                  {/if}
+                  <Move size={16} />
+                  <span>{t('onvif.presets.title')}</span>
+                </div>
+              </summary>
+              <div class="onvif-collapsible-body">
+                <PresetManager cameraId={camera.id} />
+              </div>
+            </details>
+          {/if}
+
+          <!-- ONVIF Events (collapsible) -->
+          {#if deviceCaps?.events}
+            <details class="onvif-collapsible" bind:open={showEvents}>
+              <summary class="onvif-collapsible-summary">
+                <div class="onvif-collapsible-title-row">
+                  {#if showEvents}
+                    <ChevronDown size={16} />
+                  {:else}
+                    <ChevronRight size={16} />
+                  {/if}
+                  <Activity size={16} />
+                  <span>{t('onvif.events.title')}</span>
+                </div>
+              </summary>
+              <div class="onvif-collapsible-body">
+                <ONVIFEvents cameraId={camera.id} maxEvents={50} />
+              </div>
+            </details>
+          {/if}
+        {/if}
       </div>
     {/if}
   </main>
 </div>
+
+<style>
+  .onvif-collapsible {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background-color: var(--bg-elevated);
+  }
+
+  .onvif-collapsible[open] {
+    border-color: var(--border-hover);
+  }
+
+  .onvif-collapsible-summary {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background-color: var(--bg-secondary);
+    user-select: none;
+    transition: background-color var(--duration-fast) var(--ease-out);
+    list-style: none;
+  }
+
+  .onvif-collapsible-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .onvif-collapsible-summary:hover {
+    background-color: var(--bg-hover);
+  }
+
+  .onvif-collapsible-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+  }
+
+  .onvif-collapsible-body {
+    padding: 0.75rem;
+  }
+</style>

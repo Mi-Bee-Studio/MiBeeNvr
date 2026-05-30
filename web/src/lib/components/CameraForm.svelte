@@ -8,6 +8,7 @@
     buildProtocolsMap,
     normalizeProtocol,
     testConnection,
+    getDeviceCapabilities,
   } from '$lib/api';
   import type {
     Camera,
@@ -18,10 +19,16 @@
     ProtocolInfo,
     XiaomiDevice,
     TestConnectionResult,
+    DeviceCapabilitiesInfo,
   } from '$lib/api';
   import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
+  import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
+  import ImagingPanel from '$lib/components/ImagingPanel.svelte';
+  import PresetManager from '$lib/components/PresetManager.svelte';
+  import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
+  import DeviceManagement from '$lib/components/DeviceManagement.svelte';
 
   interface Props {
     editingCamera: Camera | null;
@@ -77,6 +84,10 @@
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
 
+  // ONVIF capabilities
+  let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
+  let capsLoading = $state(false);
+
   // Auto-select encoding when protocol changes
   $effect(() => {
     const proto = protocolsMap.get(formProtocol);
@@ -100,10 +111,12 @@
     if (editingCamera) {
       populateForm(editingCamera);
       loadMergeConfig(editingCamera.id);
+      loadCapabilities(editingCamera);
     } else {
       resetFormFields();
       mergeConfig = null;
       mergeConfigLoading = false;
+      deviceCaps = null;
     }
   });
 
@@ -165,6 +178,22 @@
       mergeConfig = await getMergeConfig(cameraId);
     } catch (e) { console.warn('Failed to load merge config:', e); mergeConfig = null; } finally {
       mergeConfigLoading = false;
+    }
+  }
+
+  async function loadCapabilities(cam: Camera) {
+    if (normalizeProtocol(cam.protocol) !== 'onvif') {
+      deviceCaps = null;
+      return;
+    }
+    capsLoading = true;
+    try {
+      deviceCaps = await getDeviceCapabilities(cam.id);
+    } catch (e) {
+      console.warn('Failed to load device capabilities:', e);
+      deviceCaps = null;
+    } finally {
+      capsLoading = false;
     }
   }
 
@@ -548,6 +577,62 @@
         {t('transcoding.warning_global_disabled')}
       </div>
     {/if}
+  {/if}
+
+  <!-- ONVIF Device Settings (edit mode only, ONVIF cameras) -->
+  {#if editingCamera && normalizeProtocol(editingCamera.protocol) === 'onvif' && !capsLoading}
+    <div class="mt-6 space-y-4">
+      <h4 class="text-sm font-semibold th-text-secondary uppercase tracking-wide">ONVIF</h4>
+
+      <!-- Device Capabilities -->
+      <DeviceCapabilities cameraId={editingCamera.id} />
+
+      <!-- Imaging Panel (if supported) -->
+      {#if deviceCaps?.imaging}
+        <details class="border th-border rounded-lg" open>
+          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+            {t('onvif.imaging.title')}
+          </summary>
+          <div class="px-4 pb-4">
+            <ImagingPanel cameraId={editingCamera.id} />
+          </div>
+        </details>
+      {/if}
+
+      <!-- Preset Manager (if PTZ supported) -->
+      {#if deviceCaps?.ptz}
+        <details class="border th-border rounded-lg" open>
+          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+            {t('onvif.presets.title')}
+          </summary>
+          <div class="px-4 pb-4">
+            <PresetManager cameraId={editingCamera.id} />
+          </div>
+        </details>
+      {/if}
+
+      <!-- ONVIF Events (if supported) -->
+      {#if deviceCaps?.events}
+        <details class="border th-border rounded-lg">
+          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+            {t('onvif.events.title')}
+          </summary>
+          <div class="px-4 pb-4">
+            <ONVIFEvents cameraId={editingCamera.id} maxEvents={50} />
+          </div>
+        </details>
+      {/if}
+
+      <!-- Device Management -->
+      <details class="border th-border rounded-lg">
+        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+          {t('onvif.device.title')}
+        </summary>
+        <div class="px-4 pb-4">
+          <DeviceManagement cameraId={editingCamera.id} cameraName={editingCamera.name} />
+        </div>
+      </details>
+    </div>
   {/if}
 
   <div class="flex items-center gap-3 mt-6">
