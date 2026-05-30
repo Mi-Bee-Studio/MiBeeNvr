@@ -2,8 +2,9 @@ package camera
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
+"fmt"
+"log/slog"
+"strings"
 	"sync"
 	"time"
 
@@ -874,6 +875,12 @@ func (cm *CameraManager) CloseONVIFClient(cameraID string) {
 	delete(cm.onvifClients, cameraID)
 }
 
+// GetONVIFClient returns a cached ONVIF client for the given camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetONVIFClient(ctx context.Context, cameraID string) (*onvif.Client, error) {
+	return cm.getOrCreateONVIFClient(ctx, cameraID)
+}
+
 // closeAllONVIFClients clears the entire ONVIF client cache.
 func (cm *CameraManager) closeAllONVIFClients() {
 	cm.onvifMu.Lock()
@@ -896,6 +903,49 @@ func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID str
 		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
 	return client.NewPTZController(profiles[0].Token), nil
+}
+
+// GetImagingController returns an ImagingController for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID string) (onvif.ImagingController, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
+	}
+	if len(profiles) == 0 {
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
+	}
+	ctrl := client.NewImagingController(profiles[0].Token)
+	if ctrl == nil {
+		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)
+	}
+	// Use device endpoint as imaging service base — most cameras serve imaging
+	// on the same host with /onvif/imaging_service path.
+	endpoint := client.GetEndpoint()
+	imgEndpoint := strings.TrimSuffix(endpoint, "/device_service") + "/imaging_service"
+	ctrl.SetImagingEndpoint(imgEndpoint)
+	return ctrl, nil
+}
+
+// GetSnapshotProvider returns a SnapshotProvider for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetSnapshotProvider(ctx context.Context, cameraID string) (onvif.SnapshotProvider, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get profiles for camera %q: %w", cameraID, err)
+	}
+	if len(profiles) == 0 {
+		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
+	}
+	return client.NewSnapshotProvider(profiles[0].Token), nil
 }
 
 // strPtrOrEmpty returns the string value of a *string pointer, or empty string if nil.

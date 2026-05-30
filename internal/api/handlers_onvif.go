@@ -303,3 +303,119 @@ func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ operation failed for camera %q: %v", cameraID, err))
 	}
 }
+
+// --- Snapshot URI endpoint ---
+
+// handleSnapshotGetUri returns the ONVIF snapshot URI for a camera.
+func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	provider, err := h.camMgr.GetSnapshotProvider(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFPTZError(w, cameraID, err)
+		return
+	}
+	uri, err := provider.GetSnapshotUri(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get snapshot URI failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"uri": uri})
+}
+
+// --- Imaging endpoints ---
+
+// handleImagingGetSettings returns current imaging settings for a camera.
+func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	settings, err := img.GetImagingSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging settings failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+// handleImagingSetSettings applies imaging parameter changes for a camera.
+func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	var req onvif.ImagingSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	if err := img.SetImagingSettings(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("set imaging settings failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleImagingGetOptions returns supported imaging parameter ranges for a camera.
+func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if !h.requireONVIF(w, r) {
+		return
+	}
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
+	if err != nil {
+		handleONVIFImagingError(w, cameraID, err)
+		return
+	}
+	options, err := img.GetImagingOptions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging options failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, options)
+}
+
+// handleONVIFImagingError maps ONVIF imaging controller errors to appropriate HTTP responses.
+func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) {
+	switch {
+	case errors.As(err, new(*model.CameraNotFoundError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, new(*model.ONVIFNotCameraError)):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, new(*model.ONVIFConnectionError)):
+		writeAPIError(w, http.StatusBadGateway, err)
+	case errors.As(err, new(*model.ONVIFNoProfilesError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	default:
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("imaging operation failed for camera %q: %v", cameraID, err))
+	}
+}
