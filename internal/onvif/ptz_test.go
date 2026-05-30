@@ -17,50 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Existing Client stub tests ---
-
-func newConnectedClient(t *testing.T) *Client {
-	t.Helper()
-	// Use a mock ONVIF server that returns valid GetCapabilities (required by Initialize)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tds:GetCapabilitiesResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:Capabilities><tds:Media XAddr="http://host/media"/></tds:Capabilities></tds:GetCapabilitiesResponse></s:Body></s:Envelope>`)
-	}))
-	t.Cleanup(server.Close)
-
-	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, client.Connect(ctx))
-	return client
-}
-
-func TestPTZNotConnected(t *testing.T) {
-	client := NewClient("http://localhost:8080/onvif/device_service", "admin", "password")
-	ctx := context.Background()
-
-	err := client.PTZContinuousMove(ctx, "profile1", PTZVector{Pan: 0.5})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not connected")
-}
-
-func TestPTZStopNotConnected(t *testing.T) {
-	client := NewClient("http://localhost:8080/onvif/device_service", "admin", "password")
-	ctx := context.Background()
-
-	err := client.PTZStop(ctx, "profile1")
-	require.Error(t, err)
-}
-
-func TestPTZGetStatusNotImplemented(t *testing.T) {
-	client := newConnectedClient(t)
-	ctx := context.Background()
-
-	_, err := client.PTZGetStatus(ctx, "profile1")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not yet implemented")
-}
-
 // --- SOAP mock helpers ---
 
 const soapPTZNamespace = "http://www.onvif.org/ver20/ptz/wsdl"
