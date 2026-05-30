@@ -54,6 +54,8 @@ type CameraManager struct {
 	transcodeMgr *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr  *health.Manager            // health monitoring (nil when disabled)
 	mu         sync.RWMutex
+	onvifClients map[string]*onvif.Client // camera_id → cached ONVIF client
+	onvifMu      sync.Mutex               // protects onvifClients
 	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
 }
 
@@ -81,6 +83,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:     mm,
 		transcodeMgr: tm,
 		errorDetails: make(map[string]*model.CameraErrorDetail),
+		onvifClients: make(map[string]*onvif.Client),
 	}
 }
 
@@ -367,9 +370,10 @@ func (cm *CameraManager) Stop() error {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
 	}
 
+	cm.closeAllONVIFClients()
+
 	return nil
 }
-
 // Status returns the status of all managed recorders.
 func (cm *CameraManager) Status() map[string]model.RecorderStatus {
 	cm.mu.RLock()
@@ -832,25 +836,57 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 	return nil
 }
 
-// GetONVIFPTZController returns a PTZController for the given ONVIF camera.
-// Returns error if camera is not found, not ONVIF, or client creation fails.
-func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
-	cm.mu.RLock()
+// getOrCreateONVIFClient returns a cached ONVIF client for the given camera,
+// creating one if it doesn't exist in the cache.
+// Camera config lookup is done OUTSIDE the onvifMu lock to avoid deadlock with cm.mu.
+func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID string) (*onvif.Client, error) {
 	cam := cm.GetCameraConfig(cameraID)
-	cm.mu.RUnlock()
 	if cam == nil {
-	return nil, &model.CameraNotFoundError{CameraID: cameraID}
+		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Protocol != string(model.ProtoONVIF) {
-	return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
+		return nil, &model.ONVIFNotCameraError{CameraID: cameraID}
 	}
 	endpoint := cam.ONVIFEndpoint
 	if endpoint == "" {
 		endpoint = cam.URL
 	}
+
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+
+	if cached, ok := cm.onvifClients[cameraID]; ok {
+		return cached, nil
+	}
+
 	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
 	if err := client.Connect(ctx); err != nil {
 		return nil, &model.ONVIFConnectionError{CameraID: cameraID, Err: err}
+	}
+	cm.onvifClients[cameraID] = client
+	return client, nil
+}
+
+// CloseONVIFClient removes a cached ONVIF client for the given camera.
+func (cm *CameraManager) CloseONVIFClient(cameraID string) {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	delete(cm.onvifClients, cameraID)
+}
+
+// closeAllONVIFClients clears the entire ONVIF client cache.
+func (cm *CameraManager) closeAllONVIFClients() {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	cm.onvifClients = make(map[string]*onvif.Client)
+}
+
+// GetONVIFPTZController returns a PTZController for the given ONVIF camera.
+// Returns error if camera is not found, not ONVIF, or client creation fails.
+func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		return nil, err
 	}
 	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
