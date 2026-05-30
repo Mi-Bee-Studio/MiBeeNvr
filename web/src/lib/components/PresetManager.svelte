@@ -2,7 +2,7 @@
   import { getPTZPresets, createPTZPreset, goToPTZPreset, deletePTZPreset } from '$lib/api';
   import type { PTZPreset } from '$lib/api';
   import { showToast } from '$lib/toast';
-
+  import { t } from '$lib/i18n';
   let { cameraId }: { cameraId: string } = $props();
 
   let presets = $state<PTZPreset[]>([]);
@@ -24,7 +24,7 @@
     try {
       presets = await getPTZPresets(cameraId);
     } catch (e: any) {
-      error = e.message || 'Failed to load presets';
+      error = e.message || t('onvif.presets.loadError');
     } finally {
       loading = false;
     }
@@ -38,9 +38,9 @@
       await createPTZPreset(cameraId, name);
       newPresetName = '';
       await loadPresets();
-      showToast('Preset created', 'success');
+      showToast(t('onvif.presets.created'), 'success');
     } catch (e: any) {
-      showToast(e.message || 'Failed to create preset', 'error');
+      showToast(e.message || t('onvif.presets.failed'), 'error');
     } finally {
       adding = false;
     }
@@ -58,12 +58,12 @@
   }
 
   async function handleDelete(token: string, name: string) {
-    if (!confirm(`Delete preset "${name}"?`)) return;
+    if (!confirm(t('onvif.presets.confirmDelete', { name }))) return;
     deleting = token;
     try {
       await deletePTZPreset(cameraId, token);
       await loadPresets();
-      showToast('Preset deleted', 'success');
+      showToast(t('onvif.presets.deleted'), 'success');
     } catch (e: any) {
       showToast(e.message || 'Failed to delete preset', 'error');
     } finally {
@@ -74,7 +74,7 @@
 
 <div class="preset-panel">
   <div class="preset-header">
-    <span class="preset-title">Presets</span>
+    <span class="preset-title">{t('onvif.presets.title')}</span>
   </div>
 
   {#if loading}
@@ -89,7 +89,7 @@
       <input
         type="text"
         class="input preset-input"
-        placeholder="Preset name"
+        placeholder={t('onvif.presets.name')}
         bind:value={newPresetName}
         onkeydown={(e) => { if (e.key === 'Enter') handleAdd(); }}
       />
@@ -101,14 +101,14 @@
         {#if adding}
           <span class="spinner"></span>
         {:else}
-          Add
+          {t('onvif.presets.add')}
         {/if}
       </button>
     </div>
 
     <!-- Preset list -->
     {#if presets.length === 0}
-      <div class="preset-empty">No presets configured</div>
+      <div class="preset-empty">{t('onvif.presets.noPresets')}</div>
     {:else}
       <div class="preset-list">
         {#each presets as preset (preset.token)}
@@ -126,7 +126,7 @@
                 {#if goingTo === preset.token}
                   <span class="spinner"></span>
                 {:else}
-                  Go To
+                  {t('onvif.presets.goTo')}
                 {/if}
               </button>
               <button
@@ -137,7 +137,7 @@
                 {#if deleting === preset.token}
                   <span class="spinner"></span>
                 {:else}
-                  Delete
+                  {t('onvif.presets.delete')}
                 {/if}
               </button>
             </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getSnapshotUri, API_BASE, getAuthHeader } from '$lib/api';
   import { Camera } from 'lucide-svelte';
-
+  import { t } from '$lib/i18n';
   let { cameraId }: { cameraId: string } = $props();
 
   let loading = $state(false);
@@ -50,10 +50,10 @@
     class="btn btn-ghost snapshot-btn"
     onclick={handleSnapshot}
     disabled={loading || !snapshotUri}
-    title={loading ? 'Loading...' : 'Take snapshot'}
+    title={loading ? t('onvif.snapshot.loading') : t('onvif.snapshot.takeSnapshot')}
   >
     <Camera size={14} />
-    <span class="snapshot-btn-label">Snapshot</span>
+    <span class="snapshot-btn-label">{t('onvif.snapshot.title')}</span>
   </button>
 {:else}
   <button
@@ -62,7 +62,7 @@
     title="Snapshot not supported by this camera"
   >
     <Camera size={14} />
-    <span class="snapshot-btn-label">Snapshot</span>
+    <span class="snapshot-btn-label">{t('onvif.snapshot.title')}</span>
   </button>
 {/if}
 

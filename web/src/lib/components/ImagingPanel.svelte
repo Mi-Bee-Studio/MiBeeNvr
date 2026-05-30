@@ -2,7 +2,7 @@
   import { getImagingSettings, setImagingSettings, getImagingOptions } from '$lib/api';
   import type { ImagingSettings, ImagingOptions } from '$lib/api';
   import { showToast } from '$lib/toast';
-
+  import { t } from '$lib/i18n';
   let { cameraId }: { cameraId: string } = $props();
 
   let settings = $state<ImagingSettings | null>(null);
@@ -102,7 +102,7 @@
 
 <div class="imaging-panel">
   <div class="imaging-header">
-    <span class="imaging-title">Imaging Settings</span>
+    <span class="imaging-title">{t('onvif.imaging.title')}</span>
     {#if saving}
       <span class="imaging-saving"><span class="spinner"></span></span>
     {/if}
@@ -113,13 +113,13 @@
       <span class="spinner"></span>
     </div>
   {:else if error}
-    <div class="imaging-error">{error}</div>
+    <div class="imaging-error">{error || t('onvif.imaging.loadError')}</div>
   {:else}
     <div class="imaging-grid">
       <!-- Brightness -->
       {#if options?.brightness}
         <label class="imaging-field">
-          <span class="imaging-label">Brightness</span>
+          <span class="imaging-label">{t('onvif.imaging.brightness')}</span>
           <div class="imaging-slider-row">
             <input
               type="range"
@@ -138,7 +138,7 @@
       <!-- Contrast -->
       {#if options?.contrast}
         <label class="imaging-field">
-          <span class="imaging-label">Contrast</span>
+          <span class="imaging-label">{t('onvif.imaging.contrast')}</span>
           <div class="imaging-slider-row">
             <input
               type="range"
@@ -157,7 +157,7 @@
       <!-- Saturation -->
       {#if options?.saturation}
         <label class="imaging-field">
-          <span class="imaging-label">Saturation</span>
+          <span class="imaging-label">{t('onvif.imaging.saturation')}</span>
           <div class="imaging-slider-row">
             <input
               type="range"
@@ -176,7 +176,7 @@
       <!-- Sharpness -->
       {#if options?.sharpness}
         <label class="imaging-field">
-          <span class="imaging-label">Sharpness</span>
+          <span class="imaging-label">{t('onvif.imaging.sharpness')}</span>
           <div class="imaging-slider-row">
             <input
               type="range"
@@ -194,25 +194,25 @@
 
       <!-- Exposure -->
       <div class="imaging-section">
-        <span class="imaging-section-title">Exposure</span>
+        <span class="imaging-section-title">{t('onvif.imaging.exposure')}</span>
         <div class="imaging-mode-toggle">
           <button
             class="imaging-mode-btn"
             class:imaging-mode-btn-active={exposureMode === 'AUTO'}
             onclick={() => { exposureMode = 'AUTO'; debouncedSave(); }}
-          >Auto</button>
+          >{t('onvif.imaging.auto')}</button>
           <button
             class="imaging-mode-btn"
             class:imaging-mode-btn-active={exposureMode === 'MANUAL'}
             onclick={() => { exposureMode = 'MANUAL'; debouncedSave(); }}
-          >Manual</button>
+          >{t('onvif.imaging.manual')}</button>
         </div>
 
         {#if exposureMode === 'MANUAL'}
           <div class="imaging-sub-fields">
             {#if options?.exposure_time}
               <label class="imaging-field">
-                <span class="imaging-label">Exposure Time</span>
+                <span class="imaging-label">{t('onvif.imaging.exposureTime')}</span>
                 <div class="imaging-slider-row">
                   <input
                     type="range"
@@ -229,7 +229,7 @@
             {/if}
             {#if options?.gain}
               <label class="imaging-field">
-                <span class="imaging-label">Gain</span>
+                <span class="imaging-label">{t('onvif.imaging.gain')}</span>
                 <div class="imaging-slider-row">
                   <input
                     type="range"
@@ -250,23 +250,23 @@
 
       <!-- White Balance -->
       <div class="imaging-section">
-        <span class="imaging-section-title">White Balance</span>
+        <span class="imaging-section-title">{t('onvif.imaging.whiteBalance')}</span>
         <div class="imaging-mode-toggle">
           <button
             class="imaging-mode-btn"
             class:imaging-mode-btn-active={wbMode === 'auto'}
             onclick={() => { wbMode = 'auto'; debouncedSave(); }}
-          >Auto</button>
+          >{t('onvif.imaging.auto')}</button>
           <button
             class="imaging-mode-btn"
             class:imaging-mode-btn-active={wbMode === 'manual'}
             onclick={() => { wbMode = 'manual'; debouncedSave(); }}
-          >Manual</button>
+          >{t('onvif.imaging.manual')}</button>
         </div>
 
         {#if wbMode === 'manual' && options?.color_temperature}
           <label class="imaging-field">
-            <span class="imaging-label">Color Temperature</span>
+            <span class="imaging-label">{t('onvif.imaging.colorTemperature')}</span>
             <div class="imaging-slider-row">
               <input
                 type="range"
@@ -286,7 +286,7 @@
 
     <div class="imaging-actions">
       <button class="btn btn-ghost" onclick={handleReset} disabled={saving}>
-        Reset to Saved
+        {t('onvif.imaging.resetDefaults')}
       </button>
     </div>
   {/if}

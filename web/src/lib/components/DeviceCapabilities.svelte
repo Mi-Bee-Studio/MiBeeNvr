@@ -2,7 +2,7 @@
   import { getDeviceCapabilities } from '$lib/api';
   import type { DeviceCapabilitiesInfo } from '$lib/api';
   import { Move, Image, Bell, Camera, Radio } from 'lucide-svelte';
-
+  import { t } from '$lib/i18n';
   let { cameraId }: { cameraId: string } = $props();
 
   let caps = $state<DeviceCapabilitiesInfo | null>(null);
@@ -20,7 +20,7 @@
     try {
       caps = await getDeviceCapabilities(cameraId);
     } catch (e: any) {
-      error = e.message || 'Failed to load capabilities';
+      error = e.message || t('onvif.capabilities.loadError');
     } finally {
       loading = false;
     }
@@ -34,11 +34,11 @@
   }
 
   let badges = $derived<CapabilityBadge[]>(caps ? [
-    { key: 'ptz', label: 'PTZ', icon: Move, enabled: caps.ptz },
-    { key: 'imaging', label: 'Imaging', icon: Image, enabled: caps.imaging },
-    { key: 'events', label: 'Events', icon: Bell, enabled: caps.events },
-    { key: 'snapshot', label: 'Snapshot', icon: Camera, enabled: caps.snapshot },
-    { key: 'streaming', label: 'Streaming', icon: Radio, enabled: caps.streaming },
+    { key: 'ptz', label: t('onvif.capabilities.ptz'), icon: Move, enabled: caps.ptz },
+    { key: 'imaging', label: t('onvif.capabilities.imaging'), icon: Image, enabled: caps.imaging },
+    { key: 'events', label: t('onvif.capabilities.events'), icon: Bell, enabled: caps.events },
+    { key: 'snapshot', label: t('onvif.capabilities.snapshot'), icon: Camera, enabled: caps.snapshot },
+    { key: 'streaming', label: t('onvif.capabilities.streaming'), icon: Radio, enabled: caps.streaming },
   ] : []);
 </script>
 
