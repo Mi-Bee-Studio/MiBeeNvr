@@ -232,10 +232,10 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:      u.Scheme,
-		Host:        u.Host,
-		Protocol:    &tcp,
-		ReadTimeout: 10 * time.Second,
+		Scheme:       u.Scheme,
+		Host:         u.Host,
+		Protocol:     &tcp,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
@@ -333,6 +333,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		r.pps = append([]byte(nil), forma.PPS...)
 	}
 
+	frameAlive := make(chan struct{}, 1)
 	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
 	r.dropped.Store(0)
 	writerDone := make(chan struct{})
@@ -345,6 +346,11 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				h265Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
+		}
+		// Signal frame received for watchdog
+		select {
+		case frameAlive <- struct{}{}:
+		default:
 		}
 		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
 		if r.Hub != nil {
@@ -438,13 +444,47 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Wait() }()
 
+	// Frame watchdog: detect "RTSP alive but no data" state.
+	// When gortsplib receives RTSP keep-alives (GET_PARAMETER), it resets the
+	// ReadTimeout, so client.Wait() can block indefinitely even with no frames.
+	// The watchdog closes the connection if no frame arrives within the timeout.
+	stopWatchdog := make(chan struct{})
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		watchdog := time.NewTimer(defaultFrameWatchdogTimeout)
+		defer watchdog.Stop()
+		for {
+			select {
+			case <-frameAlive:
+				if !watchdog.Stop() {
+					<-watchdog.C
+				}
+				watchdog.Reset(defaultFrameWatchdogTimeout)
+			case <-watchdog.C:
+				h265Logger.Warn("frame watchdog timeout, closing connection",
+					"camera_id", r.cfg.CameraID, "timeout", defaultFrameWatchdogTimeout)
+				client.Close()
+				return
+			case <-stopWatchdog:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	select {
 	case err := <-errCh:
+		close(stopWatchdog)
+		<-watchdogDone
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
 		return err, true
 	case <-ctx.Done():
+		close(stopWatchdog)
+		<-watchdogDone
 		client.Close()
 		close(r.frameCh)
 		<-writerDone
@@ -452,7 +492,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return ctx.Err(), true
 	}
 }
-
 func (r *H265Recorder) writeFrames(done chan struct{}) {
 	defer func() {
 		if panicErr := recover(); panicErr != nil {

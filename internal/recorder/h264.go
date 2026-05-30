@@ -43,10 +43,11 @@ type RecordingDB interface {
 }
 
 const (
-	DefaultSegmentDur  = 10 * time.Minute
-	DefaultRingBufCap  = 300
-	DefaultMaxBackoff  = 60 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
-	DefaultInitBackoff = 1 * time.Second   // Deprecated: no longer used, kept for config backward compatibility
+	DefaultSegmentDur           = 10 * time.Minute
+	DefaultRingBufCap           = 300
+	DefaultMaxBackoff           = 60 * time.Second // Deprecated: no longer used, kept for config backward compatibility
+	DefaultInitBackoff          = 1 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
+	defaultFrameWatchdogTimeout = 30 * time.Second // Max wait for frame data before reconnecting
 )
 
 // H264Config holds configuration for the H264 recorder.
@@ -251,10 +252,10 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:      u.Scheme,
-		Host:        u.Host,
-		Protocol:    &tcp,
-		ReadTimeout: 10 * time.Second,
+		Scheme:       u.Scheme,
+		Host:         u.Host,
+		Protocol:     &tcp,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
@@ -277,6 +278,16 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 	if _, err := client.Setup(desc.BaseURL, medi, 0, 0); err != nil {
 		return fmt.Errorf("SETUP: %w", err), false
+	}
+
+	// Store initial parameter sets from SDP.
+	// This ensures SPS/PPS are available even if the RTSP source does not
+	// repeat them in-band before each IDR frame (common in lightweight implementations).
+	if forma.SPS != nil {
+		r.sps = append([]byte(nil), forma.SPS...)
+	}
+	if forma.PPS != nil {
+		r.pps = append([]byte(nil), forma.PPS...)
 	}
 
 	// Audio setup: find AAC or G.711 format if AudioEnabled.
@@ -340,6 +351,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		}
 	}
 
+	frameAlive := make(chan struct{}, 1)
 	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
 	r.dropped.Store(0)
 	writerDone := make(chan struct{})
@@ -352,6 +364,11 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				h264Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
+		}
+		// Signal frame received for watchdog
+		select {
+		case frameAlive <- struct{}{}:
+		default:
 		}
 		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
 		if r.Hub != nil {
@@ -395,10 +412,10 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				if m != nil && aid > 0 {
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
-				if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
-					if err.Error() != "muxer is closed" {
-						h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
-					}
+					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
+						if err.Error() != "muxer is closed" {
+							h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+						}
 					}
 				}
 			}
@@ -425,10 +442,10 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				if dur < time.Millisecond {
 					dur = time.Millisecond
 				}
-			if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
-				if err.Error() != "muxer is closed" {
-					h264Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
-				}
+				if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
+					if err.Error() != "muxer is closed" {
+						h264Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
+					}
 				}
 			}
 		})
@@ -442,13 +459,48 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Wait() }()
+
+	// Frame watchdog: detect "RTSP alive but no data" state.
+	// When gortsplib receives RTSP keep-alives (GET_PARAMETER), it resets the
+	// ReadTimeout, so client.Wait() can block indefinitely even with no frames.
+	// The watchdog closes the connection if no frame arrives within the timeout.
+	stopWatchdog := make(chan struct{})
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		watchdog := time.NewTimer(defaultFrameWatchdogTimeout)
+		defer watchdog.Stop()
+		for {
+			select {
+			case <-frameAlive:
+				if !watchdog.Stop() {
+					<-watchdog.C
+				}
+				watchdog.Reset(defaultFrameWatchdogTimeout)
+			case <-watchdog.C:
+				h264Logger.Warn("frame watchdog timeout, closing connection",
+					"camera_id", r.cfg.CameraID, "timeout", defaultFrameWatchdogTimeout)
+				client.Close()
+				return
+			case <-stopWatchdog:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	select {
 	case err := <-errCh:
+		close(stopWatchdog)
+		<-watchdogDone
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()
 		return err, true
 	case <-ctx.Done():
+		close(stopWatchdog)
+		<-watchdogDone
 		client.Close()
 		close(r.frameCh)
 		<-writerDone
@@ -456,7 +508,6 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return ctx.Err(), true
 	}
 }
-
 func (r *H264Recorder) writeFrames(done chan struct{}) {
 	defer func() {
 		if panicErr := recover(); panicErr != nil {
