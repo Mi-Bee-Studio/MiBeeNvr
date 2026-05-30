@@ -1181,19 +1181,9 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	// ONVIF camera recorder is not running → 400
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 
-	// 4. ONVIF camera profiles endpoint returns stub data
+	// 4. ONVIF camera profiles endpoint — real ONVIF call (camera unreachable → 502)
 	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/onvif/profiles", nil)
-	require.Equal(t, http.StatusOK, rr.Code)
-	var profilesResp map[string]interface{}
-	// 5. Verify profiles response
-	parseJSON(t, rr, &profilesResp)
-	profiles, ok := profilesResp["profiles"].([]interface{})
-	require.True(t, ok)
-	require.Empty(t, profiles)
-	caps, ok := profilesResp["capabilities"].(map[string]interface{})
-	require.True(t, ok)
-	require.Equal(t, false, caps["ptz"])
-	require.Equal(t, false, caps["streaming"])
+	require.Equal(t, http.StatusBadGateway, rr.Code)
 
 	hlsMgr.StopAll()
 }
