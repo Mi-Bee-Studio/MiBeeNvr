@@ -136,3 +136,199 @@ func (m *MockPTZController) GetStatus(ctx context.Context) (PTZVector, bool, err
 	m.GetStatusCalls++
 	return m.Position, m.Moving, m.Error
 }
+
+// MockImagingController is a testable ImagingController.
+type MockImagingController struct {
+	mu              sync.Mutex
+	Settings        *ImagingSettings
+	Options         *ImagingOptions
+	Error           error
+
+	GetImagingSettingsCalls int
+	SetImagingSettingsCalls int
+	GetImagingOptionsCalls  int
+}
+
+func (m *MockImagingController) GetImagingSettings(ctx context.Context) (*ImagingSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetImagingSettingsCalls++
+	return m.Settings, m.Error
+}
+
+func (m *MockImagingController) SetImagingSettings(ctx context.Context, settings ImagingSettings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SetImagingSettingsCalls++
+	return m.Error
+}
+
+func (m *MockImagingController) GetImagingOptions(ctx context.Context) (*ImagingOptions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetImagingOptionsCalls++
+	return m.Options, m.Error
+}
+
+var _ ImagingController = (*MockImagingController)(nil)
+
+// MockPresetManager is a testable PresetManager.
+type MockPresetManager struct {
+	mu        sync.Mutex
+	Presets   []PTZPreset
+	Error     error
+
+	GetPresetsCalls   int
+	SetPresetCalls    int
+	GoToPresetCalls   int
+	RemovePresetCalls int
+}
+
+func (m *MockPresetManager) GetPresets(ctx context.Context) ([]PTZPreset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetPresetsCalls++
+	return m.Presets, m.Error
+}
+
+func (m *MockPresetManager) SetPreset(ctx context.Context, name string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SetPresetCalls++
+	return "preset-token-" + name, m.Error
+}
+
+func (m *MockPresetManager) GoToPreset(ctx context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GoToPresetCalls++
+	return m.Error
+}
+
+func (m *MockPresetManager) RemovePreset(ctx context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RemovePresetCalls++
+	return m.Error
+}
+
+var _ PresetManager = (*MockPresetManager)(nil)
+
+// MockEventSubscriber is a testable EventSubscriber.
+type MockEventSubscriber struct {
+	mu        sync.Mutex
+	Events    []ONVIFEvent
+	Error     error
+
+	SubscribeCalls        int
+	UnsubscribeCalls      int
+	GetEventMessagesCalls int
+}
+
+func (m *MockEventSubscriber) Subscribe(ctx context.Context, cameraID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SubscribeCalls++
+	return m.Error
+}
+
+func (m *MockEventSubscriber) Unsubscribe(ctx context.Context, cameraID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.UnsubscribeCalls++
+	return m.Error
+}
+
+func (m *MockEventSubscriber) GetEventMessages(ctx context.Context) ([]ONVIFEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetEventMessagesCalls++
+	return m.Events, m.Error
+}
+
+var _ EventSubscriber = (*MockEventSubscriber)(nil)
+
+// MockDeviceManager is a testable DeviceManager.
+type MockDeviceManager struct {
+	mu                  sync.Mutex
+	NetworkInterfaces   []NetworkInterface
+	Users               []ONVIFUser
+	Error               error
+
+	SystemRebootCalls          int
+	GetNetworkInterfacesCalls int
+	SetNetworkInterfacesCalls int
+	GetUsersCalls             int
+	CreateUsersCalls          int
+	DeleteUsersCalls          int
+	SetUserCalls              int
+}
+
+func (m *MockDeviceManager) SystemReboot(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SystemRebootCalls++
+	return m.Error
+}
+
+func (m *MockDeviceManager) GetNetworkInterfaces(ctx context.Context) ([]NetworkInterface, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetNetworkInterfacesCalls++
+	return m.NetworkInterfaces, m.Error
+}
+
+func (m *MockDeviceManager) SetNetworkInterfaces(ctx context.Context, interfaces []NetworkInterface) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SetNetworkInterfacesCalls++
+	return m.Error
+}
+
+func (m *MockDeviceManager) GetUsers(ctx context.Context) ([]ONVIFUser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetUsersCalls++
+	return m.Users, m.Error
+}
+
+func (m *MockDeviceManager) CreateUsers(ctx context.Context, users []ONVIFUser) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CreateUsersCalls++
+	return m.Error
+}
+
+func (m *MockDeviceManager) DeleteUsers(ctx context.Context, usernames []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.DeleteUsersCalls++
+	return m.Error
+}
+
+func (m *MockDeviceManager) SetUser(ctx context.Context, username, password string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.SetUserCalls++
+	return m.Error
+}
+
+var _ DeviceManager = (*MockDeviceManager)(nil)
+
+// MockSnapshotProvider is a testable SnapshotProvider.
+type MockSnapshotProvider struct {
+	mu    sync.Mutex
+	URI   string
+	Error error
+
+	GetSnapshotUriCalls int
+}
+
+func (m *MockSnapshotProvider) GetSnapshotUri(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetSnapshotUriCalls++
+	return m.URI, m.Error
+}
+
+var _ SnapshotProvider = (*MockSnapshotProvider)(nil)
