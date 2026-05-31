@@ -74,7 +74,7 @@ func TestReceiverFrameDistribution(t *testing.T) {
 		{0x67, 0x42}, // SPS
 		{0x65, 0xb8}, // IDR
 	}
-	hub.Broadcast(testPTS, testAU)
+	hub.Broadcast(testPTS, testAU, false)
 
 	// Verify consumer received the frame
 	require.Eventually(t, func() bool {
@@ -104,8 +104,8 @@ func TestStreamHubMultipleConsumers(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	hub.Broadcast(90000, [][]byte{{0x65}})
-	hub.Broadcast(94500, [][]byte{{0x41}})
+	hub.Broadcast(90000, [][]byte{{0x65}}, false)
+	hub.Broadcast(94500, [][]byte{{0x41}}, false)
 
 	require.Eventually(t, func() bool {
 		return count1.Load() == 2 && count2.Load() == 2
@@ -302,7 +302,7 @@ func TestDisconnectCleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Broadcast while active
-	hub.Broadcast(90000, [][]byte{{0x65}})
+	hub.Broadcast(90000, [][]byte{{0x65}}, false)
 	require.Eventually(t, func() bool {
 		return frameCount.Load() == 1
 	}, 2*time.Second, 10*time.Millisecond)

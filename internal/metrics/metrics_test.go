@@ -170,6 +170,7 @@ func TestNewStreamingMetrics(t *testing.T) {
 	require.NotNil(t, m.FLVFramesSent)
 	require.NotNil(t, m.FLVFramesDropped)
 	require.NotNil(t, m.FLVGOPCacheHits)
+	require.NotNil(t, m.FLVGOPCacheMisses)
 }
 
 func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
@@ -184,6 +185,7 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	m.FLVFramesSent.WithLabelValues("cam1").Inc()
 	m.FLVFramesDropped.WithLabelValues("cam1").Inc()
 	m.FLVGOPCacheHits.WithLabelValues("cam1").Inc()
+	m.FLVGOPCacheMisses.WithLabelValues("cam1").Inc()
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -198,6 +200,7 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	require.True(t, names["nvr_flv_frames_sent_total"])
 	require.True(t, names["nvr_flv_frames_dropped_total"])
 	require.True(t, names["nvr_flv_gop_cache_hits_total"])
+	require.True(t, names["nvr_flv_gop_cache_misses_total"])
 }
 
 func TestTranscodingMetrics_Registration(t *testing.T) {
@@ -299,4 +302,68 @@ func TestTranscodingMetrics_FFmpegStatus(t *testing.T) {
 		}
 	}
 	t.Fatal("expected nvr_transcoding_ffmpeg_status metric family")
+}
+
+func TestStreamMetrics_Registration(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	require.NotNil(t, m.StreamFPS)
+	require.NotNil(t, m.StreamBitrateKbps)
+	require.NotNil(t, m.StreamIDRIntervalSeconds)
+}
+
+func TestStreamMetrics_GaugeSet(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.StreamFPS.WithLabelValues("cam1").Set(25.5)
+	m.StreamBitrateKbps.WithLabelValues("cam1").Set(2048.0)
+	m.StreamIDRIntervalSeconds.WithLabelValues("cam1").Set(2.0)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	require.True(t, names["nvr_stream_fps"])
+	require.True(t, names["nvr_stream_bitrate_kbps"])
+	require.True(t, names["nvr_stream_idr_interval_seconds"])
+}
+
+func TestCameraConnectionMetrics_Registration(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	require.NotNil(t, m.CameraConnectionErrorsTotal)
+	require.NotNil(t, m.CameraReconnectAttemptsTotal)
+	require.NotNil(t, m.CameraReconnectBackoffSeconds)
+}
+
+func TestCameraConnectionMetrics_CounterInc(t *testing.T) {
+	t.Helper()
+	m := NewMetrics()
+	m.CameraConnectionErrorsTotal.WithLabelValues("cam1", "timeout").Inc()
+	m.CameraConnectionErrorsTotal.WithLabelValues("cam1", "auth").Inc()
+	m.CameraConnectionErrorsTotal.WithLabelValues("cam2", "network").Inc()
+	m.CameraReconnectAttemptsTotal.WithLabelValues("cam1").Inc()
+	m.CameraReconnectAttemptsTotal.WithLabelValues("cam1").Add(4)
+	m.CameraReconnectBackoffSeconds.WithLabelValues("cam1").Set(5.0)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	require.True(t, names["nvr_camera_connection_errors_total"])
+	require.True(t, names["nvr_camera_reconnect_attempts_total"])
+	require.True(t, names["nvr_camera_reconnect_backoff_seconds"])
+
+	// Verify counter values
+	for _, f := range families {
+		if f.GetName() == "nvr_camera_connection_errors_total" {
+			require.Len(t, f.GetMetric(), 3) // 3 distinct label combos
+			return
+		}
+	}
+	t.Fatal("expected nvr_camera_connection_errors_total metric family")
 }

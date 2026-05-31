@@ -32,7 +32,9 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	Health        HealthConfig        `yaml:"health"`
+	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	Transcoding TranscodingConfig `yaml:"transcoding"`
+	MetricsAuth  MetricsAuthConfig  `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
 }
 
@@ -65,6 +67,7 @@ type CameraConfig struct {
 	Transcoding   *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
 	AudioEnabled   bool         `yaml:"audio_enabled"`
 	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
+	FrameWatchdogTimeout string `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
@@ -246,6 +249,28 @@ type HealthAutoRemediationConfig struct {
 	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
 }
 
+// RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
+type RemoteLogConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // default false
+	Endpoint string `yaml:"endpoint"` // VictoriaLogs URL, e.g. "http://localhost:9428/insert/jsonline"
+	Format   string `yaml:"format"`   // "jsonline" (default) or "loki"
+}
+
+// MetricsAuthConfig defines optional independent authentication for the /metrics endpoint.
+// When username and password (or password_hash) are non-empty, /metrics requires BasicAuth.
+// When empty, /metrics stays public (backward compatible).
+type MetricsAuthConfig struct {
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	PasswordHash string `yaml:"password_hash"`
+}
+
+// IsConfigured returns true if both username and a password (or hash) are set.
+func (c MetricsAuthConfig) IsConfigured() bool {
+	return strings.TrimSpace(c.Username) != "" &&
+		(strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordHash) != "")
+}
+
 // Load reads a YAML config file and returns a Config with defaults applied.
 func Load(path string) (*Config, error) {
 	if path == "" {
@@ -424,6 +449,16 @@ func Validate(cfg *Config) error {
 	// Validate observability.log_format
 	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
 		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
+	}
+
+	// Validate remote_log
+	if cfg.RemoteLog.Enabled {
+		if strings.TrimSpace(cfg.RemoteLog.Endpoint) == "" {
+			return fmt.Errorf("remote_log.endpoint is required when remote_log.enabled=true")
+		}
+		if cfg.RemoteLog.Format != "jsonline" && cfg.RemoteLog.Format != "loki" {
+			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
+		}
 	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
@@ -766,6 +801,11 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
+	}
+
+	// Remote log defaults
+	if cfg.RemoteLog.Format == "" {
+		cfg.RemoteLog.Format = "jsonline"
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {

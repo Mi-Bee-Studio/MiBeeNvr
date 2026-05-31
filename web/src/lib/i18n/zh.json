@@ -352,6 +352,8 @@
   "live.webrtc.unsupported": "此浏览器不支持 WebRTC",
   "live.flv.connecting": "连接中...",
   "live.flv.unsupported": "此浏览器不支持 HTTP-FLV",
+  "live.snapshot.fallback": "流不可用 — 正在显示快照",
+  "live.snapshot.autoRestore": "正在尝试恢复实时流...",
   "nav.dashboard": "监控大屏",
   "dashboard.title": "监控大屏",
   "dashboard.noCameras": "没有可预览的摄像头",

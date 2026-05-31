@@ -15,10 +15,12 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     cameraId,
     cameraName,
     expanded = false,
+    tabVisible = true,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
+    tabVisible?: boolean;
   } = $props();
 
   type PlayerState = StreamState | 'loading' | 'disconnected';
@@ -471,8 +473,23 @@ function handleWebGpuLost() {
     };
   });
 
-  // Visibility change is handled by ConnectionManager internally
-
+  // Coordinated visibility — pause when tab hidden, resume when visible
+  // Supplements ConnectionManager's internal visibility handling
+  $effect(() => {
+    const visible = tabVisible;
+    if (!visible) {
+      // Tab hidden — disconnect WebSocket to release resources
+      if (cm && !destroyed) {
+        cm.disconnect();
+      }
+    } else {
+      // Tab visible — reconnect if we were playing
+      if (!destroyed && cm && streamState !== 'loading') {
+        captureFreezeFrame();
+        cm.connect();
+      }
+    }
+  });
 
   // ─── Cleanup ───────────────────────────────────────────────────────────
 

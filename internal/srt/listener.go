@@ -2,6 +2,7 @@ package srt
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -259,6 +260,17 @@ func (l *Listener) handlePublish(conn srt.Conn) {
 	rec := NewReceiver(streamCfg, hub)
 	l.receivers[cameraID] = rec
 	l.mu.Unlock()
+
+	// Defer cleanup: if anything panics, stop receiver, remove from map, and log
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("srt receiver panic", "camera", cameraID, "error", r)
+			rec.Stop()
+			l.mu.Lock()
+			delete(l.receivers, cameraID)
+			l.mu.Unlock()
+		}
+	}()
 
 	// Start receiving in a goroutine
 	rec.StartListener(conn)

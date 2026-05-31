@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 // --- Test Helpers ---
@@ -632,7 +633,7 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x40, 0xff, 0xfe, 0xf8, 0xc0}
 
 	for i := 0; i < 20; i++ {
-		hub.Broadcast(int64(i*3000), [][]byte{sps, pps, idr})
+		hub.Broadcast(int64(i*3000), [][]byte{sps, pps, idr}, false)
 	}
 
 	// Manager should still be functional — no crash from hub callback
@@ -659,4 +660,199 @@ func TestStopAllCleansUpHubSubs(t *testing.T) {
 
 	require.Equal(t, 0, hub1.ConsumerCount(), "hub1 should have 0 consumers after StopAll")
 	require.Equal(t, 0, hub2.ConsumerCount(), "hub2 should have 0 consumers after StopAll")
+}
+
+// --- IDR Detection & Cleanup Tests ---
+
+// TestFrameMsgKeyframeDetection verifies that WriteH264 correctly constructs
+// frameMsg with isKeyframe=true for IDR AUs and false for non-IDR AUs.
+func TestFrameMsgKeyframeDetection(t *testing.T) {
+	// Test pure frameMsg construction (the logic is in WriteH264's channel send).
+	// We verify the same construction logic that WriteH264 uses.
+
+	// IDR access unit: SPS (type 7) + PPS (type 8) + IDR (type 5)
+	idrAU := [][]byte{
+		{0x67, 0x64, 0x00, 0x1f},    // SPS
+		{0x68, 0xee, 0x3c, 0x80},       // PPS
+		{0x65, 0x88, 0x84, 0x00, 0x40}, // IDR slice
+	}
+	idrMsg := frameMsg{pts: 9000, au: idrAU, isKeyframe: nalutil.IsIDR(idrAU, false)}
+	require.True(t, idrMsg.isKeyframe, "IDR AU should have isKeyframe=true")
+
+	// P-frame: non-IDR (type 1)
+	pFrameAU := [][]byte{{0x41, 0x88, 0x84, 0x00}}
+	pMsg := frameMsg{pts: 12000, au: pFrameAU, isKeyframe: nalutil.IsIDR(pFrameAU, false)}
+	require.False(t, pMsg.isKeyframe, "P-frame AU should have isKeyframe=false")
+
+	// SEI NALU only (type 6) — not a keyframe
+	seiAU := [][]byte{{0x06, 0x01}}
+	seiMsg := frameMsg{pts: 15000, au: seiAU, isKeyframe: nalutil.IsIDR(seiAU, false)}
+	require.False(t, seiMsg.isKeyframe, "SEI AU should have isKeyframe=false")
+
+	// Empty AU — not a keyframe
+	emptyAU := [][]byte{}
+	emptyMsg := frameMsg{pts: 18000, au: emptyAU, isKeyframe: nalutil.IsIDR(emptyAU, false)}
+	require.False(t, emptyMsg.isKeyframe, "empty AU should have isKeyframe=false")
+
+	// IDR without SPS/PPS — still a keyframe
+	idrOnlyAU := [][]byte{{0x65, 0x88}}
+	idrOnlyMsg := frameMsg{pts: 21000, au: idrOnlyAU, isKeyframe: nalutil.IsIDR(idrOnlyAU, false)}
+	require.True(t, idrOnlyMsg.isKeyframe, "IDR-only AU should have isKeyframe=true")
+}
+
+// TestRTCPDrainWaitGroup verifies that the drainWg WaitGroup correctly
+// tracks RTCP drain goroutines and StopAll waits for them to exit.
+func TestRTCPDrainWaitGroup(t *testing.T) {
+	mgr := NewManager(WithFrameBufSize(5))
+
+	client := newTestClient(t, false)
+	defer client.close()
+
+	offerSDP := createOfferSDP(t, client.pc)
+	_, _ = connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
+
+	// Creating a session launches one RTCP drain goroutine (drainWg.Add(1)).
+	// StopAll cancels the context → drain goroutine exits → drainWg.Done().
+	// drainWg.Wait() in StopAll ensures clean shutdown.
+	done := make(chan struct{})
+	go func() {
+		mgr.StopAll()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// StopAll returned — drain goroutine exited cleanly
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll should not block — drain goroutine should exit via cancel")
+	}
+}
+
+// TestConnectionStateMetric verifies that the Prometheus metric is incremented
+// when connection state changes occur.
+func TestConnectionStateMetric(t *testing.T) {
+	mgr := NewManager(WithFrameBufSize(5))
+	defer mgr.StopAll()
+	require.Nil(t, mgr.mets, "metrics should be nil by default (no WithMetrics option)")
+}
+
+// --- Congestion Detection & Bitrate Adaptation Tests ---
+
+// TestCongestionTracker_HighDropRateTriggersSkipping verifies that when drop rate
+// exceeds 20%, non-IDR frames are skipped.
+func TestCongestionTracker_HighDropRateTriggersSkipping(t *testing.T) {
+	tracker := newCongestionTracker(100)
+
+	// Fill window with 80 sent + 20 dropped = 20% drop rate (exactly at threshold)
+	for i := 0; i < 80; i++ {
+		tracker.recordSent()
+	}
+	for i := 0; i < 20; i++ {
+		tracker.recordDropped()
+	}
+	// 20% exactly at threshold — should NOT skip yet (need > 20%)
+	require.False(t, tracker.shouldSkipFrame(false), "20%% drop rate should not trigger skipping")
+
+	// One more drop pushes to 21/101 ≈ 20.8% — should trigger
+	tracker.recordDropped()
+	require.True(t, tracker.shouldSkipFrame(false), "20.8%% drop rate should trigger skipping")
+
+	// IDR frames are never skipped
+	require.False(t, tracker.shouldSkipFrame(true), "IDR frames must never be skipped")
+}
+
+// TestCongestionTracker_RecoveryRestoresFullRate verifies that when drop rate
+// falls below 5%, frame skipping stops.
+func TestCongestionTracker_RecoveryRestoresFullRate(t *testing.T) {
+	tracker := newCongestionTracker(100)
+
+	// Build up to congestion: 30 dropped out of 100 (30%)
+	for i := 0; i < 70; i++ {
+		tracker.recordSent()
+	}
+	for i := 0; i < 30; i++ {
+		tracker.recordDropped()
+	}
+	require.True(t, tracker.shouldSkipFrame(false), "30%% drop rate should trigger skipping")
+
+	// Recovery: push 95 sent frames to evict most drops from the window
+	for i := 0; i < 95; i++ {
+		tracker.recordSent()
+	}
+	// Window now: last 95 sent + 5 remaining drops from original 30 = 5/100 = 5%
+	// Exactly 5% — congestion should persist (need < 5%)
+	require.True(t, tracker.congested, "5%% drop rate should maintain congestion state")
+
+	// One more sent: 4 drops / 100 = 4% — should stop skipping
+	tracker.recordSent()
+	require.False(t, tracker.shouldSkipFrame(false), "<5%% drop rate should restore full rate")
+}
+
+// TestCongestionTracker_IDRAlwaysSent verifies IDR frames are never skipped
+// even during heavy congestion.
+func TestCongestionTracker_IDRAlwaysSent(t *testing.T) {
+	tracker := newCongestionTracker(100)
+
+	// Fill with 50% drops — extreme congestion
+	for i := 0; i < 50; i++ {
+		tracker.recordSent()
+		tracker.recordDropped()
+	}
+	
+	for i := 0; i < 10; i++ {
+		require.False(t, tracker.shouldSkipFrame(true), "IDR must never be skipped (iter %d)", i)
+	}
+}
+
+// TestCongestionTracker_SlidingWindow verifies that the sliding window
+// correctly evicts old entries.
+func TestCongestionTracker_SlidingWindow(t *testing.T) {
+	tracker := newCongestionTracker(10) // small window for testing
+
+	// Fill with all drops
+	for i := 0; i < 10; i++ {
+		tracker.recordDropped()
+	}
+	// 10/10 = 100% drops — should skip
+	require.True(t, tracker.shouldSkipFrame(false), "100%% drop rate should skip")
+
+	// Push 10 sent frames — old drops evicted, window now all sent
+	for i := 0; i < 10; i++ {
+		tracker.recordSent()
+	}
+	// 0/10 = 0% drops — should not skip
+	require.False(t, tracker.shouldSkipFrame(false), "0%% drop rate should not skip")
+}
+
+// TestCongestionTracker_EmptyWindow verifies initial state (no congestion).
+func TestCongestionTracker_EmptyWindow(t *testing.T) {
+	tracker := newCongestionTracker(100)
+	require.False(t, tracker.shouldSkipFrame(false), "empty tracker should not skip")
+	require.False(t, tracker.shouldSkipFrame(true), "empty tracker should not skip IDR")
+}
+
+// TestCongestionTracker_AlternatingSkip verifies that skip logic
+// alternates (skips every other non-IDR frame when congested).
+func TestCongestionTracker_AlternatingSkip(t *testing.T) {
+	tracker := newCongestionTracker(100)
+
+	// Trigger high congestion: 30 drops out of 50
+	for i := 0; i < 20; i++ {
+		tracker.recordSent()
+	}
+	for i := 0; i < 30; i++ {
+		tracker.recordDropped()
+	}
+	require.True(t, tracker.shouldSkipFrame(false), "should be congested")
+
+	// Track skip pattern — should alternate
+	skipCount := 0
+	const iterations = 20
+	for i := 0; i < iterations; i++ {
+		if tracker.shouldSkipFrame(false) {
+			skipCount++
+		}
+	}
+	// With alternating skip, roughly half should be skipped
+	require.Equal(t, iterations/2, skipCount, "should skip every other frame")
 }

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -56,6 +57,7 @@ type StreamStatsCollector struct {
 	cameraOverrides map[string]*collectorOverride
 
 	eventHandler func(cameraID string, event model.HealthEvent)
+	m            *metrics.Metrics
 }
 
 // collectorOverride holds per-camera threshold overrides for the collector.
@@ -88,6 +90,12 @@ func NewStreamStatsCollector(
 
 // OnFrame returns a frame callback for the given camera.
 // The callback uses only atomic operations — no mutex, no allocations.
+
+// SetMetrics sets the Prometheus metrics instance for exposing stream stats as gauges.
+func (s *StreamStatsCollector) SetMetrics(m *metrics.Metrics) {
+	s.m = m
+}
+
 func (s *StreamStatsCollector) OnFrame(cameraID string) func(pts int64, au [][]byte) {
 	stats := s.getOrCreateStats(cameraID)
 	return func(pts int64, au [][]byte) {
@@ -210,6 +218,12 @@ func (s *StreamStatsCollector) CheckAndReset() {
 		fps := float64(frameCount) / windowSeconds
 		bitrate := float64(byteCount*8) / windowSeconds
 
+		// Prometheus bridge: expose stream stats as gauges
+		if s.m != nil {
+			s.m.StreamFPS.WithLabelValues(cameraID).Set(fps)
+			s.m.StreamBitrateKbps.WithLabelValues(cameraID).Set(bitrate / 1000)
+		}
+
 		// Check FPS threshold
 		if minFPS > 0 && fps < minFPS && frameCount > 0 {
 			streak := s.incrementAnomalyStreak(cameraID, anomalyKeyFPS)
@@ -278,7 +292,11 @@ func (s *StreamStatsCollector) CheckAndReset() {
 						})
 					}
 				} else {
-					s.resetAnomalyStreak(cameraID, anomalyKeyIDR)
+				s.resetAnomalyStreak(cameraID, anomalyKeyIDR)
+			}
+			// Prometheus bridge: expose IDR interval as gauge
+			if s.m != nil {
+				s.m.StreamIDRIntervalSeconds.WithLabelValues(cameraID).Set(time.Since(lastIDR).Seconds())
 				}
 			}
 		}

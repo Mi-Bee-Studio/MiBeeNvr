@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 var logger = slog.Default().With("component", "webrtc-manager")
@@ -23,13 +26,16 @@ const (
 	defaultIdleTimeout  = 60 * time.Second
 	defaultFrameBufSize = 100
 	defaultFPS          = 30
-	h264ClockRate       = 90000
+	h264ClockRate        = 90000
+	highDropRateThreshold = 0.20 // 20% — trigger frame skipping
+	lowDropRateThreshold  = 0.05 // 5% — restore full frame rate
 )
 
 // frameMsg is an async write request for the WebRTC track.
 type frameMsg struct {
-	pts int64
-	au  [][]byte
+	pts       int64
+	au        [][]byte
+	isKeyframe bool
 }
 
 // peerEntry holds a single WHEP peer connection and its metadata.
@@ -43,8 +49,99 @@ type peerEntry struct {
 	sessionID string
 	lastUsed  time.Time
 	frameCh   chan frameMsg
-	drops     uint64 // atomic: total frames dropped due to buffer full
-	lastPTS   int64
+	drops       uint64             // atomic: total frames dropped due to buffer full
+	congestion  *congestionTracker  // tracks drop rate for bitrate adaptation
+	lastPTS     int64
+}
+
+// congestionTracker tracks frame send/drop rates in a sliding window
+// to detect network congestion and trigger frame skipping.
+type congestionTracker struct {
+	windowSize    int
+	window        []bool // true = sent, false = dropped (circular buffer)
+	windowPos     int
+	windowCount   int
+	congested     bool
+	skipCounter   int // alternates skip pattern: 0=send, 1=skip
+}
+
+// newCongestionTracker creates a tracker with the given sliding window size.
+func newCongestionTracker(windowSize int) *congestionTracker {
+	return &congestionTracker{
+		windowSize: windowSize,
+		window:     make([]bool, windowSize),
+	}
+}
+
+// recordSent records a successfully sent frame.
+func (ct *congestionTracker) recordSent() {
+	ct.record(true)
+}
+
+// recordDropped records a dropped frame.
+func (ct *congestionTracker) recordDropped() {
+	ct.record(false)
+}
+
+// record adds an entry to the sliding window.
+func (ct *congestionTracker) record(sent bool) {
+	ct.window[ct.windowPos] = sent
+	ct.windowPos = (ct.windowPos + 1) % ct.windowSize
+	if ct.windowCount < ct.windowSize {
+		ct.windowCount++
+	}
+}
+
+// dropRate returns the current drop rate (0.0 to 1.0).
+func (ct *congestionTracker) dropRate() float64 {
+	if ct.windowCount == 0 {
+		return 0
+	}
+	var drops int
+	for i := 0; i < ct.windowCount; i++ {
+		if !ct.window[i] {
+			drops++
+		}
+	}
+	return float64(drops) / float64(ct.windowCount)
+}
+
+// shouldSkipFrame returns true if a non-IDR frame should be skipped due to congestion.
+// IDR frames are never skipped. When congested, skips every other non-IDR frame.
+func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
+	// IDR frames are never skipped
+	if isIDR {
+		return false
+	}
+
+	// Empty window — no congestion
+	if ct.windowCount == 0 {
+		return false
+	}
+
+	rate := ct.dropRate()
+
+	// State transitions
+	if !ct.congested && rate > highDropRateThreshold {
+		ct.congested = true
+		ct.skipCounter = 0
+		slog.Debug("webrtc_congestion_start",
+			"drop_rate", rate,
+			"window_count", ct.windowCount)
+	} else if ct.congested && rate < lowDropRateThreshold {
+		ct.congested = false
+		slog.Debug("webrtc_congestion_end",
+			"drop_rate", rate,
+			"window_count", ct.windowCount)
+	}
+
+	if !ct.congested {
+		return false
+	}
+
+	// Alternating skip: skip, send, skip, send...
+	ct.skipCounter++
+	return ct.skipCounter%2 == 1
 }
 
 // Manager manages WebRTC WHEP sessions for camera streaming.
@@ -60,6 +157,8 @@ type Manager struct {
 	maxPeers     int
 	idleTimeout  time.Duration
 	frameBufSize int
+	drainWg      sync.WaitGroup // tracks RTCP drain goroutines for clean shutdown
+	mets         *metrics.Metrics
 }
 
 // hubSubscription tracks a StreamHub subscription for a camera.
@@ -95,6 +194,13 @@ func WithFrameBufSize(n int) ManagerOption {
 		if n > 0 {
 			m.frameBufSize = n
 		}
+	}
+}
+
+// WithMetrics sets the Prometheus metrics collector.
+func WithMetrics(m *metrics.Metrics) ManagerOption {
+	return func(mgr *Manager) {
+		mgr.mets = m
 	}
 }
 
@@ -202,11 +308,32 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 		entry.lastUsed = time.Now()
 		entry.mu.Unlock()
 
+		isKeyframe := nalutil.IsIDR(au, false)
+		traceID := "no-trace"
+		if isKeyframe {
+			traceID = fmt.Sprintf("%s-%d", camID, pts)
+		}
+
 		// Non-blocking send — drop frame if buffer full
 		select {
-		case entry.frameCh <- frameMsg{pts: pts, au: au}:
+		case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+			slog.Debug("frame_trace",
+				"trace_id", traceID,
+				"camera_id", camID,
+				"stage", "webrtc_recv",
+				"is_idr", isKeyframe,
+			)
 		default:
+			slog.Debug("frame_trace",
+				"trace_id", traceID,
+				"camera_id", camID,
+				"stage", "webrtc_drop",
+				"is_idr", isKeyframe,
+				"session_id", entry.sessionID,
+				"queue_depth", len(entry.frameCh),
+			)
 			dropCount := atomic.AddUint64(&entry.drops, 1)
+			entry.congestion.recordDropped()
 			if dropCount%100 == 0 {
 				logger.Warn("WebRTC frames dropped",
 					"camera_id", camID,
@@ -260,7 +387,9 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Drain RTCP for interceptors (NACK, etc.) to function
+	m.drainWg.Add(1)
 	go func() {
+		defer m.drainWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Warn("RTCP drain goroutine panic recovered", "error", r)
@@ -284,6 +413,9 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 
 	// Set up connection state monitor — auto-cleanup on disconnect/failure
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if m.mets != nil {
+			m.mets.WebRTCConnectionStateChanges.WithLabelValues(camID, state.String()).Inc()
+		}
 		if state == webrtc.PeerConnectionStateClosed ||
 			state == webrtc.PeerConnectionStateFailed ||
 			state == webrtc.PeerConnectionStateDisconnected {
@@ -309,14 +441,20 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		return nil, "", err
 	}
 
-	// Set local description and wait for ICE gathering to complete
+	// Set local description and wait for ICE gathering to complete (with timeout)
+	gatherCtx, gatherCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer gatherCancel()
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
 	if err := pc.SetLocalDescription(answer); err != nil {
 		cancel()
 		pc.Close()
 		return nil, "", err
 	}
-	<-gatherComplete
+	select {
+	case <-gatherComplete:
+	case <-gatherCtx.Done():
+		logger.Warn("ICE gathering timed out, proceeding with gathered candidates", "camera_id", camID)
+	}
 
 	// Reject audio m-lines in the answer SDP (belt-and-suspenders)
 	finalSDP := rejectAudioInSDP(pc.LocalDescription().SDP)
@@ -330,7 +468,8 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		camID:     camID,
 		sessionID: sid,
 		lastUsed:  time.Now(),
-		frameCh:   make(chan frameMsg, m.frameBufSize),
+		frameCh:    make(chan frameMsg, m.frameBufSize),
+		congestion: newCongestionTracker(m.frameBufSize),
 	}
 
 	m.peers[sid] = entry
@@ -442,6 +581,9 @@ func (m *Manager) StopAll() {
 	for _, sub := range hubSubs {
 		sub.hub.Unsubscribe(sub.subID)
 	}
+
+	// Wait for all RTCP drain goroutines to exit
+	m.drainWg.Wait()
 }
 
 // writeLoop drains frames from the async buffer and writes them to the WebRTC track.
@@ -465,7 +607,17 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 				continue
 			}
 
+			// Congestion detection: skip non-IDR frames if drop rate is high
+			if entry.congestion.shouldSkipFrame(frame.isKeyframe) {
+				slog.Debug("webrtc_congestion_skip",
+					"session_id", entry.sessionID,
+					"is_idr", frame.isKeyframe,
+					"drop_rate", entry.congestion.dropRate())
+				continue
+			}
+
 			// Calculate duration from PTS delta (90kHz clock)
+
 			entry.mu.Lock()
 			var dur time.Duration
 			if entry.lastPTS == 0 {
@@ -499,10 +651,11 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 						"session_id", entry.sessionID, "error", err)
 				}
 			}
+			// Record successful send for congestion tracking
+			entry.congestion.recordSent()
 		}
 	}
 }
-
 // idleWatchdog monitors the peer's lastUsed timestamp and evicts idle sessions.
 // Same pattern as HLS manager's idle watchdog.
 func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {

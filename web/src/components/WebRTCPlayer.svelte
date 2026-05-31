@@ -1,21 +1,51 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
-  import { AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
+  import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
+  import { sendTelemetry } from '$lib/telemetry';
   import type { StreamState } from '$lib/hls-errors';
+  import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
   let {
     cameraId,
     cameraName,
     expanded = false,
+    tabVisible = true,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
+    tabVisible?: boolean;
   } = $props();
 
+  // Reconnection coordinator from Dashboard context
+  const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
+  let coordinatedTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasActiveCoordinatedReconnect = false;
+
+  function coordinatedReconnect(reconnectFn: () => void) {
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (!coordinator) {
+      reconnectFn();
+      return;
+    }
+    hasActiveCoordinatedReconnect = true;
+    const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, grantedDelay);
+    });
+    if (delay >= 0) {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, delay);
+    }
+  }
   type WebrtcState = 'connecting' | 'connected' | 'disconnected' | 'failed';
 
   let streamState: StreamState | 'loading' = $state('loading');
@@ -38,6 +68,14 @@ let destroyed = false;
   let frozenFrameUrl: string | null = $state(null);
   let showFrozenFrame = $state(false);
   let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Snapshot fallback — degrades to static snapshots after max reconnect failures
+  let snapshotMode = $state(false);
+  let snapshotSrc = $state('');
+  let snapshotRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let snapshotRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+  const SNAPSHOT_REFRESH_MS = 2000;
+  const SNAPSHOT_RESTORE_MS = 5 * 60 * 1000;
 
   function captureFreezeFrame() {
     if (frozenFrameUrl) return;
@@ -74,6 +112,10 @@ let destroyed = false;
     if (webrtcState === 'connected') {
       streamState = 'playing';
       if (prevState !== 'playing' && frozenFrameUrl) clearFreezeFrame();
+      if (coordinator && hasActiveCoordinatedReconnect) {
+        coordinator.completeReconnect(cameraId);
+        hasActiveCoordinatedReconnect = false;
+      }
     } else if (webrtcState === 'connecting') {
       if (prevState === 'playing') captureFreezeFrame();
       streamState = 'buffering';
@@ -96,15 +138,71 @@ let destroyed = false;
   }
 
   function scheduleReconnect() {
-    if (reconnectAttempts >= maxReconnectAttempts) return;
+    if (reconnectAttempts >= maxReconnectAttempts) {
+      enterSnapshotMode();
+      return;
+    }
     captureFreezeFrame();
     reconnectAttempts++;
-    const delay = getBackoffDelay();
-    reconnectTimer = setTimeout(() => {
+
+    const doReconnect = () => {
       reconnectTimer = null;
       destroyPeerConnection();
       initWebRTC();
-    }, delay);
+    };
+
+    if (coordinator) {
+      // Use coordinator's delay instead of per-player backoff
+      if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+      hasActiveCoordinatedReconnect = true;
+      const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+        coordinatedTimer = setTimeout(doReconnect, grantedDelay);
+      });
+      if (delay >= 0) {
+        coordinatedTimer = setTimeout(doReconnect, delay);
+      }
+      return;
+    }
+
+    const delay = getBackoffDelay();
+    reconnectTimer = setTimeout(doReconnect, delay);
+  }
+
+  function enterSnapshotMode() {
+    if (snapshotMode) return;
+    console.warn(`WebRTC max retries reached for ${cameraId}, entering snapshot fallback`);
+    sendTelemetry('stream_degradation', cameraId, undefined, { protocol: 'webrtc', target: 'snapshot' });
+    snapshotMode = true;
+    streamState = 'snapshot';
+    destroyPeerConnection();
+    refreshSnapshot();
+    snapshotRefreshTimer = setInterval(refreshSnapshot, SNAPSHOT_REFRESH_MS);
+    snapshotRestoreTimer = setTimeout(exitSnapshotMode, SNAPSHOT_RESTORE_MS);
+  }
+
+  function refreshSnapshot() {
+    const authHeader = getAuthHeader();
+    let url = getSnapshotUrl(cameraId);
+    if (authHeader) {
+      const token = authHeader.replace('Basic ', '');
+      url += `?token=${encodeURIComponent(token)}`;
+    }
+    snapshotSrc = `${url}&_t=${Date.now()}`;
+  }
+
+  function exitSnapshotMode() {
+    stopSnapshotMode();
+    reconnectAttempts = 0;
+    streamState = 'loading';
+    webrtcState = 'connecting';
+    initWebRTC();
+  }
+
+  function stopSnapshotMode() {
+    snapshotMode = false;
+    snapshotSrc = '';
+    if (snapshotRefreshTimer) { clearInterval(snapshotRefreshTimer); snapshotRefreshTimer = null; }
+    if (snapshotRestoreTimer) { clearTimeout(snapshotRestoreTimer); snapshotRestoreTimer = null; }
   }
 
   function destroyPeerConnection() {
@@ -241,14 +339,13 @@ let destroyed = false;
         if (peerConnection.iceGatheringState === 'complete') {
           resolve();
         } else {
-          const handler = () => {
+          const iceAc = new AbortController();
+          peerConnection.addEventListener('icegatheringstatechange', () => {
             if (peerConnection.iceGatheringState === 'complete') {
-              peerConnection.removeEventListener('icegatheringstatechange', handler);
+              iceAc.abort();
               resolve();
             }
-          };
-          peerConnection.addEventListener('icegatheringstatechange', handler);
-
+          }, { signal: iceAc.signal });
           // Timeout fallback (5s)
           setTimeout(resolve, 5000);
         }
@@ -298,11 +395,14 @@ let destroyed = false;
   }
 
   function handleReconnect() {
+    stopSnapshotMode();
     reconnectAttempts = 0;
     webrtcState = 'connecting';
     captureFreezeFrame();
-    destroyPeerConnection();
-    initWebRTC();
+    coordinatedReconnect(() => {
+      destroyPeerConnection();
+      initWebRTC();
+    });
   }
 
   // Main lifecycle
@@ -310,6 +410,7 @@ let destroyed = false;
     const _id = cameraId;
     if (!_id) return;
 
+    stopSnapshotMode();
     destroyPeerConnection();
     streamState = 'loading';
     webrtcState = 'connecting';
@@ -322,29 +423,33 @@ let destroyed = false;
   });
 
   // Visibility change handler
+  // Coordinated visibility — pause when tab hidden, resume when visible
+  // Replaces per-player visibilitychange listener; Dashboard owns the signal
   $effect(() => {
-    let wasHidden = false;
-
-    const handler = () => {
-      if (document.hidden) {
-        wasHidden = true;
-      } else if (wasHidden) {
-        wasHidden = false;
+    const visible = tabVisible;
+    if (!visible) {
+      // Tab hidden — close peer connection to release decode resources
+      if (pc && !destroyed) {
+        try { pc.close(); } catch { /* ignore */ }
+        pc = null;
+      }
+    } else {
+      // Tab visible — resume: rebuild WebRTC connection
+      if (!destroyed && streamState !== 'loading') {
+        stopSnapshotMode();
         reconnectAttempts = 0;
         captureFreezeFrame();
         destroyPeerConnection();
         initWebRTC();
       }
-    };
-
-    document.addEventListener('visibilitychange', handler);
-    return () => {
-      document.removeEventListener('visibilitychange', handler);
-    };
+    }
   });
 
   onDestroy(() => {
     destroyed = true;
+    stopSnapshotMode();
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
     destroyPeerConnection();
@@ -361,25 +466,31 @@ let destroyed = false;
         ? 'opacity-100'
         : streamState === 'buffering'
           ? 'opacity-60'
-          : 'opacity-0 pointer-events-none',
+          : streamState === 'snapshot'
+            ? 'opacity-0 pointer-events-none'
+            : 'opacity-0 pointer-events-none',
   );
   let dotColor = $derived(
     streamState === 'playing'
       ? 'bg-green-500'
       : streamState === 'buffering'
         ? 'bg-yellow-500 animate-pulse'
-        : streamState === 'error'
-          ? 'bg-red-500'
-          : 'bg-gray-400',
+        : streamState === 'snapshot'
+          ? 'bg-blue-500 animate-pulse'
+          : streamState === 'error'
+            ? 'bg-red-500'
+            : 'bg-gray-400',
   );
   let dotTitle = $derived(
     streamState === 'playing'
       ? t('dashboard.live')
       : streamState === 'buffering'
         ? t('dashboard.buffering')
-        : streamState === 'error'
-          ? t('dashboard.errorState')
-          : t('live.webrtc.connecting'),
+        : streamState === 'snapshot'
+          ? t('dashboard.snapshotMode')
+          : streamState === 'error'
+            ? t('dashboard.errorState')
+            : t('live.webrtc.connecting'),
   );
 </script>
 
@@ -395,16 +506,36 @@ let destroyed = false;
     />
   {/if}
 
-  <video
-    bind:this={videoEl}
-    class="w-full h-full object-contain"
-    autoplay
-    muted
-    playsinline
-    aria-label="{cameraName} — {dotTitle}"
-  >
-    {t('live.videoUnsupportedTag')}
-  </video>
+  {#if snapshotMode}
+    <img
+      src={snapshotSrc}
+      alt="{cameraName} snapshot"
+      class="absolute inset-0 w-full h-full object-contain"
+    />
+    <!-- Snapshot mode indicator -->
+    <div class="absolute top-8 left-2 flex items-center gap-1.5 px-2 py-1 rounded bg-blue-500/20 border border-blue-400/30 z-20">
+      <ImageIcon size={12} class="text-blue-400" />
+      <span class="text-blue-300 text-xs">{t('live.snapshot.fallback')}</span>
+    </div>
+    <button
+      onclick={handleReconnect}
+      class="absolute bottom-14 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 text-white/80 text-xs hover:bg-white/20 transition-colors z-20"
+    >
+      <RefreshCw size={12} />
+      {t('common.retry')}
+    </button>
+  {:else}
+    <video
+      bind:this={videoEl}
+      class="w-full h-full object-contain"
+      autoplay
+      muted
+      playsinline
+      aria-label="{cameraName} — {dotTitle}"
+    >
+      {t('live.videoUnsupportedTag')}
+    </video>
+  {/if}
 
   <!-- Overlay -->
   <div

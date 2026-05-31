@@ -2,12 +2,11 @@ package camera
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1020,4 +1019,47 @@ func TestCloseAllONVIFClients(t *testing.T) {
 
 	mgr.closeAllONVIFClients()
 	assert.Empty(t, mgr.onvifClients)
+}
+
+func TestClassifyError(t *testing.T) {
+	t.Helper()
+	require.Equal(t, "unknown", classifyError(nil))
+	require.Equal(t, "unknown", classifyError(fmt.Errorf("some random error")))
+	require.Equal(t, "timeout", classifyError(fmt.Errorf("connection timeout after 10s")))
+	require.Equal(t, "timeout", classifyError(fmt.Errorf("deadline exceeded")))
+	require.Equal(t, "auth", classifyError(fmt.Errorf("401 unauthorized")))
+	require.Equal(t, "auth", classifyError(fmt.Errorf("authentication failed")))
+	require.Equal(t, "network", classifyError(fmt.Errorf("connection refused")))
+	require.Equal(t, "network", classifyError(fmt.Errorf("dial tcp: no such host")))
+}
+
+func TestCameraConnectionErrorMetrics(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	mgr, store, _, configPath := newTestManager(t)
+	defer store.CleanupTempFiles()
+	_ = mgr
+
+	// Create a new manager with metrics and a camera that will fail to start
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	cfg.Storage.RootDir = filepath.Join(tmpDir, "storage")
+	// Use an unknown protocol so createRecorder returns nil → startRecorder returns error
+	cfg.Cameras[0].Protocol = "unknown_proto"
+	cfg.Cameras[0].Enabled = true
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+	require.NoError(t, config.Save(configPath, cfg))
+
+	mgr2 := NewCameraManager(cfg, store, nil, configPath, m)
+	// Call startRecorder directly to trigger the error metric
+	segDur, _ := time.ParseDuration(cfg.Storage.SegmentDuration)
+	err := mgr2.startRecorder(context.Background(), cfg.Cameras[0], segDur)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not support recording")
+
+	// Verify no metric was recorded (createRecorder returns nil, not a connection error)
+	families, _ := m.Registry.Gather()
+	for _, f := range families {
+		require.NotEqual(t, "nvr_camera_connection_errors_total", f.GetName(), "unknown protocol should not record connection error")
+	}
 }

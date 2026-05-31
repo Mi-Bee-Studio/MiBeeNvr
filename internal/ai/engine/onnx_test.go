@@ -28,7 +28,7 @@ func newMockEngineSimple(t *testing.T) *Engine {
 // sendFrame sends a frame to a StreamHub as if a recorder broadcast it.
 func sendFrame(t *testing.T, hub *model.StreamHub, pts int64, au [][]byte) {
 	t.Helper()
-	hub.Broadcast(pts, au)
+	hub.Broadcast(pts, au, false)
 }
 
 // makeNALU creates a simple NALU with the given header byte and data.
@@ -436,7 +436,7 @@ func TestAiDetectorConcurrentCameras(t *testing.T) {
 			defer wg.Done()
 			nalu := makeNALU(0x05, []byte("frame"))
 			for j := 0; j < 5; j++ {
-				hubs[idx].Broadcast(int64(j*45000), [][]byte{nalu})
+					hubs[idx].Broadcast(int64(j*45000), [][]byte{nalu}, false)
 			}
 		}(i)
 	}

@@ -3,12 +3,15 @@ package hls
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/bluenviron/gohlslib/v2"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
@@ -17,7 +20,7 @@ import (
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	dir := t.TempDir()
-	return NewManager(dir)
+	return NewManager(context.Background(), dir)
 }
 
 // newTestStreamEntry creates a streamEntry for testing without starting a real muxer.
@@ -233,7 +236,7 @@ func TestWriteH265_InactiveStream(t *testing.T) {
 // --- NewManager Tests ---
 
 func TestNewManager(t *testing.T) {
-	mgr := NewManager(t.TempDir())
+	mgr := NewManager(context.Background(), t.TempDir())
 	require.NotNil(t, mgr)
 	require.NotNil(t, mgr.streams)
 	require.Empty(t, mgr.streams)
@@ -248,7 +251,7 @@ func TestNewManager(t *testing.T) {
 // --- NewManagerWithOpts Tests ---
 
 func TestNewManagerWithOpts_CustomValues(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), 80, 20*1024*1024, 7)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), 80, 20*1024*1024, 7)
 	require.NotNil(t, mgr)
 	require.Equal(t, 80, mgr.writeBufSize)
 	require.Equal(t, 20*1024*1024, mgr.segmentMaxSize)
@@ -256,7 +259,7 @@ func TestNewManagerWithOpts_CustomValues(t *testing.T) {
 }
 
 func TestNewManagerWithOpts_ZeroValuesUseDefaults(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), 0, 0, 0)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), 0, 0, 0)
 	require.NotNil(t, mgr)
 	require.Equal(t, defaultWriteBufSize, mgr.writeBufSize)
 	require.Equal(t, defaultSegmentMaxSize, mgr.segmentMaxSize)
@@ -334,10 +337,10 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 	require.True(t, mgr.IsActive(cameraID))
 }
 
-// --- ErrMaxStreamsReached Tests ---
+// --- LRU Eviction Tests ---
 
-func TestStartStream_AtCapacity_ReturnsErrMaxStreamsReached(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+func TestStartStream_AtCapacity_EvictsLRU(t *testing.T) {
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 	cameraID := "test-cam"
 
 	// Fill streams to maxStreams capacity
@@ -352,10 +355,14 @@ func TestStartStream_AtCapacity_ReturnsErrMaxStreamsReached(t *testing.T) {
 	}
 	mgr.mu.Unlock()
 
-	// Next start should return ErrMaxStreamsReached
-	err := mgr.StartStream(cameraID, []byte{0x67, 0x42}, []byte{0x68, 0xce}, 0)
-	require.ErrorIs(t, err, ErrMaxStreamsReached)
+	// 5th stream should succeed by evicting LRU stream
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream(cameraID, sps, pps, 0)
+	require.NoError(t, err)
 	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+	require.True(t, mgr.IsActive(cameraID))
+	mgr.StopAll()
 }
 
 // --- EvictStream Tests ---
@@ -384,6 +391,77 @@ func TestEvictStream_NotActive(t *testing.T) {
 	mgr := newTestManager(t)
 	err := mgr.EvictStream("nonexistent")
 	require.ErrorIs(t, err, ErrStreamNotActive)
+}
+
+// --- LRU Eviction Tests ---
+
+func TestLRUEviction_EvictsOldestStream(t *testing.T) {
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+
+	// Create 4 streams with staggered lastUsed times
+	mgr.mu.Lock()
+	now := time.Now()
+	for i := 0; i < defaultMaxStreams; i++ {
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: now.Add(time.Duration(i) * time.Second), // cam-0 is oldest
+			cancel:   cancel,
+		}
+	}
+	mgr.mu.Unlock()
+
+	// cam-0 has the oldest lastUsed — should be evicted
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("cam-new", sps, pps, 0)
+	require.NoError(t, err)
+	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+	// cam-0 should be evicted (oldest lastUsed)
+	require.False(t, mgr.IsActive("cam-0"))
+	// cam-1, cam-2, cam-3 should still be active
+	require.True(t, mgr.IsActive("cam-1"))
+	require.True(t, mgr.IsActive("cam-2"))
+	require.True(t, mgr.IsActive("cam-3"))
+	require.True(t, mgr.IsActive("cam-new"))
+	mgr.StopAll()
+}
+
+func TestLRUEviction_EvictedStreamCleanedUp(t *testing.T) {
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+
+	// Fill to capacity
+	mgr.mu.Lock()
+	for i := 0; i < defaultMaxStreams; i++ {
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
+			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
+			lastUsed: time.Now().Add(time.Duration(i) * time.Second),
+			cancel:   cancel,
+		}
+	}
+	mgr.mu.Unlock()
+
+	// Start 5th stream — triggers LRU eviction of cam-0
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("cam-new", sps, pps, 0)
+	require.NoError(t, err)
+
+	// Evicted stream should be fully cleaned up:
+	// - not in streams map
+	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+	require.False(t, mgr.IsActive("cam-0"))
+
+	// - writing to evicted stream should silently succeed (not error, not panic)
+	err = mgr.WriteH264("cam-0", 1000, [][]byte{{0x01}})
+	require.NoError(t, err)
+
+	// - EvictStream on already-evicted stream should return ErrStreamNotActive
+	err = mgr.EvictStream("cam-0")
+	require.ErrorIs(t, err, ErrStreamNotActive)
+
+	mgr.StopAll()
 }
 
 // --- GetActiveStreamCount Tests ---
@@ -463,7 +541,7 @@ func TestGetStreamStatus_ConcurrentReads(t *testing.T) {
 // --- Concurrent Stream Start/Stop Tests ---
 
 func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	var wg sync.WaitGroup
 	// Start 4 streams concurrently (at maxStreams limit)
@@ -485,7 +563,7 @@ func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
 }
 
 func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill to max capacity
 	for i := 0; i < defaultMaxStreams; i++ {
@@ -499,28 +577,27 @@ func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
 		mgr.mu.Unlock()
 	}
 
-	// Multiple goroutines try to start a 5th stream — all should get ErrMaxStreamsReached
+	// Multiple goroutines try to start a 5th stream — all should succeed (LRU eviction)
 	var wg sync.WaitGroup
-	errors := make([]error, 10)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func() {
 			defer wg.Done()
 			sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
 			pps := []byte{0x68, 0xce, 0x38, 0x80}
-			errors[idx] = mgr.StartStream("overflow", sps, pps, 0)
-		}(i)
+			err := mgr.StartStream("overflow", sps, pps, 0)
+			require.NoError(t, err)
+		}()
 	}
 	wg.Wait()
 
-	for i, err := range errors {
-		require.ErrorIs(t, err, ErrMaxStreamsReached, "goroutine %d should get ErrMaxStreamsReached", i)
-	}
+	// Stream count stays at maxStreams (LRU eviction keeps it bounded)
 	require.Equal(t, defaultMaxStreams, mgr.GetActiveStreamCount())
+	mgr.StopAll()
 }
 
 func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill streams
 	for i := 0; i < defaultMaxStreams; i++ {
@@ -549,7 +626,7 @@ func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
 }
 
 func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	var wg sync.WaitGroup
 	// Interleave starts and stops
@@ -576,7 +653,7 @@ func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
 
 func TestWriteFrame_DropCounterIncrements(t *testing.T) {
 	m := metrics.NewMetrics()
-	mgr := NewManagerWithOpts(t.TempDir(), 2, defaultSegmentMaxSize, 0, m) // tiny buffer
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), 2, defaultSegmentMaxSize, 0, m) // tiny buffer
 	cameraID := "test-cam"
 
 	// Insert a stream entry with tiny buffer and no FPS limit
@@ -615,7 +692,7 @@ func TestWriteFrame_DropCounterIncrements(t *testing.T) {
 
 func TestWriteFrame_DropCounterNilMetrics(t *testing.T) {
 	// Verify no panic when metrics is nil
-	mgr := NewManagerWithOpts(t.TempDir(), 1, defaultSegmentMaxSize, 0) // no metrics
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), 1, defaultSegmentMaxSize, 0) // no metrics
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
@@ -710,7 +787,7 @@ func TestSetLowLatency_CustomPartDuration(t *testing.T) {
 }
 
 func TestStartStream_LowLatency_H264(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
 	mgr.SetLowLatency(true, 200*time.Millisecond)
 
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
@@ -722,7 +799,7 @@ func TestStartStream_LowLatency_H264(t *testing.T) {
 }
 
 func TestStartStream_LowLatency_H265(t *testing.T) {
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 7)
 	mgr.SetLowLatency(true, 200*time.Millisecond)
 
 	vps := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0x95, 0x98, 0x09}
@@ -736,7 +813,7 @@ func TestStartStream_LowLatency_H265(t *testing.T) {
 
 func TestStartStream_LowLatency_SegmentCountTooLow(t *testing.T) {
 	// LL-HLS requires segment_count >= 7; gohlslib enforces this at Start()
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 3) // too low for LL-HLS
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 3) // too low for LL-HLS
 	mgr.SetLowLatency(true, 200*time.Millisecond)
 
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
@@ -994,7 +1071,7 @@ func TestFrameRateLimiter_CreditCapAfterBurst(t *testing.T) {
 // when frames are dropped by FPS throttle.
 func TestFrameRateLimiter_FPSThrottleMetric(t *testing.T) {
 	m := metrics.NewMetrics()
-	mgr := NewManagerWithOpts(t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0, m)
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0, m)
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
@@ -1059,4 +1136,461 @@ func TestWriteBufferCapacity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defaultWriteBufSize, len(entry.frameCh),
 		"buffer should remain at capacity after drop")
+}
+
+// --- shouldThrottle Tests ---
+
+func TestShouldThrottle_Disabled(t *testing.T) {
+	t.Helper()
+	// maxFPS=0 means no throttling — should never return true
+	var credit time.Duration
+	var last time.Time
+	require.False(t, shouldThrottle(0, &credit, &last, time.Now(), false))
+	require.False(t, shouldThrottle(-1, &credit, &last, time.Now(), false))
+}
+
+func TestShouldThrottle_FirstFrameAlwaysPasses(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time // zero value = never written
+	now := time.Now()
+	require.False(t, shouldThrottle(10, &credit, &last, now, false), "first frame must pass")
+	require.Equal(t, now, last, "lastFrameTime should be initialized")
+	require.Equal(t, time.Duration(0), credit, "credit should be zero after first frame")
+}
+
+func TestShouldThrottle_RapidFramesDropped(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	now := time.Now()
+
+	// First frame — initializes
+	require.False(t, shouldThrottle(10, &credit, &last, now, false))
+
+	// Immediate second frame (0 elapsed) — should be throttled
+	require.True(t, shouldThrottle(10, &credit, &last, now, false), "rapid frame should be throttled")
+}
+
+func TestShouldThrottle_CreditAccumulates(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	maxFPS := 10 // 100ms min interval
+	now := time.Now()
+
+	// First frame
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, false))
+
+	// Wait 100ms — enough credit for one frame
+	time.Sleep(100 * time.Millisecond)
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame after 100ms should pass")
+}
+
+func TestShouldThrottle_CreditCapped(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	maxFPS := 10 // 100ms min interval
+	now := time.Now()
+
+	// First frame
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, false))
+
+	// Wait 500ms — 5 intervals of credit, but cap is 2*minInterval (200ms)
+	time.Sleep(500 * time.Millisecond)
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame after long pause should pass")
+	// After consuming 1 interval (100ms), remaining credit should be capped at 2*minInterval
+	require.LessOrEqual(t, credit, 2*100*time.Millisecond, "credit should be capped at 2*minInterval")
+}
+
+func TestShouldThrottle_InsufficientCredit(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	maxFPS := 10 // 100ms min interval
+	now := time.Now()
+
+	// First frame
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, false))
+
+	// Wait only 50ms — not enough credit
+	time.Sleep(50 * time.Millisecond)
+	require.True(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame with insufficient credit should be throttled")
+}
+
+func TestShouldThrottle_MultipleFramesWithCredit(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	maxFPS := 2 // 500ms min interval
+	now := time.Now()
+
+	// First frame
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, false))
+
+	// Wait 1 second — enough for 2 frames at 2fps
+	time.Sleep(1 * time.Second)
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame 1 of burst should pass")
+	// After consuming 500ms, ~500ms credit remains — enough for one more
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame 2 of burst should pass")
+	// Third frame should be throttled — no credit left
+	require.True(t, shouldThrottle(maxFPS, &credit, &last, time.Now(), false), "frame 3 should be throttled")
+}
+
+func TestHLSThrottlePreservesIDR(t *testing.T) {
+	t.Helper()
+	var credit time.Duration
+	var last time.Time
+	maxFPS := 2 // 500ms min interval
+	now := time.Now()
+
+	// First frame — initializes throttle state
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, false))
+
+	// Second frame immediately — not IDR, should be throttled
+	require.True(t, shouldThrottle(maxFPS, &credit, &last, now, false), "non-IDR should be throttled")
+
+	// Third frame immediately — IS IDR, should NOT be throttled even though credit is exhausted
+	require.False(t, shouldThrottle(maxFPS, &credit, &last, now, true), "IDR should not be throttled despite exhausted credit")
+}
+
+// --- waitForFirstIDR Tests ---
+
+func TestWaitForFirstIDR_AlreadyReceived(t *testing.T) {
+	t.Helper()
+	idrReceived := true
+	// When idrReceived is true, no frame should be skipped
+	require.False(t, waitForFirstIDR([][]byte{{0x01}}, false, &idrReceived), "non-IDR after first IDR should pass")
+	require.True(t, idrReceived, "idrReceived should remain true")
+}
+
+func TestWaitForFirstIDR_NonIDR_Skipped(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// Non-IDR H264 (type 1)
+	require.True(t, waitForFirstIDR([][]byte{{0x01}}, false, &idrReceived), "non-IDR should be skipped")
+	require.False(t, idrReceived, "idrReceived should remain false")
+}
+
+func TestWaitForFirstIDR_IDR_Accepted(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// IDR H264 (type 5)
+	require.False(t, waitForFirstIDR([][]byte{{0x05}}, false, &idrReceived), "IDR should not be skipped")
+	require.True(t, idrReceived, "idrReceived should be set to true")
+}
+
+func TestWaitForFirstIDR_H265_IDR_Type19(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// H265 IDR_W_RADL (type 19): 19 << 1 = 0x26
+	require.False(t, waitForFirstIDR([][]byte{{0x26}}, true, &idrReceived), "H265 IDR_W_RADL should not be skipped")
+	require.True(t, idrReceived)
+}
+
+func TestWaitForFirstIDR_H265_IDR_Type20(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// H265 IDR_N_LP (type 20): 20 << 1 = 0x28
+	require.False(t, waitForFirstIDR([][]byte{{0x28}}, true, &idrReceived), "H265 IDR_N_LP should not be skipped")
+	require.True(t, idrReceived)
+}
+
+func TestWaitForFirstIDR_H265_NonIDR_Skipped(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// H265 non-IDR (type 1): 1 << 1 = 0x02
+	require.True(t, waitForFirstIDR([][]byte{{0x02}}, true, &idrReceived), "H265 non-IDR should be skipped")
+	require.False(t, idrReceived)
+}
+
+func TestWaitForFirstIDR_MixedNALUs_WithIDR(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	// PPS (type 8) + IDR (type 5) — IDR at index 1
+	require.False(t, waitForFirstIDR([][]byte{{0x08}, {0x05}}, false, &idrReceived),
+		"mixed AU with IDR should not be skipped")
+	require.True(t, idrReceived)
+}
+
+func TestWaitForFirstIDR_EmptyAU(t *testing.T) {
+	t.Helper()
+	idrReceived := false
+	require.True(t, waitForFirstIDR([][]byte{}, false, &idrReceived), "empty AU should be skipped")
+	require.False(t, idrReceived)
+}
+
+// --- writeFrameToMuxer Tests ---
+
+func TestWriteFrameToMuxer_NilMuxer(t *testing.T) {
+	t.Helper()
+	err := writeFrameToMuxer(false, nil, nil, [][]byte{{0x01}}, 1000, "test-cam")
+	require.Error(t, err, "nil muxer should return error")
+	require.Contains(t, err.Error(), "muxer not initialized")
+}
+
+func TestWriteFrameToMuxer_NilTrack(t *testing.T) {
+	t.Helper()
+	err := writeFrameToMuxer(false, &gohlslib.Muxer{}, nil, [][]byte{{0x01}}, 1000, "test-cam")
+	require.Error(t, err, "nil track should return error")
+	require.Contains(t, err.Error(), "muxer not initialized")
+}
+
+func TestWriteFrameToMuxer_CameraIDInError(t *testing.T) {
+	t.Helper()
+	err := writeFrameToMuxer(true, nil, nil, [][]byte{{0x26}}, 2000, "my-camera")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "my-camera")
+}
+
+// --- Error Recovery Tests ---
+
+// TestCalculateBackoff_VerifyExponentialGrowth verifies backoff doubles each error
+// and caps at maxBackoff (16s).
+func TestCalculateBackoff_VerifyExponentialGrowth(t *testing.T) {
+	t.Helper()
+	require.Equal(t, 2*time.Second, calculateBackoff(1))
+	require.Equal(t, 4*time.Second, calculateBackoff(2))
+	require.Equal(t, 8*time.Second, calculateBackoff(3))
+	require.Equal(t, 16*time.Second, calculateBackoff(4))
+	require.Equal(t, 16*time.Second, calculateBackoff(5))
+	require.Equal(t, 16*time.Second, calculateBackoff(10))
+	require.Equal(t, 16*time.Second, calculateBackoff(100))
+}
+
+// TestCalculateBackoff_ZeroErrors returns initial backoff
+func TestCalculateBackoff_ZeroErrors(t *testing.T) {
+	t.Helper()
+	require.Equal(t, 1*time.Second, calculateBackoff(0))
+}
+
+// TestWriteLoop_ErrorRecovery_MuxerDestroyedAndIDRReset verifies that a write error
+// causes the muxer to be destroyed and idrReceived to be reset.
+func TestWriteLoop_ErrorRecovery_MuxerDestroyedAndIDRReset(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0, m)
+
+	// Insert entry with a nil muxer
+	mgr.mu.Lock()
+	entry := &streamEntry{
+		mux:         nil,
+		track:       nil,
+		frameCh:     make(chan hlsFrame, defaultWriteBufSize),
+		lastUsed:    time.Now(),
+		idrReceived: true,
+		maxFPS:      0,
+	}
+	mgr.streams["test-cam"] = entry
+	mgr.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately to skip backoff sleep
+
+	mgr.handleWriteError(ctx, "test-cam", entry, fmt.Errorf("write failed"))
+
+	// Verify muxer destroyed and IDR reset
+	require.Nil(t, entry.mux)
+	require.Nil(t, entry.track)
+	require.False(t, entry.idrReceived, "idrReceived should be reset after error")
+
+	// Verify error metrics
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	var writeErrorsFound, muxerRestartsFound bool
+	for _, f := range families {
+		switch f.GetName() {
+		case "nvr_hls_write_errors_total":
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			writeErrorsFound = true
+		case "nvr_hls_muxer_restarts_total":
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			muxerRestartsFound = true
+		}
+	}
+	require.True(t, writeErrorsFound, "expected nvr_hls_write_errors_total metric")
+	require.True(t, muxerRestartsFound, "expected nvr_hls_muxer_restarts_total metric")
+}
+
+// TestHandleWriteError_ConsecutiveErrorsIncreaseBackoff verifies that
+// consecutive write errors properly increment the counter and increase backoff.
+func TestHandleWriteError_ConsecutiveErrorsIncreaseBackoff(t *testing.T) {
+	t.Helper()
+	entry := newTestStreamEntry(0)
+	entry.mux = nil // simulate no muxer
+	entry.track = nil
+	entry.idrReceived = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr := &Manager{streams: make(map[string]*streamEntry)}
+
+	// First error
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed 1"))
+	require.Equal(t, 1, entry.consecutiveErrors)
+	require.Equal(t, 2*time.Second, entry.backoff)
+	require.False(t, entry.idrReceived, "idrReceived should be reset after error")
+
+	// Second error
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed 2"))
+	require.Equal(t, 2, entry.consecutiveErrors)
+	require.Equal(t, 4*time.Second, entry.backoff)
+
+	// Third error
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed 3"))
+	require.Equal(t, 3, entry.consecutiveErrors)
+	require.Equal(t, 8*time.Second, entry.backoff)
+
+	// Fourth error — hits max (16s)
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed 4"))
+	require.Equal(t, 4, entry.consecutiveErrors)
+	require.Equal(t, 16*time.Second, entry.backoff)
+
+	// Fifth error — still capped at 16s
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed 5"))
+	require.Equal(t, 5, entry.consecutiveErrors)
+	require.Equal(t, 16*time.Second, entry.backoff)
+}
+
+// TestHandleWriteError_ContextCancellation verifies that backoff sleep is
+// interrupted when the context is cancelled.
+func TestHandleWriteError_ContextCancellation(t *testing.T) {
+	t.Helper()
+	entry := newTestStreamEntry(0)
+	entry.mux = nil
+	entry.track = nil
+	entry.idrReceived = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	mgr := &Manager{streams: make(map[string]*streamEntry)}
+
+	// Cancel context immediately
+	cancel()
+
+	// handleWriteError should return immediately without sleeping
+	start := time.Now()
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("write failed"))
+	elapsed := time.Since(start)
+
+	require.Equal(t, 1, entry.consecutiveErrors)
+	require.False(t, entry.idrReceived)
+	require.Less(t, elapsed, 100*time.Millisecond, "backoff should be skipped on context cancel")
+}
+
+// TestHandleWriteError_MuxerDestroyed verifies muxer is closed and niled out.
+func TestHandleWriteError_MuxerDestroyed(t *testing.T) {
+	t.Helper()
+	entry := newTestStreamEntry(0)
+	entry.idrReceived = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr := &Manager{streams: make(map[string]*streamEntry)}
+
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("muxer failed"))
+	require.Nil(t, entry.mux)
+	require.Nil(t, entry.track)
+	require.False(t, entry.idrReceived)
+	require.Equal(t, 1, entry.consecutiveErrors)
+}
+
+// TestHandleWriteError_NilMetrics_NoPanic verifies no panic when metrics is nil.
+func TestHandleWriteError_NilMetrics_NoPanic(t *testing.T) {
+	t.Helper()
+	entry := newTestStreamEntry(0)
+	entry.mux = nil
+	entry.track = nil
+	entry.idrReceived = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	defer cancel()
+
+	mgr := &Manager{streams: make(map[string]*streamEntry)}
+	// Should not panic with nil metrics
+	mgr.handleWriteError(ctx, "cam-1", entry, fmt.Errorf("test error"))
+	require.Equal(t, 1, entry.consecutiveErrors)
+}
+
+// --- Goroutine Cleanup Tests ---
+
+// TestStopAll_CancelsManagerContext verifies that StopAll cancels the manager context,
+// which causes writeLoop goroutines to exit cleanly.
+func TestStopAll_CancelsManagerContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr := NewManager(ctx, t.TempDir())
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("cam-1", sps, pps, 0)
+	require.NoError(t, err)
+	require.True(t, mgr.IsActive("cam-1"))
+
+	// Manager context should not be cancelled yet
+	require.NoError(t, mgr.ctx.Err())
+
+	// StopAll cancels manager context
+	mgr.StopAll()
+	require.Error(t, mgr.ctx.Err(), "manager context should be cancelled after StopAll")
+	require.False(t, mgr.IsActive("cam-1"))
+
+	// Parent context should NOT be cancelled (only manager's derived context)
+	require.NoError(t, ctx.Err())
+	cancel()
+}
+
+// TestWriteLoop_ExitsOnManagerContextCancel verifies that writeLoop exits
+// when the manager's context is cancelled via StopAll.
+func TestWriteLoop_ExitsOnManagerContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr := NewManager(ctx, t.TempDir())
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("cam-1", sps, pps, 0)
+	require.NoError(t, err)
+
+	before := runtime.NumGoroutine()
+
+	mgr.StopAll()
+
+	// Give goroutines time to exit
+	time.Sleep(100 * time.Millisecond)
+
+	// Goroutine count should not grow (writeLoop + idleWatchdog should have exited)
+	after := runtime.NumGoroutine()
+	require.LessOrEqual(t, after, before, "goroutine count should not grow after StopAll")
+}
+
+// TestStartStopCycles_NoGoroutineLeak verifies that repeated start/stop cycles
+// do not leak goroutines.
+func TestStartStopCycles_NoGoroutineLeak(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr := NewManager(ctx, t.TempDir())
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+
+	baseline := runtime.NumGoroutine()
+
+	// 5 start/stop cycles
+	for i := 0; i < 5; i++ {
+		err := mgr.StartStream(fmt.Sprintf("cam-%d", i), sps, pps, 0)
+		require.NoError(t, err)
+		time.Sleep(50 * time.Millisecond) // let goroutines start
+		mgr.StopAll()
+		time.Sleep(50 * time.Millisecond) // let goroutines exit
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	require.LessOrEqual(t, after, baseline+1, "at most 1 extra goroutine tolerated after 5 start/stop cycles")
 }

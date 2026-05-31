@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -108,15 +109,15 @@ func TestStreamRegistry_Empty(t *testing.T) {
 }
 
 func TestStreamRegistry_StreamLimits(t *testing.T) {
-	// Test that the HLS stream limit (max 4) is enforced via the HLSStreamHandler
-	hlsMgr := hls.NewManager(t.TempDir())
+	// Test that the HLS stream limit (max 4) is enforced via LRU eviction.
+	// When capacity is reached, the least recently used stream is evicted
+	// and the new stream is accepted (instead of rejecting with an error).
+	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
 	defer hlsMgr.StopAll()
-
-	h := &HLSStreamHandler{Mgr: hlsMgr}
 
 	// Start 4 streams to fill the limit
 	for i := 0; i < 4; i++ {
-		err := h.Mgr.StartStream(
+		err := hlsMgr.StartStream(
 			string(rune('a'+i)),
 			[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
 			[]byte{0x68, 0xce, 0x38, 0x80},
@@ -125,14 +126,17 @@ func TestStreamRegistry_StreamLimits(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// 5th stream should fail
-	err := h.Mgr.StartStream(
+	// 5th stream should succeed via LRU eviction of 'a' (oldest)
+	err := hlsMgr.StartStream(
 		"overflow",
 		[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
 		[]byte{0x68, 0xce, 0x38, 0x80},
 		0,
 	)
-	require.Error(t, err)
+	require.NoError(t, err)
+
+	// Verify stream count is still 4 (not 5) — LRU eviction kept it at capacity
+	require.Equal(t, 4, hlsMgr.GetActiveStreamCount(), "maxStreams should be enforced via LRU")
 }
 
 // --- GET /api/protocols endpoint tests (per-camera) ---

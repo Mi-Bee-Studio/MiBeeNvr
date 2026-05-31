@@ -352,6 +352,8 @@
   "live.webrtc.unsupported": "WebRTC is not supported in this browser",
   "live.flv.connecting": "Connecting...",
   "live.flv.unsupported": "HTTP-FLV is not supported in this browser",
+  "live.snapshot.fallback": "Stream unavailable — showing snapshots",
+  "live.snapshot.autoRestore": "Attempting to restore live stream...",
   "nav.dashboard": "Dashboard",
   "dashboard.title": "Monitoring Dashboard",
   "dashboard.noCameras": "No cameras available for live preview",

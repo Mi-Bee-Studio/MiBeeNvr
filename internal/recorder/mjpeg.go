@@ -238,14 +238,17 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 				mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			return
 		}
-		select {
-		case r.frameCh <- jpeg:
-		default:
-			d := r.dropped.Add(1)
-			if d%100 == 1 {
-					mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
-			}
+	select {
+	case r.frameCh <- jpeg:
+	default:
+		d := r.dropped.Add(1)
+		if r.metrics != nil {
+			r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
 		}
+		if d%100 == 1 {
+			mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+		}
+	}
 	})
 
 	r.setStatus(model.StatusRecording)

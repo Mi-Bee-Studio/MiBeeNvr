@@ -274,7 +274,8 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
-
+		// Telemetry
+		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
 
 	return r

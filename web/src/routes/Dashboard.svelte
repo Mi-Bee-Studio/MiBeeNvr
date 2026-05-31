@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, setContext } from 'svelte';
   import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -12,11 +12,15 @@
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
+  import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
   let expandedCameraId = $state<string | null>(null);
+
+  // Page Visibility — pause/resume all players when tab hidden/visible
+  let tabVisible = $state(true);
 
   let ptzOpenIndex = $state(-1);
 
@@ -51,8 +55,12 @@
   const STORAGE_KEY = 'dashboard-selected-cameras';
 
   // Default streaming protocol from settings
-  let defaultProtocol = $state<string>('hls');
+  let defaultProtocol = $state<string>('flv');
 
+  // Reconnection coordinator — limits concurrent reconnects, global exponential backoff,
+  // and backend pressure detection (HTTP 503 triggers 10s global cooldown)
+  const reconnectCoordinator = createReconnectCoordinator();
+  setContext('reconnect-coordinator', reconnectCoordinator);
 
   function loadSavedCameraIds(): string[] {
     try {
@@ -231,8 +239,28 @@
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
+    // Page Visibility API: pause players when tab hidden, resume when visible
+    const visibilityHandler = () => {
+      tabVisible = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+
+    // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
+    const originalFetch = window.fetch;
+    window.fetch = async function (...args: Parameters<typeof fetch>): Promise<Response> {
+      const response = await originalFetch.apply(this, args);
+      if (response.status === 503) {
+        reconnectCoordinator.reportBackendPressure();
+      }
+      return response;
+    };
+
+
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.fetch = originalFetch;
+      reconnectCoordinator.dispose();
     };
   });
 
@@ -424,6 +452,7 @@
                 cameraProtocol={camera.protocol}
                 protocol={defaultProtocol}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
 
             {:else if mode === 'webrtc'}
@@ -431,6 +460,7 @@
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
 
             {:else if mode === 'flv'}
@@ -438,12 +468,14 @@
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
             {:else if mode === 'wasm'}
               <WasmPlayer
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
 
             {:else}

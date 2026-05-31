@@ -52,6 +52,22 @@ func TestDefaultsApplied(t *testing.T) {
     require.Equal(t, "/dav", cfg.WebDAV.PathPrefix)
 }
 
+func TestFrameWatchdogTimeoutDefaultEmpty(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "cam1", URL: "rtsp://localhost/stream"}}}
+	cfg.ApplyDefaults()
+	require.Equal(t, "", cfg.Cameras[0].FrameWatchdogTimeout)
+}
+
+func TestFrameWatchdogTimeoutCustomValue(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID:                   "cam1",
+		URL:                  "rtsp://localhost/stream",
+		FrameWatchdogTimeout: "15s",
+	}}}
+	cfg.ApplyDefaults()
+	require.Equal(t, "15s", cfg.Cameras[0].FrameWatchdogTimeout)
+}
+
 func TestLoadNonExistentFile(t *testing.T) {
     _, err := Load("no_such_file.yaml")
     require.Error(t, err)
@@ -1096,4 +1112,35 @@ func TestAudioEnabledAllowedForXiaomi(t *testing.T) {
 	}
 	cfg.ApplyDefaults()
 	require.True(t, cfg.Cameras[0].AudioEnabled, "Xiaomi cameras should support audio")
+}
+
+func TestMetricsAuthIsConfigured(t *testing.T) {
+	t.Helper()
+	require.False(t, MetricsAuthConfig{}.IsConfigured(), "empty config should not be configured")
+	require.False(t, MetricsAuthConfig{Username: "user"}.IsConfigured(), "username only should not be configured")
+	require.False(t, MetricsAuthConfig{Password: "pass"}.IsConfigured(), "password only should not be configured")
+	require.True(t, MetricsAuthConfig{Username: "metrics", Password: "secret"}.IsConfigured(), "username+password should be configured")
+	require.True(t, MetricsAuthConfig{Username: "metrics", PasswordHash: "$2a$10$xxxx"}.IsConfigured(), "username+hash should be configured")
+}
+
+func TestMetricsAuthInConfigYAML(t *testing.T) {
+	t.Helper()
+	yaml := `
+server:
+  listen: ":9090"
+auth:
+  username: admin
+  password: admin12345
+metrics_auth:
+  username: metrics
+  password: metpass
+`
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0644))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "metrics", cfg.MetricsAuth.Username)
+	require.Equal(t, "metpass", cfg.MetricsAuth.Password)
+	require.True(t, cfg.MetricsAuth.IsConfigured())
 }

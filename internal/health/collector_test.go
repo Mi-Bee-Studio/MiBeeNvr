@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-)
+	"github.com/stretchr/testify/require")
 
 // newCollector creates a StreamStatsCollector for testing with reasonable defaults.
 func newCollector(t *testing.T, windowSize time.Duration) (*StreamStatsCollector, *[]model.HealthEvent) {
@@ -26,6 +27,27 @@ func newCollector(t *testing.T, windowSize time.Duration) (*StreamStatsCollector
 		windowSize,
 		handler,
 	)
+	return c, &events
+}
+
+// newCollectorWithMetrics creates a StreamStatsCollector with Prometheus metrics bridge.
+func newCollectorWithMetrics(t *testing.T, windowSize time.Duration, m *metrics.Metrics) (*StreamStatsCollector, *[]model.HealthEvent) {
+	t.Helper()
+	var events []model.HealthEvent
+	var mu sync.Mutex
+	handler := func(cameraID string, event model.HealthEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+	c := NewStreamStatsCollector(
+		0.5,            // bitrate change threshold (50%)
+		5.0,            // min FPS
+		30*time.Second, // max IDR interval
+		windowSize,
+		handler,
+	)
+	c.SetMetrics(m)
 	return c, &events
 }
 
@@ -627,6 +649,70 @@ func TestCollectorDebounceResetOnReconnect(t *testing.T) {
 	for _, e := range evts {
 		if e.Message == "IDR interval too long" {
 			t.Error("should not emit IDR event — debounce reset on reconnect, only 1 check since")
+		}
+	}
+}
+
+func TestCollectorPrometheusBridge(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	c, _ := newCollectorWithMetrics(t, 5*time.Second, m)
+
+	// Create frame callbacks for camera
+	onFrame := c.OnFrame("cam1")
+
+	// Simulate 50 frames at 1000 bytes each over the window
+	idrNalu := makeH264Frame(t, 5, 100) // H.264 IDR
+	for i := 0; i < 50; i++ {
+		onFrame(int64(i*33), idrNalu) // ~30fps, 100 bytes each
+		if i == 0 {
+			onFrame(int64(i*33), idrNalu)
+		}
+	}
+
+	// Trigger CheckAndReset which also updates Prometheus gauges
+	c.CheckAndReset()
+
+	// Verify FPS gauge
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		switch f.GetName() {
+		case "nvr_stream_fps":
+			require.Len(t, f.GetMetric(), 1)
+			fps := f.GetMetric()[0].GetGauge().GetValue()
+			require.Greater(t, fps, 0.0, "FPS gauge should be positive")
+		case "nvr_stream_bitrate_kbps":
+			require.Len(t, f.GetMetric(), 1)
+			kbps := f.GetMetric()[0].GetGauge().GetValue()
+			require.Greater(t, kbps, 0.0, "bitrate gauge should be positive")
+		case "nvr_stream_idr_interval_seconds":
+			require.Len(t, f.GetMetric(), 1)
+			idr := f.GetMetric()[0].GetGauge().GetValue()
+			require.GreaterOrEqual(t, idr, 0.0)
+		}
+	}
+}
+
+func TestCollectorPrometheusBridge_RemoveCamera(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	c, _ := newCollectorWithMetrics(t, 5*time.Second, m)
+
+	onFrame := c.OnFrame("cam1")
+	onFrame(0, makeH264Frame(t, 5, 100))
+	c.CheckAndReset()
+
+	// Remove camera and check again
+	c.RemoveCamera("cam1")
+	c.CheckAndReset()
+
+	// FPS gauge should still have the last value (Prometheus gauges retain until next set)
+	families, _ := m.Registry.Gather()
+	for _, f := range families {
+		if f.GetName() == "nvr_stream_fps" {
+			// After removal, no new set, so gauge retains last value
+			require.Len(t, f.GetMetric(), 1)
 		}
 	}
 }

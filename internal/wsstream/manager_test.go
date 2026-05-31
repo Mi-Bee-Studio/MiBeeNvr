@@ -23,7 +23,7 @@ func newTestHub(t *testing.T) *model.StreamHub {
 
 func broadcastFrame(t *testing.T, hub *model.StreamHub, pts int64, au [][]byte) {
 	t.Helper()
-	hub.Broadcast(pts, au)
+	hub.Broadcast(pts, au, false)
 }
 
 var sampleSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
@@ -404,7 +404,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 
 	for i := 0; i < 200; i++ {
 		nalu := []byte{0x65, byte(i)}
-		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu})
+		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
 
 	time.Sleep(50 * time.Millisecond)
@@ -545,7 +545,7 @@ func TestMultipleViewers(t *testing.T) {
 	assert.Equal(t, 3, m.ViewerCount("cam1"))
 
 	nalu := []byte{0x65, 0x01, 0x02, 0x03}
-	hub.Broadcast(90000, [][]byte{nalu})
+	hub.Broadcast(90000, [][]byte{nalu}, false)
 
 	for _, conn := range conns {
 		msg, err := readMessage(t, conn)
@@ -565,8 +565,8 @@ func TestWriteFrame_EmptyAU(t *testing.T) {
 	err := m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub)
 	require.NoError(t, err)
 
-	hub.Broadcast(90000, nil)
-	hub.Broadcast(90000, [][]byte{})
+	hub.Broadcast(90000, nil, false)
+	hub.Broadcast(90000, [][]byte{}, false)
 
 	time.Sleep(20 * time.Millisecond)
 	m.StopAll()
@@ -607,8 +607,8 @@ func TestServeWS_ConcurrentStreams(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, CodecH265, ci2.Codec)
 
-	hub1.Broadcast(90000, [][]byte{{0x65, 0x01}})
-	hub2.Broadcast(90000, [][]byte{{0x26, 0x01}})
+	hub1.Broadcast(90000, [][]byte{{0x65, 0x01}}, false)
+	hub2.Broadcast(90000, [][]byte{{0x26, 0x01}}, false)
 
 	msg1, err = readMessage(t, conn1)
 	require.NoError(t, err)

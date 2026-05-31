@@ -672,19 +672,19 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
 		if naluType == 5 && r.sps != nil && r.pps != nil {
-			r.Hub.Broadcast(pts, [][]byte{r.sps, r.pps, nalu})
+			r.Hub.Broadcast(pts, [][]byte{r.sps, r.pps, nalu}, true)
 		} else {
-			r.Hub.Broadcast(pts, [][]byte{nalu})
+			r.Hub.Broadcast(pts, [][]byte{nalu}, false)
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
 		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
-			r.Hub.Broadcast(pts, [][]byte{r.vps, r.sps, r.pps, nalu})
+			r.Hub.Broadcast(pts, [][]byte{r.vps, r.sps, r.pps, nalu}, true)
 		} else {
-			r.Hub.Broadcast(pts, [][]byte{nalu})
+			r.Hub.Broadcast(pts, [][]byte{nalu}, false)
 		}
 	default:
-		r.Hub.Broadcast(pts, [][]byte{nalu})
+		r.Hub.Broadcast(pts, [][]byte{nalu}, false)
 	}
 }
 

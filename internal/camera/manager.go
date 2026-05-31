@@ -163,26 +163,32 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):
-			h264Cfg := recorder.H264Config{
-				CameraID:     cam.ID,
-				RTSPURL:      cam.URL,
-				Username:     cam.Username,
-				Password:     cam.Password,
-				SegmentDur:   segDur,
-				DB:           cm.db,
-				AudioEnabled: cam.AudioEnabled,
-			}
+		h264Cfg := recorder.H264Config{
+			CameraID:     cam.ID,
+			RTSPURL:      cam.URL,
+			Username:     cam.Username,
+			Password:     cam.Password,
+			SegmentDur:   segDur,
+			DB:           cm.db,
+			AudioEnabled: cam.AudioEnabled,
+		}
+		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+			h264Cfg.FrameWatchdogTimeout = d
+		}
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
-			h265Cfg := recorder.H265Config{
-				CameraID:     cam.ID,
-				RTSPURL:      cam.URL,
-				Username:     cam.Username,
-				Password:     cam.Password,
-				SegmentDur:   segDur,
-				DB:           cm.db,
-				AudioEnabled: cam.AudioEnabled,
-			}
+		h265Cfg := recorder.H265Config{
+			CameraID:     cam.ID,
+			RTSPURL:      cam.URL,
+			Username:     cam.Username,
+			Password:     cam.Password,
+			SegmentDur:   segDur,
+			DB:           cm.db,
+			AudioEnabled: cam.AudioEnabled,
+		}
+		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+			h265Cfg.FrameWatchdogTimeout = d
+		}
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
 			mjpegCfg := recorder.MJPEGConfig{
@@ -225,34 +231,52 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			DB:             cm.db,
 			AudioEnabled:   cam.AudioEnabled,
 		}
+		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+			onvifCfg.FrameWatchdogTimeout = d
+		}
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	default:
 		return nil
 	}
 
 	// Initialize StreamHub for frame fan-out on all recorders
-	initStreamHub(rec)
+	initStreamHub(rec, cam.ID, cm.metrics)
 	return rec
 }
 
 // initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
-func initStreamHub(rec model.Recorder) {
+// It also sets the cameraID for structured logging and wires up the OnBroadcast callback.
+func initStreamHub(rec model.Recorder, cameraID string, m *metrics.Metrics) {
+	var hub *model.StreamHub
 	switch r := rec.(type) {
 	case *recorder.H264Recorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.H265Recorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.ONVIFRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.MJPEGRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.HTTPJPEGRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *xiaomi.XiaomiRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
+	}
+	if hub != nil {
+		hub.SetCameraID(cameraID)
+		if m != nil {
+			hub.OnBroadcast = func(cid string, isIDR bool) {
+				m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
+			}
+		}
 	}
 }
-
 // startRecorder creates and starts a recorder for the given camera config.
 // The caller must hold cm.mu (or at least a write lock) if cm.recorders is being modified.
 // If the recorder is created, it will be registered in cm.recorders.
@@ -267,9 +291,12 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
 	if err := rec.Start(ctx); err != nil {
 		delete(cm.recorders, cam.ID)
+		// Record connection error metric
+		if cm.metrics != nil {
+			cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
+		}
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
-	// Clear any previous error detail — a successful start means the camera is transitioning to recording
 	cm.errorDetails[cam.ID] = nil
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
@@ -325,6 +352,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				cm.mu.Unlock()
 				if err := rec.Start(ctx); err != nil {
 					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
+					if cm.metrics != nil {
+						cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
+					}
 				} else {
 					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
 					// Notify health manager of new camera with per-camera overrides
@@ -766,6 +796,10 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 		delete(cm.recorders, cameraID)
 	}
+	// Record reconnect attempt
+	if cm.metrics != nil {
+		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
+	}
 
 	// Create and start new recorder
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
@@ -1066,4 +1100,24 @@ func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
 	}
 	cm.eventSubscribers = make(map[string]onvif.EventSubscriber)
 	cm.onvifMu.Unlock()
+}
+
+// classifyError categorizes a connection error into a Prometheus label value.
+// Values: "timeout", "auth", "network", "unknown".
+func classifyError(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	msg := err.Error()
+	// Check for common error patterns
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+		return "timeout"
+	case strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "auth"):
+		return "auth"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "network") || strings.Contains(msg, "dial") || strings.Contains(msg, "no such host"):
+		return "network"
+	default:
+		return "unknown"
+	}
 }

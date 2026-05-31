@@ -3,6 +3,7 @@ package srt
 import (
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 // MPEG-TS constants
@@ -55,11 +56,9 @@ type NALU struct {
 }
 
 // isKeyframeNALU returns true if the NALU is an IDR slice.
+// Delegates to nalutil.IsKeyframeNALU. SRT currently supports H.264 only.
 func isKeyframeNALU(data []byte) bool {
-	if len(data) == 0 {
-		return false
-	}
-	return data[0]&0x1F == naluTypeIDR
+	return nalutil.IsKeyframeNALU(data, false)
 }
 
 // Feed processes MPEG-TS data and returns extracted NALUs.

@@ -2,13 +2,16 @@ package flv
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 var flvLogger = slog.Default().With("component", "flv-manager")
@@ -71,6 +74,7 @@ type Manager struct {
 	streams      map[string]*streamEntry
 	maxViewers   int
 	writeBufSize int
+	metrics      *metrics.Metrics
 }
 
 // Option configures a Manager.
@@ -91,6 +95,13 @@ func WithWriteBufSize(n int) Option {
 		if n > 0 {
 			m.writeBufSize = n
 		}
+	}
+}
+
+// WithMetrics sets the Prometheus metrics collector for the FLV manager.
+func WithMetrics(m *metrics.Metrics) Option {
+	return func(mgr *Manager) {
+		mgr.metrics = m
 	}
 }
 
@@ -223,24 +234,35 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		return // stream not active, silently ignore
 	}
 
-	isKeyframe := isKeyframeNALU(au[0])
+	isKeyframe := isKeyframeNALU(au[0], entry.codec == model.FormatH265)
+
+	traceID := "no-trace"
+	if isKeyframe {
+		traceID = fmt.Sprintf("%s-%d", camID, pts)
+	}
 
 	// Non-blocking send
 	select {
 	case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", camID,
+			"stage", "flv_recv",
+			"is_idr", isKeyframe,
+		)
 	default:
-		// Buffer full, drop frame
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", camID,
+			"stage", "flv_drop",
+			"is_idr", isKeyframe,
+			"queue_depth", len(entry.frameCh),
+		)
 	}
 }
-
 // isKeyframeNALU checks if the first NALU is an IDR frame.
-func isKeyframeNALU(nalu []byte) bool {
-	if len(nalu) == 0 {
-		return false
-	}
-	naluType := nalu[0] & 0x1F
-	// H.264 IDR = 5, H.265 IDR_W_RADL = 19, IDR_N_LP = 20
-	return naluType == 5 || naluType == 19 || naluType == 20
+func isKeyframeNALU(nalu []byte, isH265 bool) bool {
+	return nalutil.IsKeyframeNALU(nalu, isH265)
 }
 
 // writeLoop drains frames from the channel and distributes to all viewers.
@@ -341,6 +363,7 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 
 	// Send cached GOP
 	entry.gopMu.RLock()
+	gopLen := len(entry.gopCache.frames)
 	for _, frame := range entry.gopCache.frames {
 		if _, err := w.Write(frame.tag); err != nil {
 			entry.gopMu.RUnlock()
@@ -348,6 +371,9 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		}
 	}
 	entry.gopMu.RUnlock()
+	if gopLen == 0 && m.metrics != nil {
+		m.metrics.FLVGOPCacheMisses.WithLabelValues(camID).Inc()
+	}
 	if flusher != nil {
 		flusher.Flush()
 	}

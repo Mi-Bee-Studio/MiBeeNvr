@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
   import { createHlsConfig } from '$lib/hls-config';
@@ -7,12 +7,12 @@
     setupHlsErrorHandling,
     setupZombieDetector,
     destroyAndRecreate,
-    handleVisibilityChange,
     checkStreamAvailable,
     createAutoRetryScheduler,
   } from '$lib/hls-errors';
   import type { StreamState } from '$lib/hls-errors';
   import { captureFrame } from '$lib/freeze-frame';
+  import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
   let {
     cameraId,
@@ -21,6 +21,7 @@
     cameraProtocol,
     expanded = false,
     protocol = 'hls',
+    tabVisible = true,
   }: {
     cameraId: string;
     cameraName: string;
@@ -28,8 +29,35 @@
     cameraProtocol: string;
     expanded?: boolean;
     protocol?: string;
+    tabVisible?: boolean;
   } = $props();
 
+  // Reconnection coordinator from Dashboard context
+  const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
+  let coordinatedTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasActiveCoordinatedReconnect = false;
+
+  function coordinatedReconnect(reconnectFn: () => void) {
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (!coordinator) {
+      reconnectFn();
+      return;
+    }
+    hasActiveCoordinatedReconnect = true;
+    const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, grantedDelay);
+    });
+    if (delay >= 0) {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, delay);
+    }
+    // If -1, queued — callback will fire when slot opens
+  }
   let streamState: StreamState | 'loading' = $state('loading');
   let videoEl: HTMLVideoElement | undefined = $state();
   let hlsInstance: any = null;
@@ -37,7 +65,6 @@
   let recreateAttempts = { value: 0 };
   let zombieCleanup: (() => void) | null = null;
   let autoRetry: ReturnType<typeof createAutoRetryScheduler> | null = null;
-  let visibilityCleanup: (() => void) | null = null;
   let destroyed = false;
 
   // Freeze frame — prevents black flash during reconnection
@@ -93,6 +120,10 @@
         autoRetry.clear();
         autoRetry = null;
       }
+      if (state === 'playing' && coordinator && hasActiveCoordinatedReconnect) {
+        coordinator.completeReconnect(cameraId);
+        hasActiveCoordinatedReconnect = false;
+      }
       streamState = state;
     }
   }
@@ -119,8 +150,10 @@
     captureFreezeFrame();
     recreateAttempts.value = 0;
     streamState = 'loading';
-    destroyCurrentHls();
-    initHls();
+    coordinatedReconnect(() => {
+      destroyCurrentHls();
+      initHls();
+    });
   }
 
   function buildErrorConfig() {
@@ -129,8 +162,18 @@
       maxRetries: 3,
       retryDelays: [2000, 4000, 8000],
       onStateChange: updateState,
+      videoEl: videoEl || undefined,
       onFallbackToSnapshot: () => {
         streamState = 'error';
+        if (coordinator) {
+          // Use coordinator instead of per-player auto-retry
+          coordinatedReconnect(() => {
+            streamState = 'loading';
+            destroyCurrentHls();
+            initHls();
+          });
+          return;
+        }
         if (!autoRetry) {
           autoRetry = createAutoRetryScheduler(() => {
             streamState = 'loading';
@@ -224,40 +267,39 @@ streamState = 'error';
     };
   });
 
-  // Visibility change handler — rebuild stream on foreground
+  // Coordinated visibility — pause when tab hidden, resume when visible
+  // Replaces handleVisibilityChange() per-player listener; Dashboard owns the signal
   $effect(() => {
+    const visible = tabVisible;
     const _url = streamUrl;
     if (!_url) return;
 
-    visibilityCleanup = handleVisibilityChange(
-      () => [cameraId],
-      (id: string) => {
-        if (id !== cameraId) return;
+    if (!visible) {
+      // Tab hidden — destroy HLS to release decode/network resources
+      if (hlsInstance && !destroyed) {
+        try { hlsInstance.destroy(); } catch { /* ignore */ }
+        hlsInstance = null;
+        if (zombieCleanup) { zombieCleanup(); zombieCleanup = null; }
+      }
+    } else {
+      // Tab visible — resume: rebuild HLS stream
+      if (!destroyed && streamState !== 'loading' && !hlsInstance) {
         captureFreezeFrame();
         recreateAttempts.value = 0;
-        destroyCurrentHls();
         streamState = 'loading';
         initHls();
-      },
-    );
-
-    return () => {
-      if (visibilityCleanup) {
-        visibilityCleanup();
-        visibilityCleanup = null;
       }
-    };
+    }
   });
 
   onDestroy(() => {
     destroyed = true;
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
     destroyCurrentHls();
-    if (visibilityCleanup) {
-      visibilityCleanup();
-      visibilityCleanup = null;
-    }
+    destroyCurrentHls();
   });
 
   // --- Derived ---
