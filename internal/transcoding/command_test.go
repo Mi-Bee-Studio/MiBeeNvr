@@ -448,3 +448,62 @@ func TestARMSoftwareProhibition_H264Output(t *testing.T) {
 		t.Errorf("error should mention 'software encoding not supported', got: %v", err)
 	}
 }
+
+// TestARMMJPEGSoftwareAllowed verifies that software encoding IS allowed on ARM for MJPEG input.
+// MJPEG is always low-resolution and v4l2m2m may hang on it, so software is the safe fallback.
+func TestARMMJPEGSoftwareAllowed(t *testing.T) {
+	tests := []struct {
+		name  string
+		codec string
+	}{
+		{"mjpeg", "mjpeg"},
+		{"jpeg", "jpeg"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := TranscodeOptions{
+				InputPath:   "/tmp/frames",
+				OutputPath:  "/tmp/out.mp4",
+				InputCodec:  tc.codec,
+				OutputCodec: "h264",
+				Framerate:   10,
+			}
+			args, err := BuildFFmpegCommand(opts, armSoftwareCaps())
+			if err != nil {
+				t.Fatalf("MJPEG input should allow software encoding on ARM, got error: %v", err)
+			}
+			argsContain(t, args, "-c:v", "libx264")
+			argsContain(t, args, "-preset", "faster")
+		})
+	}
+}
+
+// TestARMMJPEGForcesSoftwareEvenWithHardware verifies that even when v4l2m2m is available,
+// MJPEG input forces software encoding (because v4l2m2m hangs on MJPEG input).
+func TestARMMJPEGForcesSoftwareEvenWithHardware(t *testing.T) {
+	tests := []struct {
+		name  string
+		codec string
+	}{
+		{"mjpeg", "mjpeg"},
+		{"jpeg", "jpeg"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := TranscodeOptions{
+				InputPath:   "/tmp/frames",
+				OutputPath:  "/tmp/out.mp4",
+				InputCodec:  tc.codec,
+				OutputCodec: "h264",
+				Framerate:   10,
+			}
+			// Use v4l2m2m caps — should STILL use libx264 for MJPEG input
+			args, err := BuildFFmpegCommand(opts, v4l2m2mCaps())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			argsContain(t, args, "-c:v", "libx264")
+			argsNotContain(t, args, "v4l2m2m")
+		})
+	}
+}

@@ -1605,9 +1605,27 @@ func TestQueueARMMJPEGInputNotChecked(t *testing.T) {
 	}
 
 	err := q.Enqueue(ctx, task)
-	// MJPEG input should not be rejected for decoder reasons
-	// (it will still be rejected for software encoding on ARM, so we expect that error)
-	require.Error(t, err, "should fail for software encoding reason, not decoder")
-	require.Contains(t, err.Error(), "software encoding not supported")
-	require.NotContains(t, err.Error(), "decoder")
+	// MJPEG input should now be ALLOWED on ARM with software encoding
+	// (low-resolution MJPEG is fast enough, and v4l2m2m may hang on MJPEG)
+	require.NoError(t, err, "MJPEG input should be allowed on ARM with software encoding")
+}
+
+func TestQueueARMJPEGInputAllowed(t *testing.T) {
+	// Test: JPEG input on ARM is also allowed with software encoding (same exemption as MJPEG)
+	db := newTestQueueDB(t)
+	q := newARMTestQueue(t, db, 1)
+
+	ctx := context.Background()
+	task := &storage.TranscodeTask{
+		CameraID:     "cam-1",
+		RecordingID:  "rec-1",
+		InputPath:    "/input.mp4",
+		InputFormat:  "jpeg",
+		OutputPath:   "/output.mp4",
+		OutputFormat: "h264",
+		CreatedAt:    time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
+	}
+
+	err := q.Enqueue(ctx, task)
+	require.NoError(t, err, "JPEG input should be allowed on ARM with software encoding")
 }

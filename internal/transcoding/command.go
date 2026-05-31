@@ -72,15 +72,18 @@ func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]
 	encoder := ""
 	forceSoftware := opts.ForceSoftware
 
+	// MJPEG input forces software encoder — v4l2m2m hangs on MJPEG input.
+	useSoftware := forceSoftware || isMJPEGInput(opts.InputCodec)
+
 	switch opts.OutputCodec {
 	case "h264":
-		if !forceSoftware && caps.H264EncoderType != EncoderSoftware && caps.H264Encoder != "" {
+		if !useSoftware && caps.H264EncoderType != EncoderSoftware && caps.H264Encoder != "" {
 			encoder = caps.H264Encoder
 		} else {
 			encoder = "libx264"
 		}
 	case "h265":
-		if !forceSoftware && caps.H265EncoderType != EncoderSoftware && caps.H265Encoder != "" {
+		if !useSoftware && caps.H265EncoderType != EncoderSoftware && caps.H265Encoder != "" {
 			encoder = caps.H265Encoder
 		} else {
 			encoder = "libx265"
@@ -89,8 +92,10 @@ func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]
 		return nil, fmt.Errorf("unsupported output codec: %s", opts.OutputCodec)
 	}
 
-	// Reject software encoding on ARM architecture (unless ForceSoftware for testing)
-	if !forceSoftware && isARMArch(caps.Arch) && isSoftwareEncoder(encoder) {
+	// Reject software encoding on ARM architecture (unless ForceSoftware for testing
+	// or input is MJPEG/JPEG — low-resolution software decode+encode is fast enough
+	// and v4l2m2m may hang on MJPEG input).
+	if !forceSoftware && isARMArch(caps.Arch) && isSoftwareEncoder(encoder) && !isMJPEGInput(opts.InputCodec) {
 		return nil, fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", caps.Arch)
 	}
 
@@ -144,4 +149,11 @@ func isARMArch(arch string) bool {
 // isSoftwareEncoder returns true if the encoder name is a software encoder.
 func isSoftwareEncoder(encoder string) bool {
 	return encoder == "libx264" || encoder == "libx265"
+}
+
+// isMJPEGInput returns true if the input codec is MJPEG or JPEG.
+// These formats are always low-resolution and software encode is fast enough;
+// v4l2m2m may hang on MJPEG input, so software encoding is the safe fallback.
+func isMJPEGInput(codec string) bool {
+	return codec == "mjpeg" || codec == "jpeg"
 }

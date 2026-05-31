@@ -162,15 +162,18 @@ func (q *TranscodeQueue) Stop() {
 // Rejects tasks where input resolution exceeds encoder limits.
 func (q *TranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTask) error {
 	if q.caps != nil && isARMArch(q.caps.Arch) {
-		// Check output encoding capability
-		switch task.OutputFormat {
-		case "h264":
-			if q.caps.H264EncoderType == EncoderSoftware {
-				return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
-			}
-		case "h265":
-			if q.caps.H265EncoderType == EncoderSoftware {
-				return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
+		// Check output encoding capability (skip for MJPEG input — software encode is fast enough
+		// at low MJPEG resolutions, and v4l2m2m may hang on MJPEG input).
+		if !isMJPEGInputTask(task.InputFormat) {
+			switch task.OutputFormat {
+			case "h264":
+				if q.caps.H264EncoderType == EncoderSoftware {
+					return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
+				}
+			case "h265":
+				if q.caps.H265EncoderType == EncoderSoftware {
+					return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
+				}
 			}
 		}
 
@@ -431,11 +434,11 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 		if info, err := os.Stat(task.InputPath); err == nil {
 			q.m.TranscodingBytesProcessed.Add(float64(info.Size()))
 		}
+	}
 
-		// Optionally replace original with transcoded file
-		if q.config.ReplaceOriginal {
-			q.replaceOriginal(task)
-		}
+	// Optionally replace original with transcoded file
+	if q.config.ReplaceOriginal {
+		q.replaceOriginal(task)
 	}
 }
 
@@ -653,4 +656,9 @@ func atomicRename(src, dst string) error {
 	}
 
 	return nil
+}
+
+// isMJPEGInputTask returns true if the input format is MJPEG or JPEG.
+func isMJPEGInputTask(format string) bool {
+	return format == "mjpeg" || format == "jpeg"
 }
