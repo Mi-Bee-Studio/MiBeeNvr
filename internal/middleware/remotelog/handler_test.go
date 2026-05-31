@@ -296,6 +296,195 @@ func TestHandler_WithGroup_Empty(t *testing.T) {
 	}
 }
 
+func TestExtractFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		msg     string
+		want    map[string]any
+		wantNot []string
+	}{
+		{
+			name: "camera_id and component",
+			msg:  "ERROR connection error component=xiaomi-recorder camera_id=cam-123 backoff=2s",
+			want: map[string]any{
+				"component":  "xiaomi-recorder",
+				"camera_id": "cam-123",
+				"backoff":   "2s",
+			},
+		},
+		{
+			name: "quoted value with spaces",
+			msg:  `ERROR stream error error="dial tcp: connection refused" attempt=3`,
+			want: map[string]any{
+				"error":   "dial tcp: connection refused",
+				"attempt": "3",
+			},
+		},
+		{
+			name:    "no key=value pairs",
+			msg:     "simple log message",
+			wantNot: []string{"component", "camera_id"},
+		},
+		{
+			name: "prefixed message",
+			msg:  "INFO resolved xiaomi MISS URL component=xiaomi-cloud did=1058760647 ip=192.168.1.1 vendor=cs2",
+			want: map[string]any{
+				"component": "xiaomi-cloud",
+				"did":       "1058760647",
+				"ip":        "192.168.1.1",
+				"vendor":    "cs2",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			obj := make(map[string]any)
+			extractFields(tt.msg, obj)
+			for k, v := range tt.want {
+				got, ok := obj[k]
+				if !ok {
+					t.Errorf("expected key %q not found", k)
+				} else if got != v {
+					t.Errorf("key %q: got %q, want %q", k, got, v)
+				}
+			}
+			for _, k := range tt.wantNot {
+				if _, ok := obj[k]; ok {
+					t.Errorf("did not expect key %q", k)
+				}
+			}
+		})
+	}
+}
+
+func TestSend_UsesMsgField(t *testing.T) {
+	t.Parallel()
+	srv, tc := startTestServer(0)
+	defer srv.Close()
+
+	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
+	defer h.Close()
+
+	for i := 0; i < defaultBufferSize; i++ {
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, "test message content", 0)
+		_ = h.Handle(nil, r)
+	}
+
+	waitForRequests(t, &tc.Count, 1, 2*time.Second)
+
+	bodies := tc.getBodies()
+	if len(bodies) == 0 {
+		t.Fatal("expected batch to be sent")
+	}
+
+	var obj map[string]any
+	for _, line := range splitNDJSON(bodies[0]) {
+		if line == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			continue
+		}
+		break
+	}
+
+	// Must have _msg (not message) as the primary message field
+	if obj["_msg"] != "test message content" {
+		t.Errorf("expected _msg='test message content', got %v", obj["_msg"])
+	}
+	// Should NOT have 'message' field
+	if _, ok := obj["message"]; ok {
+		t.Error("expected no 'message' field, only '_msg'")
+	}
+}
+
+func TestSend_ExtractsFieldsFromMessage(t *testing.T) {
+	t.Parallel()
+	srv, tc := startTestServer(0)
+	defer srv.Close()
+
+	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
+	defer h.Close()
+
+	for i := 0; i < defaultBufferSize; i++ {
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, "connection error component=recorder camera_id=cam-abc", 0)
+		_ = h.Handle(nil, r)
+	}
+
+	waitForRequests(t, &tc.Count, 1, 2*time.Second)
+
+	bodies := tc.getBodies()
+	var obj map[string]any
+outer:
+	for _, body := range bodies {
+		for _, line := range splitNDJSON(body) {
+			if line == "" {
+				continue
+			}
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				continue
+			}
+			break outer
+		}
+	}
+
+	if obj == nil {
+		t.Fatal("no valid JSON entry found")
+	}
+	// Extracted fields should be present
+	if obj["component"] != "recorder" {
+		t.Errorf("expected component='recorder', got %v", obj["component"])
+	}
+	if obj["camera_id"] != "cam-abc" {
+		t.Errorf("expected camera_id='cam-abc', got %v", obj["camera_id"])
+	}
+}
+
+func TestExtractFields_DoesNotOverwrite(t *testing.T) {
+	t.Parallel()
+	srv, tc := startTestServer(0)
+	defer srv.Close()
+
+	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
+	defer h.Close()
+
+	// Send with explicit slog attr camera_id=explicit-value
+	for i := 0; i < defaultBufferSize; i++ {
+		r := slog.NewRecord(time.Now(), slog.LevelInfo, "msg camera_id=extracted-value", 0)
+		r.AddAttrs(slog.String("camera_id", "explicit-value"))
+		_ = h.Handle(nil, r)
+	}
+
+	waitForRequests(t, &tc.Count, 1, 2*time.Second)
+
+	bodies := tc.getBodies()
+	var obj map[string]any
+outer:
+	for _, body := range bodies {
+		for _, line := range splitNDJSON(body) {
+			if line == "" {
+				continue
+			}
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				continue
+			}
+			break outer
+		}
+	}
+
+	if obj == nil {
+		t.Fatal("no valid JSON entry found")
+	}
+	// Explicit slog attr should win over extracted value
+	if obj["camera_id"] != "explicit-value" {
+		t.Errorf("explicit attr should win: got %v, want 'explicit-value'", obj["camera_id"])
+	}
+}
+
 // --- helpers ---
 
 func waitForRequests(t *testing.T, count *atomic.Int64, want int64, timeout time.Duration) {

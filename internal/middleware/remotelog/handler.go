@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -231,13 +232,16 @@ func (h *Handler) send(batch []bufferedEntry) error {
 	enc := json.NewEncoder(buf)
 	enc.SetEscapeHTML(false)
 	for _, e := range batch {
-		obj := make(map[string]any, len(e.Fields)+3)
+		obj := make(map[string]any, len(e.Fields)+4)
 		obj["_time"] = e.Time.UTC().Format(time.RFC3339Nano)
+		obj["_msg"] = e.Message
 		obj["level"] = e.Level
-		obj["message"] = e.Message
 		for k, v := range e.Fields {
 			obj[k] = v
 		}
+		// Extract key=value pairs embedded in message text (e.g. "camera_id=xxx")
+		// so VictoriaLogs can index them as separate fields for filtering.
+		extractFields(e.Message, obj)
 		if err := enc.Encode(obj); err != nil {
 			continue
 		}
@@ -311,4 +315,27 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 		clones = append(clones, h.WithGroup(name))
 	}
 	return MultiHandler(clones...)
+}
+
+// kvPat matches key=value pairs in log message text.
+// Handles: camera_id=xxx  error="quoted value"  backoff=1m30s  attempt=42
+// Skips: _msg= (VictoriaLogs internal), keys starting with digit.
+var kvPat = regexp.MustCompile(`(?:^|\s)([a-zA-Z_][a-zA-Z0-9_]*)=("[^"]*"|\S+)`)
+
+// extractFields parses key=value pairs from msg and adds them to obj
+// only if the key is not already present (explicit slog attrs take precedence).
+func extractFields(msg string, obj map[string]any) {
+	matches := kvPat.FindAllStringSubmatch(msg, -1)
+	for _, m := range matches {
+		key := m[1]
+		val := m[2]
+		// Strip surrounding quotes from quoted values
+		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = val[1 : len(val)-1]
+		}
+		// Don't overwrite explicit slog attrs
+		if _, exists := obj[key]; !exists {
+			obj[key] = val
+		}
+	}
 }

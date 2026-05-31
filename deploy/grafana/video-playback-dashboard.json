@@ -39,7 +39,7 @@
       },
       "id": 1,
       "panels": [],
-      "title": "VictoriaLogs — Frame Trace & Pipeline Events",
+      "title": "VictoriaLogs \u2014 Frame Trace & Pipeline Events",
       "type": "row"
     },
     {
@@ -60,7 +60,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "camera_id:=\"$camera_id\" _time:15m | sort by (_time)"
+          "expr": "message:\"camera_id=$camera_id\" _time:15m | sort by (_time)"
         }
       ],
       "options": {
@@ -86,7 +86,7 @@
         "type": "victoriametrics-logs-datasource",
         "uid": "VictoriaLogs"
       },
-      "description": "Count of StreamHub IDR frame drops by camera — indicates buffer-full events that lost a keyframe, likely causing downstream black screen.",
+      "description": "Count of StreamHub IDR frame drops by camera \u2014 indicates buffer-full events that lost a keyframe, likely causing downstream black screen.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -139,7 +139,7 @@
         "type": "victoriametrics-logs-datasource",
         "uid": "VictoriaLogs"
       },
-      "description": "ERROR-level log events from the frame pipeline — HLS write errors, WebRTC drops, and other streaming failures.",
+      "description": "ERROR-level log events from the frame pipeline \u2014 HLS write errors, WebRTC drops, and other streaming failures.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -175,7 +175,7 @@
         "type": "victoriametrics-logs-datasource",
         "uid": "VictoriaLogs"
       },
-      "description": "Frontend telemetry events from browser-side hls.js, FLV, and WebRTC players — segment load failures, buffer stalls, reconnection attempts, and stream degradation events.",
+      "description": "Frontend telemetry events from browser-side hls.js, FLV, and WebRTC players \u2014 segment load failures, buffer stalls, reconnection attempts, and stream degradation events.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -213,7 +213,7 @@
       },
       "id": 6,
       "panels": [],
-      "title": "Prometheus — Camera Health & Stream Quality",
+      "title": "Prometheus \u2014 Camera Health & Stream Quality",
       "type": "row"
     },
     {
@@ -249,9 +249,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.5 },
-              { "color": "red", "value": 2 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
             ]
           },
           "min": 0
@@ -301,9 +310,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "green", "value": 15 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "green",
+                "value": 15
+              }
             ]
           },
           "min": 0,
@@ -317,7 +335,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -356,9 +376,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 100 },
-              { "color": "green", "value": 500 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 100
+              },
+              {
+                "color": "green",
+                "value": 500
+              }
             ]
           },
           "min": 0
@@ -371,7 +400,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -410,9 +441,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "red", "value": 15 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
             ]
           },
           "min": 0
@@ -425,7 +465,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -475,9 +517,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.1 },
-              { "color": "red", "value": 0.5 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
             ]
           },
           "min": 0
@@ -489,8 +540,20 @@
               "options": "/p99/"
             },
             "properties": [
-              { "id": "custom.lineWidth", "value": 2 },
-              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 5] } }
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    5
+                  ]
+                }
+              }
             ]
           }
         ]
@@ -539,9 +602,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 3 },
-              { "color": "red", "value": 4 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
             ]
           }
         },
@@ -586,7 +658,10 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null }
+              {
+                "color": "green",
+                "value": null
+              }
             ]
           },
           "color": {
@@ -600,7 +675,12 @@
               "options": "failed"
             },
             "properties": [
-              { "id": "color", "value": { "fixed": "red" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixed": "red"
+                }
+              }
             ]
           },
           {
@@ -609,7 +689,12 @@
               "options": "disconnected"
             },
             "properties": [
-              { "id": "color", "value": { "fixed": "orange" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixed": "orange"
+                }
+              }
             ]
           },
           {
@@ -618,13 +703,21 @@
               "options": "connected"
             },
             "properties": [
-              { "id": "color", "value": { "fixed": "green" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixed": "green"
+                }
+              }
             ]
           }
         ]
       },
       "options": {
-        "displayLabels": ["name", "percent"],
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
         "legend": {
           "displayMode": "table",
           "placement": "right",
@@ -632,15 +725,16 @@
         },
         "pieType": "pie",
         "reduceOptions": {
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "fields": "",
           "values": false
         },
         "tooltip": {
           "mode": "multi"
         }
-      },
-      "type": "piechart"
+      }
     },
     {
       "id": 14,
@@ -661,7 +755,7 @@
         {
           "refId": "A",
           "expr": "sum by (le) (rate(nvr_hls_segment_size_bytes_bucket{camera_id=~\"$camera_id\"}[$__rate_interval]))",
-          "legendFormat": "≤{{le}}"
+          "legendFormat": "\u2264{{le}}"
         }
       ],
       "fieldConfig": {
@@ -693,7 +787,7 @@
           "color": "rgba(255,0,255,0.7)"
         },
         "filterValues": {
-          "le": 1e-9
+          "le": 1e-09
         },
         "legend": {
           "showLegend": true
@@ -710,8 +804,7 @@
           "reverse": false,
           "unit": "bytes"
         }
-      },
-      "type": "heatmap"
+      }
     },
     {
       "id": 15,
@@ -721,7 +814,7 @@
         "type": "prometheus",
         "uid": "Prometheus"
       },
-      "description": "Rate of FLV GOP cache misses per camera. Each miss means a new viewer must wait for the next IDR frame before playback can begin — high rate indicates frequent reconnections.",
+      "description": "Rate of FLV GOP cache misses per camera. Each miss means a new viewer must wait for the next IDR frame before playback can begin \u2014 high rate indicates frequent reconnections.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -791,9 +884,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 3 },
-              { "color": "red", "value": 5 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
             ]
           }
         },
@@ -818,7 +920,7 @@
         "type": "prometheus",
         "uid": "Prometheus"
       },
-      "description": "Rate of StreamHub frames dropped by camera and consumer (hls/flv/webrtc). Drops indicate buffer-full conditions — the primary cause of playback stutter and black frames.",
+      "description": "Rate of StreamHub frames dropped by camera and consumer (hls/flv/webrtc). Drops indicate buffer-full conditions \u2014 the primary cause of playback stutter and black frames.",
       "gridPos": {
         "h": 8,
         "w": 16,
@@ -844,9 +946,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "red", "value": 20 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
             ]
           }
         },
@@ -857,8 +968,16 @@
               "options": "/IDR=true/"
             },
             "properties": [
-              { "id": "custom.lineWidth", "value": 2 },
-              { "id": "color", "value": { "fixed": "red" } }
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixed": "red"
+                }
+              }
             ]
           }
         ]
