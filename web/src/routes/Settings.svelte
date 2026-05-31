@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend } from '$lib/api';
   import { getTranscodingCheck, getTranscodingStatus, getFFmpegStatus, downloadFFmpeg, retryDownload, getTranscodingSettings, updateTranscodingSettings } from '$lib/api/transcoding';
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig } from '$lib/api';
@@ -53,6 +53,12 @@ let rtmpStreamKeys = $state<{key: string, cameraId: string}[]>([]);
 
 // SRT stream configurations
 let srtStreams = $state<{streamId: string, cameraId: string, mode: string, address: string, passphrase: string}[]>([]);
+
+// AI Detection state
+let aiEnabled = $state(false);
+let aiConfidenceThreshold = $state(0.5);
+let aiFrameSkip = $state(3);
+let aiDetectedBackend = $state('');
 
 
 // Feature toggles state
@@ -413,6 +419,7 @@ function getAffectedCameraCount(protocol: string): number {
     loadDiskInfo();
     loadCameraList();
     loadStreamingConfig();
+    loadAiSettings();
     loadFeatures();
     loadDiskInfo();
     loadCameraList();
@@ -534,6 +541,25 @@ function getAffectedCameraCount(protocol: string): number {
     } finally {
       streamingSaving = false;
     }
+  }
+
+  // --- AI Detection ---
+
+  function loadAiSettings() {
+    const settings = getAiSettings();
+    aiEnabled = settings.enabled;
+    aiConfidenceThreshold = settings.confidenceThreshold;
+    aiFrameSkip = settings.frameSkip;
+    aiDetectedBackend = detectAiBackend();
+  }
+
+  function saveAiSettingsLocal() {
+    saveAiSettings({
+      enabled: aiEnabled,
+      confidenceThreshold: aiConfidenceThreshold,
+      frameSkip: aiFrameSkip,
+    });
+    showToast(t('settings.ai.saved'), 'success');
   }
 
   // --- Transcoding ---
@@ -1288,6 +1314,87 @@ function getAffectedCameraCount(protocol: string): number {
             </div>
           </div>
 
+        </div>
+
+        <!-- AI Detection -->
+        <div class="card p-8 border th-border">
+          <div class="flex items-center justify-between mb-1">
+            <div>
+              <h3 class="text-lg font-semibold th-text-primary">{t('settings.ai.title')}</h3>
+              <p class="text-sm th-text-secondary mt-1">{t('settings.ai.description')}</p>
+            </div>
+            <button
+              type="button"
+              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {aiEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+              onclick={() => { aiEnabled = !aiEnabled; }}
+              onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aiEnabled = !aiEnabled; } }}
+              role="switch"
+              aria-checked={aiEnabled}
+            >
+              <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+            </button>
+          </div>
+
+          {#if aiEnabled}
+            <div class="mt-4 pt-4 border-t th-border space-y-6">
+              <!-- Confidence Threshold -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="input-label">{t('settings.ai.confidenceThreshold')}</label>
+                  <span class="text-sm font-medium th-text-primary">{Math.round(aiConfidenceThreshold * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiConfidenceThreshold}
+                  min="0.1"
+                  max="0.9"
+                  step="0.1"
+                />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
+              </div>
+
+              <!-- Frame Skip -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="input-label">{t('settings.ai.frameSkip')}</label>
+                  <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
+                </div>
+                <input
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiFrameSkip}
+                  min="1"
+                  max="10"
+                  step="1"
+                />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
+              </div>
+
+              <!-- Model & Backend Info -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="p-3 rounded-md th-bg-hover border th-border">
+                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.modelInfo')}</div>
+                  <div class="text-sm font-medium th-text-primary">{t('settings.ai.modelName')}</div>
+                </div>
+                <div class="p-3 rounded-md th-bg-hover border th-border">
+                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.backendInfo')}</div>
+                  <div class="text-sm font-medium th-text-primary">{aiDetectedBackend}</div>
+                </div>
+              </div>
+
+              <!-- Save AI Settings -->
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  onclick={saveAiSettingsLocal}
+                >
+                  {t('settings.save')}
+                </button>
+              </div>
+            </div>
+          {/if}
         </div>
 
         <!-- Feature Toggles -->

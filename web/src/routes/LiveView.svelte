@@ -7,6 +7,7 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  import WasmPlayer from '../components/WasmPlayer.svelte';
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import SnapshotButton from '../components/SnapshotButton.svelte';
@@ -206,6 +207,13 @@
                   </div>
                 </div>
               </div>
+            {:else if streamingProtocol === 'wasm'}
+              <WasmPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={true}
+              />
+
             {:else if streamingProtocol === 'webrtc'}
               <WebRTCPlayer
                 cameraId={camera.id}

@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -114,6 +115,7 @@ type Handler struct {
 	hlsMgr          *hls.Manager
 	webrtcMgr       *webrtc.Manager
 	flvMgr          *flv.Manager
+	wsMgr           *wsstream.Manager
 	configPath      string
 	snapshotMu      sync.RWMutex
 	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
@@ -124,6 +126,8 @@ type Handler struct {
 	streamRegistry  *StreamRegistry
 	downloader      TranscodeDownloader
 	transcodeMgr    TranscodeManagerAPI
+	aiEngine        AIEngine
+	aiDetector      AIDetector
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -170,6 +174,8 @@ func (h *Handler) Routes() http.Handler {
 					r.Get("/", h.handleGetCamera)
 					r.Put("/", h.handleUpdateCamera)
 					r.Delete("/", h.handleDeleteCamera)
+					// WebSocket stream (must be before HLS catch-all /stream/*)
+					r.Get("/stream/ws", h.handleStreamWS)
 					r.Get("/stream/*", h.handleHLSStream)
 					r.Delete("/stream", h.handleStopHLSStream)
 					// WebRTC WHEP endpoints
@@ -261,6 +267,14 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
 		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
 		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
+		// AI Detection routes
+		r.Route("/api/ai", func(r chi.Router) {
+			r.Get("/status", h.handleGetAIStatus)
+			r.Post("/enable", h.handleEnableAI)
+			r.Post("/disable", h.handleDisableAI)
+			r.Get("/events", h.handleAIEvents)
+		})
+
 	})
 
 	return r
@@ -363,6 +377,11 @@ func (h *Handler) SetWebRTCManager(mgr *webrtc.Manager) {
 // SetFLVManager sets the FLV manager on the handler.
 func (h *Handler) SetFLVManager(mgr *flv.Manager) {
 	h.flvMgr = mgr
+}
+
+// SetWSManager sets the WebSocket stream manager on the handler.
+func (h *Handler) SetWSManager(mgr *wsstream.Manager) {
+	h.wsMgr = mgr
 }
 
 // SetHealthManager sets the health manager on the handler.

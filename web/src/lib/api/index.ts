@@ -238,3 +238,14 @@ export type {
   ManagerStatus,
   TranscodingSettings,
 } from './transcoding';
+
+// AI Detection — localStorage-backed settings
+export {
+  getAiSettings,
+  saveAiSettings,
+  detectAiBackend,
+} from './ai';
+
+export type {
+  AiDetectionSettings,
+} from './ai';

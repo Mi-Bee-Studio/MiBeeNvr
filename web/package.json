@@ -27,6 +27,7 @@
     "chart.js": "^4.5.1",
     "hls.js": "^1.6.16",
     "lucide-svelte": "^1.0.1",
-    "mpegts.js": "^1.8.0"
+    "mpegts.js": "^1.8.0",
+    "onnxruntime-web": "^1.26.0"
   }
 }

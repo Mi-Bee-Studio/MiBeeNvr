@@ -29,6 +29,9 @@ export default defineConfig({
           if (id.includes('node_modules/lucide-svelte')) {
             return 'vendor-lucide';
           }
+          if (id.includes('node_modules/onnxruntime-web')) {
+            return 'vendor-onnx';
+          }
           if (id.includes('node_modules')) {
             return 'vendor';
           }

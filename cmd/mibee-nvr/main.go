@@ -38,6 +38,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
@@ -360,8 +361,9 @@ type App struct {
 	srtListener *srt.Listener
 
 	// Streaming managers
-	webrtcMgr *webrtc.Manager
-	flvMgr    *flv.Manager
+	webrtcMgr    *webrtc.Manager
+	flvMgr       *flv.Manager
+	wsMgr        *wsstream.Manager
 	transcodeMgr *transcoding.TranscodeManager
 
 	// HTTP server
@@ -524,6 +526,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		slog.Info("FLV manager initialized", "max_viewers", cfg.Streaming.FLV.MaxViewers)
 	}
 
+	// Step 7.7: WebSocket stream manager (always available)
+	a.wsMgr = wsstream.NewManager()
+	slog.Info("WebSocket stream manager initialized")
+
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
 		a.rtmpServer = rtmp.NewServer(
@@ -603,6 +609,7 @@ func (a *App) buildRouter() http.Handler {
 	// Wire streaming managers
 	handler.SetWebRTCManager(a.webrtcMgr)
 	handler.SetFLVManager(a.flvMgr)
+	handler.SetWSManager(a.wsMgr)
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
 
@@ -620,6 +627,8 @@ func (a *App) buildRouter() http.Handler {
 	if a.flvMgr != nil {
 		reg.Register(&api.FLVStreamHandler{})
 	}
+	// WebSocket stream handler is always available
+	reg.Register(&api.WSStreamHandler{})
 	handler.SetStreamRegistry(reg)
 
 	// Wire FFmpeg downloader for transcoding status/download APIs
@@ -653,6 +662,7 @@ func (a *App) buildRouter() http.Handler {
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(middleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
+	r.Use(authmw.COOPHeaders)
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
@@ -828,6 +838,12 @@ func (a *App) Stop() error {
 	if a.webrtcMgr != nil {
 		log.Info("stopping WebRTC manager")
 		a.webrtcMgr.StopAll()
+	}
+
+	// 4. WebSocket stream manager
+	if a.wsMgr != nil {
+		log.Info("stopping WebSocket stream manager")
+		a.wsMgr.StopAll()
 	}
 
 	// 4. RTMP server

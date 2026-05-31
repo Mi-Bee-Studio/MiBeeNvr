@@ -8,6 +8,7 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  import WasmPlayer from '../components/WasmPlayer.svelte';
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
@@ -124,13 +125,14 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  type CameraMode = 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
+  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
 
   function getCameraMode(camera: Camera): CameraMode {
     if (!isHlsSupported(camera)) {
       if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
       return 'snapshot';
     }
+    if (defaultProtocol === 'wasm') return 'wasm';
     if (defaultProtocol === 'webrtc') return 'webrtc';
     if (defaultProtocol === 'flv') return 'flv';
     // hls, ll-hls, or default
@@ -437,6 +439,13 @@
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
               />
+            {:else if mode === 'wasm'}
+              <WasmPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={expandedCameraId === camera.id}
+              />
+
             {:else}
               <!-- Unsupported protocol (no snapshot, no HLS) -->
               <div class="absolute inset-0 flex items-center justify-center">
@@ -460,8 +469,8 @@
 
             <!-- Streaming protocol badge -->
             {#if mode !== 'unsupported'}
-              {@const protocolLabel = mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
-              {@const protocolColor = mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
+              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
+              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
               <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
                 {protocolLabel}
               </span>

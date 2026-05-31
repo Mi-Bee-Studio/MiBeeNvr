@@ -12,6 +12,18 @@
   let selectedPreset = $state('');
   let goingToPreset = $state(false);
 
+  function onPointerDown(direction: string, speed?: number) {
+    moving = direction;
+    ptzMove(cameraId, direction, speed ?? 0.5).catch(() => {});
+  }
+
+  function onPointerUp() {
+    if (!moving) return;
+    const dir = moving;
+    moving = null;
+    ptzStop(cameraId).catch(() => {});
+  }
+
   // Load presets when enabled
   $effect(() => {
     if (enabled && cameraId) {

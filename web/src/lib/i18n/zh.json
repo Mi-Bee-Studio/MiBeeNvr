@@ -939,5 +939,17 @@
   "onvif.capabilities.firmware": "固件",
   "onvif.capabilities.serialNumber": "序列号",
   "onvif.capabilities.loadError": "加载设备能力失败",
-  "common.edit": "编辑"
+  "common.edit": "编辑",
+  "settings.ai.title": "AI 检测",
+  "settings.ai.description": "配置设备端 AI 目标检测，用于实时摄像头画面。",
+  "settings.ai.enabled": "启用 AI 检测",
+  "settings.ai.confidenceThreshold": "置信度阈值",
+  "settings.ai.confidenceHint": "显示检测结果的最低置信度。较低值会显示更多目标。",
+  "settings.ai.frameSkip": "帧跳过",
+  "settings.ai.frameSkipHint": "每 N 帧分析一次。较高值可降低 CPU 占用，但可能遗漏快速移动的目标。",
+  "settings.ai.modelInfo": "模型",
+  "settings.ai.modelName": "YOLOv11-nano（约 6MB）",
+  "settings.ai.backendInfo": "检测后端",
+  "settings.ai.saved": "AI 设置已保存",
+  "settings.ai.saveError": "保存 AI 设置失败"
 }

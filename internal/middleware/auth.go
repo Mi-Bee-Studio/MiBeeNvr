@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -82,7 +83,22 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(ht
 				return
 			}
 
+
 			user, pass, ok := r.BasicAuth()
+			if !ok {
+				// Fallback: check ?token= query parameter (for WebSocket which cannot set headers)
+				if tok := r.URL.Query().Get("token"); tok != "" {
+					decoded, err := base64.StdEncoding.DecodeString(tok)
+					if err == nil {
+						parts := strings.SplitN(string(decoded), ":", 2)
+						if len(parts) == 2 {
+							user = parts[0]
+							pass = parts[1]
+							ok = true
+						}
+					}
+				}
+			}
 			if !ok || user != currentUsername || !CheckPassword(pass, currentHash) {
 				if v, ok := authFailures.Load(ip); ok {
 					entry := v.(rateLimitEntry)

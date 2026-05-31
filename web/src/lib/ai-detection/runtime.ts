@@ -1,0 +1,267 @@
+/**
+ * ONNX Runtime Web Integration — AiRuntime
+ *
+ * Dynamic import of onnxruntime-web with:
+ * - WebGPU backend (preferred) → WASM SIMD fallback
+ * - Cache API for model files (avoids re-download)
+ * - Progress callback for model download
+ * - Inference with named input/output tensors
+ *
+ * TDD: tested via runtime.test.ts with mocked onnxruntime-web.
+ */
+
+/** Cache API store name for AI model files. */
+export const MODEL_CACHE_NAME = 'mibee-nvr-ai-models';
+
+/** Default YOLOv11-nano model path (served from Go HTTP server). */
+export const DEFAULT_MODEL_URL = '/models/yolov11n.onnx';
+
+/** Session options type matching onnxruntime-web. */
+interface SessionOptions {
+  executionProviders: string[];
+  graphOptimizationLevel: string;
+}
+
+/** Init options. */
+export interface AiRuntimeInitOptions {
+  /** Progress callback: (loaded, total). Total may be 0 if unknown. */
+  onProgress?: (loaded: number, total: number) => void;
+  /** Inference timeout in ms (default: 5000). */
+  inferenceTimeoutMs?: number;
+}
+
+/** Run options. */
+export interface AiRunOptions {
+  /** Override inference timeout for this specific run. */
+  timeoutMs?: number;
+}
+
+/** Result map from session.run(). */
+export interface AiRunResult {
+  [name: string]: {
+    data: Float32Array;
+    dims: number[];
+    dispose: () => void;
+  };
+}
+
+/**
+ * Check if WebGPU is available.
+ * Extracted as a function so tests can override it.
+ */
+function detectWebGPUBackend(): boolean {
+  try {
+    return typeof navigator !== 'undefined' && (navigator as any).gpu !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * AI Runtime — lazy-loads onnxruntime-web, manages model download + caching + session.
+ */
+export class AiRuntime {
+  private _session: any = null; // ort.InferenceSession (any to avoid importing ort at module level)
+  private _ort: any = null;
+  private _initialized = false;
+  private _initPromise: Promise<void> | null = null;
+  private _abortController: AbortController | null = null;
+  private _inferenceTimeoutMs = 5000;
+
+  /** Whether the runtime has been initialized and is ready for inference. */
+  get initialized(): boolean {
+    return this._initialized;
+  }
+
+  /**
+   * Initialize the AI runtime — downloads model (with cache), loads onnxruntime-web,
+   * creates inference session.
+   *
+   * @param modelUrl URL to .onnx model file (served from Go backend)
+   * @param options Optional progress callback and inference timeout
+   */
+  async init(modelUrl: string = DEFAULT_MODEL_URL, options?: AiRuntimeInitOptions): Promise<void> {
+    // Guard against concurrent init calls
+    if (this._initPromise) {
+      return this._initPromise;
+    }
+
+    this._inferenceTimeoutMs = options?.inferenceTimeoutMs ?? 5000;
+
+    this._initPromise = this._doInit(modelUrl, options);
+    try {
+      await this._initPromise;
+    } finally {
+      this._initPromise = null;
+    }
+  }
+
+  private async _doInit(modelUrl: string, options?: AiRuntimeInitOptions): Promise<void> {
+    // 1. Download model (with cache)
+    this._abortController = new AbortController();
+    const modelBuffer = await this._loadModel(modelUrl, options?.onProgress);
+    this._abortController = null;
+
+    // 2. Dynamic import onnxruntime-web (lazy, NOT in initial bundle)
+    this._ort = await import('onnxruntime-web');
+
+    // 3. Dispose previous session if re-initializing
+    if (this._session) {
+      try {
+        await this._session.release();
+      } catch {
+        // Ignore errors on old session release
+      }
+      this._session = null;
+    }
+
+    // 4. Determine execution provider
+    const executionProviders = detectWebGPUBackend() ? ['webgpu'] : ['wasm'];
+
+    // 5. Create session
+    const sessionOptions: SessionOptions = {
+      executionProviders,
+      graphOptimizationLevel: 'all',
+    };
+
+    this._session = await this._ort.InferenceSession.create(modelBuffer, sessionOptions);
+    this._initialized = true;
+  }
+
+  /**
+   * Load model from Cache API or fetch from network.
+   * Caches the response for subsequent loads.
+   */
+  private async _loadModel(
+    modelUrl: string,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<ArrayBuffer> {
+    // Check cache first
+    try {
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      const cached = await cache.match(modelUrl);
+      if (cached) {
+        return await cached.arrayBuffer();
+      }
+    } catch {
+      // Cache unavailable (e.g. private browsing) — fall through to fetch
+    }
+
+    // Fetch from network
+    const response = await fetch(modelUrl, { signal: this._abortController?.signal });
+
+    if (!response.ok) {
+      throw new Error(`Model download failed: ${response.status} ${response.statusText}`);
+    }
+
+    // Track progress if streaming body available
+    let modelBuffer: ArrayBuffer;
+    if (onProgress && response.body) {
+      const total = parseInt(response.headers.get('content-length') || '0', 10);
+      modelBuffer = await this._readWithProgress(response, total, onProgress);
+    } else {
+      modelBuffer = await response.arrayBuffer();
+    }
+
+    // Store in cache (clone the response)
+    try {
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      const cloned = new Response(modelBuffer.slice(0));
+      await cache.put(modelUrl, cloned);
+    } catch {
+      // Cache write failure is non-fatal
+    }
+
+    return modelBuffer;
+  }
+
+  /**
+   * Read response body with progress tracking.
+   * Falls back to arrayBuffer() if streaming is not available.
+   */
+  private async _readWithProgress(
+    response: Response,
+    total: number,
+    onProgress: (loaded: number, total: number) => void,
+  ): Promise<ArrayBuffer> {
+    if (!response.body) {
+      const buf = await response.arrayBuffer();
+      onProgress(buf.byteLength, total);
+      return buf;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress(loaded, total);
+    }
+
+    // Combine chunks into single ArrayBuffer
+    const result = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return result.buffer as ArrayBuffer;
+  }
+
+  /**
+   * Run inference on the model.
+   *
+   * @param inputData Float32Array of input tensor data
+   * @param dims Tensor dimensions (e.g. [1, 3, 640, 640] for YOLO)
+   * @param options Optional per-run timeout override
+   * @returns Map of output name → { data, dims, dispose }
+   */
+  async run(inputData: Float32Array, dims: number[], options?: AiRunOptions): Promise<AiRunResult> {
+    if (!this._initialized || !this._session) {
+      throw new Error('AiRuntime not initialized — call init() first');
+    }
+
+    const inputName = this._session.inputNames[0];
+    const tensor = new this._ort.Tensor(inputData, dims);
+
+    const feeds: Record<string, any> = {
+      [inputName]: tensor,
+    };
+
+    const timeout = options?.timeoutMs ?? this._inferenceTimeoutMs;
+
+    const result = await Promise.race([
+      this._session.run(feeds),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Inference timed out after ${timeout}ms`)), timeout),
+      ),
+    ]);
+
+    return result;
+  }
+
+  /**
+   * Dispose the runtime — releases session, aborts pending downloads.
+   * Safe to call multiple times and before init().
+   */
+  dispose(): void {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+
+    if (this._session) {
+      this._session.release().catch(() => {});
+      this._session = null;
+    }
+
+    this._initialized = false;
+    this._ort = null;
+  }
+}

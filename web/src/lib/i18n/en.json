@@ -939,5 +939,17 @@
   "onvif.capabilities.firmware": "Firmware",
   "onvif.capabilities.serialNumber": "Serial Number",
   "onvif.capabilities.loadError": "Failed to load capabilities",
-  "common.edit": "Edit"
+  "common.edit": "Edit",
+  "settings.ai.title": "AI Detection",
+  "settings.ai.description": "Configure on-device AI object detection for live camera streams.",
+  "settings.ai.enabled": "Enable AI Detection",
+  "settings.ai.confidenceThreshold": "Confidence Threshold",
+  "settings.ai.confidenceHint": "Minimum confidence to display detections. Lower values show more objects.",
+  "settings.ai.frameSkip": "Frame Skip",
+  "settings.ai.frameSkipHint": "Analyze every N-th frame. Higher values reduce CPU usage but may miss fast-moving objects.",
+  "settings.ai.modelInfo": "Model",
+  "settings.ai.modelName": "YOLOv11-nano (~6MB)",
+  "settings.ai.backendInfo": "Detected Backend",
+  "settings.ai.saved": "AI settings saved",
+  "settings.ai.saveError": "Failed to save AI settings"
 }
