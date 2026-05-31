@@ -656,6 +656,7 @@
   "live.protocol.tooltip.viewers": "Viewers",
   "live.protocol.tooltip.cpu": "CPU",
   "live.protocol.tooltip.h265Note": "H.265 not supported via WebRTC",
+  "live.protocol.tooltip.flvH265Note": "H.265 HEVC requires browser support (Safari/Edge)",
   "live.reconnecting": "Signal lost, reconnecting...",
   "setup.title": "Initial Setup",
   "setup.subtitle": "Create your admin account to get started",

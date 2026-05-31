@@ -1670,7 +1670,8 @@ function getAffectedCameraCount(protocol: string): number {
             </div>
           {/if}
         </div>
-        <!-- Save button -->
+      {/if}
+        <!-- Save button (visible on both tabs) -->
         <div class="flex items-center gap-4 pt-2">
           <button
             onclick={save}
@@ -1685,7 +1686,6 @@ function getAffectedCameraCount(protocol: string): number {
             {/if}
           </button>
         </div>
-      {/if}
       </div>
     {/if}
   </main>

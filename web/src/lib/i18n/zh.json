@@ -656,6 +656,7 @@
   "live.protocol.tooltip.viewers": "查看数",
   "live.protocol.tooltip.cpu": "CPU",
   "live.protocol.tooltip.h265Note": "H.265 不支持 WebRTC",
+  "live.protocol.tooltip.flvH265Note": "H.265 HEVC 需要浏览器支持（Safari/Edge）",
   "live.reconnecting": "信号中断，正在重连...",
   "setup.title": "初始化设置",
   "setup.subtitle": "创建管理员账户以开始使用",

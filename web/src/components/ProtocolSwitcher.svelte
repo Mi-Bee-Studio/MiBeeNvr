@@ -39,6 +39,7 @@
   } = $props();
 
   let availableProtocols = $state<string[]>([]);
+  let protocolReasons = $state<Record<string, string>>({});
   let loading = $state(true);
   let open = $state(false);
   let tooltipId = $state<string | null>(null);
@@ -63,14 +64,14 @@
     return availableProtocols.includes(protocol);
   }
 
-  /**
-   * Returns the reason a protocol is unavailable, or null if available.
-   */
   function getUnavailableReason(protocol: StreamingProtocol): string | null {
     if (protocol === 'webrtc' && isH265) {
       return t('live.protocol.tooltip.h265Note');
     }
     if (!availableProtocols.includes(protocol)) {
+      // Show backend-provided reason if available
+      const backendReason = protocolReasons[protocol];
+      if (backendReason) return backendReason;
       return t('live.protocol.unavailable');
     }
     return null;
@@ -83,6 +84,14 @@
       availableProtocols = result.protocols
         .filter(p => p.Available)
         .map(p => p.Protocol);
+      // Store backend reasons for unavailable protocols
+      const reasons: Record<string, string> = {};
+      for (const p of result.protocols) {
+        if (!p.Available && p.Reason) {
+          reasons[p.Protocol] = p.Reason;
+        }
+      }
+      protocolReasons = reasons;
       // Auto-select the server's default if different from current selection
       if (result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
         onchange?.(result.default as StreamingProtocol);
@@ -91,6 +100,7 @@
       console.warn('Failed to load protocols:', e);
       const encoding = (cameraEncoding || '').toLowerCase();
       availableProtocols = ['hls'];
+      protocolReasons = {};
       if (encoding === 'h264') {
         availableProtocols.push('webrtc');
       }
@@ -229,6 +239,18 @@
                 <div class="flex items-center gap-1.5 text-[var(--color-warning)]">
                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                   <span>{t('live.protocol.tooltip.h265Note')}</span>
+                </div>
+              {/if}
+              {#if option.id === 'flv' && isH265}
+                <div class="flex items-center gap-1.5 text-[var(--color-warning)]">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                  <span>{t('live.protocol.tooltip.flvH265Note')}</span>
+                </div>
+              {/if}
+              {#if !available && reason}
+                <div class="flex items-center gap-1.5 text-[var(--color-warning)]">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                  <span>{reason}</span>
                 </div>
               {/if}
             </div>

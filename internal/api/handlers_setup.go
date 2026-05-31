@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -56,7 +57,16 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// Build minimal valid config (mirrors cmdInit pattern)
 	dataDir := strings.TrimSpace(req.StoragePath)
 	if dataDir == "" {
-		dataDir = "/var/lib/mibee-nvr"
+		// Prefer existing config value, then Docker env detection
+		if h.config.Storage.RootDir != "" {
+			dataDir = h.config.Storage.RootDir
+		} else if envDir := os.Getenv("NVR_DATA_DIR"); envDir != "" {
+			dataDir = envDir
+		} else if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+			dataDir = "/data"
+		} else {
+			dataDir = "/var/lib/mibee-nvr"
+		}
 	}
 
 	cfg := config.Config{
