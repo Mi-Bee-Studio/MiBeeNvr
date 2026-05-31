@@ -110,6 +110,27 @@ func autoInitConfig(configPath string) *config.Config {
 	return cfg
 }
 
+// dockerStorageDir detects the correct storage directory for Docker environments.
+// Returns empty string if not running in Docker or no Docker-specific path found.
+func dockerStorageDir() string {
+	// Method 1: Explicit env var (set in Dockerfile and docker-compose.yml)
+	if dir := os.Getenv("NVR_DATA_DIR"); dir != "" {
+		return dir
+	}
+	// Method 2: /data directory exists (Docker container indicator)
+	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+		return "/data"
+	}
+	// Method 3: Docker marker files
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		// Running in Docker but NVR_DATA_DIR not set — check /data
+		if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+			return "/data"
+		}
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // CLI subcommands
 // ---------------------------------------------------------------------------
@@ -918,6 +939,19 @@ func main() {
 		slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
 		cfg = autoInitConfig(*configPath)
 	}
+	// Fix Docker storage path mismatch: if running in Docker but config has
+	// the non-Docker default /var/lib/mibee-nvr, auto-fix to /data.
+	if dockerDir := dockerStorageDir(); dockerDir != "" {
+		if cfg.Storage.RootDir == "/var/lib/mibee-nvr" || cfg.Storage.RootDir == "" {
+			slog.Warn("auto-fixing storage.root_dir for Docker environment",
+				"old", cfg.Storage.RootDir, "new", dockerDir)
+			cfg.Storage.RootDir = dockerDir
+			if err := config.Save(*configPath, cfg); err != nil {
+				slog.Warn("failed to save auto-fixed config", "error", err)
+			}
+		}
+	}
+
 	if err := config.Validate(cfg); err != nil {
 		slog.Error("config validation", "error", err)
 		os.Exit(1)
