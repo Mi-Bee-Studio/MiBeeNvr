@@ -27,6 +27,7 @@ type CleanupManager struct {
 	healthEnabled   bool
 	healthRetention time.Duration
 	transcodeOrphanFn func(ctx context.Context) error
+	transcodeHistoryRetention time.Duration // 0 = disabled
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -64,6 +65,12 @@ func (cm *CleanupManager) SetHealthConfig(enabled bool, retention time.Duration)
 func (cm *CleanupManager) SetTranscodeOrphanCleanup(fn func(ctx context.Context) error) {
 	cm.transcodeOrphanFn = fn
 }
+
+// SetTranscodeHistoryRetention sets the retention period for completed transcode task history.
+func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) {
+	cm.transcodeHistoryRetention = retention
+}
+
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
@@ -97,6 +104,7 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 			logger.Error("transcode orphan cleanup error", "error", err)
 		}
 	}
+	cm.transcodeHistoryCleanup(ctx)
 	return nil
 }
 
@@ -278,5 +286,20 @@ func (cm *CleanupManager) healthRetentionCleanup(ctx context.Context) {
 	}
 	if deleted > 0 {
 		logger.Info("health events cleaned up", "deleted", deleted)
+	}
+}
+
+// transcodeHistoryCleanup deletes expired transcode task history older than the retention period.
+func (cm *CleanupManager) transcodeHistoryCleanup(ctx context.Context) {
+	if cm.transcodeHistoryRetention <= 0 {
+		return
+	}
+	deleted, err := cm.db.DeleteCompletedTasks(ctx, cm.transcodeHistoryRetention)
+	if err != nil {
+		logger.Warn("transcode history cleanup failed", "error", err)
+		return
+	}
+	if deleted > 0 {
+		logger.Info("transcode history cleaned up", "deleted", deleted)
 	}
 }

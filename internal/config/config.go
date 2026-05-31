@@ -103,6 +103,7 @@ type TranscodingConfig struct {
 	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"` // default false
 	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`          // auto-populated per platform
 	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`            // per-job timeout, default "30m", max 4h
+	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention"` // e.g. "168h" (7d), "720h" (30d), ""=never
 }
 
  type CameraTranscodingConfig struct {
@@ -457,6 +458,15 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("transcoding.job_timeout must be <= 4h, got %s", cfg.Transcoding.JobTimeout)
 		}
 	}
+	if cfg.Transcoding.HistoryRetention != "" {
+		hr, err := time.ParseDuration(cfg.Transcoding.HistoryRetention)
+		if err != nil {
+			return fmt.Errorf("transcoding.history_retention invalid duration: %w", err)
+		}
+		if hr < 24*time.Hour {
+			return fmt.Errorf("transcoding.history_retention must be at least 24h, got %s", cfg.Transcoding.HistoryRetention)
+		}
+	}
 	for _, cam := range cfg.Cameras {
 		if cam.Transcoding == nil {
 			continue
@@ -697,6 +707,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Transcoding.JobTimeout == "" {
 		cfg.Transcoding.JobTimeout = "30m"
+	}
+	if cfg.Transcoding.HistoryRetention == "" {
+		cfg.Transcoding.HistoryRetention = "168h" // 7 days
 	}
 	// RTMP defaults
 	if cfg.RTMP.Enabled == nil {

@@ -540,6 +540,12 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			return transcoding.CleanOrphanedTranscodes(ctx, dataDir, db)
 		})
 	}
+	// Wire transcode history retention cleanup
+	if cfg.Transcoding.HistoryRetention != "" {
+		if hr, err := time.ParseDuration(cfg.Transcoding.HistoryRetention); err == nil {
+			a.cleanupMgr.SetTranscodeHistoryRetention(hr)
+		}
+	}
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {

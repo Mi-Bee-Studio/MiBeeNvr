@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -23,6 +24,24 @@ type TranscodeTask struct {
 	StartedAt       sql.NullString `json:"started_at"`
 	CompletedAt     sql.NullString `json:"completed_at"`
 	OriginalDeleted bool           `json:"original_deleted"`
+}
+
+// MarshalJSON produces clean JSON for nullable fields.
+// sql.NullString marshals as {"String":"...","Valid":true} which breaks API clients.
+// Instead, we emit null for invalid values and the raw string for valid ones.
+func (t TranscodeTask) MarshalJSON() ([]byte, error) {
+	type Alias TranscodeTask
+	return json.Marshal(&struct {
+		*Alias
+		Error       *string `json:"error"`
+		StartedAt   *string `json:"started_at"`
+		CompletedAt *string `json:"completed_at"`
+	}{
+		Alias:       (*Alias)(&t),
+		Error:       nullStringToPtr(t.Error),
+		StartedAt:   nullStringToPtr(t.StartedAt),
+		CompletedAt: nullStringToPtr(t.CompletedAt),
+	})
 }
 
 // EnqueueTask inserts a new pending transcoding task.

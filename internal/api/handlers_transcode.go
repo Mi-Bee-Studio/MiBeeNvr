@@ -269,6 +269,15 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 		if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
 			filter.Offset = v
 		}
+	} else if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		// Support page-based pagination (1-indexed).
+		// Convert page to offset: offset = (page - 1) * limit.
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			if filter.Limit <= 0 {
+				filter.Limit = 50
+			}
+			filter.Offset = (p - 1) * filter.Limit
+		}
 	}
 
 	tasks, total, err := h.db.ListTranscodeTasks(r.Context(), filter)
@@ -282,11 +291,16 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 		tasks = []storage.TranscodeTask{}
 	}
 
+	page := 1
+	if filter.Limit > 0 {
+		page = (filter.Offset / filter.Limit) + 1
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tasks": tasks,
 		"total": total,
 		"limit": filter.Limit,
 		"offset": filter.Offset,
+		"page":  page,
 	})
 }
 
