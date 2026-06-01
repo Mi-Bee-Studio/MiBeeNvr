@@ -651,7 +651,7 @@ onDestroy(() => {
         </button>
       </div>
     {:else if streamState === 'buffering' || streamState === 'disconnected'}
-    {:else if streamState === 'buffering' || streamState === 'disconnected'}
+
       <!-- Semi-transparent buffering — small indicator, don't fully block video -->
       <div class="relative flex items-center gap-2">
         <div class="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>

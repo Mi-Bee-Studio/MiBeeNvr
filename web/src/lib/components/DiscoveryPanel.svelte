@@ -347,11 +347,11 @@
       <!-- ONVIF Credentials -->
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 items-end">
         <div>
-          <label class="input-label text-xs">{t('onvif.username')}</label>
+          <label class="input-label text-xs" for="onvif-username">{t('onvif.username')}</label>
           <input type="text" class="input py-1 text-sm" bind:value={onvifUsername} placeholder="admin" />
         </div>
         <div>
-          <label class="input-label text-xs">{t('onvif.password')}</label>
+          <label class="input-label text-xs" for="onvif-password">{t('onvif.password')}</label>
           <input type="password" class="input py-1 text-sm" bind:value={onvifPassword} placeholder="******" />
         </div>
         <div class="flex items-center">
@@ -414,7 +414,7 @@
           <p class="text-xs th-text-muted mb-3">{t('onvif.manualProbeHint')}</p>
           <div class="flex gap-2 items-end">
             <div class="flex-1">
-              <label class="input-label text-xs">{t('onvif.host')}</label>
+              <label class="input-label text-xs" for="onvif-host">{t('onvif.host')}</label>
               <input
                 type="text"
                 class="input py-1 text-sm"
@@ -423,7 +423,7 @@
               />
             </div>
             <div class="w-24">
-              <label class="input-label text-xs">{t('onvif.port')}</label>
+              <label class="input-label text-xs" for="onvif-port">{t('onvif.port')}</label>
               <input
                 type="number"
                 class="input py-1 text-sm"
@@ -504,11 +504,11 @@
           <p class="text-sm th-text-secondary">{t('xiaomi.signInHint')}</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="input-label text-xs">{t('xiaomi.account')}</label>
+              <label class="input-label text-xs" for="xiaomi-account">{t('xiaomi.account')}</label>
               <input type="text" class="input py-1 text-sm" bind:value={xiaomiUsername} placeholder={t('xiaomi.accountPlaceholder')} required />
             </div>
             <div>
-              <label class="input-label text-xs">{t('xiaomi.password')}</label>
+              <label class="input-label text-xs" for="xiaomi-password">{t('xiaomi.password')}</label>
               <input type="password" class="input py-1 text-sm" bind:value={xiaomiPassword} placeholder="******" required />
             </div>
           </div>
@@ -650,6 +650,7 @@
       <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true"></div>
       <div
         role="dialog"
+        tabindex="-1"
         aria-modal="true"
         class="relative card p-6 border th-border max-w-md w-full mx-4"
         onmousedown={(e) => e.stopPropagation()}

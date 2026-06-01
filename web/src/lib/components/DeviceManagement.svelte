@@ -249,7 +249,7 @@
               </div>
               <div class="device-mgmt-iface-grid">
                 <div>
-                  <label class="device-mgmt-field-label">{t('onvif.device.network.dhcp')}</label>
+                  <label class="device-mgmt-field-label" for="dm-dhcp">{t('onvif.device.network.dhcp')}</label>
                   <label class="device-mgmt-toggle-sm">
                     <input
                       type="checkbox"
@@ -260,7 +260,7 @@
                   </label>
                 </div>
                 <div>
-                  <label class="device-mgmt-field-label">{t('onvif.device.network.address')}</label>
+                  <label class="device-mgmt-field-label" for="dm-address">{t('onvif.device.network.address')}</label>
                   <input
                     type="text"
                     class="input input-sm"
@@ -270,7 +270,7 @@
                   />
                 </div>
                 <div>
-                  <label class="device-mgmt-field-label">{t('onvif.device.network.netmask')}</label>
+                  <label class="device-mgmt-field-label" for="dm-netmask">{t('onvif.device.network.netmask')}</label>
                   <input
                     type="text"
                     class="input input-sm"
@@ -280,7 +280,7 @@
                   />
                 </div>
                 <div>
-                  <label class="device-mgmt-field-label">{t('onvif.device.network.gateway')}</label>
+                  <label class="device-mgmt-field-label" for="dm-gateway">{t('onvif.device.network.gateway')}</label>
                   <input
                     type="text"
                     class="input input-sm"

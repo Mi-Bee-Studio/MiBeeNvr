@@ -242,15 +242,15 @@
                 </div>
               </div>
             {:else if streamingProtocol === 'wasm'}
+
               {#if WasmPlayerComponent}
-                <svelte:component
-                  this={WasmPlayerComponent}
+                {@const WasmPlayer = WasmPlayerComponent}
+                <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
                   expanded={true}
                   onFallbackNeeded={handleWasmFallback}
                 />
-              {:else if wasmPlayerLoading}
                 <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
                   <div class="absolute inset-0 flex items-center justify-center">
                     <div class="flex flex-col items-center gap-2">

@@ -442,7 +442,8 @@ import { onMount, onDestroy } from 'svelte';
               id="start-date"
               <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
-              id="end-date"
+id="end-date"
+          </div>
           </div>
         </div>
       </div>

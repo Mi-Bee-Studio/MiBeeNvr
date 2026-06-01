@@ -143,8 +143,8 @@
   }
 
   // Reset page when filters change
-  let prevCameraFilter = cameraFilter;
-  let prevEventTypeFilter = eventTypeFilter;
+  let prevCameraFilter = $state('');
+  let prevEventTypeFilter = $state('');
   $effect(() => {
     if (cameraFilter !== prevCameraFilter || eventTypeFilter !== prevEventTypeFilter) {
       prevCameraFilter = cameraFilter;
@@ -203,7 +203,11 @@
             <div
               class="card p-4 border transition-all duration-200 hover:scale-[1.02] cursor-pointer"
               style="border-color: {scoreBorderColor(detail.score)}"
+              role="button"
+              tabindex="0"
+              aria-expanded={expandedCamera === id}
               onclick={() => expandedCamera = expandedCamera === id ? null : id}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedCamera = expandedCamera === id ? null : id; } }}
             >
               <div class="flex items-center justify-between mb-2">
                 <span class="text-sm font-medium th-text-primary truncate" title={getCameraName(id)}>

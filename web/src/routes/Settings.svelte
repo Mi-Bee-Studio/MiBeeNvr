@@ -1016,10 +1016,12 @@ function getAffectedCameraCount(protocol: string): number {
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable WebDAV -->
             <div>
-              <label class="input-label">{t('settings.webdavEnabled')}</label>
+              <label class="input-label" for="webdav-toggle">{t('settings.webdavEnabled')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="webdav-toggle" aria-label={t('settings.webdavEnabled')}
                   type="button"
+
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavEnabled = !webdavEnabled; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
@@ -1046,10 +1048,12 @@ function getAffectedCameraCount(protocol: string): number {
 
             <!-- Read-Write Mode -->
             <div>
-              <label class="input-label">{t('settings.webdavReadWrite')}</label>
+              <label class="input-label" for="webdav-rw-toggle">{t('settings.webdavReadWrite')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="webdav-rw-toggle" aria-label={t('settings.webdavReadWrite')}
                   type="button"
+
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavReadWrite = !webdavReadWrite; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
@@ -1076,10 +1080,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.webrtcDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.webrtc')}</label>
+                <label class="input-label" for="webrtc-toggle">{t('settings.streaming.webrtc')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="webrtc-toggle" aria-label={t('settings.streaming.webrtc')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingWebrtcEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingWebrtcEnabled = !streamingWebrtcEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingWebrtcEnabled = !streamingWebrtcEnabled; } }}
@@ -1113,10 +1119,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.flvDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.flv')}</label>
+                <label class="input-label" for="flv-toggle">{t('settings.streaming.flv')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="flv-toggle" aria-label={t('settings.streaming.flv')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingFlvEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingFlvEnabled = !streamingFlvEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingFlvEnabled = !streamingFlvEnabled; } }}
@@ -1140,10 +1148,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.hlsDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.hls.llHls')}</label>
+                <label class="input-label" for="llhls-toggle">{t('settings.streaming.hls.llHls')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="llhls-toggle" aria-label={t('settings.streaming.hls.llHls')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingHlsLlHls ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingHlsLlHls = !streamingHlsLlHls; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingHlsLlHls = !streamingHlsLlHls; } }}
@@ -1164,10 +1174,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.rtmpDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.rtmp')}</label>
+                <label class="input-label" for="rtmp-toggle">{t('settings.streaming.rtmp')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="rtmp-toggle" aria-label={t('settings.streaming.rtmp')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingRtmpEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingRtmpEnabled = !streamingRtmpEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingRtmpEnabled = !streamingRtmpEnabled; } }}
@@ -1223,10 +1235,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.srtDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.srt')}</label>
+                <label class="input-label" for="srt-toggle">{t('settings.streaming.srt')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="srt-toggle" aria-label={t('settings.streaming.srt')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingSrtEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingSrtEnabled = !streamingSrtEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingSrtEnabled = !streamingSrtEnabled; } }}
@@ -1257,30 +1271,35 @@ function getAffectedCameraCount(protocol: string): number {
                       <div class="p-3 rounded-lg th-bg-secondary border th-border">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.streamId')}</label>
-                            <input type="text" class="input text-sm mt-1" placeholder="live/my-stream" bind:value={stream.streamId} />
+                            <label class="text-xs th-text-tertiary" for="srt-streamId-{i}">{t('settings.streaming.srt.streamId')}</label>
+                            <input id="srt-streamId-{i}" type="text" class="input text-sm mt-1" placeholder="live/my-stream" bind:value={stream.streamId} />
                           </div>
+
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.cameraId')}</label>
-                            <input type="text" class="input text-sm mt-1" placeholder="front-door" bind:value={stream.cameraId} />
+                            <label class="text-xs th-text-tertiary" for="srt-cameraId-{i}">{t('settings.streaming.srt.cameraId')}</label>
+                            <input id="srt-cameraId-{i}" type="text" class="input text-sm mt-1" placeholder="front-door" bind:value={stream.cameraId} />
                           </div>
+
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.mode')}</label>
-                            <select class="input text-sm mt-1" bind:value={stream.mode}>
+                            <label class="text-xs th-text-tertiary" for="srt-mode-{i}">{t('settings.streaming.srt.mode')}</label>
+                            <select id="srt-mode-{i}" class="input text-sm mt-1" bind:value={stream.mode}>
+
                               <option value="listener">{t('settings.streaming.srt.modeListener')}</option>
                               <option value="caller">{t('settings.streaming.srt.modeCaller')}</option>
                             </select>
                           </div>
                           {#if stream.mode === 'caller'}
                             <div>
-                              <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.address')}</label>
-                              <input type="text" class="input text-sm mt-1" placeholder="192.168.1.100:9000" bind:value={stream.address} />
+                              <label class="text-xs th-text-tertiary" for="srt-address-{i}">{t('settings.streaming.srt.address')}</label>
+                              <input id="srt-address-{i}" type="text" class="input text-sm mt-1" placeholder="192.168.1.100:9000" bind:value={stream.address} />
                             </div>
+
                           {/if}
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.passphrase')}</label>
-                            <input type="password" class="input text-sm mt-1" placeholder="......" bind:value={stream.passphrase} />
+                            <label class="text-xs th-text-tertiary" for="srt-passphrase-{i}">{t('settings.streaming.srt.passphrase')}</label>
+                            <input id="srt-passphrase-{i}" type="password" class="input text-sm mt-1" placeholder="......" bind:value={stream.passphrase} />
                           </div>
+
                         </div>
                         <div class="flex justify-end mt-2">
                           <button type="button" class="text-xs th-text-tertiary hover:text-red-400 transition-colors" onclick={() => { srtStreams.splice(i, 1); srtStreams = [...srtStreams]; }}>{t('common.dismiss')}</button>
@@ -1326,7 +1345,8 @@ function getAffectedCameraCount(protocol: string): number {
               <p class="text-sm th-text-secondary mt-1">{t('settings.ai.description')}</p>
             </div>
             <button
-              type="button"
+              id="ai-toggle" aria-label={t('settings.ai.title')}
+type="button"
               class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {aiEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
               onclick={() => { aiEnabled = !aiEnabled; }}
               onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aiEnabled = !aiEnabled; } }}
@@ -1342,10 +1362,12 @@ function getAffectedCameraCount(protocol: string): number {
               <!-- Confidence Threshold -->
               <div>
                 <div class="flex items-center justify-between mb-2">
-                  <label class="input-label">{t('settings.ai.confidenceThreshold')}</label>
+                <label class="input-label" for="ai-confidence-threshold">{t('settings.ai.confidenceThreshold')}</label>
                   <span class="text-sm font-medium th-text-primary">{Math.round(aiConfidenceThreshold * 100)}%</span>
                 </div>
                 <input
+                  id="ai-confidence-threshold"
+
                   type="range"
                   class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
                   bind:value={aiConfidenceThreshold}
@@ -1359,10 +1381,12 @@ function getAffectedCameraCount(protocol: string): number {
               <!-- Frame Skip -->
               <div>
                 <div class="flex items-center justify-between mb-2">
-                  <label class="input-label">{t('settings.ai.frameSkip')}</label>
+                <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
                   <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
                 </div>
                 <input
+                  id="ai-frame-skip"
+
                   type="range"
                   class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
                   bind:value={aiFrameSkip}
@@ -1425,7 +1449,8 @@ function getAffectedCameraCount(protocol: string): number {
                     </div>
                     <div class="flex items-center gap-3">
                       <button
-                        type="button"
+                        id="protocol-toggle-{protocol}" aria-label={t(`settings.featureToggles.protocols.${protocol}`)}
+type="button"
                         class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                         onclick={() => { featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; }}
                         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; } }}
@@ -1659,8 +1684,9 @@ function getAffectedCameraCount(protocol: string): number {
                     <div class="text-xs th-text-secondary">{t('transcoding.replace_original_desc')}</div>
                   </div>
                   <button
+                    id="transcoding-replace-original" aria-label={t('transcoding.replace_original')}
                     type="button"
-                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {transcodingReplaceOriginal ? 'bg-blue-600' : 'th-bg-tertiary'}"
+
                     onclick={async () => {
                       transcodingReplaceOriginal = !transcodingReplaceOriginal;
                       await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers, replace_original: transcodingReplaceOriginal });

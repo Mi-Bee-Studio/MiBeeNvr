@@ -33,7 +33,8 @@
       aria-selected={tab.id === activeTab}
     >
       {#if tab.icon}
-        <svelte:component this={tab.icon} size={16} />
+        {@const Icon = tab.icon}
+        <Icon size={16} />
       {/if}
       <span>{tab.label}</span>
       {#if tab.count !== undefined}

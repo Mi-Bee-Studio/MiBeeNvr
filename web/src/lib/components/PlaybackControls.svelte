@@ -66,13 +66,21 @@
   <div
     class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
     onclick={handleClick}
-    role="progressbar"
+    onkeydown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); onprev(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); onnext(); }
+      else if (e.key === 'Home') { e.preventDefault(); onsetspeed(1); }
+    }}
+    role="slider"
+    tabindex="0"
+    aria-label={t('detail.frameCounter', { current: String(currentFrameIndex + 1), total: String(totalFrames) })}
     aria-valuenow={currentFrameIndex}
     aria-valuemin={0}
     aria-valuemax={totalFrames - 1}
   >
     <div
-      bind:this={progressFillEl}
+bind:this={progressFillEl}
       class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
       style="width: {totalFrames > 1 ? (currentFrameIndex / (totalFrames - 1)) * 100 : 100}%"
     ></div>

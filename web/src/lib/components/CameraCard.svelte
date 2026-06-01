@@ -33,7 +33,8 @@
 
   let menuOpen = $state(false);
   let editingName = $state(false);
-  let nameInput = $state(camera.name);
+  let nameInput = $state('');
+  $effect(() => { nameInput = camera.name; });
 
   let variant = $derived(
     !camera.enabled
@@ -253,7 +254,7 @@
         </button>
 
         {#if menuOpen}
-          <div class="dropdown-menu" onclick={(e) => e.stopPropagation()}>
+          <div class="dropdown-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
             {#if isHls}
               <a href="#/live/{camera.id}" class="dropdown-item" onclick={closeMenu}>
                 <Eye size={14} />

@@ -414,8 +414,9 @@
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
         {#each cameras as camera, index}
-          {@const status = getStatusBadge(camera)}
+{@const status = getStatusBadge(camera)}
           {@const mode = getCameraMode(camera)}
+          {@const StatusIcon = status.icon}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
@@ -466,7 +467,8 @@
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
                   <span class="badge {status.class} text-[10px] px-1.5 py-0.5 flex items-center gap-1">
-                    <svelte:component this={status.icon} size={10} />
+
+                    <StatusIcon size={10} />
                     {status.text}
                   </span>
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
@@ -501,8 +503,8 @@
               />
             {:else if mode === 'wasm'}
               {#if WasmPlayerComponent}
-                <svelte:component
-                  this={WasmPlayerComponent}
+                {@const WasmPlayer = WasmPlayerComponent}
+                <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
                   expanded={expandedCameraId === camera.id}
