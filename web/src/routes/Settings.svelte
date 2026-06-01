@@ -930,10 +930,12 @@ function getAffectedCameraCount(protocol: string): number {
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable Merge -->
             <div>
-              <label class="input-label">{t('merge.enableMerge')}</label>
+              <label class="input-label" for="merge-toggle">{t('merge.enableMerge')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="merge-toggle"
                   type="button"
+                  aria-label={t('merge.enableMerge')}
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {mergeEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { mergeEnabled = !mergeEnabled; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mergeEnabled = !mergeEnabled; } }}

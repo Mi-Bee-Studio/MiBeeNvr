@@ -319,7 +319,7 @@ import { onMount, onDestroy } from 'svelte';
   });
 
   // When filters change, track previous values to detect changes
-  let prevFilters = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}|${showArchived}`;
+  let prevFilters = "";
   $effect(() => {
     const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}|${showArchived}`;
     if (current !== prevFilters) {
@@ -408,21 +408,23 @@ import { onMount, onDestroy } from 'svelte';
             </select>
           </div>
           <div class="flex-1 min-w-[120px]">
-            <label class="input-label">&nbsp;</label>
+            <label class="input-label" for="show-archived">&nbsp;</label>
             <label class="input flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
                 class="w-4 h-4 rounded cursor-pointer"
                 bind:checked={showArchived}
+                id="show-archived"
               />
               <span class="text-sm th-text-primary">{t('archives.title')}</span>
             </label>
           </div>
           <div class="flex-1 min-w-[180px]">
-            <label class="input-label">{t('recordings.search')}</label>
+            <label class="input-label" for="search-input">{t('recordings.search')}</label>
             <div class="relative">
               <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
               <input
+                id="search-input"
                 type="text"
                 class="input pl-9"
                 placeholder={t('recordings.search')}
@@ -434,14 +436,17 @@ import { onMount, onDestroy } from 'svelte';
         <!-- Time range row -->
         <div class="flex flex-wrap gap-4 sm:gap-3 items-stretch sm:items-end mt-1">
           <div class="flex-1 min-w-0">
-            <label class="input-label">{t('recordings.startDate')}</label>
+            <label class="input-label" for="start-date">{t('recordings.startDate')}</label>
             <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
               <input type="datetime-local" class="input flex-1" bind:value={startDate} />
+              id="start-date"
               <span class="th-text-tertiary shrink-0">~</span>
               <input type="datetime-local" class="input flex-1" bind:value={endDate} />
+              id="end-date"
           </div>
         </div>
       </div>
+    </div>
 
     <!-- Error message -->
     {#if error}
@@ -611,6 +616,7 @@ import { onMount, onDestroy } from 'svelte';
                           {/if}
                         {/if}
                       {/if}
+                    </div>
                   </td>
                   <td class="text-right">
                     <div class="flex justify-end gap-1">
@@ -654,6 +660,7 @@ import { onMount, onDestroy } from 'svelte';
                       >
                         <Trash2 size={16} />
                       </button>
+                    </div>
                   </td>
                 </tr>
                 {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}

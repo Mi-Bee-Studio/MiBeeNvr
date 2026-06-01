@@ -260,6 +260,7 @@
               {:else if videoBlobUrl}
                 <video controls preload="auto" class="w-full max-h-[80vh]" src={videoBlobUrl}
                   onended={handleVideoEnded} ontimeupdate={handleTimeUpdate}>
+                  <track kind="captions" />
                   {t('detail.videoUnsupported')}
                 </video>
               {:else}

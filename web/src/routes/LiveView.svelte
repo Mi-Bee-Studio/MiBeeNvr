@@ -7,7 +7,7 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
-  import WasmPlayer from '../components/WasmPlayer.svelte';
+  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import SnapshotButton from '../components/SnapshotButton.svelte';
@@ -27,6 +27,27 @@
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
+
+  // Lazy-loaded WasmPlayer component
+  let WasmPlayerComponent = $state<any>(null);
+  let wasmPlayerLoading = $state(false);
+  let wasmPlayerError = $state('');
+
+  async function loadWasmPlayer() {
+    if (WasmPlayerComponent || wasmPlayerLoading) return;
+    wasmPlayerLoading = true;
+    wasmPlayerError = '';
+    try {
+      const mod = await import('../components/WasmPlayer.svelte');
+      WasmPlayerComponent = mod.default;
+    } catch (e) {
+      console.error('Failed to load WasmPlayer:', e);
+      wasmPlayerError = String(e);
+      showToast(t('live.wasmPlayerFailed'), 'error');
+    } finally {
+      wasmPlayerLoading = false;
+    }
+  }
 
   // ONVIF capabilities
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
@@ -108,6 +129,13 @@
     showToast(t('live.wasm.fallbackToHls') || 'WebCodecs unavailable, switching to HLS', 'warning');
     handleProtocolChange('hls');
   }
+
+  // Preload WasmPlayer when user selects 'wasm' protocol
+  $effect(() => {
+    if (streamingProtocol === 'wasm') {
+      loadWasmPlayer();
+    }
+  });
 
   // Fetch capabilities when camera loads
   $effect(() => {
@@ -214,12 +242,34 @@
                 </div>
               </div>
             {:else if streamingProtocol === 'wasm'}
-              <WasmPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={true}
-                onFallbackNeeded={handleWasmFallback}
-              />
+              {#if WasmPlayerComponent}
+                <svelte:component
+                  this={WasmPlayerComponent}
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  expanded={true}
+                  onFallbackNeeded={handleWasmFallback}
+                />
+              {:else if wasmPlayerLoading}
+                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
+                  <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="flex flex-col items-center gap-2">
+                      <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                      <span class="text-white/50 text-xs">{t('live.loadingWasmPlayer')}</span>
+                    </div>
+                  </div>
+                </div>
+              {:else}
+                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
+                  <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="flex flex-col items-center gap-2">
+                      <AlertCircle size={20} class="text-red-400/60" />
+                      <span class="text-white/50 text-xs">{t('live.wasmPlayerLoadError')}</span>
+                      <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
+                    </div>
+                  </div>
+                </div>
+              {/if}
 
             {:else if streamingProtocol === 'webrtc'}
               <WebRTCPlayer

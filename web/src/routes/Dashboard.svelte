@@ -3,12 +3,13 @@
   import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
-  import WasmPlayer from '../components/WasmPlayer.svelte';
+  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
@@ -56,6 +57,27 @@
 
   // Default streaming protocol from settings
   let defaultProtocol = $state<string>('flv');
+
+  // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
+  let WasmPlayerComponent = $state<any>(null);
+  let wasmPlayerLoading = $state(false);
+  let wasmPlayerError = $state('');
+
+  async function loadWasmPlayer() {
+    if (WasmPlayerComponent || wasmPlayerLoading) return;
+    wasmPlayerLoading = true;
+    wasmPlayerError = '';
+    try {
+      const mod = await import('../components/WasmPlayer.svelte');
+      WasmPlayerComponent = mod.default;
+    } catch (e) {
+      console.error('Failed to load WasmPlayer:', e);
+      wasmPlayerError = String(e);
+      showToast(t('dashboard.wasmPlayerFailed'), 'error');
+    } finally {
+      wasmPlayerLoading = false;
+    }
+  }
 
   // Reconnection coordinator — limits concurrent reconnects, global exponential backoff,
   // and backend pressure detection (HTTP 503 triggers 10s global cooldown)
@@ -146,6 +168,13 @@
     // hls, ll-hls, or default
     return 'hls';
   }
+
+  // Preload WasmPlayer when any camera would use 'wasm' mode
+  $effect(() => {
+    if (defaultProtocol === 'wasm' && cameras.some(c => isHlsSupported(c))) {
+      loadWasmPlayer();
+    }
+  });
 
   // --- Expand / shrink ---
 
@@ -471,12 +500,30 @@
                 {tabVisible}
               />
             {:else if mode === 'wasm'}
-              <WasmPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-              />
+              {#if WasmPlayerComponent}
+                <svelte:component
+                  this={WasmPlayerComponent}
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  expanded={expandedCameraId === camera.id}
+                  tabVisible={tabVisible}
+                />
+              {:else if wasmPlayerLoading}
+                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                  <div class="flex flex-col items-center gap-2">
+                    <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                    <span class="text-white/50 text-xs">{t('dashboard.loadingWasmPlayer')}</span>
+                  </div>
+                </div>
+              {:else}
+                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                  <div class="flex flex-col items-center gap-2">
+                    <AlertCircle size={20} class="text-red-400/60" />
+                    <span class="text-white/50 text-xs">{t('dashboard.wasmPlayerLoadError')}</span>
+                    <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
+                  </div>
+                </div>
+              {/if}
 
             {:else}
               <!-- Unsupported protocol (no snapshot, no HLS) -->

@@ -117,7 +117,7 @@
   });
 
   // Reset page when filters change
-  let prevFilters = `${statusFilter}|${cameraFilter}|${limit}`;
+  let prevFilters = "";
   $effect(() => {
     const current = `${statusFilter}|${cameraFilter}|${limit}`;
     if (current !== prevFilters) {
