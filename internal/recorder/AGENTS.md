@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Five recorder implementations of `model.Recorder` interface. Each manages RTSP/HTTP connection, frame processing, and MP4/MJPEG segment lifecycle with auto-reconnect.
+Six recorder implementations of `model.Recorder` interface. Each manages RTSP/HTTP connection, frame processing, and MP4/MJPEG segment lifecycle with auto-reconnect.
 
 ## STRUCTURE
 
@@ -12,6 +12,9 @@ h265.go          # H265Recorder — RTSP HEVC, VPS/SPS/PPS tracking, IRAP sync
 mjpeg.go         # MJPEGRecorder — RTSP MJPEG→JPEG frames to directory segments
 http_jpeg.go     # HTTPJPEGRecorder — HTTP multipart MJPEG stream→JPEG frames
 onvif.go         # ONVIFRecorder — delegate recorder via ONVIF GetStreamUri
+timelapse.go     # TimelapseRecorder — periodic JPEG capture, configurable interval
+pts_check.go     # Shared PTS monotonicity check (warn only, never drop)
+backoff.go       # Shared exponential backoff with jitter
 *_test.go        # Per-recorder tests with in-process RTSP/HTTP test servers
 ```
 
