@@ -660,3 +660,41 @@ func TestAiDetectorContextCancellation(t *testing.T) {
 		t.Fatalf("expected 0 consumers after disable, got %d", hub.ConsumerCount())
 	}
 }
+
+func TestAiDetectorUnregisterCallback(t *testing.T) {
+	eng, pipes := mockEngineWithResponses(t, []detectResponse{{
+		Detections: []rawDetection{
+			{Label: "person", Confidence: 0.9, Box: [4]float32{0, 0, 0.5, 0.5}},
+		},
+	}})
+	defer func() {
+		eng.Stop()
+		pipes.closeAll(t)
+	}()
+
+	hub := model.NewStreamHub()
+	d := NewAiDetector(eng)
+	d.SetFrameSkip(1)
+
+	// Register callback and get ID.
+	eventCh := make(chan DetectionResult, 16)
+	callbackID := d.OnDetection(func(result DetectionResult) {
+		eventCh <- result
+	})
+	if callbackID == "" {
+		t.Fatal("expected non-empty callback ID")
+	}
+
+	// Unregister and close channel (simulate client disconnect).
+	d.UnregisterCallback(callbackID)
+	close(eventCh)
+
+	// Enable camera and send a frame — should not panic.
+	if err := d.EnableCamera("cam-1", hub); err != nil {
+		t.Fatalf("EnableCamera failed: %v", err)
+	}
+	nalu := makeNALU(0x05, []byte("frame"))
+	sendFrame(t, hub, 45000, [][]byte{nalu})
+	time.Sleep(200 * time.Millisecond)
+	d.DisableCamera("cam-1")
+}

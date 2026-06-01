@@ -1,11 +1,11 @@
 /**
- * Reusable WebSocket connection manager with exponential backoff reconnect,
- * zombie detection, and state management.
+ * Reusable WebSocket connection manager with zombie detection,
+ * visibility handling, and coordinated reconnection via ReconnectCoordinator.
  *
  * Designed for WebCodecs Player but generic enough for other streaming players.
  *
  * Features:
- *   - Exponential backoff reconnect: [2, 4, 8, 16, 32]s, capped at 32s
+ *   - Coordinated reconnect via ReconnectCoordinator (thundering herd prevention)
  *   - Zombie detection: monitors frame delivery rate, auto-reconnects on stall
  *   - Visibility change handler: reconnects when tab returns to foreground
  *   - Freeze-frame callback: allows caller to capture canvas before reconnect
@@ -14,10 +14,11 @@
 
 import { MsgType } from './protocol';
 import type { CodecInfo } from './protocol';
+import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
-export type ConnectionState = 'loading' | 'buffering' | 'playing' | 'error' | 'disconnected';
+export type ConnectionState = 'loading' | 'buffering' | 'playing' | 'error' | 'disconnected' | 'offline';
 
 export interface ConnectionManagerOptions {
   /** WebSocket URL (without auth token) */
@@ -32,10 +33,14 @@ export interface ConnectionManagerOptions {
   onFrame: (data: ArrayBuffer) => void;
   /** Callback before reconnect (allows caller to capture freeze frame) */
   onFreezeFrame: () => void;
-  /** Max reconnect attempts before giving up (default: 5) */
-  maxReconnectAttempts?: number;
-  /** Exponential backoff delays in ms (default: [2, 4, 8, 16, 32] seconds) */
-  reconnectDelays?: number[];
+  /** Optional callback when frames are dropped due to backpressure */
+  onFrameDrop?: (count: number) => void;
+  /** Optional callback when camera goes offline (EOS received) */
+  onCameraOffline?: () => void;
+  /** Optional reconnect coordinator for thundering herd prevention */
+  coordinator?: ReconnectCoordinator;
+  /** Camera ID (required when coordinator is provided) */
+  cameraId?: string;
   /** Zombie check interval in ms (default: 2000) */
   zombieCheckInterval?: number;
   /** Number of consecutive zombie checks before reconnect (default: 3) */
@@ -44,8 +49,6 @@ export interface ConnectionManagerOptions {
 
 // ─── Defaults ─────────────────────────────────────────────────────────────
 
-const DEFAULT_RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 32000];
-const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_ZOMBIE_CHECK_INTERVAL = 2000;
 const DEFAULT_ZOMBIE_MAX_MISSES = 3;
 
@@ -54,8 +57,8 @@ const DEFAULT_ZOMBIE_MAX_MISSES = 3;
 export class ConnectionManager {
   private _opts: ConnectionManagerOptions;
   private _ws: WebSocket | null = null;
-  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private _reconnectAttempts = 0;
+  private _coordinatedTimer: ReturnType<typeof setTimeout> | null = null;
+  private _coordinatedReconnectActive = false;
   private _destroyed = false;
   private _currentState: ConnectionState = 'disconnected';
 
@@ -67,11 +70,14 @@ export class ConnectionManager {
   // Visibility
   private _wasHidden = false;
   private _visibilityHandler: (() => void) | null = null;
+  // Backpressure
+  private _paused = false;
+  private _frameDropCount = 0;
+
+  // Visibility
 
   constructor(opts: ConnectionManagerOptions) {
     this._opts = {
-      maxReconnectAttempts: DEFAULT_MAX_RECONNECT_ATTEMPTS,
-      reconnectDelays: DEFAULT_RECONNECT_DELAYS,
       zombieCheckInterval: DEFAULT_ZOMBIE_CHECK_INTERVAL,
       zombieMaxMisses: DEFAULT_ZOMBIE_MAX_MISSES,
       ...opts,
@@ -81,13 +87,32 @@ export class ConnectionManager {
 
   // ─── Public API ────────────────────────────────────────────────────────
 
+
+  /** Whether incoming frames are being skipped due to backpressure. */
+  get paused(): boolean {
+    return this._paused;
+  }
+
+  /** Total frames dropped due to backpressure at the connection level. */
+  get frameDropCount(): number {
+    return this._frameDropCount;
+  }
+
+  /**
+   * Set backpressure pause state.
+   * When paused, incoming video frames are discarded without passing to onFrame.
+   */
+  setPaused(paused: boolean): void {
+    this._paused = paused;
+  }
+
   /** Open WebSocket connection. */
   connect(): void {
     if (this._destroyed) return;
     if (!this._opts.url) return;
 
     this._setState('loading');
-    this._stopReconnectTimer();
+    this._stopCoordinatedTimer();
 
     let url = this._opts.url;
     if (this._opts.authToken) {
@@ -102,8 +127,12 @@ export class ConnectionManager {
       socket.onopen = () => {
         if (this._destroyed) { socket.close(); return; }
         this._setState('buffering');
-        this._reconnectAttempts = 0;
         this._startZombieDetection();
+        // Notify coordinator that reconnect succeeded
+        if (this._opts.coordinator && this._opts.cameraId && this._coordinatedReconnectActive) {
+          this._opts.coordinator.completeReconnect(this._opts.cameraId);
+          this._coordinatedReconnectActive = false;
+        }
       };
 
       socket.onmessage = (event: MessageEvent) => {
@@ -122,11 +151,24 @@ export class ConnectionManager {
             // parse error — ignore
           }
         } else if (msgType === MsgType.VideoFrame) {
+          // Backpressure: skip incoming frames when decoder is overloaded
+          if (this._paused) {
+            this._frameDropCount++;
+            this._opts.onFrameDrop?.(this._frameDropCount);
+            return;
+          }
           this._recordFrameDelivery();
           this._opts.onFrame(data);
           if (this._currentState !== 'playing') {
             this._setState('playing');
           }
+        } else if (msgType === MsgType.EOS) {
+          // Camera went offline — notify and set state
+          this._stopZombieDetection();
+          this._setState('offline');
+          this._opts.onCameraOffline?.();
+          // Close WS without triggering reconnect — server already did
+          try { this._ws.close(1000); } catch { /* already closed */ }
         }
       };
 
@@ -136,12 +178,14 @@ export class ConnectionManager {
 
         // Normal close (1000) or going away (1001) — don't reconnect
         if (event.code === 1000 || event.code === 1001) {
-          this._setState('disconnected');
+          // Preserve 'offline' state — don't overwrite with 'disconnected'
+          if (this._currentState !== 'offline') {
+            this._setState('disconnected');
+          }
           return;
         }
 
-        this._opts.onFreezeFrame();
-        this._scheduleReconnect();
+        this._scheduleCoordinatedReconnect();
       };
 
       socket.onerror = () => {
@@ -152,34 +196,34 @@ export class ConnectionManager {
       };
     } catch {
       this._setState('error');
-      this._scheduleReconnect();
     }
   }
 
   /** Close WebSocket and cancel reconnect timer (but don't destroy). */
   disconnect(): void {
-    this._stopReconnectTimer();
+    this._stopCoordinatedTimer();
+    this._cancelCoordinatorRequest();
     this._closeWebSocket();
     this._stopZombieDetection();
+    this._paused = false;
   }
 
-  /** Manual reconnect — resets backoff, disconnects, and reconnects. */
+  /** Manual reconnect — disconnects and reconnects. */
   reconnect(): void {
-    this._reconnectAttempts = 0;
-    this._opts.onFreezeFrame();
-    this._stopReconnectTimer();
-    this._closeWebSocket();
-    this._stopZombieDetection();
-    this.connect();
+    this._stopCoordinatedTimer();
+    this._cancelCoordinatorRequest();
+    this._scheduleCoordinatedReconnect();
   }
 
   /** Full cleanup — no further operations possible. */
   destroy(): void {
     this._destroyed = true;
-    this._stopReconnectTimer();
+    this._stopCoordinatedTimer();
+    this._cancelCoordinatorRequest();
     this._closeWebSocket();
     this._stopZombieDetection();
     this._unbindVisibility();
+    this._paused = false;
   }
 
   // ─── Internal: State ─────────────────────────────────────────────────
@@ -189,36 +233,51 @@ export class ConnectionManager {
     this._opts.onStateChange(state);
   }
 
-  // ─── Internal: Reconnect ─────────────────────────────────────────────
+  // ─── Internal: Coordinated reconnect ─────────────────────────────────
 
-  private _getBackoffDelay(): number {
-    const delays = this._opts.reconnectDelays!;
-    if (this._reconnectAttempts >= delays.length) {
-      return delays[delays.length - 1];
-    }
-    return delays[this._reconnectAttempts];
-  }
+  private _scheduleCoordinatedReconnect(): void {
+    if (this._destroyed) return;
+    this._opts.onFreezeFrame();
+    this._closeWebSocket();
+    this._stopZombieDetection();
 
-  private _scheduleReconnect(): void {
-    if (this._reconnectAttempts >= this._opts.maxReconnectAttempts!) {
-      this._setState('error');
-      return;
-    }
-    this._stopReconnectTimer();
-    const delay = this._getBackoffDelay();
-    this._reconnectAttempts++;
-    this._reconnectTimer = setTimeout(() => {
-      this._reconnectTimer = null;
-      this._closeWebSocket();
+    if (this._opts.coordinator && this._opts.cameraId) {
+      const coordinator = this._opts.coordinator;
+      const cameraId = this._opts.cameraId;
+      this._coordinatedReconnectActive = true;
+
+      const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+        this._coordinatedTimer = setTimeout(() => {
+          this._coordinatedTimer = null;
+          this.connect();
+        }, grantedDelay);
+      });
+
+      if (delay >= 0) {
+        this._coordinatedTimer = setTimeout(() => {
+          this._coordinatedTimer = null;
+          this.connect();
+        }, delay);
+      }
+      // If -1, queued — callback will fire when slot opens
+    } else {
+      // No coordinator — immediate reconnect
       this.connect();
-    }, delay);
+    }
   }
 
-  private _stopReconnectTimer(): void {
-    if (this._reconnectTimer !== null) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = null;
+  private _stopCoordinatedTimer(): void {
+    if (this._coordinatedTimer !== null) {
+      clearTimeout(this._coordinatedTimer);
+      this._coordinatedTimer = null;
     }
+  }
+
+  private _cancelCoordinatorRequest(): void {
+    if (this._opts.coordinator && this._opts.cameraId) {
+      this._opts.coordinator.cancelRequest(this._opts.cameraId);
+    }
+    this._coordinatedReconnectActive = false;
   }
 
   private _closeWebSocket(): void {
@@ -247,13 +306,9 @@ export class ConnectionManager {
       }
 
       if (this._zombieMissCount >= this._opts.zombieMaxMisses!) {
-        // Zombie detected — reconnect
+        // Zombie detected — reconnect via coordinator
         this._zombieMissCount = 0;
-        this._opts.onFreezeFrame();
-        this._stopReconnectTimer();
-        this._closeWebSocket();
-        this._stopZombieDetection();
-        this.connect();
+        this._scheduleCoordinatedReconnect();
       }
     }, this._opts.zombieCheckInterval!);
   }
@@ -281,9 +336,8 @@ export class ConnectionManager {
         this._wasHidden = true;
       } else if (this._wasHidden) {
         this._wasHidden = false;
-        this._reconnectAttempts = 0;
         this._opts.onFreezeFrame();
-        this._stopReconnectTimer();
+        this._stopCoordinatedTimer();
         this._closeWebSocket();
         this._stopZombieDetection();
         this.connect();

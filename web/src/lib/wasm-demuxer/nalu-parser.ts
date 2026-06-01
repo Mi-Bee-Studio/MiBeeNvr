@@ -90,6 +90,17 @@ export interface NaluInfo {
 /** Codec identifier — matches protocol.ts CodecId values. */
 export type Codec = 'h264' | 'h265';
 
+// ─── Error Classes ───────────────────────────────────────────────────────────
+
+/** Error thrown when a NAL unit has invalid/corrupted data (too short to extract type). */
+export class InvalidNaluError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidNaluError';
+  }
+}
+
+
 // ─── H.264 Keyframe NAL Types ──────────────────────────────────────────────
 
 const H264_KEYFRAME_TYPES = new Set<number>([5, 7, 8]); // IDR, SPS, PPS
@@ -164,6 +175,7 @@ function splitAnnexB(data: Uint8Array): Uint8Array[] {
     // Look for 00 00 00 01 or 00 00 01
     let found = false;
     if (i <= data.length - 3 && data[i] === 0 && data[i + 1] === 0) {
+      if (i + 2 >= data.length) break;
       if (data[i + 2] === 1) {
         // 3-byte start code
         if (naluStart < i) {
@@ -172,14 +184,17 @@ function splitAnnexB(data: Uint8Array): Uint8Array[] {
         naluStart = i + 3;
         i += 3;
         found = true;
-      } else if (i <= data.length - 4 && data[i + 2] === 0 && data[i + 3] === 1) {
-        // 4-byte start code
-        if (naluStart < i) {
-          nalus.push(data.subarray(naluStart, i));
+      } else if (i <= data.length - 4 && data[i + 2] === 0) {
+        if (i + 3 >= data.length) break;
+        if (data[i + 3] === 1) {
+          // 4-byte start code
+          if (naluStart < i) {
+            nalus.push(data.subarray(naluStart, i));
+          }
+          naluStart = i + 4;
+          i += 4;
+          found = true;
         }
-        naluStart = i + 4;
-        i += 4;
-        found = true;
       }
     }
 
@@ -203,6 +218,9 @@ function splitAnnexB(data: Uint8Array): Uint8Array[] {
  * Type is in bits 0-4 of the first byte.
  */
 function getH264NaluType(data: Uint8Array): number {
+  if (data.length === 0) {
+    throw new InvalidNaluError('H.264 NALU data is empty');
+  }
   return data[0] & 0x1F;
 }
 
@@ -214,7 +232,9 @@ function getH264NaluType(data: Uint8Array): number {
  * Type is in bits 1-6 of the first byte: (byte0 >> 1) & 0x3F
  */
 function getH265NaluType(data: Uint8Array): number {
-  if (data.length < 2) return 0;
+  if (data.length < 2) {
+    throw new InvalidNaluError(`H.265 NALU requires at least 2 bytes, got ${data.length}`);
+  }
   return (data[0] >> 1) & 0x3F;
 }
 
@@ -238,17 +258,28 @@ export function parseAccessUnit(data: Uint8Array, codec: Codec): NaluInfo[] {
   const vpsType = H265_VPS_TYPE;
   const getNaluType = codec === 'h264' ? getH264NaluType : getH265NaluType;
 
-  return rawNalus.map((naluData): NaluInfo => {
-    const type = getNaluType(naluData);
-    return {
+  const result: NaluInfo[] = [];
+  for (const naluData of rawNalus) {
+    let type: number;
+    try {
+      type = getNaluType(naluData);
+    } catch (e) {
+      if (e instanceof InvalidNaluError) {
+        console.warn(`Skipping invalid NALU: ${e.message}`);
+        continue;
+      }
+      throw e;
+    }
+    result.push({
       type,
       data: naluData,
       isKeyframe: keyframeTypes.has(type),
       isSPS: type === spsType,
       isPPS: type === ppsType,
       isVPS: codec === 'h265' && type === vpsType,
-    };
-  });
+    });
+  }
+  return result;
 }
 
 /**

@@ -625,4 +625,356 @@ describe('Decoder', () => {
       decoder.close();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Pending frame cleanup
+  // -------------------------------------------------------------------------
+  describe('pending frame cleanup', () => {
+    it('should close frame when onFrame callback throws', async () => {
+      let outputCallback: ((frame: any) => void) | null = null;
+      const mockFrame = { close: vi.fn() };
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn().mockImplementation(() => {
+          if (outputCallback) outputCallback(mockFrame);
+        });
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCallback = init.output;
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      decoder.onFrame((_frame: any) => {
+        throw new Error('transfer failed');
+      });
+      decoder.decode([new Uint8Array([0x65])], 0, false);
+
+      expect(mockFrame.close).toHaveBeenCalledTimes(1);
+      decoder.close();
+    });
+
+    it('should close frames that arrive asynchronously after close()', async () => {
+      // When close() is called, frames queued inside the VideoDecoder may still arrive
+      // via async output callbacks. handleOutput must still close them.
+      const pendingFrames = [{ close: vi.fn() }, { close: vi.fn() }];
+      let outputCallback: ((frame: any) => void) | null = null;
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn();
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCallback = init.output;
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+      decoder.onFrame(() => { /* noop — frame not closed by callback */ });
+
+      // Schedule output via setTimeout (macrotask, runs after close())
+      if (outputCallback) {
+        setTimeout(() => outputCallback!(pendingFrames[0]), 0);
+        setTimeout(() => outputCallback!(pendingFrames[1]), 0);
+      }
+
+      decoder.close();
+
+      // Let macrotasks run — handleOutput processes frames on closed decoder
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Frames should have been closed by handleOutput (no callback registered after close)
+      expect(pendingFrames[0].close).toHaveBeenCalledTimes(1);
+      expect(pendingFrames[1].close).toHaveBeenCalledTimes(1);
+    });
+
+    it('should close frames that arrive asynchronously after error recovery', async () => {
+      const decoderError = new Error('hardware error');
+      let errorCb: ((e: Error) => void) | null = null;
+      let outputCb: ((frame: any) => void) | null = null;
+      const pendingFrames = [{ close: vi.fn() }, { close: vi.fn() }];
+
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => { this.state = 'configured'; });
+        decode = vi.fn();
+        reset = vi.fn().mockImplementation(() => { this.state = 'unconfigured'; });
+        close = vi.fn().mockImplementation(() => { this.state = 'closed'; });
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCb = init.output;
+          errorCb = init.error;
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+      decoder.onFrame(() => { /* noop */ });
+
+      // Capture the original output callback BEFORE error recovery triggers.
+      // The mock constructor reassigns outputCb when the recovery decoder is created,
+      // so setTimeout must use a saved reference to the stale decoder's output.
+      const oldOutputCb = outputCb;
+
+      // Schedule async output via setTimeout (using old callback with stale epoch)
+      if (oldOutputCb) {
+        setTimeout(() => oldOutputCb!(pendingFrames[0]), 0);
+        setTimeout(() => oldOutputCb!(pendingFrames[1]), 0);
+      }
+
+      // Trigger error recovery before macrotasks run
+      if (errorCb) errorCb(decoderError);
+
+      // Wait for async recovery + macrotasks to settle
+      await vi.waitFor(() => {
+        expect(mockDecoderInstances.length).toBeGreaterThanOrEqual(2);
+      });
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Frames delivered after error should still be closed by handleOutput
+      expect(pendingFrames[0].close).toHaveBeenCalledTimes(1);
+      expect(pendingFrames[1].close).toHaveBeenCalledTimes(1);
+      decoder.close();
+    });
+});
+
+  // ---------------------------------------------------------------------------
+  // Backpressure
+  // ---------------------------------------------------------------------------
+  describe('backpressure', () => {
+    it('should decode normally when under threshold', async () => {
+      let outputCallback: ((frame: any) => void) | null = null;
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn().mockImplementation(() => {
+          if (outputCallback) outputCallback({ close: vi.fn() });
+        });
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCallback = init.output;
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      // Decode 4 frames (under threshold of 5)
+      for (let i = 0; i < 4; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+      }
+
+      expect(decoder.frameDropCount).toBe(0);
+      expect(decoder.pendingDecodeCount).toBe(0); // All processed synchronously
+      decoder.close();
+    });
+
+    it('should skip frames when decode queue exceeds threshold', async () => {
+      let outputCallback: ((frame: any) => void) | null = null;
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn(); // Don't invoke output — simulates slow decoder
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCallback = init.output;
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      // Send 5 frames (fills queue to threshold)
+      for (let i = 0; i < 5; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+      }
+      expect(decoder.pendingDecodeCount).toBe(5);
+      expect(decoder.frameDropCount).toBe(0);
+
+      // 6th frame should be dropped
+      decoder.decode([new Uint8Array([0x65])], 5000, false);
+      expect(decoder.pendingDecodeCount).toBe(5);
+      expect(decoder.frameDropCount).toBe(1);
+
+      // 7th frame should also be dropped
+      decoder.decode([new Uint8Array([0x65])], 6000, false);
+      expect(decoder.frameDropCount).toBe(2);
+
+      decoder.close();
+    });
+
+    it('should emit backpressure signal when threshold exceeded', async () => {
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn(); // Slow decoder — never invokes output
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      const bpCallback = vi.fn();
+      decoder.onBackpressure(bpCallback);
+
+      // Fill queue to threshold
+      for (let i = 0; i < 5; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+      }
+      expect(bpCallback).not.toHaveBeenCalled();
+
+      // Exceed threshold — should emit backpressure signal
+      decoder.decode([new Uint8Array([0x65])], 5000, false);
+      expect(bpCallback).toHaveBeenCalledWith(true);
+      expect(bpCallback).toHaveBeenCalledTimes(1);
+
+      // Subsequent drops should NOT re-emit
+      decoder.decode([new Uint8Array([0x65])], 6000, false);
+      expect(bpCallback).toHaveBeenCalledTimes(1);
+
+      decoder.close();
+    });
+
+    it('should emit resume signal when pending count drops below threshold', async () => {
+      let outputCallback: ((frame: any) => void) | null = null;
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn();
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          outputCallback = init.output;
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      const bpCallback = vi.fn();
+      decoder.onBackpressure(bpCallback);
+
+      // Fill queue to threshold + exceed
+      for (let i = 0; i < 6; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+      }
+      expect(bpCallback).toHaveBeenCalledWith(true);
+
+      // Process one frame (output fires)
+      if (outputCallback) outputCallback({ close: vi.fn() });
+      expect(decoder.pendingDecodeCount).toBe(4);
+      expect(bpCallback).toHaveBeenCalledWith(false);
+      expect(bpCallback).toHaveBeenCalledTimes(2);
+
+      decoder.close();
+    });
+
+    it('should reset pending count and backpressure on reset()', async () => {
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn();
+        reset = vi.fn().mockImplementation(() => { this.state = 'unconfigured'; });
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      const bpCallback = vi.fn();
+      decoder.onBackpressure(bpCallback);
+
+      // Fill and exceed threshold
+      for (let i = 0; i < 6; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 1000, false);
+      }
+      expect(decoder.pendingDecodeCount).toBe(5);
+
+      // Reset should flush everything
+      decoder.reset();
+      expect(decoder.pendingDecodeCount).toBe(0);
+      expect(bpCallback).toHaveBeenCalledWith(false);
+
+      decoder.close();
+    });
+
+    it('should not crash when decoder is slow and many frames arrive', async () => {
+      const mockClass = class MockVideoDecoder {
+        configure = vi.fn().mockImplementation(async () => {});
+        decode = vi.fn(); // Never processes
+        reset = vi.fn();
+        close = vi.fn();
+        state = 'configured';
+        decodeQueueSize = 0;
+        constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+          mockDecoderInstances.push(this as unknown as MockDecoderInstance);
+        }
+        static isConfigSupported = mockIsConfigSupported;
+      };
+      vi.stubGlobal('VideoDecoder', mockClass);
+
+      const decoder = new Decoder();
+      const ci = makeH264CodecInfo();
+      await decoder.configure(ci);
+
+      // Send 100 frames rapidly
+      for (let i = 0; i < 100; i++) {
+        decoder.decode([new Uint8Array([0x65])], i * 33, i % 30 === 0);
+      }
+
+      expect(decoder.frameDropCount).toBe(95);
+      expect(decoder.pendingDecodeCount).toBe(5);
+      expect(() => decoder.close()).not.toThrow();
+    });
+  });
 });

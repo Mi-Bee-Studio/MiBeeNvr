@@ -6,6 +6,7 @@ const (
 	MsgTypeVideoFrame  byte = 0x02 // video_frame: server→client
 	MsgTypeAudioFrame  byte = 0x03 // audio_frame: reserved, server→client
 	MsgTypeKeyframeReq byte = 0x04 // keyframe_request: client→server
+	MsgTypeEOS       byte = 0xFF // eos: server→client, camera went offline
 )
 
 // Codec string constants.

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -1143,4 +1144,87 @@ metrics_auth:
 	require.Equal(t, "metrics", cfg.MetricsAuth.Username)
 	require.Equal(t, "metpass", cfg.MetricsAuth.Password)
 	require.True(t, cfg.MetricsAuth.IsConfigured())
+}
+
+func TestWebSocketConfig(t *testing.T) {
+	yaml := `
+websocket:
+  max_viewers: 5
+  write_buf_size: 200
+  idle_timeout: 30s
+`
+	path := writeTempYAML(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 5, cfg.WebSocket.MaxViewers)
+	require.Equal(t, 200, cfg.WebSocket.WriteBufSize)
+	require.Equal(t, 30*time.Second, cfg.WebSocket.IdleTimeout)
+}
+
+func TestWebSocketConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	require.Equal(t, 10, cfg.WebSocket.MaxViewers)
+	require.Equal(t, 100, cfg.WebSocket.WriteBufSize)
+	require.Equal(t, 60*time.Second, cfg.WebSocket.IdleTimeout)
+}
+
+func TestWebSocketConfigValidation(t *testing.T) {
+	t.Run("max_viewers = 0", func(t *testing.T) {
+		cfg := &Config{WebSocket: WebSocketConfig{MaxViewers: 0}}
+		cfg.ApplyDefaults()
+		cfg.WebSocket.MaxViewers = 0 // override default
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "websocket.max_viewers")
+	})
+	t.Run("write_buf_size = 0", func(t *testing.T) {
+		cfg := &Config{WebSocket: WebSocketConfig{WriteBufSize: 0}}
+		cfg.ApplyDefaults()
+		cfg.WebSocket.WriteBufSize = 0 // override default
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "websocket.write_buf_size")
+	})
+	t.Run("idle_timeout = 0", func(t *testing.T) {
+		cfg := &Config{WebSocket: WebSocketConfig{IdleTimeout: 0}}
+		cfg.ApplyDefaults()
+		cfg.WebSocket.IdleTimeout = 0 // override default
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "websocket.idle_timeout")
+	})
+	t.Run("valid config passes", func(t *testing.T) {
+		cfg := &Config{WebSocket: WebSocketConfig{MaxViewers: 5, WriteBufSize: 200, IdleTimeout: 30 * time.Second}}
+		cfg.ApplyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err)
+	})
+}
+
+func TestAIConfig(t *testing.T) {
+	yaml := `
+ai:
+  inference_timeout_ms: 30000
+  frame_skip_rate: 3
+  confidence_threshold: 0.5
+  model_path: /models/yolo.onnx
+`
+	path := writeTempYAML(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 30000, cfg.AI.InferenceTimeoutMs)
+	require.Equal(t, 3, cfg.AI.FrameSkipRate)
+	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
+	require.Equal(t, "/models/yolo.onnx", cfg.AI.ModelPath)
+}
+
+func TestAIConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	// No defaults are applied for AIConfig, so Go zero values remain
+	require.Equal(t, 0, cfg.AI.InferenceTimeoutMs)
+	require.Equal(t, 0, cfg.AI.FrameSkipRate)
+	require.Equal(t, 0.0, cfg.AI.ConfidenceThreshold)
+	require.Equal(t, "", cfg.AI.ModelPath)
 }

@@ -14,7 +14,11 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-var wsLogger = slog.Default().With("component", "ws-stream-manager")
+var wsLogger atomic.Pointer[slog.Logger]
+
+func init() {
+	wsLogger.Store(slog.Default().With("component", "ws-stream-manager"))
+}
 
 const (
 	defaultMaxViewers   = 10
@@ -57,6 +61,7 @@ type streamEntry struct {
 	cancel     context.CancelFunc
 	hub        *model.StreamHub
 	hubSubID   string
+	dropCount  atomic.Int64
 }
 
 // upgrader is the WebSocket upgrader used by ServeWS.
@@ -156,7 +161,7 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 	m.streams[camID] = entry
 	go m.writeLoop(ctx, camID, entry)
 
-	wsLogger.Info("WebSocket stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
+	wsLogger.Load().Info("WebSocket stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
 	return nil
 }
 
@@ -165,23 +170,30 @@ func (m *Manager) UnregisterStream(camID string) {
 	m.mu.Lock()
 	entry, ok := m.streams[camID]
 	if ok {
+		// Unsubscribe from recorder's StreamHub while holding the lock
+		// to prevent race with hub callback accessing entry after removal.
+		if entry.hub != nil && entry.hubSubID != "" {
+			entry.hub.Unsubscribe(entry.hubSubID)
+		}
 		delete(m.streams, camID)
 	}
 	m.mu.Unlock()
 
 	if ok {
-		// Unsubscribe from recorder's StreamHub
-		if entry.hub != nil && entry.hubSubID != "" {
-			entry.hub.Unsubscribe(entry.hubSubID)
-		}
 		entry.cancel()
 		entry.viewerMu.Lock()
+		eosMsg := []byte{byte(MsgTypeEOS)}
 		for _, v := range entry.viewers {
+			// Send EOS to viewer before closing
+			_ = v.conn.WriteMessage(websocket.BinaryMessage, eosMsg)
 			v.cancel()
 			close(v.ch)
 		}
 		entry.viewerMu.Unlock()
-		wsLogger.Info("WebSocket stream unregistered", "camera_id", camID)
+		wsLogger.Load().Info("WebSocket stream unregistered", "camera_id", camID)
+		if cnt := entry.dropCount.Load(); cnt > 0 {
+			wsLogger.Load().Info("stream drop count", "camera_id", camID, "total_drops", cnt)
+		}
 	}
 }
 
@@ -248,14 +260,18 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
 	default:
 		// Buffer full, drop frame
+		cnt := entry.dropCount.Add(1)
+		if cnt%100 == 0 {
+			wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
 	}
+		}
 }
 
 // writeLoop drains frames from the channel and distributes to all viewers.
 func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntry) {
 	defer func() {
 		if r := recover(); r != nil {
-			wsLogger.Warn("WebSocket writeLoop panic recovered", "camera_id", camID, "error", r)
+			wsLogger.Load().Warn("WebSocket writeLoop panic recovered", "camera_id", camID, "error", r)
 		}
 	}()
 
@@ -270,7 +286,7 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 				NALUs:      msg.au,
 			})
 			if err != nil {
-				wsLogger.Warn("WebSocket encode frame error", "camera_id", camID, "error", err)
+				wsLogger.Load().Warn("WebSocket encode frame error", "camera_id", camID, "error", err)
 				continue
 			}
 
@@ -281,11 +297,15 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 				case v.ch <- encoded:
 				default:
 					// Slow client — drop frame
+					cnt := entry.dropCount.Add(1)
+					if cnt%100 == 0 {
+						wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
+					}
 				}
 			}
 			entry.viewerMu.Unlock()
-		}
 	}
+}
 }
 
 // ServeWS handles a WebSocket upgrade request for a camera stream.
@@ -360,7 +380,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 	entry.viewers[viewerID] = viewer
 	entry.viewerMu.Unlock()
 
-	wsLogger.Debug("WebSocket viewer connected", "camera_id", camID, "viewer_id", viewerID)
+	wsLogger.Load().Debug("WebSocket viewer connected", "camera_id", camID, "viewer_id", viewerID)
 
 	// Cleanup on exit
 	defer func() {
@@ -369,19 +389,23 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		delete(entry.viewers, viewerID)
 		entry.viewerMu.Unlock()
 		_ = conn.Close()
-		wsLogger.Debug("WebSocket viewer disconnected", "camera_id", camID, "viewer_id", viewerID)
+		wsLogger.Load().Debug("WebSocket viewer disconnected", "camera_id", camID, "viewer_id", viewerID)
 	}()
 
-	// Start read pump to detect client disconnect
+	// Start read pump to detect client disconnect.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				wsLogger.Warn("WebSocket read pump panic recovered", "error", r)
+				wsLogger.Load().Warn("WebSocket read pump panic recovered", "error", r)
 			}
 		}()
-		// Long deadline — we just want to detect close, not timeout
-		conn.SetReadDeadline(time.Now().Add(24 * time.Hour))
 		for {
+			select {
+			case <-viewerCtx.Done():
+				return
+			default:
+			}
+			conn.SetReadDeadline(time.Now().Add(time.Second))
 			_, _, err := conn.ReadMessage()
 			if err != nil {
 				viewerCancel()
@@ -401,13 +425,14 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				return
 			case <-idleTicker.C:
 				if time.Since(lastActivity) > m.idleTimeout {
-					wsLogger.Info("WebSocket viewer idle timeout", "camera_id", camID, "viewer_id", viewerID)
+					// Send EOS before closing so frontend can show offline status
+					_ = conn.WriteMessage(websocket.BinaryMessage, []byte{byte(MsgTypeEOS)})
 					viewerCancel()
 					return
 				}
 			}
 		}
-	}()
+		}()
 
 
 	// Write frames to WebSocket until disconnect
@@ -422,7 +447,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 			lastActivity = time.Now()
 			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 				if !strings.Contains(err.Error(), "use of closed") {
-					wsLogger.Warn("WebSocket write error", "camera_id", camID, "viewer_id", viewerID, "error", err)
+					wsLogger.Load().Warn("WebSocket write error", "camera_id", camID, "viewer_id", viewerID, "error", err)
 				}
 				return nil
 			}

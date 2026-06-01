@@ -1,9 +1,12 @@
 package wsstream
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -410,6 +413,76 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func TestFrameDropCounter(t *testing.T) {
+	// Capture log output to verify periodic warnings
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	oldLogger := wsLogger.Load()
+	wsLogger.Store(logger.With("component", "ws-stream-manager"))
+	defer func() { wsLogger.Store(oldLogger) }()
+
+	m := NewManager(WithWriteBufSize(5))
+	hub := newTestHub(t)
+
+	err := m.RegisterStream("test-cam", model.FormatH264, sampleSPS, samplePPS, nil, hub)
+	require.NoError(t, err)
+
+	// Start HTTP server and connect a viewer
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("test-cam", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
+	conn := dialWS(t, wsURL)
+
+	// Read CodecInfo first message
+	_, err = readMessage(t, conn)
+	require.NoError(t, err)
+
+	// Access the stream entry to check drop count later
+	m.mu.RLock()
+	entry, ok := m.streams["test-cam"]
+	m.mu.RUnlock()
+	require.True(t, ok)
+	require.NotNil(t, entry)
+
+	// Broadcast 600 frames — viewer channel fills up, writeLoop drops frames
+	for i := 0; i < 600; i++ {
+		hub.Broadcast(int64(90000*(i+1)), [][]byte{{0x65, byte(i)}}, false)
+	}
+
+	time.Sleep(100 * time.Millisecond) // let drops settle
+
+	cnt := entry.dropCount.Load()
+	t.Logf("total drops: %d", cnt)
+	require.Greater(t, cnt, int64(0), "expected at least one dropped frame")
+
+	// Close WebSocket first, wait for viewer cleanup, then unregister stream
+	conn.Close()
+	eventually(t, func() bool {
+		return m.ViewerCount("test-cam") == 0
+	}, 500*time.Millisecond, 20*time.Millisecond)
+
+	m.UnregisterStream("test-cam")
+	time.Sleep(50 * time.Millisecond) // let writeLoop exit
+
+	// Now read log buffer — no goroutines use wsLogger anymore
+	logOutput := logBuf.String()
+	t.Logf("log output:\n%s", logOutput)
+
+	// Verify warning log was emitted every 100 drops
+	lines := strings.Split(logOutput, "\n")
+	var warnLines int
+	for _, line := range lines {
+		if strings.Contains(line, "frames dropped") {
+			warnLines++
+		}
+	}
+	require.GreaterOrEqual(t, warnLines, 3, "expected at least 3 warning log lines (every 100 drops)")
+}
+
 func TestIdleTimeout(t *testing.T) {
 	m := NewManager(WithIdleTimeout(200*time.Millisecond), WithWriteBufSize(5))
 	hub := newTestHub(t)
@@ -513,6 +586,48 @@ func TestGoroutineCleanup(t *testing.T) {
 
 	m.StopAll()
 	time.Sleep(200 * time.Millisecond)
+}
+
+func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	time.Sleep(100 * time.Millisecond) // let GC settle
+	baseline = runtime.NumGoroutine()
+
+	m := NewManager(WithIdleTimeout(5 * time.Second))
+	hub := newTestHub(t)
+
+	err := m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub)
+	require.NoError(t, err)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
+
+	// Connect viewer
+	conn := dialWS(t, wsURL)
+	_, err = readMessage(t, conn) // read CodecInfo
+	require.NoError(t, err)
+	assert.Equal(t, 1, m.ViewerCount("cam1"))
+
+	// Disconnect viewer
+	conn.Close()
+
+	// Wait for goroutines to settle
+	eventually(t, func() bool {
+		return m.ViewerCount("cam1") == 0
+	}, 2*time.Second, 50*time.Millisecond)
+
+	m.StopAll()
+	time.Sleep(2 * time.Second)
+
+	// After cleanup, goroutine count should return to baseline ±2
+	final := runtime.NumGoroutine()
+	assert.LessOrEqual(t, final, baseline+2,
+		"goroutine leak detected: baseline=%d, final=%d, leaked=%d", baseline, final, final-baseline)
 }
 
 func TestMultipleViewers(t *testing.T) {

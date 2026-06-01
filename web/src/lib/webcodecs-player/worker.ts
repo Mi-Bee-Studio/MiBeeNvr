@@ -76,7 +76,13 @@ async function handleCodecInfo(data: {
 
   // Set frame output callback — forward to main thread
   decoder.onFrame((frame: any) => {
-    self.postMessage({ type: 'frame', data: frame }, [frame] as any);
+    try {
+      self.postMessage({ type: 'frame', data: frame }, [frame] as any);
+    } catch {
+      // postMessage failed — frame still owned by worker, must close to prevent GPU leak
+      try { frame.close(); } catch { /* already closed */ }
+      throw new Error('Failed to transfer frame to main thread');
+    }
   });
 
   // Set error callback — forward to main thread

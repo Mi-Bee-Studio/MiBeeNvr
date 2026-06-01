@@ -111,6 +111,17 @@ func serveTarGz(t *testing.T, archive []byte) *httptest.Server {
 	}))
 }
 
+// withExpectedHash sets the expected SHA-256 hash for the current platform
+// to the SHA-256 of data. It restores the original map on test completion.
+func withExpectedHash(t *testing.T, data []byte) {
+	t.Helper()
+	hash := sha256.Sum256(data)
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	orig := expectedSHA256
+	expectedSHA256 = map[string]string{platform: hex.EncodeToString(hash[:])}
+	t.Cleanup(func() { expectedSHA256 = orig })
+}
+
 // --- Tests ---
 
 // TestGetStatus_NotInstalled verifies status when no ONNX Runtime exists.
@@ -186,6 +197,7 @@ func TestDownload_TarGzExtraction(t *testing.T) {
 		"onnxruntime-linux-x64-1.17.0/include/onnxruntime_c_api.h": []byte("header"),
 		"onnxruntime-linux-x64-1.17.0/lib/libonnxruntime.so":       []byte("lib"),
 	})
+	withExpectedHash(t, archive)
 
 	srv := serveTarGz(t, archive)
 	defer srv.Close()
@@ -238,6 +250,7 @@ func TestDownload_TarGzExtraction_ServerBinary(t *testing.T) {
 	archive := createTarGzArchive(t, map[string][]byte{
 		"onnxruntime-linux-x64-1.17.0/onnxruntime-server": binaryContent,
 	})
+	withExpectedHash(t, archive)
 
 	srv := serveTarGz(t, archive)
 	defer srv.Close()
@@ -314,6 +327,7 @@ func TestDownload_TarGzMissingBinaries(t *testing.T) {
 // TestDownload_RawBinary verifies that a non-archive URL falls back to raw binary download.
 func TestDownload_RawBinary(t *testing.T) {
 	fakeBinary := []byte("#!/bin/sh\necho 'onnxruntime version 1.17.0-test'\n")
+	withExpectedHash(t, fakeBinary)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fakeBinary)))
 		w.Write(fakeBinary)
@@ -387,6 +401,7 @@ func TestDownload_Retry(t *testing.T) {
 	archive := createTarGzArchive(t, map[string][]byte{
 		"onnxruntime-linux-x64-1.17.0/onnxruntime-inference": binaryContent,
 	})
+	withExpectedHash(t, archive)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := attempts.Add(1)
@@ -439,6 +454,7 @@ func TestDownload_ProgressCallback(t *testing.T) {
 	for i := range fakeBinary {
 		fakeBinary[i] = byte(i % 256)
 	}
+	withExpectedHash(t, fakeBinary)
 
 	var progressCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -672,6 +688,7 @@ func TestExtractArchive_TarGzWithDirectoryPrefix(t *testing.T) {
 		"build-dir/include/api.h":          []byte("header"),
 		"build-dir/lib/libonnxruntime.so":  []byte("lib"),
 	})
+	withExpectedHash(t, archive)
 
 	srv := serveTarGz(t, archive)
 	defer srv.Close()
@@ -806,6 +823,7 @@ func TestDownload_LargeTarGzProgress(t *testing.T) {
 	archive := createTarGzArchive(t, map[string][]byte{
 		"onnxruntime-linux-x64-1.17.0/onnxruntime-inference": largeContent,
 	})
+	withExpectedHash(t, archive)
 
 	var progressCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -855,6 +873,7 @@ func TestDownload_ConcurrentMutex(t *testing.T) {
 	archive := createTarGzArchive(t, map[string][]byte{
 		"onnxruntime-linux-x64-1.17.0/onnxruntime-inference": binaryContent,
 	})
+	withExpectedHash(t, archive)
 
 	srv := serveTarGz(t, archive)
 	defer srv.Close()

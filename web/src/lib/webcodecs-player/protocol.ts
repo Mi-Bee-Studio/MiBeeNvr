@@ -19,6 +19,7 @@ export const MsgType = {
   VideoFrame: 0x02,
   AudioFrame: 0x03,
   KeyframeReq: 0x04,
+  EOS: 0xFF,
 } as const;
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];

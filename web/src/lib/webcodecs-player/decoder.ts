@@ -17,6 +17,7 @@ const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1080;
 const FALLBACK_H264_CODEC = 'avc1.42001E';   // Baseline L3.0
 const FALLBACK_H265_CODEC = 'hvc1.1.6.L93.B0'; // Main L3.1
+const BACKPRESSURE_THRESHOLD = 5;
 
 // ─── Codec string builders ────────────────────────────────────────────────
 
@@ -141,6 +142,12 @@ export class Decoder {
   private _errorCallback: ((error: Error) => void) | null = null;
   private _errorCount = 0;
   private static readonly MAX_RECOVERY_ATTEMPTS = 3;
+  private _pendingFrames: Set<VideoFrame> = new Set();
+  private _pendingDecodeCount = 0;
+  private _frameDropCount = 0;
+  private _backpressured = false;
+  private _backpressureCallback: ((paused: boolean) => void) | null = null;
+  private _decoderEpoch = 0;
 
   /**
    * Configure the VideoDecoder with codec info.
@@ -166,12 +173,14 @@ export class Decoder {
       }
     }
 
-    // Create and configure decoder
+    // Create and configure decoder with epoch tracking for stale-frame detection
+    // Create and configure decoder with epoch tracking for stale-frame detection
+    this._decoderEpoch++;
+    const epoch = this._decoderEpoch;
     this._decoder = new VideoDecoder({
-      output: this.handleOutput.bind(this),
+      output: (frame: VideoFrame) => this.handleOutput(frame, epoch),
       error: this.handleError.bind(this),
     });
-
     await this._decoder.configure({
       codec,
       codedWidth: DEFAULT_WIDTH,
@@ -192,6 +201,18 @@ export class Decoder {
   decode(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
     if (this._closed || !this._decoder || !this._configured) return;
 
+    // Backpressure: skip frame if decode queue is full
+    if (this._pendingDecodeCount >= BACKPRESSURE_THRESHOLD) {
+      this._frameDropCount++;
+      if (!this._backpressured) {
+        this._backpressured = true;
+        if (this._backpressureCallback) {
+          try { this._backpressureCallback(true); } catch { /* ignore */ }
+        }
+      }
+      return;
+    }
+
     const data = prependAnnexB(nalus);
     const chunk = new EncodedVideoChunk({
       type: isKeyframe ? 'key' : 'delta',
@@ -199,6 +220,7 @@ export class Decoder {
       data,
     });
 
+    this._pendingDecodeCount++;
     this._decoder.decode(chunk);
   }
 
@@ -215,6 +237,14 @@ export class Decoder {
       try { this._decoder.close(); } catch { /* ignore */ }
       this._decoder = null;
       this._configured = false;
+    }
+    // Reset backpressure state — all queued decodes are flushed
+    this._pendingDecodeCount = 0;
+    if (this._backpressured) {
+      this._backpressured = false;
+      if (this._backpressureCallback) {
+        try { this._backpressureCallback(false); } catch { /* ignore */ }
+      }
     }
   }
 
@@ -233,6 +263,13 @@ export class Decoder {
       }
       this._decoder = null;
     }
+    // Clean up any remaining pending frames to prevent GPU memory leaks
+    for (const f of this._pendingFrames) {
+      try { f.close(); } catch { /* already closed */ }
+    }
+    this._pendingFrames.clear();
+    this._pendingDecodeCount = 0;
+    this._backpressured = false;
   }
 
   /**
@@ -251,6 +288,25 @@ export class Decoder {
     this._errorCallback = callback;
   }
 
+  /**
+   * Register a callback for backpressure state changes.
+   * Called with true when decoder is overloaded (pending count >= threshold),
+   * false when pressure has subsided.
+   */
+  onBackpressure(callback: (paused: boolean) => void): void {
+    this._backpressureCallback = callback;
+  }
+
+  /** Number of decode requests currently in the WebCodecs pipeline. */
+  get pendingDecodeCount(): number {
+    return this._pendingDecodeCount;
+  }
+
+  /** Total number of frames dropped due to backpressure. */
+  get frameDropCount(): number {
+    return this._frameDropCount;
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────────
 
   private buildCodecString(ci: CodecInfo): string {
@@ -260,19 +316,38 @@ export class Decoder {
     return buildH264CodecString(ci.sps, ci.profile, ci.level);
   }
 
-  private handleOutput(frame: VideoFrame): void {
+  private handleOutput(frame: VideoFrame, epoch: number): void {
+    // Discard frames from a stale decoder (after close, reset, or error recovery)
+    if (this._closed || epoch !== this._decoderEpoch) {
+      try { frame.close(); } catch { /* already closed */ }
+      return;
+    }
+
+    this._pendingDecodeCount--;
+
+    // Check backpressure recovery
+    if (this._backpressured && this._pendingDecodeCount < BACKPRESSURE_THRESHOLD) {
+      this._backpressured = false;
+      if (this._backpressureCallback) {
+        try { this._backpressureCallback(false); } catch { /* ignore */ }
+      }
+    }
+
+    this._pendingFrames.add(frame);
     if (this._frameCallback) {
-      this._frameCallback(frame);
-      // Note: caller is responsible for closing the frame.
-      // When used in a worker, the frame is transferred to the main thread
-      // which closes it after rendering. When used directly, the caller
-      // must call frame.close() to prevent GPU memory leaks.
+      try {
+        this._frameCallback(frame);
+        // Frame transferred to main thread — caller owns it now.
+      } catch {
+        // Callback failed (e.g., postMessage threw) — we still own it.
+        try { frame.close(); } catch { /* already closed */ }
+      }
     } else {
       // No callback registered — close immediately to prevent leak
-      frame.close();
+      try { frame.close(); } catch { /* already closed */ }
     }
+    this._pendingFrames.delete(frame);
   }
-
   private handleError(error: Error): void {
     this._errorCount++;
 
@@ -300,6 +375,7 @@ export class Decoder {
     } else {
       try {
         this._decoder.reset();
+        this._decoder = null;
         this._configured = false;
       } catch {
         try { this._decoder.close(); } catch { /* ignore */ }
@@ -308,12 +384,20 @@ export class Decoder {
       }
     }
 
+    // Clean up any pending frames to prevent GPU memory leaks
+    for (const f of this._pendingFrames) {
+      try { f.close(); } catch { /* already closed */ }
+    }
+    this._pendingFrames.clear();
+
     if (!this._decoder) {
       const ci = this._lastCodecInfo;
       queueMicrotask(async () => {
         try {
+          this._decoderEpoch++;
+          const epoch = this._decoderEpoch;
           this._decoder = new VideoDecoder({
-            output: this.handleOutput.bind(this),
+            output: (frame: VideoFrame) => this.handleOutput(frame, epoch),
             error: this.handleError.bind(this),
           });
           await this._decoder.configure({

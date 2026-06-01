@@ -45,8 +45,8 @@ func defaultDownloadURL(goos, goarch string) string {
 // expectedSHA256 contains the expected SHA-256 hash for each platform's archive.
 // These can be populated from GitHub release assets' checksums.
 var expectedSHA256 = map[string]string{
-	"linux/amd64":  "",
-	"linux/arm64":  "",
+	"linux/amd64":  "efc344d54d1969446ff5d3e55b54e205c6579c06333ecf1d34a04215eefae7c6",
+	"linux/arm64":  "ee5069252f549ef94759b6b60bdf10b2dc2cd71d064a7045dd66a052f956a68b",
 }
 
 // DownloadStatus represents the ONNX Runtime download state.

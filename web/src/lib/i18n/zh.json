@@ -653,6 +653,8 @@
   "live.h265.fallbackTitle": "H.265 不支持",
   "live.h265.fallbackMessage": "WebRTC 在浏览器中不支持 H.265 (HEVC)。已切换至 {protocol} 以确保兼容性。",
   "live.h265.badge": "H.265",
+  "live.wasm.fallbackToHls": "WebCodecs 不可用，正在切换至 HLS",
+  "live.h265.webrtcUnavailable": "H.265 摄像头不支持 WebRTC",
   "live.h265.webrtcUnavailable": "H.265 摄像头不支持 WebRTC",
   "live.protocol.tooltip.latency": "延迟",
   "live.protocol.tooltip.viewers": "查看数",

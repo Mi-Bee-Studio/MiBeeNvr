@@ -61,20 +61,22 @@ type cameraEntry struct {
 // All frame callbacks and inference calls are non-blocking — the recording
 // pipeline is never stalled.
 type AiDetector struct {
-	mu    sync.RWMutex
-	eng   *Engine             // inference engine (may be nil if not started)
-	cams  map[string]*cameraEntry
-	cfg   DetectorConfig      // global default config (copied per camera)
-	onDet OnDetectionFunc     // detection result callback (may be nil)
-	log   *slog.Logger
+	mu         sync.RWMutex
+	eng        *Engine                       // inference engine (may be nil if not started)
+	cams       map[string]*cameraEntry
+	cfg        DetectorConfig                // global default config (copied per camera)
+	callbacks  map[string]OnDetectionFunc    // registered detection callbacks
+	callbackID atomic.Int64                  // monotonic ID generator
+	log        *slog.Logger
 }
 
 // NewAiDetector creates a new AiDetector bound to the given Engine.
 // If engine is nil, detection calls will be no-ops until SetEngine is called.
 func NewAiDetector(eng *Engine) *AiDetector {
 	return &AiDetector{
-		eng: eng,
-		cams: make(map[string]*cameraEntry),
+		eng:       eng,
+		cams:      make(map[string]*cameraEntry),
+		callbacks: make(map[string]OnDetectionFunc),
 		cfg: DetectorConfig{
 			FrameSkip:           defaultFrameSkip,
 			ConfidenceThreshold: defaultConfidenceThreshold,
@@ -83,12 +85,28 @@ func NewAiDetector(eng *Engine) *AiDetector {
 	}
 }
 
-// OnDetection sets the callback invoked when detection results are available.
-// If nil, detection results are silently discarded.
-func (d *AiDetector) OnDetection(cb OnDetectionFunc) {
+// OnDetection registers a callback invoked when detection results are available.
+// It returns a unique callback ID that can be passed to UnregisterCallback.
+// If cb is nil, it is not registered and an empty string is returned.
+func (d *AiDetector) OnDetection(cb OnDetectionFunc) string {
+	if cb == nil {
+		return ""
+	}
+	id := fmt.Sprintf("det-%d", d.callbackID.Add(1))
+	d.mu.Lock()
+	d.callbacks[id] = cb
+	d.mu.Unlock()
+	return id
+}
+
+// UnregisterCallback removes a previously registered detection callback by its ID.
+// Returns true if the callback was found and removed, false otherwise.
+func (d *AiDetector) UnregisterCallback(id string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.onDet = cb
+	_, ok := d.callbacks[id]
+	delete(d.callbacks, id)
+	return ok
 }
 
 // SetEngine replaces the inference engine. Existing camera subscriptions
@@ -242,11 +260,14 @@ func (d *AiDetector) processFrame(ctx context.Context, camID string, pts int64, 
 		return
 	}
 
-	// Get engine reference.
+	// Get engine and callbacks snapshot.
 	d.mu.RLock()
 	eng := d.eng
-	cb := d.onDet
 	confThresh := d.cfg.ConfidenceThreshold
+	cbs := make([]OnDetectionFunc, 0, len(d.callbacks))
+	for _, cb := range d.callbacks {
+		cbs = append(cbs, cb)
+	}
 	d.mu.RUnlock()
 
 	if eng == nil {
@@ -261,8 +282,10 @@ func (d *AiDetector) processFrame(ctx context.Context, camID string, pts int64, 
 		return
 	}
 
-	// Run inference with the camera's context.
-	detections, err := eng.Detect(ctx, frameData)
+	// Run inference with a timeout to prevent stalled frames.
+	infCtx, infCancel := context.WithTimeout(ctx, inferenceTimeout)
+	defer infCancel()
+	detections, err := eng.Detect(infCtx, frameData)
 	if err != nil {
 		d.log.Warn("inference failed",
 			"camera_id", camID,
@@ -277,13 +300,13 @@ func (d *AiDetector) processFrame(ctx context.Context, camID string, pts int64, 
 		return
 	}
 
-	// Publish results via callback (non-blocking).
-	if cb != nil {
-		result := DetectionResult{
-			CameraID:   camID,
-			PTStime:    pts,
-			Detections: filtered,
-		}
+	// Publish results to all registered callbacks (non-blocking each).
+	result := DetectionResult{
+		CameraID:   camID,
+		PTStime:    pts,
+		Detections: filtered,
+	}
+	for _, cb := range cbs {
 		cb(result)
 	}
 }

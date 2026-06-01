@@ -57,6 +57,20 @@ function createManager(opts?: Partial<ConstructorParameters<typeof ConnectionMan
   });
 }
 
+function createMockCoordinator() {
+  return {
+    requestReconnect: vi.fn().mockReturnValue(1000),
+    completeReconnect: vi.fn(),
+    cancelRequest: vi.fn(),
+    reportBackendPressure: vi.fn(),
+    activeReconnects: 0,
+    maxConcurrent: 2,
+    globalBackoffMs: 1000,
+    globalCooldown: false,
+    dispose: vi.fn(),
+  };
+}
+
 function getLastWS(): MockWSInstance {
   return mockWSInstances[mockWSInstances.length - 1];
 }
@@ -162,14 +176,6 @@ describe('connect', () => {
     expect(onState).toHaveBeenCalledWith('buffering');
   });
 
-  it('should reset reconnect attempts on successful open', () => {
-    const cm = createManager();
-    cm.connect();
-    (cm as { _reconnectAttempts: number })._reconnectAttempts = 3;
-    simulateOpen();
-    expect((cm as { _reconnectAttempts: number })._reconnectAttempts).toBe(0);
-  });
-
   it('should not connect when destroyed', () => {
     const cm = createManager();
     cm.destroy();
@@ -195,14 +201,31 @@ describe('disconnect', () => {
     expect(ws.close).toHaveBeenCalled();
   });
 
-  it('should cancel pending reconnect timer', () => {
-    const cm = createManager();
+  it('should cancel pending coordinator reconnect timer', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
     cm.connect();
     simulateOpen();
     simulateClose(getLastWS(), 1006);
+    // Coordinator grants slot with 1000ms delay — timer is set
+    expect(coordinator.requestReconnect).toHaveBeenCalledWith('cam-1', expect.any(Function));
     cm.disconnect();
+    // Timer should be cancelled — advancing time should not create new WS
     vi.advanceTimersByTime(60000);
     expect(mockWSInstances.length).toBe(1);
+  });
+
+  it('should call coordinator.cancelRequest on disconnect', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(-1); // queued
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    expect(coordinator.requestReconnect).toHaveBeenCalled();
+    cm.disconnect();
+    expect(coordinator.cancelRequest).toHaveBeenCalledWith('cam-1');
   });
 
   it('should stop zombie detection', () => {
@@ -232,15 +255,6 @@ describe('reconnect', () => {
     expect(freezeFn).toHaveBeenCalled();
   });
 
-  it('should reset reconnect attempts', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-    (cm as { _reconnectAttempts: number })._reconnectAttempts = 3;
-    cm.reconnect();
-    expect((cm as { _reconnectAttempts: number })._reconnectAttempts).toBe(0);
-  });
-
   it('should close existing WebSocket and create a new one', () => {
     const cm = createManager();
     cm.connect();
@@ -263,6 +277,16 @@ describe('reconnect', () => {
     simulateOpen();
     expect(onState).toHaveBeenCalledWith('buffering');
   });
+
+  it('should use coordinator for reconnect', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    cm.reconnect();
+    expect(coordinator.requestReconnect).toHaveBeenCalledWith('cam-1', expect.any(Function));
+  });
 });
 
 // ─── destroy ──────────────────────────────────────────────────────────────
@@ -276,14 +300,28 @@ describe('destroy', () => {
     expect(ws.close).toHaveBeenCalled();
   });
 
-  it('should cancel reconnect timer', () => {
-    const cm = createManager();
+  it('should cancel coordinator reconnect timer', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    expect(coordinator.requestReconnect).toHaveBeenCalled();
+    cm.destroy();
+    vi.advanceTimersByTime(60000);
+    expect(mockWSInstances.length).toBe(1);
+  });
+
+  it('should call coordinator.cancelRequest on destroy', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(-1); // queued
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
     cm.connect();
     simulateOpen();
     simulateClose(getLastWS(), 1006);
     cm.destroy();
-    vi.advanceTimersByTime(60000);
-    expect(mockWSInstances.length).toBe(1);
+    expect(coordinator.cancelRequest).toHaveBeenCalledWith('cam-1');
   });
 
   it('should stop zombie detection', () => {
@@ -394,21 +432,6 @@ describe('callbacks', () => {
       simulateError(getLastWS());
       expect(fn).toHaveBeenCalledWith('error');
     });
-
-    it('should be called with error when max reconnect attempts reached', () => {
-      const fn = vi.fn();
-      const cm = createManager({ onStateChange: fn, maxReconnectAttempts: 1 });
-      cm.connect();
-      simulateOpen();
-
-      // 1st close: schedule reconnect (attempts 0→1)
-      simulateClose(getLastWS(), 1006);
-      vi.advanceTimersByTime(2000);
-      // Timer fires → connect → WS2 (no open yet)
-      // 2nd close: attempts(1) >= 1 → error, no more reconnect
-      simulateClose(getLastWS(), 1006);
-      expect(fn).toHaveBeenCalledWith('error');
-    });
   });
 
   describe('onCodecInfo', () => {
@@ -497,9 +520,9 @@ describe('callbacks', () => {
   });
 });
 
-// ─── Reconnect behavior ────────────────────────────────────────────────────
+// ─── Reconnect behavior (no coordinator) ────────────────────────────────────
 
-describe('reconnect behavior', () => {
+describe('reconnect behavior (no coordinator)', () => {
   it('should not reconnect on normal close (code 1000)', () => {
     const cm = createManager();
     cm.connect();
@@ -518,94 +541,13 @@ describe('reconnect behavior', () => {
     expect(mockWSInstances.length).toBe(1);
   });
 
-  it('should reconnect on abnormal close (code 1006)', () => {
+  it('should reconnect immediately on abnormal close (code 1006)', () => {
     const cm = createManager();
     cm.connect();
     simulateOpen();
     simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(2500);
+    // Without coordinator, reconnect is immediate (no timer delay)
     expect(mockWSInstances.length).toBe(2);
-  });
-
-  it('should use exponential backoff delays: [2, 4, 8, 16, 32]s', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-
-    // 1st reconnect: 2s delay (consecutive failure, no open between)
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(1999);
-    expect(mockWSInstances.length).toBe(1);
-    vi.advanceTimersByTime(1);
-    expect(mockWSInstances.length).toBe(2);
-
-    // 2nd reconnect: 4s delay
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(3999);
-    expect(mockWSInstances.length).toBe(2);
-    vi.advanceTimersByTime(1);
-    expect(mockWSInstances.length).toBe(3);
-
-    // 3rd reconnect: 8s delay
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(7999);
-    expect(mockWSInstances.length).toBe(3);
-    vi.advanceTimersByTime(1);
-    expect(mockWSInstances.length).toBe(4);
-
-    // 4th reconnect: 16s delay
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(15999);
-    expect(mockWSInstances.length).toBe(4);
-    vi.advanceTimersByTime(1);
-    expect(mockWSInstances.length).toBe(5);
-
-    // 5th reconnect: 32s delay (capped at last value)
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(31999);
-    expect(mockWSInstances.length).toBe(5);
-    vi.advanceTimersByTime(1);
-    expect(mockWSInstances.length).toBe(6);
-  });
-
-  it('should stop reconnecting after max attempts', () => {
-    const cm = createManager({ maxReconnectAttempts: 2 });
-    cm.connect();
-    simulateOpen();
-
-    // 1st failure: schedule reconnect (attempts 0→1, delay=2000)
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(2000);
-    // Timer fires → connect → WS2 (no open)
-
-    // 2nd failure: schedule reconnect (attempts 1→2, delay=4000)
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(4000);
-    // Timer fires → connect → WS3 (no open)
-
-    // 3rd close: attempts(2) >= 2 → error, stop
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(60000);
-    expect(mockWSInstances.length).toBe(3);
-
-    const onState = cm['_opts'].onStateChange as ReturnType<typeof vi.fn>;
-    expect(onState).toHaveBeenCalledWith('error');
-  });
-
-  it('should reset attempt counter on successful open', () => {
-    const cm = createManager({ maxReconnectAttempts: 2 });
-    cm.connect();
-    simulateOpen();
-
-    // Fail and reconnect once
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(2000);
-    simulateOpen();
-
-    // Fail again — since open reset counter, this is attempt 1 not 2
-    simulateClose(getLastWS(), 1006);
-    vi.advanceTimersByTime(2000);
-    expect(mockWSInstances.length).toBe(3);
   });
 
   it('should not process close events after destroy', () => {
@@ -626,6 +568,96 @@ describe('reconnect behavior', () => {
     cm.destroy();
     simulateError(getLastWS());
     expect(fn).not.toHaveBeenCalledWith('error');
+  });
+});
+
+// ─── Reconnect behavior (with coordinator) ──────────────────────────────────
+
+describe('reconnect behavior (with coordinator)', () => {
+  it('should request coordinator slot on abnormal close', () => {
+    const coordinator = createMockCoordinator();
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    expect(coordinator.requestReconnect).toHaveBeenCalledWith('cam-1', expect.any(Function));
+  });
+
+  it('should reconnect after coordinator grants slot with delay', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(2000);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    // Should not reconnect immediately — waiting for coordinator delay
+    expect(mockWSInstances.length).toBe(1);
+    vi.advanceTimersByTime(1999);
+    expect(mockWSInstances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(mockWSInstances.length).toBe(2);
+  });
+
+  it('should reconnect when coordinator fires onGranted callback (queued)', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(-1); // queued
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    // Queued — no immediate reconnect
+    expect(mockWSInstances.length).toBe(1);
+    // Simulate coordinator granting slot
+    const onGranted = coordinator.requestReconnect.mock.calls[0][1] as (delayMs: number) => void;
+    onGranted(3000);
+    vi.advanceTimersByTime(3000);
+    expect(mockWSInstances.length).toBe(2);
+  });
+
+  it('should call completeReconnect when connection opens after coordinated reconnect', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    vi.advanceTimersByTime(1000);
+    simulateOpen();
+    expect(coordinator.completeReconnect).toHaveBeenCalledWith('cam-1');
+  });
+
+  it('should not call completeReconnect on first connect (no coordinated reconnect)', () => {
+    const coordinator = createMockCoordinator();
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    expect(coordinator.completeReconnect).not.toHaveBeenCalled();
+  });
+
+  it('should cancel coordinator request when manually reconnecting', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(-1); // queued
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    expect(coordinator.cancelRequest).not.toHaveBeenCalled();
+    // Manual reconnect should cancel previous request
+    cm.reconnect();
+    expect(coordinator.cancelRequest).toHaveBeenCalledWith('cam-1');
+    expect(coordinator.requestReconnect).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not reconnect when coordinator is at capacity (queued)', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(-1);
+    const cm = createManager({ coordinator, cameraId: 'cam-1' });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    vi.advanceTimersByTime(60000);
+    // Still only 1 WS — coordinator hasn't granted slot
+    expect(mockWSInstances.length).toBe(1);
   });
 });
 
@@ -650,7 +682,7 @@ describe('zombie detection', () => {
     expect(mockWSInstances.length).toBe(1);
   });
 
-  it('should auto-reconnect after 3 x 2000ms without frames', () => {
+  it('should auto-reconnect immediately after zombie detection (no coordinator)', () => {
     const cm = createManager({
       zombieCheckInterval: 2000,
       zombieMaxMisses: 3,
@@ -665,6 +697,28 @@ describe('zombie detection', () => {
     expect(mockWSInstances.length).toBe(1);
 
     vi.advanceTimersByTime(2000);
+    // Without coordinator, zombie triggers immediate reconnect
+    expect(mockWSInstances.length).toBe(2);
+  });
+
+  it('should use coordinator for zombie-triggered reconnect', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1500);
+    const cm = createManager({
+      coordinator,
+      cameraId: 'cam-1',
+      zombieCheckInterval: 2000,
+      zombieMaxMisses: 3,
+    });
+    cm.connect();
+    simulateOpen();
+
+    vi.advanceTimersByTime(6000);
+    // Zombie detected, coordinator should be asked
+    expect(coordinator.requestReconnect).toHaveBeenCalledWith('cam-1', expect.any(Function));
+    // Not yet reconnected — waiting for coordinator delay
+    expect(mockWSInstances.length).toBe(1);
+    vi.advanceTimersByTime(1500);
     expect(mockWSInstances.length).toBe(2);
   });
 
@@ -763,24 +817,6 @@ describe('visibility change', () => {
     handler?.();
     expect(firstWS.close).toHaveBeenCalled();
     expect(mockWSInstances.length).toBe(2);
-  });
-
-  it('should reset reconnect attempts on visibility restore', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-    (cm as { _reconnectAttempts: number })._reconnectAttempts = 4;
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect((cm as { _reconnectAttempts: number })._reconnectAttempts).toBe(0);
   });
 
   it('should call onFreezeFrame when tab returns to visible', () => {
@@ -894,5 +930,135 @@ describe('edge cases', () => {
     const cm = createManager({ onStateChange: errorFn });
     cm.connect();
     expect(errorFn).toHaveBeenCalledWith('error');
+  });
+
+  it('should not use coordinator when neither coordinator nor cameraId provided', () => {
+    const coordinator = createMockCoordinator();
+    // Pass coordinator but no cameraId — should fall back to immediate reconnect
+    const cm = createManager({ coordinator });
+    cm.connect();
+    simulateOpen();
+    simulateClose(getLastWS(), 1006);
+    // Should reconnect immediately without calling coordinator
+    expect(coordinator.requestReconnect).not.toHaveBeenCalled();
+    expect(mockWSInstances.length).toBe(2);
+  });
+});
+
+// ─── Backpressure ───────────────────────────────────────────────────────
+
+describe('backpressure', () => {
+  it('should pass frames to onFrame when not paused', () => {
+    const frameFn = vi.fn();
+    const cm = createManager({ onFrame: frameFn });
+    cm.connect();
+    simulateOpen();
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(frameFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should skip video frames when paused', () => {
+    const frameFn = vi.fn();
+    const cm = createManager({ onFrame: frameFn });
+    cm.connect();
+    simulateOpen();
+
+    cm.setPaused(true);
+    expect(cm.paused).toBe(true);
+
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+
+    expect(frameFn).not.toHaveBeenCalled();
+    expect(cm.frameDropCount).toBe(3);
+  });
+
+  it('should resume passing frames when unpaused', () => {
+    const frameFn = vi.fn();
+    const cm = createManager({ onFrame: frameFn });
+    cm.connect();
+    simulateOpen();
+
+    cm.setPaused(true);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(frameFn).not.toHaveBeenCalled();
+
+    cm.setPaused(false);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(frameFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call onFrameDrop callback when frames are dropped', () => {
+    const dropFn = vi.fn();
+    const cm = createManager({ onFrameDrop: dropFn });
+    cm.connect();
+    simulateOpen();
+
+    cm.setPaused(true);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(dropFn).toHaveBeenCalledWith(1);
+
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(dropFn).toHaveBeenCalledWith(2);
+
+    expect(dropFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('should still process CodecInfo messages when paused', () => {
+    const codecFn = vi.fn();
+    const frameFn = vi.fn();
+    const cm = createManager({ onCodecInfo: codecFn, onFrame: frameFn });
+    cm.connect();
+    simulateOpen();
+
+    cm.setPaused(true);
+    simulateMessage(getLastWS(), buildCodecInfoBuffer());
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+
+    expect(codecFn).toHaveBeenCalledTimes(1);
+    expect(frameFn).not.toHaveBeenCalled();
+    expect(cm.frameDropCount).toBe(1);
+  });
+
+  it('should reset paused state on disconnect', () => {
+    const cm = createManager();
+    cm.connect();
+    simulateOpen();
+    cm.setPaused(true);
+    expect(cm.paused).toBe(true);
+
+    cm.disconnect();
+    expect(cm.paused).toBe(false);
+  });
+
+  it('should reset paused state on destroy', () => {
+    const cm = createManager();
+    cm.connect();
+    simulateOpen();
+    cm.setPaused(true);
+    expect(cm.paused).toBe(true);
+
+    cm.destroy();
+    expect(cm.paused).toBe(false);
+  });
+
+  it('should preserve frame drop count across pause/resume cycles', () => {
+    const cm = createManager();
+    cm.connect();
+    simulateOpen();
+
+    cm.setPaused(true);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(cm.frameDropCount).toBe(2);
+
+    cm.setPaused(false);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(cm.frameDropCount).toBe(2); // No new drops
+
+    cm.setPaused(true);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    expect(cm.frameDropCount).toBe(3);
   });
 });

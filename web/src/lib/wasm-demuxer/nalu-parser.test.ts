@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseAccessUnit,
   isKeyframeNalus,
+  InvalidNaluError,
   type NaluInfo,
   type H264NaluType,
   type H265NaluType,
@@ -381,6 +382,84 @@ describe('Edge cases', () => {
     // The zero-length NALU should be skipped
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe(5);
+  });
+
+  it('should handle data ending with incomplete 4-byte start code [0, 0, 0]', () => {
+    // Valid NALU followed by truncated 4-byte start code (00 00 00)
+    const nalu = h264Nalu(5);
+    const buf = new Uint8Array(SC4.length + nalu.length + 3);
+    buf.set(SC4, 0);
+    buf.set(nalu, SC4.length);
+    buf.set(new Uint8Array([0x00, 0x00, 0x00]), SC4.length + nalu.length);
+
+    const result = parseAccessUnit(buf, 'h264');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe(5);
+  });
+
+  it('should handle data ending with incomplete 3-byte start code [0, 0]', () => {
+    // Valid NALU followed by truncated 3-byte start code (00 00)
+    const nalu = h264Nalu(7);
+    const buf = new Uint8Array(SC4.length + nalu.length + 2);
+    buf.set(SC4, 0);
+    buf.set(nalu, SC4.length);
+    buf.set(new Uint8Array([0x00, 0x00]), SC4.length + nalu.length);
+
+    const result = parseAccessUnit(buf, 'h264');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Invalid NALU handling
+// ---------------------------------------------------------------------------
+describe('Invalid NALU handling', () => {
+  it('InvalidNaluError should be throwable with correct name', () => {
+    const err = new InvalidNaluError('test error');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('InvalidNaluError');
+    expect(err.message).toBe('test error');
+  });
+
+  it('should skip short H.265 NALU (< 2 bytes) and continue with valid ones', () => {
+    // Build stream: start-code + 1-byte invalid NALU + start-code + valid VPS (2 bytes)
+    const invalidNalu = new Uint8Array([0xA5]); // 1 byte — too short for H.265
+    const vps = h265Nalu(32); // valid VPS
+    const data = annexBMixed(['4', '4'], [invalidNalu, vps]);
+
+    const result = parseAccessUnit(data, 'h265');
+    // Invalid NALU should be skipped, only VPS remains
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe(32);
+    expect(result[0].isVPS).toBe(true);
+  });
+
+  it('should return empty array when all NALUs are invalid (H.265)', () => {
+    // Only invalid short NALUs between start codes
+    const invalid1 = new Uint8Array([0xB0]);
+    const invalid2 = new Uint8Array([0xC0]);
+    const data = annexBMixed(['4', '4', '4'], [invalid1, invalid2, invalid1]);
+
+    const result = parseAccessUnit(data, 'h265');
+    expect(result).toHaveLength(0);
+  });
+
+  it('should not crash with mixed valid/invalid H.265 NALUs', () => {
+    // Interleave invalid short NALUs with valid ones
+    const invalid = new Uint8Array([0xA5]);
+    const sps = h265Nalu(33);
+    const pps = h265Nalu(34);
+    const idr = h265Nalu(19);
+    const data = annexBMixed(['4', '4', '4', '4', '4'], [invalid, sps, invalid, pps, idr]);
+
+    const result = parseAccessUnit(data, 'h265');
+    // Should have 3 valid NALUs, 2 invalid skipped
+    expect(result).toHaveLength(3);
+    expect(result[0].type).toBe(33);
+    expect(result[1].type).toBe(34);
+    expect(result[2].type).toBe(19);
+    expect(result[2].isKeyframe).toBe(true);
   });
 });
 

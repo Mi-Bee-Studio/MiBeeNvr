@@ -556,8 +556,12 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Step 7.7: WebSocket stream manager (always available)
-	a.wsMgr = wsstream.NewManager()
-	slog.Info("WebSocket stream manager initialized")
+	a.wsMgr = wsstream.NewManager(
+		wsstream.WithMaxViewers(cfg.WebSocket.MaxViewers),
+		wsstream.WithWriteBufSize(cfg.WebSocket.WriteBufSize),
+		wsstream.WithIdleTimeout(cfg.WebSocket.IdleTimeout),
+	)
+	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
 
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
@@ -26,7 +27,8 @@ type AIDetector interface {
 	DisableCamera(camID string)
 	IsEnabled(camID string) bool
 	EnabledCameras() []string
-	OnDetection(cb engine.OnDetectionFunc)
+	OnDetection(cb engine.OnDetectionFunc) string
+	UnregisterCallback(id string) bool
 	StopAll()
 }
 
@@ -201,9 +203,13 @@ func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	eventCh := make(chan engine.DetectionResult, 16)
+	var eventClosed atomic.Bool
 
 	// Register detection callback.
-	h.aiDetector.OnDetection(func(result engine.DetectionResult) {
+	callbackID := h.aiDetector.OnDetection(func(result engine.DetectionResult) {
+		if eventClosed.Load() {
+			return
+		}
 		select {
 		case eventCh <- result:
 		default:
@@ -216,7 +222,11 @@ func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
-	defer close(eventCh)
+	defer func() {
+		eventClosed.Store(true)
+		close(eventCh)
+	}()
+	defer h.aiDetector.UnregisterCallback(callbackID)
 
 	for {
 		select {

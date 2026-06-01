@@ -9,6 +9,27 @@
 const AUTH_KEY = 'mibee_nvr_auth';
 const TELEMETRY_ENDPOINT = '/api/telemetry';
 
+/** Whether user has explicitly opted into telemetry in production mode. */
+let _telemetryOptedIn = false;
+
+/**
+ * Opt in to telemetry in production mode.
+ * Telemetry is always sent in dev mode.
+ */
+export function optInTelemetry(): void {
+  _telemetryOptedIn = true;
+}
+
+/** Returns whether telemetry has been opted in. Exported for testing. */
+export function isTelemetryOptedIn(): boolean {
+  return _telemetryOptedIn;
+}
+
+/** @internal Reset opt-in state for testing. */
+export function __resetOptIn(): void {
+  _telemetryOptedIn = false;
+}
+
 interface TelemetryEvent {
   event: string;
   camera_id: string;
@@ -49,7 +70,10 @@ export function sendTelemetry(
   cameraId: string,
   durationMs?: number,
   details?: object,
-): void {
+  ): void {
+  // Production guard: silently skip unless opted in
+  if (import.meta.env.PROD && !_telemetryOptedIn) return;
+
   if (typeof navigator?.sendBeacon !== 'function') return;
 
   const creds = getAuthCredentials();

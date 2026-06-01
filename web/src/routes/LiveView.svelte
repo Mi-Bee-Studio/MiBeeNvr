@@ -15,6 +15,7 @@
   import PresetManager from '$lib/components/PresetManager.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
 
   let { cameraId = '' }: { cameraId?: string } = $props();
 
@@ -101,6 +102,11 @@
     streamingProtocol = protocol;
     // Brief delay to show switching state, then mount new player
     setTimeout(() => { switchingProtocol = false; }, 100);
+  }
+
+  function handleWasmFallback() {
+    showToast(t('live.wasm.fallbackToHls') || 'WebCodecs unavailable, switching to HLS', 'warning');
+    handleProtocolChange('hls');
   }
 
   // Fetch capabilities when camera loads
@@ -212,6 +218,7 @@
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={true}
+                onFallbackNeeded={handleWasmFallback}
               />
 
             {:else if streamingProtocol === 'webrtc'}

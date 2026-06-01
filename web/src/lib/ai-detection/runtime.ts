@@ -96,7 +96,74 @@ export class AiRuntime {
     }
   }
 
+  /**
+   * Validate model URL against whitelist and SSRF rules.
+   * - Relative URLs (same-origin) are allowed.
+   * - Only HTTPS with whitelisted domains (github.com, raw.githubusercontent.com) allowed.
+   * - Private/internal IPs are blocked.
+   */
+  private _validateModelUrl(url: string): void {
+    // Allow relative URLs (no scheme) — same-origin, served by this app
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return;
+    }
+
+    // Reject plain HTTP
+    if (url.startsWith('http://')) {
+      throw new Error(`Model URL rejected: HTTP not allowed. Use HTTPS: ${url}`);
+    }
+
+    // Parse hostname
+    let hostname: string;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      throw new Error(`Model URL rejected: unable to parse: ${url}`);
+    }
+
+    // Whitelisted domains (exact or subdomain match)
+    const allowedDomains = ['github.com', 'raw.githubusercontent.com'];
+    for (const domain of allowedDomains) {
+      if (hostname === domain || hostname.endsWith('.' + domain)) {
+        return;
+      }
+    }
+
+    // Block private/internal IPs (SSRF prevention)
+    const ipv4Match = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipv4Match) {
+      const parts = ipv4Match.slice(1).map(Number);
+      // 127.0.0.0/8 (loopback)
+      if (parts[0] === 127) {
+        throw new Error(`Model URL rejected: loopback IP not allowed: ${url}`);
+      }
+      // 169.254.0.0/16 (link-local)
+      if (parts[0] === 169 && parts[1] === 254) {
+        throw new Error(`Model URL rejected: link-local IP not allowed: ${url}`);
+      }
+      // 10.0.0.0/8
+      if (parts[0] === 10) {
+        throw new Error(`Model URL rejected: private IP (10.x.x.x) not allowed: ${url}`);
+      }
+      // 192.168.0.0/16
+      if (parts[0] === 192 && parts[1] === 168) {
+        throw new Error(`Model URL rejected: private IP (192.168.x.x) not allowed: ${url}`);
+      }
+      // 172.16.0.0/12
+      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+        throw new Error(`Model URL rejected: private IP (172.16.x.x-172.31.x.x) not allowed: ${url}`);
+      }
+    }
+
+    // Non-whitelisted external domain
+    throw new Error(`Model URL rejected: domain not in whitelist: ${hostname}. Allowed: github.com, raw.githubusercontent.com`);
+  }
+
+
   private async _doInit(modelUrl: string, options?: AiRuntimeInitOptions): Promise<void> {
+    // Validate URL before loading
+    this._validateModelUrl(modelUrl);
+
     // 1. Download model (with cache)
     this._abortController = new AbortController();
     const modelBuffer = await this._loadModel(modelUrl, options?.onProgress);

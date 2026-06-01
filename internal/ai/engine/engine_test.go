@@ -462,24 +462,38 @@ func TestStart_NilEngine(t *testing.T) {
 }
 
 func TestBackoffDuration(t *testing.T) {
+	// Test the exponential growth (without jitter, check base values).
 	tests := []struct {
 		crashes  int
-		expected time.Duration
+		minDur   time.Duration // minimum expected (base without jitter)
+		maxDur   time.Duration // base cap (before jitter)
+		capped   bool
 	}{
-		{0, 0},
-		{1, 1 * time.Second},
-		{2, 2 * time.Second},
-		{3, 4 * time.Second},
-		{4, 8 * time.Second},
-		{5, 16 * time.Second},
-		{6, 30 * time.Second},  // capped
-		{10, 30 * time.Second}, // capped
+		{0, 0, 0, false},
+		{1, 1 * time.Second, 1 * time.Second, false},
+		{2, 2 * time.Second, 2 * time.Second, false},
+		{3, 4 * time.Second, 4 * time.Second, false},
+		{4, 8 * time.Second, 8 * time.Second, false},
+		{5, 16 * time.Second, 16 * time.Second, false},
+		{6, 32 * time.Second, 32 * time.Second, false}, // not capped yet
+		{9, 256 * time.Second, 256 * time.Second, false},
+		{10, maxRestartBackoff, maxRestartBackoff, true},  // 512s capped at 5min
+		{20, maxRestartBackoff, maxRestartBackoff, true},  // huge capped at 5min
 	}
 
 	for _, tt := range tests {
-		got := backoffDuration(tt.crashes)
-		if got != tt.expected {
-			t.Errorf("backoffDuration(%d) = %v, want %v", tt.crashes, got, tt.expected)
+		// Run multiple times to check jitter range.
+		for i := 0; i < 50; i++ {
+			got := backoffDuration(tt.crashes)
+			if got < tt.minDur {
+				t.Errorf("backoffDuration(%d) = %v, want >= %v", tt.crashes, got, tt.minDur)
+				break
+			}
+			// With jitter, duration should not exceed base + ~1s.
+			if got > tt.maxDur+time.Second {
+				t.Errorf("backoffDuration(%d) = %v, want <= %v", tt.crashes, got, tt.maxDur+time.Second)
+				break
+			}
 		}
 	}
 }
@@ -652,5 +666,27 @@ func TestReadLine_StripsNewline(t *testing.T) {
 	}
 	if string(line) != "data" {
 		t.Fatalf("expected newline stripped, got %q", string(line))
+	}
+}
+
+func TestDetect_InferenceTimeout(t *testing.T) {
+	e, pipes := setupMockEngine(t)
+
+	// Create a context with a very short timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Drain requests from engine so stdin.Write doesn't block,
+	// but never write a response so readLine times out.
+	go func() {
+		io.Copy(io.Discard, pipes.readFromEngine)
+	}()
+
+	// Close pipe ends after test to clean up goroutines.
+	defer pipes.closeAll(t)
+
+	_, err := e.Detect(ctx, []byte("frame"))
+	if err == nil {
+		t.Fatal("expected timeout error from Detect")
 	}
 }

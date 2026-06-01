@@ -34,6 +34,8 @@ type Config struct {
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	Transcoding TranscodingConfig `yaml:"transcoding"`
+	WebSocket     WebSocketConfig      `yaml:"websocket"`
+	AI            AIConfig             `yaml:"ai"`
 	MetricsAuth  MetricsAuthConfig  `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
 }
@@ -263,6 +265,18 @@ type MetricsAuthConfig struct {
 	Username     string `yaml:"username"`
 	Password     string `yaml:"password"`
 	PasswordHash string `yaml:"password_hash"`
+}
+type WebSocketConfig struct {
+	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
+	WriteBufSize int           `yaml:"write_buf_size" json:"writeBufSize"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout" json:"idleTimeout"`
+}
+
+type AIConfig struct {
+	InferenceTimeoutMs  int     `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
+	FrameSkipRate       int     `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64 `yaml:"confidence_threshold" json:"confidenceThreshold"`
+	ModelPath           string  `yaml:"model_path" json:"modelPath"`
 }
 
 // IsConfigured returns true if both username and a password (or hash) are set.
@@ -561,6 +575,17 @@ func Validate(cfg *Config) error {
 	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
 		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)
 	}
+	// Validate WebSocket configuration
+	if cfg.WebSocket.MaxViewers <= 0 {
+		return fmt.Errorf("websocket.max_viewers must be > 0, got %d", cfg.WebSocket.MaxViewers)
+	}
+	if cfg.WebSocket.WriteBufSize <= 0 {
+		return fmt.Errorf("websocket.write_buf_size must be > 0, got %d", cfg.WebSocket.WriteBufSize)
+	}
+	if cfg.WebSocket.IdleTimeout <= 0 {
+		return fmt.Errorf("websocket.idle_timeout must be > 0, got %s", cfg.WebSocket.IdleTimeout)
+	}
+
 	// Validate SRT configuration
 	if cfg.SRT.Port < 1 || cfg.SRT.Port > 65535 {
 		return fmt.Errorf("srt.port must be between 1 and 65535, got %d", cfg.SRT.Port)
@@ -757,6 +782,17 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.RTMP.StreamKeys == nil {
 		cfg.RTMP.StreamKeys = make(map[string]string)
 	}
+	// WebSocket defaults
+	if cfg.WebSocket.MaxViewers <= 0 {
+		cfg.WebSocket.MaxViewers = 10
+	}
+	if cfg.WebSocket.WriteBufSize <= 0 {
+		cfg.WebSocket.WriteBufSize = 100
+	}
+	if cfg.WebSocket.IdleTimeout <= 0 {
+		cfg.WebSocket.IdleTimeout = 60 * time.Second
+	}
+
 	// SRT defaults
 	if cfg.SRT.Enabled == nil {
 		cfg.SRT.Enabled = new(bool)

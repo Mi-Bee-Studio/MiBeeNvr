@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
@@ -7,6 +7,7 @@
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
   import { decodeVideoFrame } from '$lib/webcodecs-player/protocol';
   import { ConnectionManager, type ConnectionState } from '$lib/webcodecs-player/connection';
+  import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
   import type { Detection } from '$lib/ai-detection/inference';
@@ -16,14 +17,19 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     cameraName,
     expanded = false,
     tabVisible = true,
+    onFallbackNeeded,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    onFallbackNeeded?: (fallback: 'hls') => void;
   } = $props();
 
-  type PlayerState = StreamState | 'loading' | 'disconnected';
+  // Reconnection coordinator from Dashboard context
+  const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
+
+  type PlayerState = StreamState | 'loading' | 'disconnected' | 'offline';
 
   let streamState: PlayerState = $state('loading');
   let canvasEl: HTMLCanvasElement | undefined = $state();
@@ -54,11 +60,16 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let aiOverlayVisible = $derived(detections.length > 0);
   let canvasWidth = $state(0);
   let canvasHeight = $state(0);
+  // Decode error tracking for mid-stream fallback
+  let decodeErrorCount = 0;
+  const MAX_DECODE_ERRORS = 10;
+  let decodeErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ─── Freeze frame helpers ──────────────────────────────────────────────
 
   function captureFreezeFrame() {
-    if (frozenFrameUrl || !canvasEl) return;
+    if (!canvasEl) return;
+    if (frozenFrameUrl) URL.revokeObjectURL(frozenFrameUrl);
     try {
       frozenFrameUrl = canvasEl.toDataURL('image/jpeg', 0.8);
       showFrozenFrame = true;
@@ -149,7 +160,7 @@ let webgpuRenderer: WebGPURenderer | null = null;
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.warn('WebGL2 program link failed:', gl.getProgramInfoLog(program));
+      if (import.meta.env.DEV) console.warn('WebGL2 program link failed:', gl.getProgramInfoLog(program));
       return false;
     }
     glProgram = program;
@@ -199,7 +210,7 @@ let webgpuRenderer: WebGPURenderer | null = null;
     glCtx.shaderSource(shader, source);
     glCtx.compileShader(shader);
     if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
-      console.warn('WebGL2 shader compile failed:', glCtx.getShaderInfoLog(shader));
+      if (import.meta.env.DEV) console.warn('WebGL2 shader compile failed:', gl.getShaderInfoLog(shader));
       glCtx.deleteShader(shader);
       return null;
     }
@@ -283,18 +294,27 @@ function handleWebGpuLost() {
             updateState('playing');
           }
         } else if (msg.type === 'error') {
-          console.warn(`WasmPlayer worker error: ${msg.error}`);
-          // Don't set error state on every decode error — only on persistent failures
+          if (import.meta.env.DEV) console.warn(`WasmPlayer worker error: ${msg.error}`);
+          decodeErrorCount++;
+          // Reset counter window on each error
+          if (decodeErrorTimer) clearTimeout(decodeErrorTimer);
+          decodeErrorTimer = setTimeout(() => { decodeErrorCount = 0; }, 5000);
+          // Persistent decode errors → fallback to HLS
+          if (decodeErrorCount >= MAX_DECODE_ERRORS) {
+            if (import.meta.env.DEV) console.warn('[WasmPlayer] Max decode errors reached, falling back to HLS');
+            if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
+            onFallbackNeeded?.('hls');
+          }
         }
       };
 
       worker.onerror = (event: ErrorEvent) => {
-        console.warn('WasmPlayer worker error:', event.message);
+        if (import.meta.env.DEV) console.warn('WasmPlayer worker error:', event.message);
       };
 
       return true;
     } catch (e) {
-      console.warn('Failed to create Web Worker:', e);
+      if (import.meta.env.DEV) console.warn('Failed to create Web Worker:', e);
       return false;
     }
   }
@@ -354,12 +374,19 @@ function handleWebGpuLost() {
             },
           });
         } catch (e) {
-          console.warn('WasmPlayer: failed to decode VideoFrame:', e);
+          if (import.meta.env.DEV) console.warn('WasmPlayer: failed to decode VideoFrame:', e);
         }
       },
       onFreezeFrame: () => {
         captureFreezeFrame();
       },
+      onCameraOffline: () => {
+        // EOS received — connection.ts already set state to 'offline'
+        // Stop zombie detection and capture freeze frame
+        captureFreezeFrame();
+      },
+      coordinator: coordinator ?? undefined,
+      cameraId,
     });
     cm.connect();
   }
@@ -386,10 +413,9 @@ function handleWebGpuLost() {
   function checkTier(): string | null {
     const tier = getPlaybackTier();
     if (tier === 'tier3') {
-      if (!detectWebCodecs()) {
-        return t('live.webrtc.notSupported') || 'Browser does not support WebCodecs';
-      }
-      return t('live.webrtc.notSupported') || 'Browser does not support required APIs';
+      // Trigger auto-fallback to HLS instead of showing error
+      onFallbackNeeded?.('hls');
+      return null; // Don't set error state — parent will switch protocol
     }
     if (!detectWebGL2()) {
       return 'WebGL2 is required for rendering';
@@ -410,6 +436,10 @@ function handleWebGpuLost() {
       streamState = 'error';
       return;
     }
+    // If checkTier() triggered fallback, stop initialization
+    if (!detectWebCodecs()) {
+      return;
+    }
     unsupportedMsg = null;
 
     // Initialize renderer + Worker + WebSocket
@@ -420,7 +450,7 @@ function handleWebGpuLost() {
       // Try WebGPU first for tier 1
       if (canvasEl) {
         const tier = getPlaybackTier();
-        console.log(`[WasmPlayer] tier=${tier}, canvas=${!!canvasEl}`);
+        if (import.meta.env.DEV) console.log(`[WasmPlayer] tier=${tier}, canvas=${!!canvasEl}`);
         if (tier === 'tier1') {
           const wgpuRenderer = new WebGPURenderer(() => {
             handleWebGpuLost();
@@ -431,10 +461,10 @@ function handleWebGpuLost() {
           if (destroyed || cancelled) { wgpuRenderer.destroy(); return; }
 
           if (wgpuOk) {
-            console.log('[WasmPlayer] WebGPU init success');
+            if (import.meta.env.DEV) console.log('[WasmPlayer] WebGPU init success');
             webgpuRenderer = wgpuRenderer;
           } else {
-            console.warn('[WasmPlayer] WebGPU init failed, falling back to WebGL2');
+            if (import.meta.env.DEV) console.warn('[WasmPlayer] WebGPU init failed, falling back to WebGL2');
             wgpuRenderer.destroy();
           }
         }
@@ -448,7 +478,7 @@ function handleWebGpuLost() {
           streamState = 'error';
           return;
         }
-        console.log('[WasmPlayer] WebGL2 init success');
+        if (import.meta.env.DEV) console.log('[WasmPlayer] WebGL2 init success');
       }
 
       if (!initWorker()) {
@@ -496,9 +526,11 @@ function handleWebGpuLost() {
 onDestroy(() => {
     destroyed = true;
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
-    frozenFrameUrl = null;
+    if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
+    if (frozenFrameUrl) { URL.revokeObjectURL(frozenFrameUrl); frozenFrameUrl = null; }
     if (webgpuRenderer) { webgpuRenderer.destroy(); webgpuRenderer = null; }
     if (cm) { cm.destroy(); cm = null; }
+    if (coordinator) coordinator.cancelRequest(cameraId);
     terminateWorker();
     cleanupWebGL2();
   });
@@ -506,18 +538,20 @@ onDestroy(() => {
   // ─── Derived ───────────────────────────────────────────────────────────
 
   let showOverlay = $derived(
-    streamState === 'loading' || streamState === 'error' || streamState === 'buffering' || streamState === 'disconnected',
+    streamState === 'loading' || streamState === 'error' || streamState === 'buffering' || streamState === 'disconnected' || streamState === 'offline',
   );
   let overlayClass = $derived(
     streamState === 'loading'
       ? 'opacity-100'
       : streamState === 'error'
         ? 'opacity-100'
-        : streamState === 'buffering'
-          ? 'opacity-60'
-          : streamState === 'disconnected'
+        : streamState === 'offline'
+          ? 'opacity-100'
+          : streamState === 'buffering'
             ? 'opacity-60'
-            : 'opacity-0 pointer-events-none',
+            : streamState === 'disconnected'
+              ? 'opacity-60'
+              : 'opacity-0 pointer-events-none',
   );
 
   let dotColor = $derived(
@@ -527,9 +561,11 @@ onDestroy(() => {
         ? 'bg-yellow-500 animate-pulse'
         : streamState === 'error'
           ? 'bg-red-500'
-          : streamState === 'disconnected'
-            ? 'bg-gray-500'
-            : 'bg-gray-400',
+          : streamState === 'offline'
+            ? 'bg-orange-500'
+            : streamState === 'disconnected'
+              ? 'bg-gray-500'
+              : 'bg-gray-400',
   );
   let dotTitle = $derived(
     streamState === 'playing'
@@ -538,9 +574,11 @@ onDestroy(() => {
         ? t('dashboard.buffering')
         : streamState === 'error'
           ? t('dashboard.errorState')
-          : streamState === 'disconnected'
-            ? t('live.webrtc.connecting') || 'Disconnected'
-            : t('dashboard.snapshotMode'),
+          : streamState === 'offline'
+            ? 'Camera Offline'
+            : streamState === 'disconnected'
+              ? t('live.webrtc.connecting') || 'Disconnected'
+              : t('dashboard.snapshotMode'),
   );
 </script>
 
@@ -598,6 +636,21 @@ onDestroy(() => {
           {t('common.retry')}
         </button>
       </div>
+    {:else if streamState === 'offline'}
+      <!-- Camera offline overlay -->
+      <div class="absolute inset-0 bg-black/70"></div>
+      <div class="relative flex flex-col items-center gap-3 z-10">
+        <AlertCircle size={28} class="text-orange-400" />
+        <span class="text-white/70 text-xs">Camera Offline</span>
+        <button
+          onclick={() => cm?.reconnect()}
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 text-white/80 text-xs hover:bg-white/20 transition-colors"
+        >
+          <RefreshCw size={12} />
+          {t('common.retry')}
+        </button>
+      </div>
+    {:else if streamState === 'buffering' || streamState === 'disconnected'}
     {:else if streamState === 'buffering' || streamState === 'disconnected'}
       <!-- Semi-transparent buffering — small indicator, don't fully block video -->
       <div class="relative flex items-center gap-2">

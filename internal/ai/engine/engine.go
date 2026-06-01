@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,8 +31,14 @@ var (
 	// maxFrameSize limits base64-encoded frame size sent to subprocess (64 MB).
 	maxFrameSize = 64 << 20
 
-	// defaultRestartBackoff controls the maximum restart delay after crashes.
-	defaultRestartBackoff = 30 * time.Second
+	// maxRestartBackoff controls the maximum restart delay after crashes.
+	maxRestartBackoff = 5 * time.Minute
+
+	// inferenceTimeout is the default deadline for Detect() calls.
+	inferenceTimeout = 30 * time.Second
+
+	// backoffJitterMax is the maximum random jitter added to backoff delays.
+	backoffJitterMax = 1000
 
 	// healthTimeout is the deadline for health-check pings.
 	healthTimeout = 10 * time.Second
@@ -391,6 +398,9 @@ func (e *Engine) startSubprocess(parentCtx context.Context) error {
 	e.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
+		// Close all pipes to prevent leaks on Start failure.
+		stdinPipe.Close()
+		stdoutPipe.Close()
 		e.mu.Lock()
 		e.cmd = nil
 		e.stdin = nil
@@ -488,15 +498,17 @@ func readLine(ctx context.Context, r io.Reader) ([]byte, error) {
 }
 
 // backoffDuration returns the wait time before the next restart attempt.
-// Caps at defaultRestartBackoff (30s).
+// Caps at maxRestartBackoff (5 min) with random jitter up to 1s.
 func backoffDuration(crashes int) time.Duration {
 	if crashes <= 0 {
 		return 0
 	}
 	d := time.Duration(1<<(crashes-1)) * time.Second
-	if d > defaultRestartBackoff {
-		d = defaultRestartBackoff
+	if d > maxRestartBackoff {
+		d = maxRestartBackoff
 	}
+	// Add random jitter to prevent synchronized restarts.
+	d += time.Duration(rand.IntN(backoffJitterMax)) * time.Millisecond
 	return d
 }
 

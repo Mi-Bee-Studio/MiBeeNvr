@@ -33,16 +33,18 @@ func (m *mockAIEngine) ModelPath() string  { return m.modelPath }
 // --- Mock AI Detector ---
 
 type mockAIDetector struct {
-	mu       sync.Mutex
-	enabled  map[string]bool
-	enableErr error
-	hub      *model.StreamHub
-	onDetCB  engine.OnDetectionFunc
+	mu         sync.Mutex
+	enabled    map[string]bool
+	enableErr  error
+	hub        *model.StreamHub
+	callbacks  map[string]engine.OnDetectionFunc
+	callbackID atomic.Int64
 }
 
 func newMockAIDetector() *mockAIDetector {
 	return &mockAIDetector{
-		enabled: make(map[string]bool),
+		enabled:   make(map[string]bool),
+		callbacks: make(map[string]engine.OnDetectionFunc),
 	}
 }
 
@@ -79,10 +81,23 @@ func (m *mockAIDetector) EnabledCameras() []string {
 	return ids
 }
 
-func (m *mockAIDetector) OnDetection(cb engine.OnDetectionFunc) {
+func (m *mockAIDetector) OnDetection(cb engine.OnDetectionFunc) string {
+	if cb == nil {
+		return ""
+	}
+	id := fmt.Sprintf("mock-det-%d", m.callbackID.Add(1))
+	m.mu.Lock()
+	m.callbacks[id] = cb
+	m.mu.Unlock()
+	return id
+}
+
+func (m *mockAIDetector) UnregisterCallback(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.onDetCB = cb
+	_, ok := m.callbacks[id]
+	delete(m.callbacks, id)
+	return ok
 }
 
 func (m *mockAIDetector) StopAll() {
@@ -91,12 +106,15 @@ func (m *mockAIDetector) StopAll() {
 	m.enabled = make(map[string]bool)
 }
 
-// fireDetection invokes the registered OnDetection callback (for testing SSE).
+// fireDetection invokes all registered OnDetection callbacks (for testing SSE).
 func (m *mockAIDetector) fireDetection(result engine.DetectionResult) {
 	m.mu.Lock()
-	cb := m.onDetCB
+	cbs := make([]engine.OnDetectionFunc, 0, len(m.callbacks))
+	for _, cb := range m.callbacks {
+		cbs = append(cbs, cb)
+	}
 	m.mu.Unlock()
-	if cb != nil {
+	for _, cb := range cbs {
 		cb(result)
 	}
 }
@@ -349,7 +367,7 @@ func TestAIEvents_Heartbeat(t *testing.T) {
 
 	// Heartbeat is every 15s, so in 200ms we won't see one in production.
 	// But we verify the handler ran and produced SSE headers.
-	require.Equal(t, http.StatusOK, rec.code)
+	require.Equal(t, http.StatusOK, rec.Code())
 	require.Equal(t, "text/event-stream", rec.header().Get("Content-Type"))
 }
 
@@ -393,6 +411,7 @@ func TestAIEvents_DetectorNil(t *testing.T) {
 
 // sseRecorder implements http.ResponseWriter with buffering and flush support.
 type sseRecorder struct {
+	mu      sync.Mutex
 	headers http.Header
 	body    strings.Builder
 	code    int
@@ -402,20 +421,33 @@ type sseRecorder struct {
 func newSSERecorder() *sseRecorder {
 	return &sseRecorder{headers: make(http.Header)}
 }
+func (r *sseRecorder) header() http.Header      { return r.headers }
+func (r *sseRecorder) Header() http.Header        { return r.headers }
+func (r *sseRecorder) Flush()                    { r.flushed = true }
 
-func (r *sseRecorder) header() http.Header { return r.headers }
-
-func (r *sseRecorder) Header() http.Header       { return r.headers }
-
-func (r *sseRecorder) WriteHeader(code int) { r.code = code }
-
-func (r *sseRecorder) Write(b []byte) (int, error) { return r.body.Write(b) }
-
-func (r *sseRecorder) Flush() {
-	r.flushed = true
+func (r *sseRecorder) WriteHeader(code int) {
+	r.mu.Lock()
+	r.code = code
+	r.mu.Unlock()
 }
 
-func (r *sseRecorder) String() string { return r.body.String() }
+func (r *sseRecorder) Code() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.code
+}
+
+func (r *sseRecorder) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.Write(b)
+}
+
+func (r *sseRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.String()
+}
 
 // --- ensure imports compile ---
 
