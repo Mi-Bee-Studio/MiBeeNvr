@@ -1,4 +1,5 @@
 package recorder
+
 import (
 	"context"
 	"fmt"
@@ -15,13 +16,12 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
-
 var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
-
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
 type MJPEGConfig struct {
@@ -32,12 +32,13 @@ type MJPEGConfig struct {
 	DB             RecordingDB
 	MaxBackoff     time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	InitBackoff    time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	EventBus             *event.EventBus
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
 type MJPEGRecorder struct {
-	cfg   MJPEGConfig
-	store SegmentStore
+	cfg     MJPEGConfig
+	store   SegmentStore
 	metrics *metrics.Metrics
 
 	mu     sync.Mutex
@@ -53,7 +54,7 @@ type MJPEGRecorder struct {
 
 	frameCh chan []byte
 	dropped atomic.Int64
-	Hub *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	Hub     *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -172,9 +173,15 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 		}
 		if connected {
 			retryCount = 0
+			if r.metrics != nil {
+				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
+			}
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
+		if r.metrics != nil {
+			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
+		}
 		mjpegLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
@@ -193,17 +200,16 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:      u.Scheme,
-		Host:        u.Host,
-		Protocol:    &tcp,
-		ReadTimeout: 10 * time.Second,
+		Scheme:       u.Scheme,
+		Host:         u.Host,
+		Protocol:     &tcp,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
 		return fmt.Errorf("client start: %w", err), false
 	}
 	defer client.Close()
-
 
 	desc, _, err := client.Describe(u)
 	if err != nil {
@@ -231,24 +237,23 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	writerDone := make(chan struct{})
 	go r.writeFrames(writerDone)
 
-
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		jpeg, err := rtpDec.Decode(pkt)
 		if err != nil {
-				mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+			mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			return
 		}
-	select {
-	case r.frameCh <- jpeg:
-	default:
-		d := r.dropped.Add(1)
-		if r.metrics != nil {
-			r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+		select {
+		case r.frameCh <- jpeg:
+		default:
+			d := r.dropped.Add(1)
+			if r.metrics != nil {
+				r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+			}
+			if d%100 == 1 {
+				mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+			}
 		}
-		if d%100 == 1 {
-			mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
-		}
-	}
 	})
 
 	r.setStatus(model.StatusRecording)
@@ -302,7 +307,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		if r.curTempPath == "" {
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
 			if err != nil {
-					mjpegLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
+				mjpegLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 				continue
 			}
 			r.curTempPath = tempPath
@@ -312,7 +317,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
-				mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
+			mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
 			continue
 		}
 		r.frameCount++
@@ -332,6 +337,8 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	}
 
 	// Insert recording entry into database
+	var totalSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -345,9 +352,9 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		// Get file size from disk
 		// For MJPEG, the finalPath is a directory; calculate total size
-		var totalSize int64
 		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() {
 				totalSize += info.Size()
@@ -358,6 +365,19 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(model.FormatMJPEG),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    totalSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	// Update metrics for completed segment

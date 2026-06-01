@@ -28,8 +28,8 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	}
 	defer tx.Rollback()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status) VALUES(?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged)
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 // excluding merged and incomplete segments.
 func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived FROM recordings WHERE camera_id = ? AND merged = 0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
+		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
 		cameraID, formatTime(windowStart), formatTime(windowEnd))
 	if err != nil {
 		return nil, err
@@ -57,12 +57,11 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 	var res []*model.Recording
 	for rows.Next() {
 		var r model.Recording
-		var startedAtStr, endedAtStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.Archived); err != nil {
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		r.StartedAt = scanTime(startedAtStr)
-		r.EndedAt = scanTime(endedAtStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
 		res = append(res, &r)
 	}
 	return res, nil
@@ -72,7 +71,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 // Only includes recordings older than minAge.
 func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge time.Duration) ([]MergeWindow, error) {
 	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
-	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merged = 0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
+	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
 	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {
 		return nil, err
@@ -112,4 +111,25 @@ func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnable
 		ptrToNullInt64(mergeMinSegmentsToMerge),
 		cameraID)
 	return err
+}
+
+// SetMergeStatus updates merge_status for the given recording IDs in a transaction.
+// Empty ids slice is a no-op.
+func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	q := `UPDATE recordings SET merge_status = ? WHERE id = ?;`
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, q, status, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,6 +20,27 @@ func createTestH264Segment(t *testing.T, dir string) string {
 	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
 	// Minimal PPS
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
+
+	m := muxer.NewMP4Muxer(path)
+	trackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+
+	// IDR slice (NAL type 5 = 0x65)
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	require.NoError(t, m.WriteSample(trackID, idrNAL, 0, 33*time.Millisecond))
+
+	// P-slice (NAL type 1 = 0x41)
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+	require.NoError(t, m.WriteSample(trackID, pNAL, 33*time.Millisecond, 33*time.Millisecond))
+
+	require.NoError(t, m.Close())
+	return path
+}
+
+// createTestH264SegmentWithParams creates an H.264 MP4 with custom SPS/PPS bytes.
+func createTestH264SegmentWithParams(t *testing.T, dir string, sps, pps []byte) string {
+	t.Helper()
+	path := filepath.Join(dir, fmt.Sprintf("test_h264_%x.mp4", sps))
 
 	m := muxer.NewMP4Muxer(path)
 	trackID, err := m.AddH264Track(sps, pps)

@@ -67,6 +67,7 @@ type CameraConfig struct {
 	HLSMaxFPS      int          `yaml:"hls_max_fps"`
 	Merge          *MergeConfig `yaml:"merge"`
 	Transcoding   *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
+	Timelapse     *CameraTimelapseConfig `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	AudioEnabled   bool         `yaml:"audio_enabled"`
 	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
@@ -116,6 +117,14 @@ type TranscodingConfig struct {
 	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"`    // h264, h265
 	Preset      string `yaml:"preset,omitempty" json:"preset"`                // ultrafast, faster, medium
 	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`              // e.g. "2M"
+}
+
+type CameraTimelapseConfig struct {
+	Enabled        bool   `yaml:"enabled" json:"enabled"`                                  // default false
+	Interval       string `yaml:"interval,omitempty" json:"interval,omitempty"`             // snapshot interval, default "30s", min 1s
+	OutputFPS      int    `yaml:"output_fps,omitempty" json:"output_fps,omitempty"`          // output framerate, default 30, range 1-60
+	VideoCodec     string `yaml:"video_codec,omitempty" json:"video_codec,omitempty"`       // h264 or h265, default h264
+	DeleteOriginal bool   `yaml:"delete_original,omitempty" json:"delete_original,omitempty"` // remove original segments after timelapse, default false
 }
 
 type AuthConfig struct {
@@ -535,6 +544,28 @@ func Validate(cfg *Config) error {
 			}
 		}
 	}
+
+	// Validate per-camera timelapse configuration
+	for _, cam := range cfg.Cameras {
+		if cam.Timelapse == nil {
+			continue
+		}
+		if cam.Timelapse.Interval != "" {
+			dur, err := time.ParseDuration(cam.Timelapse.Interval)
+			if err != nil {
+				return fmt.Errorf("cameras.%s.timelapse.interval invalid duration: %w", cam.ID, err)
+			}
+			if dur < time.Second {
+				return fmt.Errorf("cameras.%s.timelapse.interval must be at least 1s, got %s", cam.ID, cam.Timelapse.Interval)
+			}
+		}
+		if cam.Timelapse.OutputFPS < 1 || cam.Timelapse.OutputFPS > 60 {
+			return fmt.Errorf("cameras.%s.timelapse.output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.OutputFPS)
+		}
+		if cam.Timelapse.VideoCodec != "" && cam.Timelapse.VideoCodec != "h264" && cam.Timelapse.VideoCodec != "h265" {
+			return fmt.Errorf("cameras.%s.timelapse.video_codec must be h264 or h265, got %q", cam.ID, cam.Timelapse.VideoCodec)
+		}
+	}
 	// Validate hls.segment_count
 	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
 		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)
@@ -869,6 +900,20 @@ func (cfg *Config) ApplyDefaults() {
 		if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
 			slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
 			cam.AudioEnabled = false
+		}
+
+		// Timelapse defaults
+		if cam.Timelapse != nil {
+			if cam.Timelapse.Interval == "" {
+				cam.Timelapse.Interval = "30s"
+			}
+			if cam.Timelapse.OutputFPS == 0 {
+				cam.Timelapse.OutputFPS = 30
+			}
+			if cam.Timelapse.VideoCodec == "" {
+				cam.Timelapse.VideoCodec = "h264"
+			}
+			// DeleteOriginal defaults to false (zero value)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // --- NewManager() ---
@@ -733,4 +734,201 @@ func TestReconcileOrphanedFiles_Idempotent(t *testing.T) {
 	count2, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
 	require.NoError(t, err)
 	require.Equal(t, 0, count2)
+}
+
+func TestReconcileOrphanedFiles_MJPEGDirs(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_mjpeg.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Insert camera into DB
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	// Create camera directory and MJPEG segment dirs with correct naming
+	camDir := filepath.Join(storeDir, "mjpeg-cam")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	mjpegDirs := []string{
+		"mjpeg-cam_20260514_120000_1749897600000000001",
+		"mjpeg-cam_20260514_120100_1749897660000000002",
+	}
+	for _, d := range mjpegDirs {
+		segDir := filepath.Join(camDir, d)
+		require.NoError(t, os.MkdirAll(segDir, 0755))
+		// Create JPEG frame files inside
+		require.NoError(t, os.WriteFile(filepath.Join(segDir, "frame001.jpg"), []byte("fake-jpeg-data-12345"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(segDir, "frame002.jpg"), []byte("fake-jpeg-data-67890"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(segDir, "frame003.jpg"), []byte("fake-jpeg-data-11111"), 0644))
+	}
+
+	cameraIDs := map[string]bool{"mjpeg-cam": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+
+	// Verify recordings are in DB with correct MJPEG metadata
+	for _, d := range mjpegDirs {
+		parts := strings.SplitN(d, "_", 4)
+		recID := parts[3]
+		got, err := db.GetRecording(ctx, recID)
+		require.NoError(t, err)
+		require.NotNil(t, got, "recording for dir %s should exist", d)
+		require.Equal(t, "mjpeg-cam", got.CameraID)
+		require.Equal(t, model.FormatMJPEG, got.Format)
+		require.Equal(t, 3, got.FrameCount)
+		require.Equal(t, int64(60), got.FileSize) // 3 * 20 bytes per frame
+		require.Equal(t, false, got.Merged)
+	}
+}
+
+func TestReconcileOrphanedFiles_MixedMP4AndMJPEG(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_mixed.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-mix", "Mix Cam", "rtsp", "h264", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "cam-mix")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	// Create an MP4 file
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, "cam-mix_20260514_120000_1234567890123456789.mp4"), []byte("fake-mp4-data-12345"), 0644))
+
+	// Create an MJPEG dir
+	mjpegDir := filepath.Join(camDir, "cam-mix_20260514_120100_1234567890123456790")
+	require.NoError(t, os.MkdirAll(mjpegDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(mjpegDir, "frame001.jpg"), []byte("jpeg-data-20b"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(mjpegDir, "frame002.jpg"), []byte("jpeg-data-20b"), 0644))
+
+	cameraIDs := map[string]bool{"cam-mix": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 2, count) // 1 MP4 + 1 MJPEG
+
+	// Verify MP4 recording
+	mp4Rec, err := db.GetRecording(ctx, "1234567890123456789")
+	require.NoError(t, err)
+	require.NotNil(t, mp4Rec)
+	require.Equal(t, model.FormatH264, mp4Rec.Format)
+	require.Equal(t, "cam-mix", mp4Rec.CameraID)
+
+	// Verify MJPEG recording
+	mjpegRec, err := db.GetRecording(ctx, "1234567890123456790")
+	require.NoError(t, err)
+	require.NotNil(t, mjpegRec)
+	require.Equal(t, model.FormatMJPEG, mjpegRec.Format)
+	require.Equal(t, "cam-mix", mjpegRec.CameraID)
+	require.Equal(t, 2, mjpegRec.FrameCount)
+	require.Equal(t, int64(26), mjpegRec.FileSize) // 2 * 13 bytes per frame
+}
+
+func TestReconcileOrphanedFiles_MJPEGEmptyDir(t *testing.T) {
+	// Empty MJPEG dirs (no JPEG files) should be skipped
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_mjpeg_empty.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "mjpeg-cam")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	// Create an MJPEG dir with no JPEG files inside
+	emptyDir := filepath.Join(camDir, "mjpeg-cam_20260514_120000_1749897600000000001")
+	require.NoError(t, os.MkdirAll(emptyDir, 0755))
+
+	cameraIDs := map[string]bool{"mjpeg-cam": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+}
+
+func TestReconcileOrphanedFiles_MJPEGIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_mjpeg_idem.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "mjpeg-cam")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	mjpegDir := filepath.Join(camDir, "mjpeg-cam_20260514_120000_1749897600000000001")
+	require.NoError(t, os.MkdirAll(mjpegDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(mjpegDir, "frame001.jpg"), []byte("jpeg-data"), 0644))
+
+	cameraIDs := map[string]bool{"mjpeg-cam": true}
+
+	// First run
+	count1, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 1, count1)
+
+	// Second run: already registered
+	count2, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count2)
+}
+
+func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
+	// Non-MJPEG dirs (e.g., .tmp dirs, system dirs) should be skipped
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_mjpeg_skip.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", true, "", "", ""))
+
+	camDir := filepath.Join(storeDir, "mjpeg-cam")
+	require.NoError(t, os.MkdirAll(camDir, 0755))
+
+	// Create dirs that should NOT be treated as MJPEG segments
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "some-random-dir"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "mjpeg-cam_onlydate"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "mjpeg-cam_20260514_120000"), 0755)) // missing nano part
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, "1234567890.tmp"), 0755)) // has .tmp extension
+
+	cameraIDs := map[string]bool{"mjpeg-cam": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
 }

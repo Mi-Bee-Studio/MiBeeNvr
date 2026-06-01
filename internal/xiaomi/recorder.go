@@ -22,6 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
@@ -70,6 +71,7 @@ type XiaomiRecorderConfig struct {
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
+	EventBus    *event.EventBus
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -771,6 +773,7 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 
 	// Insert recording entry into database.
 	var fileSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -784,6 +787,7 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		if info, err := os.Stat(r.curFinalPath); err == nil {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
@@ -791,6 +795,19 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			xiaomiLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(r.codec),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    fileSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	// Update metrics.

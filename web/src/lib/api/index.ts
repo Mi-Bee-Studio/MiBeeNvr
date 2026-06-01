@@ -79,6 +79,9 @@ export {
   getDeviceUsers,
   createDeviceUsers,
   deleteDeviceUsers,
+  // Timelapse
+  getTimelapseConfig,
+  updateTimelapseConfig,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -116,6 +119,8 @@ export type {
   NetworkNTP,
   NetworkInterface as ONVIFNetworkInterface,
   ONVIFDeviceUser,
+  // Timelapse
+  TimelapseConfig,
 } from './cameras';
 
 // Recordings — list, download, frames, stats, archives

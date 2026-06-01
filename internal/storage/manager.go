@@ -76,7 +76,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 
 	case "mjpeg":
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
-	finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
+		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
 		if err := os.MkdirAll(tempPath, 0755); err != nil {
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
@@ -193,6 +193,16 @@ func (m *Manager) ListFiles(cameraID string) ([]string, error) {
 	return files, nil
 }
 
+// ListCameraDirEntries returns all entries in a camera's storage directory.
+func (m *Manager) ListCameraDirEntries(cameraID string) ([]os.DirEntry, error) {
+	cameraDir := filepath.Join(m.rootDir, cameraID)
+	entries, err := os.ReadDir(cameraDir)
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraID, err)
+	}
+	return entries, nil
+}
+
 // GetFileSize returns the size of a file in bytes.
 func (m *Manager) GetFileSize(path string) (int64, error) {
 	info, err := os.Stat(path)
@@ -305,15 +315,49 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 		}
 
 		for _, f := range files {
-			if f.IsDir() {
-				continue
-			}
 			name := f.Name()
-			if !strings.HasSuffix(name, ".mp4") {
+
+			var baseName string
+			var frameCount int
+			var totalSize int64
+			var format model.Format
+			info, infoErr := f.Info()
+			if infoErr != nil {
 				continue
 			}
 
-			baseName := strings.TrimSuffix(name, ".mp4")
+			if f.IsDir() {
+				// Skip dirs with extensions (e.g., .tmp dirs)
+				if ext := filepath.Ext(name); ext != "" {
+					continue
+				}
+				baseName = name
+				format = model.FormatMJPEG
+				// Count JPEG frames and total size
+				dirPath := filepath.Join(m.rootDir, dirName, name)
+				filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
+					if err != nil || fi.IsDir() {
+						return nil
+					}
+					frameCount++
+					totalSize += fi.Size()
+					return nil
+				})
+				if frameCount == 0 {
+					continue
+				}
+			} else {
+				if !strings.HasSuffix(name, ".mp4") {
+					continue
+				}
+				baseName = strings.TrimSuffix(name, ".mp4")
+				format = model.FormatH264
+				if info.Size() == 0 {
+					continue
+				}
+				totalSize = info.Size()
+			}
+
 			parts := strings.SplitN(baseName, "_", 4)
 			if len(parts) != 4 {
 				continue
@@ -328,11 +372,6 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 				continue
 			}
 
-			info, err := f.Info()
-			if err != nil || info.Size() == 0 {
-				continue
-			}
-
 			startedAt, err := time.ParseInLocation("20060102_150405", dateStr+"_"+timeStr, time.Local)
 			if err != nil {
 				continue
@@ -342,12 +381,12 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 				ID:         nanoStr,
 				CameraID:   dirName,
 				FilePath:   filepath.Join(m.rootDir, dirName, name),
-				Format:     model.FormatH264,
+				Format:     format,
 				StartedAt:  startedAt,
 				EndedAt:    startedAt,
 				Duration:   0,
-				FileSize:   info.Size(),
-				FrameCount: 0,
+				FileSize:   totalSize,
+				FrameCount: frameCount,
 				Merged:     false,
 			})
 		}

@@ -396,6 +396,7 @@ import { onMount, onDestroy } from 'svelte';
               <option value="h264">{t('recordings.h264')}</option>
               <option value="mjpeg">{t('recordings.mjpeg')}</option>
               <option value="h265">{t('recordings.h265')}</option>
+              <option value="timelapse">{t('recording.format.timelapse')}</option>
             </select>
           </div>
           <div class="flex-1 min-w-[120px]">
@@ -573,8 +574,12 @@ import { onMount, onDestroy } from 'svelte';
                     </div>
                   </td>
                   <td>
-                    <span class="badge badge-neutral text-xs">
-                      {(recording.format === 'h264' || recording.format === 'h265') ? t('recording.format.h264') : t('recording.format.mjpeg')}
+                    <span class="badge {recording.format === 'timelapse' ? 'badge-info' : 'badge-neutral'} text-xs">
+                      {recording.format === 'timelapse'
+                        ? t('recording.format.timelapse')
+                        : (recording.format === 'h264' || recording.format === 'h265')
+                          ? t('recording.format.h264')
+                          : t('recording.format.mjpeg')}
                     </span>
                   </td>
                   <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>
@@ -589,6 +594,9 @@ import { onMount, onDestroy } from 'svelte';
                         <span class="badge badge-success">{t('recordings.merged')}</span>
                       {:else}
                         <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
+                      {/if}
+                      {#if recording.format === 'timelapse'}
+                        <span class="badge bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300">{t('recording.format.timelapse')}</span>
                       {/if}
                       {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}
                         <span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse">{t('transcoding.running')}</span>

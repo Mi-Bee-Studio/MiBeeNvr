@@ -14,55 +14,55 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 var logger = slog.Default().With("component", "webrtc-manager")
 
 const (
-	defaultMaxPeers     = 2
-	defaultIdleTimeout  = 60 * time.Second
-	defaultFrameBufSize = 100
-	defaultFPS          = 30
-	h264ClockRate        = 90000
+	defaultMaxPeers       = 2
+	defaultIdleTimeout    = 60 * time.Second
+	defaultFrameBufSize   = 100
+	defaultFPS            = 30
+	h264ClockRate         = 90000
 	highDropRateThreshold = 0.20 // 20% — trigger frame skipping
 	lowDropRateThreshold  = 0.05 // 5% — restore full frame rate
 )
 
 // frameMsg is an async write request for the WebRTC track.
 type frameMsg struct {
-	pts       int64
-	au        [][]byte
+	pts        int64
+	au         [][]byte
 	isKeyframe bool
 }
 
 // peerEntry holds a single WHEP peer connection and its metadata.
 type peerEntry struct {
-	mu        sync.Mutex
-	pc        *webrtc.PeerConnection
-	track     *webrtc.TrackLocalStaticSample
-	sender    *webrtc.RTPSender
-	cancel    context.CancelFunc
-	camID     string
-	sessionID string
-	lastUsed  time.Time
-	frameCh   chan frameMsg
-	drops       uint64             // atomic: total frames dropped due to buffer full
-	congestion  *congestionTracker  // tracks drop rate for bitrate adaptation
-	lastPTS     int64
+	mu         sync.Mutex
+	pc         *webrtc.PeerConnection
+	track      *webrtc.TrackLocalStaticSample
+	sender     *webrtc.RTPSender
+	cancel     context.CancelFunc
+	camID      string
+	sessionID  string
+	lastUsed   time.Time
+	frameCh    chan frameMsg
+	drops      uint64             // atomic: total frames dropped due to buffer full
+	congestion *congestionTracker // tracks drop rate for bitrate adaptation
+	lastPTS    int64
 }
 
 // congestionTracker tracks frame send/drop rates in a sliding window
 // to detect network congestion and trigger frame skipping.
 type congestionTracker struct {
-	windowSize    int
-	window        []bool // true = sent, false = dropped (circular buffer)
-	windowPos     int
-	windowCount   int
-	congested     bool
-	skipCounter   int // alternates skip pattern: 0=send, 1=skip
+	windowSize  int
+	window      []bool // true = sent, false = dropped (circular buffer)
+	windowPos   int
+	windowCount int
+	congested   bool
+	skipCounter int // alternates skip pattern: 0=send, 1=skip
 }
 
 // newCongestionTracker creates a tracker with the given sliding window size.
@@ -149,8 +149,8 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 // per camera and idle eviction.
 type Manager struct {
 	mu           sync.RWMutex
-	peers        map[string]*peerEntry // sessionID -> entry
-	camPeers     map[string][]string   // camID -> []sessionID
+	peers        map[string]*peerEntry       // sessionID -> entry
+	camPeers     map[string][]string         // camID -> []sessionID
 	hubSubs      map[string]*hubSubscription // camID -> subscription info
 	stopped      bool
 	api          *webrtc.API
@@ -334,6 +334,9 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 			)
 			dropCount := atomic.AddUint64(&entry.drops, 1)
 			entry.congestion.recordDropped()
+			if m.mets != nil {
+				m.mets.WebRTCFramesDropped.WithLabelValues(camID).Inc()
+			}
 			if dropCount%100 == 0 {
 				logger.Warn("WebRTC frames dropped",
 					"camera_id", camID,
@@ -461,19 +464,22 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 
 	// Create peer entry
 	entry := &peerEntry{
-		pc:        pc,
-		track:     track,
-		sender:    sender,
-		cancel:    cancel,
-		camID:     camID,
-		sessionID: sid,
-		lastUsed:  time.Now(),
+		pc:         pc,
+		track:      track,
+		sender:     sender,
+		cancel:     cancel,
+		camID:      camID,
+		sessionID:  sid,
+		lastUsed:   time.Now(),
 		frameCh:    make(chan frameMsg, m.frameBufSize),
 		congestion: newCongestionTracker(m.frameBufSize),
 	}
 
 	m.peers[sid] = entry
 	m.camPeers[camID] = append(m.camPeers[camID], sid)
+	if m.mets != nil {
+		m.mets.WebRTCActivePeers.WithLabelValues(camID).Set(float64(len(m.camPeers[camID])))
+	}
 
 	// Start async frame writer goroutine
 	go m.writeLoop(ctx, entry)
@@ -502,6 +508,13 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 		if sid == sessionID {
 			m.camPeers[entry.camID] = append(sids[:i], sids[i+1:]...)
 			break
+		}
+	}
+	if m.mets != nil {
+		if len(m.camPeers[entry.camID]) == 0 {
+			m.mets.WebRTCActivePeers.DeleteLabelValues(entry.camID)
+		} else {
+			m.mets.WebRTCActivePeers.WithLabelValues(entry.camID).Set(float64(len(m.camPeers[entry.camID])))
 		}
 	}
 	if len(m.camPeers[entry.camID]) == 0 {
@@ -653,9 +666,13 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			}
 			// Record successful send for congestion tracking
 			entry.congestion.recordSent()
+			if m.mets != nil {
+				m.mets.WebRTCFramesSent.WithLabelValues(entry.camID).Inc()
+			}
 		}
 	}
 }
+
 // idleWatchdog monitors the peer's lastUsed timestamp and evicts idle sessions.
 // Same pattern as HLS manager's idle watchdog.
 func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {

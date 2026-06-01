@@ -24,6 +24,7 @@
   import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
+  import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
   import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
@@ -577,6 +578,12 @@
         {t('transcoding.warning_global_disabled')}
       </div>
     {/if}
+  {/if}
+
+
+  <!-- Timelapse Config (edit mode only) -->
+  {#if editingCamera}
+    <TimelapseConfigEditor cameraId={editingCamera.id} />
   {/if}
 
   <!-- ONVIF Device Settings (edit mode only, ONVIF cameras) -->

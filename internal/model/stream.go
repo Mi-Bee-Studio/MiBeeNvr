@@ -98,32 +98,38 @@ type StreamHub struct {
 	// OnBroadcast is an optional callback invoked for every frame broadcast.
 	// Used for observability (e.g., Prometheus counters, structured logging).
 	OnBroadcast func(cameraID string, isIDR bool)
-	cameraID string // set by SetCameraID after construction
+	cameraID    string // set by SetCameraID after construction
 
 	// Jitter buffer state — only activated when out-of-order frames are detected.
 	jitterBufferEnabled  atomic.Bool
 	jitterBufferSize     int           // max frames to buffer before flush (default: 5)
 	jitterBufferTimeout  time.Duration // max wait before flushing partial buffer (default: 500ms)
 	jitterBuffer         []frameMsg    // buffered frames awaiting reordering
-	jitterBufferMu        sync.Mutex    // protects jitter buffer state
-	jitterBufferTimer     *time.Timer   // timeout flush timer
-	jitterBufferLastPTS   int64        // last PTS seen, for disorder detection
-	jitterBufferReorders  atomic.Int64  // total out-of-order detections
-	jitterBufferActive    atomic.Bool   // quick check if buffer may have frames
+	jitterBufferMu       sync.Mutex    // protects jitter buffer state
+	jitterBufferTimer    *time.Timer   // timeout flush timer
+	jitterBufferLastPTS  int64         // last PTS seen, for disorder detection
+	jitterBufferReorders atomic.Int64  // total out-of-order detections
+	jitterBufferActive   atomic.Bool   // quick check if buffer may have frames
 	// OnJitterBufferFlush is called when jitter buffer flushes reordered frames.
 	// Receives cameraID and number of frames flushed.
 	OnJitterBufferFlush func(cameraID string, count int)
+	// OnBufferDepth is called after each distributeFrame send/drop with current channel depth.
+	OnBufferDepth func(cameraID, consumerID string, depth int)
+	// OnJitterBufferDepth is called when jitter buffer depth changes.
+	OnJitterBufferDepth func(cameraID string, depth int)
+	// OnJitterReorder is called when an out-of-order frame is detected.
+	OnJitterReorder func(cameraID string)
 }
 
 // NewStreamHub creates a new StreamHub with no consumers.
 func NewStreamHub() *StreamHub {
 	return &StreamHub{
-		consumers:          make(map[string]*consumerEntry),
-		audioConsumers:     make(map[string]*audioConsumer),
-		consumerBufferSize:     150, // ~7.5s at 20fps, reduces StreamHub-level drops
-		jitterBufferSize:        5,   // buffer up to 5 frames before forced flush
-		jitterBufferTimeout:     500 * time.Millisecond,
-		dropRateWarnThreshold:   0.30,
+		consumers:             make(map[string]*consumerEntry),
+		audioConsumers:        make(map[string]*audioConsumer),
+		consumerBufferSize:    150, // ~7.5s at 20fps, reduces StreamHub-level drops
+		jitterBufferSize:      5,   // buffer up to 5 frames before forced flush
+		jitterBufferTimeout:   500 * time.Millisecond,
+		dropRateWarnThreshold: 0.30,
 	}
 }
 
@@ -258,6 +264,9 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 			}
 		}
 		e.entry.sendMu.RUnlock()
+		if h.OnBufferDepth != nil {
+			h.OnBufferDepth(h.cameraID, e.id, len(e.entry.ch))
+		}
 	}
 }
 
@@ -270,6 +279,9 @@ func (h *StreamHub) detectDisorder(pts int64) bool {
 	defer h.jitterBufferMu.Unlock()
 	if h.jitterBufferLastPTS > 0 && pts < h.jitterBufferLastPTS {
 		h.jitterBufferReorders.Add(1)
+		if h.OnJitterReorder != nil {
+			h.OnJitterReorder(h.cameraID)
+		}
 		h.jitterBufferEnabled.Store(true)
 		slog.Info("jitter_buffer_activated",
 			"camera_id", h.cameraID,
@@ -288,6 +300,9 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 	h.jitterBufferMu.Lock()
 	h.jitterBuffer = append(h.jitterBuffer, frameMsg{pts: pts, au: au, isIDR: isIDR})
 	h.jitterBufferActive.Store(true)
+	if h.OnJitterBufferDepth != nil {
+		h.OnJitterBufferDepth(h.cameraID, len(h.jitterBuffer))
+	}
 
 	if len(h.jitterBuffer) >= h.jitterBufferSize {
 		frames := h.flushJitterBufferLocked()
@@ -321,6 +336,9 @@ func (h *StreamHub) flushJitterBufferLocked() []frameMsg {
 	}
 	if h.OnJitterBufferFlush != nil && len(frames) > 0 {
 		h.OnJitterBufferFlush(h.cameraID, len(frames))
+	}
+	if h.OnJitterBufferDepth != nil {
+		h.OnJitterBufferDepth(h.cameraID, 0) // buffer flushed
 	}
 	return frames
 }

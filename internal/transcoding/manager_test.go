@@ -342,3 +342,117 @@ func TestManager_Queue(t *testing.T) {
 	var nilMgr *TranscodeManager
 	require.Nil(t, nilMgr.Queue())
 }
+
+func TestManager_UpdateFFmpegStatus(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name     string
+		expected float64
+		setup    func(t *testing.T) *TranscodeManager
+	}{
+		{
+			name:     "not_installed",
+			expected: 0,
+			setup: func(t *testing.T) *TranscodeManager {
+				t.Helper()
+				m := metrics.NewMetrics()
+				dl := NewDownloader(t.TempDir(), nil)
+				return &TranscodeManager{
+					downloader: dl,
+					m:          m,
+				}
+			},
+		},
+		{
+			name:     "downloading",
+			expected: 1,
+			setup: func(t *testing.T) *TranscodeManager {
+				t.Helper()
+				m := metrics.NewMetrics()
+				dl := NewDownloader(t.TempDir(), nil)
+				dl.mu.Lock()
+				dl.status = DownloadStatus{Status: "downloading", Progress: 0.5}
+				dl.mu.Unlock()
+				return &TranscodeManager{
+					downloader: dl,
+					m:          m,
+				}
+			},
+		},
+		{
+			name:     "available",
+			expected: 2,
+			setup: func(t *testing.T) *TranscodeManager {
+				t.Helper()
+				ResetProbe()
+				dataDir := t.TempDir()
+				toolsDir := filepath.Join(dataDir, "tools")
+				require.NoError(t, os.MkdirAll(toolsDir, 0755))
+				mockFFmpeg := filepath.Join(toolsDir, "ffmpeg")
+				mockScript := `#!/bin/sh
+if [ "$1" = "-version" ]; then
+  echo 'ffmpeg version 7.0-static'
+  exit 0
+fi
+exit 0
+`
+				require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+
+				db := newManagerTestDB(t)
+				m := metrics.NewMetrics()
+				cfg := ManagerConfig{
+					Transcoding: config.TranscodingConfig{
+						Enabled:    true,
+						FFmpegPath: mockFFmpeg,
+						MaxWorkers: 1,
+					},
+					DataDir:    dataDir,
+					FFmpegPath: mockFFmpeg,
+					MaxWorkers: 1,
+				}
+				mgr, err := NewTranscodeManager(db, cfg, m)
+				require.NoError(t, err)
+				require.NotNil(t, mgr)
+				return mgr
+			},
+		},
+		{
+			name:     "failed",
+			expected: 3,
+			setup: func(t *testing.T) *TranscodeManager {
+				t.Helper()
+				m := metrics.NewMetrics()
+				dl := NewDownloader(t.TempDir(), nil)
+				dl.mu.Lock()
+				dl.status = DownloadStatus{Status: "failed", Error: "test download error"}
+				dl.mu.Unlock()
+				return &TranscodeManager{
+					downloader: dl,
+					m:          m,
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := tt.setup(t)
+			mgr.updateFFmpegStatus()
+
+			families, err := mgr.m.Registry.Gather()
+			require.NoError(t, err)
+
+			var found bool
+			for _, f := range families {
+				if f.GetName() == "nvr_transcoding_ffmpeg_status" {
+					found = true
+					require.Len(t, f.GetMetric(), 1)
+					require.Equal(t, tt.expected, f.GetMetric()[0].GetGauge().GetValue())
+					break
+				}
+			}
+			require.True(t, found, "expected nvr_transcoding_ffmpeg_status metric to be present")
+		})
+	}
+}

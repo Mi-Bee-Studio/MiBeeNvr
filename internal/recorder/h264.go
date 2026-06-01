@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var h264Logger = slog.Default().With("component", "h264-recorder")
@@ -53,17 +54,18 @@ const (
 
 // H264Config holds configuration for the H264 recorder.
 type H264Config struct {
-	CameraID     string
-	RTSPURL      string
-	Username     string
-	Password     string
-	SegmentDur   time.Duration
-	RingBufCap   int
-	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	DB                  RecordingDB
+	CameraID             string
+	RTSPURL              string
+	Username             string
+	Password             string
+	SegmentDur           time.Duration
+	RingBufCap           int
+	MaxBackoff           time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff          time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	DB                   RecordingDB
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
+	EventBus             *event.EventBus
 }
 
 // H264Recorder records H.264 video from an RTSP source.
@@ -233,9 +235,15 @@ func (r *H264Recorder) run(ctx context.Context) {
 		}
 		if connected {
 			retryCount = 0
+			if r.metrics != nil {
+				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
+			}
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
+		if r.metrics != nil {
+			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
+		}
 		h264Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
@@ -494,8 +502,8 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				}
 				watchdog.Reset(r.cfg.FrameWatchdogTimeout)
 			case <-watchdog.C:
-			h264Logger.Warn("frame watchdog timeout, closing connection",
-				"camera_id", r.cfg.CameraID, "timeout", r.cfg.FrameWatchdogTimeout)
+				h264Logger.Warn("frame watchdog timeout, closing connection",
+					"camera_id", r.cfg.CameraID, "timeout", r.cfg.FrameWatchdogTimeout)
 				client.Close()
 				return
 			case <-stopWatchdog:
@@ -524,7 +532,6 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return ctx.Err(), true
 	}
 }
-
 
 func (r *H264Recorder) writeFrames(done chan struct{}) {
 	defer func() {
@@ -648,6 +655,7 @@ func (r *H264Recorder) closeCurrentSegment() {
 
 	// Insert recording entry into database
 	var fileSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -661,6 +669,7 @@ func (r *H264Recorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		if info, err := os.Stat(r.curFinalPath); err == nil {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
@@ -668,6 +677,19 @@ func (r *H264Recorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			h264Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(model.FormatH264),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    fileSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	// Update metrics for completed segment

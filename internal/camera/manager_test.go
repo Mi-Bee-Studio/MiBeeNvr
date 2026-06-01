@@ -14,6 +14,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
@@ -1062,4 +1064,43 @@ func TestCameraConnectionErrorMetrics(t *testing.T) {
 	for _, f := range families {
 		require.NotEqual(t, "nvr_camera_connection_errors_total", f.GetName(), "unknown protocol should not record connection error")
 	}
+}
+
+func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
+	m := metrics.NewMetrics()
+	mgr := NewCameraManager(testConfig(), nil, nil, "", m)
+
+	segDur, err := time.ParseDuration("1m")
+	require.NoError(t, err)
+
+	cfg := testConfig()
+	rec := mgr.createRecorder(cfg.Cameras[0], segDur)
+	require.NotNil(t, rec)
+
+	// Type-assert to H264Recorder to access the Hub
+	h264Rec, ok := rec.(*recorder.H264Recorder)
+	require.True(t, ok, "expected H264Recorder")
+	hub := h264Rec.Hub
+	require.NotNil(t, hub)
+
+	// Simulate 500 frames — expect ~5 histogram samples (1/100 sampling)
+	for i := 0; i < 500; i++ {
+		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, i == 0)
+	}
+
+	// Gather metrics and verify sample count
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	var samples int
+	for _, f := range families {
+		if f.GetName() == "nvr_frame_processing_duration_seconds" {
+			for _, metric := range f.GetMetric() {
+				samples += int(metric.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+
+	// 500 frames / 100 = 5 samples, allow ±1 for edge cases
+	require.InDelta(t, 5, samples, 1, "expected ~5 histogram samples for 500 frames")
 }

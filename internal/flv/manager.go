@@ -17,15 +17,15 @@ import (
 var flvLogger = slog.Default().With("component", "flv-manager")
 
 const (
-	defaultMaxViewers  = 10
+	defaultMaxViewers   = 10
 	defaultWriteBufSize = 100
 )
 
 // gopCache stores the last GOP (keyframe + following delta frames)
 // for instant playback start when a new client connects.
 type gopCache struct {
-	frames     []cachedFrame
-	seqHeader  []byte // cached sequence header tag
+	frames    []cachedFrame
+	seqHeader []byte // cached sequence header tag
 }
 
 type cachedFrame struct {
@@ -36,20 +36,20 @@ type cachedFrame struct {
 
 // streamEntry holds per-camera FLV streaming state.
 type streamEntry struct {
-	codec      model.Format
-	sps        []byte
-	pps        []byte
-	vps        []byte // H.265 only
-	seqHeader  []byte // pre-built sequence header tag
-	gopCache   *gopCache
-	gopMu      sync.RWMutex
-	viewers    map[int64]*viewerConn
-	viewerSeq  atomic.Int64
-	viewerMu   sync.Mutex
-	frameCh    chan frameMsg
-	cancel     context.CancelFunc
-	hub        *model.StreamHub
-	hubSubID   string
+	codec     model.Format
+	sps       []byte
+	pps       []byte
+	vps       []byte // H.265 only
+	seqHeader []byte // pre-built sequence header tag
+	gopCache  *gopCache
+	gopMu     sync.RWMutex
+	viewers   map[int64]*viewerConn
+	viewerSeq atomic.Int64
+	viewerMu  sync.Mutex
+	frameCh   chan frameMsg
+	cancel    context.CancelFunc
+	hub       *model.StreamHub
+	hubSubID  string
 }
 
 type frameMsg struct {
@@ -60,12 +60,12 @@ type frameMsg struct {
 
 // viewerConn represents a connected FLV client.
 type viewerConn struct {
-	id     int64
-	w      http.ResponseWriter
+	id      int64
+	w       http.ResponseWriter
 	flusher http.Flusher
-	ctx    context.Context
-	ch     chan []byte
-	done   chan struct{}
+	ctx     context.Context
+	ch      chan []byte
+	done    chan struct{}
 }
 
 // Manager manages HTTP-FLV streams with per-camera stream entries.
@@ -172,11 +172,14 @@ func (m *Manager) UnregisterStream(camID string) {
 	entry, ok := m.streams[camID]
 	if ok {
 		delete(m.streams, camID)
+		if m.metrics != nil {
+			m.metrics.FLVActiveStreams.DeleteLabelValues(camID)
+		}
 	}
 	m.mu.Unlock()
 
 	if ok {
-	// Unsubscribe from recorder's StreamHub
+		// Unsubscribe from recorder's StreamHub
 		if entry.hub != nil && entry.hubSubID != "" {
 			entry.hub.Unsubscribe(entry.hubSubID)
 		}
@@ -260,6 +263,7 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		)
 	}
 }
+
 // isKeyframeNALU checks if the first NALU is an IDR frame.
 func isKeyframeNALU(nalu []byte, isH265 bool) bool {
 	return nalutil.IsKeyframeNALU(nalu, isH265)
@@ -302,8 +306,14 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 			for _, v := range entry.viewers {
 				select {
 				case v.ch <- tag:
+					if m.metrics != nil {
+						m.metrics.FLVFramesSent.WithLabelValues(camID).Inc()
+					}
 				default:
 					// Slow client — drop frame
+					if m.metrics != nil {
+						m.metrics.FLVFramesDropped.WithLabelValues(camID).Inc()
+					}
 				}
 			}
 			entry.viewerMu.Unlock()
@@ -371,8 +381,12 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		}
 	}
 	entry.gopMu.RUnlock()
-	if gopLen == 0 && m.metrics != nil {
-		m.metrics.FLVGOPCacheMisses.WithLabelValues(camID).Inc()
+	if m.metrics != nil {
+		if gopLen > 0 {
+			m.metrics.FLVGOPCacheHits.WithLabelValues(camID).Inc()
+		} else {
+			m.metrics.FLVGOPCacheMisses.WithLabelValues(camID).Inc()
+		}
 	}
 	if flusher != nil {
 		flusher.Flush()
@@ -390,11 +404,17 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		done:    make(chan struct{}),
 	}
 	entry.viewers[viewerID] = viewer
+	if m.metrics != nil {
+		m.metrics.FLVActiveStreams.WithLabelValues(camID).Set(float64(len(entry.viewers)))
+	}
 	entry.viewerMu.Unlock()
 
 	// Cleanup on exit
 	defer func() {
 		entry.viewerMu.Lock()
+		if m.metrics != nil {
+			m.metrics.FLVActiveStreams.WithLabelValues(camID).Set(float64(len(entry.viewers) - 1))
+		}
 		delete(entry.viewers, viewerID)
 		close(viewer.done)
 		entry.viewerMu.Unlock()

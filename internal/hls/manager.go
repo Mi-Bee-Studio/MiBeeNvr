@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,8 +33,8 @@ const (
 	defaultMaxStreams     = 4
 	defaultWriteBufSize   = 180              // buffered frames per stream (~9s at 20fps)
 	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
-	maxBackoff             = 16 * time.Second
-	initialBackoff         = 1 * time.Second
+	maxBackoff            = 16 * time.Second
+	initialBackoff        = 1 * time.Second
 )
 
 // hlsFrame is an async write request for the HLS muxer.
@@ -44,22 +45,23 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
-	mu              sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
-	mux             *gohlslib.Muxer
-	track           *gohlslib.Track
-	dirPath         string
-	lastUsed        time.Time
-	cancel          context.CancelFunc
-	frameCh         chan hlsFrame // async write buffer
-	isH265          bool
-	subStreamCancel context.CancelFunc // cancels the sub-stream RTSP reader goroutine
-	maxFPS          int
-	lastFrameTime   time.Time
-	fpsCredit       time.Duration // accumulated frame time credit for smooth FPS throttling
-	idrReceived     bool          // true after first IDR frame is received
+	mu                sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
+	mux               *gohlslib.Muxer
+	track             *gohlslib.Track
+	dirPath           string
+	lastUsed          time.Time
+	cancel            context.CancelFunc
+	frameCh           chan hlsFrame // async write buffer
+	isH265            bool
+	subStreamCancel   context.CancelFunc // cancels the sub-stream RTSP reader goroutine
+	maxFPS            int
+	lastFrameTime     time.Time
+	fpsCredit         time.Duration // accumulated frame time credit for smooth FPS throttling
+	idrReceived       bool          // true after first IDR frame is received
 	consecutiveErrors int
 	lastErrorTime     time.Time
-	backoff          time.Duration
+	backoff           time.Duration
+	observedSegments  map[string]bool
 }
 
 // Manager manages on-demand HLS streams for cameras.
@@ -240,14 +242,15 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 
 	ctx, cancel := context.WithCancel(m.ctx)
 	entry := &streamEntry{
-		mux:      mux,
-		track:    track,
-		dirPath:  dirPath,
-		lastUsed: time.Now(),
-		cancel:   cancel,
-		frameCh:  make(chan hlsFrame, m.writeBufSize),
-		isH265:   isH265,
-		maxFPS:   maxFPS,
+		mux:              mux,
+		track:            track,
+		dirPath:          dirPath,
+		lastUsed:         time.Now(),
+		cancel:           cancel,
+		frameCh:          make(chan hlsFrame, m.writeBufSize),
+		isH265:           isH265,
+		maxFPS:           maxFPS,
+		observedSegments: make(map[string]bool),
 	}
 	m.streams[cameraID] = entry
 
@@ -490,6 +493,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 					entry.consecutiveErrors = 0
 					entry.backoff = 0
 				}
+				// Observe new segment file sizes for metrics
+				m.observeNewSegments(cameraID, entry)
 			}
 		}
 	}
@@ -899,5 +904,34 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 				return
 			}
 		}
+	}
+}
+
+// observeNewSegments scans the segment directory for new files and reports sizes.
+func (m *Manager) observeNewSegments(cameraID string, entry *streamEntry) {
+	if m.metrics == nil {
+		return
+	}
+	entries, err := os.ReadDir(entry.dirPath)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".m3u8") || strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		if entry.observedSegments[name] {
+			continue
+		}
+		entry.observedSegments[name] = true
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		m.metrics.HLSSegmentSizeBytes.WithLabelValues(cameraID).Observe(float64(info.Size()))
 	}
 }

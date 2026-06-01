@@ -56,6 +56,7 @@ type Recording struct {
 	FileSize   int64     `json:"file_size"`
 	FrameCount int       `json:"frame_count"`
 	Merged     bool      `json:"merged"`
+	MergeStatus string   `json:"merge_status"`
 	Archived   bool      `json:"archived"`
 }
 
@@ -194,6 +195,13 @@ type AudioCodec string
 const (
 	AudioAAC  AudioCodec = "aac"  // AAC audio codec
 	AudioG711 AudioCodec = "g711" // G.711 mu-law (PCMU) and a-law (PCMA)
+)
+
+// Merge status constants.
+const (
+	MergeStatusPending = "pending"
+	MergeStatusMerged  = "merged"
+	MergeStatusFailed  = "failed"
 )
 
 // AudioFrame represents a single audio frame for distribution through StreamHub.

@@ -256,7 +256,27 @@ func (d *DB) Init(ctx context.Context) error {
 	// Migration: add encoding column if missing
 	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
 	// Migration: normalize legacy protocol values + populate encoding
+	// Migration v12 → v13: add merge_status TEXT column to recordings
+	var mergeStatusColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_status'`).Scan(&mergeStatusColExists)
+	if mergeStatusColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_status TEXT NOT NULL DEFAULT 'pending'`)
+		// Backfill: merged=1 → 'merged', merged=0 → 'pending'
+		_, _ = d.db.ExecContext(ctx, `UPDATE recordings SET merge_status = 'merged' WHERE merged = 1`)
+		_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='13' WHERE key='schema_version'")
+
+	// Migration: normalize legacy protocol values + populate encoding
 	d.migrateEncodings()
+
+	// Migration v13 → v14: add framerate column to transcoding_tasks
+	var framerateColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('transcoding_tasks') WHERE name='framerate'`).Scan(&framerateColExists)
+	if framerateColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN framerate INTEGER DEFAULT 0`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='14' WHERE key='schema_version'")
 
 	return nil
 

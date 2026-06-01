@@ -25,23 +25,25 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var h265Logger = slog.Default().With("component", "h265-recorder")
 
 // H265Config holds configuration for the H265 recorder.
 type H265Config struct {
-	CameraID     string
-	RTSPURL      string
-	Username     string
-	Password     string
-	SegmentDur   time.Duration
-	RingBufCap   int
-	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	DB                 RecordingDB
-	AudioEnabled        bool
+	CameraID             string
+	RTSPURL              string
+	Username             string
+	Password             string
+	SegmentDur           time.Duration
+	RingBufCap           int
+	MaxBackoff           time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff          time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	DB                   RecordingDB
+	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
+	EventBus             *event.EventBus
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
@@ -213,9 +215,15 @@ func (r *H265Recorder) run(ctx context.Context) {
 		}
 		if connected {
 			retryCount = 0
+			if r.metrics != nil {
+				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
+			}
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
+		if r.metrics != nil {
+			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
+		}
 		h265Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
@@ -373,20 +381,19 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			data := make([]byte, 4+len(nalu))
 			copy(data, []byte{0x00, 0x00, 0x00, 0x01})
 			copy(data[4:], nalu)
-		select {
-		case r.frameCh <- data:
-		default:
-			d := r.dropped.Add(1)
-			if r.metrics != nil {
-				r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
-			}
-			if d%100 == 1 {
-				h265Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+			select {
+			case r.frameCh <- data:
+			default:
+				d := r.dropped.Add(1)
+				if r.metrics != nil {
+					r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+				}
+				if d%100 == 1 {
+					h265Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+				}
 			}
 		}
-		}
-		})
-
+	})
 
 	// Audio RTP handler.
 	if audioDec != nil {
@@ -641,6 +648,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 
 	// Insert recording entry into database
 	var fileSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -654,6 +662,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		if info, err := os.Stat(r.curFinalPath); err == nil {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
@@ -661,6 +670,19 @@ func (r *H265Recorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			h265Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(model.FormatH265),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    fileSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	// Update metrics for completed segment
