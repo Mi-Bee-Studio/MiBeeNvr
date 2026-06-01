@@ -23,23 +23,27 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var h265Logger = slog.Default().With("component", "h265-recorder")
 
 // H265Config holds configuration for the H265 recorder.
 type H265Config struct {
-	CameraID     string
-	RTSPURL      string
-	Username     string
-	Password     string
-	SegmentDur   time.Duration
-	RingBufCap   int
-	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	DB           RecordingDB
-	AudioEnabled bool
+	CameraID             string
+	RTSPURL              string
+	Username             string
+	Password             string
+	SegmentDur           time.Duration
+	RingBufCap           int
+	MaxBackoff           time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff          time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	DB                   RecordingDB
+	AudioEnabled         bool
+	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
+	EventBus             *event.EventBus
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
@@ -73,6 +77,7 @@ type H265Recorder struct {
 
 	frameCh chan []byte
 	dropped atomic.Int64
+	lastPTS atomic.Int64 // tracks last RTP PTS for monotonicity check
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -141,6 +146,9 @@ func NewH265Recorder(cfg H265Config, store SegmentStore, opts ...*metrics.Metric
 	if cfg.InitBackoff == 0 {
 		cfg.InitBackoff = DefaultInitBackoff
 	}
+	if cfg.FrameWatchdogTimeout == 0 {
+		cfg.FrameWatchdogTimeout = defaultFrameWatchdogTimeout
+	}
 	return &H265Recorder{
 		cfg:     cfg,
 		store:   store,
@@ -207,9 +215,15 @@ func (r *H265Recorder) run(ctx context.Context) {
 		}
 		if connected {
 			retryCount = 0
+			if r.metrics != nil {
+				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
+			}
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
+		if r.metrics != nil {
+			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
+		}
 		h265Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
@@ -352,9 +366,16 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		case frameAlive <- struct{}{}:
 		default:
 		}
+		// PTS monotonicity check — warn only, never drop frames
+		if prevPTS := r.lastPTS.Load(); prevPTS > 0 {
+			if result := checkPTSMonotonicity(prevPTS, int64(pkt.Timestamp)); result.Anomaly != ptsAnomalyNone {
+				logPTSAnomaly(h265Logger, r.cfg.CameraID, result)
+			}
+		}
+		r.lastPTS.Store(int64(pkt.Timestamp))
 		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
 		if r.Hub != nil {
-			r.Hub.Broadcast(int64(pkt.Timestamp), au)
+			r.Hub.Broadcast(int64(pkt.Timestamp), au, nalutil.IsIDR(au, true))
 		}
 		for _, nalu := range au {
 			data := make([]byte, 4+len(nalu))
@@ -364,6 +385,9 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			case r.frameCh <- data:
 			default:
 				d := r.dropped.Add(1)
+				if r.metrics != nil {
+					r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+				}
 				if d%100 == 1 {
 					h265Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
 				}
@@ -452,7 +476,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	watchdogDone := make(chan struct{})
 	go func() {
 		defer close(watchdogDone)
-		watchdog := time.NewTimer(defaultFrameWatchdogTimeout)
+		watchdog := time.NewTimer(r.cfg.FrameWatchdogTimeout)
 		defer watchdog.Stop()
 		for {
 			select {
@@ -460,10 +484,10 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				if !watchdog.Stop() {
 					<-watchdog.C
 				}
-				watchdog.Reset(defaultFrameWatchdogTimeout)
+				watchdog.Reset(r.cfg.FrameWatchdogTimeout)
 			case <-watchdog.C:
 				h265Logger.Warn("frame watchdog timeout, closing connection",
-					"camera_id", r.cfg.CameraID, "timeout", defaultFrameWatchdogTimeout)
+					"camera_id", r.cfg.CameraID, "timeout", r.cfg.FrameWatchdogTimeout)
 				client.Close()
 				return
 			case <-stopWatchdog:
@@ -624,6 +648,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 
 	// Insert recording entry into database
 	var fileSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -637,6 +662,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		if info, err := os.Stat(r.curFinalPath); err == nil {
 			fileSize = info.Size()
 			rec.FileSize = fileSize
@@ -644,6 +670,19 @@ func (r *H265Recorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			h265Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(model.FormatH265),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    fileSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	// Update metrics for completed segment

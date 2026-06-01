@@ -41,6 +41,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     role="dialog"
+    tabindex="-1"
     aria-modal="true"
     aria-label={t('cameras.archive.confirm.title')}
     class="relative card p-6 border th-border max-w-md w-full mx-4"

@@ -21,6 +21,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
+// CompletionFunc is called after a transcode task finishes (success or failure).
+// Implementations handle post-processing like DB registration or file cleanup.
+type CompletionFunc func(task *storage.TranscodeTask, success bool)
+
 var queueLogger = slog.Default().With("component", "transcode-queue")
 
 // progressUpdateInterval controls how often progress is written to the database.
@@ -77,6 +81,7 @@ type TranscodeQueue struct {
 	activeJobs map[int64]context.CancelFunc // task ID → cancel function
 	wg         sync.WaitGroup
 	stopped    bool
+	completionFn CompletionFunc // optional post-completion callback
 }
 
 // QueueConfig holds configuration for the transcode queue.
@@ -249,6 +254,14 @@ func (q *TranscodeQueue) GetStatus() ManagerStatus {
 	}
 }
 
+// SetCompletionFunc registers a callback invoked after each task completes.
+// The callback receives the task and whether it succeeded.
+func (q *TranscodeQueue) SetCompletionFunc(fn CompletionFunc) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.completionFn = fn
+}
+
 // dispatchPending polls the DB for pending tasks and starts workers up to MaxWorkers.
 func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 	q.mu.Lock()
@@ -319,6 +332,12 @@ func (q *TranscodeQueue) startWorker(ctx context.Context, task *storage.Transcod
 // and updates the task status in the database on completion/failure/cancellation.
 func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeTask) {
 	startTime := time.Now()
+	success := false
+	defer func() {
+		if q.completionFn != nil {
+			q.completionFn(task, success)
+		}
+		}()
 
 	// Convert storage task to transcoding options with default preset
 	opts := q.taskToOptions(task, "")
@@ -415,6 +434,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 		return
 	}
 
+	success = true
 	// Success
 	duration := time.Since(startTime)
 	q.finishTask(context.Background(), task, "completed", 1.0, "")
@@ -531,12 +551,15 @@ func (q *TranscodeQueue) taskToOptions(task *storage.TranscodeTask, preset strin
 	if preset == "" {
 		preset = "ultrafast"
 	}
+	framerate := task.Framerate
+	if framerate <= 0 {
+		framerate = 25
+	}
 	return TranscodeOptions{
 		InputPath:  task.InputPath,
 		OutputPath: task.OutputPath,
 		InputCodec: task.InputFormat,
 		OutputCodec: func() string {
-			// Map format names: storage uses "h264"/"h265", transcoding uses same
 			switch task.OutputFormat {
 			case "h264", "h265":
 				return task.OutputFormat
@@ -544,7 +567,7 @@ func (q *TranscodeQueue) taskToOptions(task *storage.TranscodeTask, preset strin
 				return "h264" // safe default
 			}
 		}(),
-		Framerate: 25,
+		Framerate: framerate,
 		Preset:    preset,
 	}
 }

@@ -32,7 +32,11 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	Health        HealthConfig        `yaml:"health"`
+	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	Transcoding TranscodingConfig `yaml:"transcoding"`
+	WebSocket     WebSocketConfig      `yaml:"websocket"`
+	AI            AIConfig             `yaml:"ai"`
+	MetricsAuth  MetricsAuthConfig  `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
 }
 
@@ -63,8 +67,10 @@ type CameraConfig struct {
 	HLSMaxFPS      int          `yaml:"hls_max_fps"`
 	Merge          *MergeConfig `yaml:"merge"`
 	Transcoding   *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
+	Timelapse     *CameraTimelapseConfig `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	AudioEnabled   bool         `yaml:"audio_enabled"`
 	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
+	FrameWatchdogTimeout string `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
@@ -111,6 +117,14 @@ type TranscodingConfig struct {
 	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"`    // h264, h265
 	Preset      string `yaml:"preset,omitempty" json:"preset"`                // ultrafast, faster, medium
 	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`              // e.g. "2M"
+}
+
+type CameraTimelapseConfig struct {
+	Enabled        bool   `yaml:"enabled" json:"enabled"`                                  // default false
+	Interval       string `yaml:"interval,omitempty" json:"interval,omitempty"`             // snapshot interval, default "30s", min 1s
+	OutputFPS      int    `yaml:"output_fps,omitempty" json:"output_fps,omitempty"`          // output framerate, default 30, range 1-60
+	VideoCodec     string `yaml:"video_codec,omitempty" json:"video_codec,omitempty"`       // h264 or h265, default h264
+	DeleteOriginal bool   `yaml:"delete_original,omitempty" json:"delete_original,omitempty"` // remove original segments after timelapse, default false
 }
 
 type AuthConfig struct {
@@ -244,6 +258,40 @@ type HealthAutoRemediationConfig struct {
 	CooldownMinutes    int  `yaml:"cooldown_minutes"`
 	BlacklistHours     int  `yaml:"blacklist_hours"`
 	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
+}
+
+// RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
+type RemoteLogConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // default false
+	Endpoint string `yaml:"endpoint"` // VictoriaLogs URL, e.g. "http://localhost:9428/insert/jsonline"
+	Format   string `yaml:"format"`   // "jsonline" (default) or "loki"
+}
+
+// MetricsAuthConfig defines optional independent authentication for the /metrics endpoint.
+// When username and password (or password_hash) are non-empty, /metrics requires BasicAuth.
+// When empty, /metrics stays public (backward compatible).
+type MetricsAuthConfig struct {
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	PasswordHash string `yaml:"password_hash"`
+}
+type WebSocketConfig struct {
+	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
+	WriteBufSize int           `yaml:"write_buf_size" json:"writeBufSize"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout" json:"idleTimeout"`
+}
+
+type AIConfig struct {
+	InferenceTimeoutMs  int     `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
+	FrameSkipRate       int     `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64 `yaml:"confidence_threshold" json:"confidenceThreshold"`
+	ModelPath           string  `yaml:"model_path" json:"modelPath"`
+}
+
+// IsConfigured returns true if both username and a password (or hash) are set.
+func (c MetricsAuthConfig) IsConfigured() bool {
+	return strings.TrimSpace(c.Username) != "" &&
+		(strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordHash) != "")
 }
 
 // Load reads a YAML config file and returns a Config with defaults applied.
@@ -425,6 +473,16 @@ func Validate(cfg *Config) error {
 	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
 		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
 	}
+
+	// Validate remote_log
+	if cfg.RemoteLog.Enabled {
+		if strings.TrimSpace(cfg.RemoteLog.Endpoint) == "" {
+			return fmt.Errorf("remote_log.endpoint is required when remote_log.enabled=true")
+		}
+		if cfg.RemoteLog.Format != "jsonline" && cfg.RemoteLog.Format != "loki" {
+			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
+		}
+	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
 			return fmt.Errorf("invalid merge check_interval: %w", err)
@@ -486,6 +544,28 @@ func Validate(cfg *Config) error {
 			}
 		}
 	}
+
+	// Validate per-camera timelapse configuration
+	for _, cam := range cfg.Cameras {
+		if cam.Timelapse == nil {
+			continue
+		}
+		if cam.Timelapse.Interval != "" {
+			dur, err := time.ParseDuration(cam.Timelapse.Interval)
+			if err != nil {
+				return fmt.Errorf("cameras.%s.timelapse.interval invalid duration: %w", cam.ID, err)
+			}
+			if dur < time.Second {
+				return fmt.Errorf("cameras.%s.timelapse.interval must be at least 1s, got %s", cam.ID, cam.Timelapse.Interval)
+			}
+		}
+		if cam.Timelapse.OutputFPS < 1 || cam.Timelapse.OutputFPS > 60 {
+			return fmt.Errorf("cameras.%s.timelapse.output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.OutputFPS)
+		}
+		if cam.Timelapse.VideoCodec != "" && cam.Timelapse.VideoCodec != "h264" && cam.Timelapse.VideoCodec != "h265" {
+			return fmt.Errorf("cameras.%s.timelapse.video_codec must be h264 or h265, got %q", cam.ID, cam.Timelapse.VideoCodec)
+		}
+	}
 	// Validate hls.segment_count
 	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
 		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)
@@ -526,6 +606,17 @@ func Validate(cfg *Config) error {
 	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
 		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)
 	}
+	// Validate WebSocket configuration
+	if cfg.WebSocket.MaxViewers <= 0 {
+		return fmt.Errorf("websocket.max_viewers must be > 0, got %d", cfg.WebSocket.MaxViewers)
+	}
+	if cfg.WebSocket.WriteBufSize <= 0 {
+		return fmt.Errorf("websocket.write_buf_size must be > 0, got %d", cfg.WebSocket.WriteBufSize)
+	}
+	if cfg.WebSocket.IdleTimeout <= 0 {
+		return fmt.Errorf("websocket.idle_timeout must be > 0, got %s", cfg.WebSocket.IdleTimeout)
+	}
+
 	// Validate SRT configuration
 	if cfg.SRT.Port < 1 || cfg.SRT.Port > 65535 {
 		return fmt.Errorf("srt.port must be between 1 and 65535, got %d", cfg.SRT.Port)
@@ -722,6 +813,17 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.RTMP.StreamKeys == nil {
 		cfg.RTMP.StreamKeys = make(map[string]string)
 	}
+	// WebSocket defaults
+	if cfg.WebSocket.MaxViewers <= 0 {
+		cfg.WebSocket.MaxViewers = 10
+	}
+	if cfg.WebSocket.WriteBufSize <= 0 {
+		cfg.WebSocket.WriteBufSize = 100
+	}
+	if cfg.WebSocket.IdleTimeout <= 0 {
+		cfg.WebSocket.IdleTimeout = 60 * time.Second
+	}
+
 	// SRT defaults
 	if cfg.SRT.Enabled == nil {
 		cfg.SRT.Enabled = new(bool)
@@ -767,6 +869,11 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
 	}
+
+	// Remote log defaults
+	if cfg.RemoteLog.Format == "" {
+		cfg.RemoteLog.Format = "jsonline"
+	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {
 		cam := &cfg.Cameras[i]
@@ -793,6 +900,20 @@ func (cfg *Config) ApplyDefaults() {
 		if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
 			slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
 			cam.AudioEnabled = false
+		}
+
+		// Timelapse defaults
+		if cam.Timelapse != nil {
+			if cam.Timelapse.Interval == "" {
+				cam.Timelapse.Interval = "30s"
+			}
+			if cam.Timelapse.OutputFPS == 0 {
+				cam.Timelapse.OutputFPS = 30
+			}
+			if cam.Timelapse.VideoCodec == "" {
+				cam.Timelapse.VideoCodec = "h264"
+			}
+			// DeleteOriginal defaults to false (zero value)
 		}
 	}
 }

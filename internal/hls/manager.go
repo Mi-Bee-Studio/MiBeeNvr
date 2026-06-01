@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gohlslib/v2"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 var hlsLogger = slog.Default().With("component", "hls-manager")
@@ -32,6 +33,8 @@ const (
 	defaultMaxStreams     = 4
 	defaultWriteBufSize   = 180              // buffered frames per stream (~9s at 20fps)
 	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
+	maxBackoff            = 16 * time.Second
+	initialBackoff        = 1 * time.Second
 )
 
 // hlsFrame is an async write request for the HLS muxer.
@@ -42,26 +45,31 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
-	mu              sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
-	mux             *gohlslib.Muxer
-	track           *gohlslib.Track
-	dirPath         string
-	lastUsed        time.Time
-	cancel          context.CancelFunc
-	frameCh         chan hlsFrame // async write buffer
-	isH265          bool
-	subStreamCancel context.CancelFunc // cancels the sub-stream RTSP reader goroutine
-	maxFPS          int
-	lastFrameTime   time.Time
-	fpsCredit       time.Duration // accumulated frame time credit for smooth FPS throttling
-	drops           uint64        // atomic: total frames dropped (FPS throttle + buffer full)
-	idrReceived     bool          // true after first IDR frame is received
+	mu                sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
+	mux               *gohlslib.Muxer
+	track             *gohlslib.Track
+	dirPath           string
+	lastUsed          time.Time
+	cancel            context.CancelFunc
+	frameCh           chan hlsFrame // async write buffer
+	isH265            bool
+	subStreamCancel   context.CancelFunc // cancels the sub-stream RTSP reader goroutine
+	maxFPS            int
+	lastFrameTime     time.Time
+	fpsCredit         time.Duration // accumulated frame time credit for smooth FPS throttling
+	idrReceived       bool          // true after first IDR frame is received
+	consecutiveErrors int
+	lastErrorTime     time.Time
+	backoff           time.Duration
+	observedSegments  map[string]bool
 }
 
 // Manager manages on-demand HLS streams for cameras.
 type Manager struct {
 	mu              sync.RWMutex
 	streams         map[string]*streamEntry // cameraID -> entry
+	ctx             context.Context
+	cancel          context.CancelFunc
 	dataDir         string
 	idleTimeout     time.Duration
 	maxStreams      int
@@ -75,8 +83,11 @@ type Manager struct {
 
 // NewManager creates a new HLS Manager with default settings.
 // Use NewManagerWithOpts for custom buffer/segment sizes.
-func NewManager(dataDir string) *Manager {
+func NewManager(ctx context.Context, dataDir string) *Manager {
+	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
+		ctx:            ctx,
+		cancel:         cancel,
 		streams:        make(map[string]*streamEntry),
 		dataDir:        dataDir,
 		idleTimeout:    defaultIdleTimeout,
@@ -91,7 +102,7 @@ func NewManager(dataDir string) *Manager {
 // writeBufSize controls the async frame buffer per stream (default: 100).
 // segmentMaxSize controls the maximum HLS segment file size in bytes (default: 10MB).
 // segmentCount controls the number of HLS segments per stream (default: 7, range [3,10]).
-func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize, segmentCount int, opts ...*metrics.Metrics) *Manager {
+func NewManagerWithOpts(ctx context.Context, dataDir string, writeBufSize, segmentMaxSize, segmentCount int, opts ...*metrics.Metrics) *Manager {
 	if writeBufSize <= 0 {
 		writeBufSize = defaultWriteBufSize
 	}
@@ -105,7 +116,10 @@ func NewManagerWithOpts(dataDir string, writeBufSize, segmentMaxSize, segmentCou
 	if len(opts) > 0 {
 		m = opts[0]
 	}
+	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
+		ctx:            ctx,
+		cancel:         cancel,
 		streams:        make(map[string]*streamEntry),
 		dataDir:        dataDir,
 		idleTimeout:    defaultIdleTimeout,
@@ -144,9 +158,15 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// At capacity — return error instead of silently evicting
+	// Already active — just update lastUsed (check before eviction to avoid unnecessary evict)
+	if entry, ok := m.streams[cameraID]; ok {
+		entry.lastUsed = time.Now()
+		return nil
+	}
+
+	// At capacity — evict least recently used stream
 	if len(m.streams) >= m.maxStreams {
-		return ErrMaxStreamsReached
+		m.evictLRULocked(cameraID)
 	}
 
 	// Already active — just update lastUsed
@@ -220,16 +240,17 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	entry := &streamEntry{
-		mux:      mux,
-		track:    track,
-		dirPath:  dirPath,
-		lastUsed: time.Now(),
-		cancel:   cancel,
-		frameCh:  make(chan hlsFrame, m.writeBufSize),
-		isH265:   isH265,
-		maxFPS:   maxFPS,
+		mux:              mux,
+		track:            track,
+		dirPath:          dirPath,
+		lastUsed:         time.Now(),
+		cancel:           cancel,
+		frameCh:          make(chan hlsFrame, m.writeBufSize),
+		isH265:           isH265,
+		maxFPS:           maxFPS,
+		observedSegments: make(map[string]bool),
 	}
 	m.streams[cameraID] = entry
 
@@ -248,6 +269,9 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		mode = "low-latency"
 	}
 	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr, "mode", mode)
+	if m.metrics != nil {
+		m.metrics.HLSActiveStreams.WithLabelValues(cameraID).Set(1)
+	}
 	return nil
 }
 
@@ -267,7 +291,7 @@ func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 boo
 		return nil // already running
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	entry.subStreamCancel = cancel
 
 	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry, fallbackFn)
@@ -426,28 +450,51 @@ func (m *Manager) readSubStreamH265(ctx context.Context, client *gortsplib.Clien
 
 // writeLoop drains frames from the async buffer and writes them to the muxer.
 // This ensures RTP receive path is never blocked by HLS disk I/O.
+// On write error: increments error counter, destroys muxer, resets IDR flag,
+// and applies exponential backoff before allowing re-creation.
 func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamEntry) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case frame := <-entry.frameCh:
-			// Wait for IDR frame before writing to avoid black frames.
-			// Non-IDR frames before the first IDR are skipped.
-			if !entry.idrReceived {
-				if !isFirstNalIDR(frame.au, entry.isH265) {
-					continue
-				}
-				entry.idrReceived = true
+			isIDR := isFirstNalIDR(frame.au, entry.isH265)
+			traceID := "no-trace"
+			if isIDR {
+				traceID = fmt.Sprintf("%s-%d", cameraID, frame.pts)
 			}
-			var err error
-			if entry.isH265 {
-				err = entry.mux.WriteH265(entry.track, time.Now(), frame.pts, frame.au)
+			slog.Debug("frame_trace",
+				"trace_id", traceID,
+				"camera_id", cameraID,
+				"stage", "hls_recv",
+				"is_idr", isIDR,
+			)
+			if waitForFirstIDR(frame.au, entry.isH265, &entry.idrReceived) {
+				continue
+			}
+			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, frame.au, frame.pts, cameraID); err != nil {
+				slog.Warn("frame_trace",
+					"trace_id", traceID,
+					"camera_id", cameraID,
+					"stage", "hls_error",
+					"is_idr", isIDR,
+					"error", err,
+				)
+				m.handleWriteError(ctx, cameraID, entry, err)
 			} else {
-				err = entry.mux.WriteH264(entry.track, time.Now(), frame.pts, frame.au)
-			}
-			if err != nil {
-				hlsLogger.Error("HLS write error", "camera_id", cameraID, "error", err)
+				slog.Debug("frame_trace",
+					"trace_id", traceID,
+					"camera_id", cameraID,
+					"stage", "hls_write",
+					"is_idr", isIDR,
+				)
+				// Successful write — reset error tracking
+				if entry.consecutiveErrors > 0 {
+					entry.consecutiveErrors = 0
+					entry.backoff = 0
+				}
+				// Observe new segment file sizes for metrics
+				m.observeNewSegments(cameraID, entry)
 			}
 		}
 	}
@@ -481,6 +528,112 @@ func isFirstNalIDR(au [][]byte, isH265 bool) bool {
 	return false
 }
 
+// shouldThrottle implements credit-based FPS throttling.
+// Returns true if the frame should be dropped (insufficient credit).
+// Modifies fpsCredit and lastFrameTime in place.
+// When maxFPS <= 0 (disabled), always returns false (never throttle).
+func shouldThrottle(maxFPS int, fpsCredit *time.Duration, lastFrameTime *time.Time, now time.Time, isIDR bool) bool {
+	if maxFPS <= 0 {
+		return false
+	}
+	minInterval := time.Second / time.Duration(maxFPS)
+	if lastFrameTime.IsZero() {
+		*lastFrameTime = now
+		*fpsCredit = 0
+		return false // first frame always passes
+	}
+	elapsed := now.Sub(*lastFrameTime)
+	*lastFrameTime = now
+	*fpsCredit += elapsed
+	if *fpsCredit < minInterval {
+		if isIDR {
+			return false // IDR always passes even with insufficient credit
+		}
+		return true // insufficient credit — drop
+	}
+	// Consume one interval of credit; cap surplus to prevent burst.
+	*fpsCredit -= minInterval
+	if *fpsCredit > minInterval*2 {
+		*fpsCredit = minInterval * 2
+	}
+	return false
+}
+
+// waitForFirstIDR checks if a frame should be skipped while waiting for the first IDR.
+// Returns true if the frame should be skipped (first IDR not yet received).
+// Sets *idrReceived to true when the first IDR frame is detected.
+func waitForFirstIDR(au [][]byte, isH265 bool, idrReceived *bool) bool {
+	if *idrReceived {
+		return false // already received IDR, don't skip
+	}
+	if !isFirstNalIDR(au, isH265) {
+		return true // not an IDR frame, skip
+	}
+	*idrReceived = true
+	return false // first IDR detected, don't skip
+}
+
+// writeFrameToMuxer writes a frame to the HLS muxer, dispatching to WriteH264 or WriteH265.
+// Returns error from muxer write; caller is responsible for logging.
+func writeFrameToMuxer(isH265 bool, mux *gohlslib.Muxer, track *gohlslib.Track, au [][]byte, pts int64, cameraID string) error {
+	if mux == nil || track == nil {
+		return fmt.Errorf("hls muxer not initialized for camera %s", cameraID)
+	}
+	if isH265 {
+		return mux.WriteH265(track, time.Now(), pts, au)
+	}
+	return mux.WriteH264(track, time.Now(), pts, au)
+}
+
+// calculateBackoff computes exponential backoff: min(maxBackoff, initialBackoff << errors).
+func calculateBackoff(consecutiveErrors int) time.Duration {
+	// Cap shift to avoid undefined behavior for large consecutiveErrors
+	shift := consecutiveErrors
+	if shift > 4 {
+		return maxBackoff // 1s << 5+ exceeds 16s cap
+	}
+	backoff := initialBackoff << shift
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+	return backoff
+}
+
+// handleWriteError handles a muxer write error by incrementing metrics,
+// destroying the muxer, resetting the IDR flag, and sleeping with backoff.
+func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *streamEntry, err error) {
+	entry.consecutiveErrors++
+	entry.backoff = calculateBackoff(entry.consecutiveErrors)
+	entry.lastErrorTime = time.Now()
+
+	hlsLogger.Error("HLS write error",
+		"camera_id", cameraID,
+		"error", err,
+		"consecutive_errors", entry.consecutiveErrors,
+		"backoff", entry.backoff,
+	)
+
+	if m.metrics != nil {
+		m.metrics.HLSWriteErrors.WithLabelValues(cameraID).Inc()
+		m.metrics.HLSMuxerRestarts.WithLabelValues(cameraID).Inc()
+	}
+
+	// Destroy old muxer so it will be recreated on next write
+	if entry.mux != nil {
+		entry.mux.Close()
+		entry.mux = nil
+	}
+	entry.track = nil
+	entry.idrReceived = false // force wait for next IDR
+
+	// Sleep with backoff (interruptible by context cancellation)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(entry.backoff):
+	}
+}
+
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
 func (m *Manager) StopStream(cameraID string) {
 	m.mu.Lock()
@@ -507,6 +660,30 @@ func (m *Manager) GetActiveStreamCount() int {
 	return len(m.streams)
 }
 
+// evictLRULocked finds and evicts the stream with the oldest lastUsed timestamp.
+// Caller must hold m.mu write lock. The newStreamID is excluded from eviction.
+func (m *Manager) evictLRULocked(newStreamID string) {
+	var oldestID string
+	var oldestTime time.Time
+	for id, entry := range m.streams {
+		if id == newStreamID {
+			continue
+		}
+		if oldestID == "" || entry.lastUsed.Before(oldestTime) {
+			oldestID = id
+			oldestTime = entry.lastUsed
+		}
+	}
+	if oldestID == "" {
+		return
+	}
+	hlsLogger.Warn("HLS max streams reached, evicting LRU stream", "camera_id", oldestID)
+	if m.metrics != nil {
+		m.metrics.HLSIdleEvictions.WithLabelValues(oldestID).Inc()
+	}
+	m.stopStreamLocked(oldestID)
+}
+
 // stopStreamLocked stops a stream. Caller must hold m.mu write lock.
 func (m *Manager) stopStreamLocked(cameraID string) {
 	entry, ok := m.streams[cameraID]
@@ -527,6 +704,9 @@ func (m *Manager) stopStreamLocked(cameraID string) {
 	os.RemoveAll(entry.dirPath)
 
 	delete(m.streams, cameraID)
+	if m.metrics != nil {
+		m.metrics.HLSActiveStreams.WithLabelValues(cameraID).Set(0)
+	}
 	hlsLogger.Info("HLS stream stopped", "camera_id", cameraID)
 }
 
@@ -558,32 +738,24 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	// Credit-based FPS throttling: accumulate elapsed time between frames,
 	// send only when enough credit has accumulated for one interval.
 	// This produces consistent frame intervals instead of jittery drops.
-	if entry.maxFPS > 0 {
-		minInterval := time.Second / time.Duration(entry.maxFPS)
-		now := time.Now()
-		if entry.lastFrameTime.IsZero() {
-			// First frame always passes — initialize timestamp
-			entry.lastFrameTime = now
-			entry.fpsCredit = 0
-		} else {
-			elapsed := now.Sub(entry.lastFrameTime)
-			entry.lastFrameTime = now
-			entry.fpsCredit += elapsed
-			if entry.fpsCredit < minInterval {
-				// Insufficient credit — drop frame
-				if m.metrics != nil {
-					m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
-				}
-				atomic.AddUint64(&entry.drops, 1)
-				entry.mu.Unlock()
-				return nil
-			}
-			// Consume one interval of credit; cap surplus to prevent burst
-			entry.fpsCredit -= minInterval
-			if entry.fpsCredit > minInterval*2 {
-				entry.fpsCredit = minInterval * 2
-			}
+	if shouldThrottle(entry.maxFPS, &entry.fpsCredit, &entry.lastFrameTime, time.Now(), nalutil.IsIDR(au, entry.isH265)) {
+		isIDR := nalutil.IsIDR(au, entry.isH265)
+		traceID := "no-trace"
+		if isIDR {
+			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", cameraID,
+			"stage", "hls_drop",
+			"is_idr", isIDR,
+			"reason", "fps_throttle",
+		)
+		if m.metrics != nil {
+			m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
+		}
+		entry.mu.Unlock()
+		return nil
 	}
 
 	entry.mu.Unlock()
@@ -593,13 +765,23 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	case entry.frameCh <- hlsFrame{pts: pts, au: au}:
 	default:
 		// Buffer full, drop frame. Live view tolerates dropped frames.
+		isIDR := nalutil.IsIDR(au, entry.isH265)
+		traceID := "no-trace"
+		if isIDR {
+			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
+		}
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", cameraID,
+			"stage", "hls_drop",
+			"is_idr", isIDR,
+			"reason", "buffer_full",
+			"queue_depth", len(entry.frameCh),
+		)
 		if m.metrics != nil {
 			m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
 		}
-		dropCount := atomic.AddUint64(&entry.drops, 1)
-		if dropCount%100 == 0 {
-			hlsLogger.Warn("HLS frames dropped due to buffer full", "camera_id", cameraID, "total_drops", dropCount)
-		}
+
 	}
 
 	return nil
@@ -645,6 +827,9 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	// If no frames reach the muxer (e.g. Hub subscription failed), this
 	// timeout ensures the HTTP request eventually returns.
 	const handleTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), handleTimeout)
+	defer cancel()
+
 	done := make(chan struct{})
 	go func() {
 		entry.mux.Handle(w, r)
@@ -654,19 +839,20 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	select {
 	case <-done:
 		return true
-	case <-time.After(handleTimeout):
-		hlsLogger.Warn("HLS Handle timed out, stream may have no frames", "camera_id", cameraID, "timeout", handleTimeout)
+	case <-ctx.Done():
+		hlsLogger.Warn("HLS Handle timed out or cancelled", "camera_id", cameraID, "timeout", handleTimeout)
 		return true
 	}
 }
 
-// StopAll stops all active HLS streams.
+// StopAll stops all active HLS streams and cancels the manager context.
 func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id := range m.streams {
 		m.stopStreamLocked(id)
 	}
+	m.cancel()
 }
 
 // SubscribeToHub subscribes the HLS manager to a StreamHub for the given camera.
@@ -711,9 +897,41 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 			entry.mu.Unlock()
 			if time.Since(lastUsed) > m.idleTimeout {
 				hlsLogger.Info("HLS stream idle timeout, stopping", "camera_id", cameraID)
+				if m.metrics != nil {
+					m.metrics.HLSIdleEvictions.WithLabelValues(cameraID).Inc()
+				}
 				m.StopStream(cameraID)
 				return
 			}
 		}
+	}
+}
+
+// observeNewSegments scans the segment directory for new files and reports sizes.
+func (m *Manager) observeNewSegments(cameraID string, entry *streamEntry) {
+	if m.metrics == nil {
+		return
+	}
+	entries, err := os.ReadDir(entry.dirPath)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".m3u8") || strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		if entry.observedSegments[name] {
+			continue
+		}
+		entry.observedSegments[name] = true
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		m.metrics.HLSSegmentSizeBytes.WithLabelValues(cameraID).Observe(float64(info.Size()))
 	}
 }

@@ -3,8 +3,9 @@
   import { t } from '$lib/i18n';
   import { apiRequest } from '$lib/api';
   import { showToast } from '$lib/toast';
+  import { detectWebCodecs, getWebCodecsUnavailableReason } from '$lib/webcodecs-player/capabilities';
 
-  export type StreamingProtocol = 'hls' | 'll-hls' | 'webrtc' | 'flv';
+  export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv';
 
   interface ProtocolOption {
     id: StreamingProtocol;
@@ -46,8 +47,11 @@
   let dropdownEl: HTMLDivElement | undefined = $state();
 
   let isH265 = $derived((cameraEncoding || '').toLowerCase() === 'h265');
+  let browserSupportsWasm = $state(false);
+  let wasmUnavailableReason: string | null = $state(null);
 
   const protocolOptions: ProtocolOption[] = [
+    { id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
     { id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
     { id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
     { id: 'hls', label: 'HLS', latency: t('live.protocol.latency.hls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
@@ -58,18 +62,25 @@
     protocolOptions.find(p => p.id === selected) || protocolOptions[2],
   );
 
+  // Always show all options — wasm is marked unavailable with tooltip instead of hidden
+  let visibleOptions = $derived(protocolOptions);
+
   function isAvailable(protocol: StreamingProtocol): boolean {
+    // Wasm requires browser WebCodecs support
+    if (protocol === 'wasm' && !browserSupportsWasm) return false;
     // H.265 cameras cannot use WebRTC
     if (protocol === 'webrtc' && isH265) return false;
     return availableProtocols.includes(protocol);
   }
 
   function getUnavailableReason(protocol: StreamingProtocol): string | null {
+    if (protocol === 'wasm' && !browserSupportsWasm) {
+      return wasmUnavailableReason || 'Browser does not support WebCodecs';
+    }
     if (protocol === 'webrtc' && isH265) {
       return t('live.protocol.tooltip.h265Note');
     }
     if (!availableProtocols.includes(protocol)) {
-      // Show backend-provided reason if available
       const backendReason = protocolReasons[protocol];
       if (backendReason) return backendReason;
       return t('live.protocol.unavailable');
@@ -107,6 +118,9 @@
       if (encoding === 'h264' || encoding === 'h265') {
         availableProtocols.push('flv');
         availableProtocols.push('ll-hls');
+      }
+      if (browserSupportsWasm) {
+        availableProtocols.push('wasm');
       }
     } finally {
       loading = false;
@@ -155,6 +169,10 @@
   }
 
   onMount(() => {
+    browserSupportsWasm = detectWebCodecs();
+    if (!browserSupportsWasm) {
+      wasmUnavailableReason = getWebCodecsUnavailableReason();
+    }
     loadProtocols();
     document.addEventListener('click', handleClickOutside);
     return () => {
@@ -185,7 +203,7 @@
   <!-- Dropdown -->
   {#if open && !loading}
     <div class="absolute top-full left-0 mt-1 w-60 rounded-lg shadow-lg border th-border th-bg-elevated z-50 overflow-hidden">
-      {#each protocolOptions as option (option.id)}
+      {#each visibleOptions as option (option.id)}
         {@const available = isAvailable(option.id)}
         {@const isActive = selected === option.id}
         {@const reason = getUnavailableReason(option.id)}

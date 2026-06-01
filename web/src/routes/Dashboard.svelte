@@ -1,21 +1,27 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, setContext } from 'svelte';
   import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
+  import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
   let error = $state('');
   let expandedCameraId = $state<string | null>(null);
+
+  // Page Visibility — pause/resume all players when tab hidden/visible
+  let tabVisible = $state(true);
 
   let ptzOpenIndex = $state(-1);
 
@@ -50,8 +56,33 @@
   const STORAGE_KEY = 'dashboard-selected-cameras';
 
   // Default streaming protocol from settings
-  let defaultProtocol = $state<string>('hls');
+  let defaultProtocol = $state<string>('flv');
 
+  // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
+  let WasmPlayerComponent = $state<any>(null);
+  let wasmPlayerLoading = $state(false);
+  let wasmPlayerError = $state('');
+
+  async function loadWasmPlayer() {
+    if (WasmPlayerComponent || wasmPlayerLoading) return;
+    wasmPlayerLoading = true;
+    wasmPlayerError = '';
+    try {
+      const mod = await import('../components/WasmPlayer.svelte');
+      WasmPlayerComponent = mod.default;
+    } catch (e) {
+      console.error('Failed to load WasmPlayer:', e);
+      wasmPlayerError = String(e);
+      showToast(t('dashboard.wasmPlayerFailed'), 'error');
+    } finally {
+      wasmPlayerLoading = false;
+    }
+  }
+
+  // Reconnection coordinator — limits concurrent reconnects, global exponential backoff,
+  // and backend pressure detection (HTTP 503 triggers 10s global cooldown)
+  const reconnectCoordinator = createReconnectCoordinator();
+  setContext('reconnect-coordinator', reconnectCoordinator);
 
   function loadSavedCameraIds(): string[] {
     try {
@@ -124,18 +155,26 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  type CameraMode = 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
+  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
 
   function getCameraMode(camera: Camera): CameraMode {
     if (!isHlsSupported(camera)) {
       if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
       return 'snapshot';
     }
+    if (defaultProtocol === 'wasm') return 'wasm';
     if (defaultProtocol === 'webrtc') return 'webrtc';
     if (defaultProtocol === 'flv') return 'flv';
     // hls, ll-hls, or default
     return 'hls';
   }
+
+  // Preload WasmPlayer when any camera would use 'wasm' mode
+  $effect(() => {
+    if (defaultProtocol === 'wasm' && cameras.some(c => isHlsSupported(c))) {
+      loadWasmPlayer();
+    }
+  });
 
   // --- Expand / shrink ---
 
@@ -229,8 +268,28 @@
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
+    // Page Visibility API: pause players when tab hidden, resume when visible
+    const visibilityHandler = () => {
+      tabVisible = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+
+    // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
+    const originalFetch = window.fetch;
+    window.fetch = async function (...args: Parameters<typeof fetch>): Promise<Response> {
+      const response = await originalFetch.apply(this, args);
+      if (response.status === 503) {
+        reconnectCoordinator.reportBackendPressure();
+      }
+      return response;
+    };
+
+
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.fetch = originalFetch;
+      reconnectCoordinator.dispose();
     };
   });
 
@@ -355,8 +414,9 @@
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
         {#each cameras as camera, index}
-          {@const status = getStatusBadge(camera)}
+{@const status = getStatusBadge(camera)}
           {@const mode = getCameraMode(camera)}
+          {@const StatusIcon = status.icon}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
@@ -407,7 +467,8 @@
               <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
                 <div class="flex items-center gap-2">
                   <span class="badge {status.class} text-[10px] px-1.5 py-0.5 flex items-center gap-1">
-                    <svelte:component this={status.icon} size={10} />
+
+                    <StatusIcon size={10} />
                     {status.text}
                   </span>
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
@@ -422,6 +483,7 @@
                 cameraProtocol={camera.protocol}
                 protocol={defaultProtocol}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
 
             {:else if mode === 'webrtc'}
@@ -429,6 +491,7 @@
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
 
             {:else if mode === 'flv'}
@@ -436,7 +499,34 @@
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
+                {tabVisible}
               />
+            {:else if mode === 'wasm'}
+              {#if WasmPlayerComponent}
+                {@const WasmPlayer = WasmPlayerComponent}
+                <WasmPlayer
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  expanded={expandedCameraId === camera.id}
+                  tabVisible={tabVisible}
+                />
+              {:else if wasmPlayerLoading}
+                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                  <div class="flex flex-col items-center gap-2">
+                    <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                    <span class="text-white/50 text-xs">{t('dashboard.loadingWasmPlayer')}</span>
+                  </div>
+                </div>
+              {:else}
+                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+                  <div class="flex flex-col items-center gap-2">
+                    <AlertCircle size={20} class="text-red-400/60" />
+                    <span class="text-white/50 text-xs">{t('dashboard.wasmPlayerLoadError')}</span>
+                    <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
+                  </div>
+                </div>
+              {/if}
+
             {:else}
               <!-- Unsupported protocol (no snapshot, no HLS) -->
               <div class="absolute inset-0 flex items-center justify-center">
@@ -460,8 +550,8 @@
 
             <!-- Streaming protocol badge -->
             {#if mode !== 'unsupported'}
-              {@const protocolLabel = mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
-              {@const protocolColor = mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
+              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
+              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
               <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
                 {protocolLabel}
               </span>

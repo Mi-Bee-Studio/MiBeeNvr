@@ -3,8 +3,9 @@
  * destroy+recreate capability, and visibility-based stream rebuild.
  *
  * Core fix for black flashing in multi-camera dashboard:
- * - Non-fatal MEDIA_ERROR: 500ms debounce before recoverMediaError()
+ * - Non-fatal MEDIA_ERROR: 500ms debounce with swapAudioCodec + recoverMediaError()
  * - Recovery escalation: 3+ recoveries in 5s → destroy+recreate
+ * - Buffer stall recovery: seek to live edge on bufferStalledError
  * - Zombie detection: readyState and FRAG_LOADED health checks
  * - Tab background/foreground recovery via visibilitychange
  */
@@ -56,6 +57,8 @@ export interface HlsErrorConfig {
   retryDelays: number[];
   onStateChange: (cameraId: string, state: StreamState) => void;
   onFallbackToSnapshot: (cameraId: string) => void;
+  /** Video element for buffer stall seek-to-live recovery. */
+  videoEl?: HTMLVideoElement;
 }
 
 /** Skip pre-check — hls.js handles errors natively with its own retry logic. */
@@ -83,7 +86,7 @@ export function setupHlsErrorHandling(
   let recoverTimer: ReturnType<typeof setTimeout> | null = null;
   let recoverCount = 0;
   let lastRecoverTime = 0;
-  const { cameraId, maxRetries, retryDelays, onStateChange, onFallbackToSnapshot } = config;
+  const { cameraId, maxRetries, retryDelays, onStateChange, onFallbackToSnapshot, videoEl } = config;
 
   // Recovery escalation thresholds
 
@@ -113,6 +116,10 @@ export function setupHlsErrorHandling(
         case Hls.ErrorTypes.MEDIA_ERROR: {
           if (retryCount < maxRetries) {
             retryCount++;
+            // First attempt: swap audio codec before standard recovery
+            if (retryCount === 1) {
+              try { hls.swapAudioCodec(); } catch { /* ignore */ }
+            }
             hls.recoverMediaError();
           } else {
             onStateChange(cameraId, 'error');
@@ -126,6 +133,19 @@ export function setupHlsErrorHandling(
           break;
       }
     } else {
+      // Non-fatal errors
+
+      // Buffer stall recovery: seek to live edge to skip stalled segment
+      if (data.details === 'bufferStalledError') {
+        if (videoEl) {
+          const livePos = hls.liveSyncPosition;
+          if (livePos !== undefined && livePos > 0) {
+            videoEl.currentTime = livePos;
+          }
+        }
+        return;
+      }
+
       // Non-fatal media errors — debounced recovery to avoid black flashing
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
         // Check if we should escalate to destroy+recreate
@@ -154,6 +174,10 @@ export function setupHlsErrorHandling(
         recoverTimer = setTimeout(() => {
           recoverTimer = null;
           try {
+            // First recovery attempt: swap audio codec as middle layer
+            if (recoverCount === 1) {
+              hls.swapAudioCodec();
+            }
             hls.recoverMediaError();
           } catch {
             // Instance may have been destroyed
@@ -313,8 +337,9 @@ export function handleVisibilityChange(
     }
   };
 
-  document.addEventListener('visibilitychange', handler);
+  const ac = new AbortController();
+  document.addEventListener('visibilitychange', handler, { signal: ac.signal });
   return () => {
-    document.removeEventListener('visibilitychange', handler);
+    ac.abort();
   };
 }

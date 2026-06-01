@@ -1,0 +1,612 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.5.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "datasource", "id": "victoriametrics-logs-datasource", "name": "VictoriaLogs", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "panels": [],
+      "title": "System Resources",
+      "type": "row"
+    },
+    {
+      "id": 2,
+      "title": "Active Cameras",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Number of currently active (connected) cameras. Drops to zero indicate a systemic connectivity issue.",
+      "gridPos": { "h": 3, "w": 4, "x": 0, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_active_cameras" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Active Recordings",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Number of cameras currently recording. Should match or be close to Active Cameras count.",
+      "gridPos": { "h": 3, "w": 4, "x": 4, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_active_recordings" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Memory Usage",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "NVR process resident memory (RSS). On RPi 3B with 1GB RAM, 400MB is the warning threshold and 500MB is critical.",
+      "gridPos": { "h": 3, "w": 4, "x": 8, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_process_resident_memory_bytes" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 419430400 },
+              { "color": "red", "value": 524288000 }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Storage Usage",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Storage utilization as a percentage. Yellow at 80%, red at 95%. On RPi with SD card, high usage can degrade I/O performance.",
+      "gridPos": { "h": 3, "w": 4, "x": 12, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "(nvr_storage_used_bytes / nvr_storage_total_bytes) * 100" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Open File Descriptors",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Number of open file descriptors. Spikes may indicate fd leaks. RPi 3B default ulimit is typically 1024.",
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 1 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_process_open_fds" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 512 },
+              { "color": "red", "value": 900 }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 7,
+      "title": "CPU Usage Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "NVR process CPU usage as a percentage of a single core. On RPi 3B (4 cores), sustained >25% per core indicates heavy load.",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(nvr_process_cpu_seconds_total[5m]) * 100",
+          "legendFormat": "CPU %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Network I/O",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "NVR process network receive and transmit throughput in bytes/sec. Spikes indicate bulk data transfer (recording, streaming, merging).",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(nvr_process_network_receive_bytes_total[5m])",
+          "legendFormat": "Receive"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(nvr_process_network_transmit_bytes_total[5m])",
+          "legendFormat": "Transmit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "id": 9,
+      "panels": [],
+      "title": "Recording Activity",
+      "type": "row"
+    },
+    {
+      "id": 10,
+      "title": "Recording Bytes Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Bytes written to disk per second by each camera. Sudden drops indicate recording failures; spikes may indicate codec changes or reconnection transients.",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (camera_id) (rate(nvr_recording_bytes_total{camera_id=~\"$camera_id\"}[5m]))",
+          "legendFormat": "{{camera_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Segments Created Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Rate of MP4 segment files created per camera. Abnormal drops suggest recording pipeline issues.",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (camera_id) (rate(nvr_segments_created_total{camera_id=~\"$camera_id\"}[5m]))",
+          "legendFormat": "{{camera_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Total Recordings in DB",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Total count of recording segments in the SQLite database. Useful for monitoring DB growth.",
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 17 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_recording_count" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Cleanup Deletions",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Rate of files deleted by the cleanup process, broken down by reason (retention, disk_threshold). Spikes in disk_threshold deletions indicate storage pressure.",
+      "gridPos": { "h": 6, "w": 18, "x": 6, "y": 17 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(nvr_cleanup_deleted_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 14,
+      "panels": [],
+      "title": "Remote Log Health",
+      "type": "row"
+    },
+    {
+      "id": 15,
+      "title": "Log Batches Sent",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Cumulative count of log batches successfully sent to the remote logging endpoint. Should be steadily increasing.",
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_remote_log_sent_total" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 16,
+      "title": "Log Batches Dropped",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Cumulative count of log batches dropped due to remote endpoint unavailability. Any non-zero value indicates log delivery failures.",
+      "gridPos": { "h": 3, "w": 6, "x": 6, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "nvr_remote_log_dropped_total" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "sparkline": { "fillOpacity": 0.3, "lineWidth": 1 }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Log Batch Size Distribution",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Remote log batch size distribution (p50/p90/p99). Large batches may cause memory pressure; small batches indicate underutilization.",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(nvr_remote_log_batch_size_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.90, sum(rate(nvr_remote_log_batch_size_bucket[5m])) by (le))",
+          "legendFormat": "p90"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(nvr_remote_log_batch_size_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "showPoints": "never", "lineInterpolation": "smooth", "spanNulls": true },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "/p99/" },
+            "properties": [
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 5] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "id": 18,
+      "panels": [],
+      "title": "Recent Error Logs",
+      "type": "row"
+    },
+    {
+      "id": 19,
+      "title": "Error Logs",
+      "type": "logs",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "VictoriaLogs" },
+      "description": "Most recent ERROR-level log entries from the NVR system. Use field filters to narrow by component or camera_id.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 31 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "level:ERROR _time:1h | sort by (_time) desc"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "dedupStrategy": "none"
+      },
+      "fieldConfig": {
+        "defaults": { "custom": {} },
+        "overrides": []
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["nvr", "system"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "camera_id",
+        "options": [],
+        "query": { "query": "label_values(nvr_stream_fps, camera_id)", "refId": "Prometheus-camera_id-Variable-Query" },
+        "refresh": 2,
+        "regex": "",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "Prometheus" }
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
+  },
+  "timezone": "browser",
+  "title": "NVR System Overview",
+  "uid": "nvr-system-overview",
+  "version": 1,
+  "weekStart": ""
+}

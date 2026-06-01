@@ -2,12 +2,11 @@ package camera
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -15,6 +14,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
@@ -1020,4 +1021,86 @@ func TestCloseAllONVIFClients(t *testing.T) {
 
 	mgr.closeAllONVIFClients()
 	assert.Empty(t, mgr.onvifClients)
+}
+
+func TestClassifyError(t *testing.T) {
+	t.Helper()
+	require.Equal(t, "unknown", classifyError(nil))
+	require.Equal(t, "unknown", classifyError(fmt.Errorf("some random error")))
+	require.Equal(t, "timeout", classifyError(fmt.Errorf("connection timeout after 10s")))
+	require.Equal(t, "timeout", classifyError(fmt.Errorf("deadline exceeded")))
+	require.Equal(t, "auth", classifyError(fmt.Errorf("401 unauthorized")))
+	require.Equal(t, "auth", classifyError(fmt.Errorf("authentication failed")))
+	require.Equal(t, "network", classifyError(fmt.Errorf("connection refused")))
+	require.Equal(t, "network", classifyError(fmt.Errorf("dial tcp: no such host")))
+}
+
+func TestCameraConnectionErrorMetrics(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	mgr, store, _, configPath := newTestManager(t)
+	defer store.CleanupTempFiles()
+	_ = mgr
+
+	// Create a new manager with metrics and a camera that will fail to start
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	cfg.Storage.RootDir = filepath.Join(tmpDir, "storage")
+	// Use an unknown protocol so createRecorder returns nil → startRecorder returns error
+	cfg.Cameras[0].Protocol = "unknown_proto"
+	cfg.Cameras[0].Enabled = true
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+	require.NoError(t, config.Save(configPath, cfg))
+
+	mgr2 := NewCameraManager(cfg, store, nil, configPath, m)
+	// Call startRecorder directly to trigger the error metric
+	segDur, _ := time.ParseDuration(cfg.Storage.SegmentDuration)
+	err := mgr2.startRecorder(context.Background(), cfg.Cameras[0], segDur)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not support recording")
+
+	// Verify no metric was recorded (createRecorder returns nil, not a connection error)
+	families, _ := m.Registry.Gather()
+	for _, f := range families {
+		require.NotEqual(t, "nvr_camera_connection_errors_total", f.GetName(), "unknown protocol should not record connection error")
+	}
+}
+
+func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
+	m := metrics.NewMetrics()
+	mgr := NewCameraManager(testConfig(), nil, nil, "", m)
+
+	segDur, err := time.ParseDuration("1m")
+	require.NoError(t, err)
+
+	cfg := testConfig()
+	rec := mgr.createRecorder(cfg.Cameras[0], segDur)
+	require.NotNil(t, rec)
+
+	// Type-assert to H264Recorder to access the Hub
+	h264Rec, ok := rec.(*recorder.H264Recorder)
+	require.True(t, ok, "expected H264Recorder")
+	hub := h264Rec.Hub
+	require.NotNil(t, hub)
+
+	// Simulate 500 frames — expect ~5 histogram samples (1/100 sampling)
+	for i := 0; i < 500; i++ {
+		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, i == 0)
+	}
+
+	// Gather metrics and verify sample count
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	var samples int
+	for _, f := range families {
+		if f.GetName() == "nvr_frame_processing_duration_seconds" {
+			for _, metric := range f.GetMetric() {
+				samples += int(metric.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+
+	// 500 frames / 100 = 5 samples, allow ±1 for edge cases
+	require.InDelta(t, 5, samples, 1, "expected ~5 histogram samples for 500 frames")
 }

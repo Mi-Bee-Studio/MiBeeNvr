@@ -43,6 +43,11 @@ ENV NVR_DATA_DIR=/data
 ENV NVR_UID=1000
 ENV NVR_GID=1000
 
+# Persistent data: recordings, database, config
+VOLUME ["/data"]
+ENV NVR_UID=1000
+ENV NVR_GID=1000
+
 COPY --from=backend /mibee-nvr /usr/local/bin/mibee-nvr
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

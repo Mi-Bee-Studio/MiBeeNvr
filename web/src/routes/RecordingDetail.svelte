@@ -47,7 +47,7 @@
         if (recording.format === 'mjpeg') {
           await tick();
           if (mjpegPlayer) await mjpegPlayer.initPlayer();
-        } else if (recording.format === 'h264' || recording.format === 'h265') {
+        } else if (recording.format === 'h264' || recording.format === 'h265' || recording.format === 'timelapse') {
           initVideoPlayer();
         }
       }
@@ -260,6 +260,7 @@
               {:else if videoBlobUrl}
                 <video controls preload="auto" class="w-full max-h-[80vh]" src={videoBlobUrl}
                   onended={handleVideoEnded} ontimeupdate={handleTimeUpdate}>
+                  <track kind="captions" />
                   {t('detail.videoUnsupported')}
                 </video>
               {:else}
@@ -304,8 +305,12 @@
               {:else}
                 <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
               {/if}
-              <span class="badge badge-neutral">
-                {(recording.format === 'h264' || recording.format === 'h265') ? t('recording.format.h264') : t('recording.format.mjpeg')}
+              <span class="badge {recording.format === 'timelapse' ? 'badge-info' : 'badge-neutral'}">
+                {recording.format === 'timelapse'
+                  ? t('recording.format.timelapse')
+                  : (recording.format === 'h264' || recording.format === 'h265')
+                    ? t('recording.format.h264')
+                    : t('recording.format.mjpeg')}
               </span>
             </div>
           </div>

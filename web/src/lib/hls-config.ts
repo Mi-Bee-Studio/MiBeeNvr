@@ -13,6 +13,42 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
     enableWorker: false,
     liveDurationInfinity: true,
     progressive: true,
+    maxLiveSyncPlaybackRate: 1.0,
+    lowLatencyMode: true,
+    // Fragment retry: exponential backoff up to 64s for unstable networks
+    fragLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: 10_000,
+        maxLoadTimeMs: 120_000,
+        timeoutRetry: {
+          maxNumRetry: 6,
+          retryDelayMs: 1000,
+          maxRetryDelayMs: 64_000,
+        },
+        errorRetry: {
+          maxNumRetry: 6,
+          retryDelayMs: 1000,
+          maxRetryDelayMs: 64_000,
+        },
+      },
+    },
+    // Manifest retry: faster timeout for playlist reload
+    manifestLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: 15_000,
+        maxLoadTimeMs: 20_000,
+        timeoutRetry: {
+          maxNumRetry: 4,
+          retryDelayMs: 0,
+          maxRetryDelayMs: 8000,
+        },
+        errorRetry: {
+          maxNumRetry: 4,
+          retryDelayMs: 1000,
+          maxRetryDelayMs: 8000,
+        },
+      },
+    },
     xhrSetup: (xhr: XMLHttpRequest, url: string) => {
       const creds = getCredentials();
       if (creds) {

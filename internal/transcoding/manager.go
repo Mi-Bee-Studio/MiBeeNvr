@@ -33,6 +33,7 @@ type TranscodeManager struct {
 	caps       *HardwareCapabilities
 	downloader *Downloader
 	queue      *TranscodeQueue
+	m          *metrics.Metrics
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -103,11 +104,22 @@ func NewTranscodeManager(store *storage.DB, cfg ManagerConfig, m *metrics.Metric
 		caps:       caps,
 		downloader: dl,
 		queue:      queue,
+		m:           m,
 	}, nil
 }
 
-// Run starts the transcoding queue workers. Blocks until ctx is cancelled.
+// Run starts the transcoding queue workers and the FFmpeg status watcher.
+// Blocks until ctx is cancelled.
 func (m *TranscodeManager) Run(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	ctx, m.cancel = context.WithCancel(ctx)
+	m.mu.Unlock()
+
+	go m.watchFFmpegStatus(ctx)
+
 	if err := m.queue.Run(ctx); err != nil {
 		mgrLogger.Error("transcode queue stopped with error", "error", err)
 	}
@@ -215,4 +227,50 @@ func GetDisabledReason() string {
 	disabledReasonMu.RLock()
 	defer disabledReasonMu.RUnlock()
 	return disabledReason
+}
+
+// ffmpegStatusCheckInterval controls how often the FFmpeg download status is polled.
+const ffmpegStatusCheckInterval = 30 * time.Second
+
+// statusGauge maps DownloadStatus.Status to Prometheus gauge values.
+var statusGauge = map[string]float64{
+	"not_installed": 0,
+	"downloading":   1,
+	"available":     2,
+	"failed":        3,
+}
+
+// updateFFmpegStatus reads the current FFmpeg status from the downloader
+// and updates the TranscodingFFmpegStatus Prometheus gauge.
+func (m *TranscodeManager) updateFFmpegStatus() {
+	if m == nil || m.downloader == nil || m.m == nil {
+		return
+	}
+	status := m.downloader.GetFFmpegStatus()
+	val, ok := statusGauge[status.Status]
+	if !ok {
+		val = 0 // default to not_installed for unknown statuses
+	}
+	m.m.TranscodingFFmpegStatus.Set(val)
+}
+
+// watchFFmpegStatus periodically updates the FFmpeg status gauge.
+// It does an immediate update on start, then every 30s.
+func (m *TranscodeManager) watchFFmpegStatus(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	// Immediate first update on start
+	m.updateFFmpegStatus()
+
+	ticker := time.NewTicker(ffmpegStatusCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.updateFFmpegStatus()
+		}
+	}
 }

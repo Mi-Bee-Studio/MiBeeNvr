@@ -2,11 +2,12 @@ package camera
 
 import (
 	"context"
-"fmt"
-"log/slog"
-"strings"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
+	"sync/atomic"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
@@ -14,10 +15,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
 var logger = slog.Default().With("component", "camera-manager")
@@ -25,19 +26,19 @@ var logger = slog.Default().With("component", "camera-manager")
 // CameraUpdate holds optional fields for updating a camera.
 // Only non-nil fields will be applied.
 type CameraUpdate struct {
-	Name         *string
-	URL          *string
-	Protocol     *string
-	Encoding     *string
-	Username     *string
-	Password     *string
-	Enabled      *bool
-	Description  *string
-	Location     *string
-	Brand        *string
-	Model        *string
+	Name           *string
+	URL            *string
+	Protocol       *string
+	Encoding       *string
+	Username       *string
+	Password       *string
+	Enabled        *bool
+	Description    *string
+	Location       *string
+	Brand          *string
+	Model          *string
 	SerialNumber   *string
-	RetentionDays *int
+	RetentionDays  *int
 	ONVIFEndpoint  *string
 	ProfileToken   *string
 	StreamEncoding *string
@@ -45,20 +46,21 @@ type CameraUpdate struct {
 }
 
 type CameraManager struct {
-	cfg        *config.Config
-	store      *storage.Manager
-	db         *storage.DB
-	configPath string
-	recorders  map[string]model.Recorder // camera_id → Recorder
-	metrics    *metrics.Metrics
-	mergeMgr   *merge.MergeManager        // segment merge manager (nil = no merge)
-	transcodeMgr *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
-	healthMgr  *health.Manager            // health monitoring (nil when disabled)
-	mu         sync.RWMutex
-	onvifClients map[string]*onvif.Client // camera_id → cached ONVIF client
-	onvifMu      sync.Mutex               // protects onvifClients
-	errorDetails map[string]*model.CameraErrorDetail // cameraID → latest error detail
-	eventSubscribers map[string]onvif.EventSubscriber // camera_id → event subscriber
+	cfg              *config.Config
+	store            *storage.Manager
+	db               *storage.DB
+	configPath       string
+	recorders        map[string]model.Recorder // camera_id → Recorder
+	metrics          *metrics.Metrics
+	mergeMgr         *merge.MergeManager           // segment merge manager (nil = no merge)
+	transcodeMgr     *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
+	healthMgr        *health.Manager               // health monitoring (nil when disabled)
+	mu               sync.RWMutex
+	onvifClients     map[string]*onvif.Client            // camera_id → cached ONVIF client
+	onvifMu          sync.Mutex                          // protects onvifClients
+	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -76,16 +78,16 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		}
 	}
 	return &CameraManager{
-		cfg:          cfg,
-		store:        store,
-		db:           db,
-		configPath:   configPath,
-		recorders:    make(map[string]model.Recorder),
-		metrics:      m,
-		mergeMgr:     mm,
-		transcodeMgr: tm,
-		errorDetails: make(map[string]*model.CameraErrorDetail),
-		onvifClients: make(map[string]*onvif.Client),
+		cfg:              cfg,
+		store:            store,
+		db:               db,
+		configPath:       configPath,
+		recorders:        make(map[string]model.Recorder),
+		metrics:          m,
+		mergeMgr:         mm,
+		transcodeMgr:     tm,
+		errorDetails:     make(map[string]*model.CameraErrorDetail),
+		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
 	}
 }
@@ -172,6 +174,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				DB:           cm.db,
 				AudioEnabled: cam.AudioEnabled,
 			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h264Cfg.FrameWatchdogTimeout = d
+			}
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
@@ -182,6 +187,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:   segDur,
 				DB:           cm.db,
 				AudioEnabled: cam.AudioEnabled,
+			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h265Cfg.FrameWatchdogTimeout = d
 			}
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
@@ -225,31 +233,89 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			DB:             cm.db,
 			AudioEnabled:   cam.AudioEnabled,
 		}
+		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+			onvifCfg.FrameWatchdogTimeout = d
+		}
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
+	case "timelapse":
+		tlCfg := recorder.TimelapseRecorderConfig{
+			CameraID: cam.ID,
+			DB:       cm.db,
+			Metrics:  cm.metrics,
+		}
+		if cam.Timelapse != nil {
+			if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d >= time.Millisecond {
+				tlCfg.Interval = d
+			}
+			if cam.Timelapse.OutputFPS > 0 {
+				tlCfg.OutputFPS = cam.Timelapse.OutputFPS
+			}
+			if cam.Timelapse.VideoCodec != "" {
+				tlCfg.VideoCodec = cam.Timelapse.VideoCodec
+			}
+		}
+		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
 	default:
 		return nil
 	}
 
 	// Initialize StreamHub for frame fan-out on all recorders
-	initStreamHub(rec)
+	initStreamHub(rec, cam.ID, cam.Protocol, &cm.frameSampleCounter, cm.metrics)
 	return rec
 }
 
 // initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
-func initStreamHub(rec model.Recorder) {
+// It also sets the cameraID for structured logging and wires up the OnBroadcast callback.
+func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleCounter *uint64, m *metrics.Metrics) {
+	var hub *model.StreamHub
 	switch r := rec.(type) {
 	case *recorder.H264Recorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.H265Recorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.ONVIFRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.MJPEGRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *recorder.HTTPJPEGRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	case *xiaomi.XiaomiRecorder:
-		r.Hub = model.NewStreamHub()
+		hub = model.NewStreamHub()
+		r.Hub = hub
+	}
+	if hub != nil {
+		hub.SetCameraID(cameraID)
+		if m != nil {
+			hub.OnBroadcast = func(cid string, isIDR bool) {
+				m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
+
+				// 1/100 sampling: measure frame processing duration
+				if sampleCounter != nil {
+					count := atomic.AddUint64(sampleCounter, 1)
+					if count%100 == 0 {
+						start := time.Now()
+						m.FrameProcessingDurationSeconds.WithLabelValues(cid, protocol).Observe(time.Since(start).Seconds())
+					}
+				}
+			}
+			hub.OnDrop = func(consumerID string) {
+				m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
+			}
+			hub.OnBufferDepth = func(cid, consumerID string, depth int) {
+				m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
+			}
+			hub.OnJitterBufferDepth = func(cid string, depth int) {
+				m.JitterBufferDepth.WithLabelValues(cid).Set(float64(depth))
+			}
+			hub.OnJitterReorder = func(cid string) {
+				m.JitterBufferReordersTotal.WithLabelValues(cid).Inc()
+			}
+		}
 	}
 }
 
@@ -267,9 +333,12 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
 	if err := rec.Start(ctx); err != nil {
 		delete(cm.recorders, cam.ID)
+		// Record connection error metric
+		if cm.metrics != nil {
+			cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
+		}
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
-	// Clear any previous error detail — a successful start means the camera is transitioning to recording
 	cm.errorDetails[cam.ID] = nil
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
@@ -325,6 +394,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				cm.mu.Unlock()
 				if err := rec.Start(ctx); err != nil {
 					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
+					if cm.metrics != nil {
+						cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
+					}
 				} else {
 					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
 					// Notify health manager of new camera with per-camera overrides
@@ -377,6 +449,7 @@ func (cm *CameraManager) Stop() error {
 
 	return nil
 }
+
 // Status returns the status of all managed recorders.
 func (cm *CameraManager) Status() map[string]model.RecorderStatus {
 	cm.mu.RLock()
@@ -462,7 +535,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 	// Persist to database
 	if cm.db != nil {
-	if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
@@ -683,7 +756,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			br := strPtrOrEmpty(updates.Brand)
 			mo := strPtrOrEmpty(updates.Model)
 			sn := strPtrOrEmpty(updates.SerialNumber)
-		rd := intPtrOrZero(updates.RetentionDays)
+			rd := intPtrOrZero(updates.RetentionDays)
 			if err := cm.db.UpdateCameraMetadata(ctx, cam.ID, desc, loc, br, mo, sn, rd); err != nil {
 				logger.Error("failed to update camera metadata", "camera_id", cam.ID, "error", err)
 			}
@@ -753,10 +826,10 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 	}
 	if cam == nil {
-	return &model.CameraNotFoundError{CameraID: cameraID}
+		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if !cam.Enabled {
-	return &model.CameraDisabledError{CameraID: cameraID}
+		return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Stop existing recorder
@@ -765,6 +838,10 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
 		delete(cm.recorders, cameraID)
+	}
+	// Record reconnect attempt
+	if cm.metrics != nil {
+		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
 	}
 
 	// Create and start new recorder
@@ -789,7 +866,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 	if cam == nil {
-	return &model.CameraNotFoundError{CameraID: cameraID}
+		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if !cam.Enabled {
 		return &model.CameraDisabledError{CameraID: cameraID}
@@ -799,7 +876,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	if rec, ok := cm.recorders[cameraID]; ok {
 		status := rec.Status()
 		if status == model.StatusRecording || status == model.StatusReconnecting {
-		return &model.CameraAlreadyRunningError{CameraID: cameraID}
+			return &model.CameraAlreadyRunningError{CameraID: cameraID}
 		}
 		// Stale recorder — stop and remove so we can start fresh
 		if err := rec.Stop(); err != nil {
@@ -1066,4 +1143,24 @@ func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
 	}
 	cm.eventSubscribers = make(map[string]onvif.EventSubscriber)
 	cm.onvifMu.Unlock()
+}
+
+// classifyError categorizes a connection error into a Prometheus label value.
+// Values: "timeout", "auth", "network", "unknown".
+func classifyError(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	msg := err.Error()
+	// Check for common error patterns
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+		return "timeout"
+	case strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "auth"):
+		return "auth"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "network") || strings.Contains(msg, "dial") || strings.Contains(msg, "no such host"):
+		return "network"
+	default:
+		return "unknown"
+	}
 }

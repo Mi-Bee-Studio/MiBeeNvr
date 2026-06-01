@@ -245,9 +245,7 @@
     gap: 0.5rem;
   }
 
-  .onvif-events-icon {
-    color: var(--color-primary);
-  }
+
 
   .onvif-events-title {
     font-size: 0.8125rem;
@@ -281,9 +279,7 @@
     background-color: rgba(239, 68, 68, 0.1);
   }
 
-  .onvif-events-live-dot {
-    animation: pulse-dot 1.5s ease-in-out infinite;
-  }
+
 
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
@@ -323,10 +319,7 @@
     text-align: center;
   }
 
-  .onvif-events-empty-icon {
-    color: var(--text-tertiary);
-    margin-bottom: 0.75rem;
-  }
+
 
   .onvif-events-empty-text {
     font-size: 0.875rem;

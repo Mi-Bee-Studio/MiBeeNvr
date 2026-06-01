@@ -13,6 +13,7 @@ import (
 	"github.com/bluenviron/gortmplib/pkg/codecs"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 var logger = slog.Default().With("component", "rtmp-server")
@@ -254,7 +255,7 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 		// pts is time.Duration from stream start, convert to 90kHz clock ticks
 		// for compatibility with StreamHub's existing consumers (HLS, WebRTC, FLV).
 		ptsTicks := pts.Nanoseconds() * 90 / 1e6 // ns → 90kHz ticks
-		entry.hub.Broadcast(ptsTicks, au)
+		entry.hub.Broadcast(ptsTicks, au, nalutil.IsIDR(au, false))
 	})
 
 	// Read loop — runs until disconnect or context cancellation

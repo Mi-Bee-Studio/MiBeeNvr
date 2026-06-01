@@ -195,10 +195,6 @@
     background-color: var(--bg-tertiary);
   }
 
-  .back-icon {
-    width: 1rem;
-    height: 1rem;
-  }
 
   .logo {
     font-size: 1.25rem;
@@ -257,10 +253,6 @@
     gap: 0.375rem;
   }
 
-  .logout-icon {
-    width: 1.125rem;
-    height: 1.125rem;
-  }
 
   @media (max-width: 639px) {
     .logout-btn span {
@@ -290,10 +282,6 @@
     }
   }
   
-  .hamburger-icon {
-    width: 1.5rem;
-    height: 1.5rem;
-  }
   
   /* Mobile Menu Overlay */
   .mobile-menu {

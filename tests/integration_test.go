@@ -1,6 +1,7 @@
 package mibee_nvr_tests
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"fmt"
+	"runtime"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai/engine"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -31,6 +35,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
+	"github.com/gorilla/websocket"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
 
 // --- Shared helpers ---
@@ -881,7 +887,7 @@ func TestMultiStreamHLS(t *testing.T) {
 
 	// Create HLS manager with small limits for testing
 	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
+	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager (no camMgr — HLS endpoint returns 500)
 	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
@@ -1137,7 +1143,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	db, store := setupEnv(t)
 
 	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(hlsDataDir, 10, 1<<20, 7)
+	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, 10, 1<<20, 7)
 
 	// Create handler with HLS manager but no camMgr
 	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
@@ -1437,4 +1443,489 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	got, err := db.GetRecording(ctx, "post-stress-check")
 	require.NoError(t, err)
 	require.NotNil(t, got)
+}
+
+// ============================================================================
+// Test 24: SSE Event Lifecycle
+// ============================================================================
+
+// mockAIDetector is a mock AIDetector for SSE lifecycle testing.
+type mockAIDetector struct {
+	mu         sync.Mutex
+	callbacks  map[string]engine.OnDetectionFunc
+	cbID       int64
+}
+
+func newMockAIDetector() *mockAIDetector {
+	return &mockAIDetector{
+		callbacks: make(map[string]engine.OnDetectionFunc),
+	}
+}
+
+func (m *mockAIDetector) OnDetection(cb engine.OnDetectionFunc) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cbID++
+	id := fmt.Sprintf("mock-cb-%d", m.cbID)
+	m.callbacks[id] = cb
+	return id
+}
+
+func (m *mockAIDetector) UnregisterCallback(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.callbacks[id]
+	delete(m.callbacks, id)
+	return ok
+}
+
+// EnableCamera / DisableCamera / IsEnabled / EnabledCameras / StopAll — no-ops for SSE test.
+func (m *mockAIDetector) EnableCamera(camID string, hub *model.StreamHub) error { return nil }
+func (m *mockAIDetector) DisableCamera(camID string)              {}
+func (m *mockAIDetector) IsEnabled(camID string) bool            { return false }
+func (m *mockAIDetector) EnabledCameras() []string               { return nil }
+func (m *mockAIDetector) StopAll()                                {}
+
+// triggerDetection invokes all registered callbacks with a test detection.
+func (m *mockAIDetector) triggerDetection() {
+	m.mu.Lock()
+	cbs := make([]engine.OnDetectionFunc, 0, len(m.callbacks))
+	for _, cb := range m.callbacks {
+		cbs = append(cbs, cb)
+	}
+	m.mu.Unlock()
+	for _, cb := range cbs {
+		cb(engine.DetectionResult{
+			CameraID:   "cam-sse-test",
+			PTStime:    1234567890,
+			Detections: []ai.Detection{{Label: "person", Confidence: 0.95, Box: [4]float32{0.1, 0.2, 0.3, 0.4}}},
+		})
+	}
+}
+
+// readSSEEvent reads the next SSE data line from the reader.
+func readSSEEvent(t *testing.T, r *bufio.Reader) []byte {
+	t.Helper()
+	for {
+		line, err := r.ReadString('\n')
+		require.NoError(t, err, "reading SSE line")
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, "data: ") {
+			return []byte(strings.TrimPrefix(line, "data: "))
+		}
+	}
+}
+
+func TestSSEEventLifecycle(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// Create mock AI detector and set it on the handler.
+	mockDet := newMockAIDetector()
+	h.SetAIComponents(nil, mockDet)
+
+	// Use httptest.Server for real TCP SSE streaming.
+	server := httptest.NewServer(h.Routes())
+	defer server.Close()
+
+	// --- Step 1: Capture goroutine baseline ---
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	baseGoroutines := runtime.NumGoroutine()
+	t.Logf("baseline goroutines: %d", baseGoroutines)
+
+	// --- Step 2: Connect SSE client ---
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer sseCancel()
+
+	sseReq, err := http.NewRequestWithContext(sseCtx, "GET", server.URL+"/api/ai/events", nil)
+	require.NoError(t, err)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, sseResp.StatusCode)
+	require.Equal(t, "text/event-stream", sseResp.Header.Get("Content-Type"))
+
+	sseReader := bufio.NewReader(sseResp.Body)
+
+	// --- Step 3: Trigger detection and verify SSE event ---
+	mockDet.triggerDetection()
+
+	eventData := readSSEEvent(t, sseReader)
+	var det engine.DetectionResult
+	require.NoError(t, json.Unmarshal(eventData, &det), "event data: %s", eventData)
+	require.Equal(t, "cam-sse-test", det.CameraID)
+	require.Len(t, det.Detections, 1)
+	require.Equal(t, "person", det.Detections[0].Label)
+	t.Logf("received SSE detection event: camera=%s, labels=%d", det.CameraID, len(det.Detections))
+
+	// --- Step 4: Disconnect SSE client ---
+	sseCancel()
+	sseResp.Body.Close()
+	t.Log("SSE client disconnected")
+
+	// --- Step 5: Verify goroutine cleanup ---
+	time.Sleep(2 * time.Second)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	finalGoroutines := runtime.NumGoroutine()
+	t.Logf("final goroutines: %d (baseline: %d)", finalGoroutines, baseGoroutines)
+	require.LessOrEqual(t, finalGoroutines, baseGoroutines+2,
+		"goroutine leak: %d goroutines remain (baseline: %d)", finalGoroutines, baseGoroutines)
+
+	// --- Step 6: Verify no panic on subsequent detection ---
+	require.NotPanics(t, func() {
+		mockDet.triggerDetection()
+	})
+	t.Log("no panic on post-disconnect detection trigger")
+}
+
+// ===========================================================================
+// Test 25: WebSocket Stream Integration
+// ===========================================================================
+
+func TestWebSocketStreamIntegration(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	// --- Step 1: Create wsstream manager and wire it to the handler ---
+	wsMgr := wsstream.NewManager(
+		wsstream.WithMaxViewers(2),
+		wsstream.WithWriteBufSize(50),
+		wsstream.WithIdleTimeout(5*time.Second),
+	)
+	h.SetWSManager(wsMgr)
+
+	// --- Step 2: Insert H264 camera into DB ---
+	cameraID := "cam-ws-int"
+	err := db.UpsertCamera(context.Background(), cameraID, "WS Test Camera",
+		"rtsp_h264", "", "rtsp://192.168.1.1/stream", "", "", true, "", "", "")
+	require.NoError(t, err)
+
+	// --- Step 3: Pre-register wsstream with mock H264 data ---
+	// The API's handleStreamWS does on-demand registration when wsMgr.IsActive() is false,
+	// but that requires a running recorder. For this integration test we pre-register
+	// so we can test the full WebSocket flow without a real camera.
+	sampleSPS := []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
+	samplePPS := []byte{0x68, 0xce, 0x38, 0x80}
+	hub := model.NewStreamHub()
+	err = wsMgr.RegisterStream(cameraID, model.FormatH264, sampleSPS, samplePPS, nil, hub)
+	require.NoError(t, err)
+	require.True(t, wsMgr.IsActive(cameraID))
+
+	// --- Step 4: Capture goroutine baseline ---
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	baseGoroutines := runtime.NumGoroutine()
+	t.Logf("baseline goroutines: %d", baseGoroutines)
+
+	// --- Step 5: Start HTTP server for WebSocket upgrade ---
+	server := httptest.NewServer(h.Routes())
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/cameras/" + cameraID + "/stream/ws"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "WebSocket dial failed (HTTP %d): %v", resp.StatusCode, err)
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	require.Eventually(t, func() bool { return wsMgr.ViewerCount(cameraID) == 1 },
+		2*time.Second, 50*time.Millisecond, "expected viewer count to be 1 after WebSocket connect")
+
+	// --- Step 6: Read and verify CodecInfo (first message) ---
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(msg), 5, "CodecInfo message too short: %d bytes", len(msg))
+	require.Equal(t, wsstream.MsgTypeCodecInfo, msg[0], "first message should be CodecInfo")
+
+	ci, err := wsstream.DecodeCodecInfo(msg)
+	require.NoError(t, err)
+	require.Equal(t, "h264", ci.Codec)
+	require.Equal(t, sampleSPS, ci.SPS)
+	require.Equal(t, samplePPS, ci.PPS)
+	t.Logf("CodecInfo: codec=%s, sps_len=%d, pps_len=%d", ci.Codec, len(ci.SPS), len(ci.PPS))
+
+	// --- Step 7: Broadcast frames via hub and verify VideoFrame messages ---
+	idrNALU := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
+	hub.Broadcast(90000, [][]byte{idrNALU}, false)
+	time.Sleep(20 * time.Millisecond) // let frame propagate through hub → wsMgr → conn
+
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, wsstream.MsgTypeVideoFrame, msg[0], "second message should be VideoFrame")
+
+	vf, err := wsstream.DecodeVideoFrame(msg)
+	require.NoError(t, err)
+	require.Equal(t, int64(90000), vf.PTS)
+	require.True(t, vf.IsKeyframe, "IDR frame should be detected as keyframe")
+	require.Len(t, vf.NALUs, 1)
+	require.Equal(t, idrNALU, vf.NALUs[0])
+	t.Logf("VideoFrame: pts=%d, keyframe=%v, nalu_count=%d", vf.PTS, vf.IsKeyframe, len(vf.NALUs))
+
+	// --- Step 8: Broadcast additional frames and verify delivery ---
+	for i := 0; i < 2; i++ {
+		nalu := []byte{0x41, byte(i), 0x02, 0x03}
+		hub.Broadcast(int64(90000*(i+2)), [][]byte{nalu}, false)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	framesRead := 0
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for framesRead < 2 {
+		_, msg, err = conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if len(msg) > 0 && msg[0] == wsstream.MsgTypeVideoFrame {
+			framesRead++
+		}
+	}
+	require.Equal(t, 2, framesRead, "should receive 2 additional video frames")
+	t.Log("received 2 additional frames via hub broadcast")
+
+	// --- Step 9: Disconnect WebSocket client and verify cleanup ---
+	conn.Close()
+	t.Log("WebSocket client disconnected")
+
+	// Poll for viewer count to drop to 0
+	eventuallyWS(t, func() bool {
+		return wsMgr.ViewerCount(cameraID) == 0
+	}, 3*time.Second, 50*time.Millisecond)
+	require.Equal(t, 0, wsMgr.ViewerCount(cameraID), "all viewers should be cleaned up after disconnect")
+	t.Log("viewer cleanup verified")
+
+	// --- Step 10: Verify no goroutine leaks ---
+	wsMgr.StopAll()
+	time.Sleep(2 * time.Second)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	finalGoroutines := runtime.NumGoroutine()
+	t.Logf("final goroutines: %d (baseline: %d)", finalGoroutines, baseGoroutines)
+	require.LessOrEqual(t, finalGoroutines, baseGoroutines+2,
+		"goroutine leak: %d goroutines remain (baseline: %d)", finalGoroutines, baseGoroutines)
+	t.Log("no goroutine leaks detected")
+}
+
+// eventuallyWS polls fn until it returns true or timeout elapses.
+func eventuallyWS(t *testing.T, fn func() bool, timeout, interval time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if fn() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("eventuallyWS: timed out after %v", timeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+// ===========================================================================
+// Test 26: AI Endpoints Integration
+// ===========================================================================
+
+// mockAIEngineForInt implements api.AIEngine for integration testing.
+type mockAIEngineForInt struct {
+	available bool
+	name      string
+	modelPath string
+}
+
+func (m *mockAIEngineForInt) IsAvailable() bool { return m.available }
+func (m *mockAIEngineForInt) Name() string      { return m.name }
+func (m *mockAIEngineForInt) ModelPath() string  { return m.modelPath }
+
+// mockAIDetectorForInt implements api.AIDetector for integration endpoint testing.
+type mockAIDetectorForInt struct {
+	mu         sync.Mutex
+	enabled    map[string]bool
+	callbacks  map[string]engine.OnDetectionFunc
+	cbID       int64
+	enableErr  error
+}
+
+func newMockAIDetectorForInt() *mockAIDetectorForInt {
+	return &mockAIDetectorForInt{
+		enabled:   make(map[string]bool),
+		callbacks: make(map[string]engine.OnDetectionFunc),
+	}
+}
+
+func (m *mockAIDetectorForInt) EnableCamera(camID string, hub *model.StreamHub) error {
+	if m.enableErr != nil {
+		return m.enableErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.enabled[camID] = true
+	return nil
+}
+
+func (m *mockAIDetectorForInt) DisableCamera(camID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.enabled, camID)
+}
+
+func (m *mockAIDetectorForInt) IsEnabled(camID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enabled[camID]
+}
+
+func (m *mockAIDetectorForInt) EnabledCameras() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0, len(m.enabled))
+	for id := range m.enabled {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (m *mockAIDetectorForInt) OnDetection(cb engine.OnDetectionFunc) string {
+	if cb == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cbID++
+	id := fmt.Sprintf("int-cb-%d", m.cbID)
+	m.callbacks[id] = cb
+	return id
+}
+
+func (m *mockAIDetectorForInt) UnregisterCallback(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.callbacks[id]
+	delete(m.callbacks, id)
+	return ok
+}
+
+func (m *mockAIDetectorForInt) StopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.enabled = make(map[string]bool)
+}
+
+// fireDetection invokes all registered callbacks (for SSE test within integration).
+func (m *mockAIDetectorForInt) fireDetection(result engine.DetectionResult) {
+	m.mu.Lock()
+	cbs := make([]engine.OnDetectionFunc, 0, len(m.callbacks))
+	for _, cb := range m.callbacks {
+		cbs = append(cbs, cb)
+	}
+	m.mu.Unlock()
+	for _, cb := range cbs {
+		cb(result)
+	}
+}
+
+func TestAIEndpointsIntegration(t *testing.T) {
+	db, store := setupEnv(t)
+	h := newAPI(db, store)
+
+	eng := &mockAIEngineForInt{available: true, name: "test-engine", modelPath: "yolov11n.onnx"}
+	det := newMockAIDetectorForInt()
+	h.SetAIComponents(eng, det)
+
+	// ----------------------------------------------------------------
+	// 1. GET /api/ai/status — returns current status
+	// ----------------------------------------------------------------
+	rr := do(t, h.Routes(), "GET", "/api/ai/status", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var statusResp map[string]interface{}
+	parseJSON(t, rr, &statusResp)
+	require.Equal(t, true, statusResp["available"])
+	require.Equal(t, "running", statusResp["engine_status"])
+	require.Equal(t, "yolov11n.onnx", statusResp["model"])
+
+	// ----------------------------------------------------------------
+	// 2. POST /api/ai/enable — missing camera_id → 400
+	// ----------------------------------------------------------------
+	rr = do(t, h.Routes(), "POST", "/api/ai/enable", strings.NewReader(`{}`))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	var errResp map[string]string
+	parseJSON(t, rr, &errResp)
+	require.Contains(t, errResp["error"], "missing camera_id")
+
+	// ----------------------------------------------------------------
+	// 3. POST /api/ai/enable — valid body but camMgr nil → 503
+	// ----------------------------------------------------------------
+	// Insert camera so DB lookup succeeds, then camMgr check fails with 503.
+	err := db.UpsertCamera(context.Background(), "cam-test", "Test", "rtsp_h264", "", "rtsp://192.168.1.1/stream", "", "", true, "", "", "")
+	require.NoError(t, err)
+	rr = do(t, h.Routes(), "POST", "/api/ai/enable", strings.NewReader(`{"camera_id":"cam-test"}`))
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	// ----------------------------------------------------------------
+	// 4. POST /api/ai/disable — missing camera_id → 400
+	// ----------------------------------------------------------------
+	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{}`))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// ----------------------------------------------------------------
+	// 5. POST /api/ai/disable — already disabled (idempotent) → 200
+	// ----------------------------------------------------------------
+	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{"camera_id":"cam-nope"}`))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var disableResp map[string]string
+	parseJSON(t, rr, &disableResp)
+	require.Equal(t, "disabled", disableResp["status"])
+	require.Equal(t, "cam-nope", disableResp["camera_id"])
+
+	// ----------------------------------------------------------------
+	// 6. POST /api/ai/disable — with detector disabled first → 200
+	// ----------------------------------------------------------------
+	det.EnableCamera("cam-toggle", model.NewStreamHub())
+	require.True(t, det.IsEnabled("cam-toggle"))
+	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{"camera_id":"cam-toggle"}`))
+	require.Equal(t, http.StatusOK, rr.Code)
+	parseJSON(t, rr, &disableResp)
+	require.Equal(t, "disabled", disableResp["status"])
+	require.False(t, det.IsEnabled("cam-toggle"))
+
+	// ----------------------------------------------------------------
+	// 7. SSE /api/ai/events — verify headers and event format
+	// ----------------------------------------------------------------
+	server := httptest.NewServer(h.Routes())
+	defer server.Close()
+
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer sseCancel()
+
+	sseReq, err := http.NewRequestWithContext(sseCtx, "GET", server.URL+"/api/ai/events", nil)
+	require.NoError(t, err)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, sseResp.StatusCode)
+	require.Equal(t, "text/event-stream", sseResp.Header.Get("Content-Type"))
+	require.Equal(t, "no-cache", sseResp.Header.Get("Cache-Control"))
+
+	sseReader := bufio.NewReader(sseResp.Body)
+
+	// Fire a detection event and read it from the SSE stream.
+	det.fireDetection(engine.DetectionResult{
+		CameraID: "cam-ai-int",
+		PTStime:  98765,
+		Detections: []ai.Detection{
+			{Label: "car", Confidence: 0.88, Box: [4]float32{0.0, 0.1, 0.5, 0.6}},
+		},
+	})
+
+	eventData := readSSEEvent(t, sseReader)
+	var detResult engine.DetectionResult
+	require.NoError(t, json.Unmarshal(eventData, &detResult), "event data: %s", eventData)
+	require.Equal(t, "cam-ai-int", detResult.CameraID)
+	require.Len(t, detResult.Detections, 1)
+	require.Equal(t, "car", detResult.Detections[0].Label)
+
+	// Disconnect SSE client.
+	sseCancel()
+	sseResp.Body.Close()
 }

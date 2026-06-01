@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 var logger = slog.Default().With("component", "srt-receiver")
@@ -167,7 +168,7 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 				// Determine PTS from the first NALU in the access unit
 				pts := nalus[0].PTS
 
-				r.hub.Broadcast(pts, au)
+				r.hub.Broadcast(pts, au, nalutil.IsIDR(au, false))
 				r.frameCount.Add(1)
 			}
 		}
@@ -182,7 +183,7 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 				continue
 			}
 			pts := nalus[0].PTS
-			r.hub.Broadcast(pts, au)
+			r.hub.Broadcast(pts, au, nalutil.IsIDR(au, false))
 			r.frameCount.Add(1)
 		}
 	}

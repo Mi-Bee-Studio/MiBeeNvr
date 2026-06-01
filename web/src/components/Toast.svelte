@@ -6,6 +6,13 @@
 
 	let toastContainer: HTMLElement;
 
+
+	function handleKeydown(e: KeyboardEvent, id: string) {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			dismissToast(id);
+		}
+	}
 	// Position container to fixed top-right
 	onMount(() => {
 		if (toastContainer) {
@@ -21,16 +28,21 @@
 
 <div bind:this={toastContainer}>
 	{#each $toasts as toast (toast.id)}
-		<div
-			class="toast"
-			class:toast-success={toast.type === 'success'}
-			class:toast-error={toast.type === 'error'}
-			class:toast-info={toast.type === 'info'}
-			class:toast-warning={toast.type === 'warning'}
+<div
+class="toast"
+class:toast-success={toast.type === 'success'}
+class:toast-error={toast.type === 'error'}
+class:toast-info={toast.type === 'info'}
+class:toast-warning={toast.type === 'warning'}
 			transition:fly={{ y: -20, duration: 300 }}
+			role="button"
+			aria-label="Dismiss notification"
+			tabindex="0"
+
 			on:click={() => dismissToast(toast.id)}
+			on:keydown={(e) => handleKeydown(e, toast.id)}
 		>
-			{toast.message}
+{toast.message}
 			<button
 				class="toast-close"
 				on:click|stopPropagation={() => dismissToast(toast.id)}
@@ -88,9 +100,4 @@
 		background-color: var(--color-warning);
 	}
 
-	/* Fade-out animation when removing */
-	.toast.fade-out {
-		opacity: 0;
-		transform: translateY(-10px);
-	}
-</style>
+	</style>

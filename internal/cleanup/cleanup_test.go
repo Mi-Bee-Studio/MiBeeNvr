@@ -69,6 +69,31 @@ func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, 
 	require.NoError(t, os.WriteFile(fullPath, []byte("fake-data"), 0644))
 }
 
+// insertTimelapseRecording inserts a timelapse-format recording with a file on disk
+// inside the camera directory (matching real timelapse manager behavior).
+func (e *testEnv) insertTimelapseRecording(t *testing.T, id string, cameraID string, fileName string, endedAt time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	fullPath := filepath.Join(e.store.RootDir(), cameraID, fileName)
+	rec := &model.Recording{
+		ID:        id,
+		CameraID:  cameraID,
+		FilePath:  fullPath,
+		Format:    "timelapse",
+		StartedAt: endedAt.Add(-time.Hour),
+		EndedAt:   endedAt,
+		Duration:  3600.0,
+		FileSize:  2048,
+		Merged:    false,
+	}
+	err := e.db.InsertRecording(ctx, rec)
+	require.NoError(t, err)
+
+	// Create the actual file in camera dir
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
+	require.NoError(t, os.WriteFile(fullPath, []byte("fake-timelapse-data"), 0644))
+}
+
 // insertRecordingWithNullEnded inserts a recording where ended_at is NULL (still recording).
 func (e *testEnv) insertRecordingWithNullEnded(t *testing.T, id string) {
 	t.Helper()
@@ -449,3 +474,94 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 	require.Equal(t, 3, total, "expected all events to remain when health cleanup disabled")
 }
 
+// TestOrphanCleanup_TimelapseSurvives verifies that timelapse MP4 files registered
+// in the recordings table survive orphanFileCleanup, while true orphans are deleted.
+func TestOrphanCleanup_TimelapseSurvives(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	// High retention so time-based cleanup doesn't interfere
+	cfg := defaultCleanupConfig()
+	cfg.RetentionDays = 365
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	now := time.Now()
+	camDir := filepath.Join(env.store.RootDir(), "cam1")
+
+	// 1. Create a registered timelapse recording (should survive)
+	env.insertTimelapseRecording(t, "tl-rec-1", "cam1", "cam1_20260101_120000_timelapse.mp4", now.Add(-1*time.Hour))
+
+	// 2. Create an orphan MP4 file (should be deleted by orphan cleanup)
+	orphanPath := filepath.Join(camDir, "cam1_20260101_130000_orphan.mp4")
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan-data"), 0644))
+	// Set mtime > 1 hour ago so it passes the age check
+	require.NoError(t, os.Chtimes(orphanPath, now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+
+	// Set timelapse file mtime > 1 hour ago too (should still survive)
+	tlPath := filepath.Join(camDir, "cam1_20260101_120000_timelapse.mp4")
+	require.NoError(t, os.Chtimes(tlPath, now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+
+	err = cm.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	// Verify: timelapse file still exists
+	_, err = os.Stat(tlPath)
+	require.NoError(t, err, "timelapse recording should survive orphan cleanup")
+
+	// Verify: timelapse DB record still exists
+	got, err := env.db.GetRecording(context.Background(), "tl-rec-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, model.Format("timelapse"), got.Format)
+
+	// Verify: orphan file was deleted
+	_, err = os.Stat(orphanPath)
+	require.True(t, os.IsNotExist(err), "orphan file should be deleted")
+}
+
+// TestTimeBasedCleanup_TimelapseExpired verifies that expired timelapse recordings
+// are cleaned up by timeBasedCleanup (format-agnostic, uses camera retention_days).
+func TestTimeBasedCleanup_TimelapseExpired(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cfg.RetentionDays = 1
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	now := time.Now()
+
+	// Expired timelapse (2 days old, > 1 day retention) → should be deleted
+	env.insertTimelapseRecording(t, "tl-expired", "cam1", "cam1_20260529_120000_timelapse.mp4", now.Add(-48*time.Hour))
+
+	// Recent timelapse (1 hour old) → should survive
+	env.insertTimelapseRecording(t, "tl-recent", "cam1", "cam1_20260601_120000_timelapse.mp4", now.Add(-1*time.Hour))
+
+	// Also insert a regular H264 recording to verify coexistence
+	env.insertTestRecording(t, "h264-expired", "cam1", "/cam1/h264_old.mp4", now.Add(-48*time.Hour), false)
+
+	err = cm.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	// Verify: expired timelapse deleted from DB
+	got, err := env.db.GetRecording(context.Background(), "tl-expired")
+	require.NoError(t, err)
+	require.Nil(t, got, "expired timelapse should be deleted")
+
+	// Verify: expired timelapse file deleted
+	_, err = os.Stat(filepath.Join(env.store.RootDir(), "cam1", "cam1_20260529_120000_timelapse.mp4"))
+	require.True(t, os.IsNotExist(err), "expired timelapse file should be deleted")
+
+	// Verify: recent timelapse survives
+	got, err = env.db.GetRecording(context.Background(), "tl-recent")
+	require.NoError(t, err)
+	require.NotNil(t, got, "recent timelapse should survive")
+	require.Equal(t, model.Format("timelapse"), got.Format)
+
+	// Verify: regular H264 expired also deleted (coexistence check)
+	got, err = env.db.GetRecording(context.Background(), "h264-expired")
+	require.NoError(t, err)
+	require.Nil(t, got, "expired h264 recording should also be deleted")
+}

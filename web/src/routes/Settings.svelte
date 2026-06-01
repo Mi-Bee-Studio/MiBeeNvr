@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend } from '$lib/api';
   import { getTranscodingCheck, getTranscodingStatus, getFFmpegStatus, downloadFFmpeg, retryDownload, getTranscodingSettings, updateTranscodingSettings } from '$lib/api/transcoding';
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig } from '$lib/api';
@@ -53,6 +53,12 @@ let rtmpStreamKeys = $state<{key: string, cameraId: string}[]>([]);
 
 // SRT stream configurations
 let srtStreams = $state<{streamId: string, cameraId: string, mode: string, address: string, passphrase: string}[]>([]);
+
+// AI Detection state
+let aiEnabled = $state(false);
+let aiConfidenceThreshold = $state(0.5);
+let aiFrameSkip = $state(3);
+let aiDetectedBackend = $state('');
 
 
 // Feature toggles state
@@ -413,6 +419,7 @@ function getAffectedCameraCount(protocol: string): number {
     loadDiskInfo();
     loadCameraList();
     loadStreamingConfig();
+    loadAiSettings();
     loadFeatures();
     loadDiskInfo();
     loadCameraList();
@@ -534,6 +541,25 @@ function getAffectedCameraCount(protocol: string): number {
     } finally {
       streamingSaving = false;
     }
+  }
+
+  // --- AI Detection ---
+
+  function loadAiSettings() {
+    const settings = getAiSettings();
+    aiEnabled = settings.enabled;
+    aiConfidenceThreshold = settings.confidenceThreshold;
+    aiFrameSkip = settings.frameSkip;
+    aiDetectedBackend = detectAiBackend();
+  }
+
+  function saveAiSettingsLocal() {
+    saveAiSettings({
+      enabled: aiEnabled,
+      confidenceThreshold: aiConfidenceThreshold,
+      frameSkip: aiFrameSkip,
+    });
+    showToast(t('settings.ai.saved'), 'success');
   }
 
   // --- Transcoding ---
@@ -904,10 +930,12 @@ function getAffectedCameraCount(protocol: string): number {
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable Merge -->
             <div>
-              <label class="input-label">{t('merge.enableMerge')}</label>
+              <label class="input-label" for="merge-toggle">{t('merge.enableMerge')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="merge-toggle"
                   type="button"
+                  aria-label={t('merge.enableMerge')}
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {mergeEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { mergeEnabled = !mergeEnabled; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mergeEnabled = !mergeEnabled; } }}
@@ -988,10 +1016,12 @@ function getAffectedCameraCount(protocol: string): number {
           <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <!-- Enable WebDAV -->
             <div>
-              <label class="input-label">{t('settings.webdavEnabled')}</label>
+              <label class="input-label" for="webdav-toggle">{t('settings.webdavEnabled')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="webdav-toggle" aria-label={t('settings.webdavEnabled')}
                   type="button"
+
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavEnabled = !webdavEnabled; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
@@ -1018,10 +1048,12 @@ function getAffectedCameraCount(protocol: string): number {
 
             <!-- Read-Write Mode -->
             <div>
-              <label class="input-label">{t('settings.webdavReadWrite')}</label>
+              <label class="input-label" for="webdav-rw-toggle">{t('settings.webdavReadWrite')}</label>
               <div class="flex items-center gap-3 mt-2">
                 <button
+                  id="webdav-rw-toggle" aria-label={t('settings.webdavReadWrite')}
                   type="button"
+
                   class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
                   onclick={() => { webdavReadWrite = !webdavReadWrite; }}
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
@@ -1048,10 +1080,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.webrtcDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.webrtc')}</label>
+                <label class="input-label" for="webrtc-toggle">{t('settings.streaming.webrtc')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="webrtc-toggle" aria-label={t('settings.streaming.webrtc')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingWebrtcEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingWebrtcEnabled = !streamingWebrtcEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingWebrtcEnabled = !streamingWebrtcEnabled; } }}
@@ -1085,10 +1119,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.flvDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.flv')}</label>
+                <label class="input-label" for="flv-toggle">{t('settings.streaming.flv')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="flv-toggle" aria-label={t('settings.streaming.flv')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingFlvEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingFlvEnabled = !streamingFlvEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingFlvEnabled = !streamingFlvEnabled; } }}
@@ -1112,10 +1148,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.hlsDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.hls.llHls')}</label>
+                <label class="input-label" for="llhls-toggle">{t('settings.streaming.hls.llHls')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="llhls-toggle" aria-label={t('settings.streaming.hls.llHls')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingHlsLlHls ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingHlsLlHls = !streamingHlsLlHls; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingHlsLlHls = !streamingHlsLlHls; } }}
@@ -1136,10 +1174,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.rtmpDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.rtmp')}</label>
+                <label class="input-label" for="rtmp-toggle">{t('settings.streaming.rtmp')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="rtmp-toggle" aria-label={t('settings.streaming.rtmp')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingRtmpEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingRtmpEnabled = !streamingRtmpEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingRtmpEnabled = !streamingRtmpEnabled; } }}
@@ -1195,10 +1235,12 @@ function getAffectedCameraCount(protocol: string): number {
             <p class="text-xs th-text-tertiary mb-4">{t('settings.streaming.srtDesc')}</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label class="input-label">{t('settings.streaming.srt')}</label>
+                <label class="input-label" for="srt-toggle">{t('settings.streaming.srt')}</label>
                 <div class="flex items-center gap-3 mt-2">
                   <button
+                    id="srt-toggle" aria-label={t('settings.streaming.srt')}
                     type="button"
+
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {streamingSrtEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                     onclick={() => { streamingSrtEnabled = !streamingSrtEnabled; }}
                     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); streamingSrtEnabled = !streamingSrtEnabled; } }}
@@ -1229,30 +1271,35 @@ function getAffectedCameraCount(protocol: string): number {
                       <div class="p-3 rounded-lg th-bg-secondary border th-border">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.streamId')}</label>
-                            <input type="text" class="input text-sm mt-1" placeholder="live/my-stream" bind:value={stream.streamId} />
+                            <label class="text-xs th-text-tertiary" for="srt-streamId-{i}">{t('settings.streaming.srt.streamId')}</label>
+                            <input id="srt-streamId-{i}" type="text" class="input text-sm mt-1" placeholder="live/my-stream" bind:value={stream.streamId} />
                           </div>
+
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.cameraId')}</label>
-                            <input type="text" class="input text-sm mt-1" placeholder="front-door" bind:value={stream.cameraId} />
+                            <label class="text-xs th-text-tertiary" for="srt-cameraId-{i}">{t('settings.streaming.srt.cameraId')}</label>
+                            <input id="srt-cameraId-{i}" type="text" class="input text-sm mt-1" placeholder="front-door" bind:value={stream.cameraId} />
                           </div>
+
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.mode')}</label>
-                            <select class="input text-sm mt-1" bind:value={stream.mode}>
+                            <label class="text-xs th-text-tertiary" for="srt-mode-{i}">{t('settings.streaming.srt.mode')}</label>
+                            <select id="srt-mode-{i}" class="input text-sm mt-1" bind:value={stream.mode}>
+
                               <option value="listener">{t('settings.streaming.srt.modeListener')}</option>
                               <option value="caller">{t('settings.streaming.srt.modeCaller')}</option>
                             </select>
                           </div>
                           {#if stream.mode === 'caller'}
                             <div>
-                              <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.address')}</label>
-                              <input type="text" class="input text-sm mt-1" placeholder="192.168.1.100:9000" bind:value={stream.address} />
+                              <label class="text-xs th-text-tertiary" for="srt-address-{i}">{t('settings.streaming.srt.address')}</label>
+                              <input id="srt-address-{i}" type="text" class="input text-sm mt-1" placeholder="192.168.1.100:9000" bind:value={stream.address} />
                             </div>
+
                           {/if}
                           <div>
-                            <label class="text-xs th-text-tertiary">{t('settings.streaming.srt.passphrase')}</label>
-                            <input type="password" class="input text-sm mt-1" placeholder="......" bind:value={stream.passphrase} />
+                            <label class="text-xs th-text-tertiary" for="srt-passphrase-{i}">{t('settings.streaming.srt.passphrase')}</label>
+                            <input id="srt-passphrase-{i}" type="password" class="input text-sm mt-1" placeholder="......" bind:value={stream.passphrase} />
                           </div>
+
                         </div>
                         <div class="flex justify-end mt-2">
                           <button type="button" class="text-xs th-text-tertiary hover:text-red-400 transition-colors" onclick={() => { srtStreams.splice(i, 1); srtStreams = [...srtStreams]; }}>{t('common.dismiss')}</button>
@@ -1290,6 +1337,92 @@ function getAffectedCameraCount(protocol: string): number {
 
         </div>
 
+        <!-- AI Detection -->
+        <div class="card p-8 border th-border">
+          <div class="flex items-center justify-between mb-1">
+            <div>
+              <h3 class="text-lg font-semibold th-text-primary">{t('settings.ai.title')}</h3>
+              <p class="text-sm th-text-secondary mt-1">{t('settings.ai.description')}</p>
+            </div>
+            <button
+              id="ai-toggle" aria-label={t('settings.ai.title')}
+type="button"
+              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {aiEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+              onclick={() => { aiEnabled = !aiEnabled; }}
+              onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aiEnabled = !aiEnabled; } }}
+              role="switch"
+              aria-checked={aiEnabled}
+            >
+              <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+            </button>
+          </div>
+
+          {#if aiEnabled}
+            <div class="mt-4 pt-4 border-t th-border space-y-6">
+              <!-- Confidence Threshold -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                <label class="input-label" for="ai-confidence-threshold">{t('settings.ai.confidenceThreshold')}</label>
+                  <span class="text-sm font-medium th-text-primary">{Math.round(aiConfidenceThreshold * 100)}%</span>
+                </div>
+                <input
+                  id="ai-confidence-threshold"
+
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiConfidenceThreshold}
+                  min="0.1"
+                  max="0.9"
+                  step="0.1"
+                />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
+              </div>
+
+              <!-- Frame Skip -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
+                  <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
+                </div>
+                <input
+                  id="ai-frame-skip"
+
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiFrameSkip}
+                  min="1"
+                  max="10"
+                  step="1"
+                />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
+              </div>
+
+              <!-- Model & Backend Info -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="p-3 rounded-md th-bg-hover border th-border">
+                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.modelInfo')}</div>
+                  <div class="text-sm font-medium th-text-primary">{t('settings.ai.modelName')}</div>
+                </div>
+                <div class="p-3 rounded-md th-bg-hover border th-border">
+                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.backendInfo')}</div>
+                  <div class="text-sm font-medium th-text-primary">{aiDetectedBackend}</div>
+                </div>
+              </div>
+
+              <!-- Save AI Settings -->
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  onclick={saveAiSettingsLocal}
+                >
+                  {t('settings.save')}
+                </button>
+              </div>
+            </div>
+          {/if}
+        </div>
+
         <!-- Feature Toggles -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.featureToggles.title')}</h3>
@@ -1316,7 +1449,8 @@ function getAffectedCameraCount(protocol: string): number {
                     </div>
                     <div class="flex items-center gap-3">
                       <button
-                        type="button"
+                        id="protocol-toggle-{protocol}" aria-label={t(`settings.featureToggles.protocols.${protocol}`)}
+type="button"
                         class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
                         onclick={() => { featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; }}
                         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; } }}
@@ -1550,8 +1684,9 @@ function getAffectedCameraCount(protocol: string): number {
                     <div class="text-xs th-text-secondary">{t('transcoding.replace_original_desc')}</div>
                   </div>
                   <button
+                    id="transcoding-replace-original" aria-label={t('transcoding.replace_original')}
                     type="button"
-                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {transcodingReplaceOriginal ? 'bg-blue-600' : 'th-bg-tertiary'}"
+
                     onclick={async () => {
                       transcodingReplaceOriginal = !transcodingReplaceOriginal;
                       await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers, replace_original: transcodingReplaceOriginal });

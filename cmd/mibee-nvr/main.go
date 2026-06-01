@@ -30,6 +30,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
@@ -38,6 +39,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
@@ -108,6 +110,27 @@ func autoInitConfig(configPath string) *config.Config {
 	}
 
 	return cfg
+}
+
+// dockerStorageDir detects the correct storage directory for Docker environments.
+// Returns empty string if not running in Docker or no Docker-specific path found.
+func dockerStorageDir() string {
+	// Method 1: Explicit env var (set in Dockerfile and docker-compose.yml)
+	if dir := os.Getenv("NVR_DATA_DIR"); dir != "" {
+		return dir
+	}
+	// Method 2: /data directory exists (Docker container indicator)
+	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+		return "/data"
+	}
+	// Method 3: Docker marker files
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		// Running in Docker but NVR_DATA_DIR not set — check /data
+		if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+			return "/data"
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -339,12 +362,16 @@ type App struct {
 	srtListener *srt.Listener
 
 	// Streaming managers
-	webrtcMgr *webrtc.Manager
-	flvMgr    *flv.Manager
+	webrtcMgr    *webrtc.Manager
+	flvMgr       *flv.Manager
+	wsMgr        *wsstream.Manager
 	transcodeMgr *transcoding.TranscodeManager
 
 	// HTTP server
 	httpServer *http.Server
+
+	// Remote log handler (nil when disabled)
+	remoteLogHandler *remotelog.Handler
 
 	// Lifecycle
 	cancel context.CancelFunc
@@ -380,6 +407,29 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 2: Metrics
 	a.metrics = metrics.NewMetrics()
+
+	// Step 2.5: Remote log handler (if enabled)
+	if cfg.RemoteLog.Enabled {
+		var logLevel slog.Level
+		switch cfg.Observability.LogLevel {
+		case "debug":
+			logLevel = slog.LevelDebug
+		case "warn":
+			logLevel = slog.LevelWarn
+		case "error":
+			logLevel = slog.LevelError
+		default:
+			logLevel = slog.LevelInfo
+		}
+		rh := remotelog.New(cfg.RemoteLog.Endpoint, cfg.RemoteLog.Format, logLevel, a.metrics)
+		a.remoteLogHandler = rh
+		// Wrap slog.Default() with multi-handler to fan out to both stdout and remote
+		if current := slog.Default(); current.Handler() != nil {
+			slog.SetDefault(slog.New(remotelog.MultiHandler(current.Handler(), rh)))
+		} else {
+			slog.SetDefault(slog.New(rh))
+		}
+	}
 
 	// Step 3: Storage manager
 	store, err := storage.NewManager(cfg.Storage.RootDir, a.metrics)
@@ -478,7 +528,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
-	a.hlsMgr = hls.NewManagerWithOpts(hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, a.metrics)
+	a.hlsMgr = hls.NewManagerWithOpts(context.Background(), hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, a.metrics)
 	// Configure Low-Latency HLS if enabled
 	if cfg.HLS.LowLatency {
 		partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
@@ -491,6 +541,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		a.webrtcMgr = webrtc.NewManager(
 			webrtc.WithMaxPeers(cfg.Streaming.WebRTC.MaxViewers),
 			webrtc.WithIdleTimeout(idleTimeout),
+			webrtc.WithMetrics(a.metrics),
 		)
 		slog.Info("WebRTC manager initialized", "max_viewers", cfg.Streaming.WebRTC.MaxViewers)
 	}
@@ -499,9 +550,18 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	if cfg.Streaming.FLV.Enabled != nil && *cfg.Streaming.FLV.Enabled {
 		a.flvMgr = flv.NewManager(
 			flv.WithMaxViewers(cfg.Streaming.FLV.MaxViewers),
+			flv.WithMetrics(a.metrics),
 		)
 		slog.Info("FLV manager initialized", "max_viewers", cfg.Streaming.FLV.MaxViewers)
 	}
+
+	// Step 7.7: WebSocket stream manager (always available)
+	a.wsMgr = wsstream.NewManager(
+		wsstream.WithMaxViewers(cfg.WebSocket.MaxViewers),
+		wsstream.WithWriteBufSize(cfg.WebSocket.WriteBufSize),
+		wsstream.WithIdleTimeout(cfg.WebSocket.IdleTimeout),
+	)
+	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
 
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
@@ -582,6 +642,7 @@ func (a *App) buildRouter() http.Handler {
 	// Wire streaming managers
 	handler.SetWebRTCManager(a.webrtcMgr)
 	handler.SetFLVManager(a.flvMgr)
+	handler.SetWSManager(a.wsMgr)
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
 
@@ -599,6 +660,8 @@ func (a *App) buildRouter() http.Handler {
 	if a.flvMgr != nil {
 		reg.Register(&api.FLVStreamHandler{})
 	}
+	// WebSocket stream handler is always available
+	reg.Register(&api.WSStreamHandler{})
 	handler.SetStreamRegistry(reg)
 
 	// Wire FFmpeg downloader for transcoding status/download APIs
@@ -632,19 +695,19 @@ func (a *App) buildRouter() http.Handler {
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(middleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
+	r.Use(authmw.COOPHeaders)
 
-	// Authenticated routes
-	r.Group(func(r chi.Router) {
-		r.Use(a.authMW)
 
-		// Prometheus metrics (authenticated)
+	// Prometheus metrics — independent auth when configured, public otherwise
+	if cfg.MetricsAuth.IsConfigured() {
+		metricsAuthMW, _ := authmw.NewAuthMiddleware(authmw.AuthProvider{
+			GetUsername: func() string { return cfg.MetricsAuth.Username },
+			GetHash:     func() string { return cfg.MetricsAuth.PasswordHash },
+		}, cfg.MetricsAuth.Password)
+		r.With(metricsAuthMW).Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
+	} else {
 		r.Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
-
-		// pprof (authenticated)
-		if cfg.Observability.EnablePprof {
-			r.Mount("/debug/pprof", http.DefaultServeMux)
-		}
-	})
+	}
 
 	r.Mount("/", handler.Routes())
 
@@ -791,6 +854,12 @@ func (a *App) Stop() error {
 		log := authmw.ComponentLogger("server")
 		log.Info("shutting down...")
 
+		// 0. Remote log handler — flush remaining logs
+		if a.remoteLogHandler != nil {
+			log.Info("flushing remote log handler")
+			a.remoteLogHandler.Close()
+		}
+
 		// 1. HTTP server — stop accepting new requests
 		log.Info("stopping HTTP server")
 		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
@@ -807,6 +876,12 @@ func (a *App) Stop() error {
 	if a.webrtcMgr != nil {
 		log.Info("stopping WebRTC manager")
 		a.webrtcMgr.StopAll()
+	}
+
+	// 4. WebSocket stream manager
+	if a.wsMgr != nil {
+		log.Info("stopping WebSocket stream manager")
+		a.wsMgr.StopAll()
 	}
 
 	// 4. RTMP server
@@ -918,6 +993,19 @@ func main() {
 		slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
 		cfg = autoInitConfig(*configPath)
 	}
+	// Fix Docker storage path mismatch: if running in Docker but config has
+	// the non-Docker default /var/lib/mibee-nvr, auto-fix to /data.
+	if dockerDir := dockerStorageDir(); dockerDir != "" {
+		if cfg.Storage.RootDir == "/var/lib/mibee-nvr" || cfg.Storage.RootDir == "" {
+			slog.Warn("auto-fixing storage.root_dir for Docker environment",
+				"old", cfg.Storage.RootDir, "new", dockerDir)
+			cfg.Storage.RootDir = dockerDir
+			if err := config.Save(*configPath, cfg); err != nil {
+				slog.Warn("failed to save auto-fixed config", "error", err)
+			}
+		}
+	}
+
 	if err := config.Validate(cfg); err != nil {
 		slog.Error("config validation", "error", err)
 		os.Exit(1)

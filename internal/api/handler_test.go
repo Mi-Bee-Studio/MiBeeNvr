@@ -2288,7 +2288,7 @@ func TestHandleStopHLSStream_NilHLSManager(t *testing.T) {
 }
 
 func TestHandleStopHLSStream_NotActive(t *testing.T) {
-	hlsMgr := hls.NewManager(t.TempDir())
+	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2302,7 +2302,7 @@ func TestHandleStopHLSStream_NotActive(t *testing.T) {
 }
 
 func TestHandleStopHLSStream_Active(t *testing.T) {
-	hlsMgr := hls.NewManager(t.TempDir())
+	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}

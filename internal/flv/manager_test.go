@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -577,6 +578,98 @@ func TestStopAll(t *testing.T) {
 	require.False(t, mgr.IsActive("cam2"))
 }
 
+// --- Viewer Cleanup Tests ---
+
+func TestViewerCleanup_FreesSlot(t *testing.T) {
+	mgr := NewManager(WithMaxViewers(1), WithWriteBufSize(10))
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
+
+	// Connect one viewer — takes the only slot
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx1)
+
+	viewerDone1 := make(chan struct{})
+	go func() {
+		defer close(viewerDone1)
+		_ = mgr.ServeFLV("cam1", w1, r1)
+	}()
+
+	require.Eventually(t, func() bool {
+		return mgr.ViewerCount("cam1") == 1
+	}, 2*time.Second, 50*time.Millisecond)
+
+	// Second viewer should get ErrMaxViewers
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest("GET", "/live/cam1.flv", nil)
+	err := mgr.ServeFLV("cam1", w2, r2)
+	require.ErrorIs(t, err, ErrMaxViewers)
+
+	// Disconnect the first viewer
+	cancel1()
+	<-viewerDone1
+
+	require.Eventually(t, func() bool {
+		return mgr.ViewerCount("cam1") == 0
+	}, 2*time.Second, 50*time.Millisecond)
+
+	// Now a new viewer should be able to connect (slot freed)
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+	w3 := httptest.NewRecorder()
+	r3 := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx3)
+
+	viewerDone3 := make(chan struct{})
+	go func() {
+		defer close(viewerDone3)
+		_ = mgr.ServeFLV("cam1", w3, r3)
+	}()
+
+	require.Eventually(t, func() bool {
+		return mgr.ViewerCount("cam1") == 1
+	}, 2*time.Second, 50*time.Millisecond)
+
+	cancel3()
+	<-viewerDone3
+}
+
+func TestGOPCacheMiss_Metric(t *testing.T) {
+	m := metrics.NewMetrics()
+	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(10), WithMetrics(m))
+	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
+
+	// Connect a viewer — no frames were written, so GOP cache is empty --> miss
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+
+	viewerDone := make(chan struct{})
+	go func() {
+		defer close(viewerDone)
+		_ = mgr.ServeFLV("cam1", w, r)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	<-viewerDone
+
+	// Verify the GOP cache miss metric was incremented
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	found := false
+	for _, f := range families {
+		if f.GetName() == "nvr_flv_gop_cache_misses_total" {
+			found = true
+			require.Len(t, f.GetMetric(), 1, "expected 1 label combo for cam1")
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue(),
+				"expected 1 GOP cache miss for cam1")
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_flv_gop_cache_misses_total metric family")
+}
 // --- Helper types ---
 
 // blockingResponseWriter never reads, causing writes to eventually block.

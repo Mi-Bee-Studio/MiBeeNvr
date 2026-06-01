@@ -252,7 +252,13 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 }
 
 // mergeFormatGroup parses segments, groups by SPS/PPS, and merges eligible groups.
+// For MJPEG format, it skips ParseSegment and calls MergeMJPEGSegments directly.
 func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+	// MJPEG segments are directories containing JPEG files — ParseSegment only handles MP4.
+	if format == string(model.FormatMJPEG) {
+		return m.mergeMJPEGGroup(ctx, cameraID, recs, cfg)
+	}
+
 	// Parse all segments.
 	type parsedRec struct {
 		rec    *model.Recording
@@ -262,10 +268,12 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 	}
 
 	var parsed []parsedRec
+	var parseFailedIDs []string
 	for _, rec := range recs {
 		info, err := ParseSegment(rec.FilePath)
 		if err != nil {
-			logger.Warn("failed to parse segment, skipping", "file_path", rec.FilePath, "error", err)
+			logger.Warn("failed to parse segment, marking as failed", "recording_id", rec.ID, "file_path", rec.FilePath, "error", err)
+			parseFailedIDs = append(parseFailedIDs, rec.ID)
 			continue
 		}
 		if info.Codec != format {
@@ -277,6 +285,15 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			spsKey: info.SPS,
 			ppsKey: info.PPS,
 		})
+	}
+
+	// Mark parse-failed recordings permanently.
+	if len(parseFailedIDs) > 0 {
+		if err := m.db.SetMergeStatus(ctx, parseFailedIDs, model.MergeStatusFailed); err != nil {
+			logger.Warn("failed to mark parse-failed segments", "error", err)
+		} else {
+			logger.Info("marked parse-failed segments as merge_status=failed", "count", len(parseFailedIDs))
+		}
 	}
 
 	// Group by SPS/PPS bytes.
@@ -291,8 +308,12 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		groups[keyStr] = append(groups[keyStr], p)
 	}
 
+	var smallGroupIDs []string
 	for _, group := range groups {
 		if len(group) < cfg.MinSegmentsToMerge {
+			for _, g := range group {
+				smallGroupIDs = append(smallGroupIDs, g.rec.ID)
+			}
 			continue
 		}
 
@@ -403,6 +424,15 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		freed += oldSize
 	}
 
+	// Mark undersized SPS/PPS groups as permanently failed.
+	if len(smallGroupIDs) > 0 {
+		if err := m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusFailed); err != nil {
+			logger.Warn("failed to mark undersized group segments", "error", err)
+		} else {
+			logger.Info("marked undersized SPS/PPS group segments as merge_status=failed", "count", len(smallGroupIDs))
+		}
+	}
+
 	return merged, segments, freed
 }
 
@@ -414,4 +444,64 @@ func groupByFormat(recs []*model.Recording) map[string][]*model.Recording {
 		m[f] = append(m[f], r)
 	}
 	return m
+}
+
+// mergeMJPEGGroup merges MJPEG segment directories into a single merged directory.
+// MJPEG segments cannot be parsed by ParseSegment (MP4-only), so this path
+// collects all MJPEG recordings and delegates to MergeMJPEGSegments.
+func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+	if len(recs) < cfg.MinSegmentsToMerge {
+		return 0, 0, 0
+	}
+
+	// Estimate merged size from source recordings.
+	var estSize int64
+	for _, r := range recs {
+		estSize += r.FileSize
+	}
+
+	// Check disk space.
+	total, used, err := m.store.GetDiskUsage()
+	if err != nil {
+		logger.Warn("failed to get disk usage", "error", err)
+		return 0, 0, 0
+	}
+	freeSpace := total - used
+	required := estSize * 11 / 10
+	if freeSpace < required {
+		logger.Warn("insufficient disk space for MJPEG merge", "camera_id", cameraID, "needed", required, "free", freeSpace)
+		return 0, 0, 0
+	}
+
+	// Delegate to MergeMJPEGSegments — handles file moves, source dir deletion, and output dir creation.
+	mergedRec, err := MergeMJPEGSegments(ctx, recs, m.store, cameraID)
+	if err != nil {
+		logger.Error("failed to merge MJPEG segments", "camera_id", cameraID, "error", err)
+		return 0, 0, 0
+	}
+
+	// Mark as merged.
+	mergedRec.Merged = true
+
+	// Atomic: insert merged recording + delete old recordings in single transaction.
+	ids := make([]string, len(recs))
+	for i, r := range recs {
+		ids[i] = r.ID
+	}
+	if err := m.db.MergeAndReplaceRecordings(ctx, mergedRec, ids); err != nil {
+		logger.Error("failed to merge and replace MJPEG recordings", "camera_id", cameraID, "error", err)
+		// MergeMJPEGSegments already deleted source dirs, so clean up the orphaned merged dir.
+		os.RemoveAll(mergedRec.FilePath)
+		return 0, 0, 0
+	}
+
+	logger.Info("merged MJPEG segments",
+		"camera_id", cameraID,
+		"segments", len(recs),
+		"duration_s", mergedRec.Duration,
+		"size_bytes", mergedRec.FileSize,
+		"freed_bytes", estSize,
+	)
+
+	return 1, len(recs), estSize
 }

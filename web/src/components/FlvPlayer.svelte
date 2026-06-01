@@ -1,21 +1,51 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
-  import { AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
+  import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
+  import { sendTelemetry } from '$lib/telemetry';
   import type { StreamState } from '$lib/hls-errors';
+  import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
   let {
     cameraId,
     cameraName,
     expanded = false,
+    tabVisible = true,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
+    tabVisible?: boolean;
   } = $props();
 
+  // Reconnection coordinator from Dashboard context
+  const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
+  let coordinatedTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasActiveCoordinatedReconnect = false;
+
+  function coordinatedReconnect(reconnectFn: () => void) {
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (!coordinator) {
+      reconnectFn();
+      return;
+    }
+    hasActiveCoordinatedReconnect = true;
+    const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, grantedDelay);
+    });
+    if (delay >= 0) {
+      coordinatedTimer = setTimeout(() => {
+        coordinatedTimer = null;
+        reconnectFn();
+      }, delay);
+    }
+  }
   let streamState: StreamState | 'loading' = $state('loading');
   let videoEl: HTMLVideoElement | undefined = $state();
   let mpegtsPlayer: any = null;
@@ -29,11 +59,20 @@
   let lastPlaybackTime = 0;
   let zombieCount = 0;
 let destroyed = false;
+let videoEventAc: AbortController | null = null;
 
   // Freeze frame — prevents black flash during reconnection
   let frozenFrameUrl: string | null = $state(null);
   let showFrozenFrame = $state(false);
   let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Snapshot fallback — degrades to static snapshots after max reconnect failures
+  let snapshotMode = $state(false);
+  let snapshotSrc = $state('');
+  let snapshotRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let snapshotRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+  const SNAPSHOT_REFRESH_MS = 2000;
+  const SNAPSHOT_RESTORE_MS = 5 * 60 * 1000;
 
   function captureFreezeFrame() {
     if (frozenFrameUrl) return;
@@ -71,15 +110,70 @@ let destroyed = false;
   }
 
   function scheduleReconnect() {
-    if (reconnectAttempts >= maxReconnectAttempts) return;
+    if (reconnectAttempts >= maxReconnectAttempts) {
+      enterSnapshotMode();
+      return;
+    }
     captureFreezeFrame();
     reconnectAttempts++;
-    const delay = getBackoffDelay();
-    reconnectTimer = setTimeout(() => {
+
+    const doReconnect = () => {
       reconnectTimer = null;
       destroyPlayer();
       initFlv();
-    }, delay);
+    };
+
+    if (coordinator) {
+      // Use coordinator's delay instead of per-player backoff
+      if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+      hasActiveCoordinatedReconnect = true;
+      const delay = coordinator.requestReconnect(cameraId, (grantedDelay) => {
+        coordinatedTimer = setTimeout(doReconnect, grantedDelay);
+      });
+      if (delay >= 0) {
+        coordinatedTimer = setTimeout(doReconnect, delay);
+      }
+      return;
+    }
+
+    const delay = getBackoffDelay();
+    reconnectTimer = setTimeout(doReconnect, delay);
+  }
+
+  function enterSnapshotMode() {
+    if (snapshotMode) return;
+    console.warn(`FLV max retries reached for ${cameraId}, entering snapshot fallback`);
+    sendTelemetry('stream_degradation', cameraId, undefined, { protocol: 'flv', target: 'snapshot' });
+    snapshotMode = true;
+    streamState = 'snapshot';
+    destroyPlayer();
+    refreshSnapshot();
+    snapshotRefreshTimer = setInterval(refreshSnapshot, SNAPSHOT_REFRESH_MS);
+    snapshotRestoreTimer = setTimeout(exitSnapshotMode, SNAPSHOT_RESTORE_MS);
+  }
+
+  function refreshSnapshot() {
+    const authHeader = getAuthHeader();
+    let url = getSnapshotUrl(cameraId);
+    if (authHeader) {
+      const token = authHeader.replace('Basic ', '');
+      url += `?token=${encodeURIComponent(token)}`;
+    }
+    snapshotSrc = `${url}&_t=${Date.now()}`;
+  }
+
+  function exitSnapshotMode() {
+    stopSnapshotMode();
+    reconnectAttempts = 0;
+    streamState = 'loading';
+    initFlv();
+  }
+
+  function stopSnapshotMode() {
+    snapshotMode = false;
+    snapshotSrc = '';
+    if (snapshotRefreshTimer) { clearInterval(snapshotRefreshTimer); snapshotRefreshTimer = null; }
+    if (snapshotRestoreTimer) { clearTimeout(snapshotRestoreTimer); snapshotRestoreTimer = null; }
   }
 
   function destroyPlayer() {
@@ -91,12 +185,10 @@ let destroyed = false;
       clearInterval(zombieInterval);
       zombieInterval = null;
     }
-    if (videoEl) {
-      if (boundOnPlaying) { videoEl.removeEventListener('playing', boundOnPlaying); }
-      if (boundOnWaiting) { videoEl.removeEventListener('waiting', boundOnWaiting); }
+    if (videoEventAc) {
+      videoEventAc.abort();
+      videoEventAc = null;
     }
-    boundOnPlaying = null;
-    boundOnWaiting = null;
     if (mpegtsPlayer) {
       try {
         mpegtsPlayer.pause();
@@ -216,27 +308,34 @@ let destroyed = false;
       });
 
       player.on(mpegts.default.Events.STATISTICS_INFO, () => {
-        // Detect playing state from video element
-        if (videoEl && videoEl.readyState >= 2) {
-          if (frozenFrameUrl) clearFreezeFrame();
-          streamState = 'playing';
-          startZombieDetector();
+      // Detect playing state from video element
+      if (videoEl && videoEl.readyState >= 2) {
+        if (frozenFrameUrl) clearFreezeFrame();
+        if (coordinator && hasActiveCoordinatedReconnect) {
+          coordinator.completeReconnect(cameraId);
+          hasActiveCoordinatedReconnect = false;
         }
+        streamState = 'playing';
+        startZombieDetector();
+      }
       });
 
       // Fallback: detect playing via video events
-      boundOnPlaying = () => {
+      const ac = new AbortController();
+      videoEventAc = ac;
+      videoEl.addEventListener('playing', () => {
         if (frozenFrameUrl) clearFreezeFrame();
+        if (coordinator && hasActiveCoordinatedReconnect) {
+          coordinator.completeReconnect(cameraId);
+          hasActiveCoordinatedReconnect = false;
+        }
         streamState = 'playing';
         startZombieDetector();
-      };
-      boundOnWaiting = () => {
+      }, { signal: ac.signal });
+      videoEl.addEventListener('waiting', () => {
         if (streamState === 'playing') captureFreezeFrame();
         if (streamState !== 'error') streamState = 'buffering';
-      };
-
-      videoEl.addEventListener('playing', boundOnPlaying);
-      videoEl.addEventListener('waiting', boundOnWaiting);
+      }, { signal: ac.signal });
     } catch (e) {
       console.warn('FLV init failed:', e);
       streamState = 'error';
@@ -245,10 +344,13 @@ let destroyed = false;
   }
 
   function handleReconnect() {
+    stopSnapshotMode();
     reconnectAttempts = 0;
     captureFreezeFrame();
-    destroyPlayer();
-    initFlv();
+    coordinatedReconnect(() => {
+      destroyPlayer();
+      initFlv();
+    });
   }
 
   // Main lifecycle
@@ -256,6 +358,7 @@ let destroyed = false;
     const _id = cameraId;
     if (!_id) return;
 
+    stopSnapshotMode();
     destroyPlayer();
     streamState = 'loading';
 
@@ -266,30 +369,32 @@ let destroyed = false;
     };
   });
 
-  // Visibility change handler
+  // Coordinated visibility — pause when tab hidden, resume when visible
+  // Replaces per-player visibilitychange listener; Dashboard owns the signal
   $effect(() => {
-    let wasHidden = false;
-
-    const handler = () => {
-      if (document.hidden) {
-        wasHidden = true;
-      } else if (wasHidden) {
-        wasHidden = false;
+    const visible = tabVisible;
+    if (!visible) {
+      // Tab hidden — pause player to release decode resources
+      if (mpegtsPlayer && !destroyed) {
+        try { mpegtsPlayer.pause(); } catch { /* ignore */ }
+      }
+    } else {
+      // Tab visible — resume: rebuild stream for fresh state
+      if (!destroyed && streamState !== 'loading') {
+        stopSnapshotMode();
         reconnectAttempts = 0;
         captureFreezeFrame();
         destroyPlayer();
         initFlv();
       }
-    };
-
-    document.addEventListener('visibilitychange', handler);
-    return () => {
-      document.removeEventListener('visibilitychange', handler);
-    };
+    }
   });
 
   onDestroy(() => {
     destroyed = true;
+    stopSnapshotMode();
+    if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
+    if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
     destroyPlayer();
@@ -306,25 +411,31 @@ let destroyed = false;
         ? 'opacity-100'
         : streamState === 'buffering'
           ? 'opacity-60'
-          : 'opacity-0 pointer-events-none',
+          : streamState === 'snapshot'
+            ? 'opacity-0 pointer-events-none'
+            : 'opacity-0 pointer-events-none',
   );
   let dotColor = $derived(
     streamState === 'playing'
       ? 'bg-green-500'
       : streamState === 'buffering'
         ? 'bg-yellow-500 animate-pulse'
-        : streamState === 'error'
-          ? 'bg-red-500'
-          : 'bg-gray-400',
+        : streamState === 'snapshot'
+          ? 'bg-blue-500 animate-pulse'
+          : streamState === 'error'
+            ? 'bg-red-500'
+            : 'bg-gray-400',
   );
   let dotTitle = $derived(
     streamState === 'playing'
       ? t('dashboard.live')
       : streamState === 'buffering'
         ? t('dashboard.buffering')
-        : streamState === 'error'
-          ? t('dashboard.errorState')
-          : t('live.flv.connecting'),
+        : streamState === 'snapshot'
+          ? t('dashboard.snapshotMode')
+          : streamState === 'error'
+            ? t('dashboard.errorState')
+            : t('live.flv.connecting'),
   );
 </script>
 
@@ -340,16 +451,36 @@ let destroyed = false;
     />
   {/if}
 
-  <video
-    bind:this={videoEl}
-    class="w-full h-full object-contain"
-    autoplay
-    muted
-    playsinline
-    aria-label="{cameraName} — {dotTitle}"
-  >
-    {t('live.videoUnsupportedTag')}
-  </video>
+  {#if snapshotMode}
+    <img
+      src={snapshotSrc}
+      alt="{cameraName} snapshot"
+      class="absolute inset-0 w-full h-full object-contain"
+    />
+    <!-- Snapshot mode indicator -->
+    <div class="absolute top-8 left-2 flex items-center gap-1.5 px-2 py-1 rounded bg-blue-500/20 border border-blue-400/30 z-20">
+      <ImageIcon size={12} class="text-blue-400" />
+      <span class="text-blue-300 text-xs">{t('live.snapshot.fallback')}</span>
+    </div>
+    <button
+      onclick={handleReconnect}
+      class="absolute bottom-14 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 text-white/80 text-xs hover:bg-white/20 transition-colors z-20"
+    >
+      <RefreshCw size={12} />
+      {t('common.retry')}
+    </button>
+  {:else}
+    <video
+      bind:this={videoEl}
+      class="w-full h-full object-contain"
+      autoplay
+      muted
+      playsinline
+      aria-label="{cameraName} — {dotTitle}"
+    >
+      {t('live.videoUnsupportedTag')}
+    </video>
+  {/if}
 
   <!-- Overlay -->
   <div

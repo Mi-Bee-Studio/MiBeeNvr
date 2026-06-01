@@ -696,3 +696,32 @@ export async function deleteDeviceUsers(
     signal,
   });
 }
+
+// --- Per-camera timelapse config ---
+
+export interface TimelapseConfig {
+  enabled: boolean;
+  interval: string;
+  output_fps: number;
+  video_codec: string;
+  delete_original: boolean;
+}
+
+export async function getTimelapseConfig(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<TimelapseConfig> {
+  return apiRequest<TimelapseConfig>(`/cameras/${cameraId}/timelapse`, { signal });
+}
+
+export async function updateTimelapseConfig(
+  cameraId: string,
+  config: TimelapseConfig,
+  signal?: AbortSignal
+): Promise<any> {
+  return apiRequest(`/cameras/${cameraId}/timelapse`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+    signal,
+  });
+}

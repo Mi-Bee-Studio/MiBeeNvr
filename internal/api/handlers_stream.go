@@ -296,7 +296,10 @@ func unwrapDelegate(rec model.Recorder) model.Recorder {
 func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
 	if provider, ok := rec.(model.HLSProvider); ok {
 		codec, sps, pps, vps = provider.CodecParams()
-		return
+		if sps != nil && pps != nil {
+			return
+		}
+		// HLSProvider returned empty params — fall through to concrete type switch
 	}
 
 	actualRec := unwrapDelegate(rec)
@@ -511,4 +514,25 @@ func (h *LLHLSStreamHandler) SupportedCodec(codec model.Format) bool {
 // UnavailabilityReason returns why LL-HLS is not available.
 func (h *LLHLSStreamHandler) UnavailabilityReason(_ model.Format) string {
 	return "Enable low-latency HLS in Settings"
+}
+// --- WSStreamHandler ---
+
+// WSStreamHandler implements StreamHandler for WebSocket streaming.
+// WebSocket streams start/stop on-demand via GET /stream/ws, so StartStream
+// and StopStream are no-ops. This registration exists purely for protocol
+// discovery (so /api/cameras/{id}/protocols returns the correct list).
+type WSStreamHandler struct{}
+
+func (h *WSStreamHandler) Name() string { return "wasm" }
+
+func (h *WSStreamHandler) CanHandle(codec model.Format) bool {
+	return codec == model.FormatH264 || codec == model.FormatH265
+}
+
+func (h *WSStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
+	return nil // WebSocket streams start on-demand via GET /stream/ws
+}
+
+func (h *WSStreamHandler) StopStream(camID string) error {
+	return nil // WebSocket streams stop when client disconnects
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
@@ -33,6 +34,7 @@ type HTTPJPEGConfig struct {
 	DB         RecordingDB
 	MaxBackoff time.Duration   // Deprecated: no longer used, tiered backoff is used instead
 	InitBackoff time.Duration  // Deprecated: no longer used, tiered backoff is used instead
+	EventBus    *event.EventBus
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -350,6 +352,8 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	}
 
 	// Insert recording entry into database
+	var totalSize int64
+	var recordingID string
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -363,8 +367,8 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
+		recordingID = rec.ID
 		// Get file size from disk (MJPEG segments are directories)
-		var totalSize int64
 		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() {
 				totalSize += info.Size()
@@ -375,6 +379,19 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+
+	// Publish SegmentCompleted event.
+	if r.cfg.EventBus != nil && recordingID != "" {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    r.cfg.CameraID,
+			FilePath:    r.curFinalPath,
+			Format:      string(model.FormatMJPEG),
+			StartedAt:   r.segStart.Format(time.RFC3339Nano),
+			EndedAt:     time.Now().Format(time.RFC3339Nano),
+			FileSize:    totalSize,
+			RecordingID: recordingID,
+		})
 	}
 
 	if r.frameCount > 0 {

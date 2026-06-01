@@ -168,6 +168,10 @@ func decryptConfig(cfg *Config, key []byte) {
 			cfg.Cameras[i].Password = v
 		}
 	}
+	// Metrics auth password
+	if v, err := Decrypt(cfg.MetricsAuth.Password, key); err == nil {
+		cfg.MetricsAuth.Password = v
+	}
 }
 
 // encryptConfig encrypts all sensitive fields in the config in place.
@@ -219,6 +223,13 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			}
 		}
 	}
+	// Metrics auth password
+	if cfg.MetricsAuth.Password != "" && !IsEncrypted(cfg.MetricsAuth.Password) {
+		if v, err := Encrypt(cfg.MetricsAuth.Password, key); err == nil {
+			cfg.MetricsAuth.Password = v
+			encrypted = append(encrypted, "metrics_auth.password")
+		}
+	}
 
 	return encrypted
 }
@@ -245,6 +256,9 @@ func SensitiveFieldPaths(cfg *Config) []string {
 			fields = append(fields, fmt.Sprintf("cameras[%d].password", i))
 		}
 	}
+	if cfg.MetricsAuth.Password != "" && !IsEncrypted(cfg.MetricsAuth.Password) {
+		fields = append(fields, "metrics_auth.password")
+	}
 
 	return fields
 }
@@ -256,7 +270,8 @@ type sensitiveSnapshot struct {
 	MQTTPassword    string
 	XiaomiUserID    string
 	XiaomiToken     string
-	CameraPasswords []string
+	CameraPasswords    []string
+	MetricsAuthPassword string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -265,7 +280,8 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		MQTTPassword:    cfg.MQTT.Password,
 		XiaomiUserID:    cfg.Xiaomi.UserID,
 		XiaomiToken:     cfg.Xiaomi.Token,
-		CameraPasswords: make([]string, len(cfg.Cameras)),
+		CameraPasswords:    make([]string, len(cfg.Cameras)),
+		MetricsAuthPassword: cfg.MetricsAuth.Password,
 	}
 	for i := range cfg.Cameras {
 		s.CameraPasswords[i] = cfg.Cameras[i].Password
@@ -282,5 +298,6 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		if i < len(s.CameraPasswords) {
 			cfg.Cameras[i].Password = s.CameraPasswords[i]
 		}
+	cfg.MetricsAuth.Password = s.MetricsAuthPassword
 	}
 }

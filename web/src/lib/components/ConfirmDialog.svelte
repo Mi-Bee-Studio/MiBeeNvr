@@ -61,6 +61,7 @@
   <div
     bind:this={dialogEl}
     role="dialog"
+    tabindex="-1"
     aria-modal="true"
     aria-labelledby="confirm-dialog-title"
     aria-describedby="confirm-dialog-desc"

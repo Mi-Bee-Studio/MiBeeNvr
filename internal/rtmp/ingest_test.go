@@ -262,7 +262,7 @@ func TestFrameDistributionToStreamHub(t *testing.T) {
 	testAU := [][]byte{
 		{0x65, 0x88, 0x84, 0x00, 0x40}, // IDR slice
 	}
-	hub.Broadcast(1000, testAU)
+	hub.Broadcast(1000, testAU, false)
 
 	// Wait for async delivery
 	require.Eventually(t, func() bool {
@@ -383,7 +383,7 @@ func TestStreamHubBroadcastNonBlocking(t *testing.T) {
 		defer close(done)
 		for i := 0; i < 200; i++ {
 			testAU := [][]byte{{0x65, 0x88}}
-			hub.Broadcast(int64(i), testAU)
+			hub.Broadcast(int64(i), testAU, false)
 		}
 	}()
 
