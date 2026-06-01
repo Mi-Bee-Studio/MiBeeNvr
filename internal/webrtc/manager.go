@@ -56,7 +56,12 @@ type peerEntry struct {
 
 // congestionTracker tracks frame send/drop rates in a sliding window
 // to detect network congestion and trigger frame skipping.
+//
+// Concurrency: recordDropped (called from WriteH264 goroutine) and recordSent /
+// shouldSkipFrame / dropRate (called from writeLoop goroutine) access these fields
+// concurrently. All public methods hold mu for the duration of their critical section.
 type congestionTracker struct {
+	mu          sync.Mutex
 	windowSize  int
 	window      []bool // true = sent, false = dropped (circular buffer)
 	windowPos   int
@@ -85,6 +90,8 @@ func (ct *congestionTracker) recordDropped() {
 
 // record adds an entry to the sliding window.
 func (ct *congestionTracker) record(sent bool) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
 	ct.window[ct.windowPos] = sent
 	ct.windowPos = (ct.windowPos + 1) % ct.windowSize
 	if ct.windowCount < ct.windowSize {
@@ -94,6 +101,13 @@ func (ct *congestionTracker) record(sent bool) {
 
 // dropRate returns the current drop rate (0.0 to 1.0).
 func (ct *congestionTracker) dropRate() float64 {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	return ct.dropRateLocked()
+}
+
+// dropRateLocked is the lock-free variant — caller must hold ct.mu.
+func (ct *congestionTracker) dropRateLocked() float64 {
 	if ct.windowCount == 0 {
 		return 0
 	}
@@ -109,6 +123,9 @@ func (ct *congestionTracker) dropRate() float64 {
 // shouldSkipFrame returns true if a non-IDR frame should be skipped due to congestion.
 // IDR frames are never skipped. When congested, skips every other non-IDR frame.
 func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
 	// IDR frames are never skipped
 	if isIDR {
 		return false
@@ -119,7 +136,7 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 		return false
 	}
 
-	rate := ct.dropRate()
+	rate := ct.dropRateLocked()
 
 	// State transitions
 	if !ct.congested && rate > highDropRateThreshold {
@@ -143,7 +160,6 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 	ct.skipCounter++
 	return ct.skipCounter%2 == 1
 }
-
 // Manager manages WebRTC WHEP sessions for camera streaming.
 // It supports H.264 video only (no audio), with configurable max peers
 // per camera and idle eviction.

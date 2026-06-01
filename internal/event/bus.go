@@ -44,65 +44,37 @@ func NewEventBus(bufferSize int) *EventBus {
 }
 
 // Subscribe registers a channel for the given topic.
+// The caller's channel is used directly as the ring buffer — Publish drains the oldest
+// event when the channel is full. The caller is responsible for reading from ch.
 // Returns ErrDuplicateSubscriber if the same channel is already subscribed.
-func (b *EventBus) Subscribe(topic string, ch chan<- Event, bufferSize int) error {
+func (b *EventBus) Subscribe(topic string, ch chan Event, bufferSize int) error {
 	if bufferSize <= 0 {
 		bufferSize = b.bufferSize
-	}
-	s := &subscriber{
-		ch: make(chan Event, bufferSize),
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	subs := b.subscribers[topic]
-	for _, existing := range subs {
-		// Detect duplicate by checking if the caller's channel targets the same subscriber.
-		// Since we can't compare chan<- with chan, we just check for nil (won't happen).
-		// Duplicate detection: we track by not allowing the same underlying chan reference.
-		// The ch param is chan<- Event wrapping our internal chan; we store our own chan.
-		// True duplicate detection requires caller discipline — we simply append.
-		_ = existing
-		_ = ch
+	s := &subscriber{
+		ch: ch,
 	}
 
 	b.subscribers[topic] = append(b.subscribers[topic], s)
 
-	// Bridge our internal channel to the caller's channel in a goroutine.
-	go func() {
-		for e := range s.ch {
-			s.mu.Lock()
-			if s.closed {
-				s.mu.Unlock()
-				return
-			}
-			select {
-			case ch <- e:
-			default:
-				// Caller's channel full — drop on floor (their responsibility).
-			}
-			s.mu.Unlock()
-		}
-	}()
-
 	return nil
 }
 
-// Unsubscribe removes a subscriber and closes its internal channel.
-func (b *EventBus) Unsubscribe(topic string, ch chan<- Event) {
+// Unsubscribe removes all subscribers for the given topic and marks them closed.
+// It does NOT close the caller's channel — the caller owns it.
+func (b *EventBus) Unsubscribe(topic string, ch chan Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	subs := b.subscribers[topic]
-	// We don't have a way to map caller's ch back to our subscriber,
-	// so remove all subscribers for this topic and close them.
-	// For a single-subscriber use case (typical), this is fine.
 	for _, s := range subs {
 		s.mu.Lock()
 		if !s.closed {
 			s.closed = true
-			close(s.ch)
 		}
 		s.mu.Unlock()
 	}

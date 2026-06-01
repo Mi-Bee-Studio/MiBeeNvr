@@ -868,6 +868,9 @@ func TestDownload_LargeTarGzProgress(t *testing.T) {
 }
 
 // TestDownload_ConcurrentMutex verifies concurrent Download calls don't cause multiple downloads.
+// It counts actual HTTP requests to the test server: if the mutex works, the server receives
+// exactly 1 request even when 3 goroutines call Download concurrently. Success count alone is
+// unreliable because a fast download lets subsequent callers see the binary already exists.
 func TestDownload_ConcurrentMutex(t *testing.T) {
 	binaryContent := []byte("#!/bin/sh\necho 'onnxruntime version 1.17.0-test'\n")
 	archive := createTarGzArchive(t, map[string][]byte{
@@ -875,7 +878,12 @@ func TestDownload_ConcurrentMutex(t *testing.T) {
 	})
 	withExpectedHash(t, archive)
 
-	srv := serveTarGz(t, archive)
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(archive)))
+		w.Write(archive)
+	}))
 	defer srv.Close()
 
 	dir := t.TempDir()
@@ -887,32 +895,25 @@ func TestDownload_ConcurrentMutex(t *testing.T) {
 	defer func() { getDownloadURL = origGetter }()
 
 	var wg sync.WaitGroup
-	var errs []error
-	var mu sync.Mutex
+	var successCount int32
 
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := d.Download(context.Background())
-			mu.Lock()
-			errs = append(errs, err)
-			mu.Unlock()
+			if err := d.Download(context.Background()); err == nil {
+				atomic.AddInt32(&successCount, 1)
+			}
 		}()
 	}
 	wg.Wait()
 
-	// First call should succeed; subsequent may fail with "already in progress"
-	successCount := 0
-	for _, err := range errs {
-		if err == nil {
-			successCount++
-		}
-	}
-	if successCount == 0 {
+	// At least one Download must succeed
+	if atomic.LoadInt32(&successCount) == 0 {
 		t.Fatal("at least one Download call should succeed")
 	}
-	if successCount > 1 {
-		t.Fatalf("expected at most 1 success due to mutex, got %d", successCount)
+	// Mutex must prevent concurrent downloads: server should receive exactly 1 request
+	if got := requestCount.Load(); got != 1 {
+		t.Fatalf("mutex should prevent concurrent downloads: expected 1 server request, got %d", got)
 	}
 }

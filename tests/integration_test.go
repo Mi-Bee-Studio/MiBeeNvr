@@ -1627,8 +1627,8 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	require.NoError(t, err, "WebSocket dial failed (HTTP %d): %v", resp.StatusCode, err)
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	require.Equal(t, 1, wsMgr.ViewerCount(cameraID))
-	t.Log("WebSocket client connected")
+	require.Eventually(t, func() bool { return wsMgr.ViewerCount(cameraID) == 1 },
+		2*time.Second, 50*time.Millisecond, "expected viewer count to be 1 after WebSocket connect")
 
 	// --- Step 6: Read and verify CodecInfo (first message) ---
 	_, msg, err := conn.ReadMessage()

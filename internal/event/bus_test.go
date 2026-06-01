@@ -123,10 +123,10 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 	bus.Unsubscribe("idem", ch)
 }
 
-func TestOverflow_DropsOldest(t *testing.T) {
-	// Use a very small internal buffer and don't consume.
+	func TestOverflow_DropsOldest(t *testing.T) {
+	// Use a very small buffer and don't consume.
 	bus := NewEventBus(3)
-	ch := make(chan Event, 100)
+	ch := make(chan Event, 3)
 	err := bus.Subscribe("overflow", ch, 3)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)

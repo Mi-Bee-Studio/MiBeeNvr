@@ -23,14 +23,17 @@ type testCollector struct {
 
 func (tc *testCollector) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tc.Count.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		r.Body.Close()
 		tc.mu.Lock()
 		tc.Bodies = append(tc.Bodies, string(body))
 		tc.mu.Unlock()
+		// Increment Count AFTER body is captured so waitForRequests can rely on
+		// Count >= N implying len(Bodies) >= N. Otherwise getBodies() may observe an
+		// empty slice under CI load, causing "no valid JSON entry found" flakes.
+		tc.Count.Add(1)
 		w.WriteHeader(http.StatusNoContent)
-	}
+}
 }
 
 func (tc *testCollector) getBodies() []string {
@@ -49,12 +52,13 @@ func startTestServer(statusCode int) (*httptest.Server, *testCollector) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/insert/jsonline", func(w http.ResponseWriter, r *http.Request) {
-		tc.Count.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		r.Body.Close()
 		tc.mu.Lock()
 		tc.Bodies = append(tc.Bodies, string(body))
 		tc.mu.Unlock()
+		// See handler() above — Count must be incremented after body capture.
+		tc.Count.Add(1)
 		w.WriteHeader(statusCode)
 	})
 	srv := httptest.NewServer(mux)

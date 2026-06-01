@@ -611,7 +611,9 @@ func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	conn := dialWS(t, wsURL)
 	_, err = readMessage(t, conn) // read CodecInfo
 	require.NoError(t, err)
-	assert.Equal(t, 1, m.ViewerCount("cam1"))
+	// Wait for server-side handler to register viewer after WebSocket upgrade
+	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 1 },
+		2*time.Second, 50*time.Millisecond)
 
 	// Disconnect viewer
 	conn.Close()
