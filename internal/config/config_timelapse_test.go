@@ -7,6 +7,7 @@ import (
 )
 
 func TestTimelapseConfig_Defaults(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -22,6 +23,7 @@ func TestTimelapseConfig_Defaults(t *testing.T) {
 }
 
 func TestTimelapseConfig_DefaultsWithExplicitValues(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -41,6 +43,7 @@ func TestTimelapseConfig_DefaultsWithExplicitValues(t *testing.T) {
 }
 
 func TestTimelapseConfig_NilIsValid(t *testing.T) {
+	t.Parallel()
 	// Per-camera timelapse is nil — should pass validation
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -52,6 +55,7 @@ func TestTimelapseConfig_NilIsValid(t *testing.T) {
 }
 
 func TestTimelapseConfig_InvalidInterval(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -66,6 +70,7 @@ func TestTimelapseConfig_InvalidInterval(t *testing.T) {
 }
 
 func TestTimelapseConfig_InvalidOutputFPS_TooLow(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -80,6 +85,7 @@ func TestTimelapseConfig_InvalidOutputFPS_TooLow(t *testing.T) {
 }
 
 func TestTimelapseConfig_InvalidOutputFPS_TooHigh(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -94,6 +100,7 @@ func TestTimelapseConfig_InvalidOutputFPS_TooHigh(t *testing.T) {
 }
 
 func TestTimelapseConfig_InvalidVideoCodec(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
@@ -108,6 +115,7 @@ func TestTimelapseConfig_InvalidVideoCodec(t *testing.T) {
 }
 
 func TestTimelapseConfig_ValidCodecs(t *testing.T) {
+	t.Parallel()
 	for _, codec := range []string{"h264", "h265"} {
 		cfg := &Config{Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -123,6 +131,7 @@ func TestTimelapseConfig_ValidCodecs(t *testing.T) {
 }
 
 func TestTimelapseConfig_ValidOutputFPSRange(t *testing.T) {
+	t.Parallel()
 	for _, fps := range []int{1, 15, 30, 60} {
 		cfg := &Config{Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -138,6 +147,7 @@ func TestTimelapseConfig_ValidOutputFPSRange(t *testing.T) {
 }
 
 func TestTimelapseConfig_DisableDoesNotValidateTimelapse(t *testing.T) {
+	t.Parallel()
 	// When timelapse.Enabled is false, validation should still run
 	// (unset values get defaults, which are valid)
 	cfg := &Config{Cameras: []CameraConfig{{

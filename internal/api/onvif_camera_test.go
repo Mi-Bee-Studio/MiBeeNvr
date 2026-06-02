@@ -12,6 +12,7 @@ import (
 )
 
 func TestONVIFCameraProfilesEndpoint(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "admin", "pass", true, "", "", ""))
@@ -27,6 +28,7 @@ func TestONVIFCameraProfilesEndpoint(t *testing.T) {
 }
 
 func TestONVIFCameraProfilesCapabilities(t *testing.T) {
+	t.Parallel()
 	// Test the capabilities endpoint exists and returns correct error when camMgr nil
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
@@ -43,6 +45,7 @@ func TestONVIFCameraProfilesCapabilities(t *testing.T) {
 }
 
 func TestCreateONVIFCameraMissingEndpoint(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"name": "Test ONVIF", "protocol": "onvif"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras", strings.NewReader(body))
@@ -61,6 +64,7 @@ func TestCreateONVIFCameraMissingEndpoint(t *testing.T) {
 }
 
 func TestCreateONVIFCameraWithEndpoint(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"name": "Test ONVIF", "protocol": "onvif", "onvif_endpoint": "http://192.168.1.100:8080/onvif/device_service"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras", strings.NewReader(body))

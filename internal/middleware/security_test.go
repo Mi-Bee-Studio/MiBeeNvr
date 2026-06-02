@@ -8,6 +8,7 @@ import (
 )
 
 func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -141,6 +142,7 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 }
 
 func TestExtractIP(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string

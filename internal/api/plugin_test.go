@@ -8,6 +8,7 @@ import (
 )
 
 func TestProtocolsEndpoint(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)

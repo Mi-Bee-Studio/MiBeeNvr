@@ -18,10 +18,10 @@ import (
 
 func TestDiscover_NoNetwork_ReturnsEmptyList(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	result := Discover(ctx, 2*time.Second)
+	result := Discover(ctx, 500*time.Millisecond)
 	require.NotNil(t, result, "Discover must return non-nil result")
 	require.NotNil(t, result.Devices, "Discover must return non-nil devices slice")
 	// Error may be non-nil if discovery.Discover returns an error, which is fine
@@ -30,7 +30,7 @@ func TestDiscover_NoNetwork_ReturnsEmptyList(t *testing.T) {
 
 func TestDiscover_DefaultTimeout(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	// Should not panic with 0 timeout (uses default 5s)
@@ -45,14 +45,14 @@ func TestDiscover_ContextCancelled_ReturnsImmediately(t *testing.T) {
 	cancel() // Cancel immediately
 
 	start := time.Now()
-	result := Discover(ctx, 10*time.Second)
+	result := Discover(ctx, 1*time.Second)
 	elapsed := time.Since(start)
 
 	require.NotNil(t, result.Devices)
 	// Cancelled context should produce a TIMEOUT error
 	require.NotNil(t, result.Error, "cancelled context should produce a categorized error")
 	require.Equal(t, "TIMEOUT", result.Error.Category)
-	require.Less(t, elapsed, 2*time.Second, "cancelled context should return immediately")
+	require.Less(t, elapsed, 500*time.Millisecond, "cancelled context should return immediately")
 }
 
 // --- ProbeDevice() tests ---
@@ -126,7 +126,7 @@ func TestProbeDevice_ValidResponse(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, device)
 	require.Equal(t, "uuid:device-abc-123", device.UUID)
@@ -146,7 +146,7 @@ func TestProbeDevice_MultipleXAddrs(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, device)
 	require.Equal(t, "uuid:multi-addr-device", device.UUID)
@@ -165,7 +165,7 @@ func TestProbeDevice_NonONVIFDevice_ReturnsNil(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err, "non-ONVIF device should not return error")
 	require.Nil(t, device)
 }
@@ -178,7 +178,7 @@ func TestProbeDevice_HTTPError_ReturnsNil(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err, "HTTP error should not return error")
 	require.Nil(t, device)
 }
@@ -200,7 +200,7 @@ func TestProbeDevice_EmptyProbeMatches_ReturnsNil(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.Nil(t, device)
 }
@@ -208,7 +208,7 @@ func TestProbeDevice_EmptyProbeMatches_ReturnsNil(t *testing.T) {
 func TestProbeDevice_ConnectionRefused_ReturnsError(t *testing.T) {
 	t.Helper()
 	// Use a port that's definitely not listening
-	device, err := ProbeDevice(context.Background(), "127.0.0.1", 1, 1*time.Second)
+	device, err := ProbeDevice(context.Background(), "127.0.0.1", 1, 200*time.Millisecond)
 	require.Error(t, err)
 	require.Nil(t, device)
 	require.Contains(t, err.Error(), "probe request failed")
@@ -218,7 +218,7 @@ func TestProbeDevice_ContextCancelled_ReturnsError(t *testing.T) {
 	t.Helper()
 	// Slow server that never responds
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		time.Sleep(100 * time.Millisecond)
 	}))
 	defer server.Close()
 
@@ -227,12 +227,12 @@ func TestProbeDevice_ContextCancelled_ReturnsError(t *testing.T) {
 
 	host, port := testServerAddr(t, server)
 	start := time.Now()
-	device, err := ProbeDevice(ctx, host, port, 10*time.Second)
+	device, err := ProbeDevice(ctx, host, port, 500*time.Millisecond)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
 	require.Nil(t, device)
-	require.Less(t, elapsed, 2*time.Second, "cancelled context should fail fast")
+	require.Less(t, elapsed, 500*time.Millisecond, "cancelled context should fail fast")
 }
 
 func TestProbeDevice_DefaultTimeout(t *testing.T) {
@@ -272,7 +272,7 @@ func TestProbeDevice_SendsSOAPProbe(t *testing.T) {
 	defer server.Close()
 
 	host, port := testServerAddr(t, server)
-	device, err := ProbeDevice(context.Background(), host, port, 5*time.Second)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, device)
 	require.NotEmpty(t, receivedBody, "should have sent a SOAP body")

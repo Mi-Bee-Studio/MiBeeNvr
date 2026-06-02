@@ -12,6 +12,7 @@ import (
 
 func TestRequestLoggerLogsRequest(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -34,6 +35,7 @@ func TestRequestLoggerLogsRequest(t *testing.T) {
 
 func TestRequestLoggerSkipPaths(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -61,6 +63,7 @@ func TestRequestLoggerSkipPaths(t *testing.T) {
 
 func TestRequestLoggerNormalizesPath(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -79,6 +82,7 @@ func TestRequestLoggerNormalizesPath(t *testing.T) {
 
 func TestStatusRecorderCapturesStatus(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	sr := &StatusRecorder{ResponseWriter: rec, Status: http.StatusOK}
 	sr.WriteHeader(http.StatusCreated)
@@ -88,6 +92,7 @@ func TestStatusRecorderCapturesStatus(t *testing.T) {
 
 func TestStatusRecorderCapturesBytes(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	sr := &StatusRecorder{ResponseWriter: rec}
 	n, err := sr.Write([]byte("hello"))
@@ -98,6 +103,7 @@ func TestStatusRecorderCapturesBytes(t *testing.T) {
 
 func TestStatusRecorderDefaultStatus(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	sr := &StatusRecorder{ResponseWriter: rec}
 	// Write without explicit WriteHeader should default to 200
@@ -107,6 +113,7 @@ func TestStatusRecorderDefaultStatus(t *testing.T) {
 
 func TestRequestLoggerLogsPostRequest(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

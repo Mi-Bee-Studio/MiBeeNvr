@@ -11,6 +11,7 @@ import (
 
 func TestSetupLoggerDefaultLevel(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("", "text")
 	require.NotNil(t, logger)
 	// Empty/unknown level defaults to info — debug should be disabled, info enabled
@@ -20,6 +21,7 @@ func TestSetupLoggerDefaultLevel(t *testing.T) {
 
 func TestSetupLoggerDebugLevel(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("debug", "text")
 	require.NotNil(t, logger)
 	require.True(t, logger.Enabled(context.Background(), slog.LevelDebug))
@@ -28,6 +30,7 @@ func TestSetupLoggerDebugLevel(t *testing.T) {
 
 func TestSetupLoggerJSONFormat(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("info", "json")
 	require.NotNil(t, logger)
 	// Verify the logger is functional
@@ -36,6 +39,7 @@ func TestSetupLoggerJSONFormat(t *testing.T) {
 
 func TestSetupLoggerTextFormat(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("info", "text")
 	require.NotNil(t, logger)
 	require.True(t, logger.Enabled(context.Background(), slog.LevelInfo))
@@ -43,6 +47,7 @@ func TestSetupLoggerTextFormat(t *testing.T) {
 
 func TestSetupLoggerWarnLevel(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("warn", "text")
 	require.NotNil(t, logger)
 	require.False(t, logger.Enabled(context.Background(), slog.LevelInfo))
@@ -51,6 +56,7 @@ func TestSetupLoggerWarnLevel(t *testing.T) {
 
 func TestSetupLoggerErrorLevel(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("error", "text")
 	require.NotNil(t, logger)
 	require.False(t, logger.Enabled(context.Background(), slog.LevelWarn))
@@ -59,6 +65,7 @@ func TestSetupLoggerErrorLevel(t *testing.T) {
 
 func TestSetupLoggerCaseInsensitive(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("INFO", "TEXT")
 	require.NotNil(t, logger)
 	require.True(t, logger.Enabled(context.Background(), slog.LevelInfo))
@@ -73,6 +80,7 @@ func TestSetupLoggerCaseInsensitive(t *testing.T) {
 
 func TestSetupLoggerUnknownLevelDefaultsToInfo(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	logger := SetupLogger("unknown_level", "text")
 	require.NotNil(t, logger)
 	require.False(t, logger.Enabled(context.Background(), slog.LevelDebug))
@@ -81,6 +89,7 @@ func TestSetupLoggerUnknownLevelDefaultsToInfo(t *testing.T) {
 
 func TestComponentLoggerAddsField(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)
@@ -97,6 +106,7 @@ func TestComponentLoggerAddsField(t *testing.T) {
 
 func TestComponentLoggerDifferentComponents(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)

@@ -118,6 +118,7 @@ func defaultCleanupConfig() config.CleanupConfig {
 // --- Tests ---
 
 func TestNewCleanupManager(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -131,6 +132,7 @@ func TestNewCleanupManager(t *testing.T) {
 }
 
 func TestRunOnce_TimeBasedCleanup(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -187,6 +189,7 @@ func TestRunOnce_TimeBasedCleanup(t *testing.T) {
 }
 
 func TestRunOnce_WithRetentionDays(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -218,6 +221,7 @@ func TestRunOnce_WithRetentionDays(t *testing.T) {
 }
 
 func TestRunOnce_TimeBasedCleanup_Ordering(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -245,6 +249,7 @@ func TestRunOnce_TimeBasedCleanup_Ordering(t *testing.T) {
 }
 
 func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -281,6 +286,7 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 }
 
 func TestRunOnce_NoExpiredRecordings(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -307,6 +313,7 @@ func TestRunOnce_NoExpiredRecordings(t *testing.T) {
 }
 
 func TestRunOnce_EmptyDatabase(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -319,6 +326,7 @@ func TestRunOnce_EmptyDatabase(t *testing.T) {
 }
 
 func TestRunOnce_FileMissingFromDisk(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -355,6 +363,7 @@ func TestRunOnce_FileMissingFromDisk(t *testing.T) {
 }
 
 func TestRun_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -387,6 +396,7 @@ func TestRun_ContextCancellation(t *testing.T) {
 }
 
 func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -440,6 +450,7 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 }
 
 func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -477,6 +488,7 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 // TestOrphanCleanup_TimelapseSurvives verifies that timelapse MP4 files registered
 // in the recordings table survive orphanFileCleanup, while true orphans are deleted.
 func TestOrphanCleanup_TimelapseSurvives(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 
@@ -523,6 +535,7 @@ func TestOrphanCleanup_TimelapseSurvives(t *testing.T) {
 // TestTimeBasedCleanup_TimelapseExpired verifies that expired timelapse recordings
 // are cleaned up by timeBasedCleanup (format-agnostic, uses camera retention_days).
 func TestTimeBasedCleanup_TimelapseExpired(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	defer env.close(t)
 

@@ -8,6 +8,7 @@ import (
 
 func TestCameraNotFoundError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraNotFoundError{CameraID: "front-door"}
 	if got := err.Error(); got != "camera not found: front-door" {
 		t.Errorf("Error() = %q, want %q", got, "camera not found: front-door")
@@ -19,6 +20,7 @@ func TestCameraNotFoundError(t *testing.T) {
 
 func TestCameraAlreadyRunningError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraAlreadyRunningError{CameraID: "cam-1"}
 	if got := err.Error(); got != "camera already running: cam-1" {
 		t.Errorf("Error() = %q, want %q", got, "camera already running: cam-1")
@@ -30,6 +32,7 @@ func TestCameraAlreadyRunningError(t *testing.T) {
 
 func TestCameraDisabledError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraDisabledError{CameraID: "cam-2"}
 	if got := err.Error(); got != "camera is disabled: cam-2" {
 		t.Errorf("Error() = %q, want %q", got, "camera is disabled: cam-2")
@@ -41,6 +44,7 @@ func TestCameraDisabledError(t *testing.T) {
 
 func TestRecordingNotFoundError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &RecordingNotFoundError{RecordingID: "rec-123"}
 	if got := err.Error(); got != "recording not found: rec-123" {
 		t.Errorf("Error() = %q, want %q", got, "recording not found: rec-123")
@@ -52,6 +56,7 @@ func TestRecordingNotFoundError(t *testing.T) {
 
 func TestStorageFullError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &StorageFullError{Message: "disk 95% full"}
 	if got := err.Error(); got != "storage full: disk 95% full" {
 		t.Errorf("Error() = %q, want %q", got, "storage full: disk 95% full")
@@ -63,6 +68,7 @@ func TestStorageFullError(t *testing.T) {
 
 func TestAuthFailedError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &AuthFailedError{Reason: "bad password"}
 	if got := err.Error(); got != "authentication failed: bad password" {
 		t.Errorf("Error() = %q, want %q", got, "authentication failed: bad password")
@@ -74,6 +80,7 @@ func TestAuthFailedError(t *testing.T) {
 
 func TestErrAuthRequired(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	if got := ErrAuthRequired.Error(); got != "authentication required" {
 		t.Errorf("Error() = %q, want %q", got, "authentication required")
 	}
@@ -81,6 +88,7 @@ func TestErrAuthRequired(t *testing.T) {
 
 func TestInvalidInputError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &InvalidInputError{Message: "name is required"}
 	if got := err.Error(); got != "invalid input: name is required" {
 		t.Errorf("Error() = %q, want %q", got, "invalid input: name is required")
@@ -92,6 +100,7 @@ func TestInvalidInputError(t *testing.T) {
 
 func TestPathTraversalError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &PathTraversalError{Path: "../../../etc/passwd"}
 	if got := err.Error(); got != "path traversal detected" {
 		t.Errorf("Error() = %q, want %q", got, "path traversal detected")
@@ -103,6 +112,7 @@ func TestPathTraversalError(t *testing.T) {
 
 func TestHLSMaxStreamsError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &HLSMaxStreamsError{}
 	if got := err.Error(); got != "maximum HLS streams reached" {
 		t.Errorf("Error() = %q, want %q", got, "maximum HLS streams reached")
@@ -114,6 +124,7 @@ func TestHLSMaxStreamsError(t *testing.T) {
 
 func TestHLSSupportedCodecError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &HLSSupportedCodecError{CameraID: "mjpeg-cam"}
 	if got := err.Error(); got != "camera recorder does not support HLS" {
 		t.Errorf("Error() = %q, want %q", got, "camera recorder does not support HLS")
@@ -125,6 +136,7 @@ func TestHLSSupportedCodecError(t *testing.T) {
 
 func TestErrorCode(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -147,6 +159,7 @@ func TestErrorCode(t *testing.T) {
 
 func TestErrorsIs(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraNotFoundError{CameraID: "cam-1"}
 	if !errors.Is(err, err) {
 		t.Error("errors.Is should match same pointer")
@@ -155,6 +168,7 @@ func TestErrorsIs(t *testing.T) {
 
 func TestErrorsAs(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraNotFoundError{CameraID: "cam-1"}
 	var target *CameraNotFoundError
 	if !errors.As(err, &target) {
@@ -172,6 +186,7 @@ func TestErrorsAs(t *testing.T) {
 
 func TestCodedErrorInterface(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	var camErr error = &CameraNotFoundError{CameraID: "x"}
 	var ce CodedError
 	if !errors.As(camErr, &ce) {
@@ -186,6 +201,7 @@ func TestCodedErrorInterface(t *testing.T) {
 
 func TestCameraAlreadyExistsError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &CameraAlreadyExistsError{CameraID: "front-door"}
 	if got := err.Error(); got != "camera already exists: front-door" {
 		t.Errorf("Error() = %q, want %q", got, "camera already exists: front-door")
@@ -197,6 +213,7 @@ func TestCameraAlreadyExistsError(t *testing.T) {
 
 func TestONVIFNotCameraError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &ONVIFNotCameraError{CameraID: "cam-1"}
 	if got := err.Error(); got != "camera is not an ONVIF device: cam-1" {
 		t.Errorf("Error() = %q, want %q", got, "camera is not an ONVIF device: cam-1")
@@ -208,6 +225,7 @@ func TestONVIFNotCameraError(t *testing.T) {
 
 func TestONVIFConnectionError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	inner := errors.New("timeout")
 	err := &ONVIFConnectionError{CameraID: "cam-1", Err: inner}
 	if got := err.Error(); got != "connect to ONVIF camera cam-1: timeout" {
@@ -224,6 +242,7 @@ func TestONVIFConnectionError(t *testing.T) {
 
 func TestONVIFNoProfilesError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &ONVIFNoProfilesError{CameraID: "cam-1"}
 	if got := err.Error(); got != "no media profiles found for camera: cam-1" {
 		t.Errorf("Error() = %q, want %q", got, "no media profiles found for camera: cam-1")
@@ -237,6 +256,7 @@ func TestONVIFNoProfilesError(t *testing.T) {
 
 func TestErrorWrappingWithFmtErrorf(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	original := &CameraNotFoundError{CameraID: "cam-1"}
 	wrapped := fmt.Errorf("operation failed: %w", original)
 	var target *CameraNotFoundError
@@ -250,6 +270,7 @@ func TestErrorWrappingWithFmtErrorf(t *testing.T) {
 
 func TestErrorWrappingDouble(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	inner := &CameraNotFoundError{CameraID: "cam-1"}
 	middle := fmt.Errorf("middle: %w", inner)
 	outer := fmt.Errorf("outer: %w", middle)
@@ -261,6 +282,7 @@ func TestErrorWrappingDouble(t *testing.T) {
 
 func TestErrorCodeWithWrapping(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	original := &CameraNotFoundError{CameraID: "cam-1"}
 	wrapped := fmt.Errorf("failed: %w", original)
 	if got := ErrorCode(wrapped); got != "CAMERA_NOT_FOUND" {
@@ -270,6 +292,7 @@ func TestErrorCodeWithWrapping(t *testing.T) {
 
 func TestErrorCodeWithONVIFConnectionError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	err := &ONVIFConnectionError{CameraID: "cam-1", Err: errors.New("timeout")}
 	wrapped := fmt.Errorf("failed: %w", err)
 	if got := ErrorCode(wrapped); got != "ONVIF_CONNECTION_FAILED" {
@@ -281,6 +304,7 @@ func TestErrorCodeWithONVIFConnectionError(t *testing.T) {
 
 func TestAllErrorsImplementCodedError(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	errors := []CodedError{
 		&CameraNotFoundError{CameraID: "x"},
 		&CameraAlreadyRunningError{CameraID: "x"},

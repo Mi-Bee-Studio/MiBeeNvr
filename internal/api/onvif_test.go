@@ -11,6 +11,7 @@ import (
 )
 
 func TestONVIFDiscoverEndpoint(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -30,6 +31,7 @@ func TestONVIFDiscoverEndpoint(t *testing.T) {
 }
 
 func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -43,6 +45,7 @@ func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
 }
 
 func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"timeout": 100}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -60,6 +63,7 @@ func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
 }
 
 func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"timeout": -1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -73,6 +77,7 @@ func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
 }
 
 func TestONVIFDeviceDetailEndpoint(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/onvif/discover/192.168.1.100", nil)
 
@@ -89,6 +94,7 @@ func TestONVIFDeviceDetailEndpoint(t *testing.T) {
 }
 
 func TestONVIFDeviceDetail_MissingIP(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/onvif/discover/", nil)
 
@@ -100,6 +106,7 @@ func TestONVIFDeviceDetail_MissingIP(t *testing.T) {
 }
 
 func TestPTZMove_InvalidMode(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"mode": "invalid"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader(body))
@@ -112,6 +119,7 @@ func TestPTZMove_InvalidMode(t *testing.T) {
 }
 
 func TestPTZMove_InvalidBody(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/move", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -123,6 +131,7 @@ func TestPTZMove_InvalidBody(t *testing.T) {
 }
 
 func TestPTZStop_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/ptz/stop", nil)
 
@@ -134,6 +143,7 @@ func TestPTZStop_NoCamMgr(t *testing.T) {
 }
 
 func TestPTZStatus_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/ptz/status", nil)
 
@@ -145,6 +155,7 @@ func TestPTZStatus_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFDeviceDetail_InvalidIP(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	invalidIPs := []string{
@@ -168,6 +179,7 @@ func TestONVIFDeviceDetail_InvalidIP(t *testing.T) {
 }
 
 func TestONVIFProbeEndpoint(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"host": "192.168.1.100", "port": 80}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader(body))
@@ -187,6 +199,7 @@ func TestONVIFProbeEndpoint(t *testing.T) {
 }
 
 func TestONVIFProbe_DefaultsApplied(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	// Empty body — defaults applied, tries to probe but no host → 400
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader("{}"))
@@ -203,6 +216,7 @@ func TestONVIFProbe_DefaultsApplied(t *testing.T) {
 }
 
 func TestONVIFProbe_InvalidHost(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	invalidHosts := []string{
 		`{"host": "notanip"}`,
@@ -225,6 +239,7 @@ func TestONVIFProbe_InvalidHost(t *testing.T) {
 }
 
 func TestONVIFProbe_TimeoutTooLarge(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"host": "192.168.1.1", "timeout": 100}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/probe", strings.NewReader(body))

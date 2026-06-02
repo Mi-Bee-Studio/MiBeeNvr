@@ -40,6 +40,7 @@ func setupHealthHandler(t *testing.T, mgr HealthManager) *Handler {
 // --- handleGetHealthStatus tests ---
 
 func TestHealth_Status_OK(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
 			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy"},
@@ -59,6 +60,7 @@ func TestHealth_Status_OK(t *testing.T) {
 }
 
 func TestHealth_Status_NilManager(t *testing.T) {
+	t.Parallel()
 	h := setupHealthHandler(t, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health/status", nil, "", "")
@@ -70,6 +72,7 @@ func TestHealth_Status_NilManager(t *testing.T) {
 }
 
 func TestHealth_Status_RequiresAuth(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 
@@ -93,6 +96,7 @@ func TestHealth_Status_RequiresAuth(t *testing.T) {
 // --- handleGetHealthEvents tests ---
 
 func TestHealth_Events_OK(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 
@@ -130,6 +134,7 @@ func TestHealth_Events_OK(t *testing.T) {
 }
 
 func TestHealth_Events_FilterByCameraID(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 
@@ -157,6 +162,7 @@ func TestHealth_Events_FilterByCameraID(t *testing.T) {
 }
 
 func TestHealth_Events_WithPagination(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 
@@ -182,6 +188,7 @@ func TestHealth_Events_WithPagination(t *testing.T) {
 }
 
 func TestHealth_Events_InvalidLimit(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -191,6 +198,7 @@ func TestHealth_Events_InvalidLimit(t *testing.T) {
 }
 
 func TestHealth_Events_InvalidOffset(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -200,6 +208,7 @@ func TestHealth_Events_InvalidOffset(t *testing.T) {
 }
 
 func TestHealth_Events_EmptyResult(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -219,6 +228,7 @@ func TestHealth_Events_EmptyResult(t *testing.T) {
 // --- handleGetCameraHealth tests ---
 
 func TestHealth_CameraHealth_OK(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		cameraByID: map[string]*model.CameraHealth{
 			"front-door": {CameraID: "front-door", LatestStatus: "healthy", LatestEvent: "connection_restored"},
@@ -236,6 +246,7 @@ func TestHealth_CameraHealth_OK(t *testing.T) {
 }
 
 func TestHealth_CameraHealth_NotFound(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		cameraByID: map[string]*model.CameraHealth{},
 	}
@@ -284,6 +295,7 @@ func newTestAuthMiddleware(username, password string) (func(http.Handler) http.H
 // --- /api/health camera aggregation tests ---
 
 func TestHealth_CameraAggregation(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
 			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100},
@@ -323,6 +335,7 @@ func TestHealth_CameraAggregation(t *testing.T) {
 }
 
 func TestHealth_CameraAggregation_NilManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -337,6 +350,7 @@ func TestHealth_CameraAggregation_NilManager(t *testing.T) {
 }
 
 func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{},
 	}
@@ -353,6 +367,7 @@ func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
 }
 
 func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
 			"cam-1": {CameraID: "cam-1", LatestStatus: "disabled", Score: 0},
@@ -377,6 +392,7 @@ func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
 // --- /api/health/cameras endpoint tests ---
 
 func TestHealthCameras_OK(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
 			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100, ScoreFactors: []string{"recording"}},
@@ -397,6 +413,7 @@ func TestHealthCameras_OK(t *testing.T) {
 }
 
 func TestHealthCameras_NilManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -410,6 +427,7 @@ func TestHealthCameras_NilManager(t *testing.T) {
 }
 
 func TestHealthCameras_NilHealth(t *testing.T) {
+	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: nil,
 	}
@@ -424,6 +442,7 @@ func TestHealthCameras_NilHealth(t *testing.T) {
 }
 
 func TestHealthCameras_PublicEndpoint(t *testing.T) {
+	t.Parallel()
 	// Verify /api/health/cameras is accessible without auth
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
@@ -468,6 +487,7 @@ func setupStabilityHandler(t *testing.T, provider StabilityProvider) *Handler {
 // --- handleGetStability tests ---
 
 func TestStability_All_OK(t *testing.T) {
+	t.Parallel()
 	provider := &mockStabilityProvider{
 		allStability: map[string]*health.StabilityData{
 			"cam1": {
@@ -514,6 +534,7 @@ func TestStability_All_OK(t *testing.T) {
 }
 
 func TestStability_All_NilProvider(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -530,6 +551,7 @@ func TestStability_All_NilProvider(t *testing.T) {
 }
 
 func TestStability_All_EmptyResult(t *testing.T) {
+	t.Parallel()
 	provider := &mockStabilityProvider{
 		allStability: map[string]*health.StabilityData{},
 	}
@@ -548,6 +570,7 @@ func TestStability_All_EmptyResult(t *testing.T) {
 // --- handleGetCameraStability tests ---
 
 func TestStability_Camera_OK(t *testing.T) {
+	t.Parallel()
 	provider := &mockStabilityProvider{
 		cameraStability: map[string]*health.StabilityData{
 			"front-door": {
@@ -576,6 +599,7 @@ func TestStability_Camera_OK(t *testing.T) {
 }
 
 func TestStability_Camera_NotFound(t *testing.T) {
+	t.Parallel()
 	provider := &mockStabilityProvider{
 		cameraStability: map[string]*health.StabilityData{},
 	}
@@ -586,6 +610,7 @@ func TestStability_Camera_NotFound(t *testing.T) {
 }
 
 func TestStability_Camera_NilProvider(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -595,6 +620,7 @@ func TestStability_Camera_NilProvider(t *testing.T) {
 }
 
 func TestStability_Camera_RequiresAuth(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 

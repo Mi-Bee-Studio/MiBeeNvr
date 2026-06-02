@@ -7,6 +7,7 @@ import (
 )
 
 func TestAudioFormatConstants(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		value Format
@@ -23,6 +24,7 @@ func TestAudioFormatConstants(t *testing.T) {
 }
 
 func TestAudioCodecConstants(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		value AudioCodec
@@ -39,6 +41,7 @@ func TestAudioCodecConstants(t *testing.T) {
 }
 
 func TestAudioFrameStruct(t *testing.T) {
+	t.Parallel()
 	// Test zero value
 	var f AudioFrame
 	require.Equal(t, int64(0), f.PTS)

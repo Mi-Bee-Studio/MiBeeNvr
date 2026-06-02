@@ -16,6 +16,7 @@ import (
 
 func TestStreamWS_AuthRequired(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -35,6 +36,7 @@ func TestStreamWS_AuthRequired(t *testing.T) {
 
 func TestStreamWS_NoManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -47,6 +49,7 @@ func TestStreamWS_NoManager(t *testing.T) {
 
 func TestStreamWS_CameraNotFound(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -61,6 +64,7 @@ func TestStreamWS_CameraNotFound(t *testing.T) {
 
 func TestStreamWS_NoCamMgr(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -78,6 +82,7 @@ func TestStreamWS_NoCamMgr(t *testing.T) {
 
 func TestStreamWS_RecorderNotRunning(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 

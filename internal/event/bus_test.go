@@ -40,6 +40,7 @@ func helperDrain(t *testing.T, ch chan Event, timeout time.Duration) []Event {
 }
 
 func TestNewEventBus_DefaultBufferSize(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 0)
 	if bus == nil {
 		t.Fatal("NewEventBus returned nil")
@@ -50,6 +51,7 @@ func TestNewEventBus_DefaultBufferSize(t *testing.T) {
 }
 
 func TestNewEventBus_CustomBufferSize(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 128)
 	if bus.bufferSize != 128 {
 		t.Fatalf("expected buffer 128, got %d", bus.bufferSize)
@@ -57,6 +59,7 @@ func TestNewEventBus_CustomBufferSize(t *testing.T) {
 }
 
 func TestPublishSubscribe(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	ch := helperSubscribe(t, bus, "test.topic", 16)
 
@@ -75,12 +78,14 @@ func TestPublishSubscribe(t *testing.T) {
 }
 
 func TestPublish_NoSubscribers(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	// Must not panic
 	bus.Publish(context.Background(), "no.subscribers", "orphan")
 }
 
 func TestPublish_MultipleSubscribers(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	ch1 := helperSubscribe(t, bus, "multi", 16)
 	ch2 := helperSubscribe(t, bus, "multi", 16)
@@ -99,6 +104,7 @@ func TestPublish_MultipleSubscribers(t *testing.T) {
 }
 
 func TestUnsubscribe(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	ch := helperSubscribe(t, bus, "unsub", 16)
 
@@ -114,6 +120,7 @@ func TestUnsubscribe(t *testing.T) {
 }
 
 func TestUnsubscribe_Idempotent(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	ch := helperSubscribe(t, bus, "idem", 16)
 
@@ -124,6 +131,7 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 }
 
 	func TestOverflow_DropsOldest(t *testing.T) {
+	t.Parallel()
 	// Use a very small buffer and don't consume.
 	bus := NewEventBus(3)
 	ch := make(chan Event, 3)
@@ -151,6 +159,7 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 }
 
 func TestContextCancellation(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 16)
 	ch := helperSubscribe(t, bus, "cancel", 16)
 
@@ -166,6 +175,7 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestConcurrentPublish(t *testing.T) {
+	t.Parallel()
 	bus := helperNewBus(t, 100)
 	ch := helperSubscribe(t, bus, "concurrent", 10000)
 
@@ -191,12 +201,14 @@ func TestConcurrentPublish(t *testing.T) {
 }
 
 func TestSegmentCompletedTopic(t *testing.T) {
+	t.Parallel()
 	if TopicSegmentCompleted != "segment.completed" {
 		t.Fatalf("expected 'segment.completed', got %q", TopicSegmentCompleted)
 	}
 }
 
 func TestSegmentCompletedStruct(t *testing.T) {
+	t.Parallel()
 	sc := SegmentCompleted{
 		CameraID:    "front-door",
 		FilePath:    "/data/segments/front-door_20260601.mp4",

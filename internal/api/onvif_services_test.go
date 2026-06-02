@@ -32,6 +32,7 @@ func setupONVIFCamera(t *testing.T) (*storage.DB, *storage.Manager) {
 // --- Snapshot URI endpoint tests ---
 
 func TestSnapshotGetUri_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -47,6 +48,7 @@ func TestSnapshotGetUri_NoCamMgr(t *testing.T) {
 }
 
 func TestSnapshotGetUri_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/nonexistent/snapshot/uri", nil)
@@ -57,6 +59,7 @@ func TestSnapshotGetUri_CameraNotFound(t *testing.T) {
 }
 
 func TestSnapshotGetUri_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -73,6 +76,7 @@ func TestSnapshotGetUri_NonONVIFRejected(t *testing.T) {
 // --- Imaging endpoint tests ---
 
 func TestImagingGetSettings_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -88,6 +92,7 @@ func TestImagingGetSettings_NoCamMgr(t *testing.T) {
 }
 
 func TestImagingGetSettings_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/nonexistent/imaging/settings", nil)
@@ -98,6 +103,7 @@ func TestImagingGetSettings_CameraNotFound(t *testing.T) {
 }
 
 func TestImagingSetSettings_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -110,6 +116,7 @@ func TestImagingSetSettings_InvalidBody(t *testing.T) {
 }
 
 func TestImagingSetSettings_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 	body := `{"brightness": 0.5, "contrast": 0.3}`
@@ -127,6 +134,7 @@ func TestImagingSetSettings_NoCamMgr(t *testing.T) {
 }
 
 func TestImagingGetOptions_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -138,6 +146,7 @@ func TestImagingGetOptions_NoCamMgr(t *testing.T) {
 }
 
 func TestImagingGetOptions_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/nonexistent/imaging/options", nil)
@@ -150,6 +159,7 @@ func TestImagingGetOptions_CameraNotFound(t *testing.T) {
 // --- Device Management endpoint tests ---
 
 func TestONVIFReboot_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -165,6 +175,7 @@ func TestONVIFReboot_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFReboot_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/nonexistent/onvif/reboot", nil)
@@ -175,6 +186,7 @@ func TestONVIFReboot_CameraNotFound(t *testing.T) {
 }
 
 func TestONVIFGetNetwork_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -186,6 +198,7 @@ func TestONVIFGetNetwork_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFGetNetwork_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/nonexistent/onvif/network", nil)
@@ -196,6 +209,7 @@ func TestONVIFGetNetwork_CameraNotFound(t *testing.T) {
 }
 
 func TestONVIFSetNetwork_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -208,6 +222,7 @@ func TestONVIFSetNetwork_InvalidBody(t *testing.T) {
 }
 
 func TestONVIFSetNetwork_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 	body := `{"interfaces": [{"name": "eth0"}]}`
@@ -221,6 +236,7 @@ func TestONVIFSetNetwork_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFGetUsers_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -232,6 +248,7 @@ func TestONVIFGetUsers_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFGetUsers_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/nonexistent/onvif/users", nil)
@@ -242,6 +259,7 @@ func TestONVIFGetUsers_CameraNotFound(t *testing.T) {
 }
 
 func TestONVIFCreateUsers_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -254,6 +272,7 @@ func TestONVIFCreateUsers_InvalidBody(t *testing.T) {
 }
 
 func TestONVIFCreateUsers_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 	body := `{"users": [{"username": "test", "level": "User"}]}`
@@ -267,6 +286,7 @@ func TestONVIFCreateUsers_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFDeleteUsers_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -279,6 +299,7 @@ func TestONVIFDeleteUsers_InvalidBody(t *testing.T) {
 }
 
 func TestONVIFDeleteUsers_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 	body := `{"usernames": ["olduser"]}`
@@ -292,6 +313,7 @@ func TestONVIFDeleteUsers_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFSetUser_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 
@@ -304,6 +326,7 @@ func TestONVIFSetUser_InvalidBody(t *testing.T) {
 }
 
 func TestONVIFSetUser_NoCamMgr(t *testing.T) {
+	t.Parallel()
 	db, store := setupONVIFCamera(t)
 	h := TestHandler(db, store)
 	body := `{"password": "newpass"}`
@@ -317,6 +340,7 @@ func TestONVIFSetUser_NoCamMgr(t *testing.T) {
 }
 
 func TestONVIFSetUser_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 	body := `{"password": "newpass"}`
 
@@ -331,6 +355,7 @@ func TestONVIFSetUser_CameraNotFound(t *testing.T) {
 // --- Non-ONVIF camera rejected for device management ---
 
 func TestONVIFReboot_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -345,6 +370,7 @@ func TestONVIFReboot_NonONVIFRejected(t *testing.T) {
 }
 
 func TestONVIFGetNetwork_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -359,6 +385,7 @@ func TestONVIFGetNetwork_NonONVIFRejected(t *testing.T) {
 }
 
 func TestONVIFGetUsers_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -375,6 +402,7 @@ func TestONVIFGetUsers_NonONVIFRejected(t *testing.T) {
 // --- Non-ONVIF camera rejected for imaging ---
 
 func TestImagingGetSettings_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -389,6 +417,7 @@ func TestImagingGetSettings_NonONVIFRejected(t *testing.T) {
 }
 
 func TestImagingSetSettings_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -405,6 +434,7 @@ func TestImagingSetSettings_NonONVIFRejected(t *testing.T) {
 }
 
 func TestImagingGetOptions_NonONVIFRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))

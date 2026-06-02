@@ -8,6 +8,7 @@ import (
 )
 
 func TestGenerateCameraID_Format(t *testing.T) {
+	t.Parallel()
 	id := GenerateCameraID()
 	
 	// Check that ID starts with "cam-" prefix
@@ -28,6 +29,7 @@ func TestGenerateCameraID_Format(t *testing.T) {
 }
 
 func TestGenerateCameraID_Unique(t *testing.T) {
+	t.Parallel()
 	ids := make(map[string]bool)
 	
 	// Generate 100 IDs and check for uniqueness

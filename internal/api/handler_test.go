@@ -110,6 +110,7 @@ func makeRecording(id, cameraID, format string, startedAt time.Time, merged bool
 // --- Health endpoint tests ---
 
 func TestHealth(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -144,6 +145,7 @@ func TestHealth(t *testing.T) {
 // --- Login endpoint tests ---
 
 func TestLogin_NoAuth(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	// No-op auth (empty password hash = auth disabled)
@@ -188,6 +190,7 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 // --- List recordings tests ---
 
 func TestListRecordings_Empty(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -204,6 +207,7 @@ func TestListRecordings_Empty(t *testing.T) {
 }
 
 func TestListRecordings_WithSeed(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -224,6 +228,7 @@ func TestListRecordings_WithSeed(t *testing.T) {
 }
 
 func TestListRecordings_FilterByCameraID(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -247,6 +252,7 @@ func TestListRecordings_FilterByCameraID(t *testing.T) {
 }
 
 func TestListRecordings_FilterByFormat(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -267,6 +273,7 @@ func TestListRecordings_FilterByFormat(t *testing.T) {
 }
 
 func TestListRecordings_FilterByMerged(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -290,6 +297,7 @@ func TestListRecordings_FilterByMerged(t *testing.T) {
 }
 
 func TestListRecordings_FilterByTimeRange(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -315,6 +323,7 @@ func TestListRecordings_FilterByTimeRange(t *testing.T) {
 }
 
 func TestListRecordings_Pagination(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -338,6 +347,7 @@ func TestListRecordings_Pagination(t *testing.T) {
 // --- Get recording tests ---
 
 func TestGetRecording_Found(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -357,6 +367,7 @@ func TestGetRecording_Found(t *testing.T) {
 }
 
 func TestGetRecording_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -370,6 +381,7 @@ func TestGetRecording_NotFound(t *testing.T) {
 // --- Delete recording tests ---
 
 func TestDeleteRecording_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -404,6 +416,7 @@ func TestDeleteRecording_Success(t *testing.T) {
 }
 
 func TestDeleteRecording_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -419,6 +432,7 @@ func TestDeleteRecording_NotFound(t *testing.T) {
 // --- Download tests ---
 
 func TestDownloadRecording(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -443,6 +457,7 @@ func TestDownloadRecording(t *testing.T) {
 }
 
 func TestDownloadRecording_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -456,6 +471,7 @@ func TestDownloadRecording_NotFound(t *testing.T) {
 // --- Stats tests ---
 
 func TestStats(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -484,6 +500,7 @@ func TestStats(t *testing.T) {
 // --- Cameras tests ---
 
 func TestListCameras_Empty(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -500,6 +517,7 @@ func TestListCameras_Empty(t *testing.T) {
 }
 
 func TestListCameras_WithSeed(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -585,6 +603,7 @@ func splitEndpoint(ep string) (string, string) {
 // --- Content-Type tests ---
 
 func TestResponseContentType(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -599,6 +618,7 @@ func TestResponseContentType(t *testing.T) {
 // --- Login response content type ---
 
 func TestLogin_ResponseContentType(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -621,6 +641,7 @@ func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, usernam
 	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil)
 }
 func TestGetSettings_NoConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil config
@@ -637,6 +658,7 @@ func TestGetSettings_NoConfig(t *testing.T) {
 }
 
 func TestGetSettings_WithConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -677,6 +699,7 @@ func TestGetSettings_WithConfig(t *testing.T) {
 
 
 func TestUpdateSettings_NoConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil config
@@ -689,6 +712,7 @@ func TestUpdateSettings_NoConfig(t *testing.T) {
 }
 
 func TestUpdateSettings_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -702,6 +726,7 @@ func TestUpdateSettings_InvalidBody(t *testing.T) {
 }
 
 func TestUpdateSettings_InvalidRetentionDays(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -720,6 +745,7 @@ func TestUpdateSettings_InvalidRetentionDays(t *testing.T) {
 }
 
 func TestUpdateSettings_InvalidDiskThreshold(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{DiskThresholdPercent: 95}, Cameras: []config.CameraConfig{}}
@@ -741,6 +767,7 @@ func TestUpdateSettings_InvalidDiskThreshold(t *testing.T) {
 }
 
 func TestUpdateSettings_InvalidCheckInterval(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{CheckInterval: "1h"}, Cameras: []config.CameraConfig{}}
@@ -760,6 +787,7 @@ func TestUpdateSettings_InvalidCheckInterval(t *testing.T) {
 
 
 func TestUpdateSettings_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -793,6 +821,7 @@ func TestUpdateSettings_Success(t *testing.T) {
 
 
 func TestUpdateSettings_EmptyBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -812,6 +841,7 @@ func TestUpdateSettings_EmptyBody(t *testing.T) {
 // --- Frames API tests ---
 
 func TestListFrames_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -823,6 +853,7 @@ func TestListFrames_NotFound(t *testing.T) {
 }
 
 func TestListFrames_H264_Error(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -842,6 +873,7 @@ func TestListFrames_H264_Error(t *testing.T) {
 }
 
 func TestListFrames_MJPEG_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -884,6 +916,7 @@ func TestListFrames_MJPEG_Success(t *testing.T) {
 }
 
 func TestListFrames_MJPEG_EmptyDirectory(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -915,6 +948,7 @@ func TestListFrames_MJPEG_EmptyDirectory(t *testing.T) {
 }
 
 func TestListFrames_MJPEG_FrameOrdering(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -966,6 +1000,7 @@ func TestListFrames_MJPEG_FrameOrdering(t *testing.T) {
 }
 
 func TestListFrames_MJPEG_DirectoryNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -982,6 +1017,7 @@ func TestListFrames_MJPEG_DirectoryNotFound(t *testing.T) {
 }
 
 func TestListFrames_MJPEG_FilePathIsNotDirectory(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1003,6 +1039,7 @@ func TestListFrames_MJPEG_FilePathIsNotDirectory(t *testing.T) {
 // --- Pagination edge cases ---
 
 func TestListRecordings_OffsetZero(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1027,6 +1064,7 @@ func TestListRecordings_OffsetZero(t *testing.T) {
 }
 
 func TestListRecordings_OffsetBeyondTotal(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1052,6 +1090,7 @@ func TestListRecordings_OffsetBeyondTotal(t *testing.T) {
 }
 
 func TestListRecordings_LimitZero(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1074,6 +1113,7 @@ func TestListRecordings_LimitZero(t *testing.T) {
 }
 
 func TestListRecordings_NegativeOffset(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1096,6 +1136,7 @@ func TestListRecordings_NegativeOffset(t *testing.T) {
 // --- Filter combination tests ---
 
 func TestListRecordings_CameraIDAndFormat(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1121,6 +1162,7 @@ func TestListRecordings_CameraIDAndFormat(t *testing.T) {
 }
 
 func TestListRecordings_MergedAndTimeRange(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1147,6 +1189,7 @@ func TestListRecordings_MergedAndTimeRange(t *testing.T) {
 }
 
 func TestListRecordings_AllFilters(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1207,6 +1250,7 @@ func TestUploadAuth_RequiresAuth(t *testing.T) {
 }
 
 func TestUploadAuth_WithConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	hash, err := middleware.HashPassword("secret")
@@ -1238,6 +1282,7 @@ func TestUploadAuth_WithConfig(t *testing.T) {
 // --- Additional edge cases ---
 
 func TestListRecordings_InvalidTimeFormat(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1258,6 +1303,7 @@ func TestListRecordings_InvalidTimeFormat(t *testing.T) {
 }
 
 func TestListRecordings_MergedFalse(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1279,6 +1325,7 @@ func TestListRecordings_MergedFalse(t *testing.T) {
 }
 
 func TestListRecordings_TotalCount(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1303,6 +1350,7 @@ func TestListRecordings_TotalCount(t *testing.T) {
 }
 
 func TestDeleteRecording_InvalidID(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1316,6 +1364,7 @@ func TestDeleteRecording_InvalidID(t *testing.T) {
 
 
 func TestDownloadRecording_MissingFile(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1332,6 +1381,7 @@ func TestDownloadRecording_MissingFile(t *testing.T) {
 }
 
 func TestListFrames_JPEGCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1370,6 +1420,7 @@ func TestListFrames_JPEGCaseInsensitive(t *testing.T) {
 // --- Frame download tests ---
 
 func TestDownloadFrame_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1417,6 +1468,7 @@ func TestDownloadFrame_Success(t *testing.T) {
 }
 
 func TestDownloadFrame_FirstFrame(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1445,6 +1497,7 @@ func TestDownloadFrame_FirstFrame(t *testing.T) {
 }
 
 func TestDownloadFrame_OutOfRange(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1470,6 +1523,7 @@ func TestDownloadFrame_OutOfRange(t *testing.T) {
 }
 
 func TestDownloadFrame_InvalidIndex(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1492,6 +1546,7 @@ func TestDownloadFrame_InvalidIndex(t *testing.T) {
 }
 
 func TestDownloadFrame_IgnoredForH264(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1532,6 +1587,7 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 }
 
 func TestHandleCreateCamera(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	body := strings.NewReader(`{"name":"Front Door","protocol":"rtsp_h264","url":"rtsp://camera1/stream"}`)
@@ -1553,6 +1609,7 @@ func TestHandleCreateCamera(t *testing.T) {
 }
 
 func TestHandleCreateCamera_MissingFields(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	cases := []struct {
@@ -1580,6 +1637,7 @@ func TestHandleCreateCamera_MissingFields(t *testing.T) {
 }
 
 func TestHandleCreateCamera_InvalidProtocol(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	body := strings.NewReader(`{"name":"Cam","protocol":"invalid_proto","url":"rtsp://x"}`)
@@ -1595,6 +1653,7 @@ func TestHandleCreateCamera_InvalidProtocol(t *testing.T) {
 }
 
 func TestHandleGetCamera(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera first
@@ -1622,6 +1681,7 @@ func TestHandleGetCamera(t *testing.T) {
 }
 
 func TestHandleGetCamera_NotFound(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent", nil, "", "")
@@ -1631,6 +1691,7 @@ func TestHandleGetCamera_NotFound(t *testing.T) {
 }
 
 func TestHandleUpdateCamera(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera
@@ -1656,6 +1717,7 @@ func TestHandleUpdateCamera(t *testing.T) {
 }
 
 func TestHandleUpdateCamera_NotFound(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	body := strings.NewReader(`{"name":"X"}`)
@@ -1666,6 +1728,7 @@ func TestHandleUpdateCamera_NotFound(t *testing.T) {
 }
 
 func TestHandleDeleteCamera(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera
@@ -1690,6 +1753,7 @@ func TestHandleDeleteCamera(t *testing.T) {
 }
 
 func TestHandleDeleteCamera_NotFound(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/nonexistent", nil, "", "")
@@ -1701,6 +1765,7 @@ func TestHandleDeleteCamera_NotFound(t *testing.T) {
 // --- Enhanced health and readyz tests ---
 
 func TestHealthEnhanced(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1719,6 +1784,7 @@ func TestHealthEnhanced(t *testing.T) {
 }
 
 func TestHealthReturnsOkWhenAllChecksPass(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1736,6 +1802,7 @@ func TestHealthReturnsOkWhenAllChecksPass(t *testing.T) {
 }
 
 func TestHealthWithNilDB(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
@@ -1749,6 +1816,7 @@ func TestHealthWithNilDB(t *testing.T) {
 }
 
 func TestReadyzReturns200(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1762,6 +1830,7 @@ func TestReadyzReturns200(t *testing.T) {
 }
 
 func TestReadyzWithNilDB(t *testing.T) {
+	t.Parallel()
 	h := TestHandler(nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
@@ -1795,6 +1864,7 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 }
 
 func TestHandleSnapshot_NoURL(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
@@ -1810,6 +1880,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 }
 
 func TestHandleSnapshot_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
@@ -1822,6 +1893,7 @@ func TestHandleSnapshot_CameraNotFound(t *testing.T) {
 }
 
 func TestHandleSnapshot_Success(t *testing.T) {
+	t.Parallel()
 	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46} // fake JPEG header
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -1840,6 +1912,7 @@ func TestHandleSnapshot_Success(t *testing.T) {
 }
 
 func TestHandleSnapshot_CacheHit(t *testing.T) {
+	t.Parallel()
 	requestCount := 0
 	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1863,6 +1936,7 @@ func TestHandleSnapshot_CacheHit(t *testing.T) {
 }
 
 func TestHandleSnapshot_StaleFallback(t *testing.T) {
+	t.Parallel()
 	requestCount := 0
 	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1902,6 +1976,7 @@ func TestHandleSnapshot_StaleFallback(t *testing.T) {
 }
 
 func TestHandleSnapshot_CameraError(t *testing.T) {
+	t.Parallel()
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("camera error"))
@@ -1915,6 +1990,7 @@ func TestHandleSnapshot_CameraError(t *testing.T) {
 }
 
 func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
+	t.Parallel()
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
 	snapshotServer.Close()
@@ -1924,6 +2000,7 @@ func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
 }
 
 func TestListRecordings_SearchQuery(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -1947,6 +2024,7 @@ func TestListRecordings_SearchQuery(t *testing.T) {
 // --- Merge settings tests ---
 
 func TestGetMergeSettings_NoConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil config
@@ -1963,6 +2041,7 @@ func TestGetMergeSettings_NoConfig(t *testing.T) {
 }
 
 func TestGetMergeSettings_WithConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -2007,6 +2086,7 @@ func TestGetMergeSettings_WithConfig(t *testing.T) {
 }
 
 func TestUpdateMergeSettings_NoConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil config
@@ -2019,6 +2099,7 @@ func TestUpdateMergeSettings_NoConfig(t *testing.T) {
 }
 
 func TestUpdateMergeSettings_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2032,6 +2113,7 @@ func TestUpdateMergeSettings_InvalidBody(t *testing.T) {
 }
 
 func TestUpdateMergeSettings_InvalidCheckInterval(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2050,6 +2132,7 @@ func TestUpdateMergeSettings_InvalidCheckInterval(t *testing.T) {
 }
 
 func TestUpdateMergeSettings_InvalidBatchLimit(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2063,6 +2146,7 @@ func TestUpdateMergeSettings_InvalidBatchLimit(t *testing.T) {
 }
 
 func TestUpdateMergeSettings_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -2094,6 +2178,7 @@ func TestUpdateMergeSettings_Success(t *testing.T) {
 // --- Camera merge config tests ---
 
 func TestUpdateCameraMergeConfig_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2117,6 +2202,7 @@ func TestUpdateCameraMergeConfig_Success(t *testing.T) {
 }
 
 func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2134,6 +2220,7 @@ func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
 }
 
 func TestUpdateCameraMergeConfig_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2147,6 +2234,7 @@ func TestUpdateCameraMergeConfig_CameraNotFound(t *testing.T) {
 }
 
 func TestDeleteCameraMergeConfig_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2169,6 +2257,7 @@ func TestDeleteCameraMergeConfig_Success(t *testing.T) {
 }
 
 func TestDeleteCameraMergeConfig_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2184,6 +2273,7 @@ func TestDeleteCameraMergeConfig_CameraNotFound(t *testing.T) {
 
 func TestHandleMergeStatus_NilManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2198,6 +2288,7 @@ func TestHandleMergeStatus_NilManager(t *testing.T) {
 
 func TestHandleMergePending_NilManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2212,6 +2303,7 @@ func TestHandleMergePending_NilManager(t *testing.T) {
 
 func TestHandleMergeStatus_WithManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -2236,6 +2328,7 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 
 func TestHandleMergePending_WithManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
@@ -2267,6 +2360,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 // --- HLS stream handler tests ---
 
 func TestHandleHLSStream_NilHLSManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil hlsMgr
@@ -2279,6 +2373,7 @@ func TestHandleHLSStream_NilHLSManager(t *testing.T) {
 }
 
 func TestHandleStopHLSStream_NilHLSManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -2288,6 +2383,7 @@ func TestHandleStopHLSStream_NilHLSManager(t *testing.T) {
 }
 
 func TestHandleStopHLSStream_NotActive(t *testing.T) {
+	t.Parallel()
 	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
 	db, store := setupTestDB(t)
 	defer db.Close()
@@ -2302,6 +2398,7 @@ func TestHandleStopHLSStream_NotActive(t *testing.T) {
 }
 
 func TestHandleStopHLSStream_Active(t *testing.T) {
+	t.Parallel()
 	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
 	db, store := setupTestDB(t)
 	defer db.Close()
@@ -2347,6 +2444,7 @@ func (noopCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
 
 func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2372,6 +2470,7 @@ func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 
 func TestXiaomiDevicesNoAuth(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2386,6 +2485,7 @@ func TestXiaomiDevicesNoAuth(t *testing.T) {
 }
 
 func TestXiaomiDevicesEmpty(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2402,6 +2502,7 @@ func TestXiaomiDevicesEmpty(t *testing.T) {
 }
 
 func TestXiaomiCaptchaRequiresFields(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2413,6 +2514,7 @@ func TestXiaomiCaptchaRequiresFields(t *testing.T) {
 }
 
 func TestXiaomiVerifyRequiresFields(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2424,6 +2526,7 @@ func TestXiaomiVerifyRequiresFields(t *testing.T) {
 }
 
 func TestXiaomiCloudUnavailableWithoutProxy(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2455,6 +2558,7 @@ func TestXiaomiCloudUnavailableWithoutProxy(t *testing.T) {
 }
 
 func TestCameraXiaomiProtocol(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	body := strings.NewReader(`{"name":"Xiaomi Camera","protocol":"xiaomi","url":"xiaomi://655448418","encoding":"h265"}`)
@@ -2470,6 +2574,7 @@ func TestCameraXiaomiProtocol(t *testing.T) {
 }
 
 func TestHandleCreateCamera_InvalidURL(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	tests := []struct {
@@ -2494,6 +2599,7 @@ func TestHandleCreateCamera_InvalidURL(t *testing.T) {
 }
 
 func TestHandleCreateCamera_ValidURLs(t *testing.T) {
+	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
 	tests := []struct {

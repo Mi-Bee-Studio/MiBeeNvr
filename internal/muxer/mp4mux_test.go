@@ -18,6 +18,7 @@ var testSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xc8}
 var testPPS = []byte{0x68, 0xce, 0x38, 0x80}
 
 func TestNewMP4Muxer(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 
@@ -28,6 +29,7 @@ func TestNewMP4Muxer(t *testing.T) {
 }
 
 func TestAddH264Track(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 
@@ -45,6 +47,7 @@ func TestAddH264Track(t *testing.T) {
 }
 
 func TestWriteAndClose(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "output.mp4")
 
@@ -90,6 +93,7 @@ func TestWriteAndClose(t *testing.T) {
 }
 
 func TestEmptyClose(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.mp4")
 
@@ -104,6 +108,7 @@ func TestEmptyClose(t *testing.T) {
 }
 
 func TestDuration(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "duration.mp4")
 
@@ -130,6 +135,7 @@ func TestDuration(t *testing.T) {
 }
 
 func TestWriteSampleInvalidTrack(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid.mp4")
 
@@ -154,6 +160,7 @@ var testSPS720 = []byte{0x67, 0x42, 0xc0, 0x1e, 0xf4, 0x02, 0x80, 0x2d, 0x80}
 var testSPS1080 = []byte{0x67, 0x42, 0xc0, 0x28, 0xf4, 0x03, 0xc0, 0x11, 0x2f, 0x28}
 
 func TestParseSPSResolution(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		sps        []byte
@@ -201,6 +208,7 @@ func TestParseSPSResolution(t *testing.T) {
 }
 
 func TestAddH264TrackParsesResolution(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 
@@ -215,6 +223,7 @@ func TestAddH264TrackParsesResolution(t *testing.T) {
 }
 
 func TestMP4MuxerAudio(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audio_video.mp4")
 
@@ -278,6 +287,7 @@ func TestMP4MuxerAudio(t *testing.T) {
 
 func TestG711AudioTrack(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "g711_video.mp4")
 
@@ -332,6 +342,7 @@ func TestG711AudioTrack(t *testing.T) {
 }
 
 func TestAddAudioTrackInvalidCodec(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 
@@ -343,6 +354,7 @@ func TestAddAudioTrackInvalidCodec(t *testing.T) {
 }
 
 func TestWriteAudioSampleInvalidTrack(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 
@@ -358,6 +370,7 @@ func TestWriteAudioSampleInvalidTrack(t *testing.T) {
 }
 
 func TestAudioOnlyMP4(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audio_only.mp4")
 

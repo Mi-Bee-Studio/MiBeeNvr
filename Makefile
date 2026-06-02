@@ -23,7 +23,13 @@ build: frontend
 
 
 test:
-	go test ./... -v
+	go test -race ./...
+
+test-verbose:
+	go test -race -v ./...
+
+test-short:
+	go test -race -short ./...
 
 cross: frontend
 	@mkdir -p $(BUILD_DIR)
@@ -109,6 +115,6 @@ deploy-check:
 	@curl -sf http://$(RPi_HOST)/api/health && echo "✅ Health check passed" || echo "❌ Health check failed"
 
 
-.PHONY: frontend build test cross cross-armv7 lint clean install install-service uninstall-service
+.PHONY: frontend build test test-verbose test-short cross cross-armv7 lint clean install install-service uninstall-service
 .PHONY: docker-build docker-build-arm64 docker-build-all docker-push docker-push-arm64 docker-push-all docker-release
 .PHONY: deploy rollback deploy-check

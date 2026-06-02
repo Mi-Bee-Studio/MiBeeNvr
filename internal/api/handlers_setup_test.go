@@ -27,6 +27,7 @@ func setupTestHandlerForSetup(t *testing.T) (*Handler, string) {
 }
 
 func TestHandleSetup_Success(t *testing.T) {
+	t.Parallel()
 	h, cfgPath := setupTestHandlerForSetup(t)
 
 	body := setupRequest{Username: "admin", Password: "testpassword123"}
@@ -57,6 +58,7 @@ func TestHandleSetup_Success(t *testing.T) {
 }
 
 func TestHandleSetup_AlreadyConfigured(t *testing.T) {
+	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)
 
 	h.config.Auth.PasswordHash = "$2a$10$somehash"
@@ -74,6 +76,7 @@ func TestHandleSetup_AlreadyConfigured(t *testing.T) {
 }
 
 func TestHandleSetup_ShortPassword(t *testing.T) {
+	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)
 
 	body := setupRequest{Username: "admin", Password: "short"}
@@ -89,6 +92,7 @@ func TestHandleSetup_ShortPassword(t *testing.T) {
 }
 
 func TestHandleSetup_EmptyUsername(t *testing.T) {
+	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)
 
 	body := setupRequest{Username: "", Password: "testpassword123"}
@@ -104,6 +108,7 @@ func TestHandleSetup_EmptyUsername(t *testing.T) {
 }
 
 func TestHandleSetup_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader([]byte("not json")))
@@ -116,6 +121,7 @@ func TestHandleSetup_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleSetup_CustomStoragePath(t *testing.T) {
+	t.Parallel()
 	h, cfgPath := setupTestHandlerForSetup(t)
 
 	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: "/tmp/custom-nvr"}
@@ -135,6 +141,7 @@ func TestHandleSetup_CustomStoragePath(t *testing.T) {
 }
 
 func TestHandleSetup_TokenIsValid(t *testing.T) {
+	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)
 
 	username := "testuser"

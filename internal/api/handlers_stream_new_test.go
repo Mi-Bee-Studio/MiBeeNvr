@@ -42,6 +42,7 @@ func hasUnavailableProtocol(t *testing.T, protocols []ProtocolDetail, name strin
 
 func TestWHEP_AuthRequired(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -59,6 +60,7 @@ func TestWHEP_AuthRequired(t *testing.T) {
 
 func TestWHEP_Create_NoWebRTCManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -72,6 +74,7 @@ func TestWHEP_Create_NoWebRTCManager(t *testing.T) {
 
 func TestWHEP_Delete_NoWebRTCManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -85,6 +88,7 @@ func TestWHEP_Delete_NoWebRTCManager(t *testing.T) {
 
 func TestWHEP_Delete_SessionNotFound(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -100,6 +104,7 @@ func TestWHEP_Delete_SessionNotFound(t *testing.T) {
 
 func TestWHEP_CameraNotFound(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -115,6 +120,7 @@ func TestWHEP_CameraNotFound(t *testing.T) {
 
 func TestWHEP_InvalidContentType(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -138,6 +144,7 @@ func TestWHEP_InvalidContentType(t *testing.T) {
 
 func TestFLV_AuthRequired(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -154,6 +161,7 @@ func TestFLV_AuthRequired(t *testing.T) {
 
 func TestFLV_NoManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -166,6 +174,7 @@ func TestFLV_NoManager(t *testing.T) {
 
 func TestFLV_CameraNotFound(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -180,6 +189,7 @@ func TestFLV_CameraNotFound(t *testing.T) {
 
 func TestFLV_StreamNotActive(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -198,6 +208,7 @@ func TestFLV_StreamNotActive(t *testing.T) {
 
 func TestCameraProtocols_AuthRequired(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -214,6 +225,7 @@ func TestCameraProtocols_AuthRequired(t *testing.T) {
 
 func TestCameraProtocols_CameraNotFound(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -226,6 +238,7 @@ func TestCameraProtocols_CameraNotFound(t *testing.T) {
 
 func TestCameraProtocols_H264Camera(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -255,6 +268,7 @@ require.Equal(t, "webrtc", resp.Default) // WebRTC is preferred
 
 func TestCameraProtocols_H265Camera(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -284,6 +298,7 @@ require.Equal(t, "flv", resp.Default) // FLV is preferred after WebRTC (unavaila
 
 func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -309,6 +324,7 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 
 func TestCameraProtocols_NoRegistry(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -330,6 +346,7 @@ func TestCameraProtocols_NoRegistry(t *testing.T) {
 
 func TestCameraProtocols_UsesStreamEncoding(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -357,6 +374,7 @@ require.True(t, containsProtocol(t, resp.Protocols, "hls"), "hls should be avail
 
 func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -392,6 +410,7 @@ func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 
 func TestRoutes_FLVEndpointRegistered(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -407,6 +426,7 @@ func TestRoutes_FLVEndpointRegistered(t *testing.T) {
 
 func TestRoutes_CameraProtocolsEndpointRegistered(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -422,6 +442,7 @@ func TestRoutes_CameraProtocolsEndpointRegistered(t *testing.T) {
 
 func TestSetWebRTCManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -435,6 +456,7 @@ func TestSetWebRTCManager(t *testing.T) {
 
 func TestSetFLVManager(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 

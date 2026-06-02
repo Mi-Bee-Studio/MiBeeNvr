@@ -224,7 +224,7 @@ func helperSetupConnectedClient(t *testing.T, mock *onvifMockServer) (*Client, *
 	t.Cleanup(server.Close)
 
 	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	err := client.Connect(ctx)
@@ -273,7 +273,7 @@ func TestClientConnect_Success(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	err := client.Connect(ctx)
@@ -290,7 +290,7 @@ func TestClientConnect_AuthFailure(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "admin", "wrongpassword")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	err := client.Connect(ctx)
@@ -307,7 +307,7 @@ func TestClientConnect_ServerError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	err := client.Connect(ctx)

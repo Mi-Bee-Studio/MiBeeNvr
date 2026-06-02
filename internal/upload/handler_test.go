@@ -59,6 +59,7 @@ func newRouter(h *Handler) *chi.Mux {
 var testJPEG = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9}
 
 func TestUploadJPEG(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -85,6 +86,7 @@ func TestUploadJPEG(t *testing.T) {
 }
 
 func TestUploadUnknownCamera(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -106,6 +108,7 @@ func TestUploadUnknownCamera(t *testing.T) {
 }
 
 func TestUploadOversized(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	storageDir := filepath.Join(tmpDir, "storage")
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -142,6 +145,7 @@ func TestUploadOversized(t *testing.T) {
 }
 
 func TestUploadBadContentType(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -163,6 +167,7 @@ func TestUploadBadContentType(t *testing.T) {
 }
 
 func TestUploadVideo(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -190,6 +195,7 @@ func TestUploadVideo(t *testing.T) {
 }
 
 func TestUploadBatch(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -230,6 +236,7 @@ func TestUploadBatch(t *testing.T) {
 }
 
 func TestUploadVideoBadContentType(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -252,6 +259,7 @@ func TestUploadVideoBadContentType(t *testing.T) {
 
 // TestUploadJPEGWritesFile verifies that a JPEG upload actually creates a file on disk.
 func TestUploadJPEGWritesFile(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 
@@ -277,6 +285,7 @@ func TestUploadJPEGWritesFile(t *testing.T) {
 
 // TestUploadVideoWritesFile verifies that a video upload creates a file on disk.
 func TestUploadVideoWritesFile(t *testing.T) {
+	t.Parallel()
 	h, cleanup := setupTestEnv(t)
 	defer cleanup()
 

@@ -75,6 +75,7 @@ func doTranscodeRequest(t *testing.T, h *Handler, method, path string) *httptest
 // --- Tests ---
 
 func TestTranscodeCheck_ReturnsCachedProbeData(t *testing.T) {
+	t.Parallel()
 	// Reset probe cache for clean test
 	transcoding.ResetProbe()
 
@@ -126,10 +127,12 @@ func testTranscodeCheckSecondCallInstant(t *testing.T) {
 }
 
 func TestTranscodeCheck_SecondCallIsCached(t *testing.T) {
+	t.Parallel()
 	testTranscodeCheckSecondCallInstant(t)
 }
 
 func TestTranscodeCheck_NoDownloader(t *testing.T) {
+	t.Parallel()
 	transcoding.ResetProbe()
 
 	// No downloader set
@@ -144,6 +147,7 @@ func TestTranscodeCheck_NoDownloader(t *testing.T) {
 }
 
 func TestFFmpegStatus_ReturnsStatus(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{
 		Status:   "not_installed",
@@ -163,6 +167,7 @@ func TestFFmpegStatus_ReturnsStatus(t *testing.T) {
 }
 
 func TestFFmpegStatus_Available(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{
 		Status:   "available",
@@ -181,6 +186,7 @@ func TestFFmpegStatus_Available(t *testing.T) {
 }
 
 func TestFFmpegStatus_NoDownloader(t *testing.T) {
+	t.Parallel()
 	h := newTranscodeHandler(t, nil)
 
 	rr := doTranscodeRequest(t, h, http.MethodGet, "/api/transcoding/ffmpeg/status")
@@ -192,6 +198,7 @@ func TestFFmpegStatus_NoDownloader(t *testing.T) {
 }
 
 func TestFFmpegDownload_Returns202IfNew(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{Status: "not_installed"})
 	h := newTranscodeHandler(t, dl)
@@ -205,6 +212,7 @@ func TestFFmpegDownload_Returns202IfNew(t *testing.T) {
 }
 
 func TestFFmpegDownload_Returns200IfAvailable(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{
 		Status:  "available",
@@ -221,6 +229,7 @@ func TestFFmpegDownload_Returns200IfAvailable(t *testing.T) {
 }
 
 func TestFFmpegDownload_IdempotentSecondCall(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{Status: "downloading", Progress: 0.5})
 	h := newTranscodeHandler(t, dl)
@@ -236,6 +245,7 @@ func TestFFmpegDownload_IdempotentSecondCall(t *testing.T) {
 }
 
 func TestFFmpegDownload_NoDownloader(t *testing.T) {
+	t.Parallel()
 	h := newTranscodeHandler(t, nil)
 
 	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/ffmpeg/download")
@@ -243,6 +253,7 @@ func TestFFmpegDownload_NoDownloader(t *testing.T) {
 }
 
 func TestFFmpegDownloadRetry_WorksonFailedStatus(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{
 		Status: "failed",
@@ -259,6 +270,7 @@ func TestFFmpegDownloadRetry_WorksonFailedStatus(t *testing.T) {
 }
 
 func TestFFmpegDownloadRetry_ConflictsIfNotFailed(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{Status: "downloading", Progress: 0.5})
 	h := newTranscodeHandler(t, dl)
@@ -272,6 +284,7 @@ func TestFFmpegDownloadRetry_ConflictsIfNotFailed(t *testing.T) {
 }
 
 func TestFFmpegDownloadRetry_Returns200IfAvailable(t *testing.T) {
+	t.Parallel()
 	dl := &mockDownloader{}
 	dl.setStatus(transcoding.DownloadStatus{
 		Status:  "available",
@@ -368,6 +381,7 @@ func TestTranscodingStatus_DisabledWithReason(t *testing.T) {
 }
 
 func TestTranscodingStatus_Enabled(t *testing.T) {
+	t.Parallel()
 	h := newTranscodeHandler(t, nil)
 	h.transcodeMgr = &mockTranscodeManager{
 		status: transcoding.ManagerStatus{
@@ -390,6 +404,7 @@ func TestTranscodingStatus_Enabled(t *testing.T) {
 }
 
 func TestTranscodingTasksList_Empty(t *testing.T) {
+	t.Parallel()
 	h := newTranscodeHandler(t, nil)
 
 	rr := doTranscodeRequest(t, h, http.MethodGet, "/api/transcoding/tasks")
@@ -403,6 +418,7 @@ func TestTranscodingTasksList_Empty(t *testing.T) {
 }
 
 func TestTranscodingTaskCreate_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
 
@@ -449,6 +465,7 @@ func TestTranscodingTaskCreate_Success(t *testing.T) {
 }
 
 func TestTranscodingTaskCreate_DisabledCamera(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
 
@@ -482,6 +499,7 @@ func TestTranscodingTaskCreate_DisabledCamera(t *testing.T) {
 }
 
 func TestTranscodingTaskCancel_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
 
@@ -511,6 +529,7 @@ func TestTranscodingTaskCancel_Success(t *testing.T) {
 }
 
 func TestTranscodingTaskCancel_CompletedTask(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
 
@@ -537,6 +556,7 @@ func TestTranscodingTaskCancel_CompletedTask(t *testing.T) {
 }
 
 func TestTranscodingCameraConfigs(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
 	h.config = &config.Config{

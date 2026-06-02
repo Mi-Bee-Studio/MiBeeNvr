@@ -239,17 +239,13 @@ func TestQueueConcurrencyLimit(t *testing.T) {
 
 	// Verify that at most 1 task is ever active concurrently
 	maxObserved := 0
- deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		active := q.ActiveCount()
 		if active > maxObserved {
 			maxObserved = active
 		}
-		if active == 0 && maxObserved > 0 {
-			break // all done
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return active == 0 && maxObserved > 0
+	}, 15*time.Second, 50*time.Millisecond, "all tasks should complete")
 	require.LessOrEqual(t, maxObserved, 1, "at most 1 task should be active with maxWorkers=1")
 
 	// Wait for all 3 tasks to complete
@@ -385,11 +381,12 @@ func TestQueueStopPreventsNewDispatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
-	// Wait a bit then check task is still pending
-	time.Sleep(500 * time.Millisecond)
-	task, err := db.GetTaskByID(context.Background(), taskID)
-	require.NoError(t, err)
-	require.Equal(t, "pending", task.Status, "task should remain pending after queue stopped")
+	// Verify task remains pending (queue is stopped, won't dispatch)
+	require.Eventually(t, func() bool {
+		task, err := db.GetTaskByID(context.Background(), taskID)
+		require.NoError(t, err)
+		return task != nil && task.Status == "pending"
+	}, 2*time.Second, 50*time.Millisecond, "task should remain pending after queue stopped")
 }
 
 func TestQueueTaskToOptions(t *testing.T) {

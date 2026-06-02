@@ -14,6 +14,7 @@ import (
 // --- handleGetSettings tests ---
 
 func TestGetSettings_NilConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	// TestHandler creates handler with nil config
@@ -26,6 +27,7 @@ func TestGetSettings_NilConfig(t *testing.T) {
 // --- handleUpdateSettings tests ---
 
 func TestUpdateSettings_BadJSON(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // config is nil
@@ -36,6 +38,7 @@ func TestUpdateSettings_BadJSON(t *testing.T) {
 }
 
 func TestUpdateSettings_NilConfig(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -48,6 +51,7 @@ func TestUpdateSettings_NilConfig(t *testing.T) {
 // --- handleReadyz tests ---
 
 func TestReadyz_OK(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -59,6 +63,7 @@ func TestReadyz_OK(t *testing.T) {
 // --- handleProtocols tests ---
 
 func TestProtocols(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -76,6 +81,7 @@ func TestProtocols(t *testing.T) {
 // --- handleBackup tests ---
 
 func TestBackup_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -116,6 +122,7 @@ func TestListBackups_AfterBackup(t *testing.T) {
 // --- handleBatchDeleteRecordings tests ---
 
 func TestBatchDeleteRecordings_EmptyIDs(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -126,6 +133,7 @@ func TestBatchDeleteRecordings_EmptyIDs(t *testing.T) {
 }
 
 func TestBatchDeleteRecordings_TooManyIDs(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -140,6 +148,7 @@ func TestBatchDeleteRecordings_TooManyIDs(t *testing.T) {
 }
 
 func TestBatchDeleteRecordings_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -151,26 +160,32 @@ func TestBatchDeleteRecordings_InvalidBody(t *testing.T) {
 // --- formatUptime tests ---
 
 func TestFormatUptime_Hours(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "1h 30m 0s", formatUptime(90*time.Minute))
 }
 
 func TestFormatUptime_Minutes(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "5m 30s", formatUptime(330*time.Second))
 }
 
 func TestFormatUptime_SecondsOnly(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "45s", formatUptime(45*time.Second))
 }
 
 func TestFormatUptime_Zero(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "0s", formatUptime(0))
 }
 
 func TestFormatUptime_ExactHour(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "1h 0m 0s", formatUptime(1 * time.Hour))
 }
 
 func TestFormatUptime_LargeDuration(t *testing.T) {
+	t.Parallel()
 	d := 72*time.Hour + 15*time.Minute + 30*time.Second
 	require.Equal(t, "72h 15m 30s", formatUptime(d))
 }
@@ -178,6 +193,7 @@ func TestFormatUptime_LargeDuration(t *testing.T) {
 // --- handleStats tests ---
 
 func TestStats_OK(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -194,6 +210,7 @@ func TestStats_OK(t *testing.T) {
 // --- handleStatsTrends tests ---
 
 func TestStatsTrends_OK(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -203,6 +220,7 @@ func TestStatsTrends_OK(t *testing.T) {
 }
 
 func TestStatsTrends_CustomDays(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -214,6 +232,7 @@ func TestStatsTrends_CustomDays(t *testing.T) {
 // --- handleGetFeatures tests ---
 
 func TestGetFeatures(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -225,6 +244,7 @@ func TestGetFeatures(t *testing.T) {
 // --- handleUpdateFeatures tests ---
 
 func TestUpdateFeatures_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)

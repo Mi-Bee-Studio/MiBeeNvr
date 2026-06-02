@@ -9,6 +9,7 @@ import (
 
 func TestNewMetrics(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m)
 	require.NotNil(t, m.Registry)
@@ -25,6 +26,7 @@ func TestNewMetrics(t *testing.T) {
 
 func TestNewMetricsRegistersGoCollector(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -40,6 +42,7 @@ func TestNewMetricsRegistersGoCollector(t *testing.T) {
 
 func TestNewMetricsRegistersProcessCollector(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -55,6 +58,7 @@ func TestNewMetricsRegistersProcessCollector(t *testing.T) {
 
 func TestCounterInc(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.RecordingBytesTotal.WithLabelValues("cam1", "h264").Inc()
 	m.RecordingBytesTotal.WithLabelValues("cam1", "h264").Add(100)
@@ -72,6 +76,7 @@ func TestCounterInc(t *testing.T) {
 
 func TestGaugeSet(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.ActiveCameras.Set(42)
 	families, err := m.Registry.Gather()
@@ -88,6 +93,7 @@ func TestGaugeSet(t *testing.T) {
 
 func TestLabeledCounter(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.CameraErrors.WithLabelValues("cam1", "connection").Inc()
 	m.CameraErrors.WithLabelValues("cam1", "decode").Inc()
@@ -106,6 +112,7 @@ func TestLabeledCounter(t *testing.T) {
 
 func TestRegistryGather(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.ActiveCameras.Set(5)
 	m.StorageUsedBytes.Set(1024)
@@ -142,6 +149,7 @@ m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
 
 func TestHLSFramesDroppedCounter(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m.HLSFramesDropped)
 
@@ -162,6 +170,7 @@ func TestHLSFramesDroppedCounter(t *testing.T) {
 
 func TestNewStreamingMetrics(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m.WebRTCActivePeers)
 	require.NotNil(t, m.WebRTCFramesSent)
@@ -175,6 +184,7 @@ func TestNewStreamingMetrics(t *testing.T) {
 
 func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 
 	// Touch all streaming metrics to ensure they appear in registry
@@ -205,6 +215,7 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 
 func TestTranscodingMetrics_Registration(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m.TranscodingJobsTotal)
 	require.NotNil(t, m.TranscodingActiveJobs)
@@ -215,6 +226,7 @@ func TestTranscodingMetrics_Registration(t *testing.T) {
 
 func TestTranscodingMetrics_CounterIncrement(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Inc()
 	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Add(4)
@@ -233,6 +245,7 @@ func TestTranscodingMetrics_CounterIncrement(t *testing.T) {
 
 func TestTranscodingMetrics_GaugeUpdate(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.TranscodingActiveJobs.Set(3)
 
@@ -250,6 +263,7 @@ func TestTranscodingMetrics_GaugeUpdate(t *testing.T) {
 
 func TestTranscodingMetrics_HistogramObserve(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.TranscodingDurationSeconds.WithLabelValues("h264", "hevc").Observe(42.5)
 
@@ -267,6 +281,7 @@ func TestTranscodingMetrics_HistogramObserve(t *testing.T) {
 
 func TestTranscodingMetrics_BytesCounter(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.TranscodingBytesProcessed.Add(1048576)
 
@@ -284,6 +299,7 @@ func TestTranscodingMetrics_BytesCounter(t *testing.T) {
 
 func TestTranscodingMetrics_FFmpegStatus(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 
 	// status 0 = not_installed, 1 = downloading, 2 = available
@@ -306,6 +322,7 @@ func TestTranscodingMetrics_FFmpegStatus(t *testing.T) {
 
 func TestStreamMetrics_Registration(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m.StreamFPS)
 	require.NotNil(t, m.StreamBitrateKbps)
@@ -314,6 +331,7 @@ func TestStreamMetrics_Registration(t *testing.T) {
 
 func TestStreamMetrics_GaugeSet(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.StreamFPS.WithLabelValues("cam1").Set(25.5)
 	m.StreamBitrateKbps.WithLabelValues("cam1").Set(2048.0)
@@ -332,6 +350,7 @@ func TestStreamMetrics_GaugeSet(t *testing.T) {
 
 func TestCameraConnectionMetrics_Registration(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	require.NotNil(t, m.CameraConnectionErrorsTotal)
 	require.NotNil(t, m.CameraReconnectAttemptsTotal)
@@ -340,6 +359,7 @@ func TestCameraConnectionMetrics_Registration(t *testing.T) {
 
 func TestCameraConnectionMetrics_CounterInc(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	m := NewMetrics()
 	m.CameraConnectionErrorsTotal.WithLabelValues("cam1", "timeout").Inc()
 	m.CameraConnectionErrorsTotal.WithLabelValues("cam1", "auth").Inc()

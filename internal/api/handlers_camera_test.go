@@ -13,6 +13,7 @@ import (
 
 func TestCameraRowForAPI_ONVIFEndpoint(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	row := &storage.CameraRow{Protocol: "onvif", ONVIFEndpoint: "http://192.168.1.100/onvif/device_service", URL: ""}
 	cameraRowForAPI(row)
 	require.Equal(t, "http://192.168.1.100/onvif/device_service", row.URL)
@@ -20,6 +21,7 @@ func TestCameraRowForAPI_ONVIFEndpoint(t *testing.T) {
 
 func TestCameraRowForAPI_NonONVIFUnchanged(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	row := &storage.CameraRow{Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream", ONVIFEndpoint: ""}
 	cameraRowForAPI(row)
 	require.Equal(t, "rtsp://192.168.1.10/stream", row.URL)
@@ -27,6 +29,7 @@ func TestCameraRowForAPI_NonONVIFUnchanged(t *testing.T) {
 
 func TestCameraRowForAPI_ONVIFWithURLAlreadySet(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	row := &storage.CameraRow{Protocol: "onvif", URL: "http://already-set", ONVIFEndpoint: "http://192.168.1.100/onvif"}
 	cameraRowForAPI(row)
 	require.Equal(t, "http://already-set", row.URL)
@@ -34,6 +37,7 @@ func TestCameraRowForAPI_ONVIFWithURLAlreadySet(t *testing.T) {
 
 func TestCameraRowForAPI_ONVIFNoEndpoint(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	row := &storage.CameraRow{Protocol: "onvif", URL: "", ONVIFEndpoint: ""}
 	cameraRowForAPI(row)
 	require.Equal(t, "", row.URL)
@@ -43,32 +47,38 @@ func TestCameraRowForAPI_ONVIFNoEndpoint(t *testing.T) {
 
 func TestStripScheme_RTSPWithPort(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://192.168.1.10:554/stream"))
 }
 
 func TestStripScheme_RTSPNoPort(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://192.168.1.10/stream"))
 }
 
 func TestStripScheme_HTTPWithPort(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	require.Equal(t, "192.168.1.10:8080", stripScheme("http://192.168.1.10:8080/capture"))
 }
 
 func TestStripScheme_HTTPS(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	require.Equal(t, "camera.example.com:443", stripScheme("https://camera.example.com:443/stream"))
 }
 
 func TestStripScheme_NoScheme(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	result := stripScheme("192.168.1.10:554")
 	require.Contains(t, result, "192.168.1.10:554")
 }
 
 func TestStripScheme_RTSPDefaultPort(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	require.Equal(t, "10.0.0.1:554", stripScheme("rtsp://10.0.0.1/path"))
 }
 
@@ -76,6 +86,7 @@ func TestStripScheme_RTSPDefaultPort(t *testing.T) {
 
 func TestTestConnection_MissingURL(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -87,6 +98,7 @@ func TestTestConnection_MissingURL(t *testing.T) {
 
 func TestTestConnection_InvalidBody(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -97,6 +109,7 @@ func TestTestConnection_InvalidBody(t *testing.T) {
 
 func TestTestConnection_RTSPConnectionRefused(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -112,6 +125,7 @@ func TestTestConnection_RTSPConnectionRefused(t *testing.T) {
 
 func TestTestConnection_HTTPConnectionFailed(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -127,6 +141,7 @@ func TestTestConnection_HTTPConnectionFailed(t *testing.T) {
 
 func TestTestConnection_InvalidURLFormat(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -140,6 +155,7 @@ func TestTestConnection_InvalidURLFormat(t *testing.T) {
 
 func TestCreateCamera_MissingName(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -151,6 +167,7 @@ func TestCreateCamera_MissingName(t *testing.T) {
 
 func TestCreateCamera_MissingProtocol(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -162,6 +179,7 @@ func TestCreateCamera_MissingProtocol(t *testing.T) {
 
 func TestCreateCamera_InvalidProtocol(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -173,6 +191,7 @@ func TestCreateCamera_InvalidProtocol(t *testing.T) {
 
 func TestCreateCamera_MissingURL(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -184,6 +203,7 @@ func TestCreateCamera_MissingURL(t *testing.T) {
 
 func TestCreateCamera_InvalidURL(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -195,6 +215,7 @@ func TestCreateCamera_InvalidURL(t *testing.T) {
 
 func TestCreateCamera_InvalidBody(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -205,6 +226,7 @@ func TestCreateCamera_InvalidBody(t *testing.T) {
 
 func TestCreateCamera_ONVIFMissingEndpoint(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -216,6 +238,7 @@ func TestCreateCamera_ONVIFMissingEndpoint(t *testing.T) {
 
 func TestCreateCamera_LegacyProtocol(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -228,6 +251,7 @@ func TestCreateCamera_LegacyProtocol(t *testing.T) {
 
 func TestCreateCamera_NilCamMgr(t *testing.T) {
 	t.Helper()
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -240,58 +264,71 @@ func TestCreateCamera_NilCamMgr(t *testing.T) {
 // --- validateURL tests ---
 
 func TestValidateURL_ValidRTSP(t *testing.T) {
+	t.Parallel()
 	require.True(t, validateURL("rtsp://192.168.1.10:554/stream"))
 }
 
 func TestValidateURL_ValidHTTP(t *testing.T) {
+	t.Parallel()
 	require.True(t, validateURL("http://192.168.1.10/capture"))
 }
 
 func TestValidateURL_Empty(t *testing.T) {
+	t.Parallel()
 	require.False(t, validateURL(""))
 }
 
 func TestValidateURL_NoScheme(t *testing.T) {
+	t.Parallel()
 	require.False(t, validateURL("192.168.1.10:554/stream"))
 }
 
 func TestValidateURL_NoHost(t *testing.T) {
+	t.Parallel()
 	require.False(t, validateURL("rtsp://"))
 }
 
 func TestValidateURL_Invalid(t *testing.T) {
+	t.Parallel()
 	require.False(t, validateURL("://"))
 }
 
 // --- isImageFile tests ---
 
 func TestIsImageFile_JPG(t *testing.T) {
+	t.Parallel()
 	require.True(t, isImageFile("frame001.jpg"))
 }
 
 func TestIsImageFile_JPEG(t *testing.T) {
+	t.Parallel()
 	require.True(t, isImageFile("frame001.jpeg"))
 }
 
 func TestIsImageFile_PNG(t *testing.T) {
+	t.Parallel()
 	require.True(t, isImageFile("frame001.png"))
 }
 
 func TestIsImageFile_Uppercase(t *testing.T) {
+	t.Parallel()
 	require.True(t, isImageFile("frame001.JPG"))
 }
 
 func TestIsImageFile_MP4(t *testing.T) {
+	t.Parallel()
 	require.False(t, isImageFile("video.mp4"))
 }
 
 func TestIsImageFile_NoExtension(t *testing.T) {
+	t.Parallel()
 	require.False(t, isImageFile("frame"))
 }
 
 // --- handleListCameras tests ---
 
 func TestCameraList_EmptyList(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -307,6 +344,7 @@ func TestCameraList_EmptyList(t *testing.T) {
 // --- handleGetCamera tests ---
 
 func TestGetCamera_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -318,6 +356,7 @@ func TestGetCamera_NotFound(t *testing.T) {
 // --- handleDeleteCamera tests ---
 
 func TestDeleteCamera_NotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -329,6 +368,7 @@ func TestDeleteCamera_NotFound(t *testing.T) {
 // --- handleStartCamera tests ---
 
 func TestStartCamera_NoManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -340,6 +380,7 @@ func TestStartCamera_NoManager(t *testing.T) {
 // --- handleStopCamera tests ---
 
 func TestStopCamera_NoManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -351,6 +392,7 @@ func TestStopCamera_NoManager(t *testing.T) {
 // --- handleUpdateCamera tests ---
 
 func TestUpdateCamera_NoManager(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -361,6 +403,7 @@ func TestUpdateCamera_NoManager(t *testing.T) {
 }
 
 func TestUpdateCamera_InvalidBody(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -371,6 +414,7 @@ func TestUpdateCamera_InvalidBody(t *testing.T) {
 }
 
 func TestUpdateCamera_InvalidURL(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -384,6 +428,7 @@ func TestUpdateCamera_InvalidURL(t *testing.T) {
 // --- validProtocols map test ---
 
 func TestValidProtocols(t *testing.T) {
+	t.Parallel()
 	for _, proto := range []string{"rtsp", "http", "onvif", "xiaomi", "rtsp_h264", "rtsp_h265", "rtsp_mjpeg", "http_jpeg"} {
 		require.True(t, validProtocols[proto], "expected %q to be valid", proto)
 	}
@@ -394,20 +439,24 @@ func TestValidProtocols(t *testing.T) {
 // --- extractDIDFromURL tests ---
 
 func TestExtractDIDFromURL(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "12345678", extractDIDFromURL("xiaomi://12345678"))
 }
 
 func TestExtractDIDFromURL_Empty(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "", extractDIDFromURL(""))
 }
 
 func TestExtractDIDFromURL_Invalid(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "", extractDIDFromURL("://bad"))
 }
 
 // --- strPtr helper ---
 
 func TestStrPtr(t *testing.T) {
+	t.Parallel()
 	s := "hello"
 	p := strPtr(s)
 	require.NotNil(t, p)

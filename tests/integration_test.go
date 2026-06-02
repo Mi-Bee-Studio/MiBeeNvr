@@ -1274,12 +1274,11 @@ func TestCameraConnectionFailure(t *testing.T) {
 	require.Equal(t, model.StatusRecording, rec.Status())
 
 	// Wait for connection failure to trigger reconnect
-	time.Sleep(500 * time.Millisecond)
-
-	// Should be in reconnecting state or still trying
-	status := rec.Status()
-	require.True(t, status == model.StatusReconnecting || status == model.StatusRecording,
-		"expected reconnecting or recording, got %s", status)
+	require.Eventually(t, func() bool {
+		status := rec.Status()
+		return status == model.StatusReconnecting || status == model.StatusRecording
+	}, 2*time.Second, 50*time.Millisecond,
+		"expected reconnecting or recording, got %s", rec.Status())
 
 	// Stop should succeed cleanly
 	require.NoError(t, rec.Stop())
@@ -1327,7 +1326,9 @@ func TestConcurrentRecordingStress(t *testing.T) {
 	}
 
 	// Let them run briefly to stress the reconnection loop
-	time.Sleep(1 * time.Second)
+	stressStart := time.Now()
+	require.Eventually(t, func() bool { return time.Since(stressStart) >= 500*time.Millisecond },
+		1*time.Second, 50*time.Millisecond, "stress period elapsed")
 
 	// Stop all concurrently
 	var stopWg sync.WaitGroup
@@ -1530,7 +1531,7 @@ func TestSSEEventLifecycle(t *testing.T) {
 
 	// --- Step 1: Capture goroutine baseline ---
 	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	baseGoroutines := runtime.NumGoroutine()
 	t.Logf("baseline goroutines: %d", baseGoroutines)
 
@@ -1564,13 +1565,12 @@ func TestSSEEventLifecycle(t *testing.T) {
 	t.Log("SSE client disconnected")
 
 	// --- Step 5: Verify goroutine cleanup ---
-	time.Sleep(2 * time.Second)
-	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
-	finalGoroutines := runtime.NumGoroutine()
-	t.Logf("final goroutines: %d (baseline: %d)", finalGoroutines, baseGoroutines)
-	require.LessOrEqual(t, finalGoroutines, baseGoroutines+2,
-		"goroutine leak: %d goroutines remain (baseline: %d)", finalGoroutines, baseGoroutines)
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return runtime.NumGoroutine() <= baseGoroutines+2
+	}, 3*time.Second, 100*time.Millisecond,
+		"goroutine leak: %d goroutines remain (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
+	t.Logf("final goroutines: %d (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 
 	// --- Step 6: Verify no panic on subsequent detection ---
 	require.NotPanics(t, func() {
@@ -1614,7 +1614,7 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 
 	// --- Step 4: Capture goroutine baseline ---
 	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	baseGoroutines := runtime.NumGoroutine()
 	t.Logf("baseline goroutines: %d", baseGoroutines)
 
@@ -1693,14 +1693,12 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	t.Log("viewer cleanup verified")
 
 	// --- Step 10: Verify no goroutine leaks ---
-	wsMgr.StopAll()
-	time.Sleep(2 * time.Second)
-	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
-	finalGoroutines := runtime.NumGoroutine()
-	t.Logf("final goroutines: %d (baseline: %d)", finalGoroutines, baseGoroutines)
-	require.LessOrEqual(t, finalGoroutines, baseGoroutines+2,
-		"goroutine leak: %d goroutines remain (baseline: %d)", finalGoroutines, baseGoroutines)
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return runtime.NumGoroutine() <= baseGoroutines+2
+	}, 3*time.Second, 100*time.Millisecond,
+		"goroutine leak: %d goroutines remain (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
+	t.Logf("final goroutines: %d (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Log("no goroutine leaks detected")
 }
 

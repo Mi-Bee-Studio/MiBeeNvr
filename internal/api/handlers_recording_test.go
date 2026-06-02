@@ -16,6 +16,7 @@ import (
 // --- handleListRecordings with sorting ---
 
 func TestListRecordings_SortByDuration(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -33,6 +34,7 @@ func TestListRecordings_SortByDuration(t *testing.T) {
 }
 
 func TestListRecordings_Search(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -51,6 +53,7 @@ func TestListRecordings_Search(t *testing.T) {
 }
 
 func TestListRecordings_InvalidLimit(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -60,6 +63,7 @@ func TestListRecordings_InvalidLimit(t *testing.T) {
 }
 
 func TestListRecordings_InvalidOffset(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -71,6 +75,7 @@ func TestListRecordings_InvalidOffset(t *testing.T) {
 // --- handleGetRecording edge cases ---
 
 func TestGetRecording_EdgeCases(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -91,6 +96,7 @@ func TestGetRecording_EdgeCases(t *testing.T) {
 // --- handleDownloadRecording tests ---
 
 func TestDownloadRecording_Missing(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -100,6 +106,7 @@ func TestDownloadRecording_Missing(t *testing.T) {
 }
 
 func TestDownloadRecording_NoFilePath(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -114,6 +121,7 @@ func TestDownloadRecording_NoFilePath(t *testing.T) {
 }
 
 func TestDownloadRecording_FileNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -128,6 +136,7 @@ func TestDownloadRecording_FileNotFound(t *testing.T) {
 }
 
 func TestDownloadRecording_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -146,6 +155,7 @@ func TestDownloadRecording_Success(t *testing.T) {
 // --- handleListFrames tests ---
 
 func TestListFrames_NoRecording(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -155,6 +165,7 @@ func TestListFrames_NoRecording(t *testing.T) {
 }
 
 func TestListFrames_NotMJPEG(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -168,6 +179,7 @@ func TestListFrames_NotMJPEG(t *testing.T) {
 }
 
 func TestListFrames_MJPEGDirWithImages(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -193,6 +205,7 @@ func TestListFrames_MJPEGDirWithImages(t *testing.T) {
 }
 
 func TestListFrames_MJPEGNotDir(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -212,6 +225,7 @@ func TestListFrames_MJPEGNotDir(t *testing.T) {
 // --- handleDeleteRecording with path traversal ---
 
 func TestDeleteRecording_PathTraversal(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -229,6 +243,7 @@ func TestDeleteRecording_PathTraversal(t *testing.T) {
 // --- Batch delete with actual recordings ---
 
 func TestBatchDeleteRecordings_Success(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)

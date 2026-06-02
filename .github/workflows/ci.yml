@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,17 +16,11 @@ jobs:
         with:
           go-version: '1.26'
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-
       - name: Lint
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./... -v
+        run: go test -race -coverprofile=coverage.out ./...
 
       - name: Display coverage
         run: go tool cover -func=coverage.out
@@ -40,13 +34,30 @@ jobs:
       - name: Check coverage threshold
         run: |
           echo "Checking coverage threshold..."
-          total=$(go tool cover -func=coverage.out | grep 'total:' | awk '{print $3}' | sed 's/%//')
+          total=$(go tool cover -func=coverage.out | grep 'total:' | awk '{print $3}' | sed 's/%//' )
           echo "Total coverage: $total%"
           if (( $(echo "$total < 55" | bc -l) )); then
             echo "Coverage $total% is below threshold of 55%"
             exit 1
           fi
           echo "Coverage threshold check passed"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
       - name: Build frontend
         run: cd web && npm ci && npm run build
 

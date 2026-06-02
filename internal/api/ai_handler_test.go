@@ -147,6 +147,7 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, body
 // --- Tests ---
 
 func TestGetAIStatus_EngineNil(t *testing.T) {
+	t.Parallel()
 	h := setupAIHandler(t, nil, nil)
 
 	rr := doJSONRequest(t, h.Routes(), http.MethodGet, "/api/ai/status", nil)
@@ -159,6 +160,7 @@ func TestGetAIStatus_EngineNil(t *testing.T) {
 }
 
 func TestGetAIStatus_EngineNotAvailable(t *testing.T) {
+	t.Parallel()
 	eng := &mockAIEngine{available: false, name: "test-engine", modelPath: "yolov11n.onnx"}
 	h := setupAIHandler(t, eng, nil)
 
@@ -173,6 +175,7 @@ func TestGetAIStatus_EngineNotAvailable(t *testing.T) {
 }
 
 func TestGetAIStatus_EngineRunning(t *testing.T) {
+	t.Parallel()
 	eng := &mockAIEngine{available: true, name: "test-engine", modelPath: "yolov11n.onnx"}
 	h := setupAIHandler(t, eng, nil)
 
@@ -188,6 +191,7 @@ func TestGetAIStatus_EngineRunning(t *testing.T) {
 
 
 func TestEnableAI_CameraNotFound(t *testing.T) {
+	t.Parallel()
 	// DB exists but camera not in DB → 404.
 	db, store := setupTestDB(t)
 	h := TestHandler(db, store)
@@ -199,6 +203,7 @@ func TestEnableAI_CameraNotFound(t *testing.T) {
 }
 
 func TestEnableAI_DetectorNil(t *testing.T) {
+	t.Parallel()
 	h := setupAIHandler(t, nil, nil)
 
 	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/enable", aiEnableRequest{CameraID: "test-cam"})
@@ -210,6 +215,7 @@ func TestEnableAI_DetectorNil(t *testing.T) {
 }
 
 func TestEnableAI_MissingCameraID(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -218,6 +224,7 @@ func TestEnableAI_MissingCameraID(t *testing.T) {
 }
 
 func TestEnableAI_InvalidBody(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -229,6 +236,7 @@ func TestEnableAI_InvalidBody(t *testing.T) {
 }
 
 func TestDisableAI_Success(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	// Enable first
 	det.EnableCamera("test-cam", model.NewStreamHub())
@@ -247,6 +255,7 @@ func TestDisableAI_Success(t *testing.T) {
 }
 
 func TestDisableAI_AlreadyDisabled(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -259,6 +268,7 @@ func TestDisableAI_AlreadyDisabled(t *testing.T) {
 }
 
 func TestDisableAI_DetectorNil(t *testing.T) {
+	t.Parallel()
 	h := setupAIHandler(t, nil, nil)
 
 	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/disable", aiDisableRequest{CameraID: "test-cam"})
@@ -266,6 +276,7 @@ func TestDisableAI_DetectorNil(t *testing.T) {
 }
 
 func TestDisableAI_MissingCameraID(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -274,6 +285,7 @@ func TestDisableAI_MissingCameraID(t *testing.T) {
 }
 
 func TestAIEvents_SSEHeaders(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -305,6 +317,7 @@ func TestAIEvents_SSEHeaders(t *testing.T) {
 }
 
 func TestAIEvents_DetectionEvent(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -347,6 +360,7 @@ func TestAIEvents_DetectionEvent(t *testing.T) {
 }
 
 func TestAIEvents_Heartbeat(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -372,6 +386,7 @@ func TestAIEvents_Heartbeat(t *testing.T) {
 }
 
 func TestAIEvents_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	det := newMockAIDetector()
 	h := setupAIHandler(t, nil, det)
 
@@ -397,6 +412,7 @@ func TestAIEvents_ContextCancellation(t *testing.T) {
 }
 
 func TestAIEvents_DetectorNil(t *testing.T) {
+	t.Parallel()
 	h := setupAIHandler(t, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ai/events", nil)

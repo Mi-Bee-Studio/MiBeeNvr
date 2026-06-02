@@ -12,6 +12,7 @@ package api
 )
 
 func TestHandleTelemetry_ValidPayload(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -40,6 +41,7 @@ func TestHandleTelemetry_ValidPayload(t *testing.T) {
 }
 
 func TestHandleTelemetry_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -55,6 +57,7 @@ func TestHandleTelemetry_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleTelemetry_MissingEvent(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
@@ -71,6 +74,7 @@ func TestHandleTelemetry_MissingEvent(t *testing.T) {
 }
 
 func TestHandleTelemetry_Unauthenticated(t *testing.T) {
+	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
@@ -95,6 +99,7 @@ func TestHandleTelemetry_Unauthenticated(t *testing.T) {
 }
 
 func TestHandleTelemetry_RateLimiting(t *testing.T) {
+	t.Parallel()
 	db, _ := setupTestDB(t)
 	defer db.Close()
 

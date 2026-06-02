@@ -262,7 +262,7 @@ func TestImagingController_ConcurrentOperations(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			if _, err := ctrl.GetImagingSettings(ctx); err != nil {
 				errs <- err

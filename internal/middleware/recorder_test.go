@@ -31,6 +31,7 @@ func assertBytes(t *testing.T, r *StatusRecorder, expected int) {
 }
 
 func TestStatusRecorder_WriteHeader(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 	r.WriteHeader(http.StatusNotFound)
 
@@ -44,6 +45,7 @@ func TestStatusRecorder_WriteHeader(t *testing.T) {
 }
 
 func TestStatusRecorder_Write(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	body := []byte("hello world")
@@ -60,6 +62,7 @@ func TestStatusRecorder_Write(t *testing.T) {
 }
 
 func TestStatusRecorder_WriteMultiple(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	r.Write([]byte("hello "))
@@ -70,6 +73,7 @@ func TestStatusRecorder_WriteMultiple(t *testing.T) {
 }
 
 func TestStatusRecorder_MultipleWriteHeaderLastCallWinsOnRecorder(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	// StatusRecorder does not protect against multiple WriteHeader calls.
@@ -89,6 +93,7 @@ func TestStatusRecorder_MultipleWriteHeaderLastCallWinsOnRecorder(t *testing.T) 
 }
 
 func TestStatusRecorder_WriteHeaderSetsStatusThenWritePreservesIt(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	// Write header explicitly, then write body — bytes recorded but status unchanged.
@@ -100,6 +105,7 @@ func TestStatusRecorder_WriteHeaderSetsStatusThenWritePreservesIt(t *testing.T) 
 }
 
 func TestStatusRecorder_WriteDoesNotOverrideExplicitStatus(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	// When Write is called after WriteHeader, status should already be set.
@@ -109,6 +115,7 @@ func TestStatusRecorder_WriteDoesNotOverrideExplicitStatus(t *testing.T) {
 }
 
 func TestStatusRecorder_ZeroValueDefault(t *testing.T) {
+	t.Parallel()
 	// Even with a zero-value StatusRecorder (no WriteHeader), Write sets 200.
 	r := &StatusRecorder{ResponseWriter: httptest.NewRecorder()}
 	_, _ = r.Write([]byte("test"))
@@ -129,6 +136,7 @@ func (h *hijackableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error)
 }
 
 func TestStatusRecorder_Hijack(t *testing.T) {
+	t.Parallel()
 	underlying := &hijackableResponseWriter{ResponseRecorder: httptest.NewRecorder()}
 	r := &StatusRecorder{ResponseWriter: underlying}
 
@@ -145,6 +153,7 @@ func TestStatusRecorder_Hijack(t *testing.T) {
 }
 
 func TestStatusRecorder_WriteAfterWriteHeader(t *testing.T) {
+	t.Parallel()
 	r := newTestStatusRecorder(t)
 
 	r.WriteHeader(http.StatusOK)
@@ -155,6 +164,7 @@ func TestStatusRecorder_WriteAfterWriteHeader(t *testing.T) {
 }
 
 func TestStatusRecorder_ImplementsResponseWriter(t *testing.T) {
+	t.Parallel()
 	// Compile-time check: StatusRecorder must implement http.ResponseWriter.
 	r := newTestStatusRecorder(t)
 	var rw http.ResponseWriter = r
@@ -162,6 +172,7 @@ func TestStatusRecorder_ImplementsResponseWriter(t *testing.T) {
 }
 
 func TestStatusRecorder_ImplementsHijacker(t *testing.T) {
+	t.Parallel()
 	// Compile-time check: StatusRecorder must implement http.Hijacker
 	// when the underlying ResponseWriter does.
 	underlying := &hijackableResponseWriter{ResponseRecorder: httptest.NewRecorder()}

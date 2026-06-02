@@ -13,6 +13,7 @@ import (
 // --- StreamHandler interface tests ---
 
 func TestHLSStreamHandler_CanHandle(t *testing.T) {
+	t.Parallel()
 	h := &HLSStreamHandler{}
 
 	// HLS can handle H.264 and H.265
@@ -25,6 +26,7 @@ func TestHLSStreamHandler_CanHandle(t *testing.T) {
 }
 
 func TestHLSStreamHandler_Name(t *testing.T) {
+	t.Parallel()
 	h := &HLSStreamHandler{}
 	require.Equal(t, "hls", h.Name())
 }
@@ -32,6 +34,7 @@ func TestHLSStreamHandler_Name(t *testing.T) {
 // --- StreamRegistry tests ---
 
 func TestStreamRegistry_RegisterAndQuery(t *testing.T) {
+	t.Parallel()
 	reg := NewStreamRegistry()
 
 	hlsHandler := &HLSStreamHandler{}
@@ -47,6 +50,7 @@ func TestStreamRegistry_RegisterAndQuery(t *testing.T) {
 }
 
 func TestStreamRegistry_H265ExcludesWebRTC(t *testing.T) {
+	t.Parallel()
 	reg := NewStreamRegistry()
 
 	// Register HLS handler (supports H.264 and H.265)
@@ -69,6 +73,7 @@ func TestStreamRegistry_H265ExcludesWebRTC(t *testing.T) {
 }
 
 func TestStreamRegistry_FLVSupportsH264AndH265(t *testing.T) {
+	t.Parallel()
 	reg := NewStreamRegistry()
 
 	reg.Register(&HLSStreamHandler{})
@@ -85,6 +90,7 @@ func TestStreamRegistry_FLVSupportsH264AndH265(t *testing.T) {
 }
 
 func TestStreamRegistry_MJPEGNoProtocols(t *testing.T) {
+	t.Parallel()
 	reg := NewStreamRegistry()
 
 	reg.Register(&HLSStreamHandler{})
@@ -99,6 +105,7 @@ func TestStreamRegistry_MJPEGNoProtocols(t *testing.T) {
 }
 
 func TestStreamRegistry_Empty(t *testing.T) {
+	t.Parallel()
 	reg := NewStreamRegistry()
 
 	handlers := reg.HandlersForCodec(model.FormatH264)
@@ -109,6 +116,7 @@ func TestStreamRegistry_Empty(t *testing.T) {
 }
 
 func TestStreamRegistry_StreamLimits(t *testing.T) {
+	t.Parallel()
 	// Test that the HLS stream limit (max 4) is enforced via LRU eviction.
 	// When capacity is reached, the least recently used stream is evicted
 	// and the new stream is accepted (instead of rejecting with an error).
@@ -142,6 +150,7 @@ func TestStreamRegistry_StreamLimits(t *testing.T) {
 // --- GET /api/protocols endpoint tests (per-camera) ---
 
 func TestProtocolsEndpoint_RegistryIntegration(t *testing.T) {
+	t.Parallel()
 	// Test that the Handler can have a StreamRegistry set and that
 	// the /api/protocols endpoint returns protocol data from the registry
 	db, store := setupTestDB(t)
@@ -174,6 +183,7 @@ func TestProtocolsEndpoint_RegistryIntegration(t *testing.T) {
 // --- No type-switch spaghetti in handlers_stream.go ---
 
 func TestHandlersStream_NoRecorderTypeAssertions(t *testing.T) {
+	t.Parallel()
 	// This is a compile-time / grep-time verification.
 	// The file handlers_stream.go should NOT contain rec.(*recorder.
 	// This test documents the requirement; actual enforcement is via grep in CI.

@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseLegacyProtocol(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input       string
 		wantProto   string
@@ -38,6 +39,7 @@ func TestParseLegacyProtocol(t *testing.T) {
 }
 
 func TestValidateProtocolEncoding(t *testing.T) {
+	t.Parallel()
 	validCombos := []struct{ proto, enc string }{
 		{"rtsp", "h264"},
 		{"rtsp", "h265"},
@@ -68,6 +70,7 @@ func TestValidateProtocolEncoding(t *testing.T) {
 }
 
 func TestHealthStatusConstants(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		value HealthStatus
@@ -86,6 +89,7 @@ func TestHealthStatusConstants(t *testing.T) {
 }
 
 func TestHealthEventTypeConstants(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		value HealthEventType
@@ -105,6 +109,7 @@ func TestHealthEventTypeConstants(t *testing.T) {
 }
 
 func TestHealthEventJSONTags(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Second)
 	event := HealthEvent{
 		ID:        1,
@@ -129,6 +134,7 @@ func TestHealthEventJSONTags(t *testing.T) {
 }
 
 func TestCameraHealthStruct(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Second)
 	ch := CameraHealth{
 		CameraID:      "cam-01",

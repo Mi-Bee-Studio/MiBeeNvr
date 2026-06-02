@@ -7,6 +7,7 @@ import (
 )
 
 func TestTranscodingConfig_Defaults(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{}
 	cfg.ApplyDefaults()
 
@@ -18,6 +19,7 @@ func TestTranscodingConfig_Defaults(t *testing.T) {
 }
 
 func TestTranscodingConfig_InvalidMaxWorkers(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{}
 	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = 5 // > 4
@@ -27,6 +29,7 @@ func TestTranscodingConfig_InvalidMaxWorkers(t *testing.T) {
 }
 
 func TestTranscodingConfig_InvalidMaxWorkersZero(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{}
 	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = 0 // < 1
@@ -36,6 +39,7 @@ func TestTranscodingConfig_InvalidMaxWorkersZero(t *testing.T) {
 }
 
 func TestTranscodingConfig_InvalidMaxWorkersNegative(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{}
 	cfg.ApplyDefaults()
 	cfg.Transcoding.MaxWorkers = -1 // < 0
@@ -45,6 +49,7 @@ func TestTranscodingConfig_InvalidMaxWorkersNegative(t *testing.T) {
 }
 
 func TestTranscodingConfig_InvalidTargetCodec(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -58,6 +63,7 @@ func TestTranscodingConfig_InvalidTargetCodec(t *testing.T) {
 }
 
 func TestTranscodingConfig_InvalidPreset(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -71,6 +77,7 @@ func TestTranscodingConfig_InvalidPreset(t *testing.T) {
 }
 
 func TestTranscodingConfig_ValidConfig(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{
 			Enabled:         true,
@@ -93,6 +100,7 @@ func TestTranscodingConfig_ValidConfig(t *testing.T) {
 }
 
 func TestTranscodingConfig_ValidEmptyPerCamera(t *testing.T) {
+	t.Parallel()
 	// Per-camera transcoding with only TargetCodec set (partial override) should pass
 	cfg := &Config{
 		Transcoding: TranscodingConfig{
@@ -112,6 +120,7 @@ func TestTranscodingConfig_ValidEmptyPerCamera(t *testing.T) {
 }
 
 func TestResolveTranscodingConfig_GlobalOnly(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{Enabled: true},
 		Cameras: []CameraConfig{{
@@ -129,6 +138,7 @@ func TestResolveTranscodingConfig_GlobalOnly(t *testing.T) {
 }
 
 func TestResolveTranscodingConfig_PerCameraOverride(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{Enabled: false}, // global disabled
 		Cameras: []CameraConfig{{
@@ -151,6 +161,7 @@ func TestResolveTranscodingConfig_PerCameraOverride(t *testing.T) {
 }
 
 func TestResolveTranscodingConfig_PerCameraDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{Enabled: true}, // global enabled
 		Cameras: []CameraConfig{{
@@ -167,6 +178,7 @@ func TestResolveTranscodingConfig_PerCameraDisabled(t *testing.T) {
 }
 
 func TestResolveTranscodingConfig_NonExistentCamera(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{Enabled: true, MaxWorkers: 2},
 	}
@@ -180,6 +192,7 @@ func TestResolveTranscodingConfig_NonExistentCamera(t *testing.T) {
 }
 
 func TestTranscodingEnabledFalse_ValidatesClean(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{
 			Enabled: false, // explicitly disabled
@@ -194,6 +207,7 @@ func TestTranscodingEnabledFalse_ValidatesClean(t *testing.T) {
 }
 
 func TestTranscodingConfig_ValidMaxWorkersRange(t *testing.T) {
+	t.Parallel()
 	for _, w := range []int{1, 2, 3, 4} {
 		cfg := &Config{Transcoding: TranscodingConfig{MaxWorkers: w}}
 		cfg.ApplyDefaults()
@@ -203,6 +217,7 @@ func TestTranscodingConfig_ValidMaxWorkersRange(t *testing.T) {
 }
 
 func TestTranscodingConfig_ValidCodecs(t *testing.T) {
+	t.Parallel()
 	for _, codec := range []string{"h264", "h265"} {
 		cfg := &Config{
 			Cameras: []CameraConfig{{
@@ -217,6 +232,7 @@ func TestTranscodingConfig_ValidCodecs(t *testing.T) {
 }
 
 func TestTranscodingConfig_ValidPresets(t *testing.T) {
+	t.Parallel()
 	for _, preset := range []string{"ultrafast", "faster", "medium"} {
 		cfg := &Config{
 			Cameras: []CameraConfig{{

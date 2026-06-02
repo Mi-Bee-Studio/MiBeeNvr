@@ -27,6 +27,7 @@ func setupPTZTestDB(t *testing.T) (*storage.DB, *storage.Manager) {
 }
 
 func TestPTZMoveEndpoint(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "admin", "pass", true, "", "", ""))
@@ -48,6 +49,7 @@ func TestPTZMoveEndpoint(t *testing.T) {
 }
 
 func TestPTZMoveNonOnvifRejected(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", true, "", "", ""))
@@ -64,6 +66,7 @@ func TestPTZMoveNonOnvifRejected(t *testing.T) {
 }
 
 func TestPTZMoveCameraNotFound(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 
 	h := TestHandler(db, store)
@@ -78,6 +81,7 @@ func TestPTZMoveCameraNotFound(t *testing.T) {
 }
 
 func TestPTZMoveInvalidMode(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", true, "", "", ""))
@@ -94,6 +98,7 @@ func TestPTZMoveInvalidMode(t *testing.T) {
 }
 
 func TestPTZStopEndpoint(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", true, "", "", ""))
@@ -113,6 +118,7 @@ func TestPTZStopEndpoint(t *testing.T) {
 }
 
 func TestPTZStatusEndpoint(t *testing.T) {
+	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", true, "", "", ""))

@@ -143,8 +143,7 @@ func TestUnregisterStream(t *testing.T) {
 
 	m.UnregisterStream("cam1")
 	assert.False(t, m.IsActive("cam1"))
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 0, hub.ConsumerCount())
+	eventually(t, func() bool { return hub.ConsumerCount() == 0 }, 500*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestUnregisterStream_NotExists(t *testing.T) {
@@ -164,9 +163,8 @@ func TestStopAll(t *testing.T) {
 	assert.False(t, m.IsActive("cam1"))
 	assert.False(t, m.IsActive("cam2"))
 
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 0, hub1.ConsumerCount())
-	assert.Equal(t, 0, hub2.ConsumerCount())
+	eventually(t, func() bool { return hub1.ConsumerCount() == 0 }, 500*time.Millisecond, 10*time.Millisecond)
+	eventually(t, func() bool { return hub2.ConsumerCount() == 0 }, 500*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestViewerCount(t *testing.T) {
@@ -405,14 +403,18 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
-	for i := 0; i < 200; i++ {
+	iterations := 200
+	if testing.Short() {
+		iterations = 50
+	}
+	for i := 0; i < iterations; i++ {
 		nalu := []byte{0x65, byte(i)}
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
 
-	time.Sleep(50 * time.Millisecond)
-}
+	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 
+}
 func TestFrameDropCounter(t *testing.T) {
 	// Capture log output to verify periodic warnings
 	var logBuf bytes.Buffer
@@ -448,13 +450,16 @@ func TestFrameDropCounter(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, entry)
 
-	// Broadcast 600 frames — viewer channel fills up, writeLoop drops frames
-	for i := 0; i < 600; i++ {
+	// Broadcast frames — viewer channel fills up, writeLoop drops frames
+	iterations := 600
+	if testing.Short() {
+		iterations = 100
+	}
+	for i := 0; i < iterations; i++ {
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{{0x65, byte(i)}}, false)
 	}
 
-	time.Sleep(100 * time.Millisecond) // let drops settle
-
+	require.Eventually(t, func() bool { return entry.dropCount.Load() > 0 }, 2*time.Second, 20*time.Millisecond)
 	cnt := entry.dropCount.Load()
 	t.Logf("total drops: %d", cnt)
 	require.Greater(t, cnt, int64(0), "expected at least one dropped frame")
@@ -584,10 +589,9 @@ func TestGoroutineCleanup(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	m.StopAll()
-	time.Sleep(200 * time.Millisecond)
-}
+	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 
+}
 func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	time.Sleep(100 * time.Millisecond) // let GC settle
@@ -624,8 +628,7 @@ func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	}, 2*time.Second, 50*time.Millisecond)
 
 	m.StopAll()
-	time.Sleep(2 * time.Second)
-
+	require.Eventually(t, func() bool { return runtime.NumGoroutine() <= baseline+2 }, 3*time.Second, 50*time.Millisecond)
 	// After cleanup, goroutine count should return to baseline ±2
 	final := runtime.NumGoroutine()
 	assert.LessOrEqual(t, final, baseline+2,

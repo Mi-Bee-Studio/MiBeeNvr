@@ -12,6 +12,7 @@ func newTestTracker(window time.Duration) *QualityTracker {
 
 // TestQualityTracker_RecordUptime simulates 23h recording + 1h offline → uptime ≈ 95.8%
 func TestQualityTracker_RecordUptime(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -44,6 +45,7 @@ func TestQualityTracker_RecordUptime(t *testing.T) {
 
 // TestQualityTracker_RecordFailure simulates 3 failures → TotalFailures=3
 func TestQualityTracker_RecordFailure(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -81,6 +83,7 @@ func TestQualityTracker_RecordFailure(t *testing.T) {
 
 // TestQualityTracker_MTBF simulates failures at t=0, t=2h, t=4h → MTBF ≈ 2h
 func TestQualityTracker_MTBF(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -114,6 +117,7 @@ func TestQualityTracker_MTBF(t *testing.T) {
 
 // TestQualityTracker_SessionTracking verifies online/offline durations are tracked
 func TestQualityTracker_SessionTracking(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -163,6 +167,7 @@ func TestQualityTracker_SessionTracking(t *testing.T) {
 
 // TestQualityTracker_GetAllQuality returns metrics for all tracked cameras
 func TestQualityTracker_GetAllQuality(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -191,6 +196,7 @@ func TestQualityTracker_GetAllQuality(t *testing.T) {
 
 // TestQualityTracker_RemoveCamera clears tracking for a camera
 func TestQualityTracker_RemoveCamera(t *testing.T) {
+	t.Parallel()
 	q := newTestTracker(24 * time.Hour)
 
 	q.OnOnline("cam1")
@@ -204,6 +210,7 @@ func TestQualityTracker_RemoveCamera(t *testing.T) {
 
 // TestQualityTracker_MTBFZeroFailures returns 0 MTBF when <2 failures
 func TestQualityTracker_MTBFZeroFailures(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -223,6 +230,7 @@ func TestQualityTracker_MTBFZeroFailures(t *testing.T) {
 
 // TestQualityTracker_WindowExpiry prunes sessions outside the rolling window
 func TestQualityTracker_WindowExpiry(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	q := &QualityTracker{
 		cameras: make(map[string]*cameraSession),
@@ -248,6 +256,7 @@ func TestQualityTracker_WindowExpiry(t *testing.T) {
 
 // TestQualityTracker_NewQualityTrackerDefaults verifies constructor
 func TestQualityTracker_NewQualityTrackerDefaults(t *testing.T) {
+	t.Parallel()
 	q := NewQualityTracker(12 * time.Hour)
 	if q == nil {
 		t.Fatal("expected non-nil tracker")

@@ -245,7 +245,7 @@ func TestPTZController_ConcurrentCommands(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			if err := ctrl.ContinuousMove(ctx, PTZVector{Pan: 0.1}); err != nil {
 				errs <- err
@@ -254,7 +254,7 @@ func TestPTZController_ConcurrentCommands(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			if _, _, err := ctrl.GetStatus(ctx); err != nil {
 				errs <- err
