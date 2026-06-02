@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -22,6 +22,9 @@
   let archives = $state<ArchiveGroup[]>([]);
   let archiveConfirm = $state<Camera | null>(null);
   let archiveLoading = $state(false);
+  let archiveConfirmCount = $state<number>(0);
+  let archiveConfirmSize = $state<number>(0);
+  let archiveConfirmStatsLoading = $state(false);
   let confirmDeleteArchive = $state<string | null>(null);
   let deleteArchiveLoading = $state(false);
   // Archive expansion state
@@ -85,6 +88,22 @@
       archives = res.archives || [];
     } catch (e) {
       console.warn('Failed to load archives:', e);
+    }
+  }
+
+  async function openArchiveConfirm(camera: Camera) {
+    archiveConfirm = camera;
+    archiveConfirmCount = 0;
+    archiveConfirmSize = 0;
+    archiveConfirmStatsLoading = true;
+    try {
+      const res = await getCameraRecordingStats(camera.id);
+      archiveConfirmCount = res.recording_count || 0;
+      archiveConfirmSize = res.total_size || 0;
+    } catch (e) {
+      console.warn('Failed to load archive stats:', e);
+    } finally {
+      archiveConfirmStatsLoading = false;
     }
   }
 
@@ -506,7 +525,7 @@
                 {protocolsMap}
                 health={healthData[camera.id]}
                 onedit={openEditForm}
-                ondelete={(c) => archiveConfirm = c}
+                ondelete={openArchiveConfirm}
                 onstart={handleStartCamera}
                 onstop={handleStopCamera}
                 onrestart={handleRestartCamera}
@@ -687,8 +706,8 @@
   {#if archiveConfirm}
     <ArchiveConfirmDialog
       cameraName={archiveConfirm.name}
-      recordingCount={0}
-      totalSize="N/A"
+      recordingCount={archiveConfirmCount}
+      totalSize={archiveConfirmStatsLoading ? '...' : formatFileSize(archiveConfirmSize)}
       loading={archiveLoading}
       onconfirm={async () => {
         archiveLoading = true;
@@ -696,7 +715,7 @@
           await deleteCamera(archiveConfirm!.id);
           showToast(t('cameras.cameraArchived'), 'success');
           archiveConfirm = null;
-          await loadCameras();
+          await Promise.all([loadCameras(), loadArchives()]);
         } catch (e) {
           showToast(t('cameras.failedArchive'), 'error');
         } finally {

@@ -37,6 +37,7 @@ export {
   getCamera,
   updateCamera,
   deleteCamera,
+  getCameraRecordingStats,
   enableCamera,
   disableCamera,
   startCamera,
@@ -121,8 +122,8 @@ export type {
   ONVIFDeviceUser,
   // Timelapse
   TimelapseConfig,
+  CameraRecordingStats,
 } from './cameras';
-
 // Recordings — list, download, frames, stats, archives
 export {
   listRecordings,

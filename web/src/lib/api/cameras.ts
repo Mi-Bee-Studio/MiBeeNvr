@@ -232,6 +232,15 @@ export async function deleteCamera(id: string, signal?: AbortSignal): Promise<vo
   });
 }
 
+export interface CameraRecordingStats {
+  recording_count: number;
+  total_size: number;
+}
+
+export async function getCameraRecordingStats(id: string, signal?: AbortSignal): Promise<CameraRecordingStats> {
+  return apiRequest<CameraRecordingStats>(`/cameras/${id}/stats`, { signal });
+}
+
 export async function enableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
   return updateCamera(id, { enabled: true }, signal);
 }
