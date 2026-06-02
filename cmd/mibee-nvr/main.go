@@ -24,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
@@ -376,6 +377,9 @@ type App struct {
 
 	// Lifecycle
 	cancel context.CancelFunc
+
+	// Event bus
+	eventBus *event.EventBus
 }
 
 // NewApp constructs the application with all dependencies initialized in
@@ -408,6 +412,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 2: Metrics
 	a.metrics = metrics.NewMetrics()
+
+	// Step 2.1: Event bus
+	a.eventBus = event.NewEventBus(64)
 
 	// Step 2.5: Remote log handler (if enabled)
 	if cfg.RemoteLog.Enabled {
@@ -650,6 +657,7 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetWSManager(a.wsMgr)
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
+	handler.SetEventBus(a.eventBus)
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -128,6 +129,7 @@ type Handler struct {
 	transcodeMgr    TranscodeManagerAPI
 	aiEngine        AIEngine
 	aiDetector      AIDetector
+	eventBus        *event.EventBus
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -278,6 +280,8 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
+		// Generic event streaming (SSE)
+		r.Get("/api/events", h.handleEvents)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
@@ -402,6 +406,11 @@ func (h *Handler) SetStabilityProvider(p StabilityProvider) {
 // SetDownloader sets the FFmpeg downloader on the handler.
 func (h *Handler) SetDownloader(d TranscodeDownloader) {
 	h.downloader = d
+}
+
+// SetEventBus sets the event bus on the handler.
+func (h *Handler) SetEventBus(bus *event.EventBus) {
+	h.eventBus = bus
 }
 
 // --- Per-camera streaming protocols endpoint ---

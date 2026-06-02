@@ -174,7 +174,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken string) (stri
 }
 
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
-func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilities, error) {
+func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -198,11 +198,14 @@ func mapDeviceInfo(info *onvifgo.DeviceInformation) *DeviceInfo {
 	}
 }
 
-// mapCapabilities converts onvif-go Capabilities to project DeviceCapabilities.
-func mapCapabilities(caps *onvifgo.Capabilities) *DeviceCapabilities {
-	return &DeviceCapabilities{
+func mapCapabilities(caps *onvifgo.Capabilities) *DeviceCapabilitiesDetailed {
+	return &DeviceCapabilitiesDetailed{
 		PTZ:       caps.PTZ != nil,
+		Imaging:   caps.Imaging != nil,
+		Events:    caps.Events != nil,
+		Snapshot:  caps.Media != nil,
 		Streaming: caps.Media != nil,
+		Device:    caps.Device != nil,
 	}
 }
 

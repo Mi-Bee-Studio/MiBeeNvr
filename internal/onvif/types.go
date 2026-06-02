@@ -182,4 +182,5 @@ type DeviceCapabilitiesDetailed struct {
 	Snapshot  bool `json:"snapshot"`
 	Streaming bool `json:"streaming"`
 	Device    bool `json:"device"` // Device management (reboot, network, users)
+	DeviceInfo *DeviceInfo `json:"device_info,omitempty"`
 }

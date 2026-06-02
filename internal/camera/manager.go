@@ -60,6 +60,8 @@ type CameraManager struct {
 	onvifMu          sync.Mutex                          // protects onvifClients
 	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
+	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
 	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
 }
 
@@ -89,6 +91,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
+		deviceInfoCache:  make(map[string]*onvif.DeviceInfo),
 	}
 }
 
@@ -948,10 +951,48 @@ func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID st
 }
 
 // CloseONVIFClient removes a cached ONVIF client for the given camera.
+// Also cleans up any cached device info for this camera.
 func (cm *CameraManager) CloseONVIFClient(cameraID string) {
 	cm.onvifMu.Lock()
-	defer cm.onvifMu.Unlock()
 	delete(cm.onvifClients, cameraID)
+	cm.onvifMu.Unlock()
+
+	cm.deviceInfoMu.Lock()
+	delete(cm.deviceInfoCache, cameraID)
+	cm.deviceInfoMu.Unlock()
+}
+
+// GetCachedDeviceInfo returns cached device info for the given ONVIF camera.
+// On first call, fetches from the device and caches the result.
+// Returns nil if the camera is not ONVIF, not found, or the device info cannot be fetched.
+func (cm *CameraManager) GetCachedDeviceInfo(ctx context.Context, cameraID string) *onvif.DeviceInfo {
+	// Check cache with read lock
+	cm.deviceInfoMu.RLock()
+	if info, ok := cm.deviceInfoCache[cameraID]; ok {
+		cm.deviceInfoMu.RUnlock()
+		return info
+	}
+	cm.deviceInfoMu.RUnlock()
+
+	// Not cached — fetch from device
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		logger.Warn("failed to get ONVIF client for device info", "camera_id", cameraID, "error", err)
+		return nil
+	}
+
+	info, err := client.GetDeviceInformation(ctx)
+	if err != nil {
+		logger.Warn("failed to get device information", "camera_id", cameraID, "error", err)
+		return nil
+	}
+
+	// Cache with write lock
+	cm.deviceInfoMu.Lock()
+	cm.deviceInfoCache[cameraID] = info
+	cm.deviceInfoMu.Unlock()
+
+	return info
 }
 
 // GetONVIFClient returns a cached ONVIF client for the given camera.
@@ -960,11 +1001,15 @@ func (cm *CameraManager) GetONVIFClient(ctx context.Context, cameraID string) (*
 	return cm.getOrCreateONVIFClient(ctx, cameraID)
 }
 
-// closeAllONVIFClients clears the entire ONVIF client cache.
+// closeAllONVIFClients clears the entire ONVIF client and device info caches.
 func (cm *CameraManager) closeAllONVIFClients() {
 	cm.onvifMu.Lock()
-	defer cm.onvifMu.Unlock()
 	cm.onvifClients = make(map[string]*onvif.Client)
+	cm.onvifMu.Unlock()
+
+	cm.deviceInfoMu.Lock()
+	cm.deviceInfoCache = make(map[string]*onvif.DeviceInfo)
+	cm.deviceInfoMu.Unlock()
 }
 
 // GetONVIFPTZController returns a PTZController for the given ONVIF camera.

@@ -39,7 +39,7 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 
 	caps, err := client.GetCapabilities(r.Context())
 	if err != nil {
-		caps = &onvif.DeviceCapabilities{}
+		caps = &onvif.DeviceCapabilitiesDetailed{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -64,16 +64,17 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	caps, err := client.GetCapabilities(r.Context())
+	detailed, err := client.GetCapabilities(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, onvif.DeviceCapabilitiesDetailed{
-		PTZ:       caps.PTZ,
-		Streaming: caps.Streaming,
-	})
+	// Attach cached device info (lazy — fetched once, cached in camera manager)
+	deviceInfo := h.camMgr.GetCachedDeviceInfo(r.Context(), cameraID)
+	detailed.DeviceInfo = deviceInfo
+
+	writeJSON(w, http.StatusOK, detailed)
 }
 // --- ONVIF discovery endpoints ---
 
