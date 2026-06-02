@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ type CleanupManager struct {
 	healthRetention           time.Duration
 	transcodeOrphanFn         func(ctx context.Context) error
 	transcodeHistoryRetention time.Duration // 0 = disabled
+	ffprobePath               string         // empty = skip repair
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -74,6 +77,12 @@ func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) 
 	cm.transcodeHistoryRetention = retention
 }
 
+// SetFFprobePath sets the path to the ffprobe binary for zero-duration recording repair.
+// If empty or unset, the repair step is skipped gracefully.
+func (cm *CleanupManager) SetFFprobePath(path string) {
+	cm.ffprobePath = path
+}
+
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
@@ -114,11 +123,12 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 		}
 	}
 	cm.orphanFileCleanup(ctx)
+	cm.staleRecordCleanup(ctx)
+	cm.repairZeroDurationRecordings(ctx)
 	return nil
 }
 
 // timeBasedCleanup deletes recordings per-camera where:
-// - ended_at < NOW() - retention
 // - ended_at < NOW() - retention
 // Each camera uses its own retention_days (0 = fallback to global).
 func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
@@ -383,4 +393,119 @@ func (cm *CleanupManager) cleanOrphansForCamera(ctx context.Context, cameraID st
 		}
 	}
 	return deleted
+}
+
+// staleRecordCleanup scans DB for MJPEG recordings with merge_status='pending'
+// whose directory on disk no longer exists, and marks them as merge_status='failed'.
+func (cm *CleanupManager) staleRecordCleanup(ctx context.Context) {
+	cameras, err := cm.db.ListCameras(ctx)
+	if err != nil {
+		logger.Warn("stale record cleanup: failed to list cameras", "error", err)
+		return
+	}
+	var totalFixed int
+	for _, cam := range cameras {
+		totalFixed += cm.fixStaleMJPEGRecords(ctx, cam.ID)
+	}
+	if totalFixed > 0 {
+		logger.Info("stale MJPEG records marked as failed", "fixed", totalFixed)
+	}
+}
+
+// fixStaleMJPEGRecords checks pending MJPEG recordings for a camera and marks
+// those with missing directories as failed. Returns count of fixed records.
+func (cm *CleanupManager) fixStaleMJPEGRecords(ctx context.Context, cameraID string) int {
+	recordings, err := cm.db.ListPendingMJPEGRecordings(ctx, cameraID)
+	if err != nil {
+		logger.Warn("stale record cleanup: failed to list pending MJPEG recordings",
+			"camera_id", cameraID, "error", err)
+		return 0
+	}
+	var staleIDs []string
+	for _, rec := range recordings {
+		if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
+			staleIDs = append(staleIDs, rec.ID)
+		}
+	}
+	if len(staleIDs) == 0 {
+		return 0
+	}
+	if err := cm.db.SetMergeStatus(ctx, staleIDs, model.MergeStatusFailed); err != nil {
+		logger.Warn("stale record cleanup: failed to update merge status",
+			"camera_id", cameraID, "error", err)
+		return 0
+	}
+	logger.Info("stale MJPEG records marked failed", "camera_id", cameraID, "count", len(staleIDs))
+	return len(staleIDs)
+}
+
+// repairZeroDurationRecordings fixes recordings with duration=0 by probing actual
+// media files with ffprobe. Only runs when ffprobePath is configured.
+func (cm *CleanupManager) repairZeroDurationRecordings(ctx context.Context) {
+	if cm.ffprobePath == "" {
+		return
+	}
+	// Verify ffprobe is available
+	if _, err := os.Stat(cm.ffprobePath); err != nil {
+		logger.Warn("zero-duration repair: ffprobe not available, skipping", "path", cm.ffprobePath)
+		cm.ffprobePath = "" // don't keep retrying
+		return
+	}
+	recordings, err := cm.db.RepairZeroDurationRecordings(ctx)
+	if err != nil {
+		logger.Warn("zero-duration repair: failed to query recordings", "error", err)
+		return
+	}
+	if len(recordings) == 0 {
+		return
+	}
+	logger.Info("zero-duration repair: found recordings to repair", "count", len(recordings))
+	var repaired int
+	for _, rec := range recordings {
+		// Check file exists on disk
+		if _, err := os.Stat(rec.FilePath); err != nil {
+			continue
+		}
+		duration := cm.probeDuration(ctx, rec.FilePath)
+		if duration <= 0 {
+			continue
+		}
+		// Calculate corrected ended_at = started_at + probed duration
+		endedAt := rec.StartedAt.Add(time.Duration(duration * float64(time.Second)))
+		if err := cm.db.UpdateRecordingDuration(ctx, rec.ID, duration, endedAt); err != nil {
+			logger.Warn("zero-duration repair: failed to update recording",
+				"id", rec.ID, "error", err)
+			continue
+		}
+		logger.Info("zero-duration repair: fixed recording",
+			"id", rec.ID, "camera_id", rec.CameraID, "duration", duration)
+		repaired++
+	}
+	if repaired > 0 {
+		logger.Info("zero-duration repair: completed", "repaired", repaired, "total", len(recordings))
+	}
+}
+
+// probeDuration runs ffprobe to get the duration of a media file.
+// Returns 0 on any error.
+func (cm *CleanupManager) probeDuration(ctx context.Context, filePath string) float64 {
+	cmd := exec.CommandContext(ctx, cm.ffprobePath,
+		"-v", "quiet",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		logger.Warn("zero-duration repair: ffprobe failed", "path", filePath, "error", err)
+		return 0
+	}
+	// Parse float from output (e.g. "32.400000\n")
+	trimmed := strings.TrimSpace(string(out))
+	d, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		logger.Warn("zero-duration repair: failed to parse ffprobe output", "path", filePath, "output", trimmed, "error", err)
+		return 0
+	}
+	return d
 }

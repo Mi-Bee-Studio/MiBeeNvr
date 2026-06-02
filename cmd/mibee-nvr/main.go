@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"os/exec"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -605,6 +606,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		if hr, err := time.ParseDuration(cfg.Transcoding.HistoryRetention); err == nil {
 			a.cleanupMgr.SetTranscodeHistoryRetention(hr)
 		}
+	}
+	// Wire ffprobe path for zero-duration recording repair
+	if path, err := exec.LookPath("ffprobe"); err == nil {
+		a.cleanupMgr.SetFFprobePath(path)
 	}
 
 	// Step 9: Optional MQTT client

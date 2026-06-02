@@ -133,3 +133,43 @@ func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) er
 	}
 	return tx.Commit()
 }
+
+// ListSingletonPendingRecordings returns pending recordings for a camera that are
+// older than minAge but are NOT part of any multi-segment merge window.
+// These are hour-boundary orphans that will never be merged.
+func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string, minAge time.Duration) ([]*model.Recording, error) {
+	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
+	query := `
+		SELECT r.id, r.camera_id, r.file_path, r.format, r.started_at, r.ended_at, r.duration, r.file_size, r.frame_count, r.merged, r.merge_status, r.archived
+		FROM recordings r
+		WHERE r.camera_id = ?
+			AND r.merge_status = 'pending'
+			AND r.ended_at IS NOT NULL
+			AND r.ended_at < ?
+			AND (
+				SELECT COUNT(*)
+				FROM recordings r2
+				WHERE r2.camera_id = r.camera_id
+					AND r2.merge_status = 'pending'
+					AND r2.ended_at IS NOT NULL
+					AND strftime('%Y-%m-%d %H', r2.started_at) = strftime('%Y-%m-%d %H', r.started_at)
+					AND r2.format = r.format
+			) = 1;
+		`
+	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, &r)
+	}
+	return res, nil
+}

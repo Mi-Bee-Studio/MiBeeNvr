@@ -424,3 +424,54 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 	}
 	return result, nil
 }
+
+// ListPendingMJPEGRecordings returns recordings for a camera where format IN ('mjpeg','jpeg')
+// AND merge_status='pending' AND ended_at IS NOT NULL.
+func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND format IN ('mjpeg','jpeg') AND merge_status = 'pending' AND ended_at IS NOT NULL;`
+	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, r)
+	}
+	return res, nil
+}
+
+// RepairZeroDurationRecordings returns recordings where duration=0 but the file is
+// non-trivial in size, non-MJPEG, has ended_at set, and merge_status=pending.
+// These are candidates for duration repair via ffprobe.
+func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE duration = 0 AND file_size > 1048576 AND format != 'mjpeg' AND ended_at IS NOT NULL AND merge_status = 'pending';`
+	rows, err := d.db.QueryContext(ctx, sqlstr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, r)
+	}
+	return res, nil
+}
+
+// UpdateRecordingDuration updates the duration and ended_at for a recording.
+func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration float64, endedAt time.Time) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
+	return err
+}

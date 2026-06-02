@@ -248,6 +248,23 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 		}
 	}
 
+	// Mark singleton pending segments as merged — they're hour-boundary orphans
+	// that will never be merged because their window has only 1 segment.
+	singletons, err := m.db.ListSingletonPendingRecordings(ctx, cameraID, minAge)
+	if err != nil {
+		logger.Warn("failed to list singleton pending recordings", "camera_id", cameraID, "error", err)
+	} else if len(singletons) > 0 {
+		ids := make([]string, len(singletons))
+		for i, r := range singletons {
+			ids[i] = r.ID
+		}
+		if err := m.db.SetMergeStatus(ctx, ids, model.MergeStatusMerged); err != nil {
+			logger.Warn("failed to mark singletons as merged", "camera_id", cameraID, "error", err)
+		} else {
+			logger.Info("marked singleton segments as merged", "camera_id", cameraID, "count", len(singletons))
+		}
+	}
+
 	return merged, segments, freed, nil
 }
 
