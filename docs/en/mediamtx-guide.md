@@ -1,10 +1,31 @@
 # MediaMTX Integration Guide
 
-MediaMTX (formerly rtsp-simple-server) is a zero-dependency real-time media server that acts as a "media router" between publishers and readers. MiBee NVR uses it to ingest camera streams — especially for CSI cameras that need a streaming pipeline.
+MediaMTX (formerly rtsp-simple-server) is a powerful media server that can serve as an RTSP proxy server for MiBee NVR. It provides RTSP to WebRTC, HLS, and other protocol conversion capabilities, making it particularly suitable for integration with MiBee NVR.
 
-**Official docs**: <https://mediamtx.org>  
-**GitHub**: <https://github.com/bluenviron/mediamtx>  
-**Recommended version**: v1.18.0+
+MediaMTX main advantages:
+- Supports multiple camera protocols (RTSP, RTMP, HTTP-FLV, WebRTC)
+- Provides real-time stream conversion
+- Supports load balancing and failover
+- Easy to configure and deploy
+- Perfect integration with MiBee NVR
+
+## MediaMTX Overview
+
+### What is MediaMTX
+
+MediaMTX (formerly RTSP-simple-server) is an open-source media server focused on:
+- RTSP/RTMP/WebRTC client/server functionality
+- Real-time stream media processing
+- Protocol conversion and forwarding
+- Media publishing and subscription
+
+### Key Features
+
+- **Protocol Support**: RTSP, RTMP, WebRTC, HLS, HTTP-FLV
+- **Stream Management**: Real-time recording, forwarding, conversion
+- **Load Balancing**: Multi-camera stream distribution
+- **Authentication**: Basic authentication, custom authentication
+- **Monitoring**: Statistics and logging
 
 ## Installation
 
@@ -27,26 +48,78 @@ sudo mkdir -p /etc/mediamtx
 mediamtx --version
 ```
 
+### From Source
+
+```bash
+# Install dependencies
+sudo apt-get install -y golang git
+
+# Clone repository
+git clone https://github.com/bluenviron/mediamtx.git
+cd mediamtx
+
+# Build
+go build -mod=readonly -o mediamtx ./cmd/mediamtx
+```
+
+### Using Docker
+
+```bash
+# Pull image
+docker pull bluenviron/mediamtx:latest
+
+# Run container
+docker run -d --name mediamtx \
+  -p 8554:8554 -p 8000:8000 -p 1935:1935 \
+  -v /path/to/config.yml:/etc/mediamtx.yml \
+  bluenviron/mediamtx:latest
+```
+
 ## Basic Configuration
 
 Create `/etc/mediamtx/mediamtx.yml`:
 
 ```yaml
-# Global
-logLevel: info
-logDestinations: [stdout]
+# MediaMTX Basic Configuration
 
-# RTSP server
-rtsp: yes
-rtspAddress: :8554
-rtspTransports: [udp, multicast, tcp]
-
-# Paths (camera streams)
+# RTSP Configuration
 paths:
-  cam_front:
-    source: rtsp://admin:password@192.168.1.10:554/stream1
-    rtspTransport: tcp
-    sourceOnDemand: yes
+  all:
+    # Enable recording (optional)
+    record: true
+    # Recording path
+    recordPath: /path/to/recordings
+    # Recording format
+    recordFormat: fmp4
+    # Max recording duration
+    recordMaxDuration: 1h
+
+# Server Configuration
+protocols:
+  # RTSP Protocol
+  - protocol: rtsp
+    listen: :8554
+    # RTSP-over-TCP
+    rtspOverTcp: true
+    # Authentication
+    authMethod: static
+    authUsers:
+      user: password
+
+  # RTMP Protocol (optional)
+  - protocol: rtmp
+    listen: :1935
+
+  # WebRTC Protocol (optional)
+  - protocol: webrtc
+    listen: :8889
+    # WebRTC Server Key
+    webrtcServerKey: mediamtx
+
+# Logging Configuration
+logging:
+  level: info
+  format: json
 ```
 
 Start:
@@ -56,6 +129,8 @@ mediamtx /etc/mediamtx/mediamtx.yml
 ```
 
 The stream is now available at `rtsp://localhost:8554/cam_front`.
+```
+
 
 ## Integrating with MiBee NVR
 
@@ -278,3 +353,224 @@ rtspTransport: udp
 ```
 
 For home networks, TCP is recommended for reliability.
+
+## Troubleshooting
+
+### Connection Issues
+
+#### Camera Cannot Connect to MediaMTX
+
+```bash
+# Test RTSP connection
+ffmpeg -rtsp_transport tcp -i "rtsp://admin:password123@localhost:8554/cam1" -t 5 -f null -
+
+# Check MediaMTX logs
+mediamtx --config mediamtx.yml --log-level debug
+
+# Check port usage
+netstat -tlnp | grep :8554
+```
+
+#### MediaMTX Cannot Connect to Camera
+
+```bash
+# Direct camera test
+ffmpeg -rtsp_transport tcp -i "rtsp://192.168.1.100:554/stream" -t 5 -f null -
+
+# Check camera network connectivity
+ping 192.168.1.100
+nmap -p 554 192.168.1.100
+```
+
+### Performance Issues
+
+#### High CPU Usage
+
+```yaml
+# Optimization configuration
+paths:
+  all:
+    videoBitrate: 1000        # Reduce bitrate
+    fps: 15                   # Reduce frame rate
+    gopSize: 30              # Increase GOP size
+```
+
+#### High Memory Usage
+
+```yaml
+# Memory optimization
+paths:
+  all:
+    recordMaxDuration: 10m   # Reduce recording duration
+    bufferType: ring         # Use ring buffer
+    bufferTimeMs: 1000       # Reduce buffer time
+```
+
+### Authentication Issues
+
+#### Authentication Failure
+
+```yaml
+# Check authentication configuration
+paths:
+  all:
+    authMethod: static
+    authUsers:
+      admin: password123      # Ensure correct password
+
+# Test authenticated access
+ffmpeg -rtsp_transport tcp -i "rtsp://admin:password123@localhost:8554/cam1" -t 5 -f null -
+```
+
+### Recording Issues
+
+#### Recording Failure
+
+```bash
+# Check storage permissions
+ls -la /mnt/data/nvr/recordings/
+sudo chown -R mibee:mibee /mnt/data/nvr/recordings/
+
+# Check disk space
+df -h /mnt/data/nvr
+
+# Check MediaMTX recording logs
+mediamtx --config mediamtx.yml --log-level debug
+```
+
+## Monitoring and Logging
+
+### Log Configuration
+
+```yaml
+# mediamtx.yml - Log Configuration
+
+logging:
+  level: info
+  format: json
+  files:
+    - path: /var/log/mediamtx.log
+      maxSize: 100MB
+      maxBackups: 5
+      compress: true
+```
+
+### Statistics
+
+```bash
+# Check MediaMTX statistics
+curl http://localhost:8889/stats
+
+# Check MiBee NVR statistics
+curl http://localhost:9090/api/stats
+```
+
+### Prometheus Monitoring
+
+```yaml
+# mediamtx.yml - Prometheus Configuration
+
+metrics:
+  enabled: true
+  address: :9998
+  path: /metrics
+```
+
+## Performance Optimization
+
+### Network Optimization
+
+```yaml
+# Network optimization configuration
+protocols:
+  - protocol: rtsp
+    listen: :8554
+    rtspOverTcp: true        # Use TCP for stability
+    rtspReadTimeout: 10s     # Read timeout
+    rtspWriteTimeout: 10s    # Write timeout
+```
+
+### Encoding Optimization
+
+```yaml
+# Encoding optimization configuration
+paths:
+  all:
+    videoCodec: h264         # Use H.264
+    videoBitrate: 2000       # 2 Mbps
+    audioCodec: aac          # Use AAC
+    audioBitrate: 128        # 128 kbps
+    fps: 25                  # 25 FPS
+    gopSize: 50              # 2 second GOP
+```
+
+### Buffer Optimization
+
+```yaml
+# Buffer optimization configuration
+paths:
+  all:
+    bufferType: ring         # Ring buffer
+    bufferTimeMs: 2000       # 2 second buffer
+    ringSize: 1000           # Buffer size
+```
+
+## Best Practices
+
+### Deployment Architecture
+
+```
+camera → MediaMTX (load balancing) → MiBee NVR
+         ↓
+      monitoring node
+         ↓
+      storage cluster
+```
+
+### Configuration Management
+
+```bash
+# Use configuration management tools
+ansible-playbook -i inventory mediamtx.yml
+```
+
+### Backup Strategy
+
+```bash
+# Regular configuration backup
+*/5 * * * * cp /etc/mediamtx.yml /backup/mediamtx-$(date +\%Y\%m\%d).yml
+```
+
+### Update Strategy
+
+```bash
+# Rolling update script
+cat > update-mediamtx.sh << 'EOF'
+#!/bin/bash
+# Stop service
+sudo systemctl stop mediamtx
+
+# Backup configuration
+sudo cp /etc/mediamtx.yml /etc/mediamtx.yml.bak
+
+# Update binary
+sudo wget -O /usr/local/bin/mediamtx https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx-linux-amd64
+sudo chmod +x /usr/local/bin/mediamtx
+
+# Start service
+sudo systemctl start mediamtx
+EOF
+
+chmod +x update-mediamtx.sh
+```
+
+## Summary
+
+MediaMTX provides powerful media processing capabilities for MiBee NVR, enabling:
+
+- More stable camera connections
+- More protocol support
+- Better performance
+- More flexible deployment options
+
+It's recommended to choose appropriate configuration based on actual needs and regularly monitor system status.
