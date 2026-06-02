@@ -1104,3 +1104,112 @@ func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
 	// 500 frames / 100 = 5 samples, allow ±1 for edge cases
 	require.InDelta(t, 5, samples, 1, "expected ~5 histogram samples for 500 frames")
 }
+
+// --- autoPopulateSnapshotURL tests ---
+
+func TestAutoPopulateSnapshotURL_CameraNotFound(t *testing.T) {
+	// Should log warning and return, not panic
+	mgr, _, _, _ := newTestManager(t)
+	mgr.autoPopulateSnapshotURL(context.Background(), "nonexistent-camera")
+}
+
+func TestAutoPopulateSnapshotURL_NonONVIFCamera(t *testing.T) {
+	// Should log warning and return
+	mgr, _, _, _ := newTestManager(t)
+	mgr.autoPopulateSnapshotURL(context.Background(), "cam-h264")
+}
+
+func TestAutoPopulateSnapshotURL_PreservesExistingURL(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	// Add an ONVIF camera with existing SnapshotURL to config
+	mgr.cfg.Cameras = append(mgr.cfg.Cameras, config.CameraConfig{
+		ID:          "cam-onvif",
+		Name:        "ONVIF Camera",
+		Protocol:    "onvif",
+		URL:         "http://192.168.1.100/onvif/device_service",
+		SnapshotURL: "http://existing-snapshot.jpg",
+	})
+
+	// autoPopulateSnapshotURL will fail early (no ONVIF client connectable)
+	// but the important thing is it doesn't overwrite the existing URL
+	mgr.autoPopulateSnapshotURL(context.Background(), "cam-onvif")
+
+	// Verify SnapshotURL is still the original value
+	camCfg := mgr.GetCameraConfig("cam-onvif")
+	require.NotNil(t, camCfg)
+	assert.Equal(t, "http://existing-snapshot.jpg", camCfg.SnapshotURL)
+}
+
+func TestAddCamera_ONVIF_PreservesExistingSnapshotURL(t *testing.T) {
+	mgr, _, db, configPath := newTestManager(t)
+
+	cam := config.CameraConfig{
+		ID:           "new-onvif-cam",
+		Name:         "New ONVIF Camera",
+		Protocol:     "onvif",
+		URL:          "http://192.168.1.100/onvif/device_service",
+		Username:     "admin",
+		Password:     "pass",
+		Enabled:      true,
+		SnapshotURL:  "http://custom-snapshot.jpg",
+	}
+
+	ctx := context.Background()
+	id, err := mgr.AddCamera(ctx, cam)
+	require.NoError(t, err)
+	require.Equal(t, "new-onvif-cam", id)
+
+	// Give goroutine a moment (it should NOT fire since SnapshotURL is already set)
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify SnapshotURL is preserved
+	camCfg := mgr.GetCameraConfig("new-onvif-cam")
+	require.NotNil(t, camCfg)
+	assert.Equal(t, "http://custom-snapshot.jpg", camCfg.SnapshotURL)
+
+	// Cleanup
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	for i, c := range mgr.cfg.Cameras {
+		if c.ID == "new-onvif-cam" {
+			mgr.cfg.Cameras = append(mgr.cfg.Cameras[:i], mgr.cfg.Cameras[i+1:]...)
+			break
+		}
+	}
+	config.Save(configPath, mgr.cfg)
+	db.Close()
+}
+
+func TestUpdateCamera_ONVIFEndpointChange_ClosesClient(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	// Add an ONVIF camera to config
+	mgr.cfg.Cameras = append(mgr.cfg.Cameras, config.CameraConfig{
+		ID:       "cam-onvif",
+		Name:     "ONVIF Camera",
+		Protocol: "onvif",
+		URL:      "http://192.168.1.100/onvif/device_service",
+		Enabled:  false,
+	})
+
+	// Pre-seed ONVIF client cache
+	mockClient := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
+	mgr.onvifClients["cam-onvif"] = mockClient
+	assert.Contains(t, mgr.onvifClients, "cam-onvif")
+
+	// Update ONVIF endpoint
+	newEndpoint := "http://192.168.1.100:8080/onvif/device_service"
+	_, err := mgr.UpdateCamera(context.Background(), "cam-onvif", CameraUpdate{
+		ONVIFEndpoint: &newEndpoint,
+	})
+	require.NoError(t, err)
+
+	// Cached client should be closed
+	assert.NotContains(t, mgr.onvifClients, "cam-onvif")
+
+	// Endpoint should be updated
+	camCfg := mgr.GetCameraConfig("cam-onvif")
+	require.NotNil(t, camCfg)
+	assert.Equal(t, newEndpoint, camCfg.ONVIFEndpoint)
+}

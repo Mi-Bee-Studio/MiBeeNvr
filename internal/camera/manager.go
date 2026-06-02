@@ -559,6 +559,11 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		logger.Error("failed to persist config", "error", err)
 	}
 
+	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
+	if cam.Protocol == string(model.ProtoONVIF) && cam.SnapshotURL == "" && cam.Enabled {
+		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
+	}
+
 	return cam.ID, nil
 }
 
@@ -689,6 +694,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Determine if recorder needs restart
 	needsRestart := false
+	onvifEndpointChanged := false
 	if updates.URL != nil && *updates.URL != cam.URL {
 		needsRestart = true
 	}
@@ -725,6 +731,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cam.Password = *updates.Password
 	}
 	if updates.ONVIFEndpoint != nil {
+		if *updates.ONVIFEndpoint != cam.ONVIFEndpoint {
+			onvifEndpointChanged = true
+		}
 		cam.ONVIFEndpoint = *updates.ONVIFEndpoint
 	}
 	if updates.ProfileToken != nil {
@@ -805,10 +814,20 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			}
 		}
 	}
+	// If ONVIF endpoint changed, close cached client so a fresh one is created
+	if onvifEndpointChanged {
+		cm.CloseONVIFClient(cam.ID)
+	}
 
 	// Persist config to disk
 	if err := cm.persistConfig(); err != nil {
 		logger.Error("failed to persist config", "error", err)
+	}
+
+	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
+	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
+	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" && cam.Enabled {
+		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
 	return cam, nil
@@ -1208,4 +1227,55 @@ func classifyError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// autoPopulateSnapshotURL fetches the ONVIF snapshot URI and sets cam.SnapshotURL if empty.
+// Runs in a goroutine — manages its own locking to avoid deadlock with callers.
+func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID string) {
+	// Use a short-lived context to avoid blocking forever
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cm.getOrCreateONVIFClient(fetchCtx, cameraID)
+	if err != nil {
+		logger.Warn("failed to get ONVIF client for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	profiles, err := client.GetProfiles(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get profiles for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+	if len(profiles) == 0 {
+		logger.Warn("no profiles found for snapshot URL", "camera_id", cameraID)
+		return
+	}
+
+	provider := client.NewSnapshotProvider(profiles[0].Token)
+	if provider == nil {
+		logger.Warn("failed to create snapshot provider", "camera_id", cameraID)
+		return
+	}
+
+	uri, err := provider.GetSnapshotUri(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get snapshot URI from ONVIF device", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	// Update SnapshotURL under write lock
+	cm.mu.Lock()
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID && cm.cfg.Cameras[i].SnapshotURL == "" {
+			cm.cfg.Cameras[i].SnapshotURL = uri
+			break
+		}
+	}
+	if err := cm.persistConfig(); err != nil {
+		logger.Warn("failed to persist snapshot URL", "camera_id", cameraID, "error", err)
+	}
+	cm.mu.Unlock()
+
+	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", uri)
 }
