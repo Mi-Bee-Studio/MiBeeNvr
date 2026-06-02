@@ -209,6 +209,7 @@ func (h *Handler) Routes() http.Handler {
 					r.Get("/snapshot", h.handleSnapshot)
 					r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 					r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+					r.Get("/stats", h.handleCameraRecordingStats)
 						// Per-camera timelapse configuration
 						r.Get("/timelapse", h.handleGetCameraTimelapse)
 						r.Put("/timelapse", h.handlePutCameraTimelapse)

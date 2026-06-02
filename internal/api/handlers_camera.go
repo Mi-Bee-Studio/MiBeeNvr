@@ -489,6 +489,16 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
 }
 
+func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	count, totalSize, err := h.db.GetCameraRecordingStats(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"recording_count": count, "total_size": totalSize})
+}
+
 func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.camMgr == nil {
