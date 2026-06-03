@@ -53,7 +53,7 @@ func (m *Manager) EnsureCameraDir(cameraID string) error {
 
 // CreateSegment creates a new recording segment.
 // For format "h264": creates a .tmp file for writing MP4 data.
-// For format "mjpeg": creates a .tmp directory for writing JPEG frames.
+// For formats "mjpeg" and "timelapse": creates a .tmp directory for writing JPEG frames.
 // Returns the temp path (for writing) and the suggested final path (for CloseSegment).
 func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string, finalPath string, err error) {
 	if err := m.EnsureCameraDir(cameraID); err != nil {
@@ -74,7 +74,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		}
 		f.Close()
 
-	case "mjpeg":
+	case "mjpeg", "timelapse":
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
