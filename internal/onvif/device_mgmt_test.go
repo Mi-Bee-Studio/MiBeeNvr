@@ -2,9 +2,11 @@ package onvif
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	onvifgo "github.com/0x524a/onvif-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -251,7 +253,7 @@ func TestErrUnsupported(t *testing.T) {
 
 func TestDeviceManagerImpl_SetNetworkInterfaces_ReturnsUnsupported(t *testing.T) {
 	t.Helper()
-	dm := NewDeviceManager(nil)
+	dm := NewDeviceManager(nil, "", "", "", nil)
 	err := dm.SetNetworkInterfaces(context.Background(), nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupported)
@@ -321,4 +323,95 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 	require.Equal(t, 10, m.SystemRebootCalls)
 	require.Equal(t, 10, m.GetNetworkInterfacesCalls)
 	require.Equal(t, 10, m.GetUsersCalls)
+
+}
+
+
+// --- GetUsers auto-fallback tests ---
+
+// mapUsers converts onvif-go User slice to ONVIFUser slice.
+func TestMapUsers(t *testing.T) {
+	t.Helper()
+	users := mapUsers([]*onvifgo.User{
+		{Username: "admin", UserLevel: "Administrator"},
+		{Username: "op", UserLevel: "Operator"},
+		{Username: "anon", UserLevel: "User"},
+	})
+	require.Len(t, users, 3)
+	require.Equal(t, "admin", users[0].Username)
+	require.Equal(t, "Administrator", users[0].Level)
+	require.Equal(t, "op", users[1].Username)
+	require.Equal(t, "Operator", users[1].Level)
+	require.Equal(t, "anon", users[2].Username)
+	}
+
+func TestMapUsers_Nil(t *testing.T) {
+	t.Helper()
+	users := mapUsers(nil)
+	require.Empty(t, users)
+}
+
+func TestRawGetUsers_NilSOAP(t *testing.T) {
+	t.Helper()
+	dm := NewDeviceManager(nil, "http://cam/onvif/device_service", "admin", "pass", nil)
+	_, err := dm.rawGetUsers(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "raw SOAP fallback not available")
+}
+
+func TestRawGetUsers_SOAPError(t *testing.T) {
+	t.Helper()
+	dm := NewDeviceManager(nil, "http://cam/onvif/device_service", "admin", "pass",
+		func(_ context.Context, _, _ string) ([]byte, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	)
+	_, err := dm.rawGetUsers(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "raw GetUsers failed")
+}
+
+func TestRawGetUsers_Success(t *testing.T) {
+	t.Helper()
+	dm := NewDeviceManager(nil, "http://cam/onvif/device_service", "admin", "pass",
+		func(_ context.Context, endpoint, _ string) ([]byte, error) {
+			require.Equal(t, "http://cam/onvif/device_service", endpoint)
+			return []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
+				`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">` +
+				`<s:Body><tds:GetUsersResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">` +
+				`<tds:User><tds:Username>admin</tds:Username><tds:UserLevel>Administrator</tds:UserLevel></tds:User>` +
+				`<tds:User><tds:Username>op</tds:Username><tds:UserLevel>Operator</tds:UserLevel></tds:User>` +
+				`</tds:GetUsersResponse></s:Body></s:Envelope>`), nil
+		},
+	)
+	users, err := dm.rawGetUsers(context.Background())
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	require.Equal(t, "admin", users[0].Username)
+	require.Equal(t, "Administrator", users[0].Level)
+	require.Equal(t, "op", users[1].Username)
+	require.Equal(t, "Operator", users[1].Level)
+}
+
+func TestParseRawGetUsersResponse_Empty(t *testing.T) {
+	t.Helper()
+	users, err := parseRawGetUsersResponse([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tds:GetUsersResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl"></tds:GetUsersResponse></s:Body></s:Envelope>`))
+	require.NoError(t, err)
+	require.Empty(t, users)
+}
+
+func TestParseRawGetUsersResponse_WithUsers(t *testing.T) {
+	t.Helper()
+	users, err := parseRawGetUsersResponse([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><tds:GetUsersResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:User><tds:Username>admin</tds:Username><tds:UserLevel>Administrator</tds:UserLevel></tds:User></tds:GetUsersResponse></s:Body></s:Envelope>`))
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	require.Equal(t, "admin", users[0].Username)
+	require.Equal(t, "Administrator", users[0].Level)
+}
+
+func TestParseRawGetUsersResponse_InvalidXML(t *testing.T) {
+	t.Helper()
+	_, err := parseRawGetUsersResponse([]byte("not xml"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parse GetUsers response")
 }
