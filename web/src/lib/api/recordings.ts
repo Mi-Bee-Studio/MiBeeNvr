@@ -24,6 +24,13 @@ export interface FrameInfo {
   index: number;
 }
 
+export interface TimelapseFrame {
+  filename: string;
+  url: string;
+  size: number;
+  timestamp: string;
+}
+
 export interface FramesResponse {
   frames: FrameInfo[];
 }
@@ -181,6 +188,15 @@ export async function listFrames(
   signal?: AbortSignal
 ): Promise<FramesResponse> {
   return apiRequest<FramesResponse>(`/recordings/${recordingId}/frames`, { signal });
+}
+
+// --- Timelapse frames ---
+
+export async function getTimelapseFrames(
+  recordingId: string,
+  signal?: AbortSignal
+): Promise<TimelapseFrame[]> {
+  return apiRequest<TimelapseFrame[]>(`/recordings/${recordingId}/timelapse-frames`, { signal });
 }
 
 export async function loadFrameBlob(

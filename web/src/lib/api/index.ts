@@ -142,6 +142,7 @@ export {
   deleteArchiveGroup,
   deleteArchiveRecording,
   setArchiveRetention,
+  getTimelapseFrames,
 } from './recordings';
 
 export type {
@@ -153,6 +154,7 @@ export type {
   DailyStats,
   ArchiveGroup,
   ArchiveListResponse,
+  TimelapseFrame,
 } from './recordings';
 
 // Settings — cleanup, webdav, merge, features

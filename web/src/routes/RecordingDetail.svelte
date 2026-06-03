@@ -5,13 +5,13 @@
     deleteRecording,
     downloadRecording as apiDownloadRecording,
     loadRecordingVideoBlob,
-    listRecordings
+    listRecordings,
+    getTimelapseFrames
   } from '$lib/api';
-  import { getTranscodingStatus, enqueueTranscodeTask } from '$lib/api/transcoding';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
-  import type { Recording } from '$lib/api';
+  import type { Recording, TimelapseFrame } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
-  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw } from 'lucide-svelte';
+  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
@@ -35,6 +35,16 @@
   let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
   let transcodeTask = $derived(findTranscodeTask());
 
+  // Timelapse player state
+  let timelapseFrames = $state<TimelapseFrame[]>([]);
+  let tlCurrentFrame = $state(0);
+  let tlIsPlaying = $state(false);
+  let tlSpeed = $state(1);
+  let tlLoading = $state(false);
+  let tlError = $state('');
+  const tlSpeeds = [1, 2, 5, 10];
+  let tlPlayInterval: ReturnType<typeof setInterval> | null = null;
+
   async function loadRecording() {
     loading = true;
     error = '';
@@ -47,7 +57,9 @@
         if (recording.format === 'mjpeg') {
           await tick();
           if (mjpegPlayer) await mjpegPlayer.initPlayer();
-        } else if (recording.format === 'h264' || recording.format === 'h265' || recording.format === 'timelapse') {
+        } else if (recording.format === 'timelapse') {
+          initTimelapsePlayer();
+        } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
         }
       }
@@ -105,6 +117,74 @@
     try { videoBlobUrl = await loadRecordingVideoBlob(currentId); }
     catch (e) { console.error('Failed to load video:', e); error = t('detail.failedLoadVideo'); }
     finally { videoLoading = false; }
+  }
+
+  // --- Timelapse JPEG sequence player ---
+
+  async function initTimelapsePlayer() {
+    tlLoading = true;
+    tlError = '';
+    tlIsPlaying = false;
+    tlCurrentFrame = 0;
+    stopTimelapsePlayback();
+    try {
+      timelapseFrames = await getTimelapseFrames(currentId);
+    } catch (e) {
+      console.error('Failed to load timelapse frames:', e);
+      tlError = t('detail.failedLoadVideo');
+      timelapseFrames = [];
+    } finally {
+      tlLoading = false;
+    }
+  }
+
+  function stopTimelapsePlayback() {
+    if (tlPlayInterval) {
+      clearInterval(tlPlayInterval);
+      tlPlayInterval = null;
+    }
+  }
+
+  function tlTogglePlay() {
+    if (tlIsPlaying) {
+      tlIsPlaying = false;
+      stopTimelapsePlayback();
+    } else {
+      if (timelapseFrames.length === 0) return;
+      tlIsPlaying = true;
+      const fps = 10 * tlSpeed;
+      stopTimelapsePlayback();
+      tlPlayInterval = setInterval(() => {
+        const next = tlCurrentFrame + 1;
+        if (next >= timelapseFrames.length) {
+          tlIsPlaying = false;
+          stopTimelapsePlayback();
+          return;
+        }
+        tlCurrentFrame = next;
+      }, 1000 / fps);
+    }
+  }
+
+  function tlSetSpeed(speed: number) {
+    tlSpeed = speed;
+    if (tlIsPlaying) {
+      stopTimelapsePlayback();
+      const fps = 10 * tlSpeed;
+      tlPlayInterval = setInterval(() => {
+        const next = tlCurrentFrame + 1;
+        if (next >= timelapseFrames.length) {
+          tlIsPlaying = false;
+          stopTimelapsePlayback();
+          return;
+        }
+        tlCurrentFrame = next;
+      }, 1000 / fps);
+    }
+  }
+
+  function tlSeek(index: number) {
+    tlCurrentFrame = Math.max(0, Math.min(index, timelapseFrames.length - 1));
   }
 
   async function confirmDelete() {
@@ -184,6 +264,7 @@
       case ' ':
         e.preventDefault();
         if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('togglePlay');
+        else if (recording?.format === 'timelapse') tlTogglePlay();
         else if (recording?.format === 'h264' || recording?.format === 'h265') {
           const video = document.querySelector('video');
           if (video) { if (video.paused) video.play(); else video.pause(); }
@@ -192,11 +273,13 @@
       case 'ArrowLeft':
         e.preventDefault();
         if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('prevFrame');
+        else if (recording?.format === 'timelapse') tlSeek(tlCurrentFrame - 1);
         else { const v = document.querySelector('video'); if (v) v.currentTime = Math.max(0, v.currentTime - 5); }
         break;
       case 'ArrowRight':
         e.preventDefault();
         if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('nextFrame');
+        else if (recording?.format === 'timelapse') tlSeek(tlCurrentFrame + 1);
         else { const v = document.querySelector('video'); if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
         break;
       case 'Escape': goBack(); break;
@@ -207,6 +290,7 @@
     return () => {
       if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
       if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
+      stopTimelapsePlayback();
     };
   });
 
@@ -273,10 +357,137 @@
                 {t('detail.nextRecording')} <SkipForward size={16} />
               </button>
             </div>
-          {:else if recording.format === 'mjpeg'}
             <div class="bg-black">
               <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
             </div>
+          {:else if recording.format === 'timelapse'}
+            <!-- Timelapse JPEG sequence player -->
+            {#if tlLoading}
+              <div class="flex items-center justify-center h-64 bg-black">
+                <div class="spinner spinner-lg"></div>
+                <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
+              </div>
+            {:else if tlError}
+              <div class="flex items-center justify-center h-64 bg-black">
+                <div class="text-center th-text-muted">
+                  <AlertTriangle size={48} class="mx-auto mb-2" />
+                  <p>{tlError}</p>
+                </div>
+              </div>
+            {:else if timelapseFrames.length === 0}
+              <div class="flex items-center justify-center h-64 bg-black">
+                <div class="text-center th-text-muted">
+                  <HelpCircle size={48} class="mx-auto mb-2" />
+                  <p>{t('detail.noFrames')}</p>
+                </div>
+              </div>
+            {:else}
+              <!-- Frame display -->
+              <div class="relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
+                {#if timelapseFrames[tlCurrentFrame]}
+                  {@const frame = timelapseFrames[tlCurrentFrame]}
+                  <img
+                    src={frame.url}
+                    alt={frame.filename}
+                    class="max-w-full max-h-[75vh]"
+                  />
+                {/if}
+              </div>
+
+              <!-- Controls -->
+              <div class="th-bg-secondary px-4 py-3 space-y-2">
+                <!-- Progress bar -->
+                <div
+                  class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
+                  role="slider"
+                  tabindex="0"
+                  aria-label={t('detail.frameCounter', { current: String(tlCurrentFrame + 1), total: String(timelapseFrames.length) })}
+                  aria-valuenow={tlCurrentFrame}
+                  aria-valuemin={0}
+                  aria-valuemax={timelapseFrames.length - 1}
+                  onclick={(e) => {
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const ratio = (e.clientX - rect.left) / rect.width;
+                    tlSeek(Math.round(ratio * (timelapseFrames.length - 1)));
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); }
+                    else if (e.key === 'ArrowLeft') { e.preventDefault(); tlSeek(tlCurrentFrame - 1); }
+                    else if (e.key === 'ArrowRight') { e.preventDefault(); tlSeek(tlCurrentFrame + 1); }
+                  }}
+                >
+                  <div
+                    class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
+                    style="width: {timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}%"
+                  ></div>
+                  <div
+                    class="absolute top-1/2 -translate-y-1/2 w-3 h-3 th-bg-info rounded-full shadow group-hover:th-bg-accent transition-colors"
+                    style="left: calc({timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}% - 6px)"
+                  ></div>
+                </div>
+
+                <!-- Control buttons -->
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <button
+                      onclick={() => tlSeek(tlCurrentFrame - 1)}
+                      disabled={tlCurrentFrame === 0 || tlIsPlaying}
+                      class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                      style="color: {tlCurrentFrame === 0 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame === 0 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+
+                    <button
+                      onclick={tlTogglePlay}
+                      class="px-4 py-1.5 rounded text-sm font-medium text-white transition-colors flex items-center gap-1"
+                      style="background-color: {tlIsPlaying ? 'var(--color-danger)' : 'var(--color-info)'}"
+                    >
+                      {#if tlIsPlaying}
+                        <Pause size={14} /> {t('detail.pause')}
+                      {:else}
+                        <Play size={14} /> {t('detail.play')}
+                      {/if}
+                    </button>
+
+                    <button
+                      onclick={() => tlSeek(tlCurrentFrame + 1)}
+                      disabled={tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying}
+                      class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                      style="color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+
+                  <!-- Frame counter -->
+                  <span class="th-text-secondary text-sm font-mono">
+                    {tlCurrentFrame + 1} / {timelapseFrames.length}
+                  </span>
+
+                  <!-- Speed control -->
+                  <div class="flex items-center gap-1">
+                    <span class="th-text-tertiary text-xs mr-1">{t('detail.speed')}</span>
+                    {#each tlSpeeds as speed}
+                      <button
+                        onclick={() => tlSetSpeed(speed)}
+                        class="px-2 py-1 rounded text-xs font-medium transition-colors"
+                        style="background-color: {tlSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlSpeed === speed ? 'white' : 'var(--text-secondary)'}"
+                      >
+                        {speed}x
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Keyboard shortcuts hint -->
+              <div class="px-4 py-2 th-bg-tertiary">
+                <p class="text-xs text-center th-text-muted">
+                  {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | {t('detail.escapeBack')}
+                </p>
+              </div>
+            {/if}
           {:else}
             <div class="flex items-center justify-center h-64 bg-black">
               <div class="text-center th-text-tertiary">
