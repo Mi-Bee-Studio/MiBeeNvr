@@ -199,6 +199,14 @@ export async function getTimelapseFrames(
   return apiRequest<TimelapseFrame[]>(`/recordings/${recordingId}/timelapse-frames`, { signal });
 }
 
+export async function loadTimelapseFrameBlob(
+  recordingId: string,
+  filename: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const blob = await apiRequestBlob(`/recordings/${recordingId}/timelapse-frames/${filename}`, { signal });
+  return URL.createObjectURL(blob);
+}
 export async function loadFrameBlob(
   recordingId: string,
   frameIndex: number,

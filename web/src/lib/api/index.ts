@@ -143,6 +143,7 @@ export {
   deleteArchiveRecording,
   setArchiveRetention,
   getTimelapseFrames,
+  loadTimelapseFrameBlob,
 } from './recordings';
 
 export type {

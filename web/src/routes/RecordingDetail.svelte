@@ -6,7 +6,8 @@
     downloadRecording as apiDownloadRecording,
     loadRecordingVideoBlob,
     listRecordings,
-    getTimelapseFrames
+    getTimelapseFrames,
+    loadTimelapseFrameBlob
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { Recording, TimelapseFrame } from '$lib/api';
@@ -44,6 +45,7 @@
   let tlError = $state('');
   const tlSpeeds = [1, 2, 5, 10];
   let tlPlayInterval: ReturnType<typeof setInterval> | null = null;
+  let tlBlobCache = $state<Map<number, string>>(new Map());
 
   async function loadRecording() {
     loading = true;
@@ -130,14 +132,41 @@
     tlIsPlaying = false;
     tlCurrentFrame = 0;
     stopTimelapsePlayback();
+    // Clear old blob URLs
+    tlBlobCache.forEach(url => URL.revokeObjectURL(url));
+    tlBlobCache = new Map();
     try {
       timelapseFrames = await getTimelapseFrames(currentId);
+      // Start preloading frames in background
+      preloadTimelapseFrames();
     } catch (e) {
       console.error('Failed to load timelapse frames:', e);
       tlError = t('detail.failedLoadVideo');
       timelapseFrames = [];
     } finally {
       tlLoading = false;
+    }
+  }
+
+  async function preloadTimelapseFrames(startIndex: number = 0) {
+    const batchSize = 5;
+    const total = timelapseFrames.length;
+    for (let i = startIndex; i < total; i += batchSize) {
+      const batch = timelapseFrames.slice(i, Math.min(i + batchSize, total));
+      await Promise.all(
+        batch.map(async (frame, idx) => {
+          const frameIdx = i + idx;
+          if (tlBlobCache.has(frameIdx)) return;
+          try {
+            const blobUrl = await loadTimelapseFrameBlob(currentId, frame.filename);
+            tlBlobCache.set(frameIdx, blobUrl);
+          } catch (e) { console.warn('Failed to preload timelapse frame:', frameIdx, e); }
+        })
+      );
+      // Small delay between batches to avoid rate limiting
+      if (i + batchSize < total) {
+        await new Promise(r => setTimeout(r, 100));
+      }
     }
   }
 
@@ -293,6 +322,8 @@
     return () => {
       if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
       if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
+      tlBlobCache.forEach(url => URL.revokeObjectURL(url));
+      tlBlobCache = new Map();
       stopTimelapsePlayback();
     };
   });
@@ -389,11 +420,17 @@
               <div class="relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
                 {#if timelapseFrames[tlCurrentFrame]}
                   {@const frame = timelapseFrames[tlCurrentFrame]}
-                  <img
-                    src={frame.url}
-                    alt={frame.filename}
-                    class="max-w-full max-h-[75vh]"
-                  />
+                  {#if tlBlobCache.has(tlCurrentFrame)}
+                    <img
+                      src={tlBlobCache.get(tlCurrentFrame)}
+                      alt={frame.filename}
+                      class="max-w-full max-h-[75vh]"
+                    />
+                  {:else}
+                    <div class="flex items-center justify-center h-64 bg-black">
+                      <div class="spinner spinner-lg"></div>
+                    </div>
+                  {/if}
                 {/if}
               </div>
 
