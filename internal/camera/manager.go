@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
@@ -53,6 +54,7 @@ type CameraManager struct {
 	recorders        map[string]model.Recorder // camera_id → Recorder
 	metrics          *metrics.Metrics
 	mergeMgr         *merge.MergeManager           // segment merge manager (nil = no merge)
+	timelapseMergeMgr *timelapse.RollingMergeManager // timelapse rolling merge (nil = no merge)
 	transcodeMgr     *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr        *health.Manager               // health monitoring (nil when disabled)
 	mu               sync.RWMutex
@@ -69,6 +71,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	var m *metrics.Metrics
 	var mm *merge.MergeManager
 	var tm *transcoding.TranscodeManager
+	var tmm *timelapse.RollingMergeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
@@ -77,6 +80,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			mm = v
 		case *transcoding.TranscodeManager:
 			tm = v
+		case *timelapse.RollingMergeManager:
+			tmm = v
 		}
 	}
 	return &CameraManager{
@@ -88,6 +93,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		metrics:          m,
 		mergeMgr:         mm,
 		transcodeMgr:     tm,
+		timelapseMergeMgr: tmm,
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
@@ -260,6 +266,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if cam.Timelapse.VideoCodec != "" {
 				tlCfg.VideoCodec = cam.Timelapse.VideoCodec
 			}
+		}
+		if cm.timelapseMergeMgr != nil {
+			tlCfg.MergeMgr = cm.timelapseMergeMgr
 		}
 		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
 	default:

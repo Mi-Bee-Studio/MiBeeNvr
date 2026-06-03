@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -36,6 +37,7 @@ type TimelapseRecorderConfig struct {
 	DataDir    string         // base data directory
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
+	MergeMgr *timelapse.RollingMergeManager // optional rolling merge manager
 }
 
 // TimelapseRecorder captures JPEG frames at a configurable interval from an
@@ -45,6 +47,7 @@ type TimelapseRecorder struct {
 	cfg     TimelapseRecorderConfig
 	store   SegmentStore
 	metrics *metrics.Metrics
+	mergeMgr *timelapse.RollingMergeManager
 	client  *http.Client
 
 	mu     sync.Mutex
@@ -121,6 +124,7 @@ func NewTimelapseRecorder(cfg TimelapseRecorderConfig, store SegmentStore, opts 
 		cfg:     cfg,
 		store:   store,
 		metrics: m,
+		mergeMgr: cfg.MergeMgr,
 		client: &http.Client{
 			Timeout: 0, // no timeout — stream is long-lived
 			Transport: &http.Transport{
@@ -401,6 +405,11 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 
 	if r.frameCount > 0 {
 		r.recordSegmentCreated()
+	}
+
+	// Trigger async rolling merge if merge manager is configured.
+	if r.mergeMgr != nil && r.curFinalPath != "" && r.frameCount > 0 {
+		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, r.curFinalPath, r.curFinalPath+".mp4")
 	}
 
 	r.curTempPath = ""
