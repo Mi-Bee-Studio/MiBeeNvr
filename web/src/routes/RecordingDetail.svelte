@@ -101,8 +101,11 @@
     const next = await loadNextRecording();
     if (next) {
       nextRecordingId = next.id;
-      try { nextBlobUrl = await loadRecordingVideoBlob(next.id); }
-      catch (e) { console.warn('Failed to prefetch next recording:', e); nextRecordingId = null; }
+      // Only prefetch video blob for MP4 formats (h264/h265)
+      if (next.format !== 'timelapse' && next.format !== 'mjpeg') {
+        try { nextBlobUrl = await loadRecordingVideoBlob(next.id); }
+        catch (e) { console.warn('Failed to prefetch next recording:', e); nextRecordingId = null; }
+      }
     }
   }
 
