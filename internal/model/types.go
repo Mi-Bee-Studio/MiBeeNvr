@@ -57,6 +57,8 @@ type Recording struct {
 	FrameCount int       `json:"frame_count"`
 	Merged     bool      `json:"merged"`
 	MergeStatus string   `json:"merge_status"`
+	MergePath  string    `json:"merge_path"`
+	MergeError string    `json:"merge_error"`
 	Archived   bool      `json:"archived"`
 }
 

@@ -33,10 +33,10 @@ type Config struct {
 	SRT           SRTConfig           `yaml:"srt"`
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
-	Transcoding TranscodingConfig `yaml:"transcoding"`
-	WebSocket     WebSocketConfig      `yaml:"websocket"`
-	AI            AIConfig             `yaml:"ai"`
-	MetricsAuth  MetricsAuthConfig  `yaml:"metrics_auth"`
+	Transcoding   TranscodingConfig   `yaml:"transcoding"`
+	WebSocket     WebSocketConfig     `yaml:"websocket"`
+	AI            AIConfig            `yaml:"ai"`
+	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
 }
 
@@ -50,36 +50,36 @@ type StorageConfig struct {
 }
 
 type CameraConfig struct {
-	ID             string       `yaml:"id"`
-	Name           string       `yaml:"name"`
-	Protocol       string       `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
-	Encoding       string       `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
-	URL            string       `yaml:"url"`
-	Username       string       `yaml:"username"`
-	Password       string       `yaml:"password"`
-	ONVIFEndpoint  string       `yaml:"onvif_endpoint"`
-	ProfileToken   string       `yaml:"profile_token"`
-	StreamEncoding string       `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	Enabled        bool         `yaml:"enabled"`
-	SubStreamURL   string       `yaml:"sub_stream_url"`
-	SnapshotURL    string       `yaml:"snapshot_url"`
-	SampleInterval int          `yaml:"sample_interval"`
-	HLSMaxFPS      int          `yaml:"hls_max_fps"`
-	Merge          *MergeConfig `yaml:"merge"`
-	Transcoding   *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
-	Timelapse     *CameraTimelapseConfig `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
-	AudioEnabled   bool         `yaml:"audio_enabled"`
-	HealthOverrides HealthOverrides `yaml:"health_overrides,omitempty"`
-	FrameWatchdogTimeout string `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+	ID                   string                   `yaml:"id"`
+	Name                 string                   `yaml:"name"`
+	Protocol             string                   `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding             string                   `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
+	URL                  string                   `yaml:"url"`
+	Username             string                   `yaml:"username"`
+	Password             string                   `yaml:"password"`
+	ONVIFEndpoint        string                   `yaml:"onvif_endpoint"`
+	ProfileToken         string                   `yaml:"profile_token"`
+	StreamEncoding       string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
+	Enabled              bool                     `yaml:"enabled"`
+	SubStreamURL         string                   `yaml:"sub_stream_url"`
+	SnapshotURL          string                   `yaml:"snapshot_url"`
+	SampleInterval       int                      `yaml:"sample_interval"`
+	HLSMaxFPS            int                      `yaml:"hls_max_fps"`
+	Merge                *MergeConfig             `yaml:"merge"`
+	Transcoding          *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
+	Timelapse            *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
+	AudioEnabled         bool                     `yaml:"audio_enabled"`
+	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
+	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
-	}
+}
 
-	// HealthOverrides allows per-camera health monitoring threshold overrides.
-	// When set, non-zero values take precedence over global health config.
-	type HealthOverrides struct {
+// HealthOverrides allows per-camera health monitoring threshold overrides.
+// When set, non-zero values take precedence over global health config.
+type HealthOverrides struct {
 	MaxIDRInterval         string  `yaml:"max_idr_interval,omitempty"`
 	BitrateChangeThreshold float64 `yaml:"bitrate_change_threshold,omitempty"`
 	MinFPS                 int     `yaml:"min_fps,omitempty"`
@@ -103,28 +103,32 @@ type MergeConfig struct {
 }
 
 type TranscodingConfig struct {
-	Enabled          bool   `yaml:"enabled" json:"enabled"`                            // default false
-	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`           // auto-detected or user-specified
-	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`           // default 1, max 4
-	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"` // default false
-	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`          // auto-populated per platform
-	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`            // per-job timeout, default "30m", max 4h
+	Enabled          bool   `yaml:"enabled" json:"enabled"`                               // default false
+	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`             // auto-detected or user-specified
+	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`             // default 1, max 4
+	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"`   // default false
+	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`           // auto-populated per platform
+	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`             // per-job timeout, default "30m", max 4h
 	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention"` // e.g. "168h" (7d), "720h" (30d), ""=never
 }
 
- type CameraTranscodingConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`                        // default false
-	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"`    // h264, h265
-	Preset      string `yaml:"preset,omitempty" json:"preset"`                // ultrafast, faster, medium
-	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`              // e.g. "2M"
+type CameraTranscodingConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`                     // default false
+	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"` // h264, h265
+	Preset      string `yaml:"preset,omitempty" json:"preset"`             // ultrafast, faster, medium
+	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`           // e.g. "2M"
 }
 
 type CameraTimelapseConfig struct {
-	Enabled        bool   `yaml:"enabled" json:"enabled"`                                  // default false
-	Interval       string `yaml:"interval,omitempty" json:"interval,omitempty"`             // snapshot interval, default "30s", min 1s
-	OutputFPS      int    `yaml:"output_fps,omitempty" json:"output_fps,omitempty"`          // output framerate, default 30, range 1-60
-	VideoCodec     string `yaml:"video_codec,omitempty" json:"video_codec,omitempty"`       // h264 or h265, default h264
-	DeleteOriginal bool   `yaml:"delete_original,omitempty" json:"delete_original,omitempty"` // remove original segments after timelapse, default false
+	Enabled        bool   `yaml:"enabled" json:"enabled"`                                       // default false
+	Interval       string `yaml:"interval,omitempty" json:"interval,omitempty"`                 // snapshot interval, default "30s", min 1s
+	OutputFPS      int    `yaml:"output_fps,omitempty" json:"output_fps,omitempty"`             // output framerate, default 30, range 1-60
+	VideoCodec     string `yaml:"video_codec,omitempty" json:"video_codec,omitempty"`           // h264 or h265, default h264
+	DeleteOriginal bool   `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`   // remove original segments after timelapse, default false
+	MergeEnabled   *bool  `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`       // auto-detect (nil=auto)
+	MergeMode      string `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`             // auto, mp4, jpeg — default auto
+	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`           // default true
+	MergeOutputFPS int    `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"` // default 30, range 1-60
 }
 
 type AuthConfig struct {
@@ -568,6 +572,15 @@ func Validate(cfg *Config) error {
 			slog.Warn("timelapse.video_codec is deprecated, ignoring", "camera_id", cam.ID, slog.String("value", cam.Timelapse.VideoCodec))
 			cam.Timelapse.VideoCodec = ""
 		}
+		// Validate merge config fields
+		if cam.Timelapse.MergeMode != "" {
+			if cam.Timelapse.MergeMode != "auto" && cam.Timelapse.MergeMode != "mp4" && cam.Timelapse.MergeMode != "jpeg" {
+				return fmt.Errorf("cameras.%s.timelapse.merge_mode must be one of \"auto\", \"mp4\", \"jpeg\" (got %q)", cam.ID, cam.Timelapse.MergeMode)
+			}
+		}
+		if cam.Timelapse.MergeOutputFPS < 1 || cam.Timelapse.MergeOutputFPS > 60 {
+			return fmt.Errorf("cameras.%s.timelapse.merge_output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.MergeOutputFPS)
+		}
 	}
 
 	// Validate hls.segment_count
@@ -918,6 +931,18 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Timelapse.VideoCodec = "h264"
 			}
 			// DeleteOriginal defaults to false (zero value)
+			// Merge defaults
+			if cam.Timelapse.MergeMode == "" {
+				cam.Timelapse.MergeMode = "auto"
+			}
+			if cam.Timelapse.DailyMerge == nil {
+				v := true
+				cam.Timelapse.DailyMerge = &v
+			}
+			if cam.Timelapse.MergeOutputFPS == 0 {
+				cam.Timelapse.MergeOutputFPS = 30
+			}
+			// MergeEnabled defaults to nil (auto-detect)
 		}
 	}
 }

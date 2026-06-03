@@ -91,6 +91,18 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate merge_mode
+	if body.MergeMode != "" && body.MergeMode != "auto" && body.MergeMode != "mp4" && body.MergeMode != "jpeg" {
+		writeError(w, http.StatusBadRequest, "merge_mode must be \"auto\", \"mp4\", or \"jpeg\"")
+		return
+	}
+
+	// Validate merge_output_fps
+	if body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60 {
+		writeError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
+		return
+	}
+
 	// Find and update camera config in memory
 	found := false
 	for i := range h.config.Cameras {
@@ -106,6 +118,17 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 			if body.VideoCodec == "" {
 				h.config.Cameras[i].Timelapse.VideoCodec = "h264"
 			}
+			if body.MergeMode == "" {
+				h.config.Cameras[i].Timelapse.MergeMode = "auto"
+			}
+			if body.DailyMerge == nil {
+				v := true
+				h.config.Cameras[i].Timelapse.DailyMerge = &v
+			}
+			if body.MergeOutputFPS == 0 {
+				h.config.Cameras[i].Timelapse.MergeOutputFPS = 30
+			}
+			// MergeEnabled default is nil (auto-detect)
 			found = true
 			break
 		}
