@@ -271,6 +271,12 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 // mergeFormatGroup parses segments, groups by SPS/PPS, and merges eligible groups.
 // For MJPEG format, it skips ParseSegment and calls MergeMJPEGSegments directly.
 func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+	// Timelapse recordings are JPEG directories with no mergeable output — skip entirely.
+	if format == string(model.FormatTimelapse) {
+		logger.Debug("skipping timelapse recordings (not mergeable)", "camera_id", cameraID, "count", len(recs))
+		return 0, 0, 0
+	}
+
 	// MJPEG segments are directories containing JPEG files — ParseSegment only handles MP4.
 	if format == string(model.FormatMJPEG) {
 		return m.mergeMJPEGGroup(ctx, cameraID, recs, cfg)

@@ -212,10 +212,21 @@ func (m *Manager) GetFileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// DeleteFile removes a file from disk.
+// DeleteFile removes a file or directory from disk.
+// For directory-based recordings (MJPEG, timelapse), it uses os.RemoveAll.
 func (m *Manager) DeleteFile(path string) error {
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("storage: failed to delete %q: %w", path, err)
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("storage: failed to stat %q: %w", path, err)
+	}
+	if info.IsDir() {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("storage: failed to remove directory %q: %w", path, err)
+		}
+	} else {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("storage: failed to delete %q: %w", path, err)
+		}
 	}
 	return nil
 }

@@ -714,3 +714,105 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, recs, "failed segments should not be mergeable")
 }
+
+// insertTimelapseRecording creates a timelapse segment directory with fake JPEG files
+// and inserts a pending recording into the DB.
+func (e *mergeTestEnv) insertTimelapseRecording(t *testing.T, id string, cameraID string, startedAt, endedAt time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+	cameraDir := filepath.Join(e.store.RootDir(), cameraID)
+	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+
+	// Timelapse recordings are directories named with a timestamp.
+	segName := fmt.Sprintf("%s_%s_timelapse", cameraID, startedAt.Format("20060102_150405"))
+	finalPath := filepath.Join(cameraDir, segName)
+	require.NoError(t, os.MkdirAll(finalPath, 0755))
+
+	// Create fake JPEG files.
+	for i := 0; i < 3; i++ {
+		filename := fmt.Sprintf("frame_%06d.jpg", i)
+		require.NoError(t, os.WriteFile(filepath.Join(finalPath, filename), []byte("fake-jpeg"), 0644))
+	}
+
+	// Calculate total size.
+	var totalSize int64
+	filepath.Walk(finalPath, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			totalSize += info.Size()
+		}
+		return nil
+	})
+
+	rec := &model.Recording{
+		ID:         id,
+		CameraID:   cameraID,
+		FilePath:   finalPath,
+		Format:     model.FormatTimelapse,
+		StartedAt:  startedAt,
+		EndedAt:    endedAt,
+		Duration:   endedAt.Sub(startedAt).Seconds(),
+		FileSize:   totalSize,
+		FrameCount: 3,
+		Merged:     false,
+	}
+	require.NoError(t, e.db.InsertRecording(ctx, rec))
+	return finalPath
+}
+
+func TestRunOnce_TimelapseSkipped(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	// Insert 2 timelapse recordings in the same hour window, old enough to pass min_age.
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	tp1 := env.insertTimelapseRecording(t, "tl1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	tp2 := env.insertTimelapseRecording(t, "tl2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	// Also insert 2 H264 recordings to verify normal merge still works.
+	env.insertMergeableRecording(t, "h264-1", cameraID, oldTime.Add(2*time.Hour), oldTime.Add(2*time.Hour).Add(30*time.Second))
+	env.insertMergeableRecording(t, "h264-2", cameraID, oldTime.Add(2*time.Hour).Add(30*time.Second), oldTime.Add(2*time.Hour).Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+
+	err := mgr.RunOnce(ctx)
+	require.NoError(t, err)
+
+	// Verify timelapse recordings still exist (were NOT merged).
+	tl1, err := env.db.GetRecording(ctx, "tl1")
+	require.NoError(t, err)
+	require.NotNil(t, tl1, "timelapse recording should not be deleted")
+	require.Equal(t, model.FormatTimelapse, tl1.Format)
+	// Timelapse should still be pending (not marked failed or merged)
+	require.Equal(t, model.MergeStatusPending, tl1.MergeStatus)
+
+	tl2, err := env.db.GetRecording(ctx, "tl2")
+	require.NoError(t, err)
+	require.NotNil(t, tl2, "timelapse recording should not be deleted")
+	require.Equal(t, model.FormatTimelapse, tl2.Format)
+	require.Equal(t, model.MergeStatusPending, tl2.MergeStatus)
+
+	// Verify timelapse directories still exist on disk.
+	_, err = os.Stat(tp1)
+	require.NoError(t, err, "timelapse dir should still exist: %s", tp1)
+	_, err = os.Stat(tp2)
+	require.NoError(t, err, "timelapse dir should still exist: %s", tp2)
+
+	// Verify H264 recordings got merged.
+	recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	// Should have tl1, tl2, and the merged recording (3 total).
+	require.Len(t, recsAfter, 3)
+}
