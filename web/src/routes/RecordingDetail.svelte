@@ -70,7 +70,6 @@
           } else {
             initTimelapsePlayer();
           }
-          initTimelapsePlayer();
         } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
         }
