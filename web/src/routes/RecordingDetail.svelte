@@ -44,8 +44,9 @@
   let tlLoading = $state(false);
   let tlError = $state('');
   const tlSpeeds = [1, 2, 5, 10];
-  let tlPlayInterval: ReturnType<typeof setInterval> | null = null;
+  let tlPlayTimeout: ReturnType<typeof setTimeout> | null = null;
   let tlBlobCache = $state<Map<number, string>>(new Map());
+  let tlAbortController: AbortController | null = null;
 
   async function loadRecording() {
     loading = true;
@@ -132,18 +133,21 @@
     tlIsPlaying = false;
     tlCurrentFrame = 0;
     stopTimelapsePlayback();
+    // Abort any in-flight requests from previous recording
+    tlAbortController?.abort();
+    tlAbortController = new AbortController();
+    const signal = tlAbortController.signal;
     // Clear old blob URLs
     tlBlobCache.forEach(url => URL.revokeObjectURL(url));
     tlBlobCache = new Map();
     try {
-      timelapseFrames = await getTimelapseFrames(currentId);
+      timelapseFrames = await getTimelapseFrames(currentId, signal);
       if (timelapseFrames.length > 0) {
-        // Load first frame immediately so user sees something
-        await ensureFrameCached(0);
-        // Pre-fetch next frames in background (don't await)
-        prefetchAhead(0);
+        await ensureFrameCached(0, signal);
+        prefetchAhead(0, signal);
       }
     } catch (e) {
+      if (signal.aborted) return; // cancelled, not an error
       console.error('Failed to load timelapse frames:', e);
       tlError = t('detail.failedLoadVideo');
       timelapseFrames = [];
@@ -152,25 +156,29 @@
     }
   }
 
-  async function ensureFrameCached(index: number) {
+  async function ensureFrameCached(index: number, signal?: AbortSignal) {
     if (tlBlobCache.has(index) || !timelapseFrames[index]) return;
+    if (signal?.aborted) return;
     try {
-      const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename);
+      const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename, signal);
+      if (signal?.aborted) return; // aborted while waiting
       tlBlobCache.set(index, blobUrl);
     } catch (e) {
+      if (signal?.aborted) return;
       console.warn('Failed to load timelapse frame:', index, e);
     }
   }
 
-  async function prefetchAhead(fromIndex: number) {
-    const windowSize = 10;
-    const batchSize = 3;
+  async function prefetchAhead(fromIndex: number, signal?: AbortSignal) {
+    const windowSize = 20;
+    const batchSize = 5;
     const end = Math.min(fromIndex + windowSize, timelapseFrames.length);
     for (let i = fromIndex; i < end; i += batchSize) {
+      if (signal?.aborted) return;
       const batch = [];
       for (let j = i; j < Math.min(i + batchSize, end); j++) {
         if (!tlBlobCache.has(j)) {
-          batch.push(ensureFrameCached(j));
+          batch.push(ensureFrameCached(j, signal));
         }
       }
       await Promise.all(batch);
@@ -178,10 +186,32 @@
   }
 
   function stopTimelapsePlayback() {
-    if (tlPlayInterval) {
-      clearInterval(tlPlayInterval);
-      tlPlayInterval = null;
+    if (tlPlayTimeout) {
+      clearTimeout(tlPlayTimeout);
+      tlPlayTimeout = null;
     }
+  }
+
+  function playNextFrame() {
+    if (!tlIsPlaying) return;
+    const signal = tlAbortController?.signal;
+    if (signal?.aborted) return;
+    const next = tlCurrentFrame + 1;
+    if (next >= timelapseFrames.length) {
+      tlIsPlaying = false;
+      return;
+    }
+    tlCurrentFrame = next;
+    const loadPromise = tlBlobCache.has(next)
+      ? Promise.resolve()
+      : ensureFrameCached(next, signal);
+    prefetchAhead(next + 1, signal);
+    loadPromise.then(() => {
+      if (signal?.aborted) return;
+      const fps = 10 * tlSpeed;
+      const delay = Math.max(0, (1000 / fps) - 10);
+      tlPlayTimeout = setTimeout(playNextFrame, delay);
+    });
   }
 
   function tlTogglePlay() {
@@ -191,54 +221,23 @@
     } else {
       if (timelapseFrames.length === 0) return;
       tlIsPlaying = true;
-      const fps = 10 * tlSpeed;
       stopTimelapsePlayback();
-      tlPlayInterval = setInterval(async () => {
-        const next = tlCurrentFrame + 1;
-        if (next >= timelapseFrames.length) {
-          tlIsPlaying = false;
-          stopTimelapsePlayback();
-          return;
-        }
-        tlCurrentFrame = next;
-        // Ensure this frame is loaded (if not cached, load it)
-        if (!tlBlobCache.has(next)) {
-          await ensureFrameCached(next);
-        }
-        // Pre-fetch ahead in background
-        prefetchAhead(next + 1);
-      }, 1000 / fps);
+      playNextFrame();
     }
   }
 
   function tlSetSpeed(speed: number) {
     tlSpeed = speed;
-    if (tlIsPlaying) {
-      stopTimelapsePlayback();
-      const fps = 10 * tlSpeed;
-      tlPlayInterval = setInterval(async () => {
-        const next = tlCurrentFrame + 1;
-        if (next >= timelapseFrames.length) {
-          tlIsPlaying = false;
-          stopTimelapsePlayback();
-          return;
-        }
-        tlCurrentFrame = next;
-        if (!tlBlobCache.has(next)) {
-          await ensureFrameCached(next);
-        }
-        prefetchAhead(next + 1);
-      }, 1000 / fps);
-    }
   }
 
   function tlSeek(index: number) {
     const target = Math.max(0, Math.min(index, timelapseFrames.length - 1));
     tlCurrentFrame = target;
+    const signal = tlAbortController?.signal;
     if (!tlBlobCache.has(target)) {
-      ensureFrameCached(target);
+      ensureFrameCached(target, signal);
     }
-    prefetchAhead(target + 1);
+    prefetchAhead(target + 1, signal);
   }
 
   async function confirmDelete() {
@@ -342,6 +341,9 @@
 
   $effect(() => {
     return () => {
+      // Abort all in-flight timelapse frame requests
+      tlAbortController?.abort();
+      tlAbortController = null;
       if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
       if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
       tlBlobCache.forEach(url => URL.revokeObjectURL(url));
