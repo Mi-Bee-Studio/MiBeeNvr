@@ -43,10 +43,13 @@
   let tlSpeed = $state(1);
   let tlLoading = $state(false);
   let tlError = $state('');
-  const tlSpeeds = [1, 2, 5, 10];
+  const tlSpeeds = [1, 2, 5, 10, 20, 50];
   let tlPlayTimeout: ReturnType<typeof setTimeout> | null = null;
   let tlBlobCache = $state<Map<number, string>>(new Map());
   let tlAbortController: AbortController | null = null;
+  let tlLoop = $state(false);
+  let tlSeekLoading = $state(false);
+  let tlSeekTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function loadRecording() {
     loading = true;
@@ -163,6 +166,16 @@
       const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename, signal);
       if (signal?.aborted) return; // aborted while waiting
       tlBlobCache.set(index, blobUrl);
+      // Evict old cache entries when over 500 limit
+      if (tlBlobCache.size >= 500) {
+        const keys = [...tlBlobCache.keys()].sort((a, b) => a - b);
+        const toEvict = keys.slice(0, keys.length - 400);
+        for (const k of toEvict) {
+          const url = tlBlobCache.get(k);
+          if (url) URL.revokeObjectURL(url);
+          tlBlobCache.delete(k);
+        }
+      }
     } catch (e) {
       if (signal?.aborted) return;
       console.warn('Failed to load timelapse frame:', index, e);
@@ -170,8 +183,8 @@
   }
 
   async function prefetchAhead(fromIndex: number, signal?: AbortSignal) {
-    const windowSize = 20;
-    const batchSize = 5;
+    const windowSize = 200;
+    const batchSize = 20;
     const end = Math.min(fromIndex + windowSize, timelapseFrames.length);
     for (let i = fromIndex; i < end; i += batchSize) {
       if (signal?.aborted) return;
@@ -198,7 +211,14 @@
     if (signal?.aborted) return;
     const next = tlCurrentFrame + 1;
     if (next >= timelapseFrames.length) {
+      if (tlLoop) {
+        tlCurrentFrame = 0;
+        tlPlayTimeout = setTimeout(playNextFrame, 50);
+        return;
+      }
       tlIsPlaying = false;
+      // Auto-advance to next recording
+      navigateToNext();
       return;
     }
     tlCurrentFrame = next;
@@ -235,7 +255,12 @@
     tlCurrentFrame = target;
     const signal = tlAbortController?.signal;
     if (!tlBlobCache.has(target)) {
-      ensureFrameCached(target, signal);
+      // Show spinner only if loading takes >500ms
+      tlSeekTimeout = setTimeout(() => { tlSeekLoading = true; }, 500);
+      ensureFrameCached(target, signal).finally(() => {
+        if (tlSeekTimeout) { clearTimeout(tlSeekTimeout); tlSeekTimeout = null; }
+        tlSeekLoading = false;
+      });
     }
     prefetchAhead(target + 1, signal);
   }
@@ -338,6 +363,43 @@
       case 'Escape': goBack(); break;
     }
   }
+  function tlToggleLoop() {
+    tlLoop = !tlLoop;
+  }
+
+  function toggleFullscreen() {
+    const el = document.querySelector('.timelapse-container');
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      el.requestFullscreen();
+    }
+  }
+
+  function getFrameTimestamp(): string {
+    if (!recording || !timelapseFrames[tlCurrentFrame]) return '';
+    const start = new Date(recording.started_at).getTime();
+    const frame = timelapseFrames[tlCurrentFrame];
+    // Use frame.timestamp if available, otherwise estimate from index
+    if (frame.timestamp) {
+      const ts = new Date(frame.timestamp).getTime();
+      const diff = Math.max(0, ts - start);
+      const totalSec = Math.floor(diff / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    // Fallback: estimate from frame index
+    const totalFrames = timelapseFrames.length;
+    const durationMs = recording.duration * 1000;
+    const estimatedSec = Math.floor((tlCurrentFrame / Math.max(1, totalFrames)) * (durationMs / 1000));
+    const h = Math.floor(estimatedSec / 3600);
+    const m = Math.floor((estimatedSec % 3600) / 60);
+    const s = estimatedSec % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
 
   $effect(() => {
     return () => {
@@ -390,7 +452,7 @@
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-        {#if recording.format === 'h264' || recording.format === 'h265'}
+          {#if recording.format === 'h264' || recording.format === 'h265'}
             <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
               {#if isTransitioning}
                 <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
@@ -418,7 +480,8 @@
             <div class="bg-black">
               <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
             </div>
-          {:else if recording.format === 'timelapse'}
+          {/if}
+          {#if recording.format === 'timelapse'}
             <!-- Timelapse JPEG sequence player -->
             {#if tlLoading}
               <div class="flex items-center justify-center h-64 bg-black">
@@ -441,7 +504,7 @@
               </div>
             {:else}
               <!-- Frame display -->
-              <div class="relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
+              <div class="timelapse-container relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
                 {#if timelapseFrames[tlCurrentFrame]}
                   {@const frame = timelapseFrames[tlCurrentFrame]}
                   {#if tlBlobCache.has(tlCurrentFrame)}
@@ -449,7 +512,21 @@
                       src={tlBlobCache.get(tlCurrentFrame)}
                       alt={frame.filename}
                       class="max-w-full max-h-[75vh]"
+                      style="transition: opacity 0.2s ease-in-out"
                     />
+                  {:else if tlCurrentFrame > 0 && tlBlobCache.has(tlCurrentFrame - 1)}
+                    <!-- Show previous frame while loading, with fade -->
+                    <img
+                      src={tlBlobCache.get(tlCurrentFrame - 1)}
+                      alt={frame.filename}
+                      class="max-w-full max-h-[75vh] opacity-50"
+                      style="transition: opacity 0.3s ease-in-out"
+                    />
+                    {#if tlSeekLoading}
+                      <div class="absolute inset-0 flex items-center justify-center bg-black/30">
+                        <div class="spinner spinner-lg"></div>
+                      </div>
+                    {/if}
                   {:else}
                     <div class="flex items-center justify-center h-64 bg-black">
                       <div class="spinner spinner-lg"></div>
@@ -524,10 +601,15 @@
                     </button>
                   </div>
 
-                  <!-- Frame counter -->
-                  <span class="th-text-secondary text-sm font-mono">
-                    {tlCurrentFrame + 1} / {timelapseFrames.length}
-                  </span>
+                  <!-- Frame counter + timestamp -->
+                  <div class="flex items-center gap-3">
+                    <span class="th-text-secondary text-sm font-mono">
+                      {tlCurrentFrame + 1} / {timelapseFrames.length}
+                    </span>
+                    <span class="th-text-tertiary text-xs font-mono">
+                      {getFrameTimestamp()}
+                    </span>
+                  </div>
 
                   <!-- Speed control -->
                   <div class="flex items-center gap-1">
@@ -542,6 +624,29 @@
                       </button>
                     {/each}
                   </div>
+                  <div class="flex items-center gap-2">
+                    <!-- Loop toggle -->
+                    <button
+                      onclick={tlToggleLoop}
+                      class="px-2 py-1 rounded text-xs font-medium transition-colors"
+                      style="background-color: {tlLoop ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlLoop ? 'white' : 'var(--text-secondary)'}"
+                      title="Loop playback"
+                    >
+                      {#if tlLoop}
+                        🔁 Loop
+                      {:else}
+                        🔁 Loop
+                      {/if}
+                    </button>
+                    <!-- Fullscreen button -->
+                    <button
+                      onclick={toggleFullscreen}
+                      class="px-2 py-1 rounded text-xs font-medium transition-colors th-bg-tertiary th-text-secondary"
+                      title={t('live.fullscreen')}
+                    >
+                      ⛶ {t('live.fullscreen')}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -552,7 +657,8 @@
                 </p>
               </div>
             {/if}
-          {:else}
+          {/if}
+          {#if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse'}
             <div class="flex items-center justify-center h-64 bg-black">
               <div class="text-center th-text-tertiary">
                 <div class="text-4xl mb-2 flex justify-center"><HelpCircle size={48} /></div>
