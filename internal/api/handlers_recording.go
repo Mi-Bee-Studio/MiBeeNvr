@@ -458,3 +458,23 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 	filePath := filepath.Join(rec.FilePath, filename)
 	http.ServeFile(w, r, filePath)
 }
+
+// handleMergedRecording handles GET /api/recordings/{id}/merged.
+// Serves the merged MP4 file for a timelapse recording if it has been merged.
+func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.MergePath == "" {
+		writeError(w, http.StatusNotFound, "merged recording not available")
+		return
+	}
+	http.ServeFile(w, r, rec.MergePath)
+}

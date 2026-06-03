@@ -16,6 +16,8 @@ export interface Recording {
   file_size: number;
   frame_count: number;
   merged: boolean;
+  merge_status?: 'pending' | 'merged' | 'failed';
+  merge_path?: string;
   archived?: boolean;
 }
 
@@ -131,6 +133,9 @@ export async function batchDeleteRecordings(
 
 export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
+}
+export function getMergedRecordingUrl(id: string): string {
+  return `/api/recordings/${id}/merged`;
 }
 
 export async function downloadRecording(

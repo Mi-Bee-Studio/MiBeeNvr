@@ -146,6 +146,54 @@
             />
             <label for="timelapse-delete-original" class="th-text-secondary text-sm">{t('timelapse.deleteOriginal')}</label>
           </div>
+
+          <!-- Merge Settings -->
+          <div class="md:col-span-2 border-t th-border pt-4 mt-2">
+            <p class="text-sm font-medium th-text-secondary mb-3">{t('timelapse.mergeSettings') || 'Merge Settings'}</p>
+          </div>
+
+          <!-- Merge Mode -->
+          <div>
+            <label for="timelapse-merge-mode" class="input-label">{t('timelapse.mergeMode')}</label>
+            <select
+              id="timelapse-merge-mode"
+              class="input"
+              value={config.merge_mode || 'auto'}
+              onchange={(e) => updateField('merge_mode', (e.target as HTMLSelectElement).value)}
+            >
+              <option value="auto">{t('timelapse.mergeModeAuto')}</option>
+              <option value="mp4">{t('timelapse.mergeModeMp4')}</option>
+              <option value="jpeg">{t('timelapse.mergeModeJpeg')}</option>
+            </select>
+          </div>
+
+          <!-- Daily Merge -->
+          <div class="flex items-center gap-2">
+            <input
+              id="timelapse-daily-merge"
+              type="checkbox"
+              class="accent-[var(--color-accent)]"
+              checked={config.daily_merge ?? true}
+              onchange={(e) => updateField('daily_merge', (e.target as HTMLInputElement).checked)}
+            />
+            <label for="timelapse-daily-merge" class="th-text-secondary text-sm">{t('timelapse.dailyMerge')}</label>
+          </div>
+
+          <!-- Merge Output FPS -->
+          <div>
+            <label for="timelapse-merge-fps" class="input-label">{t('timelapse.mergeOutputFps')}</label>
+            <input
+              id="timelapse-merge-fps"
+              type="number"
+              class="input"
+              min="1"
+              max="60"
+              value={config.merge_output_fps || 30}
+              oninput={(e) => updateField('merge_output_fps', Number((e.target as HTMLInputElement).value))}
+            />
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.mergeOutputFpsHint')}</p>
+          </div>
+
         {/if}
       </div>
     {/if}

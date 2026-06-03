@@ -64,6 +64,12 @@
           await tick();
           if (mjpegPlayer) await mjpegPlayer.initPlayer();
         } else if (recording.format === 'timelapse') {
+          // For merged timelapse, use video player instead of JPEG player
+          if (recording.merge_status === 'merged') {
+            initVideoPlayer();
+          } else {
+            initTimelapsePlayer();
+          }
           initTimelapsePlayer();
         } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();

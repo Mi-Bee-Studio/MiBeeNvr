@@ -168,6 +168,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
+				r.Get("/merged", h.handleMergedRecording)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
@@ -241,6 +242,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/onvif/probe", h.handleONVIFProbe)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
 		r.Get("/api/protocols", h.handleProtocols)
 		r.Get("/api/features", h.handleGetFeatures)
 		r.Put("/api/features", h.handleUpdateFeatures)

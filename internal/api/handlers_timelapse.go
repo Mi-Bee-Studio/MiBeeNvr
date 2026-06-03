@@ -148,3 +148,15 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 
 	writeJSON(w, http.StatusOK, h.config.Cameras)
 }
+
+// handleTimelapseStatus returns global timelapse merge defaults.
+// GET /api/timelapse/status
+func (h *Handler) handleTimelapseStatus(w http.ResponseWriter, r *http.Request) {
+	defaultDailyMerge := true
+	writeJSON(w, http.StatusOK, map[string]any{
+		"merge_enabled":    false,
+		"merge_mode":       "auto",
+		"daily_merge":      defaultDailyMerge,
+		"merge_output_fps": 30,
+	})
+}
