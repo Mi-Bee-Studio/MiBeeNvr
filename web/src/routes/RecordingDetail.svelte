@@ -137,8 +137,12 @@
     tlBlobCache = new Map();
     try {
       timelapseFrames = await getTimelapseFrames(currentId);
-      // Start preloading frames in background
-      preloadTimelapseFrames();
+      if (timelapseFrames.length > 0) {
+        // Load first frame immediately so user sees something
+        await ensureFrameCached(0);
+        // Pre-fetch next frames in background (don't await)
+        prefetchAhead(0);
+      }
     } catch (e) {
       console.error('Failed to load timelapse frames:', e);
       tlError = t('detail.failedLoadVideo');
@@ -148,25 +152,28 @@
     }
   }
 
-  async function preloadTimelapseFrames(startIndex: number = 0) {
-    const batchSize = 5;
-    const total = timelapseFrames.length;
-    for (let i = startIndex; i < total; i += batchSize) {
-      const batch = timelapseFrames.slice(i, Math.min(i + batchSize, total));
-      await Promise.all(
-        batch.map(async (frame, idx) => {
-          const frameIdx = i + idx;
-          if (tlBlobCache.has(frameIdx)) return;
-          try {
-            const blobUrl = await loadTimelapseFrameBlob(currentId, frame.filename);
-            tlBlobCache.set(frameIdx, blobUrl);
-          } catch (e) { console.warn('Failed to preload timelapse frame:', frameIdx, e); }
-        })
-      );
-      // Small delay between batches to avoid rate limiting
-      if (i + batchSize < total) {
-        await new Promise(r => setTimeout(r, 100));
+  async function ensureFrameCached(index: number) {
+    if (tlBlobCache.has(index) || !timelapseFrames[index]) return;
+    try {
+      const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename);
+      tlBlobCache.set(index, blobUrl);
+    } catch (e) {
+      console.warn('Failed to load timelapse frame:', index, e);
+    }
+  }
+
+  async function prefetchAhead(fromIndex: number) {
+    const windowSize = 10;
+    const batchSize = 3;
+    const end = Math.min(fromIndex + windowSize, timelapseFrames.length);
+    for (let i = fromIndex; i < end; i += batchSize) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + batchSize, end); j++) {
+        if (!tlBlobCache.has(j)) {
+          batch.push(ensureFrameCached(j));
+        }
       }
+      await Promise.all(batch);
     }
   }
 
@@ -186,7 +193,7 @@
       tlIsPlaying = true;
       const fps = 10 * tlSpeed;
       stopTimelapsePlayback();
-      tlPlayInterval = setInterval(() => {
+      tlPlayInterval = setInterval(async () => {
         const next = tlCurrentFrame + 1;
         if (next >= timelapseFrames.length) {
           tlIsPlaying = false;
@@ -194,6 +201,12 @@
           return;
         }
         tlCurrentFrame = next;
+        // Ensure this frame is loaded (if not cached, load it)
+        if (!tlBlobCache.has(next)) {
+          await ensureFrameCached(next);
+        }
+        // Pre-fetch ahead in background
+        prefetchAhead(next + 1);
       }, 1000 / fps);
     }
   }
@@ -203,7 +216,7 @@
     if (tlIsPlaying) {
       stopTimelapsePlayback();
       const fps = 10 * tlSpeed;
-      tlPlayInterval = setInterval(() => {
+      tlPlayInterval = setInterval(async () => {
         const next = tlCurrentFrame + 1;
         if (next >= timelapseFrames.length) {
           tlIsPlaying = false;
@@ -211,12 +224,21 @@
           return;
         }
         tlCurrentFrame = next;
+        if (!tlBlobCache.has(next)) {
+          await ensureFrameCached(next);
+        }
+        prefetchAhead(next + 1);
       }, 1000 / fps);
     }
   }
 
   function tlSeek(index: number) {
-    tlCurrentFrame = Math.max(0, Math.min(index, timelapseFrames.length - 1));
+    const target = Math.max(0, Math.min(index, timelapseFrames.length - 1));
+    tlCurrentFrame = target;
+    if (!tlBlobCache.has(target)) {
+      ensureFrameCached(target);
+    }
+    prefetchAhead(target + 1);
   }
 
   async function confirmDelete() {
