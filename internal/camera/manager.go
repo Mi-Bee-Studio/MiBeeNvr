@@ -243,6 +243,10 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	case "timelapse":
 		tlCfg := recorder.TimelapseRecorderConfig{
 			CameraID: cam.ID,
+			URL:      cam.URL,
+			Username: cam.Username,
+			Password: cam.Password,
+			DataDir:  cm.cfg.Storage.RootDir,
 			DB:       cm.db,
 			Metrics:  cm.metrics,
 		}
@@ -288,6 +292,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	case *xiaomi.XiaomiRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
+	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	}

@@ -559,13 +559,17 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("cameras.%s.timelapse.interval must be at least 1s, got %s", cam.ID, cam.Timelapse.Interval)
 			}
 		}
-		if cam.Timelapse.OutputFPS < 1 || cam.Timelapse.OutputFPS > 60 {
-			return fmt.Errorf("cameras.%s.timelapse.output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.OutputFPS)
+		// VideoCodec and OutputFPS are deprecated — any value is accepted
+		if cam.Timelapse.OutputFPS < 0 || cam.Timelapse.OutputFPS > 60 {
+			slog.Warn("timelapse.output_fps out of range, ignoring", "camera_id", cam.ID, slog.Int("value", cam.Timelapse.OutputFPS))
+			cam.Timelapse.OutputFPS = 0
 		}
-		if cam.Timelapse.VideoCodec != "" && cam.Timelapse.VideoCodec != "h264" && cam.Timelapse.VideoCodec != "h265" {
-			return fmt.Errorf("cameras.%s.timelapse.video_codec must be h264 or h265, got %q", cam.ID, cam.Timelapse.VideoCodec)
+		if cam.Timelapse.VideoCodec != "" {
+			slog.Warn("timelapse.video_codec is deprecated, ignoring", "camera_id", cam.ID, slog.String("value", cam.Timelapse.VideoCodec))
+			cam.Timelapse.VideoCodec = ""
 		}
 	}
+
 	// Validate hls.segment_count
 	if cfg.HLS.SegmentCount < 3 || cfg.HLS.SegmentCount > 10 {
 		return fmt.Errorf("hls.segment_count must be between 3 and 10, got %d", cfg.HLS.SegmentCount)

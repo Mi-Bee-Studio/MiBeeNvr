@@ -75,13 +75,13 @@ func TestTimelapseConfig_InvalidOutputFPS_TooLow(t *testing.T) {
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
 			Enabled:   true,
-			OutputFPS: -1, // must be >= 1
+			OutputFPS: -1, // deprecated, will be reset to 0
 		},
 	}}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "timelapse.output_fps")
+	require.NoError(t, err)
+	require.Equal(t, 0, cfg.Cameras[0].Timelapse.OutputFPS, "out-of-range OutputFPS should be reset to 0")
 }
 
 func TestTimelapseConfig_InvalidOutputFPS_TooHigh(t *testing.T) {
@@ -90,13 +90,13 @@ func TestTimelapseConfig_InvalidOutputFPS_TooHigh(t *testing.T) {
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
 			Enabled:   true,
-			OutputFPS: 120, // must be <= 60
+			OutputFPS: 120, // deprecated, will be reset to 0
 		},
 	}}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "timelapse.output_fps")
+	require.NoError(t, err)
+	require.Equal(t, 0, cfg.Cameras[0].Timelapse.OutputFPS, "out-of-range OutputFPS should be reset to 0")
 }
 
 func TestTimelapseConfig_InvalidVideoCodec(t *testing.T) {
@@ -105,13 +105,13 @@ func TestTimelapseConfig_InvalidVideoCodec(t *testing.T) {
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 		Timelapse: &CameraTimelapseConfig{
 			Enabled:    true,
-			VideoCodec: "vp9", // unsupported
+			VideoCodec: "vp9", // deprecated, will be reset to empty
 		},
 	}}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "timelapse.video_codec")
+	require.NoError(t, err)
+	require.Equal(t, "", cfg.Cameras[0].Timelapse.VideoCodec, "non-empty VideoCodec should be reset to empty")
 }
 
 func TestTimelapseConfig_ValidCodecs(t *testing.T) {
