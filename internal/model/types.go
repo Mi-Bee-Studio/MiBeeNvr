@@ -163,6 +163,7 @@ const (
 	ProtoRTSPH265  Protocol = "rtsp_h265"
 	ProtoONVIF     Protocol = "onvif"
 	ProtoXiaomi    Protocol = "xiaomi"
+	ProtoTimelapse Protocol = "timelapse"
 )
 
 // Transport-only protocol constants
@@ -178,9 +179,10 @@ const (
 
 // Formats used for recordings/segments
 const (
-	FormatH264  Format = "h264"
-	FormatMJPEG Format = "mjpeg"
-	FormatH265  Format = "h265"
+	FormatH264      Format = "h264"
+	FormatH265      Format = "h265"
+	FormatMJPEG     Format = "mjpeg"
+	FormatTimelapse Format = "timelapse"
 )
 
 // Audio format constants
@@ -217,6 +219,7 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoHTTP):   {string(EncJPEG)},
 	string(ProtoONVIF):  {string(FormatH264), string(FormatH265)},
 	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
+	string(ProtoTimelapse): {},
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
@@ -232,7 +235,9 @@ func ParseLegacyProtocol(old string) (protocol, encoding string, err error) {
 		return "http", "jpeg", nil
 	case "onvif":
 		return "onvif", "", nil
-	default:
+	case "timelapse":
+		return "timelapse", "", nil
+default:
 		return "", "", fmt.Errorf("unknown legacy protocol: %s", old)
 	}
 }
@@ -244,8 +249,8 @@ func ValidateProtocolEncoding(protocol, encoding string) error {
 	if !ok {
 		return fmt.Errorf("unknown protocol: %s", protocol)
 	}
-	// ONVIF allows empty encoding (auto-detect)
-	if protocol == string(ProtoONVIF) && encoding == "" {
+	// ONVIF and Timelapse allow empty encoding (auto-detect / no encoding needed)
+	if (protocol == string(ProtoONVIF) || protocol == string(ProtoTimelapse)) && encoding == "" {
 		return nil
 	}
 	for _, e := range encodings {
