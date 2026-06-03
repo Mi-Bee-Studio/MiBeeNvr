@@ -1,14 +1,18 @@
 package recorder
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,54 +26,41 @@ var timelapseLogger = slog.Default().With("component", "timelapse-recorder")
 // TimelapseRecorderConfig holds configuration for the timelapse recorder.
 type TimelapseRecorderConfig struct {
 	CameraID   string
-	Interval   time.Duration  // frame capture interval (e.g., 5s)
-	OutputFPS  int            // output video FPS (e.g., 30)
-	VideoCodec string         // "h264" or "h265"
-	SegmentDur time.Duration  // segment duration before merging
+	Interval   time.Duration // frame capture interval (e.g., 5s)
+	OutputFPS  int            // output video FPS (e.g., 30) — DEPRECATED, kept for config compat
+	VideoCodec string         // "h264" or "h265" — DEPRECATED, kept for config compat
+	SegmentDur time.Duration  // segment duration
+	URL        string         // HTTP MJPEG stream URL
+	Username   string         // for basic auth (optional)
+	Password   string         // for basic auth (optional)
 	DataDir    string         // base data directory
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
 }
 
-// ffRunnerFunc executes FFmpeg with the given arguments.
-type ffRunnerFunc func(ctx context.Context, ffmpegPath string, args []string, outputPath string) error
-
-// defaultTimelapseFFRunner runs FFmpeg via exec.CommandContext.
-func defaultTimelapseFFRunner(ctx context.Context, ffmpegPath string, args []string, outputPath string) error {
-	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
-	return cmd.Run()
-}
-
-// TimelapseRecorder captures JPEG frames at a configurable interval and
-// periodically merges them into MP4 via FFmpeg. It implements model.Recorder.
+// TimelapseRecorder captures JPEG frames at a configurable interval from an
+// HTTP MJPEG stream and stores them as zero-padded JPEG sequences in
+// timestamped segment directories. Implements model.Recorder.
 type TimelapseRecorder struct {
 	cfg     TimelapseRecorderConfig
 	store   SegmentStore
 	metrics *metrics.Metrics
-	runFF   ffRunnerFunc
-
-	interval   time.Duration
-	outputFPS  int
-	videoCodec string
-	segmentDur time.Duration
+	client  *http.Client
 
 	mu     sync.Mutex
 	status model.RecorderStatus
 	cancel context.CancelFunc
-	done   chan struct{}
+	cancelStream context.CancelFunc
+	done         chan struct{}
+	watchdogDone chan struct{}
 
-	lastCapture atomic.Int64 // UnixNano of last frame capture
+	lastFrameTime atomic.Int64
+	lastCapture   atomic.Int64 // UnixNano of last frame capture
 
-	// segment tracking
-	segMu        sync.Mutex
 	curTempPath  string
 	curFinalPath string
 	segStart     time.Time
 	frameCount   int
-	jpegSeq      int64
-
-	// mergeWg tracks in-flight FFmpeg merge goroutines so Stop() can wait for them.
-	mergeWg sync.WaitGroup
 
 	Hub *model.StreamHub
 }
@@ -98,6 +89,13 @@ func (r *TimelapseRecorder) recordSegmentCreated() {
 	}
 }
 
+// recordBytes adds to the recording bytes counter if metrics is available.
+func (r *TimelapseRecorder) recordBytes(bytes int64) {
+	if r.metrics != nil {
+		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "timelapse").Add(float64(bytes))
+	}
+}
+
 // recordError increments the camera errors counter if metrics is available.
 func (r *TimelapseRecorder) recordError(errorType string) {
 	if r.metrics != nil {
@@ -107,222 +105,32 @@ func (r *TimelapseRecorder) recordError(errorType string) {
 
 var _ model.Recorder = (*TimelapseRecorder)(nil)
 
-// NewTimelapseRecorder creates a new TimelapseRecorder with default FFmpeg runner.
-func NewTimelapseRecorder(cfg TimelapseRecorderConfig, store SegmentStore) *TimelapseRecorder {
-	return NewTimelapseRecorderWithRunner(cfg, store, defaultTimelapseFFRunner)
-}
-
-// NewTimelapseRecorderWithRunner creates a TimelapseRecorder with an injectable FFmpeg runner for testing.
-func NewTimelapseRecorderWithRunner(cfg TimelapseRecorderConfig, store SegmentStore, ff ffRunnerFunc) *TimelapseRecorder {
+// NewTimelapseRecorder creates a new TimelapseRecorder.
+func NewTimelapseRecorder(cfg TimelapseRecorderConfig, store SegmentStore, opts ...*metrics.Metrics) *TimelapseRecorder {
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 	if cfg.Interval < time.Millisecond {
 		cfg.Interval = 5 * time.Second
-	}
-	if cfg.OutputFPS < 1 {
-		cfg.OutputFPS = 30
-	}
-	if cfg.VideoCodec == "" {
-		cfg.VideoCodec = "h264"
 	}
 	if cfg.SegmentDur < time.Millisecond {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
 	return &TimelapseRecorder{
-		cfg:        cfg,
-		store:      store,
-		runFF:      ff,
-		interval:   cfg.Interval,
-		outputFPS:  cfg.OutputFPS,
-		videoCodec: cfg.VideoCodec,
-		segmentDur: cfg.SegmentDur,
-		status:     model.StatusStopped,
+		cfg:     cfg,
+		store:   store,
+		metrics: m,
+		client: &http.Client{
+			Timeout: 0, // no timeout — stream is long-lived
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+			},
+		},
+		status: model.StatusStopped,
 	}
 }
 
-// OnFrame is called for each incoming JPEG frame. Only saves every Nth frame
-// based on the configured interval. Non-blocking.
-func (r *TimelapseRecorder) OnFrame(data []byte) {
-	if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
-		return // not a valid JPEG
-	}
-
-	now := time.Now().UnixNano()
-	last := r.lastCapture.Load()
-	if now-last < r.interval.Nanoseconds() {
-		return // too soon, skip
-	}
-
-	// Try to update lastCapture — CAS to prevent duplicate saves under concurrency
-	if !r.lastCapture.CompareAndSwap(last, now) {
-		return
-	}
-
-	r.segMu.Lock()
-	defer r.segMu.Unlock()
-
-	// Create segment directory if needed
-	if r.curTempPath == "" {
-		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, "timelapse")
-		if err != nil {
-			timelapseLogger.Error("failed to create timelapse segment", "camera_id", r.cfg.CameraID, "error", err)
-			return
-		}
-		r.curTempPath = tempPath
-		r.curFinalPath = finalPath
-		r.segStart = time.Now()
-		r.frameCount = 0
-	}
-
-	r.jpegSeq++
-	if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
-		timelapseLogger.Error("failed to write timelapse frame", "camera_id", r.cfg.CameraID, "error", err)
-		return
-	}
-	r.frameCount++
-
-	// Check segment duration
-	if time.Since(r.segStart) >= r.segmentDur {
-		r.triggerMerge()
-	}
-}
-
-// triggerMerge closes the current segment and starts FFmpeg conversion in a goroutine.
-// Caller must hold segMu.
-func (r *TimelapseRecorder) triggerMerge() {
-	if r.curTempPath == "" || r.frameCount == 0 {
-		return
-	}
-
-	// Snapshot segment data
-	tempPath := r.curTempPath
-	finalPath := r.curFinalPath
-	segStart := r.segStart
-	frameCount := r.frameCount
-	cameraID := r.cfg.CameraID
-
-	// Reset segment state
-	r.curTempPath = ""
-	r.curFinalPath = ""
-	r.frameCount = 0
-
-	// Non-blocking merge: run FFmpeg in a goroutine
-	r.mergeWg.Add(1)
-	go func() {
-		defer r.mergeWg.Done()
-		r.mergeSegment(tempPath, finalPath, segStart, frameCount, cameraID)
-	}()
-}
-
-// mergeSegment runs FFmpeg to convert JPEG directory → MP4 timelapse.
-func (r *TimelapseRecorder) mergeSegment(tempPath, finalPath string, segStart time.Time, frameCount int, cameraID string) {
-	defer func() {
-		if panicErr := recover(); panicErr != nil {
-			buf := make([]byte, 4096)
-			buf = buf[:runtime.Stack(buf, false)]
-			timelapseLogger.Error("PANIC recovered in mergeSegment", "camera_id", cameraID, "panic", panicErr, "stack", string(buf))
-		}
-	}()
-
-	// Close segment (atomic rename)
-	if err := r.store.CloseSegment(tempPath, finalPath); err != nil {
-		timelapseLogger.Error("failed to close timelapse segment", "camera_id", cameraID, "error", err)
-		return
-	}
-
-	outputPath := finalPath + "_timelapse.mp4"
-	ffmpeg := "ffmpeg"
-
-	// Build FFmpeg args
-	args := []string{
-		"-framerate", strconv.Itoa(r.outputFPS),
-		"-pattern_type", "glob",
-		"-i", filepath.Join(finalPath, "*.jpg"),
-	}
-
-	switch r.videoCodec {
-	case "h265":
-		args = append(args, "-c:v", "libx265", "-preset", "faster", "-crf", "28")
-	default:
-		args = append(args, "-c:v", "libx264", "-preset", "faster", "-crf", "23")
-	}
-	args = append(args, "-pix_fmt", "yuv420p", "-y", outputPath)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	timelapseLogger.Info("starting timelapse merge",
-		"camera_id", cameraID,
-		"segment", finalPath,
-		"output", outputPath,
-		"frames", frameCount,
-		"fps", r.outputFPS,
-		"codec", r.videoCodec,
-	)
-
-	if err := r.runFF(ctx, ffmpeg, args, outputPath); err != nil {
-		timelapseLogger.Warn("timelapse FFmpeg merge failed",
-			"camera_id", cameraID,
-			"segment", finalPath,
-			"error", err,
-		)
-		return
-	}
-
-	// Verify output exists
-	if _, err := os.Stat(outputPath); err != nil {
-		timelapseLogger.Warn("timelapse output missing after merge",
-			"camera_id", cameraID,
-			"output", outputPath,
-		)
-		return
-	}
-
-	// Register in DB with format="timelapse"
-	var fileSize int64
-	if info, err := os.Stat(outputPath); err == nil {
-		fileSize = info.Size()
-	}
-
-	now := time.Now()
-	recording := &model.Recording{
-		ID:         fmt.Sprintf("tl_%d", now.UnixNano()),
-		CameraID:   cameraID,
-		FilePath:   outputPath,
-		Format:     "timelapse",
-		StartedAt:  segStart,
-		EndedAt:    now,
-		Duration:   now.Sub(segStart).Seconds(),
-		FileSize:   fileSize,
-		FrameCount: frameCount,
-		Merged:     false,
-	}
-
-	if r.cfg.DB != nil {
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), recording, 3, 500*time.Millisecond); err != nil {
-			timelapseLogger.Error("failed to insert timelapse recording", "camera_id", cameraID, "error", err)
-			return
-		}
-	}
-
-	r.recordSegmentCreated()
-
-	timelapseLogger.Info("timelapse merge completed",
-		"camera_id", cameraID,
-		"output", outputPath,
-		"size", fileSize,
-		"frames", frameCount,
-	)
-
-	// Clean up original JPEG directory
-	if err := os.RemoveAll(finalPath); err != nil {
-		timelapseLogger.Warn("failed to cleanup timelapse JPEG dir",
-			"camera_id", cameraID,
-			"path", finalPath,
-			"error", err,
-		)
-	}
-}
-
-// Start begins timelapse recording. Implements model.Recorder.
 func (r *TimelapseRecorder) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -332,15 +140,15 @@ func (r *TimelapseRecorder) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	r.done = make(chan struct{})
+	r.watchdogDone = make(chan struct{})
 	r.status = model.StatusRecording
 	r.lastCapture.Store(0) // reset so first frame is always captured
 	r.incActive()
 	go r.run(ctx)
+	go r.idleWatchdog(ctx)
 	return nil
 }
 
-// Stop stops the timelapse recorder and waits for all pending merges to complete.
-// Implements model.Recorder.
 func (r *TimelapseRecorder) Stop() error {
 	r.mu.Lock()
 	if r.cancel != nil {
@@ -350,13 +158,13 @@ func (r *TimelapseRecorder) Stop() error {
 	if r.done != nil {
 		<-r.done
 	}
-	// Wait for all in-flight FFmpeg merges to complete
-	r.mergeWg.Wait()
+	if r.watchdogDone != nil {
+		<-r.watchdogDone
+	}
 	r.decActive()
 	return nil
 }
 
-// Status returns the current recorder status. Implements model.Recorder.
 func (r *TimelapseRecorder) Status() model.RecorderStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -369,18 +177,287 @@ func (r *TimelapseRecorder) setStatus(s model.RecorderStatus) {
 	r.mu.Unlock()
 }
 
-// run is the main goroutine. It manages lifecycle and flushes the final segment on stop.
 func (r *TimelapseRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
+	defer r.closeCurrentSegment()
 
-	// Wait for cancellation, then flush remaining segment
-	<-ctx.Done()
+	var retryCount int
+	for {
+		streamCtx, streamCancel := context.WithCancel(ctx)
+		r.mu.Lock()
+		r.cancelStream = streamCancel
+		r.mu.Unlock()
+		err, connected := r.connectAndStream(streamCtx)
+		r.mu.Lock()
+		r.cancelStream = nil
+		r.mu.Unlock()
+		streamCancel()
 
-	// Close any remaining open segment
-	r.segMu.Lock()
-	if r.curTempPath != "" && r.frameCount > 0 {
-		r.triggerMerge()
+		if ctx.Err() != nil {
+			return
+		}
+		if connected {
+			retryCount = 0
+		}
+		retryCount++
+		backoff := TieredBackoffWithJitter(retryCount)
+		timelapseLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
+		r.recordError("connection")
+		r.setStatus(model.StatusReconnecting)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 	}
-	r.segMu.Unlock()
+}
+
+func (r *TimelapseRecorder) idleWatchdog(ctx context.Context) {
+	defer close(r.watchdogDone)
+	const idleTimeout = 60 // seconds
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lastFrame := r.lastFrameTime.Load()
+			if lastFrame > 0 && time.Now().Unix()-lastFrame > idleTimeout {
+				timelapseLogger.Warn("no frames received, triggering reconnect",
+					"camera_id", r.cfg.CameraID,
+					"idle_seconds", time.Now().Unix()-lastFrame)
+				r.recordError("idle_timeout")
+				r.setStatus(model.StatusReconnecting)
+				r.mu.Lock()
+				if r.cancelStream != nil {
+					r.cancelStream()
+				}
+				r.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+// connectAndStream opens an HTTP connection to the MJPEG stream and samples
+// frames at the configured interval.
+func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			buf := make([]byte, 4096)
+			buf = buf[:runtime.Stack(buf, false)]
+			timelapseLogger.Error("PANIC recovered in connectAndStream", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.URL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err), false
+	}
+	if r.cfg.Username != "" {
+		req.SetBasicAuth(r.cfg.Username, r.cfg.Password)
+	}
+
+	timelapseLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("http connect: %w", err), false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("http status %d", resp.StatusCode), false
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "multipart/x-mixed-replace") {
+		return fmt.Errorf("unexpected content-type %q, expected multipart/x-mixed-replace", ct), false
+	}
+	boundary := timelapseExtractBoundary(ct)
+
+	r.setStatus(model.StatusRecording)
+	reader := bufio.NewReader(resp.Body)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err(), true
+		default:
+		}
+
+		// Read until boundary marker
+		if err := r.skipToBoundary(reader, boundary); err != nil {
+			return fmt.Errorf("read boundary: %w", err), true
+		}
+
+		// Read part headers to get Content-Length
+		contentLength, err := r.readPartHeaders(reader)
+		if err != nil {
+			return fmt.Errorf("read part headers: %w", err), true
+		}
+
+		// Read JPEG body
+		var data []byte
+		if contentLength > 0 {
+			data = make([]byte, contentLength)
+			if _, err := io.ReadFull(reader, data); err != nil {
+				return fmt.Errorf("read jpeg body: %w", err), true
+			}
+		} else {
+			// Content-Length missing: read until next boundary
+			var buf bytes.Buffer
+			boundaryMarker := []byte("--" + boundary)
+			if data, err = readUntilBoundary(reader, &buf, boundaryMarker); err != nil {
+				return fmt.Errorf("read jpeg body (no content-length): %w", err), true
+			}
+		}
+
+		// Validate JPEG magic bytes
+		if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+			timelapseLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
+			continue
+		}
+
+		// Interval-based frame sampling using CAS pattern
+		now := time.Now().UnixNano()
+		last := r.lastCapture.Load()
+		if now-last < r.cfg.Interval.Nanoseconds() {
+			continue // too soon, skip
+		}
+		if !r.lastCapture.CompareAndSwap(last, now) {
+			continue // another goroutine captured first
+		}
+
+		// Create segment if needed
+		if r.curTempPath == "" {
+			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, "timelapse")
+			if err != nil {
+				return fmt.Errorf("create segment: %w", err), true
+			}
+			r.curTempPath = tempPath
+			r.curFinalPath = finalPath
+			r.segStart = time.Now()
+			r.frameCount = 0
+		}
+
+		// Write frame with zero-padded name
+		r.frameCount++
+		frameName := fmt.Sprintf("frame_%06d.jpg", r.frameCount)
+		jpgPath := filepath.Join(r.curTempPath, frameName)
+		if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+			timelapseLogger.Error("failed to write timelapse frame", "camera_id", r.cfg.CameraID, "error", err)
+			r.frameCount--
+			continue
+		}
+		r.recordBytes(int64(len(data)))
+		r.lastFrameTime.Store(time.Now().Unix())
+
+		// Check if segment duration elapsed
+		if time.Since(r.segStart) >= r.cfg.SegmentDur {
+			r.closeCurrentSegment()
+		}
+	}
+}
+
+func (r *TimelapseRecorder) closeCurrentSegment() {
+	if r.curTempPath == "" {
+		return
+	}
+	if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
+		timelapseLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
+	}
+
+	// Insert recording entry into database
+	var totalSize int64
+	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
+		now := time.Now()
+		duration := now.Sub(r.segStart).Seconds()
+		rec := &model.Recording{
+			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			CameraID:   r.cfg.CameraID,
+			FilePath:   r.curFinalPath,
+			Format:     model.FormatTimelapse,
+			StartedAt:  r.segStart,
+			EndedAt:    now,
+			Duration:   duration,
+			FrameCount: r.frameCount,
+		}
+		// Calculate directory size by walking files
+		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				totalSize += info.Size()
+			}
+			return nil
+		})
+		rec.FileSize = totalSize
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+			timelapseLogger.Error("failed to insert timelapse recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
+	}
+
+	if r.frameCount > 0 {
+		r.recordSegmentCreated()
+	}
+
+	r.curTempPath = ""
+	r.curFinalPath = ""
+	r.frameCount = 0
+}
+
+// timelapseExtractBoundary parses the boundary string from a Content-Type header.
+// Example: "multipart/x-mixed-replace;boundary=123456789000000000000987654321"
+func timelapseExtractBoundary(ct string) string {
+	idx := strings.Index(ct, "boundary=")
+	if idx == -1 {
+		return "frame"
+	}
+	val := ct[idx+len("boundary="):]
+	val = strings.Trim(val, `"`)
+	if i := strings.IndexAny(val, "; "); i != -1 {
+		val = val[:i]
+	}
+	return val
+}
+
+// skipToBoundary reads from the reader until it finds "--<boundary>\r\n".
+func (r *TimelapseRecorder) skipToBoundary(reader *bufio.Reader, boundary string) error {
+	marker := []byte("--" + boundary)
+	for {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			return err
+		}
+		line = bytes.TrimRight(line, "\r\n")
+		if bytes.Equal(line, marker) {
+			return nil
+		}
+	}
+}
+
+// readPartHeaders reads MIME part headers until an empty line.
+// Returns the Content-Length value, or 0 if not found.
+func (r *TimelapseRecorder) readPartHeaders(reader *bufio.Reader) (int, error) {
+	contentLength := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return contentLength, nil
+		}
+		if contentLength == 0 && strings.HasPrefix(strings.ToLower(line), "content-length:") {
+			val := strings.TrimSpace(line[len("content-length:"):])
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return 0, fmt.Errorf("invalid content-length %q: %w", val, err)
+			}
+			contentLength = n
+		}
+	}
 }

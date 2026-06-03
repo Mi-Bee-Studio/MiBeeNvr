@@ -1,385 +1,448 @@
 package recorder
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- Mock DB for timelapse tests ---
 
 type mockTimelapseDB struct {
+	mu       sync.Mutex
 	inserted []*model.Recording
 }
 
 func (m *mockTimelapseDB) InsertRecording(_ context.Context, r *model.Recording) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.inserted = append(m.inserted, r)
 	return nil
 }
 
 func (m *mockTimelapseDB) InsertRecordingWithRetry(_ context.Context, r *model.Recording, _ int, _ time.Duration) error {
-	m.inserted = append(m.inserted, r)
-	return nil
+	return m.InsertRecording(context.Background(), r)
+}
+
+func (m *mockTimelapseDB) recordings() []*model.Recording {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*model.Recording, len(m.inserted))
+	copy(out, m.inserted)
+	return out
 }
 
 // --- Mock segment store for timelapse tests ---
 
 type mockTimelapseStore struct {
-	dataDir     string
-	segmentSeq  atomic.Int64
-	frameFiles  []string // tracks all written frames
+	dataDir string
+	seq     int
 }
 
 func newMockTimelapseStore(dataDir string) *mockTimelapseStore {
 	return &mockTimelapseStore{dataDir: dataDir}
 }
 
-func (s *mockTimelapseStore) CreateSegment(cameraID string, _ string) (string, string, error) {
-	seq := s.segmentSeq.Add(1)
-	name := fmt.Sprintf("%s_%d_tmp", cameraID, seq)
+func (s *mockTimelapseStore) CreateSegment(cameraID, _ string) (string, string, error) {
+	s.seq++
+	name := fmt.Sprintf("%s_%d_tmp", cameraID, s.seq)
 	tempPath := filepath.Join(s.dataDir, name)
-	finalPath := filepath.Join(s.dataDir, fmt.Sprintf("%s_%d", cameraID, seq))
+	finalPath := filepath.Join(s.dataDir, fmt.Sprintf("%s_%d", cameraID, s.seq))
 	if err := os.MkdirAll(tempPath, 0o755); err != nil {
 		return "", "", err
 	}
 	return tempPath, finalPath, nil
 }
 
-func (s *mockTimelapseStore) WriteFrame(tempPath string, data []byte) (int, error) {
-	name := fmt.Sprintf("frame_%06d.jpg", len(s.frameFiles))
-	path := filepath.Join(tempPath, name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return 0, err
-	}
-	s.frameFiles = append(s.frameFiles, path)
-	return len(data), nil
+func (s *mockTimelapseStore) WriteFrame(_ string, _ []byte) (int, error) {
+	return 0, nil // no-op — timelapse recorder writes frames directly via os.WriteFile
 }
 
 func (s *mockTimelapseStore) CloseSegment(tempPath, finalPath string) error {
 	return os.Rename(tempPath, finalPath)
 }
 
-// --- Mock FFmpeg runner for timelapse tests ---
+// --- MJPEG test server helper ---
 
-type mockFFRunner struct {
-	shouldFail bool
+func newTestMJPEGServer(t *testing.T, frames [][]byte) *httptest.Server {
+	t.Helper()
+	boundary := "frame"
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace;boundary="+boundary)
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		// Fast-flush loop: continuously send frames with short sleeps
+		// to keep the connection alive but deliver frames promptly.
+		for {
+			for _, frame := range frames {
+				select {
+				case <-r.Context().Done():
+					return
+				default:
+				}
+				fmt.Fprintf(w, "--%s\r\n", boundary)
+				fmt.Fprintf(w, "Content-Type: image/jpeg\r\n")
+				fmt.Fprintf(w, "Content-Length: %d\r\n", len(frame))
+				fmt.Fprintf(w, "\r\n")
+				w.Write(frame)
+				fmt.Fprintf(w, "\r\n")
+				flusher.Flush()
+				time.Sleep(5 * time.Millisecond)
+			}
+		}
+	}
+
+	return httptest.NewServer(http.HandlerFunc(handler))
 }
 
-func (r *mockFFRunner) Run(_ context.Context, _ string, _ []string, outputPath string) error {
-	if r.shouldFail {
-		return fmt.Errorf("mock ffmpeg error")
+// makeTestJPEG creates a minimal valid JPEG in memory.
+func makeTestJPEG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	// Fill with non-zero color so it's a real image
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
+		}
 	}
-	// Simulate FFmpeg creating output MP4
-	if err := os.WriteFile(outputPath, []byte("fake-mp4"), 0o644); err != nil {
-		return err
+	var buf bytes.Buffer
+	err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 50})
+	if err != nil {
+		t.Fatalf("failed to encode test JPEG: %v", err)
 	}
-	return nil
+	return buf.Bytes()
+}
+
+// waitUntilFinished polls recorder status until stopped, with timeout.
+func waitUntilFinished(t *testing.T, rec *TimelapseRecorder, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if rec.Status() == model.StatusStopped {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for recorder to reach StatusStopped")
 }
 
 // --- Tests ---
 
-func TestTimelapseRecorder_ImplementsRecorder(t *testing.T) {
-	var _ model.Recorder = (*TimelapseRecorder)(nil)
-}
+func TestTimelapseStartStop(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	srv := newTestMJPEGServer(t, [][]byte{jpg})
+	defer srv.Close()
 
-func TestTimelapseRecorder_StartStop(t *testing.T) {
 	store := newMockTimelapseStore(t.TempDir())
-	db := &mockTimelapseDB{}
-
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-startstop",
-		Interval:   1 * time.Second,
-		OutputFPS:  30,
-		VideoCodec: "h264",
+		CameraID:   "cam-startstop",
+		URL:        srv.URL,
+		Interval:   200 * time.Millisecond,
 		SegmentDur: 5 * time.Minute,
-		DataDir:    t.TempDir(),
-		DB:         db,
 	}, store)
 
-	require.Equal(t, model.StatusStopped, rec.Status())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	require.NoError(t, rec.Start(ctx))
 	require.Equal(t, model.StatusRecording, rec.Status())
 
-	// Starting again should fail
+	// Double start should fail
 	require.Error(t, rec.Start(ctx))
 
+	// Let it run briefly
+	time.Sleep(200 * time.Millisecond)
+
 	require.NoError(t, rec.Stop())
-	require.Equal(t, model.StatusStopped, rec.Status())
+	assert.Equal(t, model.StatusStopped, rec.Status())
 
 	// Double stop should be safe
 	require.NoError(t, rec.Stop())
 }
 
-func TestTimelapseRecorder_SavesEveryNthFrame(t *testing.T) {
-	store := newMockTimelapseStore(t.TempDir())
+func TestTimelapseFrameSampling(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	srv := newTestMJPEGServer(t, [][]byte{jpg})
+	defer srv.Close()
+
+	dataDir := t.TempDir()
+	store := newMockTimelapseStore(dataDir)
 	db := &mockTimelapseDB{}
-	ff := &mockFFRunner{}
 
-	rec := NewTimelapseRecorderWithRunner(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-saves",
-		Interval:   200 * time.Millisecond,
-		OutputFPS:  10,
-		VideoCodec: "h264",
-		SegmentDur: 5 * time.Minute,
-		DataDir:    t.TempDir(),
+	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
+		CameraID:   "cam-sampling",
+		URL:        srv.URL,
+		Interval:   100 * time.Millisecond,
+		SegmentDur: 10 * time.Second, // long enough to keep one segment
 		DB:         db,
-	}, store, ff.Run)
+	}, store)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	require.NoError(t, rec.Start(ctx))
 
-	jpeg := generateTestJPEG()
-	// Send 10 frames rapidly — only 1st should be saved (interval=200ms)
-	for i := 0; i < 10; i++ {
-		rec.OnFrame(jpeg)
-		time.Sleep(10 * time.Millisecond) // 10ms apart, well under 200ms interval
-	}
-
-	// Wait for interval to pass
-	time.Sleep(250 * time.Millisecond)
-
-	// Send 1 more frame — should be saved (200ms since last)
-	rec.OnFrame(jpeg)
-	time.Sleep(50 * time.Millisecond)
+	// Server sends frames every ~5ms, but interval is 100ms.
+	// Run for 800ms. Expected frames: ~8 (800/100), NOT ~26 (800/30).
+	time.Sleep(800 * time.Millisecond)
 
 	require.NoError(t, rec.Stop())
+	waitUntilFinished(t, rec, 2*time.Second)
 
-	// With interval=200ms and frames at 10ms spacing, only ~2 frames should be captured:
-	// 1st frame (always captured) + 1 frame after 200ms gap
-	require.Len(t, store.frameFiles, 2, "expected 2 frames captured with 200ms interval from 11 rapid frames")
-}
-
-func TestTimelapseRecorder_SegmentMerge(t *testing.T) {
-	store := newMockTimelapseStore(t.TempDir())
-	db := &mockTimelapseDB{}
-	ff := &mockFFRunner{}
-
-	segmentDur := 150 * time.Millisecond
-	rec := NewTimelapseRecorderWithRunner(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-merge",
-		Interval:   10 * time.Millisecond,
-		OutputFPS:  30,
-		VideoCodec: "h264",
-		SegmentDur: segmentDur,
-		DataDir:    t.TempDir(),
-		DB:         db,
-	}, store, ff.Run)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	require.NoError(t, rec.Start(ctx))
-
-	jpeg := generateTestJPEG()
-
-	// Send frames for first segment
-	for i := 0; i < 3; i++ {
-		rec.OnFrame(jpeg)
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Wait for segment to close and FFmpeg to run
-	time.Sleep(500 * time.Millisecond)
-
-	// Send frames for second segment
-	for i := 0; i < 3; i++ {
-		rec.OnFrame(jpeg)
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	time.Sleep(500 * time.Millisecond)
-
-	require.NoError(t, rec.Stop())
-
-	// Should have merged recordings in DB with format="timelapse"
-	timelapseCount := 0
-	for _, r := range db.inserted {
-		if r.Format == "timelapse" {
-			timelapseCount++
-			require.Contains(t, r.FilePath, "_timelapse.mp4")
-			require.Greater(t, r.FrameCount, 0)
+	// Count total JPEG files across all segment dirs
+	var frameCount int
+	filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".jpg") {
+			frameCount++
 		}
-	}
-	require.Equal(t, 2, timelapseCount, "expected 2 timelapse recordings from 2 segments")
+		return nil
+	})
+
+	// With 100ms interval over 800ms, expect ~8 frames (allow 4–12 range).
+	assert.Greater(t, frameCount, 3, "expected at least 4 frames with 100ms interval")
+	assert.Less(t, frameCount, 14, "expected fewer than 14 frames — interval sampling should skip most frames")
 }
 
-func TestTimelapseRecorder_FFmpegFailurePreservesOriginal(t *testing.T) {
-	store := newMockTimelapseStore(t.TempDir())
-	db := &mockTimelapseDB{}
-	ff := &mockFFRunner{shouldFail: true}
+func TestTimelapseSegmentRotation(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	srv := newTestMJPEGServer(t, [][]byte{jpg})
+	defer srv.Close()
 
-	rec := NewTimelapseRecorderWithRunner(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-fferr",
-		Interval:   10 * time.Millisecond,
-		OutputFPS:  30,
-		VideoCodec: "h264",
-		SegmentDur: 100 * time.Millisecond,
-		DataDir:    t.TempDir(),
-		DB:         db,
-	}, store, ff.Run)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	require.NoError(t, rec.Start(ctx))
-
-	jpeg := generateTestJPEG()
-	rec.OnFrame(jpeg)
-	time.Sleep(400 * time.Millisecond)
-
-	require.NoError(t, rec.Stop())
-
-	// No timelapse recordings should be registered (FFmpeg failed)
-	timelapseCount := 0
-	for _, r := range db.inserted {
-		if r.Format == "timelapse" {
-			timelapseCount++
-		}
-	}
-	require.Equal(t, 0, timelapseCount, "no timelapse recordings when FFmpeg fails")
-}
-
-func TestTimelapseRecorder_H265Codec(t *testing.T) {
-	store := newMockTimelapseStore(t.TempDir())
-	db := &mockTimelapseDB{}
-	ff := &mockFFRunner{}
-
-	rec := NewTimelapseRecorderWithRunner(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-h265",
-		Interval:   10 * time.Millisecond,
-		OutputFPS:  25,
-		VideoCodec: "h265",
-		SegmentDur: 100 * time.Millisecond,
-		DataDir:    t.TempDir(),
-		DB:         db,
-	}, store, ff.Run)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	require.NoError(t, rec.Start(ctx))
-
-	jpeg := generateTestJPEG()
-	rec.OnFrame(jpeg)
-	time.Sleep(400 * time.Millisecond)
-
-	require.NoError(t, rec.Stop())
-
-	require.Len(t, db.inserted, 1)
-	require.Equal(t, model.Format("timelapse"), db.inserted[0].Format)
-}
-
-func TestTimelapseRecorder_DropInvalidFrames(t *testing.T) {
 	store := newMockTimelapseStore(t.TempDir())
 	db := &mockTimelapseDB{}
 
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-invalid",
-		Interval:   10 * time.Millisecond,
-		OutputFPS:  30,
-		VideoCodec: "h264",
-		SegmentDur: 5 * time.Minute,
-		DataDir:    t.TempDir(),
+		CameraID:   "cam-segment",
+		URL:        srv.URL,
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 300 * time.Millisecond,
 		DB:         db,
 	}, store)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	require.NoError(t, rec.Start(ctx))
 
-	// Invalid frame (not JPEG magic bytes)
-	rec.OnFrame([]byte("not-a-jpeg"))
-	time.Sleep(50 * time.Millisecond)
-
-	// Valid frame
-	rec.OnFrame(generateTestJPEG())
-	time.Sleep(50 * time.Millisecond)
+	// Run for 700ms — should trigger >= 1 segment rotation (300ms each)
+	time.Sleep(700 * time.Millisecond)
 
 	require.NoError(t, rec.Stop())
+	waitUntilFinished(t, rec, 3*time.Second)
 
-	// Only the valid frame should be written
-	require.Len(t, store.frameFiles, 1, "expected only 1 valid frame, invalid frames dropped")
+	recs := db.recordings()
+	timelapseCount := 0
+	for _, r := range recs {
+		if r.Format == model.FormatTimelapse {
+			timelapseCount++
+		}
+	}
+	assert.GreaterOrEqual(t, timelapseCount, 1, "expected at least 1 DB recording with timelapse format")
 }
 
-func TestTimelapseRecorder_ContextCancellation(t *testing.T) {
+func TestTimelapseDBRegistration(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	srv := newTestMJPEGServer(t, [][]byte{jpg})
+	defer srv.Close()
+
 	store := newMockTimelapseStore(t.TempDir())
 	db := &mockTimelapseDB{}
 
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-cancel",
-		Interval:   1 * time.Second,
-		OutputFPS:  30,
-		VideoCodec: "h264",
-		SegmentDur: 5 * time.Minute,
-		DataDir:    t.TempDir(),
+		CameraID:   "cam-dbreg",
+		URL:        srv.URL,
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 300 * time.Millisecond,
 		DB:         db,
 	}, store)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	time.Sleep(700 * time.Millisecond)
+	require.NoError(t, rec.Stop())
+	waitUntilFinished(t, rec, 3*time.Second)
+
+	recs := db.recordings()
+	require.NotEmpty(t, recs, "expected at least one recording in DB")
+
+	tlRec := recs[len(recs)-1] // take the last one
+	assert.Equal(t, "cam-dbreg", tlRec.CameraID)
+	assert.Equal(t, model.FormatTimelapse, tlRec.Format)
+	assert.Greater(t, tlRec.FrameCount, 0, "FrameCount should be > 0")
+	assert.True(t, tlRec.Duration > 0, "Duration should be > 0")
+
+	// FilePath should be a directory that exists
+	info, err := os.Stat(tlRec.FilePath)
+	require.NoError(t, err, "recording FilePath should exist")
+	assert.True(t, info.IsDir(), "recording FilePath should be a directory")
+}
+
+func TestTimelapseReconnect(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	// Server that closes after first read (no looping)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace;boundary=frame")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		flusher.Flush()
+
+		// Send exactly one frame then close
+		fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(jpg))
+		w.Write(jpg)
+		fmt.Fprintf(w, "\r\n")
+		flusher.Flush()
+		// Connection closes when handler returns
+	}))
+	defer srv.Close()
+
+	store := newMockTimelapseStore(t.TempDir())
+	db := &mockTimelapseDB{}
+
+	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
+		CameraID:   "cam-reconnect",
+		URL:        srv.URL,
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 1 * time.Second,
+		DB:         db,
+	}, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	require.NoError(t, rec.Start(ctx))
 
-	// Send some frames
-	rec.OnFrame(generateTestJPEG())
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel context
-	cancel()
-
+	// Let it run — server closes after first frame, recorder should reconnect (or stop on retry)
+	// The key test: no panic, no hang
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		time.Sleep(500 * time.Millisecond)
 		rec.Stop()
-		close(done)
 	}()
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Stop() did not return within timeout after context cancellation")
+	case <-time.After(5 * time.Second):
+		t.Fatal("recorder hung after server closed connection")
 	}
 
-	require.Equal(t, model.StatusStopped, rec.Status())
+	// Status should be stopped
+	assert.Equal(t, model.StatusStopped, rec.Status())
 }
 
-func TestTimelapseRecorder_Defaults(t *testing.T) {
-	store := newMockTimelapseStore(t.TempDir())
+func TestTimelapseInvalidFramesDropped(t *testing.T) {
+	invalidFrames := [][]byte{
+		[]byte("this-is-not-a-jpeg"),
+		[]byte{0xFF, 0x01, 0x02}, // wrong magic after FF
+		[]byte("also-not-jpeg-data"),
+	}
+	srv := newTestMJPEGServer(t, invalidFrames)
+	defer srv.Close()
 
-	// Zero-value config — should apply defaults
+	store := newMockTimelapseStore(t.TempDir())
+	db := &mockTimelapseDB{}
+
 	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-defaults",
-		DataDir:    t.TempDir(),
+		CameraID:   "cam-invalid",
+		URL:        srv.URL,
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 1 * time.Second,
+		DB:         db,
 	}, store)
 
-	require.Equal(t, model.StatusStopped, rec.Status())
-	// Interval default should be set (non-zero)
-	require.True(t, rec.interval > 0, "interval should have default value")
-	// OutputFPS default should be set
-	require.Greater(t, rec.outputFPS, 0, "outputFPS should have default value")
-	// VideoCodec default should be set
-	require.NotEmpty(t, rec.videoCodec, "videoCodec should have default value")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	time.Sleep(500 * time.Millisecond)
+	require.NoError(t, rec.Stop())
+	waitUntilFinished(t, rec, 2*time.Second)
+
+	// No JPEG files should be written (all frames had invalid magic bytes)
+	var frameCount int
+	dataDir := store.dataDir
+	filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".jpg") {
+			frameCount++
+		}
+		return nil
+	})
+	assert.Equal(t, 0, frameCount, "no JPEG files should be written when all frames are invalid")
+
+	// No DB recordings either (segment was never closed with frames)
+	recs := db.recordings()
+	timelapseCount := 0
+	for _, r := range recs {
+		if r.Format == model.FormatTimelapse {
+			timelapseCount++
+		}
+	}
+	assert.Equal(t, 0, timelapseCount, "no timelapse recordings when all frames are invalid")
 }
 
-func TestTimelapseRecorder_StreamHub(t *testing.T) {
-	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
-		CameraID:   "cam-tl-hub",
-		Interval:   1 * time.Second,
-		DataDir:    t.TempDir(),
-	}, newMockTimelapseStore(t.TempDir()))
+func TestTimelapseJPEGNaming(t *testing.T) {
+	jpg := makeTestJPEG(t, 64, 64)
+	srv := newTestMJPEGServer(t, [][]byte{jpg})
+	defer srv.Close()
 
-	// Hub should be nil before Start (no streaming support needed for timelapse)
-	require.Nil(t, rec.GetHub())
+	store := newMockTimelapseStore(t.TempDir())
+	db := &mockTimelapseDB{}
+
+	rec := NewTimelapseRecorder(TimelapseRecorderConfig{
+		CameraID:   "cam-naming",
+		URL:        srv.URL,
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 10 * time.Second, // long enough to keep one segment
+		DB:         db,
+	}, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	time.Sleep(500 * time.Millisecond)
+	require.NoError(t, rec.Stop())
+	waitUntilFinished(t, rec, 2*time.Second)
+
+	// List all .jpg files in segment directories
+	var jpgFiles []string
+	dataDir := store.dataDir
+	filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".jpg") {
+			jpgFiles = append(jpgFiles, filepath.Base(path))
+		}
+		return nil
+	})
+
+	require.NotEmpty(t, jpgFiles, "expected at least one JPEG file in segment dir")
+
+	// Verify naming pattern: frame_NNNNNN.jpg
+	for _, name := range jpgFiles {
+		assert.Regexp(t, `^frame_\d{6}\.jpg$`, name, "file name should match frame_NNNNNN.jpg pattern")
+	}
 }
