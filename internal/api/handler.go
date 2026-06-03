@@ -166,6 +166,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/", h.handleDeleteRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
+				r.Get("/timelapse-frames", h.handleTimelapseFrames)
+				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
