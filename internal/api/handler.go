@@ -215,6 +215,8 @@ func (h *Handler) Routes() http.Handler {
 						// Per-camera timelapse configuration
 						r.Get("/timelapse", h.handleGetCameraTimelapse)
 						r.Put("/timelapse", h.handlePutCameraTimelapse)
+					// Camera-specific events (SSE)
+					r.Get("/events", h.handleCameraEvents)
 					r.Post("/start", h.handleStartCamera)
 					r.Post("/stop", h.handleStopCamera)
 				})
