@@ -370,33 +370,27 @@ func arm32SoftwareCaps() HardwareCapabilities {
 	}
 }
 
-// TestARMSoftwareProhibition verifies that software encoding is rejected on arm64.
-func TestARMSoftwareProhibition(t *testing.T) {
+// TestARMSoftwareAllowed verifies that software encoding is now allowed on arm64
+// as a fallback when v4l2m2m is listed but the device lacks actual encoding capability.
+func TestARMSoftwareAllowed(t *testing.T) {
 	opts := h264ToH265Opts()
 	opts.ForceSoftware = false
-	_, err := BuildFFmpegCommand(opts, armSoftwareCaps())
-	if err == nil {
-		t.Fatal("expected error for ARM software encoding, got nil")
+	args, err := BuildFFmpegCommand(opts, armSoftwareCaps())
+	if err != nil {
+		t.Fatalf("software encoding should now be allowed on ARM as fallback, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "software encoding not supported") {
-		t.Errorf("error should mention 'software encoding not supported', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "arm64") {
-		t.Errorf("error should mention architecture, got: %v", err)
-	}
+	argsContain(t, args, "-c:v", "libx265")
 }
 
-// TestARM32SoftwareProhibition verifies that software encoding is also rejected on 32-bit ARM.
-func TestARM32SoftwareProhibition(t *testing.T) {
+// TestARM32SoftwareAllowed verifies that software encoding is also allowed on 32-bit ARM.
+func TestARM32SoftwareAllowed(t *testing.T) {
 	opts := h264ToH265Opts()
 	opts.ForceSoftware = false
-	_, err := BuildFFmpegCommand(opts, arm32SoftwareCaps())
-	if err == nil {
-		t.Fatal("expected error for ARM32 software encoding, got nil")
+	args, err := BuildFFmpegCommand(opts, arm32SoftwareCaps())
+	if err != nil {
+		t.Fatalf("software encoding should be allowed on ARM32 as fallback, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "software encoding not supported") {
-		t.Errorf("error should mention 'software encoding not supported', got: %v", err)
-	}
+	argsContain(t, args, "-c:v", "libx265")
 }
 
 // TestX86SoftwareAllowed verifies that software encoding works on amd64.
@@ -431,8 +425,8 @@ func TestARMForceSoftwarePreserved(t *testing.T) {
 	argsContain(t, args, "-c:v", "libx265")
 }
 
-// TestARMSoftwareProhibition_H264Output verifies rejection for H.264 output on ARM.
-func TestARMSoftwareProhibition_H264Output(t *testing.T) {
+// TestARMSoftwareAllowed_H264Output verifies software encoding for H.264 output on ARM.
+func TestARMSoftwareAllowed_H264Output(t *testing.T) {
 	opts := TranscodeOptions{
 		InputPath:   "/tmp/h265input.mp4",
 		OutputPath:  "/tmp/h264output.mp4",
@@ -440,13 +434,11 @@ func TestARMSoftwareProhibition_H264Output(t *testing.T) {
 		OutputCodec: "h264",
 		Framerate:   30,
 	}
-	_, err := BuildFFmpegCommand(opts, armSoftwareCaps())
-	if err == nil {
-		t.Fatal("expected error for ARM H.264 software encoding, got nil")
+	args, err := BuildFFmpegCommand(opts, armSoftwareCaps())
+	if err != nil {
+		t.Fatalf("software encoding should be allowed on ARM for H.264 output, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "software encoding not supported") {
-		t.Errorf("error should mention 'software encoding not supported', got: %v", err)
-	}
+	argsContain(t, args, "-c:v", "libx264")
 }
 
 // TestARMMJPEGSoftwareAllowed verifies that software encoding IS allowed on ARM for MJPEG input.

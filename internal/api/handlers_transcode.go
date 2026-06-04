@@ -163,7 +163,7 @@ func (h *Handler) handleFFmpegDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Start download in background
 	go func() {
-		if err := h.downloader.DownloadFFmpeg(r.Context()); err != nil {
+		if err := h.downloader.DownloadFFmpeg(context.Background()); err != nil {
 			logger.Warn("FFmpeg download failed", "error", err)
 		}
 	}()
@@ -207,7 +207,7 @@ func (h *Handler) handleFFmpegDownloadRetry(w http.ResponseWriter, r *http.Reque
 
 	// Start download in background
 	go func() {
-		if err := h.downloader.DownloadFFmpeg(r.Context()); err != nil {
+		if err := h.downloader.DownloadFFmpeg(context.Background()); err != nil {
 			logger.Warn("FFmpeg download retry failed", "error", err)
 		}
 	}()

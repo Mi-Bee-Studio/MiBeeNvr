@@ -167,34 +167,34 @@ func (q *TranscodeQueue) Stop() {
 // Rejects tasks where input resolution exceeds encoder limits.
 func (q *TranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTask) error {
 	if q.caps != nil && isARMArch(q.caps.Arch) {
-		// Check output encoding capability (skip for MJPEG input — software encode is fast enough
-		// at low MJPEG resolutions, and v4l2m2m may hang on MJPEG input).
+		// Log warning when software encoding is selected on ARM — it's slow but
+		// may be the only option when v4l2m2m is listed but device lacks encode capability.
 		if !isMJPEGInputTask(task.InputFormat) {
 			switch task.OutputFormat {
 			case "h264":
 				if q.caps.H264EncoderType == EncoderSoftware {
-					return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
+					slog.Warn("software H.264 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
 				}
 			case "h265":
 				if q.caps.H265EncoderType == EncoderSoftware {
-					return fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", q.caps.Arch)
+					slog.Warn("software H.265 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
 				}
 			}
 		}
 
-		// Check input decode capability
+		// Log warning when hardware decoder is not available on ARM.
+		// Software decoding works but is slower; still allow the task to proceed.
 		switch task.InputFormat {
 		case "h264":
 			if q.caps.H264DecoderType != EncoderV4L2M2M && q.caps.H264DecoderType != EncoderVAAPI && q.caps.H264DecoderType != EncoderNVENC {
-				return fmt.Errorf("no hardware H.264 decoder available on %s; software decoding too slow for transcoding", q.caps.Arch)
+				slog.Warn("no hardware H.264 decoder on ARM — using software decode", "arch", q.caps.Arch)
 			}
 		case "h265":
 			if q.caps.H265DecoderType != EncoderV4L2M2M && q.caps.H265DecoderType != EncoderVAAPI && q.caps.H265DecoderType != EncoderNVENC {
-				return fmt.Errorf("no hardware H.265 decoder available on %s; software decoding too slow for transcoding", q.caps.Arch)
+				slog.Warn("no hardware H.265 decoder on ARM — using software decode", "arch", q.caps.Arch)
 			}
-			// MJPEG is not checked — software decode is fast enough
-		}
 	}
+}
 
 	// Check input resolution against encoder limits (all architectures)
 	if q.caps != nil && (q.caps.MaxEncodeWidth > 0 || q.caps.MaxEncodeHeight > 0) {
