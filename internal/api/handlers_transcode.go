@@ -515,6 +515,80 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, newTask)
 }
 
+// handleTranscodingBackfill handles POST /api/transcoding/backfill.
+// Enqueues all untranscoded recordings for a camera into the transcode queue.
+func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
+		writeError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		return
+	}
+
+	cameraID := r.URL.Query().Get("camera_id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera_id is required")
+		return
+	}
+
+	// Check if transcoding is enabled for this camera
+	if h.config != nil {
+		camConfig := h.config.ResolveTranscodingConfig(cameraID)
+		if !camConfig.Enabled {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", cameraID))
+			return
+		}
+	}
+
+	// Get target codec (default h264)
+	targetCodec := "h264"
+	if h.config != nil {
+		camConfig := h.config.ResolveTranscodingConfig(cameraID)
+		if camConfig.TargetCodec != "" {
+			targetCodec = camConfig.TargetCodec
+		}
+	}
+
+	// Get recordings without transcode
+	recordings, err := h.db.ListRecordingsWithoutTranscode(r.Context(), cameraID)
+	if err != nil {
+		logger.Warn("failed to list recordings without transcode", "error", err, "camera_id", cameraID)
+		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		return
+	}
+
+	// Enqueue each recording
+	enqueued := 0
+	for _, rec := range recordings {
+		outputPath := rec.FilePath + ".transcoded.mp4"
+		now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+		task := &storage.TranscodeTask{
+			CameraID:        cameraID,
+			RecordingID:     rec.ID,
+			InputPath:       rec.FilePath,
+			InputFormat:     string(rec.Format),
+			OutputPath:      outputPath,
+			OutputFormat:    targetCodec,
+			OriginalDeleted: true,
+			Framerate:       0,
+			CreatedAt:       now,
+		}
+		if err := h.db.EnqueueTask(r.Context(), task); err != nil {
+			logger.Warn("failed to enqueue backfill task", "error", err, "recording_id", rec.ID)
+		} else {
+			enqueued++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enqueued": enqueued,
+		"skipped":  len(recordings) - enqueued,
+		"total":    len(recordings),
+	})
+}
+
 // --- Per-camera transcoding config endpoint ---
 
 // handleTranscodingCameraConfigs handles GET /api/transcoding/cameras.

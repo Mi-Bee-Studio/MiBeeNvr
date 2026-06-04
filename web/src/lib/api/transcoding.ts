@@ -130,6 +130,18 @@ export async function cancelTranscodeTask(id: number): Promise<void> {
 export async function retryTranscodeTask(id: number): Promise<TranscodeTask> {
 	return apiRequest<TranscodeTask>(`/transcoding/tasks/${id}/retry`, { method: 'POST' });
 }
+
+export async function startBackfill(cameraID: string): Promise<{
+  enqueued: number;
+  skipped: number;
+  total: number;
+}> {
+  const query = new URLSearchParams({ camera_id: cameraID }).toString();
+  return apiRequest<{ enqueued: number; skipped: number; total: number }>(
+    `/transcoding/backfill?${query}`,
+    { method: 'POST' }
+  );
+}
 // --- Cameras ---
 
 export async function getTranscodingCameras(): Promise<Record<string, unknown>> {
