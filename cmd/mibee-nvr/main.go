@@ -507,7 +507,9 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			DataDir:         cfg.Storage.RootDir,
 			FFmpegPath:      ffmpegPath,
 			MaxWorkers:      cfg.Transcoding.MaxWorkers,
-			ReplaceOriginal: cfg.Transcoding.ReplaceOriginal,
+			ReplaceOriginal: true,
+			EventBus:        a.eventBus,
+			Config:          cfg,
 		}, a.metrics)
 		if err != nil {
 			slog.Warn("Transcoding disabled", "error", err)

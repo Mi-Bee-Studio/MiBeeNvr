@@ -106,7 +106,6 @@ type TranscodingConfig struct {
 	Enabled          bool   `yaml:"enabled" json:"enabled"`                               // default false
 	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`             // auto-detected or user-specified
 	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`             // default 1, max 4
-	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"`   // default false
 	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`           // auto-populated per platform
 	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`             // per-job timeout, default "30m", max 4h
 	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention"` // e.g. "168h" (7d), "720h" (30d), ""=never

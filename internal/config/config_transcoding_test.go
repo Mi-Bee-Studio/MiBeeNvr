@@ -13,7 +13,6 @@ func TestTranscodingConfig_Defaults(t *testing.T) {
 
 	require.False(t, cfg.Transcoding.Enabled, "transcoding.enabled should default to false")
 	require.Equal(t, 1, cfg.Transcoding.MaxWorkers, "transcoding.max_workers should default to 1")
-	require.False(t, cfg.Transcoding.ReplaceOriginal, "transcoding.replace_original should default to false")
 	require.Empty(t, cfg.Transcoding.FFmpegPath, "transcoding.ffmpeg_path should default to empty (auto-detect)")
 	require.Empty(t, cfg.Transcoding.DownloadURL, "transcoding.download_url should default to empty")
 }
@@ -82,7 +81,6 @@ func TestTranscodingConfig_ValidConfig(t *testing.T) {
 		Transcoding: TranscodingConfig{
 			Enabled:         true,
 			MaxWorkers:      2,
-			ReplaceOriginal: true,
 		},
 		Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",

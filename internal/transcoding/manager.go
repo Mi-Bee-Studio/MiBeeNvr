@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -33,7 +34,9 @@ type TranscodeManager struct {
 	caps       *HardwareCapabilities
 	downloader *Downloader
 	queue      *TranscodeQueue
+	eventBus   *event.EventBus
 	m          *metrics.Metrics
+	cfg        *config.Config
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -47,6 +50,8 @@ type ManagerConfig struct {
 	FFprobePath    string
 	MaxWorkers     int
 	ReplaceOriginal bool
+	EventBus       *event.EventBus
+	Config         *config.Config
 }
 
 // NewTranscodeManager probes hardware, validates capabilities, and creates the manager.
@@ -104,7 +109,9 @@ func NewTranscodeManager(store *storage.DB, cfg ManagerConfig, m *metrics.Metric
 		caps:       caps,
 		downloader: dl,
 		queue:      queue,
-		m:           m,
+		eventBus:   cfg.EventBus,
+		m:          m,
+		cfg:        cfg.Config,
 	}, nil
 }
 
@@ -119,6 +126,65 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 	m.mu.Unlock()
 
 	go m.watchFFmpegStatus(ctx)
+
+	// Event-driven auto-enqueue: subscribe to segment completion
+	if m.eventBus != nil {
+		ch := make(chan event.Event, 64)
+		if err := m.eventBus.Subscribe(event.TopicSegmentCompleted, ch, 0); err != nil {
+			mgrLogger.Warn("failed to subscribe to segment completion events", "error", err)
+		} else {
+			go func() {
+				defer m.eventBus.Unsubscribe(event.TopicSegmentCompleted, ch)
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case evt := <-ch:
+						seg, ok := evt.Data.(event.SegmentCompleted)
+						if !ok {
+							continue
+						}
+						// Skip timelapse recordings
+						if seg.Format == "timelapse" {
+							continue
+						}
+						// Check if camera has transcoding enabled
+						camConfig := m.cfg.ResolveTranscodingConfig(seg.CameraID)
+						if !camConfig.Enabled {
+							continue
+						}
+						// Get target codec (default h264)
+						targetCodec := camConfig.TargetCodec
+						if targetCodec == "" {
+							targetCodec = "h264"
+						}
+						// Skip if input_format equals target_codec
+						if seg.Format == targetCodec {
+							continue
+						}
+						// Build task
+						outputPath := seg.FilePath + ".transcoded.mp4"
+						now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+						task := &storage.TranscodeTask{
+							CameraID:        seg.CameraID,
+							RecordingID:     seg.RecordingID,
+							InputPath:       seg.FilePath,
+							InputFormat:     seg.Format,
+							OutputPath:      outputPath,
+							OutputFormat:    targetCodec,
+							OriginalDeleted: true,
+							Framerate:       0,
+							CreatedAt:       now,
+						}
+						// Enqueue
+						if err := m.queue.Enqueue(ctx, task); err != nil {
+							mgrLogger.Warn("failed to auto-enqueue transcode task", "error", err, "recording_id", seg.RecordingID)
+						}
+					}
+				}
+			}()
+		}
+	}
 
 	if err := m.queue.Run(ctx); err != nil {
 		mgrLogger.Error("transcode queue stopped with error", "error", err)

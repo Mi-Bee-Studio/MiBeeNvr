@@ -322,7 +322,6 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		CameraID       string `json:"camera_id"`
 		RecordingID    string `json:"recording_id"`
 		TargetCodec    string `json:"target_codec"`
-		ReplaceOriginal bool  `json:"replace_original"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -454,6 +453,66 @@ func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Req
 		"id":     id,
 		"status": "cancelled",
 	})
+}
+
+// handleTranscodingTaskRetry handles POST /api/transcoding/tasks/{id}/retry.
+// Creates a new pending transcoding task from a failed task.
+func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
+		writeError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+
+	// Get the existing task
+	task, err := h.db.GetTaskByID(r.Context(), id)
+	if err != nil {
+		logger.Warn("failed to get transcode task", "error", err, "task_id", id)
+		writeError(w, http.StatusInternalServerError, "failed to get task")
+		return
+	}
+	if task == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	// Only failed tasks can be retried
+	if task.Status != "failed" {
+		writeError(w, http.StatusConflict, "can only retry failed tasks")
+		return
+	}
+
+	// Build new pending task from the failed task's parameters
+	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	newTask := &storage.TranscodeTask{
+		CameraID:        task.CameraID,
+		RecordingID:     task.RecordingID,
+		InputPath:       task.InputPath,
+		InputFormat:     task.InputFormat,
+		OutputPath:      task.OutputPath,
+		OutputFormat:    task.OutputFormat,
+		OriginalDeleted: true,
+		Framerate:       task.Framerate,
+		CreatedAt:       now,
+	}
+
+	if err := h.transcodeMgr.Queue().Enqueue(r.Context(), newTask); err != nil {
+		logger.Warn("failed to enqueue retry transcode task", "error", err, "task_id", id)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue retry task")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, newTask)
 }
 
 // --- Per-camera transcoding config endpoint ---

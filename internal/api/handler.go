@@ -278,6 +278,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
 		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
 		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
+		r.Post("/api/transcoding/tasks/{id}/retry", h.handleTranscodingTaskRetry)
 		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
 		// AI Detection routes
 		r.Route("/api/ai", func(r chi.Router) {

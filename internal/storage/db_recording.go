@@ -447,6 +447,28 @@ func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([
 	return res, nil
 }
 
+// ListRecordingsWithoutTranscode returns recordings for a camera that have ended
+// but have no corresponding transcoding task, and are not archived.
+func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE camera_id = ? AND ended_at IS NOT NULL AND archived = 0 AND NOT EXISTS (SELECT 1 FROM transcoding_tasks WHERE recording_id = recordings.id) ORDER BY started_at DESC;`
+	rows, err := d.db.QueryContext(ctx, sqlstr, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	res := make([]model.Recording, 0)
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, r)
+	}
+	return res, nil
+}
+
 // RepairZeroDurationRecordings returns recordings where duration=0 but the file is
 // non-trivial in size, non-MJPEG, has ended_at set, and merge_status=pending.
 // These are candidates for duration repair via ffprobe.
