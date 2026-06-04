@@ -96,6 +96,7 @@ var validProtocols = map[string]bool{
 	"onvif": true,
 	// Plugin protocols
 	"xiaomi": true,
+	"timelapse": true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
 	"rtsp_h265":  true,
@@ -120,6 +121,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken   string `json:"profile_token"`
 		StreamEncoding string `json:"stream_encoding"`
 		Encoding       string `json:"encoding"`
+		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -134,7 +136,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, xiaomi", body.Protocol))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, xiaomi, timelapse", body.Protocol))
 		return
 	}
 	// ONVIF cameras: accept url OR onvif_endpoint
@@ -213,6 +215,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
+		Timelapse:      body.Timelapse,
 	}
 	if body.Enabled != nil {
 		cam.Enabled = *body.Enabled

@@ -570,9 +570,16 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		}
 	}
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: remove the camera we just added
+		for i, c := range cm.cfg.Cameras {
+			if c.ID == cam.ID {
+				cm.cfg.Cameras = append(cm.cfg.Cameras[:i], cm.cfg.Cameras[i+1:]...)
+				break
+			}
+		}
+		return "", fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
@@ -589,7 +596,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Find camera index
+	// Find camera index and save original for potential rollback
 	idx := -1
 	for i, cam := range cm.cfg.Cameras {
 		if cam.ID == cameraID {
@@ -600,6 +607,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	if idx == -1 {
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
+	savedCam := cm.cfg.Cameras[idx]
 
 	// Stop and remove recorder if running
 	if rec, ok := cm.recorders[cameraID]; ok {
@@ -617,9 +625,11 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: re-insert camera at original position
+		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
+		return fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	return nil
@@ -644,6 +654,7 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	if idx == -1 {
 		return fmt.Errorf("camera %q not found", cameraID)
 	}
+	savedCam := cm.cfg.Cameras[idx]
 
 	// 1. Stop recorder if running
 	if rec, ok := cm.recorders[cameraID]; ok {
@@ -681,7 +692,9 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	// 5. Remove from in-memory config slice and persist
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config after archive", "camera_id", cameraID, "error", err)
+		// Rollback: re-insert camera at original position
+		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
+		return fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	logger.Info("archived camera", "camera_id", cameraID)
@@ -707,6 +720,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if idx == -1 {
 		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
+	// Save original for potential rollback
+	savedCam := *cam
 
 	// Determine if recorder needs restart
 	needsRestart := false
@@ -835,9 +850,11 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cm.CloseONVIFClient(cam.ID)
 	}
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: restore original camera config
+		cm.cfg.Cameras[idx] = savedCam
+		return nil, fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)

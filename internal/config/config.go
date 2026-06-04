@@ -445,10 +445,11 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("camera[%d].health_overrides.min_fps must be >= 0", i)
 		}
 	}
-	// Validate Xiaomi configuration
-	for _, cam := range cfg.Cameras {
+	// Validate Xiaomi configuration: non-fatal — disable cameras instead of crashing
+	for i, cam := range cfg.Cameras {
 		if cam.Protocol == "xiaomi" && strings.TrimSpace(cfg.Xiaomi.Token) == "" {
-			return fmt.Errorf("xiaomi camera %q requires xiaomi.token in config", cam.ID)
+			slog.Warn("xiaomi camera disabled: xiaomi.token not configured", "camera_id", cam.ID)
+			cfg.Cameras[i].Enabled = false
 		}
 	}
 	// port ranges
