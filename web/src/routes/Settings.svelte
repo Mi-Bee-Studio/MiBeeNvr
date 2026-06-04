@@ -69,7 +69,6 @@ let featuresSaving = $state(false);
 // Transcoding state
 let transcodingEnabled = $state(false);
 let transcodingMaxWorkers = $state(1);
-let transcodingReplaceOriginal = $state(false);
 let transcodingCheck = $state<SelfCheckResult | null>(null);
 let ffmpegStatus = $state<DownloadStatus>({ status: 'not_installed', progress: 0, version: '', error: '', total_bytes: 0, downloaded_bytes: 0 });
 let ffmpegDownloading = $state(false);
@@ -272,7 +271,6 @@ function getAffectedCameraCount(protocol: string): number {
         const transcodingCfg = await getTranscodingSettings();
         transcodingEnabled = transcodingCfg.enabled;
         transcodingMaxWorkers = transcodingCfg.max_workers || 1;
-        transcodingReplaceOriginal = transcodingCfg.replace_original || false;
         if (transcodingEnabled) {
           // Load hardware info + FFmpeg status + queue polling
           try {
@@ -602,7 +600,7 @@ function getAffectedCameraCount(protocol: string): number {
       if (result.supported) {
         hardwareInfo = hw;
         // Persist enabled=true to backend
-        await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers, replace_original: transcodingReplaceOriginal });
+        await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers });
         transcodingEnabled = true;
         showToast(t('transcoding.self_check_passed') + ' — ' + t('transcoding.restart_required'), 'success');
         // Load current FFmpeg status
@@ -1668,7 +1666,7 @@ type="button"
                   <select
                     class="input w-20 text-center"
                     bind:value={transcodingMaxWorkers}
-                    onchange={async () => { await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers, replace_original: transcodingReplaceOriginal }); showToast(t('common.saved'), 'success'); }}
+                    onchange={async () => { await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers }); showToast(t('common.saved'), 'success'); }}
                   >
                     <option value={1}>1</option>
                     <option value={2}>2</option>
@@ -1677,27 +1675,6 @@ type="button"
                   </select>
                 </div>
 
-                <!-- Replace Original -->
-                <div class="flex items-center justify-between">
-                  <div>
-                    <div class="text-sm th-text-primary">{t('transcoding.replace_original')}</div>
-                    <div class="text-xs th-text-secondary">{t('transcoding.replace_original_desc')}</div>
-                  </div>
-                  <button
-                    id="transcoding-replace-original" aria-label={t('transcoding.replace_original')}
-                    type="button"
-
-                    onclick={async () => {
-                      transcodingReplaceOriginal = !transcodingReplaceOriginal;
-                      await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers, replace_original: transcodingReplaceOriginal });
-                      showToast(t('common.saved'), 'success');
-                    }}
-                    role="switch"
-                    aria-checked={transcodingReplaceOriginal}
-                  >
-                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {transcodingReplaceOriginal ? 'translate-x-6' : 'translate-x-1'}"></span>
-                  </button>
-                </div>
               </div>
             </div>
           {/if}

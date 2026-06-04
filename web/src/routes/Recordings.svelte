@@ -193,7 +193,7 @@ import { onMount, onDestroy } from 'svelte';
   function startTranscodingPoll() {
     stopTranscodingPoll();
     loadTranscodingStatus();
-    transcodingPollInterval = setInterval(loadTranscodingStatus, 2000);
+    transcodingPollInterval = setInterval(loadTranscodingStatus, 3000);
   }
 
   function stopTranscodingPoll() {

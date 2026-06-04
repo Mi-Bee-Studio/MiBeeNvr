@@ -307,7 +307,7 @@
   function startTranscodingPoll() {
     stopTranscodingPoll();
     loadTranscodingStatus();
-    transcodingPollInterval = setInterval(loadTranscodingStatus, 5000);
+    transcodingPollInterval = setInterval(loadTranscodingStatus, 3000);
   }
 
   function stopTranscodingPoll() {

@@ -22,7 +22,6 @@ export interface HardwareCapabilities {
 export interface TranscodingSettings {
   enabled?: boolean;
   max_workers?: number;
-  replace_original?: boolean;
 }
 
 export interface SelfCheckResult {

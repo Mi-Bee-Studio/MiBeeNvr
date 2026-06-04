@@ -30,7 +30,7 @@ var queueLogger = slog.Default().With("component", "transcode-queue")
 // progressUpdateInterval controls how often progress is written to the database.
 // FFmpeg emits progress lines multiple times per second; writing every line
 // causes SQLITE_BUSY contention under concurrent load.
-const progressUpdateInterval = 5 * time.Second
+const progressUpdateInterval = 2 * time.Second
 
 // maxDBRetries is the maximum number of retry attempts for SQLITE_BUSY errors.
 const maxDBRetries = 3
