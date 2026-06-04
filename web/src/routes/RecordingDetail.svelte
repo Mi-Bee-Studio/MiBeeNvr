@@ -482,9 +482,6 @@
                 {t('detail.nextRecording')} <SkipForward size={16} />
               </button>
             </div>
-            <div class="bg-black">
-              <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
-            </div>
           {/if}
           {#if recording.format === 'timelapse'}
             <!-- Timelapse JPEG sequence player -->
