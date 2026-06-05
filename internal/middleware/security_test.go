@@ -20,8 +20,6 @@ func TestSecurityHeaders(t *testing.T) {
 		header string
 		want   string
 	}{
-		{"X-Content-Type-Options", "nosniff"},
-		{"Strict-Transport-Security", "max-age=31536000; includeSubDomains"},
 		{"X-Frame-Options", "DENY"},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},

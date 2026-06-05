@@ -1221,8 +1221,8 @@ exit 0
 	return NewTranscodeQueue(db, caps, nil, cfg, nil)
 }
 
-func TestQueueARMRejectsSoftwareEncoding(t *testing.T) {
-	// Test: enqueue on ARM queue with software-only caps → rejected
+func TestQueueARMSoftwareEncodingAllowed(t *testing.T) {
+	// Test: enqueue on ARM queue with software-only caps → now allowed (fallback)
 	db := newTestQueueDB(t)
 	q := newARMTestQueue(t, db, 1)
 
@@ -1238,9 +1238,8 @@ func TestQueueARMRejectsSoftwareEncoding(t *testing.T) {
 	}
 
 	err := q.Enqueue(ctx, task)
-	require.Error(t, err, "enqueue should reject software encoding on ARM")
-	require.Contains(t, err.Error(), "software encoding not supported")
-	require.Contains(t, err.Error(), "arm64")
+	require.NoError(t, err, "enqueue should allow software encoding on ARM as fallback")
+	require.Greater(t, task.ID, int64(0), "task should be inserted")
 }
 
 func TestQueueARMHardwareEncodingAllowed(t *testing.T) {
@@ -1284,8 +1283,8 @@ func TestQueueX86SoftwareEncodingAllowed(t *testing.T) {
 	require.NoError(t, err, "enqueue should allow software encoding on amd64")
 }
 
-func TestQueueARMRejectsH265Software(t *testing.T) {
-	// Test: enqueue H.265 output on ARM with software-only caps → rejected
+func TestQueueARMH265SoftwareAllowed(t *testing.T) {
+	// Test: enqueue H.265 output on ARM with software-only caps → now allowed (fallback)
 	db := newTestQueueDB(t)
 	q := newARMTestQueue(t, db, 1)
 
@@ -1301,14 +1300,14 @@ func TestQueueARMRejectsH265Software(t *testing.T) {
 	}
 
 	err := q.Enqueue(ctx, task)
-	require.Error(t, err, "enqueue should reject H.265 software encoding on ARM")
-	require.Contains(t, err.Error(), "software encoding not supported")
+	require.NoError(t, err, "enqueue should allow H.265 software encoding on ARM as fallback")
+	require.Greater(t, task.ID, int64(0), "task should be inserted")
 }
 
 // --- ARM Decoder Rejection Tests ---
 
-func TestQueueARMRejectsH265InputNoDecoder(t *testing.T) {
-	// Test: ARM queue with hardware encoder but no HEVC decoder → rejected with "no hardware H.265 decoder"
+func TestQueueARMH265InputAllowedWithoutDecoder(t *testing.T) {
+	// Test: ARM queue with hardware encoder but no HEVC decoder → now allowed (software decode)
 	db := newTestQueueDB(t)
 
 	dir := t.TempDir()
@@ -1350,8 +1349,9 @@ exit 0
 	}
 
 	err := q.Enqueue(ctx, task)
-	require.Error(t, err, "enqueue should reject H.265 input without hardware decoder on ARM")
-	require.Contains(t, err.Error(), "no hardware H.265 decoder")
+	// Now allowed — software decoding works on ARM, just slower
+	require.NoError(t, err, "enqueue should allow H.265 input with software decode on ARM")
+	require.Greater(t, task.ID, int64(0), "task should be inserted")
 }
 
 func TestQueueARMAllowsH265InputWithDecoder(t *testing.T) {
@@ -1375,8 +1375,8 @@ func TestQueueARMAllowsH265InputWithDecoder(t *testing.T) {
 	require.Greater(t, task.ID, int64(0), "task should be inserted")
 }
 
-func TestQueueARMRejectsH264InputNoDecoder(t *testing.T) {
-	// Test: ARM queue with hardware encoder but no H.264 decoder → rejected
+func TestQueueARMH264InputAllowedWithoutDecoder(t *testing.T) {
+	// Test: ARM queue with hardware encoder but no H.264 decoder → now allowed (software decode)
 	db := newTestQueueDB(t)
 
 	dir := t.TempDir()
@@ -1418,8 +1418,9 @@ exit 0
 	}
 
 	err := q.Enqueue(ctx, task)
-	require.Error(t, err, "enqueue should reject H.264 input without hardware decoder on ARM")
-	require.Contains(t, err.Error(), "no hardware H.264 decoder")
+	// Now allowed — software decoding works on ARM, just slower
+	require.NoError(t, err, "enqueue should allow H.264 input with software decode on ARM")
+	require.Greater(t, task.ID, int64(0), "task should be inserted")
 }
 
 func TestQueueX86AllowsAnyInput(t *testing.T) {

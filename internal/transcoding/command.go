@@ -2,6 +2,7 @@ package transcoding
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 )
@@ -92,11 +93,11 @@ func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]
 		return nil, fmt.Errorf("unsupported output codec: %s", opts.OutputCodec)
 	}
 
-	// Reject software encoding on ARM architecture (unless ForceSoftware for testing
-	// or input is MJPEG/JPEG — low-resolution software decode+encode is fast enough
-	// and v4l2m2m may hang on MJPEG input).
+	// Log a warning when using software encoding on ARM — it's slow but may be
+	// the only option when v4l2m2m is listed but the device lacks encoding capability
+	// (e.g. Amlogic S905X3 meson-video-decoder only does decode, not encode).
 	if !forceSoftware && isARMArch(caps.Arch) && isSoftwareEncoder(encoder) && !isMJPEGInput(opts.InputCodec) {
-		return nil, fmt.Errorf("software encoding not supported on %s architecture; hardware encoder required", caps.Arch)
+		slog.Warn("using software encoder on ARM — transcoding will be slow; no working hardware encoder found", "encoder", encoder, "arch", caps.Arch)
 	}
 
 	args = append(args, "-c:v", encoder)

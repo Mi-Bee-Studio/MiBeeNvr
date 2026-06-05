@@ -142,6 +142,8 @@ export {
   deleteArchiveGroup,
   deleteArchiveRecording,
   setArchiveRetention,
+  getTimelapseFrames,
+  loadTimelapseFrameBlob,
 } from './recordings';
 
 export type {
@@ -153,6 +155,7 @@ export type {
   DailyStats,
   ArchiveGroup,
   ArchiveListResponse,
+  TimelapseFrame,
 } from './recordings';
 
 // Settings — cleanup, webdav, merge, features
@@ -223,17 +226,20 @@ export type {
 
 // Transcoding — hardware check, FFmpeg, task management
 export {
-  getTranscodingCheck,
-  getFFmpegStatus,
-  downloadFFmpeg,
-  retryDownload,
-  getTranscodingStatus,
-  getTranscodingTasks,
-  enqueueTranscodeTask,
-  cancelTranscodeTask,
-  getTranscodingCameras,
-  getTranscodingSettings,
-  updateTranscodingSettings,
+    getTranscodingCheck,
+    getFFmpegStatus,
+    downloadFFmpeg,
+    retryDownload,
+    getTranscodingStatus,
+    getTranscodingTasks,
+    enqueueTranscodeTask,
+    cancelTranscodeTask,
+    retryTranscodeTask,
+    startBackfill,
+    getUntranscodedRecordingCount,
+    getTranscodingCameras,
+    getTranscodingSettings,
+    updateTranscodingSettings,
 } from './transcoding';
 
 export type {

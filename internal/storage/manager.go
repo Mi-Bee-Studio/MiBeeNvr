@@ -53,7 +53,7 @@ func (m *Manager) EnsureCameraDir(cameraID string) error {
 
 // CreateSegment creates a new recording segment.
 // For format "h264": creates a .tmp file for writing MP4 data.
-// For format "mjpeg": creates a .tmp directory for writing JPEG frames.
+// For formats "mjpeg" and "timelapse": creates a .tmp directory for writing JPEG frames.
 // Returns the temp path (for writing) and the suggested final path (for CloseSegment).
 func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string, finalPath string, err error) {
 	if err := m.EnsureCameraDir(cameraID); err != nil {
@@ -74,7 +74,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		}
 		f.Close()
 
-	case "mjpeg":
+	case "mjpeg", "timelapse":
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
@@ -212,10 +212,21 @@ func (m *Manager) GetFileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// DeleteFile removes a file from disk.
+// DeleteFile removes a file or directory from disk.
+// For directory-based recordings (MJPEG, timelapse), it uses os.RemoveAll.
 func (m *Manager) DeleteFile(path string) error {
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("storage: failed to delete %q: %w", path, err)
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("storage: failed to stat %q: %w", path, err)
+	}
+	if info.IsDir() {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("storage: failed to remove directory %q: %w", path, err)
+		}
+	} else {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("storage: failed to delete %q: %w", path, err)
+		}
 	}
 	return nil
 }

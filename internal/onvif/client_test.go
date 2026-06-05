@@ -481,7 +481,11 @@ func TestGetCapabilities_PTZSupported(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, caps)
 	require.True(t, caps.PTZ, "PTZ should be supported when PTZ capability is present")
+	require.True(t, caps.Snapshot, "Snapshot should be supported when Media capability is present")
 	require.True(t, caps.Streaming, "Streaming should be supported when Media capability is present")
+	require.False(t, caps.Imaging, "Imaging should not be supported when Imaging capability is absent")
+	require.False(t, caps.Events, "Events should not be supported when Events capability is absent")
+	require.False(t, caps.Device, "Device should not be supported when Device capability is absent")
 	// GetCapabilities called twice: once during Connect (Initialize), once explicitly
 	require.Equal(t, 2, mock.callCount("GetCapabilities"))
 }
@@ -504,7 +508,11 @@ func TestGetCapabilities_NoPTZ(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, caps)
 	require.False(t, caps.PTZ, "PTZ should not be supported when PTZ capability is absent")
+	require.True(t, caps.Snapshot, "Snapshot should be supported when Media capability is present")
 	require.True(t, caps.Streaming, "Streaming should be supported when Media capability is present")
+	require.False(t, caps.Imaging, "Imaging should not be supported when Imaging capability is absent")
+	require.False(t, caps.Events, "Events should not be supported when Events capability is absent")
+	require.False(t, caps.Device, "Device should not be supported when Device capability is absent")
 }
 
 // --- Interface compliance ---
@@ -537,36 +545,31 @@ func TestMapDeviceInfo(t *testing.T) {
 func TestMapCapabilities(t *testing.T) {
 	t.Helper()
 
-	// With PTZ and Media
+	// With PTZ, Media, Imaging, Events, Device
 	caps := &onvifgo.Capabilities{
-		PTZ:   &onvifgo.PTZCapabilities{XAddr: "http://host/ptz"},
-		Media: &onvifgo.MediaCapabilities{XAddr: "http://host/media"},
+		PTZ:     &onvifgo.PTZCapabilities{XAddr: "http://host/ptz"},
+		Media:   &onvifgo.MediaCapabilities{XAddr: "http://host/media"},
+		Imaging: &onvifgo.ImagingCapabilities{XAddr: "http://host/imaging"},
+		Events:  &onvifgo.EventCapabilities{XAddr: "http://host/events"},
+		Device:  &onvifgo.DeviceCapabilities{XAddr: "http://host/device"},
 	}
 	result := mapCapabilities(caps)
 	require.True(t, result.PTZ)
+	require.True(t, result.Imaging)
+	require.True(t, result.Events)
+	require.True(t, result.Snapshot)
 	require.True(t, result.Streaming)
+	require.True(t, result.Device)
 
-	// Without PTZ
-	capsNoPTZ := &onvifgo.Capabilities{
-		Media: &onvifgo.MediaCapabilities{XAddr: "http://host/media"},
-	}
-	resultNoPTZ := mapCapabilities(capsNoPTZ)
-	require.False(t, resultNoPTZ.PTZ)
-	require.True(t, resultNoPTZ.Streaming)
-
-	// Without Media
-	capsNoMedia := &onvifgo.Capabilities{
-		PTZ: &onvifgo.PTZCapabilities{XAddr: "http://host/ptz"},
-	}
-	resultNoMedia := mapCapabilities(capsNoMedia)
-	require.True(t, resultNoMedia.PTZ)
-	require.False(t, resultNoMedia.Streaming)
-
-	// Empty capabilities
+	// Without anything
 	capsEmpty := &onvifgo.Capabilities{}
 	resultEmpty := mapCapabilities(capsEmpty)
 	require.False(t, resultEmpty.PTZ)
+	require.False(t, resultEmpty.Imaging)
+	require.False(t, resultEmpty.Events)
+	require.False(t, resultEmpty.Snapshot)
 	require.False(t, resultEmpty.Streaming)
+	require.False(t, resultEmpty.Device)
 }
 
 func TestMapProfile(t *testing.T) {

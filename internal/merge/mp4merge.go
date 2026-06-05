@@ -91,6 +91,15 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		timescale:    first.Timescale,
 		totalSamples: totalVideoSamples,
 	}
+	// Parse resolution from first segment's SPS.
+	switch codec {
+	case "h265":
+		w, h := parseHEVCSPSResolution(first.SPS)
+		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
+	case "h264":
+		w, h := parseSPSResolution(first.SPS)
+		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
+	}
 	// Populate placeholder samples so the size calculation includes per-sample tables.
 	videoTrack.samples = make([]mergedSample, totalVideoSamples)
 	for i := range videoTrack.samples {
@@ -317,6 +326,8 @@ type mergeTrack struct {
 	timescale    uint32
 	totalSamples int
 	duration     uint32
+	width        uint16
+	height       uint16
 	samples      []mergedSample
 }
 
@@ -387,8 +398,8 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	tkhd := &mp4.Tkhd{
 		TrackID:    trackID,
 		DurationV0: tr.duration,
-		Width:      0,
-		Height:     0,
+		Width:  uint32(tr.width) << 16,
+		Height: uint32(tr.height) << 16,
 		Matrix: [9]int32{
 			0x00010000, 0, 0,
 			0, 0x00010000, 0,
@@ -773,6 +784,8 @@ func writeMergeH264SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("avc1")},
 			DataReferenceIndex: 1,
 		},
+		Width:           uint16(tr.width),
+		Height:          uint16(tr.height),
 		Horizresolution: 0x00480000,
 		Vertresolution:  0x00480000,
 		FrameCount:      1,
@@ -826,6 +839,8 @@ func writeMergeH265SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("hvc1")},
 			DataReferenceIndex: 1,
 		},
+		Width:           uint16(tr.width),
+		Height:          uint16(tr.height),
 		Horizresolution: 0x00480000,
 		Vertresolution:  0x00480000,
 		FrameCount:      1,

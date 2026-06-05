@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
@@ -53,6 +54,7 @@ type CameraManager struct {
 	recorders        map[string]model.Recorder // camera_id → Recorder
 	metrics          *metrics.Metrics
 	mergeMgr         *merge.MergeManager           // segment merge manager (nil = no merge)
+	timelapseMergeMgr *timelapse.RollingMergeManager // timelapse rolling merge (nil = no merge)
 	transcodeMgr     *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr        *health.Manager               // health monitoring (nil when disabled)
 	mu               sync.RWMutex
@@ -60,6 +62,8 @@ type CameraManager struct {
 	onvifMu          sync.Mutex                          // protects onvifClients
 	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
+	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
 	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
 }
 
@@ -67,6 +71,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	var m *metrics.Metrics
 	var mm *merge.MergeManager
 	var tm *transcoding.TranscodeManager
+	var tmm *timelapse.RollingMergeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
@@ -75,6 +80,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			mm = v
 		case *transcoding.TranscodeManager:
 			tm = v
+		case *timelapse.RollingMergeManager:
+			tmm = v
 		}
 	}
 	return &CameraManager{
@@ -86,9 +93,11 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		metrics:          m,
 		mergeMgr:         mm,
 		transcodeMgr:     tm,
+		timelapseMergeMgr: tmm,
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
+		deviceInfoCache:  make(map[string]*onvif.DeviceInfo),
 	}
 }
 
@@ -240,6 +249,10 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	case "timelapse":
 		tlCfg := recorder.TimelapseRecorderConfig{
 			CameraID: cam.ID,
+			URL:      cam.URL,
+			Username: cam.Username,
+			Password: cam.Password,
+			DataDir:  cm.cfg.Storage.RootDir,
 			DB:       cm.db,
 			Metrics:  cm.metrics,
 		}
@@ -253,6 +266,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if cam.Timelapse.VideoCodec != "" {
 				tlCfg.VideoCodec = cam.Timelapse.VideoCodec
 			}
+		}
+		if cm.timelapseMergeMgr != nil {
+			tlCfg.MergeMgr = cm.timelapseMergeMgr
 		}
 		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
 	default:
@@ -285,6 +301,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	case *xiaomi.XiaomiRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
+	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	}
@@ -551,9 +570,21 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		}
 	}
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: remove the camera we just added
+		for i, c := range cm.cfg.Cameras {
+			if c.ID == cam.ID {
+				cm.cfg.Cameras = append(cm.cfg.Cameras[:i], cm.cfg.Cameras[i+1:]...)
+				break
+			}
+		}
+		return "", fmt.Errorf("failed to persist config: %w", err)
+	}
+
+	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
+	if cam.Protocol == string(model.ProtoONVIF) && cam.SnapshotURL == "" && cam.Enabled {
+		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
 	return cam.ID, nil
@@ -565,7 +596,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Find camera index
+	// Find camera index and save original for potential rollback
 	idx := -1
 	for i, cam := range cm.cfg.Cameras {
 		if cam.ID == cameraID {
@@ -576,6 +607,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	if idx == -1 {
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
+	savedCam := cm.cfg.Cameras[idx]
 
 	// Stop and remove recorder if running
 	if rec, ok := cm.recorders[cameraID]; ok {
@@ -593,9 +625,11 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: re-insert camera at original position
+		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
+		return fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	return nil
@@ -620,6 +654,7 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	if idx == -1 {
 		return fmt.Errorf("camera %q not found", cameraID)
 	}
+	savedCam := cm.cfg.Cameras[idx]
 
 	// 1. Stop recorder if running
 	if rec, ok := cm.recorders[cameraID]; ok {
@@ -657,7 +692,9 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	// 5. Remove from in-memory config slice and persist
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config after archive", "camera_id", cameraID, "error", err)
+		// Rollback: re-insert camera at original position
+		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
+		return fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	logger.Info("archived camera", "camera_id", cameraID)
@@ -683,9 +720,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if idx == -1 {
 		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
+	// Save original for potential rollback
+	savedCam := *cam
 
 	// Determine if recorder needs restart
 	needsRestart := false
+	onvifEndpointChanged := false
 	if updates.URL != nil && *updates.URL != cam.URL {
 		needsRestart = true
 	}
@@ -722,6 +762,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cam.Password = *updates.Password
 	}
 	if updates.ONVIFEndpoint != nil {
+		if *updates.ONVIFEndpoint != cam.ONVIFEndpoint {
+			onvifEndpointChanged = true
+		}
 		cam.ONVIFEndpoint = *updates.ONVIFEndpoint
 	}
 	if updates.ProfileToken != nil {
@@ -802,10 +845,22 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			}
 		}
 	}
+	// If ONVIF endpoint changed, close cached client so a fresh one is created
+	if onvifEndpointChanged {
+		cm.CloseONVIFClient(cam.ID)
+	}
 
-	// Persist config to disk
+	// Persist config to disk (rollback on failure)
 	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
+		// Rollback: restore original camera config
+		cm.cfg.Cameras[idx] = savedCam
+		return nil, fmt.Errorf("failed to persist config: %w", err)
+	}
+
+	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
+	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
+	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" && cam.Enabled {
+		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
 	return cam, nil
@@ -948,10 +1003,48 @@ func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID st
 }
 
 // CloseONVIFClient removes a cached ONVIF client for the given camera.
+// Also cleans up any cached device info for this camera.
 func (cm *CameraManager) CloseONVIFClient(cameraID string) {
 	cm.onvifMu.Lock()
-	defer cm.onvifMu.Unlock()
 	delete(cm.onvifClients, cameraID)
+	cm.onvifMu.Unlock()
+
+	cm.deviceInfoMu.Lock()
+	delete(cm.deviceInfoCache, cameraID)
+	cm.deviceInfoMu.Unlock()
+}
+
+// GetCachedDeviceInfo returns cached device info for the given ONVIF camera.
+// On first call, fetches from the device and caches the result.
+// Returns nil if the camera is not ONVIF, not found, or the device info cannot be fetched.
+func (cm *CameraManager) GetCachedDeviceInfo(ctx context.Context, cameraID string) *onvif.DeviceInfo {
+	// Check cache with read lock
+	cm.deviceInfoMu.RLock()
+	if info, ok := cm.deviceInfoCache[cameraID]; ok {
+		cm.deviceInfoMu.RUnlock()
+		return info
+	}
+	cm.deviceInfoMu.RUnlock()
+
+	// Not cached — fetch from device
+	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+	if err != nil {
+		logger.Warn("failed to get ONVIF client for device info", "camera_id", cameraID, "error", err)
+		return nil
+	}
+
+	info, err := client.GetDeviceInformation(ctx)
+	if err != nil {
+		logger.Warn("failed to get device information", "camera_id", cameraID, "error", err)
+		return nil
+	}
+
+	// Cache with write lock
+	cm.deviceInfoMu.Lock()
+	cm.deviceInfoCache[cameraID] = info
+	cm.deviceInfoMu.Unlock()
+
+	return info
 }
 
 // GetONVIFClient returns a cached ONVIF client for the given camera.
@@ -960,11 +1053,15 @@ func (cm *CameraManager) GetONVIFClient(ctx context.Context, cameraID string) (*
 	return cm.getOrCreateONVIFClient(ctx, cameraID)
 }
 
-// closeAllONVIFClients clears the entire ONVIF client cache.
+// closeAllONVIFClients clears the entire ONVIF client and device info caches.
 func (cm *CameraManager) closeAllONVIFClients() {
 	cm.onvifMu.Lock()
-	defer cm.onvifMu.Unlock()
 	cm.onvifClients = make(map[string]*onvif.Client)
+	cm.onvifMu.Unlock()
+
+	cm.deviceInfoMu.Lock()
+	cm.deviceInfoCache = make(map[string]*onvif.DeviceInfo)
+	cm.deviceInfoMu.Unlock()
 }
 
 // GetONVIFPTZController returns a PTZController for the given ONVIF camera.
@@ -1163,4 +1260,55 @@ func classifyError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// autoPopulateSnapshotURL fetches the ONVIF snapshot URI and sets cam.SnapshotURL if empty.
+// Runs in a goroutine — manages its own locking to avoid deadlock with callers.
+func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID string) {
+	// Use a short-lived context to avoid blocking forever
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cm.getOrCreateONVIFClient(fetchCtx, cameraID)
+	if err != nil {
+		logger.Warn("failed to get ONVIF client for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	profiles, err := client.GetProfiles(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get profiles for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+	if len(profiles) == 0 {
+		logger.Warn("no profiles found for snapshot URL", "camera_id", cameraID)
+		return
+	}
+
+	provider := client.NewSnapshotProvider(profiles[0].Token)
+	if provider == nil {
+		logger.Warn("failed to create snapshot provider", "camera_id", cameraID)
+		return
+	}
+
+	uri, err := provider.GetSnapshotUri(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get snapshot URI from ONVIF device", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	// Update SnapshotURL under write lock
+	cm.mu.Lock()
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID && cm.cfg.Cameras[i].SnapshotURL == "" {
+			cm.cfg.Cameras[i].SnapshotURL = uri
+			break
+		}
+	}
+	if err := cm.persistConfig(); err != nil {
+		logger.Warn("failed to persist snapshot URL", "camera_id", cameraID, "error", err)
+	}
+	cm.mu.Unlock()
+
+	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", uri)
 }

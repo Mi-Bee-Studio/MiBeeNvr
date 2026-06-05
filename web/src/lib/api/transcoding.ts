@@ -22,7 +22,6 @@ export interface HardwareCapabilities {
 export interface TranscodingSettings {
   enabled?: boolean;
   max_workers?: number;
-  replace_original?: boolean;
 }
 
 export interface SelfCheckResult {
@@ -117,7 +116,6 @@ export async function enqueueTranscodeTask(body: {
   camera_id: string;
   recording_id: string;
   target_codec: string;
-  replace_original: boolean;
 }): Promise<TranscodeTask> {
   return apiRequest<TranscodeTask>('/transcoding/tasks', {
     method: 'POST',
@@ -129,6 +127,26 @@ export async function cancelTranscodeTask(id: number): Promise<void> {
   return apiRequest<void>(`/transcoding/tasks/${id}`, { method: 'DELETE' });
 }
 
+export async function retryTranscodeTask(id: number): Promise<TranscodeTask> {
+	return apiRequest<TranscodeTask>(`/transcoding/tasks/${id}/retry`, { method: 'POST' });
+}
+
+export async function startBackfill(cameraID: string): Promise<{
+  enqueued: number;
+  skipped: number;
+  total: number;
+}> {
+  const query = new URLSearchParams({ camera_id: cameraID }).toString();
+  return apiRequest<{ enqueued: number; skipped: number; total: number }>(
+    `/transcoding/backfill?${query}`,
+    { method: 'POST' }
+  );
+}
+
+export async function getUntranscodedRecordingCount(cameraID: string): Promise<{ count: number }> {
+    const query = new URLSearchParams({ camera_id: cameraID }).toString();
+    return apiRequest<{ count: number }>(`/transcoding/recordings-without-transcode?${query}`);
+}
 // --- Cameras ---
 
 export async function getTranscodingCameras(): Promise<Record<string, unknown>> {

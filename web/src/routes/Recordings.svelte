@@ -193,7 +193,7 @@ import { onMount, onDestroy } from 'svelte';
   function startTranscodingPoll() {
     stopTranscodingPoll();
     loadTranscodingStatus();
-    transcodingPollInterval = setInterval(loadTranscodingStatus, 2000);
+    transcodingPollInterval = setInterval(loadTranscodingStatus, 3000);
   }
 
   function stopTranscodingPoll() {
@@ -438,11 +438,9 @@ import { onMount, onDestroy } from 'svelte';
           <div class="flex-1 min-w-0">
             <label class="input-label" for="start-date">{t('recordings.startDate')}</label>
             <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
-              <input type="datetime-local" class="input flex-1" bind:value={startDate} />
-              id="start-date"
+              <input type="datetime-local" class="input flex-1" id="start-date" bind:value={startDate} />
               <span class="th-text-tertiary shrink-0">~</span>
-              <input type="datetime-local" class="input flex-1" bind:value={endDate} />
-id="end-date"
+              <input type="datetime-local" class="input flex-1" id="end-date" bind:value={endDate} />
           </div>
           </div>
         </div>

@@ -512,7 +512,6 @@ func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":          h.config.Transcoding.Enabled,
 		"max_workers":       h.config.Transcoding.MaxWorkers,
-		"replace_original": h.config.Transcoding.ReplaceOriginal,
 	})
 }
 
@@ -525,7 +524,6 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 	var body struct {
 		Enabled         *bool `json:"enabled"`
 		MaxWorkers      *int  `json:"max_workers"`
-		ReplaceOriginal *bool `json:"replace_original"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -543,10 +541,6 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 
 	if body.Enabled != nil {
 		h.config.Transcoding.Enabled = *body.Enabled
-	}
-
-	if body.ReplaceOriginal != nil {
-		h.config.Transcoding.ReplaceOriginal = *body.ReplaceOriginal
 	}
 
 	// Persist config to disk

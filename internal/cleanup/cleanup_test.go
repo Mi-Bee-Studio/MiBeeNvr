@@ -2,14 +2,15 @@ package cleanup
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -577,4 +578,56 @@ func TestTimeBasedCleanup_TimelapseExpired(t *testing.T) {
 	got, err = env.db.GetRecording(context.Background(), "h264-expired")
 	require.NoError(t, err)
 	require.Nil(t, got, "expired h264 recording should also be deleted")
+}
+
+// TestTimeBasedCleanup_TimelapseDirectory verifies that directory-based timelapse
+// recordings are properly removed using os.RemoveAll (not os.Remove).
+func TestTimeBasedCleanup_TimelapseDirectory(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	// Create a directory-based timelapse recording (like real timelapse recorder does).
+	now := time.Now()
+	expiredTime := now.Add(-48 * time.Hour)
+	camDir := filepath.Join(env.store.RootDir(), "cam1")
+	segDir := filepath.Join(camDir, "cam1_20260529_120000_timelapse")
+
+	// Insert as a direct DB recording with directory path.
+	rec := &model.Recording{
+		ID:        "tl-dir",
+		CameraID:  "cam1",
+		FilePath:  segDir,
+		Format:    model.FormatTimelapse,
+		StartedAt: expiredTime.Add(-time.Hour),
+		EndedAt:   expiredTime,
+		Duration:  3600.0,
+		FileSize:  4096,
+		FrameCount: 10,
+		Merged:    false,
+	}
+	require.NoError(t, env.db.InsertRecording(context.Background(), rec))
+
+	// Create the directory with fake JPEG files.
+	require.NoError(t, os.MkdirAll(segDir, 0755))
+	for i := 0; i < 3; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(segDir, fmt.Sprintf("frame_%06d.jpg", i)), []byte("fake-jpeg"), 0644))
+	}
+
+	cfg := defaultCleanupConfig()
+	cfg.RetentionDays = 1
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	err = cm.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	// DB record should be deleted.
+	got, err := env.db.GetRecording(context.Background(), "tl-dir")
+	require.NoError(t, err)
+	require.Nil(t, got, "expired timelapse recording should be deleted from DB")
+
+	// Directory should be removed from disk.
+	_, err = os.Stat(segDir)
+	require.True(t, os.IsNotExist(err), "timelapse directory should be deleted: %v", err)
 }

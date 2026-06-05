@@ -32,3 +32,11 @@ func (r *StatusRecorder) Write(b []byte) (int, error) {
 func (r *StatusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return r.ResponseWriter.(http.Hijacker).Hijack()
 }
+
+// Flush implements the http.Flusher interface.
+// Required for SSE (Server-Sent Events) streaming endpoints.
+func (r *StatusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}

@@ -16,12 +16,21 @@ export interface Recording {
   file_size: number;
   frame_count: number;
   merged: boolean;
+  merge_status?: 'pending' | 'merged' | 'failed';
+  merge_path?: string;
   archived?: boolean;
 }
 
 export interface FrameInfo {
   filename: string;
   index: number;
+}
+
+export interface TimelapseFrame {
+  filename: string;
+  url: string;
+  size: number;
+  timestamp: string;
 }
 
 export interface FramesResponse {
@@ -125,6 +134,9 @@ export async function batchDeleteRecordings(
 export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
 }
+export function getMergedRecordingUrl(id: string): string {
+  return `/api/recordings/${id}/merged`;
+}
 
 export async function downloadRecording(
   id: string,
@@ -183,6 +195,23 @@ export async function listFrames(
   return apiRequest<FramesResponse>(`/recordings/${recordingId}/frames`, { signal });
 }
 
+// --- Timelapse frames ---
+
+export async function getTimelapseFrames(
+  recordingId: string,
+  signal?: AbortSignal
+): Promise<TimelapseFrame[]> {
+  return apiRequest<TimelapseFrame[]>(`/recordings/${recordingId}/timelapse-frames`, { signal });
+}
+
+export async function loadTimelapseFrameBlob(
+  recordingId: string,
+  filename: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const blob = await apiRequestBlob(`/recordings/${recordingId}/timelapse-frames/${filename}`, { signal });
+  return URL.createObjectURL(blob);
+}
 export async function loadFrameBlob(
   recordingId: string,
   frameIndex: number,

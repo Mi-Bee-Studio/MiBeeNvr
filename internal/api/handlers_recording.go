@@ -198,6 +198,11 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Timelapse recordings are JPEG sequences — cannot be downloaded as a single file.
+	if rec.Format == model.Format("timelapse") {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Timelapse recordings (JPEG sequences) cannot be downloaded as a single file. Use /api/recordings/%s/timelapse-frames to access individual frames.", id))
+		return
+	}
 	if rec.FilePath == "" {
 		writeError(w, http.StatusNotFound, "file not available")
 		return
@@ -341,4 +346,135 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"frames": frames,
 	})
+}
+
+// --- Timelapse endpoints ---
+
+// handleTimelapseFrames handles GET /api/recordings/{id}/timelapse-frames.
+// Returns JSON array of JPEG frame metadata for timelapse recordings.
+func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.Format != model.Format("timelapse") {
+		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		return
+	}
+
+	info, err := os.Stat(rec.FilePath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "timelapse directory not found")
+		return
+	}
+	if !info.IsDir() {
+		writeError(w, http.StatusNotFound, "timelapse recording is not a directory")
+		return
+	}
+
+	entries, err := os.ReadDir(rec.FilePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read timelapse directory")
+		return
+	}
+
+	type TimelapseFrameInfo struct {
+		Filename  string `json:"filename"`
+		URL       string `json:"url"`
+		Size      int64  `json:"size"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	var frames []TimelapseFrameInfo
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		frames = append(frames, TimelapseFrameInfo{
+			Filename:  name,
+			URL:       fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", id, name),
+			Size:      fi.Size(),
+			Timestamp: fi.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+
+	sort.Slice(frames, func(i, j int) bool {
+		return frames[i].Filename < frames[j].Filename
+	})
+
+	if frames == nil {
+		frames = []TimelapseFrameInfo{}
+	}
+
+	writeJSON(w, http.StatusOK, frames)
+}
+
+// handleTimelapseFrame handles GET /api/recordings/{id}/timelapse-frames/{filename}.
+// Serves an individual JPEG frame from a timelapse recording.
+func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	filename := chi.URLParam(r, "filename")
+
+	// Validate filename — only allow alphanumeric, underscore, dash, dot
+	for _, c := range filename {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+			writeError(w, http.StatusBadRequest, "invalid filename")
+			return
+		}
+	}
+	if filename == "" || filename == "." || filename == ".." {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.Format != model.Format("timelapse") {
+		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		return
+	}
+
+	filePath := filepath.Join(rec.FilePath, filename)
+	http.ServeFile(w, r, filePath)
+}
+
+// handleMergedRecording handles GET /api/recordings/{id}/merged.
+// Serves the merged MP4 file for a timelapse recording if it has been merged.
+func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.MergePath == "" {
+		writeError(w, http.StatusNotFound, "merged recording not available")
+		return
+	}
+	http.ServeFile(w, r, rec.MergePath)
 }

@@ -151,9 +151,11 @@ func probeEncoders(ffmpegPath string, caps *HardwareCapabilities) *HardwareCapab
 	case "arm64", "arm":
 		h264Candidates = []encoder{
 			{"h264_v4l2m2m", EncoderV4L2M2M},
+			{"libx264", EncoderSoftware},
 		}
 		h265Candidates = []encoder{
 			{"hevc_v4l2m2m", EncoderV4L2M2M},
+			{"libx265", EncoderSoftware},
 		}
 	case "amd64":
 		h264Candidates = []encoder{
@@ -239,7 +241,8 @@ var videoDeviceExists = func() bool {
 }
 
 // testEncoder checks if an encoder is available via ffmpeg -encoders list parsing.
-// For V4L2M2M encoders, also verifies /dev/video* device existence.
+// For V4L2M2M encoders, also verifies /dev/video* device existence AND does a smoke test
+// (encoders may be listed but the device may only support decode, not encode).
 func testEncoder(ffmpegPath, encoder string) bool {
 	if cachedEncoderList == nil {
 		cachedEncoderList, cachedEncoderStderr = parseEncoderList(ffmpegPath)
@@ -251,11 +254,40 @@ func testEncoder(ffmpegPath, encoder string) bool {
 		return false
 	}
 
-	if strings.Contains(encoder, "v4l2m2m") && !videoDeviceExists() {
-		slog.Debug("V4L2M2M encoder listed but no video devices", "encoder", encoder)
-		return false
+	if strings.Contains(encoder, "v4l2m2m") {
+		if !videoDeviceExists() {
+			slog.Debug("V4L2M2M encoder listed but no video devices", "encoder", encoder)
+			return false
+		}
+		// Device exists but may only support decode. Smoke test: encode 1 frame.
+		if !smokeTestEncoder(ffmpegPath, encoder) {
+			slog.Debug("V4L2M2M encoder smoke test failed — device likely lacks encode support", "encoder", encoder)
+			return false
+		}
 	}
 
+	return true
+}
+
+// smokeTestEncoder runs a minimal FFmpeg encode (1 frame of black) to verify the encoder
+// actually works. Some V4L2 devices advertise encoders in ffmpeg -encoders but only support decode.
+var smokeTestEncoder = func(ffmpegPath, encoder string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ffmpegPath,
+		"-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.1:r=1",
+		"-frames:v", "1",
+		"-c:v", encoder,
+		"-f", "null", "-",
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		slog.Debug("Encoder smoke test failed", "encoder", encoder, "error", err, "stderr", stderr.String())
+		return false
+	}
 	return true
 }
 

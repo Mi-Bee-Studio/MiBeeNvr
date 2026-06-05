@@ -278,6 +278,17 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='14' WHERE key='schema_version'")
 
+	// Migration v14 → v15: add merge_path and merge_error columns to recordings
+	var mergePathColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_path'`).Scan(&mergePathColExists)
+	if mergePathColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT ''`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT ''`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'")
+	// Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)")
+
 	return nil
 
 }

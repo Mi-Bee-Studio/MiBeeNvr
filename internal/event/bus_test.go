@@ -239,3 +239,96 @@ func TestSegmentCompletedStruct(t *testing.T) {
 		t.Fatalf("expected FileSize 1024000, got %d", data.FileSize)
 	}
 }
+
+func helperSubscribeByPrefix(t *testing.T, bus *EventBus, prefix string, bufSize int) chan Event {
+	t.Helper()
+	ch := make(chan Event, bufSize)
+	err := bus.SubscribeByPrefix(prefix, ch, bufSize)
+	if err != nil {
+		t.Fatalf("SubscribeByPrefix(%q) failed: %v", prefix, err)
+	}
+	return ch
+}
+
+func TestSubscribeByPrefix_Matches(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	ch := helperSubscribeByPrefix(t, bus, "onvif.", 16)
+
+	bus.Publish(context.Background(), "onvif.motion", "moved")
+	bus.Publish(context.Background(), "onvif.tamper", "tampered")
+	bus.Publish(context.Background(), "segment.completed", "done")
+
+	events := helperDrain(t, ch, time.Second)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].Topic != "onvif.motion" {
+		t.Fatalf("expected topic 'onvif.motion', got %q", events[0].Topic)
+	}
+	if events[1].Topic != "onvif.tamper" {
+		t.Fatalf("expected topic 'onvif.tamper', got %q", events[1].Topic)
+	}
+}
+
+func TestSubscribeByPrefix_EmptyPrefixMatchesAll(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	ch := helperSubscribeByPrefix(t, bus, "", 16)
+
+	bus.Publish(context.Background(), "onvif.motion", "moved")
+	bus.Publish(context.Background(), "segment.completed", "done")
+
+	events := helperDrain(t, ch, time.Second)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+}
+
+func TestSubscribeByPrefix_NoMatch(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	ch := helperSubscribeByPrefix(t, bus, "xiaomi.", 16)
+
+	bus.Publish(context.Background(), "onvif.motion", "moved")
+
+	events := helperDrain(t, ch, 100*time.Millisecond)
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+}
+
+func TestUnsubscribeByPrefix(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	ch := helperSubscribeByPrefix(t, bus, "onvif.", 16)
+
+	bus.UnsubscribeByPrefix("onvif.", ch)
+
+	bus.Publish(context.Background(), "onvif.motion", "after_unsub")
+
+	events := helperDrain(t, ch, 100*time.Millisecond)
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events after unsubscribe, got %d", len(events))
+	}
+}
+
+func TestSubscribeByPrefix_AndExactSubscribe(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	exactCh := helperSubscribe(t, bus, "onvif.motion", 16)
+	prefixCh := helperSubscribeByPrefix(t, bus, "onvif.", 16)
+
+	bus.Publish(context.Background(), "onvif.motion", "moved")
+	bus.Publish(context.Background(), "onvif.tamper", "tampered")
+
+	exactEvents := helperDrain(t, exactCh, time.Second)
+	prefixEvents := helperDrain(t, prefixCh, time.Second)
+
+	if len(exactEvents) != 1 {
+		t.Fatalf("exact: expected 1 event, got %d", len(exactEvents))
+	}
+	if len(prefixEvents) != 2 {
+		t.Fatalf("prefix: expected 2 events, got %d", len(prefixEvents))
+	}
+}

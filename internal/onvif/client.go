@@ -174,7 +174,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken string) (stri
 }
 
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
-func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilities, error) {
+func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -198,11 +198,14 @@ func mapDeviceInfo(info *onvifgo.DeviceInformation) *DeviceInfo {
 	}
 }
 
-// mapCapabilities converts onvif-go Capabilities to project DeviceCapabilities.
-func mapCapabilities(caps *onvifgo.Capabilities) *DeviceCapabilities {
-	return &DeviceCapabilities{
+func mapCapabilities(caps *onvifgo.Capabilities) *DeviceCapabilitiesDetailed {
+	return &DeviceCapabilitiesDetailed{
 		PTZ:       caps.PTZ != nil,
+		Imaging:   caps.Imaging != nil,
+		Events:    caps.Events != nil,
+		Snapshot:  caps.Media != nil,
 		Streaming: caps.Media != nil,
+		Device:    caps.Device != nil,
 	}
 }
 
@@ -232,6 +235,119 @@ func mapStreamURI(uri *onvifgo.MediaURI, profileToken string) *StreamInfo {
 	}
 }
 
+// PTZEndpoint returns the PTZ service endpoint URL derived from the device endpoint.
+// Format: http://host:port/onvif/ptz_service
+func (c *Client) PTZEndpoint() string {
+	return strings.Replace(c.endpoint, "device_service", "ptz_service", 1)
+}
+
+// DeviceEndpoint returns the device service endpoint URL (same as c.endpoint).
+func (c *Client) DeviceEndpoint() string {
+	return c.endpoint
+}
+
+// DoRawSOAPNoAuth sends a raw SOAP request without any authentication header.
+// Used as fallback for cameras with buggy per-service WS-Security validation.
+func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	// No auth header — camera firmware rejects WS-Security on some services
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
+	}
+	return body, nil
+}
+
+// DoRawSOAPBasicAuth sends a raw SOAP request with HTTP Basic Auth.
+// Used as fallback for cameras that accept BasicAuth but reject WS-Security.
+func (c *Client) DoRawSOAPBasicAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	if c.username != "" {
+		req.SetBasicAuth(c.username, c.password)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
+	}
+	return body, nil
+}
+
+// buildWSSecurityHeader creates a WS-Security header with UsernameToken using PasswordText.
+func (c *Client) buildWSSecurityHeader() string {
+	return `<s:Header><wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>` + c.username + `</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">` + c.password + `</wsse:Password></wsse:UsernameToken></wsse:Security></s:Header>`
+}
+
+// DoRawSOAPWithPasswordText sends a raw SOAP request with WS-Security UsernameToken (PasswordText).
+// The soapBody parameter should be a full SOAP envelope (with <s:Envelope> and <s:Body>).
+// This method injects the WS-Security header into the envelope before the <s:Body>.
+// Used as fallback for cameras that reject PasswordDigest but accept PasswordText.
+func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	// Inject WS-Security header before <s:Body>
+	bodyWithAuth := strings.Replace(soapBody, "<s:Body>", c.buildWSSecurityHeader()+"<s:Body>", 1)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(bodyWithAuth))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
+	}
+	return body, nil
+}
+
+// isAuthError checks if an error indicates WS-Security auth rejection by the camera.
+// This is used to trigger fallback to raw SOAP without auth.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "NotAuthorized") ||
+		strings.Contains(s, "status 400") ||
+		strings.Contains(s, "status 500") ||
+		strings.Contains(s, "status 502")
+}
+
 // NewPTZController creates a PTZController backed by this client's onvif-go connection.
 // Requires Connect() to have been called first. Returns nil if not connected.
 func (c *Client) NewPTZController(profileToken string) PTZController {
@@ -240,7 +356,18 @@ func (c *Client) NewPTZController(profileToken string) PTZController {
 	if c.client == nil {
 		return nil
 	}
-	return NewPTZController(c.client, profileToken)
+	return NewPTZController(c.client, profileToken, c.PTZEndpoint(), c.username, c.password, c.DoRawSOAPWithPasswordText)
+}
+
+// NewDeviceManager creates a DeviceManager backed by this client's onvif-go connection.
+// Requires Connect() to have been called first. Returns nil if not connected.
+func (c *Client) NewDeviceManager() DeviceManager {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	return NewDeviceManager(c.client, c.DeviceEndpoint(), c.username, c.password, c.DoRawSOAPWithPasswordText)
 }
 
 // NewImagingController creates an ImagingController backed by this client's onvif-go connection.
@@ -281,15 +408,4 @@ func (c *Client) NewEventSubscriber(opts ...EventSubscriberOption) EventSubscrib
 		return nil
 	}
 	return NewEventSubscriber(c.client, opts...)
-}
-
-// NewDeviceManager creates a DeviceManager backed by this client's onvif-go connection.
-// Requires Connect() to have been called first. Returns nil if not connected.
-func (c *Client) NewDeviceManager() DeviceManager {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client == nil {
-		return nil
-	}
-	return NewDeviceManager(c.client)
 }

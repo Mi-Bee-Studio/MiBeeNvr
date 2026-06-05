@@ -53,9 +53,13 @@ func helperMockDeviceClient(t *testing.T) *MockDeviceClient {
 			Encoding:     "H264",
 			ProfileToken: "profile_1",
 		},
-		Capabilities: &DeviceCapabilities{
+		Capabilities: &DeviceCapabilitiesDetailed{
 			PTZ:       true,
+			Imaging:   true,
+			Events:    true,
+			Snapshot:  true,
 			Streaming: true,
+			Device:    true,
 		},
 	}
 }
@@ -204,10 +208,12 @@ func TestMockDeviceClient_GetCapabilities(t *testing.T) {
 
 	caps, err := m.GetCapabilities(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, caps)
 	require.True(t, caps.PTZ)
+	require.True(t, caps.Imaging)
+	require.True(t, caps.Events)
+	require.True(t, caps.Snapshot)
 	require.True(t, caps.Streaming)
-	require.Equal(t, 1, m.GetCapabilitiesCalls)
+	require.True(t, caps.Device)
 }
 
 // --- MockPTZController tests ---

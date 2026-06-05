@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, getContext } from 'svelte';
+  import { onDestroy, getContext, untrack } from 'svelte';
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
@@ -435,13 +435,16 @@ let destroyed = false;
       }
     } else {
       // Tab visible — resume: rebuild WebRTC connection
-      if (!destroyed && streamState !== 'loading') {
-        stopSnapshotMode();
-        reconnectAttempts = 0;
-        captureFreezeFrame();
-        destroyPeerConnection();
-        initWebRTC();
-      }
+      // Use untrack to avoid re-triggering on streamState changes (would cause infinite loop)
+      untrack(() => {
+        if (!destroyed && streamState !== 'loading') {
+          stopSnapshotMode();
+          reconnectAttempts = 0;
+          captureFreezeFrame();
+          destroyPeerConnection();
+          initWebRTC();
+        }
+      });
     }
   });
 

@@ -17,7 +17,7 @@ type DeviceClient interface {
 	GetDeviceInformation(ctx context.Context) (*DeviceInfo, error)
 	GetProfiles(ctx context.Context) ([]DeviceProfile, error)
 	GetStreamURI(ctx context.Context, profileToken string) (*StreamInfo, error)
-	GetCapabilities(ctx context.Context) (*DeviceCapabilities, error)
+	GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error)
 }
 
 // PTZController controls PTZ movement on an ONVIF device.

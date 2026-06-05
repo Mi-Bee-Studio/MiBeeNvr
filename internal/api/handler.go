@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -35,8 +36,8 @@ type HealthCheck struct {
 
 // HealthResponse is the response from /api/health.
 type HealthResponse struct {
-	Status string                 `json:"status"` // "ok" | "degraded" | "unhealthy"
-	Checks map[string]HealthCheck `json:"checks"`
+	Status        string                 `json:"status"` // "ok" | "degraded" | "unhealthy"
+	Checks        map[string]HealthCheck `json:"checks"`
 	Uptime        string                 `json:"uptime"`
 	SetupRequired bool                   `json:"setup_required"`
 	Cameras       *CameraHealthSummary   `json:"cameras,omitempty"`
@@ -107,27 +108,28 @@ type snapshotCache struct {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
-	db              *storage.DB
-	store           *storage.Manager
-	authMW          func(http.Handler) http.Handler
-	config          *config.Config
-	camMgr          *camera.CameraManager
-	hlsMgr          *hls.Manager
-	webrtcMgr       *webrtc.Manager
-	flvMgr          *flv.Manager
-	wsMgr           *wsstream.Manager
-	configPath      string
-	snapshotMu      sync.RWMutex
-	snapshots       map[string]*snapshotCache // cameraID -> cached snapshot
-	mergeMgr        *merge.MergeManager
-	healthMgr       HealthManager
+	db                *storage.DB
+	store             *storage.Manager
+	authMW            func(http.Handler) http.Handler
+	config            *config.Config
+	camMgr            *camera.CameraManager
+	hlsMgr            *hls.Manager
+	webrtcMgr         *webrtc.Manager
+	flvMgr            *flv.Manager
+	wsMgr             *wsstream.Manager
+	configPath        string
+	snapshotMu        sync.RWMutex
+	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
+	mergeMgr          *merge.MergeManager
+	healthMgr         HealthManager
 	stabilityProvider StabilityProvider
-	cloudProxy      CloudAuthProxy
-	streamRegistry  *StreamRegistry
-	downloader      TranscodeDownloader
-	transcodeMgr    TranscodeManagerAPI
-	aiEngine        AIEngine
-	aiDetector      AIDetector
+	cloudProxy        CloudAuthProxy
+	streamRegistry    *StreamRegistry
+	downloader        TranscodeDownloader
+	transcodeMgr      TranscodeManagerAPI
+	aiEngine          AIEngine
+	aiDetector        AIDetector
+	eventBus          *event.EventBus
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -164,59 +166,64 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/", h.handleDeleteRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
+				r.Get("/timelapse-frames", h.handleTimelapseFrames)
+				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
+				r.Get("/merged", h.handleMergedRecording)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
 			r.Post("/", h.handleCreateCamera)
-      r.Post("/test-connection", h.handleTestConnection)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.handleGetCamera)
-					r.Put("/", h.handleUpdateCamera)
-					r.Delete("/", h.handleDeleteCamera)
-					// WebSocket stream (must be before HLS catch-all /stream/*)
-					r.Get("/stream/ws", h.handleStreamWS)
-					r.Get("/stream/*", h.handleHLSStream)
-					r.Delete("/stream", h.handleStopHLSStream)
-					// WebRTC WHEP endpoints
-					r.Post("/stream/webrtc", h.handleCreateWHEPSession)
-					r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
-					// HTTP-FLV stream
-					r.Get("/stream.flv", h.handleFLVStream)
-					// Per-camera protocols
-					r.Get("/protocols", h.handleCameraProtocols)
-					r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
-					r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
-					r.Post("/ptz/move", h.handlePTZMove)
-					r.Post("/ptz/stop", h.handlePTZStop)
-					r.Get("/ptz/status", h.handlePTZStatus)
-					r.Get("/ptz/presets", h.handlePTZGetPresets)
-					r.Post("/ptz/presets", h.handlePTZCreatePreset)
-					r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
-					r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
-					r.Get("/snapshot/uri", h.handleSnapshotGetUri)
-					r.Get("/imaging/settings", h.handleImagingGetSettings)
-					r.Put("/imaging/settings", h.handleImagingSetSettings)
-					r.Get("/imaging/options", h.handleImagingGetOptions)
-					// Device management
-					r.Post("/onvif/reboot", h.handleONVIFReboot)
-					r.Get("/onvif/network", h.handleONVIFGetNetwork)
-					r.Put("/onvif/network", h.handleONVIFSetNetwork)
-					r.Get("/onvif/users", h.handleONVIFGetUsers)
-					r.Post("/onvif/users", h.handleONVIFCreateUsers)
-					r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
-					r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
-					r.Get("/snapshot", h.handleSnapshot)
-					r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
-					r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
-					r.Get("/stats", h.handleCameraRecordingStats)
-						// Per-camera timelapse configuration
-						r.Get("/timelapse", h.handleGetCameraTimelapse)
-						r.Put("/timelapse", h.handlePutCameraTimelapse)
-					r.Post("/start", h.handleStartCamera)
-					r.Post("/stop", h.handleStopCamera)
-				})
+			r.Post("/test-connection", h.handleTestConnection)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetCamera)
+				r.Put("/", h.handleUpdateCamera)
+				r.Delete("/", h.handleDeleteCamera)
+				// WebSocket stream (must be before HLS catch-all /stream/*)
+				r.Get("/stream/ws", h.handleStreamWS)
+				r.Get("/stream/*", h.handleHLSStream)
+				r.Delete("/stream", h.handleStopHLSStream)
+				// WebRTC WHEP endpoints
+				r.Post("/stream/webrtc", h.handleCreateWHEPSession)
+				r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
+				// HTTP-FLV stream
+				r.Get("/stream.flv", h.handleFLVStream)
+				// Per-camera protocols
+				r.Get("/protocols", h.handleCameraProtocols)
+				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+				r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
+				r.Post("/ptz/move", h.handlePTZMove)
+				r.Post("/ptz/stop", h.handlePTZStop)
+				r.Get("/ptz/status", h.handlePTZStatus)
+				r.Get("/ptz/presets", h.handlePTZGetPresets)
+				r.Post("/ptz/presets", h.handlePTZCreatePreset)
+				r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
+				r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
+				r.Get("/snapshot/uri", h.handleSnapshotGetUri)
+				r.Get("/imaging/settings", h.handleImagingGetSettings)
+				r.Put("/imaging/settings", h.handleImagingSetSettings)
+				r.Get("/imaging/options", h.handleImagingGetOptions)
+				// Device management
+				r.Post("/onvif/reboot", h.handleONVIFReboot)
+				r.Get("/onvif/network", h.handleONVIFGetNetwork)
+				r.Put("/onvif/network", h.handleONVIFSetNetwork)
+				r.Get("/onvif/users", h.handleONVIFGetUsers)
+				r.Post("/onvif/users", h.handleONVIFCreateUsers)
+				r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
+				r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
+				r.Get("/snapshot", h.handleSnapshot)
+				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
+				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+				r.Get("/stats", h.handleCameraRecordingStats)
+				// Per-camera timelapse configuration
+				r.Get("/timelapse", h.handleGetCameraTimelapse)
+				r.Put("/timelapse", h.handlePutCameraTimelapse)
+				// Camera-specific events (SSE)
+				r.Get("/events", h.handleCameraEvents)
+				r.Post("/start", h.handleStartCamera)
+				r.Post("/stop", h.handleStopCamera)
 			})
+		})
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
@@ -235,6 +242,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/onvif/probe", h.handleONVIFProbe)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
 		r.Get("/api/protocols", h.handleProtocols)
 		r.Get("/api/features", h.handleGetFeatures)
 		r.Put("/api/features", h.handleUpdateFeatures)
@@ -270,7 +278,10 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
 		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
 		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
+		r.Post("/api/transcoding/tasks/{id}/retry", h.handleTranscodingTaskRetry)
+		r.Post("/api/transcoding/backfill", h.handleTranscodingBackfill)
 		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
+		r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
 		// AI Detection routes
 		r.Route("/api/ai", func(r chi.Router) {
 			r.Get("/status", h.handleGetAIStatus)
@@ -278,6 +289,8 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
+		// Generic event streaming (SSE)
+		r.Get("/api/events", h.handleEvents)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
@@ -404,6 +417,11 @@ func (h *Handler) SetDownloader(d TranscodeDownloader) {
 	h.downloader = d
 }
 
+// SetEventBus sets the event bus on the handler.
+func (h *Handler) SetEventBus(bus *event.EventBus) {
+	h.eventBus = bus
+}
+
 // --- Per-camera streaming protocols endpoint ---
 
 // cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
@@ -487,7 +505,7 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 // It returns the server's ingest capabilities (RTMP, SRT).
 func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp := capabilitiesResponse{}
-	
+
 	if h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled {
 		resp.Ingest.RTMP = &protocolCapability{
 			Enabled: true,
@@ -499,7 +517,7 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Port:    h.config.RTMP.Port,
 		}
 	}
-	
+
 	if h.config.SRT.Enabled != nil && *h.config.SRT.Enabled {
 		resp.Ingest.SRT = &protocolCapability{
 			Enabled: true,
@@ -511,6 +529,6 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Port:    h.config.SRT.Port,
 		}
 	}
-	
+
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -39,7 +39,7 @@ type MockDeviceClient struct {
 	DeviceInfo   *DeviceInfo
 	Profiles     []DeviceProfile
 	StreamURI    *StreamInfo
-	Capabilities *DeviceCapabilities
+	Capabilities *DeviceCapabilitiesDetailed
 	ConnectError error
 
 	ConnectCalls              int
@@ -77,7 +77,7 @@ func (m *MockDeviceClient) GetStreamURI(ctx context.Context, profileToken string
 	return m.StreamURI, nil
 }
 
-func (m *MockDeviceClient) GetCapabilities(ctx context.Context) (*DeviceCapabilities, error) {
+func (m *MockDeviceClient) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.GetCapabilitiesCalls++

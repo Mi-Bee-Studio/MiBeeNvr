@@ -714,6 +714,10 @@ export interface TimelapseConfig {
   output_fps: number;
   video_codec: string;
   delete_original: boolean;
+  merge_enabled?: boolean;
+  merge_mode?: string;
+  daily_merge?: boolean;
+  merge_output_fps?: number;
 }
 
 export async function getTimelapseConfig(

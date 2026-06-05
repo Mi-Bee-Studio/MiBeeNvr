@@ -48,8 +48,8 @@ func (t TranscodeTask) MarshalJSON() ([]byte, error) {
 // EnqueueTask inserts a new pending transcoding task.
 func (d *DB) EnqueueTask(ctx context.Context, task *TranscodeTask) error {
 	q := `INSERT INTO transcoding_tasks (camera_id, recording_id, input_path, input_format, output_path, output_format, status, progress, created_at, original_deleted, framerate)
-		VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, ?);`
-	result, err := d.db.ExecContext(ctx, q, task.CameraID, task.RecordingID, task.InputPath, task.InputFormat, task.OutputPath, task.OutputFormat, task.CreatedAt, task.Framerate)
+		VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?);`
+	result, err := d.db.ExecContext(ctx, q, task.CameraID, task.RecordingID, task.InputPath, task.InputFormat, task.OutputPath, task.OutputFormat, task.CreatedAt, task.OriginalDeleted, task.Framerate)
 	if err != nil {
 		return err
 	}

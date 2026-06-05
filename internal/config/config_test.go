@@ -314,22 +314,23 @@ func TestXiaomiConfigDefaults(t *testing.T) {
 	require.Equal(t, "cn", cfg.Xiaomi.Region)
 }
 
-func TestXiaomiConfigValidationRequiresToken(t *testing.T) {
-	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}}
+func TestXiaomiConfigValidationDisablesCameraWithoutToken(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device", Enabled: true}}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "xiaomi.token")
+	require.NoError(t, err)
+	require.False(t, cfg.Cameras[0].Enabled, "camera should be disabled when xiaomi.token is missing")
 }
 
 func TestXiaomiConfigValidationWithToken(t *testing.T) {
 	cfg := &Config{
-		Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}},
+		Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device", Enabled: true}},
 		Xiaomi:  XiaomiConfig{Token: "test-token", Region: "cn"},
 	}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
+	require.True(t, cfg.Cameras[0].Enabled, "camera should remain enabled when xiaomi.token is present")
 }
 
 func TestCameraConfigXiaomiFields(t *testing.T) {
