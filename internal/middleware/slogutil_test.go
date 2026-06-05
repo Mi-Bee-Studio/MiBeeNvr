@@ -89,7 +89,6 @@ func TestSetupLoggerUnknownLevelDefaultsToInfo(t *testing.T) {
 
 func TestComponentLoggerAddsField(t *testing.T) {
 	t.Helper()
-	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)
@@ -106,7 +105,6 @@ func TestComponentLoggerAddsField(t *testing.T) {
 
 func TestComponentLoggerDifferentComponents(t *testing.T) {
 	t.Helper()
-	t.Parallel()
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	testLogger := slog.New(handler)

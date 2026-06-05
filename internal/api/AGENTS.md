@@ -7,26 +7,52 @@ Chi-based REST API. All endpoints, JSON responses, HLS proxy, ONVIF proxy, file 
 ## STRUCTURE
 
 ```
-handler.go           # Handler struct, Routes(), all endpoint methods, test factories
-handler_test.go      # Unit tests for recordings, cameras, stats, settings
-onvif_test.go        # ONVIF discovery and camera tests
-onvif_camera_test.go # ONVIF-specific camera management tests
-ptz_test.go          # PTZ control tests
-```
+handler.go                # Handler struct, Routes(), endpoint registration
+handlers_camera.go        # Camera CRUD, test-connection, merge config
+handlers_recording.go     # Recording list, download, frames, batch operations
+handlers_stream.go        # Multi-protocol streaming (HLS proxy, protocol registry)
+handlers_system.go        # System stats, settings, config, storage info
+handlers_onvif.go         # ONVIF discovery, device details, PTZ, imaging, users
+handlers_xiaomi.go        # Xiaomi cloud auth, device sync
+handlers_timelapse.go     # Timelapse config GET/PUT per camera
+handlers_transcode.go     # Transcoding: hardware check, FFmpeg download, task management, backfill
+handlers_health.go        # Camera health history
+handlers_archive.go       # Camera archiving
+handlers_merge.go         # Per-camera merge config
+handlers_hls.go           # HLS segment proxy
+handlers_flv.go           # HTTP-FLV streaming
+handlers_webrtc.go        # WebRTC WHEP session management
+handlers_ws.go            # WebSocket streaming
+handlers_setup.go         # First-time setup
+events_handler.go         # SSE event streaming endpoint
+*_test.go                 # Per-handler tests
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
 | Add endpoint | `handler.go` | Add method on Handler, register in `Routes()` |
-| Change auth | `Routes()` | `authMW` wraps authenticated routes |
-| File download | `serveRecording()` | Uses `http.ServeFile()` for Content-Length + range support |
-| Snapshot caching | `handleSnapshot()` | In-memory cache per camera, TTL-based invalidation |
-| HLS proxy | `handleHLSStream()` | Forwards to HLS Manager, handles stream-not-found |
-| ONVIF proxy | `handleONVIF*()` | Discovery + device detail + PTZ |
-| Health check | `handleHealth()` | DB + storage disk space checks |
-| System stats | `handleSystemStats()` | CPU/Memory/Network from `/proc` |
-| Test factories | `TestHandler()` / `TestHandlerWithAuth()` | Exported, used by integration tests too |
+| Camera management | `handlers_camera.go` | CRUD ops, test-connection, merge config |
+| Recording operations | `handlers_recording.go` | List, download, frames, batch operations |
+| Streaming protocols | `handlers_stream.go` | HLS proxy, protocol registry, multi-protocol support |
+| System settings | `handlers_system.go` | Stats, config, storage info |
+| ONVIF integration | `handlers_onvif.go` | Discovery, PTZ, imaging, users |
+| Xiaomi cameras | `handlers_xiaomi.go` | Cloud auth, device sync |
+| Timelapse config | `handlers_timelapse.go` | GET/PUT per-camera timelapse settings |
+| Transcoding tasks | `handlers_transcode.go` | Hardware check, FFmpeg jobs, backfill |
+| Health monitoring | `handlers_health.go` | Camera health history |
+| Camera archiving | `handlers_archive.go` | Archive/restore operations |
+| Merge policies | `handlers_merge.go` | Per-camera segment merge config |
+| HLS streaming | `handlers_hls.go` | HLS segment proxy |
+| HTTP-FLV | `handlers_flv.go` | HTTP-FLV streaming endpoint |
+| WebRTC | `handlers_webrtc.go` | WHEP session management |
+| WebSocket | `handlers_ws.go` | WebSocket streaming endpoint |
+| First-time setup | `handlers_setup.go` | Initial setup wizard |
+| Event streaming | `events_handler.go` | SSE event streaming |
+| Auth middleware | `Routes()` | `authMW` wraps authenticated routes |
+| File download | `serveRecording()` | Uses `http.ServeFile()` for range support |
+| Snapshot cache | `handleSnapshot()` | In-memory cache per camera, TTL 5s |
+| Test helpers | `TestHandler()` | Exported, used by integration tests |
 
 ## CONVENTIONS
 
