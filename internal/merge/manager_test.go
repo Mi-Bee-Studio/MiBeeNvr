@@ -774,8 +774,9 @@ func TestRunOnce_TimelapseSkipped(t *testing.T) {
 	tp2 := env.insertTimelapseRecording(t, "tl2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
 
 	// Also insert 2 H264 recordings to verify normal merge still works.
-	env.insertMergeableRecording(t, "h264-1", cameraID, oldTime.Add(2*time.Hour), oldTime.Add(2*time.Hour).Add(30*time.Second))
-	env.insertMergeableRecording(t, "h264-2", cameraID, oldTime.Add(2*time.Hour).Add(30*time.Second), oldTime.Add(2*time.Hour).Add(60*time.Second))
+	// Use oldTime+1h so they are in a different hour window than timelapse and well past minAge.
+	env.insertMergeableRecording(t, "h264-1", cameraID, oldTime.Add(1*time.Hour), oldTime.Add(1*time.Hour).Add(30*time.Second))
+	env.insertMergeableRecording(t, "h264-2", cameraID, oldTime.Add(1*time.Hour).Add(30*time.Second), oldTime.Add(1*time.Hour).Add(60*time.Second))
 
 	cfg := config.MergeConfig{
 		Enabled:            true,
