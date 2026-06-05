@@ -309,6 +309,7 @@ type mockTranscodeManager struct {
 
 type mockTranscodeQueue struct {
 	enqueued []*storage.TranscodeTask
+	db       *storage.DB
 	cancelID int64
 	cancelErr error
 }
@@ -324,8 +325,11 @@ func (m *mockTranscodeManager) Queue() transcoding.QueueAPI {
 	return nil
 }
 
-func (m *mockTranscodeQueue) Enqueue(_ context.Context, task *storage.TranscodeTask) error {
+func (m *mockTranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTask) error {
 	m.enqueued = append(m.enqueued, task)
+	if m.db != nil {
+		return m.db.EnqueueTask(ctx, task)
+	}
 	return nil
 }
 
@@ -434,8 +438,8 @@ func TestTranscodingTaskCreate_Success(t *testing.T) {
 		FileSize:  1024000,
 	})
 
-	// Set up mock manager with config enabling transcoding
-	q := &mockTranscodeQueue{}
+	// Set up mock manager with config enabling transcoding and DB persistence
+	q := &mockTranscodeQueue{db: db}
 	h.transcodeMgr = &mockTranscodeManager{
 		status: transcoding.ManagerStatus{Enabled: true},
 		queue: q,
@@ -480,7 +484,7 @@ func TestTranscodingTaskCreate_DisabledCamera(t *testing.T) {
 		FileSize:  1024000,
 	})
 
-	q := &mockTranscodeQueue{}
+	q := &mockTranscodeQueue{db: db}
 	h.transcodeMgr = &mockTranscodeManager{
 		status: transcoding.ManagerStatus{Enabled: true},
 		queue: q,
@@ -517,7 +521,7 @@ func TestTranscodingTaskCancel_Success(t *testing.T) {
 	err := db.EnqueueTask(context.Background(), task)
 	require.NoError(t, err)
 
-	q := &mockTranscodeQueue{}
+	q := &mockTranscodeQueue{db: db}
 	h.transcodeMgr = &mockTranscodeManager{queue: q}
 
 	rr := doTranscodeRequest(t, h, http.MethodDelete, fmt.Sprintf("/api/transcoding/tasks/%d", task.ID))
@@ -587,4 +591,247 @@ func TestTranscodingCameraConfigs(t *testing.T) {
 	cameras, ok := resp["cameras"].([]any)
 	require.True(t, ok)
 	require.Len(t, cameras, 2)
+}
+
+func TestTranscodingBackfill_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+
+	// Seed recordings without transcode tasks
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		seedRecording(t, db, &model.Recording{
+			ID:        fmt.Sprintf("rec-bf-%d", i),
+			CameraID:  "cam-bf",
+			FilePath:  fmt.Sprintf("/data/cam-bf/segment-%d.mp4", i),
+			Format:    model.Format("h265"),
+			StartedAt: now.Add(-time.Duration(i+1) * time.Hour),
+			EndedAt:   now.Add(-time.Duration(i) * time.Hour),
+			Duration:  3600,
+			FileSize:  1024000,
+		})
+	}
+
+	// Seed one recording that already has a transcode task (should be skipped)
+	seedRecording(t, db, &model.Recording{
+		ID:        "rec-bf-already",
+		CameraID:  "cam-bf",
+		FilePath:  "/data/cam-bf/already-done.mp4",
+		Format:    model.Format("h265"),
+		StartedAt: now.Add(-5 * time.Hour),
+		EndedAt:   now.Add(-4 * time.Hour),
+		Duration:  3600,
+		FileSize:  1024000,
+	})
+	// Create a transcode task for the already-done recording
+	task := &storage.TranscodeTask{
+		CameraID:     "cam-bf",
+		RecordingID:  "rec-bf-already",
+		InputPath:    "/data/cam-bf/already-done.mp4",
+		InputFormat:  "h265",
+		OutputPath:   "/data/cam-bf/already-done.mp4.transcoded.mp4",
+		OutputFormat: "h264",
+		CreatedAt:    time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
+	}
+	require.NoError(t, db.EnqueueTask(context.Background(), task))
+
+	// Set up mock manager and config with DB persistence
+	q := &mockTranscodeQueue{db: db}
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+		queue:  q,
+	}
+	h.config = &config.Config{
+		Transcoding: config.TranscodingConfig{Enabled: true},
+		Cameras: []config.CameraConfig{{
+			ID: "cam-bf",
+			Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
+		}},
+	}
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/backfill?camera_id=cam-bf")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, float64(3), resp["enqueued"], "should enqueue 3 recordings")
+	require.Equal(t, float64(1), resp["skipped"], "should skip 1 already-transcoded recording")
+	require.Equal(t, float64(4), resp["total"], "should have 4 total recordings")
+}
+
+func TestTranscodingBackfill_DisabledCamera(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+		queue:  &mockTranscodeQueue{db: db},
+	}
+	h.config = &config.Config{
+		Transcoding: config.TranscodingConfig{Enabled: true},
+		Cameras: []config.CameraConfig{{
+			ID: "cam-no-transcode",
+			Transcoding: &config.CameraTranscodingConfig{Enabled: false},
+		}},
+	}
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/backfill?camera_id=nonexistent")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+func TestTranscodingBackfill_NoManager(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+	// No transcodeMgr set
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/backfill?camera_id=cam-001")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestTranscodingTaskRetry_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+
+	// Create a failed transcode task
+	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	task := &storage.TranscodeTask{
+		CameraID:     "cam-retry",
+		RecordingID:  "rec-retry-1",
+		InputPath:    "/data/cam-retry/segment.mp4",
+		InputFormat:  "h265",
+		OutputPath:   "/data/cam-retry/segment.mp4.transcoded.mp4",
+		OutputFormat: "h264",
+		CreatedAt:    now,
+	}
+	require.NoError(t, db.EnqueueTask(context.Background(), task))
+
+	// Mark it as failed
+	require.NoError(t, db.UpdateTaskStatus(context.Background(), task.ID, "failed", 0.5, "encoding error"))
+
+	// Set up mock manager with DB persistence
+	q := &mockTranscodeQueue{db: db}
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+		queue:  q,
+	}
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, fmt.Sprintf("/api/transcoding/tasks/%d/retry", task.ID))
+	require.Equal(t, http.StatusCreated, rr.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "cam-retry", resp["camera_id"])
+	require.Equal(t, "rec-retry-1", resp["recording_id"])
+	require.Equal(t, "h264", resp["output_format"])
+
+	// Verify a new pending task was created in the DB
+	tasks, err := db.GetTasksByStatus(context.Background(), "pending")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1, "should have 1 pending task")
+	require.Equal(t, "cam-retry", tasks[0].CameraID)
+	require.Equal(t, "rec-retry-1", tasks[0].RecordingID)
+	require.True(t, tasks[0].OriginalDeleted, "retry should set OriginalDeleted=true")
+}
+
+func TestTranscodingTaskRetry_NonFailedTask(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+
+	// Create a completed task
+	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	task := &storage.TranscodeTask{
+		CameraID:     "cam-retry",
+		RecordingID:  "rec-retry-2",
+		InputPath:    "/data/cam-retry/segment2.mp4",
+		InputFormat:  "h265",
+		OutputPath:   "/data/cam-retry/segment2.mp4.transcoded.mp4",
+		OutputFormat: "h264",
+		CreatedAt:    now,
+	}
+	require.NoError(t, db.EnqueueTask(context.Background(), task))
+	require.NoError(t, db.UpdateTaskStatus(context.Background(), task.ID, "completed", 1.0, ""))
+
+	q := &mockTranscodeQueue{db: db}
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+		queue:  q,
+	}
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, fmt.Sprintf("/api/transcoding/tasks/%d/retry", task.ID))
+	require.Equal(t, http.StatusConflict, rr.Code)
+}
+
+func TestTranscodingTaskCreate_IgnoresReplaceOriginal(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+
+	// Seed a recording
+	seedRecording(t, db, &model.Recording{
+		ID:        "rec-rep-001",
+		CameraID:  "cam-rep",
+		FilePath:  "/data/cam-rep/segment.mp4",
+		Format:    model.Format("h265"),
+		StartedAt: time.Now().Add(-5 * time.Minute),
+		EndedAt:   time.Now(),
+		Duration:  300,
+		FileSize:  1024000,
+	})
+
+	q := &mockTranscodeQueue{db: db}
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+		queue:  q,
+	}
+	h.config = &config.Config{
+		Transcoding: config.TranscodingConfig{Enabled: true},
+		Cameras: []config.CameraConfig{{
+			ID: "cam-rep",
+			Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
+		}},
+	}
+
+	// Send replace_original: false — handler should ignore it
+	body := map[string]any{
+		"camera_id":       "cam-rep",
+		"recording_id":    "rec-rep-001",
+		"target_codec":    "h264",
+		"replace_original": false,
+	}
+	rr := doTranscodeBodyRequest(t, h, http.MethodPost, "/api/transcoding/tasks", body)
+	require.Equal(t, http.StatusCreated, rr.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	// The handler does not parse replace_original, so OriginalDeleted defaults to false
+	// Verify the response does NOT contain original_deleted: true
+	if origDel, ok := resp["original_deleted"]; ok {
+		require.False(t, origDel.(bool), "handler should not set OriginalDeleted via API")
+	}
+}
+
+func TestTranscodingTaskRetry_NoManager(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+	// No transcodeMgr set
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/tasks/1/retry")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func TestTranscodingBackfill_NoCameraID(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	h := TestHandler(db, store)
+	h.transcodeMgr = &mockTranscodeManager{
+		status: transcoding.ManagerStatus{Enabled: true},
+	}
+
+	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/backfill")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }

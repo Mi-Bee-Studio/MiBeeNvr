@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -455,4 +456,229 @@ exit 0
 			require.True(t, found, "expected nvr_transcoding_ffmpeg_status metric to be present")
 		})
 	}
+}
+
+func TestManager_AutoEnqueueOnSegmentCompleted(t *testing.T) {
+	t.Helper()
+	ResetProbe()
+
+	db := newManagerTestDB(t)
+	mockFFmpeg := createMockFFmpeg(t)
+	m := metrics.NewMetrics()
+	bus := event.NewEventBus(64)
+
+	cfg := ManagerConfig{
+		Transcoding: config.TranscodingConfig{
+			Enabled:    true,
+			FFmpegPath: mockFFmpeg,
+			MaxWorkers: 1,
+		},
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
+		EventBus:   bus,
+		Config: &config.Config{
+			Transcoding: config.TranscodingConfig{Enabled: true},
+			Cameras: []config.CameraConfig{{
+				ID: "cam-001",
+				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
+			}},
+		},
+	}
+
+	mgr, err := NewTranscodeManager(db, cfg, m)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go mgr.Run(ctx)
+
+	// Give it a moment to start the event subscriber
+	time.Sleep(200 * time.Millisecond)
+
+	// Publish a segment completed event for a camera with transcoding enabled
+	bus.Publish(ctx, event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    "cam-001",
+		RecordingID: "rec-001",
+		FilePath:    "/tmp/rec-001.mp4",
+		Format:      "h265",
+	})
+
+	// Wait for task to be created
+	require.Eventually(t, func() bool {
+		tasks, err := db.GetTasksByStatus(ctx, "pending")
+		require.NoError(t, err)
+		return len(tasks) == 1
+	}, 5*time.Second, 100*time.Millisecond, "expected 1 pending task")
+
+	tasks, err := db.GetTasksByStatus(ctx, "pending")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, "cam-001", tasks[0].CameraID)
+	require.Equal(t, "rec-001", tasks[0].RecordingID)
+	require.Equal(t, "h265", tasks[0].InputFormat)
+	require.Equal(t, "h264", tasks[0].OutputFormat)
+	require.True(t, tasks[0].OriginalDeleted, "auto-enqueue should set OriginalDeleted=true")
+}
+
+func TestManager_AutoEnqueueSkipsDisabledCamera(t *testing.T) {
+	t.Helper()
+	ResetProbe()
+
+	db := newManagerTestDB(t)
+	mockFFmpeg := createMockFFmpeg(t)
+	m := metrics.NewMetrics()
+	bus := event.NewEventBus(64)
+
+	cfg := ManagerConfig{
+		Transcoding: config.TranscodingConfig{
+			Enabled:    true,
+			FFmpegPath: mockFFmpeg,
+			MaxWorkers: 1,
+		},
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
+		EventBus:   bus,
+		Config: &config.Config{
+			Transcoding: config.TranscodingConfig{Enabled: true},
+			Cameras: []config.CameraConfig{{
+				ID: "cam-disabled",
+				Transcoding: &config.CameraTranscodingConfig{Enabled: false},
+			}},
+		},
+	}
+
+	mgr, err := NewTranscodeManager(db, cfg, m)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go mgr.Run(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Publish event for camera with transcoding disabled
+	bus.Publish(ctx, event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    "cam-disabled",
+		RecordingID: "rec-002",
+		FilePath:    "/tmp/rec-002.mp4",
+		Format:      "h265",
+	})
+
+	// Give event processing time
+	time.Sleep(500 * time.Millisecond)
+
+	// No task should be created
+	tasks, err := db.GetTasksByStatus(ctx, "pending")
+	require.NoError(t, err)
+	require.Empty(t, tasks, "no task should be created for disabled camera")
+}
+
+func TestManager_AutoEnqueueSkipsTimelapse(t *testing.T) {
+	t.Helper()
+	ResetProbe()
+
+	db := newManagerTestDB(t)
+	mockFFmpeg := createMockFFmpeg(t)
+	m := metrics.NewMetrics()
+	bus := event.NewEventBus(64)
+
+	cfg := ManagerConfig{
+		Transcoding: config.TranscodingConfig{
+			Enabled:    true,
+			FFmpegPath: mockFFmpeg,
+			MaxWorkers: 1,
+		},
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
+		EventBus:   bus,
+		Config: &config.Config{
+			Transcoding: config.TranscodingConfig{Enabled: true},
+			Cameras: []config.CameraConfig{{
+				ID: "cam-003",
+				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
+			}},
+		},
+	}
+
+	mgr, err := NewTranscodeManager(db, cfg, m)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go mgr.Run(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Publish event with timelapse format — should be skipped
+	bus.Publish(ctx, event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    "cam-003",
+		RecordingID: "rec-timelapse",
+		FilePath:    "/tmp/rec-timelapse.mp4",
+		Format:      "timelapse",
+	})
+
+	time.Sleep(500 * time.Millisecond)
+
+	tasks, err := db.GetTasksByStatus(ctx, "pending")
+	require.NoError(t, err)
+	require.Empty(t, tasks, "no task should be created for timelapse format")
+}
+
+func TestManager_AutoEnqueueSkipsSameFormat(t *testing.T) {
+	t.Helper()
+	ResetProbe()
+
+	db := newManagerTestDB(t)
+	mockFFmpeg := createMockFFmpeg(t)
+	m := metrics.NewMetrics()
+	bus := event.NewEventBus(64)
+
+	cfg := ManagerConfig{
+		Transcoding: config.TranscodingConfig{
+			Enabled:    true,
+			FFmpegPath: mockFFmpeg,
+			MaxWorkers: 1,
+		},
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
+		EventBus:   bus,
+		Config: &config.Config{
+			Transcoding: config.TranscodingConfig{Enabled: true},
+			Cameras: []config.CameraConfig{{
+				ID: "cam-004",
+				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
+			}},
+		},
+	}
+
+	mgr, err := NewTranscodeManager(db, cfg, m)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go mgr.Run(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Publish event with format matching target codec — should be skipped
+	bus.Publish(ctx, event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    "cam-004",
+		RecordingID: "rec-samefmt",
+		FilePath:    "/tmp/rec-samefmt.mp4",
+		Format:      "h264", // same as target codec
+	})
+
+	time.Sleep(500 * time.Millisecond)
+
+	tasks, err := db.GetTasksByStatus(ctx, "pending")
+	require.NoError(t, err)
+	require.Empty(t, tasks, "no task should be created when input format matches target codec")
 }

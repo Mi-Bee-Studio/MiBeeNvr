@@ -1,36 +1,36 @@
 <script lang="ts">
-  import { t } from '$lib/i18n';
-  import {
-    createCamera,
-    updateCamera,
-    getMergeConfig,
-    updateMergeConfig,
-    buildProtocolsMap,
-    normalizeProtocol,
-    testConnection,
-    getDeviceCapabilities,
-  } from '$lib/api';
-  import type {
-    Camera,
-    CameraTranscodingConfig,
-    CreateCameraRequest,
-    UpdateCameraRequest,
-    MergeConfig,
-    ProtocolInfo,
-    XiaomiDevice,
-    TestConnectionResult,
-    DeviceCapabilitiesInfo,
-  } from '$lib/api';
-  import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
-  import { showToast } from '$lib/toast';
-  import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
-  import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
-  import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
-  import ImagingPanel from '$lib/components/ImagingPanel.svelte';
-  import PresetManager from '$lib/components/PresetManager.svelte';
-  import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
-  import DeviceManagement from '$lib/components/DeviceManagement.svelte';
-
+    import { t } from '$lib/i18n';
+    import {
+        createCamera,
+        updateCamera,
+        getMergeConfig,
+        updateMergeConfig,
+        buildProtocolsMap,
+        normalizeProtocol,
+        testConnection,
+        getDeviceCapabilities,
+    } from '$lib/api';
+    import type {
+        Camera,
+        CameraTranscodingConfig,
+        CreateCameraRequest,
+        UpdateCameraRequest,
+        MergeConfig,
+        ProtocolInfo,
+        XiaomiDevice,
+        TestConnectionResult,
+        DeviceCapabilitiesInfo,
+    } from '$lib/api';
+    import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
+    import { showToast } from '$lib/toast';
+    import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
+    import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
+    import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
+    import ImagingPanel from '$lib/components/ImagingPanel.svelte';
+    import PresetManager from '$lib/components/PresetManager.svelte';
+    import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
+    import DeviceManagement from '$lib/components/DeviceManagement.svelte';
+    import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
   interface Props {
     editingCamera: Camera | null;
     protocols: ProtocolInfo[];
@@ -40,6 +40,7 @@
     oncancel: () => void;
     globalTranscodingEnabled?: boolean;
     h265Available?: boolean;
+    onbackfillneeded?: (info: { cameraId: string; count: number; targetCodec: string }) => Promise<boolean>;
   }
 
   let {
@@ -51,6 +52,7 @@
     h265Available = true,
     onsave,
     oncancel,
+    onbackfillneeded,
   }: Props = $props();
 
   // Form state
@@ -74,8 +76,8 @@
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
   let formTranscodingPreset = $state('ultrafast');
-  let formTranscodingBitrate = $state('2M');
-  let validationErrors = $state<Record<string, string>>({});
+let formTranscodingBitrate = $state('2M');
+let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
   let testing = $state(false);
@@ -235,86 +237,125 @@
     }
   }
 
-  async function handleSubmit() {
+async function handleSubmit() {
     if (!validate()) return;
     saving = true;
 
+    // Check if transcoding is being newly enabled for an existing camera
+    const isEnablingTranscoding = editingCamera && formTranscodingEnabled && !editingCamera.transcoding?.enabled;
+
+    if (isEnablingTranscoding) {
+        try {
+            const countRes = await getUntranscodedRecordingCount(editingCamera.id);
+            if (countRes.count > 0) {
+                saving = false;
+                const confirmed = await onbackfillneeded?.({
+                    cameraId: editingCamera.id,
+                    count: countRes.count,
+                    targetCodec: formTranscodingCodec,
+                }) ?? false;
+
+                if (confirmed) {
+                    // Save camera then start backfill
+                    saving = true;
+                    await performCameraSave();
+                    const result = await startBackfill(editingCamera.id);
+                    showToast(t('transcoding.backfill.success', { count: String(result.enqueued) }), 'success');
+                    saving = false;
+                    onsave();
+                } else {
+                    formTranscodingEnabled = false;
+                }
+                return;
+            }
+        } catch (e) {
+            console.warn('Failed to check untranscoded recordings:', e);
+            // Proceed with save anyway
+        }
+    }
+
     try {
-      if (editingCamera) {
+        await performCameraSave();
+        onsave();
+    } catch (e) { console.warn('Failed to save camera:', e); showToast(
+        editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
+        'error'
+    );
+    } finally {
+        saving = false;
+    }
+}
+
+async function performCameraSave() {
+    if (editingCamera) {
         const data: UpdateCameraRequest = {
-          name: formName,
-          protocol: formProtocol,
-          url: formUrl,
-          enabled: formEnabled,
-          description: formDescription || undefined,
-          location: formLocation || undefined,
-          brand: formBrand || undefined,
-          model: formModel || undefined,
-          serial_number: formSerialNumber || undefined,
-          retention_days: formRetentionDays,
-          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-          encoding: formEncoding,
-          transcoding: {
-            enabled: formTranscodingEnabled,
-            target_codec: formTranscodingCodec,
-            preset: formTranscodingPreset,
-            bitrate: formTranscodingBitrate,
-          },
+            name: formName,
+            protocol: formProtocol,
+            url: formUrl,
+            enabled: formEnabled,
+            description: formDescription || undefined,
+            location: formLocation || undefined,
+            brand: formBrand || undefined,
+            model: formModel || undefined,
+            serial_number: formSerialNumber || undefined,
+            retention_days: formRetentionDays,
+            stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+            encoding: formEncoding,
+            transcoding: {
+                enabled: formTranscodingEnabled,
+                target_codec: formTranscodingCodec,
+                preset: formTranscodingPreset,
+                bitrate: formTranscodingBitrate,
+            },
         };
         if (formUsername && formUsername !== editingCamera.username) {
-          data.username = formUsername;
+            data.username = formUsername;
         }
         if (formPassword) {
-          if (!data.username && formUsername === editingCamera.username) {
-            data.username = formUsername;
-          }
-          data.password = formPassword;
+            if (!data.username && formUsername === editingCamera.username) {
+                data.username = formUsername;
+            }
+            data.password = formPassword;
         }
 
         // Save per-camera merge config if editing
         if (mergeConfig) {
-          try {
-            await updateMergeConfig(editingCamera.id, mergeConfig);
-          } catch (e) { console.warn('Failed to save merge config:', e); }
+            try {
+                await updateMergeConfig(editingCamera.id, mergeConfig);
+            } catch (e) { console.warn('Failed to save merge config:', e); }
         }
         await updateCamera(editingCamera.id, data);
         showToast(t('cameras.cameraUpdated'), 'success');
-      } else {
+    } else {
         const data: CreateCameraRequest = {
-          name: formName,
-          protocol: formProtocol,
-          url: formUrl,
-          enabled: formEnabled,
-          description: formDescription || undefined,
-          location: formLocation || undefined,
-          brand: formBrand || undefined,
-          model: formModel || undefined,
-          serial_number: formSerialNumber || undefined,
-          stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-          encoding: formEncoding,
-          transcoding: {
-            enabled: formTranscodingEnabled,
-            target_codec: formTranscodingCodec,
-            preset: formTranscodingPreset,
-            bitrate: formTranscodingBitrate,
-          },
+            name: formName,
+            protocol: formProtocol,
+            url: formUrl,
+            enabled: formEnabled,
+            description: formDescription || undefined,
+            location: formLocation || undefined,
+            brand: formBrand || undefined,
+            model: formModel || undefined,
+            serial_number: formSerialNumber || undefined,
+            retention_days: formRetentionDays,
+            stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+            encoding: formEncoding,
+            transcoding: {
+                enabled: formTranscodingEnabled,
+                target_codec: formTranscodingCodec,
+                preset: formTranscodingPreset,
+                bitrate: formTranscodingBitrate,
+            },
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
         await createCamera(data);
         showToast(t('cameras.cameraAdded'), 'success');
-      }
-      onsave();
-    } catch (e) { console.warn('Failed to save camera:', e); showToast(
-        editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
-        'error'
-      );
-    } finally {
-      saving = false;
     }
-  }
-</script>
+}
 
+
+</script>
 <div class="card p-6 border th-border">
   <h3 class="text-lg font-semibold th-text-primary mb-4">
     {editingCamera ? t('cameras.editCamera') : t('cameras.addCamera')}
@@ -576,10 +617,9 @@
       <div class="mt-6 p-3 rounded-md th-bg-hover border th-border text-sm th-text-muted flex items-center gap-2">
         <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         {t('transcoding.warning_global_disabled')}
-      </div>
-    {/if}
+</div>
   {/if}
-
+{/if}
 
   <!-- Timelapse Config (edit mode only) -->
   {#if editingCamera}
@@ -652,5 +692,6 @@
     <button onclick={oncancel} class="btn btn-ghost">
       {t('cameras.cancel')}
     </button>
-  </div>
+    </div>
 </div>
+

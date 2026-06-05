@@ -142,6 +142,11 @@ export async function startBackfill(cameraID: string): Promise<{
     { method: 'POST' }
   );
 }
+
+export async function getUntranscodedRecordingCount(cameraID: string): Promise<{ count: number }> {
+    const query = new URLSearchParams({ camera_id: cameraID }).toString();
+    return apiRequest<{ count: number }>(`/transcoding/recordings-without-transcode?${query}`);
+}
 // --- Cameras ---
 
 export async function getTranscodingCameras(): Promise<Record<string, unknown>> {

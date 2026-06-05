@@ -226,17 +226,20 @@ export type {
 
 // Transcoding — hardware check, FFmpeg, task management
 export {
-  getTranscodingCheck,
-  getFFmpegStatus,
-  downloadFFmpeg,
-  retryDownload,
-  getTranscodingStatus,
-  getTranscodingTasks,
-  enqueueTranscodeTask,
-  cancelTranscodeTask,
-  getTranscodingCameras,
-  getTranscodingSettings,
-  updateTranscodingSettings,
+    getTranscodingCheck,
+    getFFmpegStatus,
+    downloadFFmpeg,
+    retryDownload,
+    getTranscodingStatus,
+    getTranscodingTasks,
+    enqueueTranscodeTask,
+    cancelTranscodeTask,
+    retryTranscodeTask,
+    startBackfill,
+    getUntranscodedRecordingCount,
+    getTranscodingCameras,
+    getTranscodingSettings,
+    updateTranscodingSettings,
 } from './transcoding';
 
 export type {

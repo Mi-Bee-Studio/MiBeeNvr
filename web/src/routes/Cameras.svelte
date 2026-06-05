@@ -14,6 +14,7 @@
   import OnboardingOverlay from '$lib/components/OnboardingOverlay.svelte';
   import Tab from '$lib/components/Tab.svelte';
   import Pagination from '../components/Pagination.svelte';
+  import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -46,6 +47,10 @@
 
   // Confirmation dialog state
   let confirmAction = $state<{ camera: Camera; action: 'stop' | 'restart' } | null>(null);
+
+  // Backfill dialog state
+  let backfillInfo = $state<{ cameraId: string; count: number; targetCodec: string; resolve: (value: boolean) => void } | null>(null);
+  let backfillLoading = $state(false);
 
   // Xiaomi
   let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
@@ -303,6 +308,34 @@
     editingCamera = null;
   }
 
+  async function handleBackfillNeeded(info: { cameraId: string; count: number; targetCodec: string }): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      backfillInfo = { ...info, resolve };
+    });
+  }
+
+  async function handleBackfillConfirm() {
+    if (!backfillInfo) return;
+    backfillLoading = true;
+    try {
+      const result = await startBackfill(backfillInfo.cameraId);
+      showToast(t('transcoding.backfill.success', { count: String(result.enqueued) }), 'success');
+      backfillInfo.resolve(true);
+      backfillInfo = null;
+    } catch (e) {
+      console.warn('Backfill failed:', e);
+      showToast(t('transcoding.backfill.error'), 'error');
+    } finally {
+      backfillLoading = false;
+    }
+  }
+
+  function handleBackfillCancel() {
+    if (!backfillInfo) return;
+    backfillInfo.resolve(false);
+    backfillInfo = null;
+  }
+
   async function executeConfirmAction() {
     if (!confirmAction) return;
     const { camera, action } = confirmAction;
@@ -490,6 +523,7 @@
             h265Available={h265Available}
             onsave={handleFormSave}
             oncancel={handleFormCancel}
+            onbackfillneeded={handleBackfillNeeded}
           />
         {/if}
 
@@ -786,6 +820,23 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- Backfill Confirm Dialog -->
+  {#if backfillInfo}
+    <ConfirmDialog
+      title={t('transcoding.backfill.confirm_title', { camera: editingCamera?.name || '' })}
+      message={t('transcoding.backfill.confirm_message', {
+        count: String(backfillInfo.count),
+        codec: backfillInfo.targetCodec.toUpperCase(),
+      })}
+      confirmText={t('transcoding.backfill.confirm_button')}
+      cancelText={t('recordings.cancel')}
+      onconfirm={handleBackfillConfirm}
+      oncancel={handleBackfillCancel}
+      variant="primary"
+      loading={backfillLoading}
+    />
   {/if}
 
   <!-- Onboarding overlay for first-time users -->
