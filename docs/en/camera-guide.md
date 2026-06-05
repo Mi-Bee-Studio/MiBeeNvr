@@ -762,7 +762,7 @@
 #JB>### Documentation
 #QW>
 #JM>- [MiBee NVR Configuration Guide](./configuration.md)
-#SX>- [MiBee NVR API Reference](./api-reference.md)
+- [MiBee NVR API Reference](./api/README.md)
 #RW>- [MiBee NVR Getting Started](./getting-started.md)
 #BB>
 #YJ>### Community Support

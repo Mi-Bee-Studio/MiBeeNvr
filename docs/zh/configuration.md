@@ -67,6 +67,39 @@ hls:
   segment_max_size_mb: 10        # HLS 片段最大大小 (MB)
   segment_count: 7               # 每个流的片段数 (范围: 3-10)
   max_streams: 4                 # 最大并发流数 (范围: 1-20，RPi 限制: 4)
+  low_latency: false             # 启用低延迟 HLS (LL-HLS)
+  part_min_duration: "200ms"     # LL-HLS 分片时长 (范围: 100ms-1s)
+streaming:
+  default_protocol: "hls"        # 默认直播协议 (webrtc/flv/hls/ll-hls)
+  webrtc:
+    enabled: true                  # 启用 WebRTC WHEP 直播
+    max_viewers: 2                # 最大并发 WebRTC 观众数 (范围: 1-10)
+  flv:
+    enabled: true                  # 启用 HTTP-FLV 直播
+    max_viewers: 10               # 最大并发 FLV 观众数 (范围: 1-50)
+websocket:
+  max_viewers: 10               # 最大并发 WebSocket 观众数
+health:
+  enabled: false                 # 启用摄像头健康监控
+remote_log:
+  enabled: false                 # 启用远程日志
+  endpoint: ""                    # 日志投递的 HTTP 端点 URL
+  format: "jsonline"              # 日志格式: jsonline 或 loki
+ai:
+  enabled: false                 # 启用 AI 检测
+  model_path: ""                  # ONNX 模型路径
+  confidence_threshold: 0.5      # AI 检测置信度阈值 (范围: 0-1)
+  inference_timeout_ms: 1000     # AI 推理超时 (毫秒)
+  frame_skip_rate: 2             # 帧跳过率 (每 N 帧处理一帧)
+rtmp:
+  enabled: false                 # 启用 RTMP 服务器
+  port: 1935                    # RTMP 监听端口
+srt:
+  enabled: false                 # 启用 SRT 监听器
+  port: 9000                    # SRT 监听端口
+metrics_auth:
+  username: ""                   # Metrics 端点用户名
+  password: ""                   # Metrics 端点密码
 xiaomi:
   user_id: ""                    # 小米账户用户 ID (来自认证响应)
   token: ""                      #小米 passToken API 访问令牌
@@ -163,7 +196,7 @@ cameras:
 - **类型**: string
 - **必需**: 是
 - **描述**: 摄像头传输协议
-- **选项**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`
+- **选项**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`
 - **旧格式**: 也支持 `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`（自动解析为新格式）
 - **注意**: 旧格式会自动解析为新协议+编码格式以保持向后兼容性
 - **兼容性**: 两种格式都支持
@@ -178,6 +211,7 @@ cameras:
   - `protocol: "http"` → `encoding: "jpeg"`
   - `protocol: "onvif"` → `encoding: "h264"` 或 `"h265"`（如果未指定则自动检测）
   - `protocol: "xiaomi"` → `encoding: "h264"` 或 `"h265"`（自动检测）
+  - `protocol: "timelapse"` → `encoding: "h264"` 或 `"h265"`（与录像机编码匹配）
 
 ### `cameras[].url`
 - **类型**: string
@@ -265,13 +299,14 @@ cameras:
 
 ### `cameras[].audio_enabled`
 
-#ZV|- **类型**: boolean
-#MK|- **默认**: `false`
-#VB|- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像
-#QM|- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）
-#ZX|- **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
-#RN|- **示例**: `true`, `false
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像
+- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）
+- **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
+- **示例**: `true`, `false`
 
+### `cameras[].did`
 
 - **类型**: string
 - **可选**: 是（小米摄像头必需）
@@ -284,6 +319,40 @@ cameras:
 - **描述**: 每个摄像头合并配置覆盖
 - **注意**: 只有非零字段会覆盖全局合并配置
 - **示例**: 参见 [合并配置](#合并配置)
+
+### `cameras[].timelapse`
+- **类型**: object
+- **可选**: 是
+- **描述**: 每个摄像头延时摄影配置覆盖
+- **字段**:
+  - `enabled` (boolean) - 启用延时摄影
+  - `interval` (string, 默认: "30s", 最小: "1s") - 快照间隔
+  - `output_fps` (int, 默认: 30, 范围: 1-60) - 输出帧率
+  - `video_codec` (string, 默认: "h264") - 视频编码 (h264/h265)
+  - `delete_original` (boolean, 默认: false) - 延时摄影后删除原始片段
+  - `merge_enabled` (boolean) - 启用合并 (nil=自动检测)
+  - `merge_mode` (string, 默认: "auto") - 合并模式: auto, mp4, jpeg
+  - `daily_merge` (boolean, 默认: true) - 每日合并
+  - `merge_output_fps` (int, 默认: 30, 范围: 1-60) - 合并输出帧率
+- **示例**: 参见 [延时摄影配置](#延时摄影配置)
+
+### `cameras[].health_overrides`
+- **类型**: object
+- **可选**: 是
+- **描述**: 每个摄像头健康监控阈值覆盖。设置后，非零值优先于全局健康配置
+- **字段**:
+  - `max_idr_interval` (string) - 最大 IDR 帧间隔
+  - `bitrate_change_threshold` (float, 范围: 0-1) - 码率变化阈值
+  - `min_fps` (int) - 最小帧率
+  - `offline_threshold` (string) - 离线判定阈值
+  - `freeze_timeout` (string) - 画面冻结超时
+
+### `cameras[].frame_watchdog_timeout`
+- **类型**: string
+- **可选**: 是
+- **默认**: `"30s"`
+- **描述**: 每个摄像头的帧超时阈值。如果在此时间内未收到新帧，将触发看门狗重启
+- **示例**: `"30s"`, `"60s"`, `"2m"`
 
 ## 清理配置
 
@@ -449,6 +518,147 @@ cameras:
 - **描述**: 最大并发 HLS 流数
 - **示例**: `4`, `8`, `16`
 
+### `hls.low_latency`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用低延迟 HLS (LL-HLS)。启用后使用 gohlslib 的 Low-Latency HLS 变体
+- **注意**: 启用时 `hls.segment_count` 必须 >= 7
+- **示例**: `true`, `false`
+
+### `hls.part_min_duration`
+- **类型**: string
+- **默认**: `"200ms"`
+- **范围**: 100ms-1s
+- **描述**: LL-HLS 部分片段时长。低延迟 HLS 部分片段的持续时间
+- **示例**: `"200ms"`, `"500ms"`, `"1s"`
+
+## 流媒体配置
+
+流媒体配置控制直播协议的默认行为和限制。
+
+### `streaming.default_protocol`
+- **类型**: string
+- **默认**: `"hls"`
+- **选项**: `"webrtc"`, `"flv"`, `"hls"`, `"ll-hls"`
+- **描述**: 默认直播协议。控制新观看者首次连接时使用的流媒体协议
+- **示例**: `"hls"`, `"webrtc"`, `"flv"`, `"ll-hls"`
+
+### `streaming.webrtc.enabled`
+- **类型**: boolean
+- **默认**: `true`
+- **描述**: 启用 WebRTC WHEP 直播支持
+- **示例**: `true`, `false`
+
+### `streaming.webrtc.max_viewers`
+- **类型**: integer
+- **默认**: 2
+- **范围**: 1-10
+- **描述**: 最大并发 WebRTC 观众数。RPi 3B 上建议保持较低值
+- **示例**: `2`, `4`, `8`
+
+### `streaming.flv.enabled`
+- **类型**: boolean
+- **默认**: `true`
+- **描述**: 启用 HTTP-FLV 直播支持
+- **示例**: `true`, `false`
+
+### `streaming.flv.max_viewers`
+- **类型**: integer
+- **默认**: 10
+- **范围**: 1-50
+- **描述**: 最大并发 HTTP-FLV 观众数
+- **示例**: `10`, `20`, `50`
+
+## WebSocket 配置
+
+### `websocket.max_viewers`
+- **类型**: integer
+- **默认**: 10
+- **描述**: 最大并发 WebSocket 观众数
+- **示例**: `5`, `10`, `20`
+
+## 健康监控配置
+
+### `health.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用摄像头健康监控系统。启用后，系统会监控摄像头状态、检测异常并可选地自动修复
+- **示例**: `true`, `false`
+
+## 远程日志配置
+
+### `remote_log.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用远程日志投递（如 VictoriaLogs）
+- **示例**: `true`, `false`
+
+### `remote_log.endpoint`
+- **类型**: string
+- **必需**: 是（如果启用）
+- **描述**: 远程日志接收的 HTTP 端点 URL，例如 VictoriaLogs 的 JSONline 接口
+- **示例**: `"http://localhost:9428/insert/jsonline"`
+
+### `remote_log.format`
+- **类型**: string
+- **默认**: `"jsonline"`
+- **选项**: `"jsonline"`, `"loki"`
+- **描述**: 远程日志输出格式
+- **示例**: `"jsonline"`, `"loki"`
+
+## AI 推理配置
+
+### `ai.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用 AI 推理检测。启用后可在录像流上运行 ONNX Runtime 推理
+- **注意**: AI 配置没有独立的 enabled 字段，AI 功能在配置了 model_path 后自动启用
+- **示例**: `true`, `false`
+
+## RTMP 配置
+
+### `rtmp.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用 RTMP 服务器以接收 RTMP 推流
+- **示例**: `true`, `false`
+
+### `rtmp.port`
+- **类型**: integer
+- **默认**: 1935
+- **范围**: 1-65535
+- **描述**: RTMP 监听端口
+- **示例**: `1935`, `1936`
+
+## SRT 配置
+
+### `srt.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用 SRT 监听器以接收 MPEG-TS 流
+- **示例**: `true`, `false`
+
+### `srt.port`
+- **类型**: integer
+- **默认**: 9000
+- **范围**: 1-65535
+- **描述**: SRT 监听端口
+- **示例**: `9000`, `9001`
+
+## Metrics 认证配置
+
+### `metrics_auth.username`
+- **类型**: string
+- **可选**: 是
+- **描述**: Metrics（Prometheus）端点的 BasicAuth 用户名。设置后会保护 /api/metrics 端点
+- **示例**: `"monitor"`
+
+### `metrics_auth.password`
+- **类型**: string
+- **可选**: 是
+- **描述**: Metrics 端点的 BasicAuth 密码
+- **示例**: `"monitor-pass"`
+
 ## 小米配置
 
 ### `xiaomi.user_id`
@@ -552,6 +762,23 @@ cameras:
     enabled: true
 ```
 
+### 延时摄影摄像头
+```yaml
+cameras:
+  - id: "garden-timelapse"
+    name: "花园延时摄影"
+    protocol: "timelapse"
+    encoding: "h264"
+    url: "rtsp://192.168.1.103:554/stream"
+    enabled: true
+    timelapse:
+      enabled: true
+      interval: "30s"
+      delete_original: false
+      merge_mode: "auto"
+      daily_merge: true
+```
+
 ## 从旧格式迁移
 
 旧协议格式如 `"rtsp_h264"` 会自动转换为新的独立 `protocol` 和 `encoding` 字段：
@@ -584,6 +811,15 @@ cameras:
 - **HLS 配置**:
   - 片段数: 3-10
   - 最大流数: 1-20（RPi 3B 上为 4）
+  - 低延迟 HLS: segment_count 必须 >= 7
+  - 分片时长: 必须在 100ms-1s 之间
+- **流媒体配置**:
+  - default_protocol 必须是 webrtc/flv/hls/ll-hls 之一
+  - webrtc.max_viewers: 1-10
+  - flv.max_viewers: 1-50
+- **健康配置**: 所有时长字段必须有效
+- **远程日志**: 启用时必须提供 endpoint
+- **SRT 配置**: 端口必须在 1-65535 范围内
 
 ## 文件路径和位置
 
@@ -668,4 +904,29 @@ hls:
   max_streams: 4
 observability:
   log_level: "info"
+streaming:
+  default_protocol: "hls"
+  webrtc:
+    enabled: true
+    max_viewers: 2
+  flv:
+    enabled: true
+    max_viewers: 10
+websocket:
+  max_viewers: 10
+health:
+  enabled: false
+remote_log:
+  enabled: false
+ai:
+  enabled: false
+rtmp:
+  enabled: false
+  port: 1935
+srt:
+  enabled: false
+  port: 9000
+metrics_auth:
+  username: ""
+  password: ""
 ```

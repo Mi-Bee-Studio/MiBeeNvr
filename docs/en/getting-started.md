@@ -6,8 +6,8 @@ MiBee NVR is a lightweight Network Video Recorder written in Go. It records vide
 
 **Key Features:**
 
-- Records RTSP (H.264, H.265, MJPEG), HTTP JPEG, and ONVIF cameras to MP4 segments
-- Web UI with dark/light theme, HLS live view, and Chart.js statistics
+- Records RTSP (H.264, H.265, MJPEG), HTTP JPEG, ONVIF, Xiaomi (CS2 P2P), and Timelapse cameras to MP4 segments
+- Web UI with dark/light theme, multi-protocol live view (HLS, WebRTC, HTTP-FLV, WebSocket), and Chart.js statistics
 - WebDAV (configurable read-only/read-write) and FTP access to recordings
 - MQTT integration for event-driven recording
 - Segment merging to reduce file count
@@ -139,7 +139,7 @@ There are three ways to set the admin password:
 
 MiBee NVR uses a **separate transport + encoding** format for camera protocols:
 
-- **Transport**: `rtsp`, `http`, `onvif`
+- **Transport**: `rtsp`, `http`, `onvif`, `xiaomi`, `timelapse`
 - **Encoding**: `h264`, `h265`, `mjpeg`, `jpeg`
 
 > The old combined format (`rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`) still works for backward compatibility.
@@ -195,6 +195,18 @@ cameras:
 
 > ONVIF auto-detects the encoding. The `encoding` field can be omitted.
 
+### Timelapse Camera
+
+```yaml
+cameras:
+  - id: "construction"
+    name: "Construction Site"
+    protocol: "timelapse"
+    enabled: true
+```
+
+> Timelapse cameras capture periodic snapshots without a continuous video stream.
+
 ### Using the Old Combined Format
 
 All of these still work:
@@ -216,7 +228,7 @@ After editing the config, restart MiBee NVR or use the Web UI to add cameras at 
 
 Open http://your-server:9090 and log in with your configured credentials. From the Web UI you can:
 
-- View live camera streams (HLS)
+- View live camera streams (HLS, WebRTC, HTTP-FLV, WebSocket)
 - Play back and download recordings
 - Add, edit, and remove cameras
 - View storage statistics and trends

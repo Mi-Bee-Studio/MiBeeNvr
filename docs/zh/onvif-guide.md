@@ -685,7 +685,7 @@ services:
 ### 文档
 - [MiBee NVR 入门指南](./getting-started.md)
 - [MiBee NVR 配置指南](./configuration.md)
-- [MiBee NVR API 参考](./api-reference.md)
+- [MiBee NVR API 参考](./api/README.md)
 
 ### 社区支持
 - GitHub Issues：[MiBee NVR Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)

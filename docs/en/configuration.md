@@ -21,6 +21,7 @@ cameras:
     encoding: "h264"
     url: "rtsp://..."
     enabled: true
+    audio_enabled: false
     onvif_endpoint: ""           # ONVIF specific
     profile_token: ""            # ONVIF specific  
     stream_encoding: ""          # ONVIF auto-detect (H264/H265)
@@ -29,6 +30,8 @@ cameras:
     sample_interval: 1            # MJPEG frame sampling
     hls_max_fps: 0               # HLS frame rate limit
     vendor: ""                   # Xiaomi transport vendor
+    did: ""                      # Xiaomi device ID
+    frame_watchdog_timeout: "30s" # Per-camera frame watchdog
     merge:                       # Per-camera merge overrides
       enabled: false
       check_interval: "1h"
@@ -36,6 +39,18 @@ cameras:
       batch_limit: 150
       min_segment_age: "5m"
       min_segments_to_merge: 2
+    transcoding:                 # Per-camera transcoding overrides
+      enabled: false
+      target_codec: "h264"
+      preset: "ultrafast"
+      bitrate: "2M"
+    timelapse:                   # Per-camera timelapse recording
+      enabled: false
+      interval: "30s"
+      delete_original: false
+    health_overrides:            # Per-camera health threshold overrides
+      min_fps: 10
+      offline_threshold: "15s"
 cleanup:
   retention_days: 30
   check_interval: "1h"
@@ -67,6 +82,8 @@ hls:
   segment_max_size_mb: 10        # HLS segment max size in MB
   segment_count: 7               # Segments per stream (range: 3-10)
   max_streams: 4                 # Max concurrent streams (range: 1-20, RPi constraint: 4)
+  low_latency: false             # Enable Low-Latency HLS
+  part_min_duration: "200ms"     # LL-HLS partial segment duration
 xiaomi:
   user_id: ""                    # Xiaomi account user ID (from auth response)
   token: ""                      # Xiaomi passToken for API access
@@ -75,6 +92,69 @@ observability:
   log_level: "info"              # Log level: debug, info, warn, error
   log_format: "text"             # Log format: json or text
   enable_pprof: false            # Enable pprof debug endpoints
+streaming:
+  default_protocol: "hls"        # Default live view protocol (hls/ll-hls/webrtc/flv)
+  webrtc:
+    enabled: true
+    max_viewers: 2               # Range: 1-10
+    idle_timeout: "60s"
+  flv:
+    enabled: true
+    max_viewers: 10              # Range: 1-50
+    idle_timeout: "60s"
+    gop_cache_size: 1
+websocket:
+  max_viewers: 10
+  write_buf_size: 100
+  idle_timeout: 60s
+health:
+  enabled: false
+  events_retention: "720h"       # 30 days
+  alerts:
+    cooldown: "5m"
+    mqtt: false
+  layer1:
+    offline_threshold: "30s"
+  layer2:
+    bitrate_change_threshold: 0.5
+    min_fps: 5
+    max_idr_interval: "60s"
+  layer2_5:
+    freeze_timeout: "10s"
+  auto_remediation:
+    enabled: false
+    max_restarts_per_hour: 3
+    cooldown_minutes: 5
+    blacklist_hours: 1
+    global_max_per_min: 10
+remote_log:
+  enabled: false
+  endpoint: ""                   # VictoriaLogs URL when enabled
+  format: "jsonline"             # jsonline or loki
+transcoding:
+  enabled: false
+  max_workers: 1                 # Range: 1-4
+  job_timeout: "30m"
+  history_retention: "168h"      # 7 days
+ai:
+  inference_timeout_ms: 0
+  frame_skip_rate: 0
+  confidence_threshold: 0.0
+  model_path: ""
+rtmp:
+  enabled: false
+  port: 1935
+  # stream_keys:                  # Map camera_id to stream key
+  #   cam1: "my-stream-key"
+srt:
+  enabled: false
+  port: 9000
+  # streams:                      # SRT stream mappings
+  #   - camera_id: "cam1"
+  #     mode: "listener"
+metrics_auth:
+  username: ""
+  password: ""
 version: "1.0"
 ```
 
@@ -163,7 +243,7 @@ cameras:
 - **Type**: string
 - **Required**: Yes
 - **Description**: Camera transport protocol
-- **Options**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`
+- **Options**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`
 - **Legacy Format**: Also supports `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` (automatically parsed to new format)
 - **Note**: Legacy format is automatically parsed to the new protocol+encoding format for backward compatibility
 - **Compatibility**: Both formats are supported
@@ -265,14 +345,15 @@ cameras:
 
 ### `cameras[].audio_enabled`
 
-#SS|- **Type**: boolean
-#TT|- **Default**: `false`
-#BY|- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording.
-#MV|- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras)
-#YR|- **Note**: Not supported for MJPEG or HTTP-JPEG cameras
-#TM|- **Example**: `true`, `false
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording.
+- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras)
+- **Note**: Not supported for MJPEG or HTTP-JPEG cameras
+- **Example**: `true`, `false`
 
 
+### `cameras[].did`
 - **Type**: string
 - **Optional**: Yes (required for Xiaomi cameras)
 - **Description**: Xiaomi Device ID from cloud service
@@ -284,6 +365,71 @@ cameras:
 - **Description**: Per-camera merge configuration overrides
 - **Note**: Only non-zero fields override the global merge config
 - **Example**: See [Merge Configuration](#merge-configuration)
+
+### `cameras[].transcoding`
+- **Type**: object
+- **Optional**: Yes
+- **Description**: Per-camera transcoding configuration overrides. See [Transcoding Configuration](#transcoding-configuration) for field details.
+- **Example**:
+  ```yaml
+  cameras:
+    - id: "cam1"
+      transcoding:
+        enabled: true
+        target_codec: "h264"
+        preset: "ultrafast"
+        bitrate: "2M"
+  ```
+
+### `cameras[].timelapse`
+- **Type**: object
+- **Optional**: Yes
+- **Description**: Per-camera timelapse recording configuration
+- **Fields**:
+  - **`enabled`** (boolean, default: `false`) — Enable timelapse recording
+  - **`interval`** (string, default: `"30s"`, min: 1s) — Snapshot capture interval
+  - **`output_fps`** (integer, default: 30, range: 1-60) — Output framerate
+  - **`video_codec`** (string, default: `"h264"`, options: h264/h265) — Video codec (deprecated)
+  - **`delete_original`** (boolean, default: `false`) — Remove original segments after timelapse
+  - **`merge_enabled`** (boolean, default: auto-detect) — Enable auto-merging
+  - **`merge_mode`** (string, default: `"auto"`, options: auto/mp4/jpeg) — Merge output format
+  - **`daily_merge`** (boolean, default: `true`) — Merge segments into daily files
+  - **`merge_output_fps`** (integer, default: 30, range: 1-60) — Merge output framerate
+- **Example**:
+  ```yaml
+  cameras:
+    - id: "cam1"
+      timelapse:
+        enabled: true
+        interval: "60s"
+        delete_original: true
+  ```
+
+### `cameras[].health_overrides`
+- **Type**: object
+- **Optional**: Yes
+- **Description**: Per-camera health monitoring threshold overrides. Non-zero values take precedence over global [Health Configuration](#health-configuration).
+- **Fields**:
+  - **`max_idr_interval`** (string) — Max IDR interval override (e.g. `"30s"`)
+  - **`bitrate_change_threshold`** (float, range: 0-1) — Bitrate change threshold override
+  - **`min_fps`** (integer) — Minimum FPS override
+  - **`offline_threshold`** (string) — Offline detection threshold override (e.g. `"15s"`)
+  - **`freeze_timeout`** (string) — Freeze detection timeout override (e.g. `"5s"`)
+- **Example**:
+  ```yaml
+  cameras:
+    - id: "cam1"
+      health_overrides:
+        min_fps: 10
+        offline_threshold: "15s"
+  ```
+
+### `cameras[].frame_watchdog_timeout`
+- **Type**: string
+- **Optional**: Yes
+- **Default**: `"30s"`
+- **Description**: Timeout before declaring a camera unhealthy when no frames are received. Per-camera override of the frame watchdog.
+- **Example**: `"30s"`, `"60s"`, `"120s"`
 
 ## Cleanup Configuration
 
@@ -449,6 +595,20 @@ cameras:
 - **Description**: Maximum number of concurrent HLS streams
 - **Example**: `4`, `8`, `16`
 
+### `hls.low_latency`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable Low-Latency HLS (LL-HLS) using partial segments for reduced latency
+- **Note**: Requires `segment_count` >= 7 when enabled
+- **Example**: `true`, `false`
+
+### `hls.part_min_duration`
+- **Type**: string
+- **Default**: `"200ms"`
+- **Range**: 100ms-1s
+- **Description**: Minimum duration for LL-HLS partial segments
+- **Example**: `"200ms"`, `"500ms"`, `"1s"`
+
 ## Xiaomi Configuration
 
 ### `xiaomi.user_id`
@@ -491,6 +651,338 @@ cameras:
 - **Default**: `false`
 - **Description**: Enable pprof debug endpoints for performance profiling
 - **Note**: Use with caution in production
+
+## Streaming Configuration
+
+### `streaming.default_protocol`
+- **Type**: string
+- **Default**: `"hls"`
+- **Options**: `"hls"`, `"ll-hls"`, `"webrtc"`, `"flv"`
+- **Description**: Default streaming protocol for live view in the web UI
+- **Example**: `"hls"`, `"webrtc"`, `"flv"`
+
+### `streaming.webrtc.enabled`
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Enable WebRTC WHEP streaming for low-latency live view
+- **Example**: `true`, `false`
+
+### `streaming.webrtc.max_viewers`
+- **Type**: integer
+- **Default**: 2
+- **Range**: 1-10
+- **Description**: Maximum number of concurrent WebRTC viewers per stream
+- **Example**: `2`, `5`, `10`
+
+### `streaming.webrtc.idle_timeout`
+- **Type**: string
+- **Default**: `"60s"`
+- **Description**: Idle timeout before closing an inactive WebRTC connection
+- **Example**: `"30s"`, `"60s"`, `"120s"`
+
+### `streaming.flv.enabled`
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Enable HTTP-FLV streaming for browser-compatible live view
+- **Example**: `true`, `false`
+
+### `streaming.flv.max_viewers`
+- **Type**: integer
+- **Default**: 10
+- **Range**: 1-50
+- **Description**: Maximum number of concurrent FLV viewers per stream
+- **Example**: `10`, `25`, `50`
+
+### `streaming.flv.idle_timeout`
+- **Type**: string
+- **Default**: `"60s"`
+- **Description**: Idle timeout before closing an inactive FLV connection
+- **Example**: `"30s"`, `"60s"`, `"120s"`
+
+### `streaming.flv.gop_cache_size`
+- **Type**: integer
+- **Default**: 1
+- **Description**: Number of GOPs to cache for instant FLV playback on viewer connect
+- **Example**: `1`, `2`, `5`
+
+## WebSocket Configuration
+
+### `websocket.max_viewers`
+- **Type**: integer
+- **Default**: 10
+- **Description**: Maximum number of concurrent WebSocket viewers per stream
+- **Example**: `10`, `20`, `50`
+
+### `websocket.write_buf_size`
+- **Type**: integer
+- **Default**: 100
+- **Description**: Write buffer size for WebSocket frames (units of frames)
+- **Example**: `100`, `200`, `500`
+
+### `websocket.idle_timeout`
+- **Type**: duration
+- **Default**: `60s`
+- **Description**: Idle timeout before closing an inactive WebSocket connection
+- **Example**: `30s`, `60s`, `120s`
+
+## Health Configuration
+
+### `health.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable camera health monitoring system
+- **Example**: `true`, `false`
+
+### `health.events_retention`
+- **Type**: string
+- **Default**: `"720h"` (30 days)
+- **Description**: How long to retain health monitoring events
+- **Example**: `"720h"`, `"168h"`, `"720h"`
+
+### `health.alerts.cooldown`
+- **Type**: string
+- **Default**: `"5m"`
+- **Description**: Cooldown period between consecutive health alerts
+- **Example**: `"1m"`, `"5m"`, `"10m"`
+
+### `health.alerts.mqtt`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable MQTT publishing for health alerts
+- **Example**: `true`, `false`
+
+### `health.layer1.offline_threshold`
+- **Type**: string
+- **Default**: `"30s"`
+- **Description**: Time without any data before a camera is considered offline
+- **Example**: `"15s"`, `"30s"`, `"60s"`
+
+### `health.layer2.bitrate_change_threshold`
+- **Type**: float
+- **Default**: 0.5
+- **Range**: 0-1
+- **Description**: Normalized bitrate change threshold for quality anomaly detection. A value of 0.5 means a 50% change triggers a quality event.
+- **Example**: `0.3`, `0.5`, `0.8`
+
+### `health.layer2.min_fps`
+- **Type**: integer
+- **Default**: 5
+- **Description**: Minimum acceptable FPS for a healthy camera
+- **Example**: `5`, `10`, `15`
+
+### `health.layer2.max_idr_interval`
+- **Type**: string
+- **Default**: `"60s"`
+- **Description**: Maximum allowed interval between IDR frames before triggering a health event
+- **Example**: `"30s"`, `"60s"`, `"120s"`
+
+### `health.layer2_5.freeze_timeout`
+- **Type**: string
+- **Default**: `"10s"`
+- **Description**: Timeout for detecting a frozen video stream (streaming data but no motion)
+- **Example**: `"5s"`, `"10s"`, `"30s"`
+
+### `health.auto_remediation.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable automatic camera restart when health issues are detected
+- **Example**: `true`, `false`
+
+### `health.auto_remediation.max_restarts_per_hour`
+- **Type**: integer
+- **Default**: 3
+- **Description**: Maximum number of automatic camera restarts per hour
+- **Example**: `3`, `5`, `10`
+
+### `health.auto_remediation.cooldown_minutes`
+- **Type**: integer
+- **Default**: 5
+- **Description**: Cooldown in minutes between automatic remediation actions
+- **Example**: `5`, `10`, `30`
+
+### `health.auto_remediation.blacklist_hours`
+- **Type**: integer
+- **Default**: 1
+- **Description**: Hours to blacklist a camera from auto-remediation after exceeding the restart limit
+- **Example**: `1`, `2`, `24`
+
+### `health.auto_remediation.global_max_per_min`
+- **Type**: integer
+- **Default**: 10
+- **Description**: Global maximum number of remediation actions per minute across all cameras
+- **Example**: `10`, `20`, `50`
+
+## Remote Log Configuration
+
+### `remote_log.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable remote log shipping (e.g. to VictoriaLogs)
+- **Example**: `true`, `false`
+
+### `remote_log.endpoint`
+- **Type**: string
+- **Required**: Yes (if enabled)
+- **Description**: Remote log endpoint URL (e.g. VictoriaLogs insert URL)
+- **Example**: `"http://localhost:9428/insert/jsonline"`
+
+### `remote_log.format`
+- **Type**: string
+- **Default**: `"jsonline"`
+- **Options**: `"jsonline"`, `"loki"`
+- **Description**: Log shipping format
+- **Example**: `"jsonline"`, `"loki"`
+
+## AI Configuration
+
+### `ai.inference_timeout_ms`
+- **Type**: integer
+- **Default**: 0 (no timeout)
+- **Description**: Inference timeout in milliseconds for AI model execution
+- **Example**: `5000`, `10000`, `30000`
+
+### `ai.frame_skip_rate`
+- **Type**: integer
+- **Default**: 0 (process all frames)
+- **Description**: Number of frames to skip between AI inference runs
+- **Example**: `0`, `3`, `5`
+
+### `ai.confidence_threshold`
+- **Type**: float
+- **Default**: 0.0
+- **Range**: 0.0-1.0
+- **Description**: Minimum confidence threshold for AI detection results
+- **Example**: `0.5`, `0.7`, `0.9`
+
+### `ai.model_path`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: Path to the ONNX model file for AI inference
+- **Example**: `"/models/yolo.onnx"`
+
+## RTMP Configuration
+
+### `rtmp.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable RTMP ingest server for receiving push streams
+- **Example**: `true`, `false`
+
+### `rtmp.port`
+- **Type**: integer
+- **Default**: 1935
+- **Range**: 1-65535
+- **Description**: RTMP server listen port
+- **Example**: `1935`, `1936`
+
+### `rtmp.stream_keys`
+- **Type**: map (string → string)
+- **Optional**: Yes
+- **Description**: Mapping of camera IDs to stream keys for RTMP authentication
+- **Example**:
+  ```yaml
+  rtmp:
+    stream_keys:
+      cam1: "my-stream-key-1"
+      cam2: "my-stream-key-2"
+  ```
+
+## SRT Configuration
+
+### `srt.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable SRT listener for receiving MPEG-TS streams
+- **Example**: `true`, `false`
+
+### `srt.port`
+- **Type**: integer
+- **Default**: 9000
+- **Range**: 1-65535
+- **Description**: SRT listener listen port
+- **Example**: `9000`, `9001`
+
+### `srt.streams`
+- **Type**: array of objects
+- **Optional**: Yes
+- **Description**: SRT stream mappings defining how incoming SRT streams are routed to cameras
+- **Fields**:
+  - **`camera_id`** (string, required) — Target camera ID
+  - **`mode`** (string, required, options: `"listener"`/`"caller"`) — SRT mode
+  - **`address`** (string, required for caller mode) — Remote SRT address
+  - **`passphrase`** (string, optional) — AES encryption passphrase
+  - **`stream_id`** (string, optional) — SRT stream ID for caller mode
+- **Example**:
+  ```yaml
+  srt:
+    streams:
+      - camera_id: "cam1"
+        mode: "listener"
+      - camera_id: "cam2"
+        mode: "caller"
+        address: "192.168.1.100:9000"
+  ```
+
+## Metrics Auth Configuration
+
+### `metrics_auth.username`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: Username for /metrics endpoint BasicAuth. When set (with password), the /metrics endpoint becomes authenticated; otherwise it stays public.
+- **Example**: `"admin"`
+
+### `metrics_auth.password`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: Password (plaintext) for /metrics endpoint BasicAuth. Mutually exclusive with password_hash.
+- **Example**: `"metrics-password"`
+
+### `metrics_auth.password_hash`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: bcrypt-hashed password for /metrics endpoint BasicAuth. Takes precedence over password.
+- **Example**: `"$2a$10$..."`
+
+## Transcoding Configuration
+
+### `transcoding.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable FFmpeg-based transcoding globally
+- **Example**: `true`, `false`
+
+### `transcoding.ffmpeg_path`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: Path to FFmpeg binary. Auto-detected if not specified.
+- **Example**: `"/usr/bin/ffmpeg"`
+
+### `transcoding.max_workers`
+- **Type**: integer
+- **Default**: 1
+- **Range**: 1-4
+- **Description**: Maximum number of concurrent transcoding jobs
+- **Example**: `1`, `2`, `4`
+
+### `transcoding.download_url`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: URL to download FFmpeg binary from (auto-populated per platform)
+- **Example**: `"https://github.com/.../ffmpeg"`
+
+### `transcoding.job_timeout`
+- **Type**: string
+- **Default**: `"30m"`
+- **Range**: 1s-4h
+- **Description**: Per-job timeout for transcoding operations
+- **Example**: `"10m"`, `"30m"`, `"1h"`
+
+### `transcoding.history_retention`
+- **Type**: string
+- **Default**: `"168h"` (7 days)
+- **Description**: How long to retain transcoding job history. Empty string means never delete.
+- **Minimum**: 24h
+- **Example**: `"168h"`, `"720h"`, `""`
 
 ## Camera Protocol Examples
 
@@ -574,16 +1066,31 @@ The configuration is validated on startup with these constraints:
 
 - **Camera IDs**: Must be unique across all cameras
 - **Camera URLs**: Must have valid scheme (http/rtsp) and host
+- **Camera Protocols**: Protocol/encoding combinations must be valid (rtsp+h264/h265/mjpeg, http+jpeg, onvif+h264/h265, xiaomi+h264/h265, timelapse)
 - **ONVIF Cameras**: Must have either URL or onvif_endpoint
 - **Xiaomi Cameras**: Must have xiaomi.token configured
 - **Port Numbers**: Must be in range 1-65535
 - **Segment Duration**: Maximum 30 seconds on RPi 3B
 - **Retention Days**: Must be between 1 and 3650
 - **Disk Threshold**: Must be between 50% and 99%
-- **Merge Configuration**: All duration fields must be valid
-- **HLS Configuration**: 
+- **Merge Configuration**: All duration fields must be valid; min_segments_to_merge >= 2
+- **HLS Configuration**:
   - Segment count: 3-10
   - Max streams: 1-20 (4 on RPi 3B)
+  - Low-latency requires segment_count >= 7
+  - Part min duration: 100ms-1s
+- **Streaming Configuration**:
+  - Default protocol must be one of: hls, ll-hls, webrtc, flv
+  - WebRTC max viewers: 1-10
+  - FLV max viewers: 1-50
+- **WebSocket Configuration**: max_viewers > 0, write_buf_size > 0, idle_timeout > 0
+- **Health Configuration**: All duration fields must be valid when health is enabled
+- **Remote Log Configuration**: endpoint required when enabled; format must be jsonline or loki
+- **Transcoding Configuration**: max_workers 1-4; job_timeout 1s-4h; history_retention >= 24h
+- **SRT Configuration**: port 1-65535; stream mode must be listener or caller
+- **Camera Health Overrides**: All duration fields must be valid; bitrate_change_threshold 0-1; min_fps >= 0
+- **Camera Timelapse**: interval >= 1s; merge_mode must be auto/mp4/jpeg; merge_output_fps 1-60
+- **Camera Transcoding**: target_codec must be h264 or h265; preset must be ultrafast/faster/medium
 
 ## File Paths and Locations
 
@@ -636,6 +1143,11 @@ cameras:
     url: "rtsp://192.168.1.100:554/stream"
     enabled: true
     sub_stream_url: "rtsp://192.168.1.100:554/sub"
+    audio_enabled: true
+    transcoding:
+      enabled: true
+      target_codec: "h264"
+      preset: "ultrafast"
   - id: "xiaomi-cam"
     name: "Xiaomi Camera"
     protocol: "xiaomi"
@@ -666,6 +1178,21 @@ webdav:
   read_write: false
 hls:
   max_streams: 4
+  low_latency: false
+streaming:
+  default_protocol: "hls"
+  webrtc:
+    enabled: true
+    max_viewers: 2
+  flv:
+    enabled: true
+    max_viewers: 10
+websocket:
+  max_viewers: 10
+health:
+  enabled: true
+  layer1:
+    offline_threshold: "30s"
 observability:
   log_level: "info"
 ```

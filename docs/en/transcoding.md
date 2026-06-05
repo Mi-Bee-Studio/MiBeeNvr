@@ -350,4 +350,4 @@ A: Yes, but expect reduced performance. Use 1 worker and simple presets for best
 - Cancel stuck tasks: `DELETE /api/transcoding/tasks/{id}`
 - Verify camera has transcoding enabled
 
-For more detailed troubleshooting, check the [Configuration](configuration.md) and [API Reference](api-reference.md) documents.
+For more detailed troubleshooting, check the [Configuration](configuration.md) and [API Reference](./api/README.md) documents.

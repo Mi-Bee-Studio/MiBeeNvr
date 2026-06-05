@@ -788,7 +788,7 @@ cameras:
 ### 文档
 
 - [MiBee NVR 配置指南](./configuration.md)
-- [MiBee NVR API 参考](./api-reference.md)
+- [MiBee NVR API 参考](./api/README.md)
 - [MiBee NVR 入门指南](./getting-started.md)
 
 ### 社区支持

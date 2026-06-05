@@ -40,6 +40,12 @@ cameras: []
 #     url: "rtsp://192.168.1.100:554/stream"
 #     enabled: true
 #     audio_enabled: false          # Enable audio recording (default: false)
+#     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
+#     timelapse:                      # Per-camera timelapse recording
+#       enabled: false               # Enable timelapse (default: false)
+#       interval: "30s"              # Snapshot interval (default: 30s)
+#     health_overrides:              # Per-camera health threshold overrides
+#       freeze_timeout: "10s"        # Timeout for detecting frozen stream (default: 10s)
 #   - id: "backyard"
 #     name: "Back Yard"
 #     protocol: "http"
@@ -47,6 +53,12 @@ cameras: []
 #     url: "http://192.168.1.101/capture"
 #     enabled: true
 #     audio_enabled: false          # Enable audio recording (default: false). Not supported for MJPEG/HTTP-JPEG.
+#     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
+#     timelapse:                      # Per-camera timelapse recording
+#       enabled: false               # Enable timelapse (default: false)
+#       interval: "30s"              # Snapshot interval (default: 30s)
+#     health_overrides:              # Per-camera health threshold overrides
+#       freeze_timeout: "10s"        # Timeout for detecting frozen stream (default: 10s)
 #   - id: "xiaomi-cam"
 #     name: "Xiaomi Camera"
 #     protocol: "xiaomi"
@@ -55,6 +67,12 @@ cameras: []
 #     vendor: "cs2"                # Transport vendor: "cs2" (default)
 #     enabled: true
 #     audio_enabled: false          # Enable audio recording (default: false)
+#     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
+#     timelapse:                      # Per-camera timelapse recording
+#       enabled: false               # Enable timelapse (default: false)
+#       interval: "30s"              # Snapshot interval (default: 30s)
+#     health_overrides:              # Per-camera health threshold overrides
+#       freeze_timeout: "10s"        # Timeout for detecting frozen stream (default: 10s)
 
 # Xiaomi cloud account settings (required for xiaomi cameras)
 # xiaomi:
@@ -110,6 +128,8 @@ hls:
   segment_max_size_mb: 10          # HLS segment max size in MB (default: 10)
   segment_count: 7                 # Segments per stream (range: 3-10, default: 7)
   max_streams: 4                   # Max concurrent HLS streams (range: 1-20, default: 4)
+  low_latency: false               # Enable Low-Latency HLS (default: false)
+  part_min_duration: "200ms"       # LL-HLS part duration (range: 100ms-1s, default: 200ms)
 
 # Observability — logging and debugging
 observability:
@@ -136,3 +156,75 @@ observability:
 #         target_codec: "h264"    # Target codec: h264, h265 (default: same as source)
 #         preset: "ultrafast"     # FFmpeg preset: ultrafast, faster, medium (default: ultrafast)
 #         bitrate: "2M"           # Target bitrate (e.g. "1M", "2M", "500K")
+
+# Streaming — default live view protocol and per-protocol settings
+# streaming:
+#   default_protocol: "hls"          # Default streaming protocol: hls, ll-hls, webrtc, flv (default: hls)
+#   webrtc:
+#     enabled: true                   # Enable WebRTC WHEP streaming (default: true)
+#     max_viewers: 2                  # Max concurrent WebRTC viewers (range: 1-10, default: 2)
+#     idle_timeout: "60s"             # WebRTC viewer idle timeout (default: 60s)
+#   flv:
+#     enabled: true                   # Enable HTTP-FLV streaming (default: true)
+#     max_viewers: 10                 # Max concurrent FLV viewers (range: 1-50, default: 10)
+#     idle_timeout: "60s"             # FLV viewer idle timeout (default: 60s)
+#     gop_cache_size: 1               # FLV GOP cache size (default: 1)
+
+# WebSocket streaming — binary frame streaming
+# websocket:
+#   max_viewers: 10                  # Max concurrent WebSocket viewers (default: 10)
+#   write_buf_size: 100               # WebSocket write buffer size (default: 100)
+#   idle_timeout: "60s"               # WebSocket idle timeout (default: 60s)
+
+# Camera health monitoring — automatic health detection and remediation
+# health:
+#   enabled: false                   # Enable health monitoring (default: false)
+#   events_retention: "720h"          # Health events retention duration (default: 720h / 30 days)
+#   alerts:
+#     cooldown: "5m"                 # Alert cooldown between notifications (default: 5m)
+#     mqtt: false                     # Send health alerts via MQTT (default: false)
+#   layer1:
+#     offline_threshold: "30s"        # Timeout before declaring camera offline (default: 30s)
+#   layer2:
+#     bitrate_change_threshold: 0.5   # Max bitrate change ratio (0-1, default: 0.5)
+#     min_fps: 5                      # Minimum acceptable FPS (default: 5)
+#     max_idr_interval: "60s"          # Max IDR interval (default: 60s)
+#   layer2_5:
+#     freeze_timeout: "10s"           # Timeout for detecting frozen stream (default: 10s)
+#   auto_remediation:
+#     enabled: false                  # Enable automatic camera restart (default: false)
+#     max_restarts_per_hour: 3         # Max restarts per hour per camera (default: 3)
+#     cooldown_minutes: 5             # Cooldown between restarts in minutes (default: 5)
+#     blacklist_hours: 1              # Hours to blacklist camera after repeated failures (default: 1)
+#     global_max_per_min: 10          # Max restarts across all cameras per minute (default: 10)
+
+# Remote logging — send logs to external HTTP endpoint
+# remote_log:
+#   enabled: false                   # Enable remote logging (default: false)
+#   endpoint: ""                      # HTTP endpoint URL for log delivery
+#   format: "jsonline"               # Log format: jsonline, loki (default: jsonline)
+
+# AI inference — ONNX Runtime object detection
+# ai:
+#   inference_timeout_ms: 5000        # Inference timeout in ms (default: 5000)
+#   frame_skip_rate: 10              # Process every Nth frame (default: 10)
+#   confidence_threshold: 0.5         # Detection confidence threshold (default: 0.5)
+#   model_path: ""                   # Path to ONNX model (empty = auto-download)
+
+# RTMP ingest server — receive RTMP push streams
+# rtmp:
+#   enabled: false                   # Enable RTMP server (default: false)
+#   port: 1935                       # RTMP listen port (default: 1935)
+#   stream_keys: {}                  # Camera ID to stream key mapping (e.g. front-door: mykey)
+
+# SRT listener — receive SRT/MPEG-TS streams
+# srt:
+#   enabled: false                   # Enable SRT listener (default: false)
+#   port: 9000                       # SRT listen port (default: 9000)
+#   streams: []                      # SRT stream mappings (camera_id, mode, address, passphrase, stream_id)
+
+# Metrics authentication — optional BasicAuth for /metrics endpoint
+# metrics_auth:
+#   username: ""                     # Metrics endpoint username (empty = public access)
+#   password: ""                     # Metrics endpoint password
+#   password_hash: ""                 # Metrics endpoint password hash (bcrypt)

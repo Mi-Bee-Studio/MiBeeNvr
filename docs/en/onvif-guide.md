@@ -685,7 +685,7 @@ services:
 ### Documentation
 - [MiBee NVR Getting Started](./getting-started.md)
 - [MiBee NVR Configuration Guide](./configuration.md)
-- [MiBee NVR API Reference](./api-reference.md)
+- [MiBee NVR API Reference](./api/README.md)
 
 ### Community Support
 - GitHub Issues: [MiBee NVR Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)

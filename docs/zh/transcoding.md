@@ -350,4 +350,4 @@ A: 是的，但预期性能会降低。使用 1 个工作进程和简单预设�
 - 取消卡住的任务：`DELETE /api/transcoding/tasks/{id}`
 - 验证摄像头已启用转码
 
-更多详细的故障排除，请查看 [配置](configuration.md) 和 [API 参考](api-reference.md) 文档。
+更多详细的故障排除，请查看 [配置](configuration.md) 和 [API 参考](./api/README.md) 文档。

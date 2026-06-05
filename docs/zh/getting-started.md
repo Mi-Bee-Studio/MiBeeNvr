@@ -6,8 +6,8 @@ MiBee NVR 是一个用 Go 语言编写的轻量级网络视频录像机。它将
 
 **主要功能：**
 
-- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG 和 ONVIF 摄像头录制为 MP4 片段
-- Web 管理界面，支持深色/浅色主题、HLS 实时预览和 Chart.js 统计图表
+- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG、ONVIF、Xiaomi (CS2 P2P) 和 Timelapse 摄像头录制为 MP4 片段
+- Web 管理界面，支持深色/浅色主题、多协议实时预览（HLS、WebRTC、HTTP-FLV、WebSocket）和 Chart.js 统计图表
 - WebDAV（可配置只读/读写）和 FTP 访问录像文件
 - MQTT 集成，支持事件触发录制
 - 片段合并，减少文件数量
@@ -138,7 +138,7 @@ make cross
 
 MiBee NVR 使用**独立的传输协议 + 编码格式**配置摄像头：
 
-- **传输协议**：`rtsp`、`http`、`onvif`
+- **传输协议**：`rtsp`、`http`、`onvif`、`xiaomi`、`timelapse`
 - **编码格式**：`h264`、`h265`、`mjpeg`、`jpeg`
 
 > 旧版组合格式（`rtsp_h264`、`rtsp_h265`、`rtsp_mjpeg`、`http_jpeg`）仍然支持，保持向后兼容。
@@ -194,6 +194,18 @@ cameras:
 
 > ONVIF 会自动检测编码格式，可以省略 `encoding` 字段。
 
+### 延时摄影摄像头
+
+```yaml
+cameras:
+  - id: "construction"
+    name: "施工现场"
+    protocol: "timelapse"
+    enabled: true
+```
+
+> 延时摄影摄像头按周期拍摄快照，不产生连续视频流。
+
 ### 使用旧版组合格式
 
 以下格式仍然可用：
@@ -215,7 +227,7 @@ cameras:
 
 在浏览器打开 http://你的服务器地址:9090，使用配置的凭据登录。通过 Web UI 可以：
 
-- 查看摄像头实时画面（HLS）
+- 查看摄像头实时画面（HLS、WebRTC、HTTP-FLV、WebSocket）
 - 回放和下载录像
 - 添加、编辑和删除摄像头
 - 查看存储统计和趋势

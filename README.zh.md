@@ -32,10 +32,15 @@
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
 - **小米摄像头**：CS2 P2P 协议、云端认证（社区驱动，非核心功能）
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
+- **视频转码**：基于 FFmpeg 的硬件转码，H.265→H.264 转换
+- **延时摄影**：定时快照延时录像
+- **WebSocket 流**：实时二进制帧流
+- **AI 检测**：ONNX Runtime 推理，浏览器端目标检测
+- **事件系统**：基于 SSE 的实时事件流
 
 ## 开发路线
 
-|| 状态 | 协议 / 功能 | 说明 |
+| 状态 | 协议 / 功能 | 说明 |
 |------|------------|------|
 | ✅ 已完成 | RTSP（H.264/H.265/MJPEG） | 核心流媒体协议 |
 | ✅ 已完成 | HTTP JPEG | IP 摄像头快照流 |
@@ -122,9 +127,17 @@ make build
 |------|------|
 | [快速入门](docs/zh/getting-started.md) | 安装、添加第一个摄像头 |
 | [配置说明](docs/zh/configuration.md) | 完整配置参考 |
-| [API 文档](docs/zh/api-reference.md) | REST API 接口文档 |
+| [API 文档](docs/zh/api/README.md) | REST API 接口文档 |
 | [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
 | [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译 |
+| [摄像头指南](docs/zh/camera-guide.md) | 摄像头设置、协议、故障排除 |
+| [Xiaomi 设置](docs/zh/xiaomi-setup.md) | 小米云摄像头集成 |
+| [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制、故障排除 |
+| [FTP 集成](docs/zh/ftp-integration.md) | FTP 文件访问设置 |
+| [MQTT 集成](docs/zh/mqtt-integration.md) | MQTT 智能家居集成 |
+| [WebDAV 集成](docs/zh/webdav-integration.md) | WebDAV 文件访问设置 |
+| [故障排除](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
+| [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
 
 ```bash
 make build              # 本机编译（当前架构）
@@ -169,7 +182,7 @@ make docker-release
 
 | 镜像 | 架构 |
 |------|------|
-| `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64 |
+| `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64, armv7 |
 
 可用标签：`latest`、`v1.2.3`（semver）、`sha-abc1234`
 
@@ -177,19 +190,36 @@ make docker-release
 
 ```
 cmd/mibee-nvr/       # 程序入口
-internal/            # 核心模块
-  api/               # REST API
-  camera/            # 摄像头管理
-  recorder/          # H.264/H.265/MJPEG 录像引擎
-  hls/               # HLS 直播管理器
-  storage/           # SQLite 数据库 + 文件管理
-  config/            # YAML 配置
-  middleware/        # 认证中间件
-  muxer/             # MP4 封装器
-  ftp/               # FTP 服务
-  webdav/            # WebDAV 服务（可配置只读/读写）
-  mqtt/              # MQTT 客户端
-  ui/                # 内嵌 Web UI
+internal/            # 核心模块（29 个）
+  ai/               # ONNX Runtime AI 推理
+  api/              # REST API
+  camera/           # 摄像头管理
+  cleanup/          # 保留策略 + 磁盘清理
+  config/           # YAML 配置、验证
+  event/            # 发布/订阅事件总线
+  flv/              # HTTP-FLV 直播
+  ftp/              # FTP 服务
+  health/           # 摄像头健康监控
+  hls/              # HLS 直播（+ LL-HLS）
+  merge/            # 片段合并
+  metrics/          # Prometheus 指标
+  middleware/       # 认证、限流
+  model/            # 核心类型
+  mqtt/             # MQTT 客户端
+  muxer/            # MP4 封装器
+  onvif/            # ONVIF 发现、云台控制
+  recorder/         # H.264/H.265/MJPEG/JPEG/ONVIF/小米/延时录像引擎
+  rtmp/             # RTMP 接入服务
+  srt/              # SRT 监听器
+  storage/          # SQLite 数据库 + 文件管理
+  timelapse/        # 延时录像管理器
+  transcoding/      # FFmpeg 转码
+  ui/               # 内嵌 Web UI
+  upload/           # HTTP 上传处理
+  webdav/           # WebDAV 服务
+  webrtc/           # WebRTC WHEP 直播
+  wsstream/         # WebSocket 直播流
+  xiaomi/           # 小米摄像头（CS2 P2P）
 web/                 # Svelte 5 前端
 deploy/              # systemd 服务文件
 docs/                # 文档（中文/英文）
