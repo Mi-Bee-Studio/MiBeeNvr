@@ -26,6 +26,7 @@
 | 延时摄影与协议 | [timelapse-protocols.md](timelapse-protocols.md) | 延时摄影状态、支持的协议、功能标志 |
 | 备份 | [backup.md](backup.md) | 创建/列出数据库备份 |
 | 错误响应 | [errors.md](errors.md) | 错误码、HTTP 状态码、常见示例 |
+| Prometheus 指标 | [../metrics.md](../metrics.md) | 所有 Prometheus 指标定义、类型、标签及使用方法 |
 
 ## 快速开始
 

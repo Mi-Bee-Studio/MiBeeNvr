@@ -28,8 +28,6 @@ var timelapseLogger = slog.Default().With("component", "timelapse-recorder")
 type TimelapseRecorderConfig struct {
 	CameraID   string
 	Interval   time.Duration // frame capture interval (e.g., 5s)
-	OutputFPS  int            // output video FPS (e.g., 30) — DEPRECATED, kept for config compat
-	VideoCodec string         // "h264" or "h265" — DEPRECATED, kept for config compat
 	SegmentDur time.Duration  // segment duration
 	URL        string         // HTTP MJPEG stream URL
 	Username   string         // for basic auth (optional)
@@ -376,12 +374,14 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 	}
 
 	// Insert recording entry into database
+	var recordingID string
 	var totalSize int64
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
+		recordingID = fmt.Sprintf("%d", now.UnixNano())
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         recordingID,
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinalPath,
 			Format:     model.FormatTimelapse,
@@ -409,7 +409,7 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 
 	// Trigger async rolling merge if merge manager is configured.
 	if r.mergeMgr != nil && r.curFinalPath != "" && r.frameCount > 0 {
-		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, r.curFinalPath, r.curFinalPath+".mp4")
+		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, r.curFinalPath, r.curFinalPath+".mp4", recordingID)
 	}
 
 	r.curTempPath = ""

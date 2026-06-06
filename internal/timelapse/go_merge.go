@@ -1,8 +1,10 @@
 package timelapse
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,13 +13,37 @@ import (
 	"github.com/abema/go-mp4"
 )
 
+// init registers MJPEG sample entry box types with go-mp4 library.
+// Without this registration, mp4.Marshal for VisualSampleEntry with type 'mjpa'
+// would fail with ErrBoxInfoNotFound.
+func init() {
+	mp4.AddAnyTypeBoxDef(&mp4.VisualSampleEntry{}, mp4.StrToBoxType("mjpa"))
+}
+
 // GoMerger implements TimelapseMerger using pure Go to create an MP4 file
 // from JPEG frames. Each JPEG is stored as a sample in an MJPEG video track.
-type GoMerger struct{}
+// When jpegQuality >= 0, frames are decoded and re-encoded at the given quality
+// to reduce file size. When jpegQuality < 0, original JPEG data is used as-is (passthrough).
+type GoMerger struct {
+	jpegQuality int
+}
 
-// NewGoMerger creates a new GoMerger.
+// NewGoMerger creates a new GoMerger with passthrough mode (original JPEG quality preserved).
 func NewGoMerger() *GoMerger {
-	return &GoMerger{}
+	return &GoMerger{jpegQuality: -1}
+}
+
+// NewEnhancedGoMerger creates a GoMerger that re-encodes JPEG frames at the given quality.
+// quality range: 1-100 (1 = smallest files/poor quality, 100 = best quality/large files).
+// Recommended archival quality: 30 (60-70% size reduction vs Q=85, visually acceptable).
+func NewEnhancedGoMerger(quality int) *GoMerger {
+	if quality < 1 {
+		quality = 1
+	}
+	if quality > 100 {
+		quality = 100
+	}
+	return &GoMerger{jpegQuality: quality}
 }
 
 // CanMerge always returns true since this is a pure Go implementation.
@@ -30,8 +56,6 @@ func (m *GoMerger) Tier() MergeTier {
 	return TierGo
 }
 
-// Merge performs the merge of JPEG frame files from framesDir into outputPath at the given fps.
-// It creates an MP4 file with an MJPEG video track, where each JPEG frame is a sample.
 func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps int) (*MergeResult, error) {
 	// List and sort frame files.
 	frames, err := listFrameFiles(framesDir)
@@ -85,6 +109,18 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 				Tier:  TierGo,
 				Error: err.Error(),
 			}, err
+		}
+
+		// Re-encode JPEG at lower quality if configured.
+		if m.jpegQuality >= 0 {
+			data, err = reencodeJPEG(data, m.jpegQuality)
+			if err != nil {
+				muxer.close()
+				return &MergeResult{
+					Tier:  TierGo,
+					Error: fmt.Sprintf("re-encode frame %s: %v", framePath, err),
+				}, err
+			}
 		}
 
 		if err := muxer.addSample(data, sampleDuration); err != nil {
@@ -703,4 +739,20 @@ func parseJPEGDimensions(data []byte) (width, height int) {
 // MathInt64 is a helper to avoid int64 conversion issues.
 func MathInt64(x int) int64 {
 	return int64(x)
+}
+
+// reencodeJPEG decodes a JPEG image and re-encodes it at the given quality level.
+// This provides file size reduction at the cost of visual quality.
+// quality: 1-100 (1 = smallest, 100 = best).
+func reencodeJPEG(data []byte, quality int) ([]byte, error) {
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode jpeg: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, fmt.Errorf("encode jpeg at quality %d: %w", quality, err)
+	}
+	return buf.Bytes(), nil
 }

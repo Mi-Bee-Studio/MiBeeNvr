@@ -19,6 +19,8 @@ export interface Recording {
   merge_status?: 'pending' | 'merged' | 'failed';
   merge_path?: string;
   archived?: boolean;
+  merge_tier?: string;
+  merge_error?: string;
 }
 
 export interface FrameInfo {

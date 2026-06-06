@@ -140,6 +140,12 @@ func testMergeConfigDefaults(t *testing.T) {
 	if cfg.DailyMerge {
 		t.Error("MergeConfig.DailyMerge should default to false")
 	}
+	if cfg.CRF != 0 {
+		t.Errorf("MergeConfig.CRF should default to 0, got %d", cfg.CRF)
+	}
+	if cfg.Bitrate != "" {
+		t.Errorf("MergeConfig.Bitrate should default to empty, got %q", cfg.Bitrate)
+	}
 }
 
 func testMergeConfigValues(t *testing.T) {
@@ -149,6 +155,8 @@ func testMergeConfigValues(t *testing.T) {
 		OutputFPS:      30,
 		DeleteOriginal: true,
 		DailyMerge:     true,
+		CRF:            23,
+		Bitrate:        "2M",
 	}
 	if !cfg.Enabled {
 		t.Error("MergeConfig.Enabled should be true")
@@ -164,6 +172,12 @@ func testMergeConfigValues(t *testing.T) {
 	}
 	if !cfg.DailyMerge {
 		t.Error("MergeConfig.DailyMerge should be true")
+	}
+	if cfg.CRF != 23 {
+		t.Errorf("MergeConfig.CRF = %d, want 23", cfg.CRF)
+	}
+	if cfg.Bitrate != "2M" {
+		t.Errorf("MergeConfig.Bitrate = %q, want %q", cfg.Bitrate, "2M")
 	}
 }
 
@@ -183,14 +197,18 @@ func testMergeResultDefaults(t *testing.T) {
 	if r.Duration != 0 {
 		t.Errorf("MergeResult.Duration should default to 0, got %f", r.Duration)
 	}
+	if r.Codec != "" {
+		t.Errorf("MergeResult.Codec should default to empty, got %q", r.Codec)
+	}
 }
 
-func testMergeResultSuccess(t *testing.T) {
+	func testMergeResultSuccess(t *testing.T) {
 	r := MergeResult{
 		Tier:         TierGo,
 		OutputPath:   "/tmp/merged.mp4",
 		FramesMerged: 150,
 		Duration:     15.0,
+		Codec:        "h264",
 	}
 	if r.Tier != TierGo {
 		t.Errorf("MergeResult.Tier = %v, want %v", r.Tier, TierGo)
@@ -206,6 +224,9 @@ func testMergeResultSuccess(t *testing.T) {
 	}
 	if r.Duration != 15.0 {
 		t.Errorf("MergeResult.Duration = %f, want 15.0", r.Duration)
+	}
+	if r.Codec != "h264" {
+		t.Errorf("MergeResult.Codec = %q, want %q", r.Codec, "h264")
 	}
 }
 

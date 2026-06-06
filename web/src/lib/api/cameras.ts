@@ -708,11 +708,23 @@ export async function deleteDeviceUsers(
 
 // --- Per-camera timelapse config ---
 
+export interface TimeRange {
+  start: string;
+  end: string;
+}
+
+export interface ScheduleConfig {
+  time_ranges: TimeRange[];
+  days_of_week: number[];
+}
+
 export interface TimelapseConfig {
   enabled: boolean;
   interval: string;
-  output_fps: number;
-  video_codec: string;
+  frame_source: string;
+  snapshot_url: string;
+  schedule: ScheduleConfig | null;
+  paused: boolean;
   delete_original: boolean;
   merge_enabled?: boolean;
   merge_mode?: string;

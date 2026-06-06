@@ -894,7 +894,71 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "15", version)
+	require.Equal(t, "16", version)
+}
+
+func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_migrate_v16.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Verify merge_tier column exists
+	var mergeTierExists int
+	err := db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_tier'`).Scan(&mergeTierExists)
+	require.NoError(t, err)
+	require.Equal(t, 1, mergeTierExists, "merge_tier column must exist after Init")
+
+	// Verify schema version is at least 16
+	var version string
+	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
+	require.NoError(t, err)
+	require.Equal(t, "16", version)
+
+	// Verify insert with merge_tier works and stores correctly
+	rec := &model.Recording{
+		ID:         "mt-001",
+		CameraID:   "cam1",
+		FilePath:   "/test.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  time.Now(),
+		EndedAt:    time.Now().Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   1024,
+		FrameCount: 60,
+		Merged:     false,
+		MergeTier:  "ffmpeg",
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec))
+
+	// Verify merge_tier stored correctly via direct SQL
+	var storedTier string
+	err = db.db.QueryRowContext(ctx, `SELECT merge_tier FROM recordings WHERE id='mt-001'`).Scan(&storedTier)
+	require.NoError(t, err)
+	require.Equal(t, "ffmpeg", storedTier)
+
+	// Verify merge_tier default is empty string for unset values
+	rec2 := &model.Recording{
+		ID:         "mt-002",
+		CameraID:   "cam1",
+		FilePath:   "/test2.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  time.Now(),
+		EndedAt:    time.Now().Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   2048,
+		FrameCount: 30,
+		Merged:     false,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec2))
+
+	var defaultTier string
+	err = db.db.QueryRowContext(ctx, `SELECT merge_tier FROM recordings WHERE id='mt-002'`).Scan(&defaultTier)
+	require.NoError(t, err)
+	require.Equal(t, "", defaultTier, "merge_tier should default to empty string")
 }
 
 func TestInsertRecordingWithRetry_Success(t *testing.T) {

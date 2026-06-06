@@ -26,6 +26,7 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | Timelapse & Protocols | [timelapse-protocols.md](timelapse-protocols.md) | Timelapse status, supported protocols, feature flags |
 | Backup | [backup.md](backup.md) | Create/list database backups |
 | Error Responses | [errors.md](errors.md) | Error codes, HTTP status codes, common examples |
+| Prometheus Metrics | [../metrics.md](../metrics.md) | All Prometheus metric definitions, types, labels, and usage |
 
 ## Quick Start
 

@@ -118,16 +118,34 @@ type CameraTranscodingConfig struct {
 	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`           // e.g. "2M"
 }
 
+// TimeRange defines a start and end time for timelapse scheduling.
+type TimeRange struct {
+	Start string `yaml:"start,omitempty" json:"start,omitempty"` // HH:MM format (24h)
+	End   string `yaml:"end,omitempty" json:"end,omitempty"`     // HH:MM format (24h)
+}
+
+// ScheduleConfig defines when timelapse recording should be active.
+type ScheduleConfig struct {
+	// TimeRanges specifies the time windows for recording (e.g., 09:00-17:00).
+	// Multiple ranges are supported and overlapping ranges are auto-merged.
+	TimeRanges []TimeRange `yaml:"time_ranges,omitempty" json:"time_ranges,omitempty"`
+	// DaysOfWeek restricts recording to specific days (0=Sunday, 1=Monday, ..., 6=Saturday).
+	// Empty or nil means all days.
+	DaysOfWeek []int `yaml:"days_of_week,omitempty" json:"days_of_week,omitempty"`
+}
+
 type CameraTimelapseConfig struct {
-	Enabled        bool   `yaml:"enabled" json:"enabled"`                                       // default false
-	Interval       string `yaml:"interval,omitempty" json:"interval,omitempty"`                 // snapshot interval, default "30s", min 1s
-	OutputFPS      int    `yaml:"output_fps,omitempty" json:"output_fps,omitempty"`             // output framerate, default 30, range 1-60
-	VideoCodec     string `yaml:"video_codec,omitempty" json:"video_codec,omitempty"`           // h264 or h265, default h264
-	DeleteOriginal bool   `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`   // remove original segments after timelapse, default false
-	MergeEnabled   *bool  `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`       // auto-detect (nil=auto)
-	MergeMode      string `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`             // auto, mp4, jpeg — default auto
-	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`           // default true
-	MergeOutputFPS int    `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"` // default 30, range 1-60
+	Enabled        bool            `yaml:"enabled" json:"enabled"`                                                       // default false
+	Interval       string          `yaml:"interval,omitempty" json:"interval,omitempty"`                                 // snapshot interval, default "30s", min 1s
+	FrameSource    string          `yaml:"frame_source,omitempty" json:"frame_source,omitempty"`                         // auto, snapshot, rtsp_keyframe, mjpeg — default auto
+	SnapshotURL    string          `yaml:"snapshot_url,omitempty" json:"snapshot_url,omitempty"`                       // URL for snapshot source (required when frame_source=snapshot)
+	Schedule       *ScheduleConfig `yaml:"schedule,omitempty" json:"schedule,omitempty"`                               // nil = 24/7 recording
+	Paused         bool            `yaml:"paused" json:"paused"`                                                           // pause timelapse recording, default false
+	DeleteOriginal bool            `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`                   // remove original segments after timelapse, default false
+	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`                       // auto-detect (nil=auto)
+	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`                             // auto, mp4, jpeg — default auto
+	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
+	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"`                 // default 30, range 1-60
 }
 
 type AuthConfig struct {
@@ -563,14 +581,44 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("cameras.%s.timelapse.interval must be at least 1s, got %s", cam.ID, cam.Timelapse.Interval)
 			}
 		}
-		// VideoCodec and OutputFPS are deprecated — any value is accepted
-		if cam.Timelapse.OutputFPS < 0 || cam.Timelapse.OutputFPS > 60 {
-			slog.Warn("timelapse.output_fps out of range, ignoring", "camera_id", cam.ID, slog.Int("value", cam.Timelapse.OutputFPS))
-			cam.Timelapse.OutputFPS = 0
+		// Validate frame_source
+		if cam.Timelapse.FrameSource != "" {
+			switch cam.Timelapse.FrameSource {
+			case "auto", "snapshot", "rtsp_keyframe", "mjpeg":
+				// valid
+			default:
+				return fmt.Errorf("cameras.%s.timelapse.frame_source must be one of \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\" (got %q)", cam.ID, cam.Timelapse.FrameSource)
+			}
 		}
-		if cam.Timelapse.VideoCodec != "" {
-			slog.Warn("timelapse.video_codec is deprecated, ignoring", "camera_id", cam.ID, slog.String("value", cam.Timelapse.VideoCodec))
-			cam.Timelapse.VideoCodec = ""
+		// Validate schedule
+		if sched := cam.Timelapse.Schedule; sched != nil {
+			// Validate days of week (0-6)
+			for i, d := range sched.DaysOfWeek {
+				if d < 0 || d > 6 {
+					return fmt.Errorf("cameras.%s.timelapse.schedule.days_of_week[%d] must be between 0 (Sunday) and 6 (Saturday), got %d", cam.ID, i, d)
+				}
+			}
+			// Validate and normalize time ranges
+			var parsed []TimeRange
+			for i, tr := range sched.TimeRanges {
+				startH, startM, err := parseHHMM(tr.Start)
+				if err != nil {
+					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].start invalid time: %w", cam.ID, i, err)
+				}
+				endH, endM, err := parseHHMM(tr.End)
+				if err != nil {
+					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].end invalid time: %w", cam.ID, i, err)
+				}
+				// Convert to minutes since midnight for comparison
+				startMins := startH*60 + startM
+				endMins := endH*60 + endM
+				if endMins <= startMins {
+					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].end (%s) must be after start (%s)", cam.ID, i, tr.End, tr.Start)
+				}
+				parsed = append(parsed, TimeRange{Start: tr.Start, End: tr.End})
+			}
+			// Auto-merge overlapping time ranges
+			sched.TimeRanges = mergeTimeRanges(parsed)
 		}
 		// Validate merge config fields
 		if cam.Timelapse.MergeMode != "" {
@@ -924,12 +972,12 @@ func (cfg *Config) ApplyDefaults() {
 			if cam.Timelapse.Interval == "" {
 				cam.Timelapse.Interval = "30s"
 			}
-			if cam.Timelapse.OutputFPS == 0 {
-				cam.Timelapse.OutputFPS = 30
+			if cam.Timelapse.FrameSource == "" {
+				cam.Timelapse.FrameSource = "auto"
 			}
-			if cam.Timelapse.VideoCodec == "" {
-				cam.Timelapse.VideoCodec = "h264"
-			}
+			// SnapshotURL defaults to empty string (must be set explicitly for snapshot source)
+			// Schedule defaults to nil (24/7 recording)
+			// Paused defaults to false (zero value)
 			// DeleteOriginal defaults to false (zero value)
 			// Merge defaults
 			if cam.Timelapse.MergeMode == "" {
@@ -1067,4 +1115,65 @@ func EncryptConfigFile(path string) ([]string, error) {
 	}
 
 	return plaintextFields, nil
+}
+
+// parseHHMM parses a time string in HH:MM format and returns hours and minutes.
+func parseHHMM(s string) (hours, minutes int, err error) {
+	if len(s) != 5 || s[2] != ':' {
+		return 0, 0, fmt.Errorf("invalid time format %q, expected HH:MM", s)
+	}
+	hours = int(s[0]-'0')*10 + int(s[1]-'0')
+	minutes = int(s[3]-'0')*10 + int(s[4]-'0')
+	if hours < 0 || hours > 23 || minutes < 0 || minutes > 59 {
+		return 0, 0, fmt.Errorf("invalid time %q, hours must be 00-23, minutes 00-59", s)
+	}
+	return hours, minutes, nil
+}
+
+// mergeTimeRanges merges overlapping or adjacent time ranges and returns a non-overlapping sorted list.
+func mergeTimeRanges(ranges []TimeRange) []TimeRange {
+	if len(ranges) <= 1 {
+		return ranges
+	}
+	// Convert to minutes since midnight for sorting
+	type tr struct {
+		start, end int
+		original   TimeRange
+	}
+	parsed := make([]tr, len(ranges))
+	for i, r := range ranges {
+		sh, sm, _ := parseHHMM(r.Start)
+		eh, em, _ := parseHHMM(r.End)
+		parsed[i] = tr{start: sh*60 + sm, end: eh*60 + em, original: r}
+	}
+	// Sort by start time
+	for i := 0; i < len(parsed); i++ {
+		for j := i + 1; j < len(parsed); j++ {
+			if parsed[j].start < parsed[i].start {
+				parsed[i], parsed[j] = parsed[j], parsed[i]
+			}
+		}
+	}
+	// Merge overlapping/adjacent ranges
+	merged := []tr{parsed[0]}
+	for i := 1; i < len(parsed); i++ {
+		last := &merged[len(merged)-1]
+		if parsed[i].start <= last.end {
+			// Overlapping or adjacent — extend end if needed
+			if parsed[i].end > last.end {
+				last.end = parsed[i].end
+			}
+		} else {
+			merged = append(merged, parsed[i])
+		}
+	}
+	// Convert back to TimeRanges
+	result := make([]TimeRange, len(merged))
+	for i, m := range merged {
+		result[i] = TimeRange{
+			Start: fmt.Sprintf("%02d:%02d", m.start/60, m.start%60),
+			End:   fmt.Sprintf("%02d:%02d", m.end/60, m.end%60),
+		}
+	}
+	return result
 }

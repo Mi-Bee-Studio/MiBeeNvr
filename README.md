@@ -187,6 +187,7 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [WebDAV Integration](docs/en/webdav-integration.md) | WebDAV file access setup |
 | [Troubleshooting](docs/en/troubleshooting.md) | Common issues and solutions |
 | [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
+| [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
 
 ## Build & Deploy
 

@@ -21,6 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -130,6 +131,8 @@ type Handler struct {
 	aiEngine          AIEngine
 	aiDetector        AIDetector
 	eventBus          *event.EventBus
+	timelapseMergeMgr *timelapse.RollingMergeManager
+	timelapseDailyMgr  *timelapse.DailyMergeManager
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
@@ -242,7 +245,17 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/onvif/probe", h.handleONVIFProbe)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		// Timelapse endpoints
+		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
+		r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
+		r.Post("/api/timelapse/{id}/pause", h.handleTimelapsePause)
+		r.Post("/api/timelapse/{id}/resume", h.handleTimelapseResume)
+		r.Get("/api/timelapse/{id}", h.handleTimelapseGet)
+		r.Delete("/api/timelapse/{id}", h.handleTimelapseDelete)
+		r.Post("/api/timelapse/{id}/download", h.handleTimelapseDownload)
+		r.Get("/api/timelapse/{id}/thumbnail", h.handleTimelapseThumbnail)
+		r.Get("/api/timelapse/merge/progress/{cameraId}", h.handleTimelapseMergeProgress)
 		r.Get("/api/protocols", h.handleProtocols)
 		r.Get("/api/features", h.handleGetFeatures)
 		r.Put("/api/features", h.handleUpdateFeatures)
@@ -420,6 +433,16 @@ func (h *Handler) SetDownloader(d TranscodeDownloader) {
 // SetEventBus sets the event bus on the handler.
 func (h *Handler) SetEventBus(bus *event.EventBus) {
 	h.eventBus = bus
+}
+
+// SetTimelapseMergeMgr sets the timelapse rolling merge manager on the handler.
+func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
+	h.timelapseMergeMgr = mgr
+}
+
+// SetTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
+func (h *Handler) SetTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
+	h.timelapseDailyMgr = mgr
 }
 
 // --- Per-camera streaming protocols endpoint ---

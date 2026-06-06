@@ -3,7 +3,7 @@
   import { normalizeProtocol, enableCamera, disableCamera } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive } from 'lucide-svelte';
+ import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -15,8 +15,12 @@
     onstop: (camera: Camera) => void;
     onrestart: (camera: Camera) => void;
     ontoggle: (camera: Camera) => void;
-    onsaveName: (camera: Camera, name: string) => void;
-  }
+   onsaveName: (camera: Camera, name: string) => void;
+   mergeStatus?: string;
+   mergeProgress?: number;
+   mergeError?: string;
+   onRetryMerge?: (camera: Camera) => void;
+ }
 
   let {
     camera,
@@ -28,8 +32,12 @@
     onstop,
     onrestart,
     ontoggle,
-    onsaveName,
-  }: Props = $props();
+   onsaveName,
+   mergeStatus = 'idle',
+   mergeProgress = 0,
+   mergeError = '',
+   onRetryMerge
+ }: Props = $props();
 
   let menuOpen = $state(false);
   let editingName = $state(false);
@@ -63,8 +71,13 @@
     if (status === 'warning') return 'bg-amber-400';
     if (status === 'error') return 'bg-red-500';
     return 'bg-gray-400';
-  }
+ }
 
+ function getMergeBadgeClass(status?: string): string {
+   if (status === 'merging') return 'badge-info';
+   if (status === 'failed') return 'badge-error';
+   return 'badge-neutral';
+ }
   function closeMenu() {
     menuOpen = false;
   }
@@ -160,8 +173,20 @@
         <span class="badge badge-error" title={camera.error_detail || ''}>
           {t('cameras.tutkCardBadge')}
         </span>
-      {/if}
-      {#if variant === 'disabled'}
+   {/if}
+   <!-- Merge status badge -->
+   {#if mergeStatus === 'merging'}
+     <span class="badge badge-info flex items-center gap-1" title={mergeProgress + '%'} >
+       <Loader2 size={10} class="animate-spin" />
+       {mergeProgress}%
+     </span>
+   {:else if mergeStatus === 'failed'}
+     <span class="badge badge-error flex items-center gap-1" title={mergeError || 'Merge failed'} >
+       <AlertCircle size={10} />
+       Failed
+     </span>
+   {/if}
+   {#if variant === 'disabled'}
         <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
       {:else if camera.status === 'recording'}
         <span class="badge badge-success">{t('cameras.statusRecording')}</span>
@@ -230,8 +255,18 @@
           >
             <RotateCw size={14} />
           </button>
-        {/if}
-      {/if}
+     {/if}
+     <!-- Retry merge button when merge failed -->
+     {#if mergeStatus === 'failed' && onRetryMerge}
+       <button
+         class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
+         onclick={() => onRetryMerge(camera)}
+         title={'Retry merge'}
+       >
+         <RefreshCw size={14} />
+       </button>
+     {/if}
+   {/if}
 
       {#if isHls}
         <a

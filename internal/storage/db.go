@@ -285,9 +285,16 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT ''`)
 		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT ''`)
 	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'")
-	// Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'")	// Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)")
+
+	// Migration v15 → v16: add merge_tier column to recordings
+	var mergeTierColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_tier'`).Scan(&mergeTierColExists)
+	if mergeTierColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_tier TEXT DEFAULT ''`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='16' WHERE key='schema_version'")
 
 	return nil
 

@@ -33,6 +33,22 @@ const (
 // String returns the string representation of the MergeTier.
 func (t MergeTier) String() string { return string(t) }
 
+// FrameSource represents the source of frames for timelapse recording.
+type FrameSource string
+
+const (
+	// FrameSourceAuto auto-detects the best frame source based on camera capabilities.
+	FrameSourceAuto FrameSource = "auto"
+	// FrameSourceSnapshot uses HTTP snapshot endpoint for frame capture.
+	FrameSourceSnapshot FrameSource = "snapshot"
+	// FrameSourceRTSPKeyframe extracts keyframes from RTSP stream for frame capture.
+	FrameSourceRTSPKeyframe FrameSource = "rtsp_keyframe"
+	// FrameSourceMJPEG uses MJPEG stream for frame capture.
+	FrameSourceMJPEG FrameSource = "mjpeg"
+)
+
+// String returns the string representation of the FrameSource.
+func (s FrameSource) String() string { return string(s) }
 
 // MergeStatus represents the merge process status for a timelapse recording.
 type MergeStatus string
@@ -64,6 +80,12 @@ type MergeConfig struct {
 	DeleteOriginal bool `json:"delete_original" yaml:"delete_original"`
 	// DailyMerge groups frames by day for daily merged output files.
 	DailyMerge bool `json:"daily_merge" yaml:"daily_merge"`
+	// CRF controls the Constant Rate Factor for x264/x265 encoding (0-51, default 23).
+	// Only applies when using software libx264/libx265 encoder.
+	CRF int `json:"crf" yaml:"crf"`
+	// Bitrate sets a target bitrate for encoding (e.g. "2M", "500k").
+	// Overrides CRF when set; only applies to software libx264/libx265 encoder.
+	Bitrate string `json:"bitrate" yaml:"bitrate"`
 }
 
 // MergeResult holds the outcome of a merge operation.
@@ -78,6 +100,8 @@ type MergeResult struct {
 	FramesMerged int `json:"frames_merged"`
 	// Duration is the total duration of the merged output in seconds.
 	Duration float64 `json:"duration"`
+	// Codec is the detected output codec (e.g. "h264", "hevc") from ffprobe.
+	Codec string `json:"codec,omitempty"`
 }
 
 // TimelapseMerger is the interface for merging timelapse frame sequences into a single output file.

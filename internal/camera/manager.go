@@ -57,6 +57,9 @@ type CameraManager struct {
 	timelapseMergeMgr *timelapse.RollingMergeManager // timelapse rolling merge (nil = no merge)
 	transcodeMgr     *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr        *health.Manager               // health monitoring (nil when disabled)
+	scheduler        *timelapse.Scheduler           // timelapse schedule evaluator
+	scheduleMonitors map[string]context.CancelFunc  // camera_id -> cancel func for schedule monitor
+	keyframeExtractors map[string]*timelapse.KeyframeExtractor // camera_id -> keyframe extractor
 	mu               sync.RWMutex
 	onvifClients     map[string]*onvif.Client            // camera_id → cached ONVIF client
 	onvifMu          sync.Mutex                          // protects onvifClients
@@ -94,6 +97,9 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:         mm,
 		transcodeMgr:     tm,
 		timelapseMergeMgr: tmm,
+		scheduler:        timelapse.NewScheduler(),
+		scheduleMonitors: make(map[string]context.CancelFunc),
+		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
@@ -246,31 +252,26 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			onvifCfg.FrameWatchdogTimeout = d
 		}
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
-	case "timelapse":
-		tlCfg := recorder.TimelapseRecorderConfig{
-			CameraID: cam.ID,
-			URL:      cam.URL,
-			Username: cam.Username,
-			Password: cam.Password,
-			DataDir:  cm.cfg.Storage.RootDir,
-			DB:       cm.db,
-			Metrics:  cm.metrics,
+case "timelapse":
+		frameSource := "auto"
+		if cam.Timelapse != nil && cam.Timelapse.FrameSource != "" {
+			frameSource = cam.Timelapse.FrameSource
 		}
-		if cam.Timelapse != nil {
-			if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d >= time.Millisecond {
-				tlCfg.Interval = d
-			}
-			if cam.Timelapse.OutputFPS > 0 {
-				tlCfg.OutputFPS = cam.Timelapse.OutputFPS
-			}
-			if cam.Timelapse.VideoCodec != "" {
-				tlCfg.VideoCodec = cam.Timelapse.VideoCodec
-			}
+		if cam.Timelapse == nil || !cam.Timelapse.Enabled {
+			return nil
 		}
-		if cm.timelapseMergeMgr != nil {
-			tlCfg.MergeMgr = cm.timelapseMergeMgr
+		switch frameSource {
+		case "snapshot":
+			rec = cm.createTimelapseSnapshotRecorder(cam, segDur)
+		case "rtsp_keyframe":
+			logger.Info("rtsp_keyframe timelapse source requires an active regular recorder", "camera_id", cam.ID)
+			return nil
+		case "mjpeg", "auto", "":
+			rec = cm.createTimelapseMJPEGRecorder(cam, segDur)
+		default:
+			logger.Warn("unknown timelapse frame source", "camera_id", cam.ID, "frame_source", frameSource)
+			return nil
 		}
-		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
 	default:
 		return nil
 	}
@@ -344,9 +345,24 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
 	if rec == nil {
+		// Check if this is due to rtsp_keyframe timelapse config (handled elsewhere)
+		if cam.Protocol == "timelapse" && cam.Timelapse != nil && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+			return nil
+		}
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
 	}
 	cm.recorders[cam.ID] = rec
+
+	// For timelapse recorders, check scheduler before starting
+	if cam.Protocol == "timelapse" && cam.Timelapse != nil {
+		if !cm.scheduler.IsRecordingTime(*cam.Timelapse) {
+			logger.Info("timelapse schedule: not recording time, delaying start", "camera_id", cam.ID)
+			// Start schedule monitor anyway so it can start the recorder when the schedule says so
+			cm.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
+			return nil
+		}
+	}
+
 	// Recorders derive their run context from context.Background() internally,
 	// so their lifecycle is independent of this ctx (e.g. HTTP request context).
 	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
@@ -358,6 +374,21 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		}
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
+
+	// Start schedule monitor for timelapse recorders
+	if cam.Protocol == "timelapse" && cam.Timelapse != nil {
+		cm.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
+	}
+
+	// Start keyframe extractor for regular recorders with rtsp_keyframe timelapse config
+	if cam.Protocol != "timelapse" && cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+		if hub := getRecorderHub(rec); hub != nil {
+			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
+				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+			}
+		}
+	}
+
 	cm.errorDetails[cam.ID] = nil
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
@@ -425,6 +456,14 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 						hOverrides = &resolved
 					}
 					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
+					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
+					if cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+						if hub := getRecorderHub(rec); hub != nil {
+							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
+								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+							}
+						}
+					}
 				}
 			}
 		case string(model.ProtoONVIF):
@@ -465,6 +504,17 @@ func (cm *CameraManager) Stop() error {
 	}
 
 	cm.closeAllONVIFClients()
+
+	// Stop all timelapse schedule monitors
+	cm.mu.Lock()
+	for _, cancel := range cm.scheduleMonitors {
+		cancel()
+	}
+	cm.scheduleMonitors = make(map[string]context.CancelFunc)
+	cm.mu.Unlock()
+
+	// Stop all timelapse keyframe extractors
+	cm.stopAllTimelapseKeyframeExtractors()
 
 	return nil
 }
@@ -1244,6 +1294,18 @@ func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
 
 // classifyError categorizes a connection error into a Prometheus label value.
 // Values: "timeout", "auth", "network", "unknown".
+// getRecorderHub safely extracts the StreamHub from a recorder using type assertion.
+// Returns nil if the recorder does not implement the hubber interface.
+func getRecorderHub(rec model.Recorder) *model.StreamHub {
+	type hubber interface {
+		GetHub() *model.StreamHub
+	}
+	if h, ok := rec.(hubber); ok {
+		return h.GetHub()
+	}
+	return nil
+}
+
 func classifyError(err error) string {
 	if err == nil {
 		return "unknown"

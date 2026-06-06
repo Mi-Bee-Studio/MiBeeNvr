@@ -138,6 +138,7 @@ make build
 | [WebDAV 集成](docs/zh/webdav-integration.md) | WebDAV 文件访问设置 |
 | [故障排除](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
 | [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
+| [Prometheus 指标](docs/zh/metrics.md) | 完整的 Prometheus 指标参考，包含类型、标签和使用示例 |
 
 ```bash
 make build              # 本机编译（当前架构）

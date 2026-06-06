@@ -42,6 +42,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
@@ -356,6 +357,7 @@ type App struct {
 	hlsMgr     *hls.Manager
 	cleanupMgr *cleanup.CleanupManager
 	healthMgr  *health.Manager
+	dailyMergeMgr *timelapse.DailyMergeManager
 
 	// Optional network services (nil when disabled)
 	mqttClient  *mqtt.Client
@@ -535,6 +537,12 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			return cam != nil && cam.Enabled
 		})
 	}
+
+	// Step 6.6: Timelapse daily merge manager.
+	// Uses GoMerger as default (no external deps); FFmpeg concat is attempted at runtime if available.
+	dailyFPS := 10
+	dailyMergeDir := filepath.Join(cfg.Storage.RootDir, "daily-merge")
+	a.dailyMergeMgr = timelapse.NewDailyMergeManager(db, db, timelapse.NewGoMerger(), dailyFPS, dailyMergeDir)
 
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -786,6 +794,11 @@ func (a *App) Start() error {
 		go a.transcodeMgr.Run(ctx)
 	}
 
+	// Start daily merge cron (midnight UTC) for timelapse cameras.
+	if a.dailyMergeMgr != nil {
+		go a.runDailyMergeLoop(ctx)
+	}
+
 	// Start cleanup manager
 	go a.cleanupMgr.Run(ctx)
 
@@ -841,6 +854,46 @@ func (a *App) Start() error {
 	slog.Info("received signal, shutting down", "signal", sig.String())
 
 	return a.Stop()
+}
+
+// runDailyMergeLoop runs the daily merge for all timelapse cameras at midnight UTC.
+// It calculates the time until the next midnight, waits, runs the merge, then loops every 24h.
+func (a *App) runDailyMergeLoop(ctx context.Context) {
+	now := time.Now().UTC()
+	nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
+	initialDelay := nextMidnight.Sub(now)
+
+	slog.Info("daily merge: starting cron loop",
+		"next_run", nextMidnight.Format(time.RFC3339),
+		"delay_seconds", initialDelay.Seconds(),
+	)
+
+	select {
+	case <-time.After(initialDelay):
+	case <-ctx.Done():
+		return
+	}
+
+	for {
+		yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+		for _, cam := range a.cfg.Cameras {
+			if cam.Timelapse != nil {
+				slog.Info("daily merge: running for camera",
+					"camera_id", cam.ID, "date", yesterday)
+				if err := a.dailyMergeMgr.Run(ctx, cam.ID, yesterday); err != nil {
+					slog.Error("daily merge: camera merge failed",
+						"camera_id", cam.ID, "date", yesterday, "error", err)
+				}
+			}
+		}
+
+		// Wait 24h until next midnight.
+		select {
+		case <-time.After(24 * time.Hour):
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // Stop gracefully shuts down all components in reverse dependency order

@@ -57,8 +57,9 @@ type Recording struct {
 	FrameCount int       `json:"frame_count"`
 	Merged     bool      `json:"merged"`
 	MergeStatus string   `json:"merge_status"`
-	MergePath  string    `json:"merge_path"`
-	MergeError string    `json:"merge_error"`
+	MergePath   string    `json:"merge_path"`
+	MergeTier   string    `json:"merge_tier"`
+	MergeError  string    `json:"merge_error"`
 	Archived   bool      `json:"archived"`
 }
 
@@ -221,7 +222,7 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoHTTP):   {string(EncJPEG)},
 	string(ProtoONVIF):  {string(FormatH264), string(FormatH265)},
 	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
-	string(ProtoTimelapse): {},
+	string(ProtoTimelapse): {""}, // empty string for auto-detect
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding

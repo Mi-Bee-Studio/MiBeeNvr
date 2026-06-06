@@ -31,9 +31,9 @@ func scanRecording(r *model.Recording, startedAtStr, endedAtStr, mergeStatusStr 
 }
 
 func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status) VALUES(?,?,?,?,?,?,?,?,?,?,?);`
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);`
 	mergeStatus := mergeStatusFromBool(r.Merged)
-	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus)
+	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus, r.MergeTier)
 	return err
 }
 
@@ -72,16 +72,16 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 }
 
 func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
-	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=?, merge_status=? WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.MergeStatus, r.ID)
+	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merged=?, merge_status=?, merge_tier=? WHERE id=?;`
+	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, r.MergeStatus, r.MergeTier, r.ID)
 	return err
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE id=?;`, id)
+	row := d.db.QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_error, archived FROM recordings WHERE id=?;`, id)
 	var r model.Recording
-	var startedAtStr, endedAtStr sql.NullString
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.MergeStatus, &r.Archived); err != nil {
+	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeErrorStr, &r.Archived); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -89,6 +89,15 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	}
 	r.StartedAt = scanTime(startedAtStr)
 	r.EndedAt = scanTime(endedAtStr)
+	if mergePathStr.Valid {
+		r.MergePath = mergePathStr.String
+	}
+	if mergeTierStr.Valid {
+		r.MergeTier = mergeTierStr.String
+	}
+	if mergeErrorStr.Valid {
+		r.MergeError = mergeErrorStr.String
+	}
 	if r.MergeStatus == "" {
 		r.MergeStatus = mergeStatusFromBool(r.Merged)
 	}
@@ -130,7 +139,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	} else {
 		where = append(where, "archived=0")
 	}
-	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings"
+	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_error, archived FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -160,14 +169,22 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	var res []model.Recording
 	for rows.Next() {
 		var r model.Recording
-		var startedAtStr, endedAtStr sql.NullString
-		var mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+		var startedAtStr, endedAtStr, mergeStatusStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &mergePathStr, &mergeTierStr, &mergeErrorStr, &r.Archived); err != nil {
 			return nil, err
 		}
 		r.MergeStatus = mergeStatusFromBool(r.Merged)
 		if mergeStatusStr.Valid && mergeStatusStr.String != "" {
 			r.MergeStatus = mergeStatusStr.String
+		}
+		if mergePathStr.Valid {
+			r.MergePath = mergePathStr.String
+		}
+		if mergeTierStr.Valid {
+			r.MergeTier = mergeTierStr.String
+		}
+		if mergeErrorStr.Valid {
+			r.MergeError = mergeErrorStr.String
 		}
 		r.StartedAt = scanTime(startedAtStr)
 		r.EndedAt = scanTime(endedAtStr)
@@ -260,7 +277,7 @@ func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Rec
 	q := `INSERT OR IGNORE INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status) VALUES(?,?,?,?,?,?,?,?,?,?,?);`
 	inserted := 0
 	for _, r := range recordings {
-		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged))
+		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), r.MergeTier)
 		if err != nil {
 			return 0, err
 		}

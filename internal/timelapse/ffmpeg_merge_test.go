@@ -16,7 +16,7 @@ func TestFFmpegMerge_CanMerge(t *testing.T) {
 	t.Run("FFmpeg available", func(t *testing.T) {
 		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
 			FFmpegPath: "/usr/bin/ffmpeg",
-		})
+		}, nil)
 		if !m.CanMerge() {
 			t.Error("expected CanMerge() == true with FFmpegPath set")
 		}
@@ -25,14 +25,14 @@ func TestFFmpegMerge_CanMerge(t *testing.T) {
 	t.Run("FFmpeg not available", func(t *testing.T) {
 		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
 			FFmpegPath: "",
-		})
+		}, nil)
 		if m.CanMerge() {
 			t.Error("expected CanMerge() == false with empty FFmpegPath")
 		}
 	})
 
 	t.Run("nil caps", func(t *testing.T) {
-		m := NewFFmpegMerger(nil)
+		m := NewFFmpegMerger(nil, nil)
 		if m.CanMerge() {
 			t.Error("expected CanMerge() == false with nil caps")
 		}
@@ -40,7 +40,7 @@ func TestFFmpegMerge_CanMerge(t *testing.T) {
 }
 
 func TestFFmpegMerge_Tier(t *testing.T) {
-	m := NewFFmpegMerger(nil)
+	m := NewFFmpegMerger(nil, nil)
 	if m.Tier() != TierFFmpeg {
 		t.Errorf("expected TierFFmpeg, got %q", m.Tier())
 	}
@@ -49,9 +49,9 @@ func TestFFmpegMerge_Tier(t *testing.T) {
 func TestFFmpegMerge_Command(t *testing.T) {
 	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
 		FFmpegPath: "/usr/bin/ffmpeg",
-	})
+	}, nil)
 
-	args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10)
+	args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "libx264")
 	cmdStr := strings.Join(args, " ")
 
 	expectedParts := []string{
@@ -78,9 +78,9 @@ func TestFFmpegMerge_Command_HardwareEncoder(t *testing.T) {
 			FFmpegPath:      "/usr/bin/ffmpeg",
 			H264Encoder:     "h264_v4l2m2m",
 			H264EncoderType: transcoding.EncoderV4L2M2M,
-		})
+		}, nil)
 
-		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10)
+		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "h264_v4l2m2m")
 		cmdStr := strings.Join(args, " ")
 
 		if !strings.Contains(cmdStr, "h264_v4l2m2m") {
@@ -99,9 +99,9 @@ func TestFFmpegMerge_Command_HardwareEncoder(t *testing.T) {
 			FFmpegPath:      "/usr/bin/ffmpeg",
 			H264Encoder:     "h264_vaapi",
 			H264EncoderType: transcoding.EncoderVAAPI,
-		})
+		}, nil)
 
-		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10)
+		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "h264_vaapi")
 		cmdStr := strings.Join(args, " ")
 
 		if !strings.Contains(cmdStr, "h264_vaapi") {
@@ -117,13 +117,63 @@ func TestFFmpegMerge_Command_HardwareEncoder(t *testing.T) {
 			FFmpegPath:      "/usr/bin/ffmpeg",
 			H264Encoder:     "libx264",
 			H264EncoderType: transcoding.EncoderSoftware,
-		})
+		}, nil)
 
-		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10)
+		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "libx264")
 		cmdStr := strings.Join(args, " ")
 
 		if !strings.Contains(cmdStr, "libx264") {
 			t.Errorf("expected libx264 fallback, got: %s", cmdStr)
+		}
+	})
+}
+
+func TestFFmpegMerge_Command_CRFConfig(t *testing.T) {
+	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+		FFmpegPath: "/usr/bin/ffmpeg",
+	}, &MergeConfig{CRF: 28})
+
+	args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "libx264")
+	cmdStr := strings.Join(args, " ")
+
+	if !strings.Contains(cmdStr, "-crf 28") {
+		t.Errorf("expected CRF 28 from config, got: %s", cmdStr)
+	}
+	if !strings.Contains(cmdStr, "-preset fast") {
+		t.Errorf("expected preset fast, got: %s", cmdStr)
+	}
+}
+
+func TestFFmpegMerge_Command_BitrateConfig(t *testing.T) {
+	t.Run("bitrate overrides CRF", func(t *testing.T) {
+		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+			FFmpegPath: "/usr/bin/ffmpeg",
+		}, &MergeConfig{CRF: 28, Bitrate: "2M"})
+
+		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "libx264")
+		cmdStr := strings.Join(args, " ")
+
+		if !strings.Contains(cmdStr, "-b:v 2M") {
+			t.Errorf("expected bitrate flag, got: %s", cmdStr)
+		}
+		if strings.Contains(cmdStr, "-crf") {
+			t.Errorf("expected CRF to be omitted when bitrate is set, got: %s", cmdStr)
+		}
+	})
+
+	t.Run("bitrate with hw encoder ignores bitrate", func(t *testing.T) {
+		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+			FFmpegPath:      "/usr/bin/ffmpeg",
+			H264Encoder:     "h264_v4l2m2m",
+			H264EncoderType: transcoding.EncoderV4L2M2M,
+		}, &MergeConfig{Bitrate: "2M"})
+
+		args := m.buildArgs("/tmp/frames", "/tmp/output.mp4", 10, "h264_v4l2m2m")
+		cmdStr := strings.Join(args, " ")
+
+		// V4L2 should not get bitrate or crf flags
+		if strings.Contains(cmdStr, "-b:v") {
+			t.Errorf("expected no bitrate flag for v4l2m2m, got: %s", cmdStr)
 		}
 	})
 }
@@ -159,6 +209,263 @@ func TestFFmpegMerge_SelectEncoder(t *testing.T) {
 	})
 }
 
+func TestFFmpegMerge_EncoderFallbackChain(t *testing.T) {
+	t.Run("hardware encoder first, libx264 second", func(t *testing.T) {
+		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+			H264Encoder:     "h264_v4l2m2m",
+			H264EncoderType: transcoding.EncoderV4L2M2M,
+		}, nil)
+		chain := m.encoderFallbackChain()
+		expected := []string{"h264_v4l2m2m", "libx264"}
+		if len(chain) != len(expected) {
+			t.Fatalf("expected %d encoders, got %d: %v", len(expected), len(chain), chain)
+		}
+		for i, enc := range expected {
+			if chain[i] != enc {
+				t.Errorf("chain[%d] = %q, want %q", i, chain[i], enc)
+			}
+		}
+	})
+
+	t.Run("libx264 only when no hardware", func(t *testing.T) {
+		m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+			H264Encoder:     "libx264",
+			H264EncoderType: transcoding.EncoderSoftware,
+		}, nil)
+		chain := m.encoderFallbackChain()
+		if len(chain) != 1 || chain[0] != "libx264" {
+			t.Errorf("expected single libx264, got: %v", chain)
+		}
+	})
+
+	t.Run("nil caps returns single libx264", func(t *testing.T) {
+		m := NewFFmpegMerger(nil, nil)
+		chain := m.encoderFallbackChain()
+		if len(chain) != 1 || chain[0] != "libx264" {
+			t.Errorf("expected single libx264, got: %v", chain)
+		}
+	})
+}
+
+func TestFFmpegMerge_CodecDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a fake ffprobe that returns known JSON output.
+	ffprobePath := filepath.Join(tmpDir, "ffprobe")
+	ffprobeScript := `#!/bin/sh
+# Mock ffprobe that returns h264 codec for any input
+cat << 'FFPROBE_EOF'
+{"streams":[{"codec_name":"h264","duration":"10.000000","width":640,"height":480}]}
+FFPROBE_EOF
+`
+	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override PATH so the fake ffprobe is found.
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Create a fake ffmpeg that creates a valid output file.
+	ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
+	ffmpegScript := `#!/bin/sh
+# Mock FFmpeg: create minimal output file
+touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
+`
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+		FFmpegPath: ffmpegPath,
+	}, nil)
+
+	framesDir := filepath.Join(tmpDir, "frames")
+	if err := os.MkdirAll(framesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create minimal frame files.
+	for i := 1; i <= 3; i++ {
+		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outputPath := filepath.Join(tmpDir, "merged.mp4")
+	ctx := context.Background()
+	result, err := m.Merge(ctx, framesDir, outputPath, 10)
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+
+	if result.Codec != "h264" {
+		t.Errorf("expected codec 'h264', got %q", result.Codec)
+	}
+	if result.Tier != TierFFmpeg {
+		t.Errorf("expected TierFFmpeg, got %q", result.Tier)
+	}
+	if result.FramesMerged != 3 {
+		t.Errorf("expected 3 frames, got %d", result.FramesMerged)
+	}
+}
+
+func TestFFmpegMerge_CodecDetection_FallbackToEmpty(t *testing.T) {
+	// When ffprobe is not available, codec should be empty but merge still succeeds.
+	tmpDir := t.TempDir()
+
+	// Create a fake ffmpeg only (no ffprobe).
+	ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
+	ffmpegScript := `#!/bin/sh
+touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
+`
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+		FFmpegPath: ffmpegPath,
+	}, nil)
+
+	framesDir := filepath.Join(tmpDir, "frames")
+	if err := os.MkdirAll(framesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 2; i++ {
+		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outputPath := filepath.Join(tmpDir, "merged.mp4")
+	ctx := context.Background()
+	result, err := m.Merge(ctx, framesDir, outputPath, 10)
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+
+	if result.Codec != "" {
+		t.Errorf("expected empty codec when ffprobe unavailable, got %q", result.Codec)
+	}
+	if result.FramesMerged != 2 {
+		t.Errorf("expected 2 frames, got %d", result.FramesMerged)
+	}
+}
+
+func TestFFmpegMerge_Fallback_ToSoftware(t *testing.T) {
+	// Simulate hardware encoder failure with fallback to libx264.
+	tmpDir := t.TempDir()
+
+	// Create a fake ffprobe for codec detection.
+	ffprobePath := filepath.Join(tmpDir, "ffprobe")
+	ffprobeScript := `#!/bin/sh
+cat << 'FFPROBE_EOF'
+{"streams":[{"codec_name":"h264","duration":"10.000000","width":640,"height":480}]}
+FFPROBE_EOF
+`
+	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a fake ffmpeg that fails for v4l2m2m but succeeds for libx264.
+	ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
+	ffmpegScript := `#!/bin/sh
+# Fail if h264_v4l2m2m is requested, succeed otherwise
+if echo "$@" | grep -q "h264_v4l2m2m"; then
+  echo "Hardware encoder failed" >&2
+  exit 1
+fi
+touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
+`
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", tmpDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+		FFmpegPath:      ffmpegPath,
+		H264Encoder:     "h264_v4l2m2m",
+		H264EncoderType: transcoding.EncoderV4L2M2M,
+	}, nil)
+
+	chain := m.encoderFallbackChain()
+	if len(chain) != 2 || chain[0] != "h264_v4l2m2m" || chain[1] != "libx264" {
+		t.Fatalf("expected fallback chain [h264_v4l2m2m, libx264], got: %v", chain)
+	}
+
+	framesDir := filepath.Join(tmpDir, "frames")
+	if err := os.MkdirAll(framesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 3; i++ {
+		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outputPath := filepath.Join(tmpDir, "merged.mp4")
+	ctx := context.Background()
+	result, err := m.Merge(ctx, framesDir, outputPath, 10)
+	if err != nil {
+		t.Fatalf("Merge failed after fallback: %v", err)
+	}
+
+	if result.Tier != TierFFmpeg {
+		t.Errorf("expected TierFFmpeg, got %q", result.Tier)
+	}
+	if result.FramesMerged != 3 {
+		t.Errorf("expected 3 frames, got %d", result.FramesMerged)
+	}
+}
+
+func TestFFmpegMerge_Fallback_BaseCase(t *testing.T) {
+	// When preferred encoder is already libx264, no fallback is attempted.
+	tmpDir := t.TempDir()
+
+	ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
+	ffmpegScript := `#!/bin/sh
+exit 1
+`
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
+		FFmpegPath:      ffmpegPath,
+		H264Encoder:     "libx264",
+		H264EncoderType: transcoding.EncoderSoftware,
+	}, nil)
+
+	chain := m.encoderFallbackChain()
+	if len(chain) != 1 || chain[0] != "libx264" {
+		t.Fatalf("expected single libx264, got: %v", chain)
+	}
+
+	framesDir := filepath.Join(tmpDir, "frames")
+	if err := os.MkdirAll(framesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 2; i++ {
+		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outputPath := filepath.Join(tmpDir, "merged.mp4")
+	ctx := context.Background()
+	_, err := m.Merge(ctx, framesDir, outputPath, 10)
+	if err == nil {
+		t.Fatal("expected error when ffmpeg always fails")
+	}
+}
+
 func TestFFmpegMerge_Cancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
@@ -172,7 +479,7 @@ sleep 10
 
 	m := NewFFmpegMerger(&transcoding.HardwareCapabilities{
 		FFmpegPath: ffmpegPath,
-	})
+	}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -221,7 +528,7 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 		t.Skip("FFmpeg not available — skipping integration test")
 	}
 
-	m := NewFFmpegMerger(caps)
+	m := NewFFmpegMerger(caps, nil)
 
 	if !m.CanMerge() {
 		t.Fatal("expected CanMerge() == true with real FFmpeg")
@@ -234,7 +541,6 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 	}
 
 	// Create a minimal valid JPEG (1x1 pixel) for each frame.
-	// Minimal JPEG EOI marker + SOI is enough for FFmpeg to process.
 	jpegData := []byte{
 		0xFF, 0xD8, // SOI
 		0xFF, 0xE0, // APP0

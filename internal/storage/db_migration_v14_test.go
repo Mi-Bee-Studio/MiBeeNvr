@@ -114,11 +114,11 @@ func TestMergeColumnsExist(t *testing.T) {
 		_ = db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_status'`).Scan(&colExists)
 		require.Equal(t, 1, colExists, "merge_status column should still exist")
 
-		// Verify schema version is 15
+		// Verify schema version is 16
 		var version string
 		err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "15", version)
+		require.Equal(t, "16", version)
 	})
 
 	// Test 2: Existing DB at v14 — columns added via migration
@@ -226,7 +226,7 @@ func TestMergeColumnsExist(t *testing.T) {
 		var version string
 		err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "15", version)
+		require.Equal(t, "16", version)
 
 		// Data intact
 		var count int
