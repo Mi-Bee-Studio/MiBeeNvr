@@ -83,7 +83,6 @@ func (r *RollingMergeManager) StartSegmentMerge(ctx context.Context, cameraID, s
 
 	// Count total frames in segment dir for progress estimation.
 	totalFrames := countJPGFrames(segmentDir)
-	_ = totalFrames // available for future fine-grained progress
 
 	r.setProgress(cameraID, MergeProgressInfo{
 		CameraID: cameraID,
