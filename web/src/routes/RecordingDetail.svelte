@@ -7,7 +7,9 @@
     loadRecordingVideoBlob,
     listRecordings,
     getTimelapseFrames,
-    loadTimelapseFrameBlob
+    loadTimelapseFrameBlob,
+    triggerTimelapseMerge,
+    subscribeTimelapseMergeProgress
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { Recording, TimelapseFrame } from '$lib/api';
@@ -50,6 +52,12 @@
   let tlLoop = $state(false);
   let tlSeekLoading = $state(false);
   let tlSeekTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Merge state
+let mergeInProgress = $state(false);
+let mergeProgressPct = $state(0);
+let mergeErrorMsg = $state('');
+let mergeAbortController = $state<AbortController | null>(null);
 
   async function loadRecording() {
     loading = true;
@@ -132,6 +140,36 @@
     catch (e) { console.error('Failed to load video:', e); error = t('detail.failedLoadVideo'); }
     finally { videoLoading = false; }
   }
+
+async function handleMergeAndPlay() {
+  if (!recording) return;
+  mergeInProgress = true;
+  mergeProgressPct = 0;
+  mergeErrorMsg = '';
+
+  try {
+    await triggerTimelapseMerge(recording.camera_id);
+
+    const ac = subscribeTimelapseMergeProgress(recording.camera_id, (data) => {
+      if (data.status === 'completed') {
+        mergeInProgress = false;
+        mergeProgressPct = 100;
+        mergeAbortController = null;
+        loadRecording();
+      } else if (data.status === 'failed') {
+        mergeInProgress = false;
+        mergeErrorMsg = data.error || '';
+      } else if (data.progress !== undefined) {
+        mergeProgressPct = data.progress;
+      }
+    });
+
+    mergeAbortController = ac;
+  } catch (e) {
+    mergeInProgress = false;
+    mergeErrorMsg = e instanceof Error ? e.message : 'Failed to start merge';
+  }
+}
 
   // --- Timelapse JPEG sequence player ---
 
@@ -411,6 +449,9 @@
       // Abort all in-flight timelapse frame requests
       tlAbortController?.abort();
       tlAbortController = null;
+      // Abort merge SSE connection
+      mergeAbortController?.abort();
+      mergeAbortController = null;
       if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
       if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
       tlBlobCache.forEach(url => URL.revokeObjectURL(url));
@@ -695,6 +736,11 @@
                     ? t('recording.format.h264')
                     : t('recording.format.mjpeg')}
               </span>
+              {#if recording.format === 'timelapse' && recording.merge_status}
+                <span class="badge {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : mergeInProgress ? 'badge-info' : 'badge-neutral'}">
+                  {recording.merge_status === 'merged' ? t('detail.mergeStatusMerged') : recording.merge_status === 'failed' ? t('detail.mergeStatusFailed') : mergeInProgress ? t('detail.mergeStatusMerging', { percent: String(mergeProgressPct) }) : t('detail.mergeStatusPending')}
+                </span>
+              {/if}
             </div>
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
@@ -728,6 +774,25 @@
                 <button onclick={handleDownload} class="btn btn-primary">
                   {t('detail.download')}
                 </button>
+              {/if}
+              {#if recording.format === 'timelapse' && recording.merge_status !== 'merged' && !mergeInProgress}
+                <button onclick={handleMergeAndPlay} class="btn btn-primary">
+                  {t('detail.mergeAndPlay')}
+                </button>
+              {/if}
+              {#if mergeInProgress}
+                <div class="flex items-center gap-3">
+                  <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
+                    <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
+                  </div>
+                  <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
+                </div>
+              {/if}
+              {#if mergeErrorMsg}
+                <div class="flex items-center gap-3">
+                  <span class="text-xs th-color-danger">{t('detail.mergeFailed', { error: mergeErrorMsg })}</span>
+                  <button onclick={handleMergeAndPlay} class="btn btn-secondary btn-sm">{t('detail.mergeRetry')}</button>
+                </div>
               {/if}
               {#if transcodingStatus?.enabled && !transcodeTask}
                 <button onclick={handleTranscode} class="btn btn-secondary" title={t('transcoding.recordings.transcodeBtn')}>

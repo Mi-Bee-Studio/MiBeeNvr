@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
   import { getTimelapseConfig, updateTimelapseConfig } from '$lib/api';
-  import type { TimelapseConfig } from '$lib/api';
+  import type { TimelapseConfig, ScheduleConfig } from '$lib/api';
   import { showToast } from '$lib/toast';
 
   interface Props {
@@ -14,6 +14,8 @@
   let loading = $state(true);
   let saving = $state(false);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   async function loadConfig() {
     loading = true;
@@ -31,6 +33,57 @@
     if (!config) return;
     config = { ...config, [key]: value };
     debouncedSave();
+  }
+
+  function initSchedule() {
+    if (!config) return;
+    config = {
+      ...config,
+      schedule: {
+        time_ranges: [{ start: '00:00', end: '23:59' }],
+        days_of_week: [0, 1, 2, 3, 4, 5, 6],
+      },
+    };
+    debouncedSave();
+  }
+
+  function updateSchedule(fn: (s: ScheduleConfig) => ScheduleConfig) {
+    if (!config?.schedule) return;
+    config = { ...config, schedule: fn({ ...config.schedule, time_ranges: [...config.schedule.time_ranges] }) };
+    debouncedSave();
+  }
+
+  function toggleDay(day: number) {
+    if (!config?.schedule) return;
+    const days = config.schedule.days_of_week;
+    const newDays = days.includes(day)
+      ? days.filter(d => d !== day)
+      : [...days, day].sort();
+    updateSchedule(s => ({ ...s, days_of_week: newDays }));
+  }
+
+  function updateTimeRange(index: number, field: 'start' | 'end', value: string) {
+    if (!config?.schedule) return;
+    const ranges = config.schedule.time_ranges.map((r, i) => i === index ? { ...r, [field]: value } : r);
+    updateSchedule(s => ({ ...s, time_ranges: ranges }));
+  }
+
+  function addTimeRange() {
+    if (!config?.schedule) return;
+    const ranges = [...config.schedule.time_ranges, { start: '00:00', end: '23:59' }];
+    updateSchedule(s => ({ ...s, time_ranges: ranges }));
+  }
+
+  function removeTimeRange(index: number) {
+    if (!config?.schedule || config.schedule.time_ranges.length <= 1) return;
+    const ranges = config.schedule.time_ranges.filter((_, i) => i !== index);
+    updateSchedule(s => ({ ...s, time_ranges: ranges }));
+  }
+
+  async function togglePause() {
+    if (!config) return;
+    config = { ...config, paused: !config.paused };
+    await saveConfig();
   }
 
   function debouncedSave() {
@@ -66,6 +119,9 @@
       <span class="text-xs th-text-muted ml-2">{t('timelapse.enabled')}</span>
     {:else}
       <span class="text-xs th-text-muted ml-2">{t('timelapse.disabled')}</span>
+    {/if}
+    {#if config?.paused}
+      <span class="text-xs th-text-muted ml-2">({t('timelapse.paused')})</span>
     {/if}
     {#if saving}
       <span class="spinner ml-2"></span>
@@ -106,34 +162,35 @@
             <p class="th-text-muted text-xs mt-1">{t('timelapse.intervalHint')}</p>
           </div>
 
-          <!-- Output FPS -->
+          <!-- Frame Source -->
           <div>
-            <label for="timelapse-fps" class="input-label">{t('timelapse.outputFps')}</label>
-            <input
-              id="timelapse-fps"
-              type="number"
-              class="input"
-              min="1"
-              max="60"
-              value={config.output_fps}
-              oninput={(e) => updateField('output_fps', Number((e.target as HTMLInputElement).value))}
-            />
-            <p class="th-text-muted text-xs mt-1">{t('timelapse.outputFpsHint')}</p>
-          </div>
-
-          <!-- Video Codec -->
-          <div>
-            <label for="timelapse-codec" class="input-label">{t('timelapse.videoCodec')}</label>
+            <label for="timelapse-frame-source" class="input-label">{t('timelapse.frameSource')}</label>
             <select
-              id="timelapse-codec"
+              id="timelapse-frame-source"
               class="input"
-              value={config.video_codec}
-              onchange={(e) => updateField('video_codec', (e.target as HTMLSelectElement).value)}
+              value={config.frame_source}
+              onchange={(e) => updateField('frame_source', (e.target as HTMLSelectElement).value)}
             >
-              <option value="h264">{t('timelapse.codecH264')}</option>
-              <option value="h265">{t('timelapse.codecH265')}</option>
+              <option value="auto">Auto</option>
+              <option value="snapshot">Snapshot</option>
+              <option value="rtsp_keyframe">RTSP Keyframe</option>
+              <option value="mjpeg">MJPEG</option>
             </select>
           </div>
+
+          <!-- Snapshot URL (shown only when frame_source is 'snapshot') -->
+          {#if config.frame_source === 'snapshot'}
+            <div class="md:col-span-2">
+              <label for="timelapse-snapshot-url" class="input-label">{t('timelapse.snapshotUrl')}</label>
+              <input
+                id="timelapse-snapshot-url"
+                type="text"
+                class="input"
+                value={config.snapshot_url}
+                oninput={(e) => updateField('snapshot_url', (e.target as HTMLInputElement).value)}
+              />
+            </div>
+          {/if}
 
           <!-- Delete Original -->
           <div class="flex items-center gap-2">
@@ -147,9 +204,75 @@
             <label for="timelapse-delete-original" class="th-text-secondary text-sm">{t('timelapse.deleteOriginal')}</label>
           </div>
 
+          <!-- Schedule Section -->
+          <div class="md:col-span-2 border-t th-border pt-4 mt-2">
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-sm font-medium th-text-secondary">{t('timelapse.schedule')}</p>
+              {#if !config.schedule}
+                <button class="text-xs th-text-accent hover:underline" onclick={initSchedule}>
+                  {t('common.configure')}
+                </button>
+              {/if}
+            </div>
+
+            {#if config.schedule}
+              <!-- Day of week checkboxes (Sun=0 .. Sat=6) -->
+              <div class="flex flex-wrap gap-3 mb-3">
+                {#each DAYS as day, i}
+                  <label class="flex items-center gap-1 text-sm th-text-secondary cursor-pointer">
+                    <input
+                      type="checkbox"
+                      class="accent-[var(--color-accent)]"
+                      checked={config.schedule.days_of_week.includes(i)}
+                      onchange={() => toggleDay(i)}
+                    />
+                    {day}
+                  </label>
+                {/each}
+              </div>
+
+              <!-- Time ranges -->
+              {#each config.schedule.time_ranges as range, i}
+                <div class="flex items-center gap-2 mb-2">
+                  <input
+                    type="time"
+                    class="input text-sm w-32"
+                    value={range.start}
+                    oninput={(e) => updateTimeRange(i, 'start', (e.target as HTMLInputElement).value)}
+                  />
+                  <span class="th-text-muted text-xs">to</span>
+                  <input
+                    type="time"
+                    class="input text-sm w-32"
+                    value={range.end}
+                    oninput={(e) => updateTimeRange(i, 'end', (e.target as HTMLInputElement).value)}
+                  />
+                  {#if config.schedule.time_ranges.length > 1}
+                    <button class="text-xs th-text-danger hover:underline ml-1" onclick={() => removeTimeRange(i)}>
+                      {t('common.remove')}
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+              <button class="text-xs th-text-accent hover:underline mt-1" onclick={addTimeRange}>
+                + {t('common.add')}
+              </button>
+            {/if}
+          </div>
+
+          <!-- Pause/Resume -->
+          <div class="md:col-span-2 border-t th-border pt-4 mt-2">
+            <button
+              class="px-3 py-1.5 text-sm rounded th-bg-surface th-border th-border-secondary hover:th-bg-hover transition-colors"
+              onclick={togglePause}
+            >
+              {config.paused ? t('common.resume') || 'Resume' : t('common.pause') || 'Pause'}
+            </button>
+          </div>
+
           <!-- Merge Settings -->
           <div class="md:col-span-2 border-t th-border pt-4 mt-2">
-            <p class="text-sm font-medium th-text-secondary mb-3">{t('timelapse.mergeSettings') || 'Merge Settings'}</p>
+            <p class="text-sm font-medium th-text-secondary mb-3">{t('timelapse.mergeSettings')}</p>
           </div>
 
           <!-- Merge Mode -->

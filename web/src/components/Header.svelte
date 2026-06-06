@@ -62,6 +62,7 @@
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
     { href: '#/status', labelKey: 'nav.status', route: '/status' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
+    { href: '#/timelapse', labelKey: 'nav.timelapse', route: '/timelapse' },
   ];
 
   function isActive(route: string): boolean {

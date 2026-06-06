@@ -122,6 +122,8 @@ export type {
   ONVIFDeviceUser,
   // Timelapse
   TimelapseConfig,
+  ScheduleConfig,
+  TimeRange,
   CameraRecordingStats,
 } from './cameras';
 // Recordings — list, download, frames, stats, archives
@@ -144,6 +146,8 @@ export {
   setArchiveRetention,
   getTimelapseFrames,
   loadTimelapseFrameBlob,
+  triggerTimelapseMerge,
+  subscribeTimelapseMergeProgress,
 } from './recordings';
 
 export type {

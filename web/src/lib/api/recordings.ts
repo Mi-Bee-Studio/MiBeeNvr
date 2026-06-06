@@ -1,7 +1,7 @@
 /**
  * Recording API — list, download, frames, stats, archives
  */
-import { apiRequest, apiRequestBlob, getAuthHeader } from './client';
+import { apiRequest, apiRequestBlob, getAuthHeader, API_BASE, ApiRequestError } from './client';
 
 // --- Types ---
 
@@ -231,6 +231,48 @@ export async function loadRecordingVideoBlob(
   return URL.createObjectURL(blob);
 }
 
+// --- Timelapse Merge ---
+
+export async function triggerTimelapseMerge(cameraId: string, date?: string): Promise<void> {
+  const query = date ? `?date=${encodeURIComponent(date)}` : '';
+  const url = `${API_BASE}/timelapse/${cameraId}/merge${query}`;
+  const headers: Record<string, string> = {};
+  const authHeader = getAuthHeader();
+  if (authHeader) headers['Authorization'] = authHeader;
+  const res = await fetch(url, { method: 'POST', headers });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ error: 'Failed to start merge' }));
+    throw new ApiRequestError(errorData.error || `HTTP ${res.status}`, errorData.code);
+  }
+}
+
+export function subscribeTimelapseMergeProgress(
+  cameraId: string,
+  onProgress: (data: any) => void,
+  onError?: (e: Event) => void
+): AbortController {
+  const abortController = new AbortController();
+  const es = new EventSource(`${API_BASE}/timelapse/merge/progress/${cameraId}`);
+
+  es.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      onProgress(data);
+    } catch (e) {
+      console.warn('Failed to parse merge progress event:', e);
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+  };
+
+  abortController.signal.addEventListener('abort', () => {
+    es.close();
+  });
+
+  return abortController;
+}
 // --- Stats ---
 
 export async function getStats(signal?: AbortSignal): Promise<StorageStats> {

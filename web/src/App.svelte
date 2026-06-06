@@ -16,6 +16,7 @@
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Surveillance from './routes/Surveillance.svelte';
   import Status from './routes/Status.svelte';
+  import Timelapse from './routes/Timelapse.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -117,6 +118,9 @@
       return { route: 'transcoding-history', params: {} };
     }
 
+    if (segments[0] === 'timelapse') {
+      return { route: 'timelapse', params: {} };
+    }
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : 'dashboard';
       return { route: 'dashboard', params: { tab } };
@@ -223,6 +227,8 @@
       <Dashboard initialTab={params.tab || 'dashboard'} />
     {:else if currentRoute === 'transcoding-history'}
       <TranscodingHistory />
+    {:else if currentRoute === 'timelapse'}
+      <Timelapse />
     {/if}
   {/if}
 
