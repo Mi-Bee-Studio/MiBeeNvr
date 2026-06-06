@@ -483,6 +483,7 @@
   "cameras.protocol.http": "HTTP",
   "cameras.protocol.onvif": "ONVIF",
   "cameras.protocol.xiaomi": "Xiaomi",
+  "cameras.protocol.timelapse": "Timelapse",
   "cameras.encoding.h264": "H.264",
   "cameras.encoding.h265": "H.265",
   "cameras.encoding.mjpeg": "MJPEG",
