@@ -252,24 +252,58 @@ export function subscribeTimelapseMergeProgress(
   onError?: (e: Event) => void
 ): AbortController {
   const abortController = new AbortController();
-  const es = new EventSource(`${API_BASE}/timelapse/merge/progress/${cameraId}`);
 
-  es.onmessage = (event) => {
+  (async () => {
     try {
-      const data = JSON.parse(event.data);
-      onProgress(data);
-    } catch (e) {
-      console.warn('Failed to parse merge progress event:', e);
+      const authHeader = getAuthHeader();
+      const headers: Record<string, string> = {};
+      if (authHeader) headers['Authorization'] = authHeader;
+
+      const response = await fetch(`${API_BASE}/timelapse/merge/progress/${cameraId}`, {
+        headers,
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        console.warn('SSE connection failed:', response.status);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        console.warn('SSE response body not readable');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            try {
+              const data = JSON.parse(jsonStr);
+              onProgress(data);
+            } catch (e) {
+              console.warn('Failed to parse merge progress event:', e);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+      console.warn('SSE stream error:', err);
+      if (onError) onError(new Event('error'));
     }
-  };
-
-  es.onerror = () => {
-    es.close();
-  };
-
-  abortController.signal.addEventListener('abort', () => {
-    es.close();
-  });
+  })();
 
   return abortController;
 }

@@ -5,17 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"log/slog"
 	"math"
 	"net/http"
-	"strconv"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,26 +76,26 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	}
 
 	var raw json.RawMessage
-if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-writeError(w, http.StatusBadRequest, "invalid request body")
-return
-}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 
-var body config.CameraTimelapseConfig
-if err := json.Unmarshal(raw, &body); err != nil {
-writeError(w, http.StatusBadRequest, "invalid request body")
-return
-}
+	var body config.CameraTimelapseConfig
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 
-// Backward compat: accept mergeDuration as alias for merge_duration
-if body.MergeDuration == "" {
-var legacy struct {
-MergeDuration string `json:"mergeDuration"`
-}
-if err := json.Unmarshal(raw, &legacy); err == nil && legacy.MergeDuration != "" {
-body.MergeDuration = legacy.MergeDuration
-}
-}
+	// Backward compat: accept mergeDuration as alias for merge_duration
+	if body.MergeDuration == "" {
+		var legacy struct {
+			MergeDuration string `json:"mergeDuration"`
+		}
+		if err := json.Unmarshal(raw, &legacy); err == nil && legacy.MergeDuration != "" {
+			body.MergeDuration = legacy.MergeDuration
+		}
+	}
 
 	// Validate interval
 	if body.Interval != "" {
@@ -674,6 +674,13 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
+	// Dedup: prevent concurrent merges for the same camera
+	_, loaded := h.activeMerges.LoadOrStore(cameraID, struct{}{})
+	if loaded {
+		writeError(w, http.StatusConflict, "a merge is already in progress for this camera")
+		return
+	}
+
 	// Parse optional duration query param for custom merge windows
 	durationStr := r.URL.Query().Get("duration")
 	if durationStr != "" {
@@ -693,6 +700,7 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
+		defer h.activeMerges.Delete(cameraID)
 		ctx := context.Background()
 		if err := h.timelapseDailyMgr.Run(ctx, cameraID, date); err != nil {
 			logger.Warn("timelapse daily merge failed", "camera_id", cameraID, "date", date, "error", err)
@@ -749,6 +757,7 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur)
 
 	go func() {
+		defer h.activeMerges.Delete(cameraID)
 		ctx := context.Background()
 		if err := mgr.Run(ctx, cameraID, refTime); err != nil {
 			logger.Warn("timelapse merge failed", "camera_id", cameraID, "duration", durationStr, "error", err)

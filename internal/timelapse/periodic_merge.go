@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,17 +26,21 @@ type PeriodicMergeManager struct {
 	fps      int
 	dataDir  string
 	duration time.Duration
+
+	retryCounts map[string]int
+	retryMu     sync.Mutex
 }
 
 // NewPeriodicMergeManager creates a new PeriodicMergeManager with the given merge duration.
 func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, duration time.Duration) *PeriodicMergeManager {
 	return &PeriodicMergeManager{
-		store:    store,
-		updater:  updater,
-		merger:   merger,
-		fps:      fps,
-		dataDir:  dataDir,
-		duration: duration,
+		store:       store,
+		updater:     updater,
+		merger:      merger,
+		fps:         fps,
+		dataDir:     dataDir,
+		duration:    duration,
+		retryCounts: make(map[string]int),
 	}
 }
 
@@ -63,8 +68,8 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 		return fmt.Errorf("periodic merge: list recordings: %w", err)
 	}
 
-	// Filter to only include segments with merge_status='merged'.
-	segments := filterMergedSegments(recordings)
+	// Filter to only include merged or retryable segments.
+	segments := m.filterEligibleSegments(recordings)
 
 	// 2. Handle no segments.
 	if len(segments) == 0 {
@@ -357,6 +362,13 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 		ids[i] = seg.ID
 	}
 
+	// Clean up retry counts on successful merge.
+	m.retryMu.Lock()
+	for _, seg := range segments {
+		delete(m.retryCounts, seg.ID)
+	}
+	m.retryMu.Unlock()
+
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, "daily_merged"); err != nil {
 			slog.Warn("periodic merge: failed to update merge statuses",
@@ -373,12 +385,24 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 	return nil
 }
 
-// markMergeFailed updates segment statuses to failed.
+// markMergeFailed updates retry counts and marks segments as failed.
+// Segments are retried up to 3 times before being permanently marked as failed.
 func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []model.Recording, mergeErr error) error {
 	ids := make([]string, len(segments))
 	for i, seg := range segments {
 		ids[i] = seg.ID
 	}
+
+	// Increment retry counts and check if any segment has exhausted retries.
+	m.retryMu.Lock()
+	maxRetriesReached := false
+	for _, seg := range segments {
+		m.retryCounts[seg.ID]++
+		if m.retryCounts[seg.ID] >= 3 {
+			maxRetriesReached = true
+		}
+	}
+	m.retryMu.Unlock()
 
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, model.MergeStatusFailed); err != nil {
@@ -390,14 +414,51 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 		}
 	}
 
-	slog.Error("periodic merge: failed",
-		"segments", len(segments),
-		"error", mergeErr,
-	)
+	if maxRetriesReached {
+		slog.Error("periodic merge: permanently failed after 3 retries",
+			"segments", len(segments),
+			"error", mergeErr,
+		)
+	} else {
+		slog.Warn("periodic merge: failed, will retry on next cycle",
+			"segments", len(segments),
+			"retry_count", func() int {
+				m.retryMu.Lock()
+				defer m.retryMu.Unlock()
+				if len(segments) > 0 {
+					return m.retryCounts[segments[0].ID]
+				}
+				return 0
+			}(),
+			"error", mergeErr,
+		)
+	}
+
 	return nil
 }
 
+// filterEligibleSegments filters recordings to include merged segments
+// and failed segments with remaining retry attempts (< 3).
+func (m *PeriodicMergeManager) filterEligibleSegments(recordings []model.Recording) []model.Recording {
+	var segments []model.Recording
+	m.retryMu.Lock()
+	defer m.retryMu.Unlock()
+	for _, r := range recordings {
+		if r.MergeStatus == model.MergeStatusMerged {
+			segments = append(segments, r)
+			continue
+		}
+		if r.MergeStatus == model.MergeStatusFailed {
+			if count, ok := m.retryCounts[r.ID]; ok && count < 3 {
+				segments = append(segments, r)
+			}
+		}
+	}
+	return segments
+}
+
 // filterMergedSegments filters recordings to only those with merge_status='merged'.
+// This is a standalone helper used by daily.go (legacy compat).
 func filterMergedSegments(recordings []model.Recording) []model.Recording {
 	var segments []model.Recording
 	for _, r := range recordings {
@@ -407,7 +468,6 @@ func filterMergedSegments(recordings []model.Recording) []model.Recording {
 	}
 	return segments
 }
-
 // checkSegmentCompatibility checks if all segments have compatible resolution and codec.
 // Uses ffprobe to read metadata from each segment.
 func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) (bool, error) {

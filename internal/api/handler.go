@@ -19,9 +19,9 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -132,8 +132,9 @@ type Handler struct {
 	aiDetector        AIDetector
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
-	timelapseDailyMgr  *timelapse.DailyMergeManager
+	timelapseDailyMgr *timelapse.DailyMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
+	activeMerges      sync.Map
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
