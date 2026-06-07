@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -154,6 +155,14 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		logger.Warn("failed to save config after timelapse update", "camera_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save config")
 		return
+	}
+
+	// Update merge scheduler if MergeDuration changed
+	if h.mergeScheduler != nil && body.MergeDuration != "" {
+		if dur, err := config.ParseMergeDuration(body.MergeDuration); err == nil {
+			h.mergeScheduler.AddOrUpdate(id, dur)
+			slog.Debug("timelapse: updated merge scheduler", "camera_id", id, "duration", dur)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, h.config.Cameras)
@@ -644,22 +653,30 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTimelapseMerge handles POST /api/timelapse/{id}/merge.
-// Triggers a daily merge for the specified camera and date.
+// Triggers a merge for the specified camera. Accepts optional duration
+// query param (e.g., "8h", "12h", "24h", "natural-day", "7d", "30d")
+// for custom merge windows. Without duration, uses daily merge (backward compat).
 func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
+	// Parse optional duration query param for custom merge windows
+	durationStr := r.URL.Query().Get("duration")
+	if durationStr != "" {
+		h.handleTimelapseMergeWithDuration(w, r, cameraID, durationStr)
+		return
+	}
+
+	// No duration — use configured DailyMergeManager (backward compat)
 	if h.timelapseDailyMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
 		return
 	}
 
-	// Accept date query param (YYYY-MM-DD, default yesterday)
 	date := r.URL.Query().Get("date")
 	if date == "" {
 		date = time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
 	}
 
-	// Run merge in background to avoid blocking the response
 	go func() {
 		ctx := context.Background()
 		if err := h.timelapseDailyMgr.Run(ctx, cameraID, date); err != nil {
@@ -667,10 +684,67 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":    "merge_initiated",
 		"camera_id": cameraID,
 		"date":      date,
+	})
+}
+
+// handleTimelapseMergeWithDuration handles merge with a custom duration.
+func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *http.Request, cameraID, durationStr string) {
+	dur, err := config.ParseMergeDuration(durationStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		return
+	}
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	// Get FPS from camera's timelapse config, default 10
+	fps := 10
+	for i := range h.config.Cameras {
+		if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
+			if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
+				fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
+			}
+			break
+		}
+	}
+
+	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
+
+	// Parse date or use current time as reference
+	dateStr := r.URL.Query().Get("date")
+	refTime := time.Now().UTC()
+	if dateStr != "" {
+		parsed, err := time.Parse("2006-01-02", dateStr)
+		if err == nil {
+			refTime = parsed
+		}
+	}
+
+	// Create PeriodicMergeManager with the specified duration
+	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur)
+
+	go func() {
+		ctx := context.Background()
+		if err := mgr.Run(ctx, cameraID, refTime); err != nil {
+			logger.Warn("timelapse merge failed", "camera_id", cameraID, "duration", durationStr, "error", err)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":    "merge_initiated",
+		"camera_id": cameraID,
+		"date":      refTime.Format("2006-01-02"),
+		"duration":  durationStr,
 	})
 }
 

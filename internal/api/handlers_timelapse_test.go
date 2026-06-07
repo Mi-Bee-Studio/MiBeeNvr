@@ -894,6 +894,68 @@ func TestTimelapseMerge_DefaultDate(t *testing.T) {
 	}
 }
 
+func TestTimelapseMerge_DurationInvalid(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=invalid", nil, "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseMerge_DurationNeedsConfig(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // no config set
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=8h", nil, "", "")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseMerge_DurationAccepted(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir: t.TempDir(),
+		},
+		Cameras: []config.CameraConfig{
+			{
+				ID: "cam-1",
+				Timelapse: &config.CameraTimelapseConfig{
+					Enabled:        true,
+					MergeOutputFPS: 15,
+				},
+			},
+		},
+	}
+
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=8h&date=2026-06-06", nil, "", "")
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "merge_initiated" {
+		t.Fatalf("expected status=merge_initiated, got %v", resp["status"])
+	}
+	if resp["duration"] != "8h" {
+		t.Fatalf("expected duration=8h, got %v", resp["duration"])
+	}
+}
+
+
 // --- Timelapse Pause/Resume tests ---
 
 func TestTimelapsePause_Success(t *testing.T) {

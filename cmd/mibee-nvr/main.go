@@ -357,7 +357,7 @@ type App struct {
 	hlsMgr     *hls.Manager
 	cleanupMgr *cleanup.CleanupManager
 	healthMgr  *health.Manager
-	dailyMergeMgr *timelapse.DailyMergeManager
+	mergeScheduler *timelapse.MergeScheduler
 
 	// Optional network services (nil when disabled)
 	mqttClient  *mqtt.Client
@@ -538,11 +538,42 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		})
 	}
 
-	// Step 6.6: Timelapse daily merge manager.
+	// Step 6.6: Merge scheduler for timelapse cameras.
 	// Uses GoMerger as default (no external deps); FFmpeg concat is attempted at runtime if available.
-	dailyFPS := 10
-	dailyMergeDir := filepath.Join(cfg.Storage.RootDir, "daily-merge")
-	a.dailyMergeMgr = timelapse.NewDailyMergeManager(db, db, timelapse.NewGoMerger(), dailyFPS, dailyMergeDir)
+	// Per-camera merge durations are handled by MergeScheduler.
+	periodicMergeDir := filepath.Join(cfg.Storage.RootDir, "periodic-merge")
+	a.mergeScheduler = timelapse.NewMergeScheduler()
+	// Pre-create per-camera merge managers and register them in the scheduler
+	periodicMergeManagers := make(map[string]*timelapse.PeriodicMergeManager)
+	for _, cam := range cfg.Cameras {
+		if cam.Timelapse != nil {
+			dur := 24 * time.Hour
+			if cam.Timelapse.MergeDuration != "" {
+				if parsed, err := config.ParseMergeDuration(cam.Timelapse.MergeDuration); err == nil {
+					dur = parsed
+				} else {
+					slog.Warn("merge scheduler: invalid merge duration, defaulting to 24h",
+						"camera_id", cam.ID,
+						"merge_duration", cam.Timelapse.MergeDuration,
+						"error", err,
+					)
+				}
+			}
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur)
+			a.mergeScheduler.AddOrUpdate(cam.ID, dur)
+			slog.Info("merge scheduler: configured camera",
+				"camera_id", cam.ID,
+				"duration", dur.String(),
+			)
+		}
+	}
+	a.mergeScheduler.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
+		manager, ok := periodicMergeManagers[cameraID]
+		if !ok {
+			return fmt.Errorf("merge scheduler: no manager for camera %s", cameraID)
+		}
+		return manager.Run(ctx, cameraID, refTime)
+	})
 
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -659,7 +690,7 @@ func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.hlsMgr, a.configPath, a.mergeMgr, cloudProxy)
+	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.hlsMgr, a.configPath, a.mergeMgr, cloudProxy, a.mergeScheduler)
 
 	// Wire streaming managers
 	handler.SetWebRTCManager(a.webrtcMgr)
@@ -794,9 +825,9 @@ func (a *App) Start() error {
 		go a.transcodeMgr.Run(ctx)
 	}
 
-	// Start daily merge cron (midnight UTC) for timelapse cameras.
-	if a.dailyMergeMgr != nil {
-		go a.runDailyMergeLoop(ctx)
+	// Start merge scheduler for timelapse cameras.
+	if a.mergeScheduler != nil {
+		a.mergeScheduler.Start(ctx)
 	}
 
 	// Start cleanup manager
@@ -856,45 +887,6 @@ func (a *App) Start() error {
 	return a.Stop()
 }
 
-// runDailyMergeLoop runs the daily merge for all timelapse cameras at midnight UTC.
-// It calculates the time until the next midnight, waits, runs the merge, then loops every 24h.
-func (a *App) runDailyMergeLoop(ctx context.Context) {
-	now := time.Now().UTC()
-	nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-	initialDelay := nextMidnight.Sub(now)
-
-	slog.Info("daily merge: starting cron loop",
-		"next_run", nextMidnight.Format(time.RFC3339),
-		"delay_seconds", initialDelay.Seconds(),
-	)
-
-	select {
-	case <-time.After(initialDelay):
-	case <-ctx.Done():
-		return
-	}
-
-	for {
-		yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
-		for _, cam := range a.cfg.Cameras {
-			if cam.Timelapse != nil {
-				slog.Info("daily merge: running for camera",
-					"camera_id", cam.ID, "date", yesterday)
-				if err := a.dailyMergeMgr.Run(ctx, cam.ID, yesterday); err != nil {
-					slog.Error("daily merge: camera merge failed",
-						"camera_id", cam.ID, "date", yesterday, "error", err)
-				}
-			}
-		}
-
-		// Wait 24h until next midnight.
-		select {
-		case <-time.After(24 * time.Hour):
-		case <-ctx.Done():
-			return
-		}
-	}
-}
 
 // Stop gracefully shuts down all components in reverse dependency order
 // with a 30-second timeout. Shutdown order:
@@ -979,6 +971,13 @@ func (a *App) Stop() error {
 
 		// 6. Merge manager — stopped via context cancellation above
 		log.Info("merge manager stopped")
+
+		// 6.1. Merge scheduler
+		if a.mergeScheduler != nil {
+			log.Info("stopping merge scheduler")
+			a.mergeScheduler.Stop()
+		}
+		log.Info("merge scheduler stopped")
 
 		// 7. HLS manager
 		log.Info("stopping HLS streams")

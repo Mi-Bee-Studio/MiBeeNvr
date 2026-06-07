@@ -133,10 +133,11 @@ type Handler struct {
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
 	timelapseDailyMgr  *timelapse.DailyMergeManager
+	mergeScheduler    *timelapse.MergeScheduler
 }
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -367,7 +368,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 }
 
 // --- Test helper exported for handler_test.go ---
@@ -383,7 +384,7 @@ func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "")
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.
