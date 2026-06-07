@@ -16,7 +16,9 @@ import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle } from 'lucide-svelte';
+  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
+  import CalendarView from '../components/timelapse/CalendarView.svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -56,6 +58,21 @@ import { onMount, onDestroy } from 'svelte';
   let transcodingStatus = $state<ManagerStatus | null>(null);
   let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
   let transcodeTargetMap = $state<Record<string, string>>({}); // recording_id -> target_codec
+
+  // View mode state
+  let viewMode = $state<'table' | 'gallery' | 'calendar'>(
+    (() => {
+      try {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        const v = params.get('view');
+        if (v === 'gallery' || v === 'calendar') return v;
+      } catch {}
+      return 'table';
+    })()
+  );
+  let selectedDate = $state<string | null>(null);
+  let isTimelapseSelected = $derived(format === 'timelapse');
+  let currentMonth = $state(new Date());
 
   function toggleSelectAll() {
     if (selectedIds.size === recordings.length) {
@@ -179,6 +196,26 @@ import { onMount, onDestroy } from 'svelte';
 
   function viewRecording(recording: Recording) {
     window.location.hash = `#/recordings/${recording.id}`;
+  }
+
+  function prevDay() {
+    if (!selectedDate) return;
+    const d = new Date(selectedDate + 'T12:00:00');
+    d.setDate(d.getDate() - 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    selectedDate = `${y}-${m}-${day}`;
+  }
+
+  function nextDay() {
+    if (!selectedDate) return;
+    const d = new Date(selectedDate + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    selectedDate = `${y}-${m}-${day}`;
   }
 
   // --- Transcoding ---
@@ -357,6 +394,39 @@ import { onMount, onDestroy } from 'svelte';
     };
   });
 
+  // Sync viewMode to URL hash
+  $effect(() => {
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf('?');
+    const base = qIdx !== -1 ? hash.slice(0, qIdx) : hash;
+    if (viewMode !== 'table') {
+      const newHash = base + '?view=' + viewMode;
+      if (window.location.hash !== newHash) {
+        window.location.hash = newHash;
+      }
+    } else {
+      if (hash.includes('?view=')) {
+        const params = new URLSearchParams(hash.split('?')[1] || '');
+        params.delete('view');
+        const qs = params.toString();
+        const newHash = qs ? base + '?' + qs : base;
+        if (window.location.hash !== newHash) {
+          window.location.hash = newHash;
+        }
+      }
+    }
+  });
+
+  // Auto-select today's date when entering gallery mode
+  $effect(() => {
+    if (viewMode === 'gallery' && !selectedDate) {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      selectedDate = `${y}-${m}-${d}`;
+    }
+  });
   // Pagination calculations
   let currentPage = $derived(Math.floor(offset / limit) + 1);
   let totalPages = $derived(Math.ceil(totalRecordings / limit));
@@ -447,6 +517,30 @@ import { onMount, onDestroy } from 'svelte';
       </div>
     </div>
 
+    {#if isTimelapseSelected}
+      <!-- View Mode Tabs -->
+      <div class="flex items-center gap-1 mb-4 border-b th-border pb-2">
+        <button
+          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'table' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
+          onclick={() => viewMode = 'table'}
+        >
+          {t('recordings.viewTable')}
+        </button>
+        <button
+          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'gallery' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
+          onclick={() => viewMode = 'gallery'}
+        >
+          {t('recordings.viewGallery')}
+        </button>
+        <button
+          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'calendar' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
+          onclick={() => viewMode = 'calendar'}
+        >
+          {t('recordings.viewCalendar')}
+        </button>
+      </div>
+    {/if}
+
     <!-- Error message -->
     {#if error}
       <div class="card border th-border-danger p-8 text-center">
@@ -459,8 +553,42 @@ import { onMount, onDestroy } from 'svelte';
       </div>
     {/if}
 
-    <!-- Recordings table -->
-    <div class="card border th-border">
+    {#if isTimelapseSelected && viewMode !== 'table'}
+      <!-- Gallery/Calendar View -->
+      {#if viewMode === 'gallery'}
+        <!-- Gallery tab -->
+        <div class="card p-5 mb-4 border th-border">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold th-text-primary">
+              {t('recordings.viewGallery')}
+            </h3>
+            <div class="flex items-center gap-2">
+              <button onclick={prevDay} class="btn btn-ghost btn-sm px-2" aria-label="Previous day">
+                <ChevronLeft size={16} />
+              </button>
+              <span class="text-sm th-text-secondary min-w-[100px] text-center">
+                {selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString(
+                  document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US',
+                  { weekday: 'short', month: 'short', day: 'numeric' }
+                ) : ''}
+              </span>
+              <button onclick={nextDay} class="btn btn-ghost btn-sm px-2" aria-label="Next day">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+          <GalleryGrid {selectedDate} {recordings} {cameras} onselectRecording={viewRecording} />
+        </div>
+      {:else if viewMode === 'calendar'}
+        <!-- Calendar tab -->
+        <CalendarView bind:currentMonth bind:selectedDate {recordings} />
+        <div class="card p-5 mb-4 border th-border">
+          <GalleryGrid {selectedDate} {recordings} {cameras} onselectRecording={viewRecording} />
+        </div>
+      {/if}
+    {:else}
+      <!-- Recordings table (existing) -->
+      <div class="card border th-border">
       {#if loading && recordings.length === 0}
         <div class="p-6 space-y-4">
           <!-- Skeleton header -->
@@ -729,6 +857,7 @@ import { onMount, onDestroy } from 'svelte';
       {/if}
       {/if}
     </div>
+    {/if}
   </main>
   </div>
 

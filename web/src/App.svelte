@@ -54,8 +54,14 @@
 
 
   // Parse hash-based routes (hoisted — function declarations are available before this line)
-  function parseRoute(hash: string) {
-    const path = hash.slice(1); // Remove #
+function parseRoute(hash: string) {
+    let path = hash.slice(1); // Remove #
+
+    // Strip query parameters from hash for routing
+    const qIdx = path.indexOf('?');
+    if (qIdx !== -1) {
+        path = path.slice(0, qIdx);
+    }
 
     if (!path || path === '/') {
       return isAuthenticated() ? { route: 'recordings', params: {} } : { route: 'login', params: {} };
