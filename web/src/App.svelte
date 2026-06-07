@@ -16,7 +16,6 @@
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Surveillance from './routes/Surveillance.svelte';
   import Status from './routes/Status.svelte';
-  import Timelapse from './routes/Timelapse.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -125,7 +124,7 @@ function parseRoute(hash: string) {
     }
 
     if (segments[0] === 'timelapse') {
-      return { route: 'timelapse', params: {} };
+      return { route: 'recordings', params: { view: 'gallery' } };
     }
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : 'dashboard';
@@ -138,9 +137,13 @@ function parseRoute(hash: string) {
 
   // Current route — initialize from hash synchronously to prevent
   // Login component from redirecting to recordings before onMount runs
-  // Redirect legacy #/health route
-  if (typeof window !== 'undefined' && window.location.hash === '#/health') {
-    window.location.replace('#/status');
+  // Redirect legacy routes
+  if (typeof window !== 'undefined') {
+    if (window.location.hash === '#/health') {
+      window.location.replace('#/status');
+    } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse')) {
+      window.location.replace('#/recordings?view=gallery');
+    }
   }
 
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
@@ -150,9 +153,13 @@ function parseRoute(hash: string) {
 
   function updateRoute() {
     const hash = window.location.hash;
-    // Redirect legacy #/health route
+    // Redirect legacy routes
     if (hash === '#/health') {
       window.location.replace('#/status');
+      return;
+    }
+    if (hash === '#/timelapse' || hash.startsWith('#/timelapse')) {
+      window.location.replace('#/recordings?view=gallery');
       return;
     }
     const { route, params: routeParams } = parseRoute(hash);
