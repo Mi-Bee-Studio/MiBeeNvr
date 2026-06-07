@@ -264,8 +264,8 @@ case "timelapse":
 		case "snapshot":
 			rec = cm.createTimelapseSnapshotRecorder(cam, segDur)
 		case "rtsp_keyframe":
-			logger.Info("rtsp_keyframe timelapse source requires an active regular recorder", "camera_id", cam.ID)
-			return nil
+			logger.Warn("rtsp_keyframe requires dual-mode (regular recorder + timelapse config); creating stub recorder for standalone timelapse", "camera_id", cam.ID)
+			rec = &recorder.StubRecorder{}
 		case "mjpeg", "auto", "":
 			rec = cm.createTimelapseMJPEGRecorder(cam, segDur)
 		default:
@@ -307,6 +307,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+	case *recorder.StubRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	}
 	if hub != nil {
 		hub.SetCameraID(cameraID)
@@ -345,10 +348,6 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
 	if rec == nil {
-		// Check if this is due to rtsp_keyframe timelapse config (handled elsewhere)
-		if cam.Protocol == "timelapse" && cam.Timelapse != nil && cam.Timelapse.FrameSource == "rtsp_keyframe" {
-			return nil
-		}
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
 	}
 	cm.recorders[cam.ID] = rec

@@ -284,7 +284,7 @@ func (cm *CameraManager) ResumeTimelapse(ctx context.Context, cameraID string) e
 
 	rec := cm.createRecorder(*cam, segDur)
 	if rec == nil {
-		return nil // e.g., rtsp_keyframe — no recorder to start
+		return nil
 	}
 
 	cm.recorders[cameraID] = rec
