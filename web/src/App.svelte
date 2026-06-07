@@ -233,8 +233,6 @@ function parseRoute(hash: string) {
       <Dashboard initialTab={params.tab || 'dashboard'} />
     {:else if currentRoute === 'transcoding-history'}
       <TranscodingHistory />
-    {:else if currentRoute === 'timelapse'}
-      <Timelapse />
     {/if}
   {/if}
 

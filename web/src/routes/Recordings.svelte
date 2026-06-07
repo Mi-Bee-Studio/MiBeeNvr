@@ -66,7 +66,7 @@ import { onMount, onDestroy } from 'svelte';
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'gallery' || v === 'calendar') return v;
+        if (v === 'gallery' || v === 'calendar' || v === 'timelapse') return v === 'timelapse' ? 'gallery' : v;
       } catch {}
       return 'table';
     })()
