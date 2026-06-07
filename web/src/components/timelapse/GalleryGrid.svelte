@@ -131,8 +131,18 @@
                 <div class="absolute inset-0 flex items-center justify-center">
                   <CameraIcon size={24} class="th-text-muted opacity-50" />
                 </div>
-              {/if}
-            </div>
+            {/if}
+            {#if recording.merge_status}
+              <div class="absolute top-1.5 right-1.5">
+                <span
+                  class="badge text-[10px] leading-none py-0.5 px-1.5 {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : 'badge-neutral'}"
+                  title={recording.merge_status === 'failed' && recording.merge_error ? recording.merge_error : ''}
+                >
+                  {recording.merge_status === 'merged' ? t('detail.mergeStatusMerged') : recording.merge_status === 'failed' ? t('detail.mergeStatusFailed') : t('detail.mergeStatusPending')}
+                </span>
+              </div>
+            {/if}
+          </div>
             <!-- Info -->
             <div class="p-3 space-y-1.5">
               <p class="text-sm font-medium th-text-primary truncate">

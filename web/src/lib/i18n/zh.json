@@ -312,6 +312,7 @@
   "timelapse.frameSource": "帧来源",
   "timelapse.snapshotUrl": "快照 URL",
   "timelapse.schedule": "时间表",
+  "timelapse.scheduleUtcHint": "(UTC 时区)",
   "timelapse.paused": "已暂停",
   "timelapse.deleteOriginal": "转换后删除原始帧",
   "timelapse.saveFailed": "保存延时摄影设置失败",

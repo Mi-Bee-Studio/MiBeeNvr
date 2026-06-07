@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    listRecordings,
+    listTimelapseRecordings,
     listCameras,
   } from '$lib/api';
   import type { Recording, Camera } from '$lib/api';
@@ -72,8 +72,7 @@
     error = '';
 
     try {
-      const resp = await listRecordings({
-        format: 'timelapse',
+      const resp = await listTimelapseRecordings({
         camera_id: selectedCamera || undefined,
         start: rangeStart.toISOString(),
         end: rangeEnd.toISOString(),

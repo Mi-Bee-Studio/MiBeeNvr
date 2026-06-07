@@ -312,6 +312,7 @@
   "timelapse.frameSource": "Frame Source",
   "timelapse.snapshotUrl": "Snapshot URL",
   "timelapse.schedule": "Schedule",
+  "timelapse.scheduleUtcHint": "(UTC timezone)",
   "timelapse.paused": "Paused",
   "timelapse.deleteOriginal": "Delete original frames after conversion",
   "timelapse.saveFailed": "Failed to save timelapse settings",

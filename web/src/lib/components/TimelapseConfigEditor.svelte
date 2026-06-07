@@ -257,6 +257,7 @@
               <button class="text-xs th-text-accent hover:underline mt-1" onclick={addTimeRange}>
                 + {t('common.add')}
               </button>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.scheduleUtcHint')}</p>
             {/if}
           </div>
 

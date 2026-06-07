@@ -108,6 +108,33 @@ export async function listRecordings(params: {
   return apiRequest<RecordingListResponse>(endpoint, { signal });
 }
 
+export async function listTimelapseRecordings(params: {
+  camera_id?: string;
+  start?: string;
+  end?: string;
+  limit?: number;
+  offset?: number;
+  sort_by?: string;
+  sort_order?: string;
+  signal?: AbortSignal;
+} = {}): Promise<RecordingListResponse> {
+  const queryParams = new URLSearchParams();
+
+  if (params.camera_id) queryParams.set('camera_id', params.camera_id);
+  if (params.start) queryParams.set('start', params.start);
+  if (params.end) queryParams.set('end', params.end);
+  if (params.limit !== undefined) queryParams.set('limit', String(params.limit));
+  if (params.offset !== undefined) queryParams.set('offset', String(params.offset));
+  if (params.sort_by) queryParams.set('sort_by', params.sort_by);
+  if (params.sort_order) queryParams.set('sort_order', params.sort_order);
+
+  const query = queryParams.toString();
+  const endpoint = query ? `/timelapse?${query}` : '/timelapse';
+
+  const { signal } = params;
+  return apiRequest<RecordingListResponse>(endpoint, { signal });
+}
+
 export async function getRecording(id: string, signal?: AbortSignal): Promise<Recording> {
   return apiRequest<Recording>(`/recordings/${id}`, { signal });
 }
