@@ -165,7 +165,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		interval = d
 	}
 
-	isH265 := cam.Encoding == "h265"
+	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265"
 
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
 		CameraID:   cameraID,

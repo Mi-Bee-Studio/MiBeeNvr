@@ -671,6 +671,14 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		}
 	}
 
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+		}
+	}
+
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
@@ -715,6 +723,14 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		delete(cm.recorders, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
 		}
 	}
 
@@ -868,6 +884,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			}
 			delete(cm.recorders, cam.ID)
 		}
+		// Stop keyframe extractor if running
+		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
+			delete(cm.keyframeExtractors, cam.ID)
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
 	// Start recorder if newly enabled or protocol changed to a recordable one
@@ -891,6 +914,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			delete(cm.recorders, cam.ID)
 			if cm.metrics != nil {
 				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+		// Stop keyframe extractor if running
+		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
+			delete(cm.keyframeExtractors, cam.ID)
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
 			}
 		}
 	}
@@ -1017,6 +1047,15 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 		cm.metrics.ActiveCameras.Dec()
 	}
 	logger.Info("stopped recorder for camera", "camera_id", cameraID)
+
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1230,6 +1269,13 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 			delete(cm.recorders, id)
 			if cm.metrics != nil {
 				cm.metrics.ActiveCameras.Dec()
+			}
+			// Stop keyframe extractor if running
+			if ext, ok := cm.keyframeExtractors[id]; ok {
+				delete(cm.keyframeExtractors, id)
+				if err := ext.Stop(); err != nil {
+					logger.Warn("failed to stop keyframe extractor", "camera_id", id, "error", err)
+				}
 			}
 		}
 	}
