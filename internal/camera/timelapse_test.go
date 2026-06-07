@@ -325,9 +325,9 @@ func TestCreateRecorder_TimelapseRTSPKeyframeSource(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := mgr.createRecorder(cam, segDur)
-	// rtsp_keyframe now returns a StubRecorder for standalone timelapse cameras
-	assert.NotNil(t, rec, "rtsp_keyframe should return a StubRecorder (not nil) from createRecorder")
-	assert.IsType(t, &recorder.StubRecorder{}, rec, "should be a StubRecorder")
+	// rtsp_keyframe now creates an H264Recorder for standalone timelapse cameras
+	assert.NotNil(t, rec, "rtsp_keyframe should return a recorder from createRecorder")
+	assert.IsType(t, &recorder.H264Recorder{}, rec, "should be an H264Recorder")
 }
 
 func TestCreateRecorder_TimelapseWithMergeManager(t *testing.T) {
@@ -700,15 +700,14 @@ func TestStartRecorder_TimelapseRTSPKeyframe(t *testing.T) {
 	require.NoError(t, err)
 
 	err = mgr.startRecorder(ctx, cam, segDur)
-	// Should NOT error — startRecorder creates and registers StubRecorder
+	// Should NOT error — startRecorder creates and registers H264Recorder for standalone timelapse with rtsp_keyframe
 	require.NoError(t, err, "rtsp_keyframe should not cause an error")
-
-	// Verify StubRecorder is registered (createRecorder now returns a StubRecorder not nil)
+	// Verify H264Recorder is registered (createRecorder now returns H264Recorder for rtsp_keyframe)
 	mgr.mu.RLock()
 	rec, exists := mgr.recorders[cam.ID]
 	mgr.mu.RUnlock()
-	assert.True(t, exists, "rtsp_keyframe should register a StubRecorder")
-	assert.IsType(t, &recorder.StubRecorder{}, rec, "should be a StubRecorder")
+	assert.True(t, exists, "rtsp_keyframe should register a recorder")
+	assert.IsType(t, &recorder.H264Recorder{}, rec, "should be an H264Recorder")
 }
 
 // --- GetRecorderHub Tests ---

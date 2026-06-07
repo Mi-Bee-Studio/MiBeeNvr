@@ -264,8 +264,41 @@ case "timelapse":
 		case "snapshot":
 			rec = cm.createTimelapseSnapshotRecorder(cam, segDur)
 		case "rtsp_keyframe":
-			logger.Warn("rtsp_keyframe requires dual-mode (regular recorder + timelapse config); creating stub recorder for standalone timelapse", "camera_id", cam.ID)
-			rec = &recorder.StubRecorder{}
+			// For standalone timelapse with rtsp_keyframe, create an RTSP recorder
+			// to provide frames for keyframe extraction.
+			switch cam.Encoding {
+			case "h264", "":
+				h264Cfg := recorder.H264Config{
+					CameraID:     cam.ID,
+					RTSPURL:      cam.URL,
+					Username:     cam.Username,
+					Password:     cam.Password,
+					SegmentDur:   segDur,
+					DB:           cm.db,
+					AudioEnabled: cam.AudioEnabled,
+				}
+				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+					h264Cfg.FrameWatchdogTimeout = d
+				}
+				rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			case "h265":
+				h265Cfg := recorder.H265Config{
+					CameraID:     cam.ID,
+					RTSPURL:      cam.URL,
+					Username:     cam.Username,
+					Password:     cam.Password,
+					SegmentDur:   segDur,
+					DB:           cm.db,
+					AudioEnabled: cam.AudioEnabled,
+				}
+				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+					h265Cfg.FrameWatchdogTimeout = d
+				}
+				rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			default:
+				logger.Warn("unsupported encoding for rtsp_keyframe timelapse frame source", "camera_id", cam.ID, "encoding", cam.Encoding)
+				return nil
+			}
 		case "mjpeg", "auto", "":
 			rec = cm.createTimelapseMJPEGRecorder(cam, segDur)
 		default:
@@ -379,8 +412,8 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		cm.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
 	}
 
-	// Start keyframe extractor for regular recorders with rtsp_keyframe timelapse config
-	if cam.Protocol != "timelapse" && cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config
+	if cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
 		if hub := getRecorderHub(rec); hub != nil {
 			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
 				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
