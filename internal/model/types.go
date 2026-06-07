@@ -83,6 +83,7 @@ type RecordingFilter struct {
 	StartTime time.Time
 	EndTime   time.Time
 	Format    Format
+	Formats   []Format
 	Merged    *bool // nil = all, true = merged only, false = unmerged only
 	Search    string
 	Limit     int

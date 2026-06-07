@@ -145,7 +145,7 @@ type CameraTimelapseConfig struct {
 	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`                       // auto-detect (nil=auto)
 	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`                             // auto, mp4, jpeg — default auto
 	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
-	MergeDuration  string `yaml:"merge_duration,omitempty" json:"mergeDuration,omitempty"`                       // 8h, 12h, 24h, natural-day, 7d, 30d — default natural-day
+	MergeDuration  string `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
 	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"`                 // default 30, range 1-60
 }
 

@@ -123,7 +123,14 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		where = append(where, "started_at<=?")
 		args = append(args, formatTime(filter.EndTime))
 	}
-	if filter.Format != "" {
+	if len(filter.Formats) > 0 {
+		placeholders := make([]string, len(filter.Formats))
+		for i, f := range filter.Formats {
+			placeholders[i] = "?"
+			args = append(args, string(f))
+		}
+		where = append(where, "format IN ("+strings.Join(placeholders, ",")+")")
+	} else if filter.Format != "" {
 		where = append(where, "format=?")
 		args = append(args, filter.Format)
 	}
@@ -212,7 +219,14 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 		where = append(where, "started_at<=?")
 		args = append(args, formatTime(filter.EndTime))
 	}
-	if filter.Format != "" {
+	if len(filter.Formats) > 0 {
+		placeholders := make([]string, len(filter.Formats))
+		for i, f := range filter.Formats {
+			placeholders[i] = "?"
+			args = append(args, string(f))
+		}
+		where = append(where, "format IN ("+strings.Join(placeholders, ",")+")")
+	} else if filter.Format != "" {
 		where = append(where, "format=?")
 		args = append(args, filter.Format)
 	}

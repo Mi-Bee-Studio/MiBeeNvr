@@ -75,11 +75,27 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var body config.CameraTimelapseConfig
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
+	var raw json.RawMessage
+if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+writeError(w, http.StatusBadRequest, "invalid request body")
+return
+}
+
+var body config.CameraTimelapseConfig
+if err := json.Unmarshal(raw, &body); err != nil {
+writeError(w, http.StatusBadRequest, "invalid request body")
+return
+}
+
+// Backward compat: accept mergeDuration as alias for merge_duration
+if body.MergeDuration == "" {
+var legacy struct {
+MergeDuration string `json:"mergeDuration"`
+}
+if err := json.Unmarshal(raw, &legacy); err == nil && legacy.MergeDuration != "" {
+body.MergeDuration = legacy.MergeDuration
+}
+}
 
 	// Validate interval
 	if body.Interval != "" {
@@ -236,6 +252,8 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 	// Stream progress updates until completion.
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -244,7 +262,7 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
-		default:
+		case <-ticker.C:
 			// Poll progress.
 			info, ok = h.timelapseMergeMgr.GetProgress(cameraID)
 			if !ok {
@@ -259,9 +277,6 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 			if info.Status == "completed" || info.Status == "failed" {
 				return
 			}
-
-			// Poll every 500ms.
-			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }
@@ -595,59 +610,59 @@ func min(a, b int) int {
 func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse pagination params
+	// Parse pagination params with abuse prevention
 	limit := 0
-	offset := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	offset := 0
 	if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
 		}
 	}
 
-	// Query without pagination (need full sets to combine)
-	tlFilter := model.RecordingFilter{Format: model.Format("timelapse")}
-	tlRecordings, err := h.db.ListRecordings(ctx, tlFilter)
+	// Parse optional filters
+	cameraID := r.URL.Query().Get("camera_id")
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+
+	// Build filter for both timelapse and MJPEG recordings
+	filter := model.RecordingFilter{
+		Formats:   []model.Format{model.FormatTimelapse, model.FormatMJPEG},
+		CameraID:  cameraID,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+	}
+
+	// Get total count for pagination
+	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count recordings")
+		return
+	}
+
+	// Get paginated results from DB
+	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
-	mjFilter := model.RecordingFilter{Format: model.FormatMJPEG}
-	mjRecordings, err := h.db.ListRecordings(ctx, mjFilter)
-	if err != nil {
-		mjRecordings = nil
+	if recordings == nil {
+		recordings = []model.Recording{}
 	}
-
-	// Combine
-	all := append(tlRecordings, mjRecordings...)
-	if all == nil {
-		all = []model.Recording{}
-	}
-
-	// Sort by started_at desc
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].StartedAt.After(all[j].StartedAt)
-	})
-
-	// Apply pagination
-	total := len(all)
-	start := offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
-	all = all[start:end]
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recordings": all,
+		"recordings": recordings,
 		"total":      total,
 	})
 }

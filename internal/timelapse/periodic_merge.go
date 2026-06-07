@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -159,12 +160,20 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
-	input, err := os.ReadFile(seg.FilePath)
+	src, err := os.Open(seg.FilePath)
 	if err != nil {
-		return fmt.Errorf("periodic merge: read segment %s: %w", seg.ID, err)
+		return fmt.Errorf("periodic merge: open segment %s: %w", seg.ID, err)
 	}
-	if err := os.WriteFile(outputPath, input, 0644); err != nil {
-		return fmt.Errorf("periodic merge: write output file: %w", err)
+	defer src.Close()
+
+	dst, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("periodic merge: create output file: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("periodic merge: copy segment %s: %w", seg.ID, err)
 	}
 
 	if m.updater != nil {
@@ -293,15 +302,26 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 				continue
 			}
 
-			data, err := os.ReadFile(filepath.Join(seg.FilePath, entry.Name()))
+			src, err := os.Open(filepath.Join(seg.FilePath, entry.Name()))
 			if err != nil {
-				return fmt.Errorf("periodic merge: read frame %s: %w", entry.Name(), err)
+				return fmt.Errorf("periodic merge: open frame %s: %w", entry.Name(), err)
 			}
 
 			frameIndex++
 			frameName := fmt.Sprintf("frame_%06d.jpg", frameIndex)
-			if err := os.WriteFile(filepath.Join(tmpDir, frameName), data, 0644); err != nil {
-				return fmt.Errorf("periodic merge: write frame %s: %w", frameName, err)
+			dst, err := os.Create(filepath.Join(tmpDir, frameName))
+			if err != nil {
+				src.Close()
+				return fmt.Errorf("periodic merge: create frame %s: %w", frameName, err)
+			}
+
+			_, err = io.Copy(dst, src)
+			src.Close()
+			if cerr := dst.Close(); cerr != nil && err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return fmt.Errorf("periodic merge: copy frame %s: %w", frameName, err)
 			}
 
 			select {
