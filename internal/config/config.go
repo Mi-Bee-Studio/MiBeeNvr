@@ -144,7 +144,8 @@ type CameraTimelapseConfig struct {
 	DeleteOriginal bool            `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`                   // remove original segments after timelapse, default false
 	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`                       // auto-detect (nil=auto)
 	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`                             // auto, mp4, jpeg — default auto
-	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
+	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
+	MergeDuration  string `yaml:"merge_duration,omitempty" json:"mergeDuration,omitempty"`                       // 8h, 12h, 24h, natural-day, 7d, 30d — default natural-day
 	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"`                 // default 30, range 1-60
 }
 
@@ -629,6 +630,9 @@ func Validate(cfg *Config) error {
 		if cam.Timelapse.MergeOutputFPS < 1 || cam.Timelapse.MergeOutputFPS > 60 {
 			return fmt.Errorf("cameras.%s.timelapse.merge_output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.MergeOutputFPS)
 		}
+		if _, err := ParseMergeDuration(cam.Timelapse.MergeDuration); err != nil {
+			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %v", cam.ID, err)
+		}
 	}
 
 	// Validate hls.segment_count
@@ -990,6 +994,9 @@ func (cfg *Config) ApplyDefaults() {
 			if cam.Timelapse.MergeOutputFPS == 0 {
 				cam.Timelapse.MergeOutputFPS = 30
 			}
+			if cam.Timelapse.MergeDuration == "" {
+				cam.Timelapse.MergeDuration = "natural-day"
+			}
 			// MergeEnabled defaults to nil (auto-detect)
 		}
 	}
@@ -1176,4 +1183,26 @@ func mergeTimeRanges(ranges []TimeRange) []TimeRange {
 		}
 	}
 	return result
+}
+
+// ParseMergeDuration parses a MergeDuration value and returns the corresponding time.Duration.
+// Valid values: "8h", "12h", "24h", "natural-day", "7d", "30d"
+// Empty string defaults to "natural-day" (24 hours).
+func ParseMergeDuration(s string) (time.Duration, error) {
+	switch s {
+	case "", "natural-day":
+		return 24 * time.Hour, nil
+	case "8h":
+		return 8 * time.Hour, nil
+	case "12h":
+		return 12 * time.Hour, nil
+	case "24h":
+		return 24 * time.Hour, nil
+	case "7d":
+		return 7 * 24 * time.Hour, nil
+	case "30d":
+		return 30 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid merge duration %q: must be one of \"8h\", \"12h\", \"24h\", \"natural-day\", \"7d\", \"30d\"", s)
+	}
 }

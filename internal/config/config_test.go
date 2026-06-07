@@ -1229,3 +1229,64 @@ func TestAIConfigDefaults(t *testing.T) {
 	require.Equal(t, 0.0, cfg.AI.ConfidenceThreshold)
 	require.Equal(t, "", cfg.AI.ModelPath)
 }
+
+func TestParseMergeDuration_Valid(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected time.Duration
+	}{
+		{"", 24 * time.Hour},
+		{"natural-day", 24 * time.Hour},
+		{"8h", 8 * time.Hour},
+		{"12h", 12 * time.Hour},
+		{"24h", 24 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"30d", 30 * 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			dur, err := ParseMergeDuration(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, dur)
+		})
+	}
+}
+
+func TestParseMergeDuration_Invalid(t *testing.T) {
+	_, err := ParseMergeDuration("invalid")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be one of")
+}
+
+func TestValidateTimelapseMergeDuration_Valid(t *testing.T) {
+	for _, md := range []string{"8h", "12h", "24h", "natural-day", "7d", "30d"} {
+		cfg := &Config{
+			Cameras: []CameraConfig{{
+				ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
+				Timelapse: &CameraTimelapseConfig{
+					MergeDuration: md,
+				},
+			}},
+		}
+		cfg.ApplyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "merge_duration=%s should be valid", md)
+	}
+}
+
+func TestValidateTimelapseMergeDuration_Invalid(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
+			Timelapse: &CameraTimelapseConfig{
+				MergeDuration: "invalid",
+			},
+		}},
+	}
+	cfg.ApplyDefaults()
+	// Override the default that ApplyDefaults would set
+	cfg.Cameras[0].Timelapse.MergeDuration = "invalid"
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge_duration")
+}

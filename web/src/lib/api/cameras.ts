@@ -730,6 +730,7 @@ export interface TimelapseConfig {
   merge_mode?: string;
   daily_merge?: boolean;
   merge_output_fps?: number;
+  merge_duration?: string;
 }
 
 export async function getTimelapseConfig(

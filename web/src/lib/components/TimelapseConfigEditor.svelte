@@ -302,6 +302,24 @@
             <label for="timelapse-daily-merge" class="th-text-secondary text-sm">{t('timelapse.dailyMerge')}</label>
           </div>
 
+          <!-- Merge Duration -->
+          <div>
+            <label for="timelapse-merge-duration" class="input-label">{t('timelapse.mergeDuration')}</label>
+            <select
+              id="timelapse-merge-duration"
+              class="input"
+              value={config.merge_duration || 'natural-day'}
+              onchange={(e) => updateField('merge_duration', (e.target as HTMLSelectElement).value)}
+            >
+              <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+              <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+              <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+              <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+              <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+              <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+            </select>
+          </div>
+
           <!-- Merge Output FPS -->
           <div>
             <label for="timelapse-merge-fps" class="input-label">{t('timelapse.mergeOutputFps')}</label>
