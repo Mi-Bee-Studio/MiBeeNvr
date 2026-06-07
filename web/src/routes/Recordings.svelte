@@ -19,6 +19,7 @@ import { onMount, onDestroy } from 'svelte';
   import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
+  import TimelineBar from '../components/timelapse/TimelineBar.svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -73,7 +74,14 @@ import { onMount, onDestroy } from 'svelte';
   let selectedDate = $state<string | null>(null);
   let isTimelapseSelected = $derived(format === 'timelapse');
   let currentMonth = $state(new Date());
+  let timeRange = $state<'week' | 'month' | '3months'>('month');
 
+  function onTimelineSelectDay(date: string) {
+    const d = new Date(date + 'T12:00:00');
+    const calMonth = new Date(d.getFullYear(), d.getMonth());
+    currentMonth = calMonth;
+    selectedDate = date;
+  }
   function toggleSelectAll() {
     if (selectedIds.size === recordings.length) {
       selectedIds = new Set();
@@ -518,6 +526,10 @@ import { onMount, onDestroy } from 'svelte';
     </div>
 
     {#if isTimelapseSelected}
+      <!-- Timeline density bar -->
+      <div class="mb-4">
+        <TimelineBar {recordings} {currentMonth} bind:timeRange onselectDay={onTimelineSelectDay} />
+      </div>
       <!-- View Mode Tabs -->
       <div class="flex items-center gap-1 mb-4 border-b th-border pb-2">
         <button
