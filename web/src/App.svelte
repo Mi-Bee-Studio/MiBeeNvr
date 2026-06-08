@@ -6,7 +6,6 @@
   import Login from './routes/Login.svelte';
   import Recordings from './routes/Recordings.svelte';
   import RecordingDetail from './routes/RecordingDetail.svelte';
-  import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
   import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
@@ -15,7 +14,6 @@
 
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Surveillance from './routes/Surveillance.svelte';
-  import Status from './routes/Status.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -102,17 +100,14 @@ function parseRoute(hash: string) {
       return { route: 'cameras', params: {} };
     }
 
-    if (segments[0] === 'surveillance') {
-      const tab = segments[1] === 'recordings' ? 'recordings' : 'cameras';
-      return { route: 'surveillance', params: { tab } };
-    }
 
     if (segments[0] === 'status') {
-      const tab = segments[1] === 'transcoding' ? 'transcoding' : 'health';
-      return { route: 'status', params: { tab } };
+      window.location.replace('#/dashboard/health');
+      return parseRoute('#/dashboard/health');
     }
     if (segments[0] === 'stats') {
-      return { route: 'stats', params: {} };
+      window.location.replace('#/dashboard');
+      return parseRoute('#/dashboard');
     }
 
     if (segments[0] === 'settings') {
@@ -124,11 +119,14 @@ function parseRoute(hash: string) {
     }
 
     if (segments[0] === 'timelapse') {
-      return { route: 'recordings', params: { view: 'gallery' } };
+      return { route: 'recordings', params: {} };
     }
     if (segments[0] === 'dashboard') {
-      const tab = segments[1] === 'health' ? 'health' : 'dashboard';
+      const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };
+    }
+    if (segments[0] === 'surveillance') {
+      return { route: 'surveillance', params: {} };
     }
 
     // Default to login for unknown routes
@@ -139,10 +137,14 @@ function parseRoute(hash: string) {
   // Login component from redirecting to recordings before onMount runs
   // Redirect legacy routes
   if (typeof window !== 'undefined') {
-    if (window.location.hash === '#/health') {
-      window.location.replace('#/status');
+    if (window.location.hash === '#/health' || window.location.hash.startsWith('#/health/')) {
+      window.location.replace('#/dashboard/health');
+    } else if (window.location.hash === '#/stats' || window.location.hash.startsWith('#/stats/')) {
+      window.location.replace('#/dashboard');
+    } else if (window.location.hash === '#/status' || window.location.hash.startsWith('#/status/')) {
+      window.location.replace('#/dashboard/health');
     } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse')) {
-      window.location.replace('#/recordings?view=gallery');
+      window.location.replace('#/recordings');
     }
   }
 
@@ -154,12 +156,20 @@ function parseRoute(hash: string) {
   function updateRoute() {
     const hash = window.location.hash;
     // Redirect legacy routes
-    if (hash === '#/health') {
-      window.location.replace('#/status');
+    if (hash === '#/health' || hash.startsWith('#/health/')) {
+      window.location.replace('#/dashboard/health');
+      return;
+    }
+    if (hash === '#/stats' || hash.startsWith('#/stats/')) {
+      window.location.replace('#/dashboard');
+      return;
+    }
+    if (hash === '#/status' || hash.startsWith('#/status/')) {
+      window.location.replace('#/dashboard/health');
       return;
     }
     if (hash === '#/timelapse' || hash.startsWith('#/timelapse')) {
-      window.location.replace('#/recordings?view=gallery');
+      window.location.replace('#/recordings');
       return;
     }
     const { route, params: routeParams } = parseRoute(hash);
@@ -229,15 +239,11 @@ function parseRoute(hash: string) {
     {:else if currentRoute === 'live'}
       <LiveView cameraId={params.id} />
     {:else if currentRoute === 'surveillance'}
-      <Surveillance initialTab={params.tab || 'cameras'} />
-    {:else if currentRoute === 'status'}
-      <Status initialTab={params.tab || 'health'} />
-    {:else if currentRoute === 'stats'}
-      <Stats />
+      <Surveillance />
     {:else if currentRoute === 'settings'}
       <Settings />
     {:else if currentRoute === 'dashboard'}
-      <Dashboard initialTab={params.tab || 'dashboard'} />
+      <Dashboard initialTab={params.tab || 'storage'} />
     {:else if currentRoute === 'transcoding-history'}
       <TranscodingHistory />
     {/if}

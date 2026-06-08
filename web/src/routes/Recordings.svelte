@@ -6,8 +6,8 @@ import { onMount, onDestroy } from 'svelte';
     deleteRecording,
     batchDeleteRecordings
   } from '$lib/api';
-  import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
+  import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { downloadRecording } from '$lib/api';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
@@ -16,10 +16,11 @@ import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle, ChevronLeft, ChevronRight, Filter, Table2, LayoutGrid, Calendar } from 'lucide-svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
   import TimelineBar from '../components/timelapse/TimelineBar.svelte';
+  import Tab from '../lib/components/Tab.svelte';
 
   // Helper function to get camera name by ID
   function getCameraName(cameraId: string): string {
@@ -30,7 +31,6 @@ import { onMount, onDestroy } from 'svelte';
 
   // Filter state
   let cameraId = $state('');
-  let format = $state('');
   let searchQuery = $state('');
   let mergedFilter = $state('');
   let showArchived = $state(false);
@@ -61,20 +61,19 @@ import { onMount, onDestroy } from 'svelte';
   let transcodeTargetMap = $state<Record<string, string>>({}); // recording_id -> target_codec
 
   // View mode state
-  let viewMode = $state<'table' | 'gallery' | 'calendar'>(
-    (() => {
-      try {
-        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
-        const v = params.get('view');
-        if (v === 'gallery' || v === 'calendar' || v === 'timelapse') return v === 'timelapse' ? 'gallery' : v;
-      } catch {}
-      return 'table';
-    })()
-  );
+  let initialViewMode: 'table' | 'gallery' | 'calendar' = 'table';
+  try {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const v = params.get('view');
+    if (v === 'gallery' || v === 'calendar' || v === 'timelapse') initialViewMode = v === 'timelapse' ? 'gallery' : v;
+  } catch {}
+  let viewMode = $state<'table' | 'gallery' | 'calendar'>(initialViewMode);
   let selectedDate = $state<string | null>(null);
-  let isTimelapseSelected = $derived(format === 'timelapse');
+  // When navigating from Timelapse nav item (URL ?view=gallery/calendar), auto-select timelapse format
+  let format = $state('');
   let currentMonth = $state(new Date());
   let timeRange = $state<'week' | 'month' | '3months'>('month');
+  let showAdvancedFilters = $state(false);
 
   function onTimelineSelectDay(date: string) {
     const d = new Date(date + 'T12:00:00');
@@ -141,22 +140,50 @@ import { onMount, onDestroy } from 'svelte';
     error = '';
 
     try {
-      const response = await listRecordings({
-        camera_id: cameraId || undefined,
-        format: format || undefined,
-        search: searchQuery || undefined,
-        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-        archived: showArchived ? true : undefined,
-        start: startDate ? new Date(startDate).toISOString() : undefined,
-        end: endDate ? new Date(endDate).toISOString() : undefined,
-        offset,
-        limit,
-        sort_by: sortBy,
-        order: sortOrder,
-        signal: abortController.signal
-      });
-      recordings = response.recordings;
-      totalRecordings = response.total || 0;
+      // In gallery/calendar mode, use wider date range for all recording types
+      if (viewMode !== 'table') {
+        // Calculate calendar month range for gallery view
+        const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+        const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
+        // Extend range to include timeline data
+        const rangeStart = calStart;
+        let rangeEnd = calEnd;
+        if (timeRange === 'week') {
+          rangeEnd = new Date();
+        } else if (timeRange === '3months') {
+          rangeEnd = new Date();
+        }
+        const response = await listRecordings({
+          camera_id: cameraId || undefined,
+          format: format || undefined,
+          search: searchQuery || undefined,
+          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+          archived: showArchived ? true : undefined,
+          start: rangeStart.toISOString(),
+          end: rangeEnd.toISOString(),
+          limit: 1000,
+          signal: abortController.signal
+        });
+        recordings = response.recordings;
+        totalRecordings = response.total || 0;
+      } else {
+        const response = await listRecordings({
+          camera_id: cameraId || undefined,
+          format: format || undefined,
+          search: searchQuery || undefined,
+          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+          archived: showArchived ? true : undefined,
+          start: startDate ? new Date(startDate).toISOString() : undefined,
+          end: endDate ? new Date(endDate).toISOString() : undefined,
+          offset,
+          limit,
+          sort_by: sortBy,
+          order: sortOrder,
+          signal: abortController.signal
+        });
+        recordings = response.recordings;
+        totalRecordings = response.total || 0;
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         return;
@@ -376,7 +403,7 @@ import { onMount, onDestroy } from 'svelte';
   // Watch all filter + pagination changes — debounce to avoid double-fire with onMount
   let loadTimeout: number;
   $effect(() => {
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter, showArchived];
+    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter, showArchived, viewMode];
     clearTimeout(loadTimeout);
     loadTimeout = window.setTimeout(() => loadRecordings(), 100);
     return () => clearTimeout(loadTimeout);
@@ -425,6 +452,22 @@ import { onMount, onDestroy } from 'svelte';
     }
   });
 
+  // React to URL hash changes from nav clicks (e.g. #/recordings?view=gallery)
+  $effect(() => {
+    const handler = () => {
+      try {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        const v = params.get('view');
+        if (v === 'gallery' || v === 'calendar' || v === 'timelapse') {
+          const newMode = v === 'timelapse' ? 'gallery' : v;
+          if (viewMode !== newMode) viewMode = newMode;
+        }
+      } catch {}
+    };
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  });
+
   // Auto-select today's date when entering gallery mode
   $effect(() => {
     if (viewMode === 'gallery' && !selectedDate) {
@@ -446,6 +489,10 @@ import { onMount, onDestroy } from 'svelte';
     offset = (newPage - 1) * limit;
     window.scrollTo(0, 0);
   }
+
+  function handleViewModeChange(id: string) {
+    viewMode = id as 'table' | 'gallery' | 'calendar';
+  }
 </script>
 
   <div class="min-h-screen th-bg-primary pt-[68px]">
@@ -453,11 +500,12 @@ import { onMount, onDestroy } from 'svelte';
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">
-      <h2 class="text-2xl font-bold th-text-primary mb-4">{t('recordings.title')}</h2>
+      <h2 class="text-2xl font-bold th-text-primary mb-4">{t('nav.recordings')}</h2>
 
-      <!-- Filters -->
-      <div class="card p-5 mb-6 border th-border space-y-3">
-        <div class="flex flex-wrap gap-3 items-end">
+      <!-- Collapsible Filters -->
+      <div class="card p-4 mb-6 border th-border">
+        <!-- Compact filter bar -->
+        <div class="flex flex-wrap items-end gap-3">
           <div class="flex-1 min-w-[160px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
             <select id="camera" class="input" bind:value={cameraId}>
@@ -467,91 +515,99 @@ import { onMount, onDestroy } from 'svelte';
               {/each}
             </select>
           </div>
-          <div class="flex-1 min-w-[120px]">
-            <label for="format" class="input-label">{t('recordings.format')}</label>
-            <select id="format" class="input" bind:value={format}>
-              <option value="">{t('recordings.allFormats')}</option>
-              <option value="h264">{t('recordings.h264')}</option>
-              <option value="mjpeg">{t('recordings.mjpeg')}</option>
-              <option value="h265">{t('recordings.h265')}</option>
-              <option value="timelapse">{t('recording.format.timelapse')}</option>
-            </select>
-          </div>
-          <div class="flex-1 min-w-[120px]">
-            <label for="merged" class="input-label">{t('recordings.allStatus')}</label>
-            <select id="merged" class="input" bind:value={mergedFilter}>
-              <option value="">{t('recordings.all')}</option>
-              <option value="true">{t('recordings.merged')}</option>
-              <option value="false">{t('recordings.unmerged')}</option>
-            </select>
-          </div>
-          <div class="flex-1 min-w-[120px]">
-            <label class="input-label" for="show-archived">&nbsp;</label>
-            <label class="input flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                class="w-4 h-4 rounded cursor-pointer"
-                bind:checked={showArchived}
-                id="show-archived"
-              />
-              <span class="text-sm th-text-primary">{t('archives.title')}</span>
-            </label>
-          </div>
-          <div class="flex-1 min-w-[180px]">
-            <label class="input-label" for="search-input">{t('recordings.search')}</label>
-            <div class="relative">
-              <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
-              <input
-                id="search-input"
-                type="text"
-                class="input pl-9"
-                placeholder={t('recordings.search')}
-                bind:value={searchQuery}
-              />
+          <div class="flex-1 min-w-[200px]">
+            <label class="input-label">{t('recordings.startDate')}</label>
+            <div class="flex items-center gap-2">
+              <input type="datetime-local" class="input flex-1" bind:value={startDate} />
+              <span class="th-text-tertiary shrink-0">~</span>
+              <input type="datetime-local" class="input flex-1" bind:value={endDate} />
             </div>
           </div>
-        </div>
-        <!-- Time range row -->
-        <div class="flex flex-wrap gap-4 sm:gap-3 items-stretch sm:items-end mt-1">
-          <div class="flex-1 min-w-0">
-            <label class="input-label" for="start-date">{t('recordings.startDate')}</label>
-            <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
-              <input type="datetime-local" class="input flex-1" id="start-date" bind:value={startDate} />
-              <span class="th-text-tertiary shrink-0">~</span>
-              <input type="datetime-local" class="input flex-1" id="end-date" bind:value={endDate} />
+          <div class="flex items-center gap-1 pb-[2px]">
+            <button
+              class="btn btn-ghost btn-sm"
+              onclick={() => showAdvancedFilters = !showAdvancedFilters}
+              title="{showAdvancedFilters ? 'Hide' : 'Show'} advanced filters"
+            >
+              <Filter size={16} />
+              {#if showAdvancedFilters}
+                <ChevronUp size={14} class="ml-1" />
+              {:else}
+                <ChevronDown size={14} class="ml-1" />
+              {/if}
+            </button>
+            <button onclick={clearFilters} class="btn btn-ghost btn-sm">
+              {t('recordings.clearFilters')}
+            </button>
           </div>
-          </div>
         </div>
+        {#if showAdvancedFilters}
+          <div class="mt-3 pt-3 border-t th-border">
+            <div class="flex flex-wrap gap-3 items-end">
+              <div class="flex-1 min-w-[120px]">
+                <label for="format" class="input-label">{t('recordings.format')}</label>
+                <select id="format" class="input" bind:value={format}>
+                  <option value="">{t('recordings.allFormats')}</option>
+                  <option value="h264">{t('recordings.h264')}</option>
+                  <option value="mjpeg">{t('recordings.mjpeg')}</option>
+                  <option value="h265">{t('recordings.h265')}</option>
+                  <option value="timelapse">{t('recording.format.timelapse')}</option>
+                </select>
+              </div>
+              <div class="flex-1 min-w-[120px]">
+                <label for="merged" class="input-label">{t('recordings.allStatus')}</label>
+                <select id="merged" class="input" bind:value={mergedFilter}>
+                  <option value="">{t('recordings.all')}</option>
+                  <option value="true">{t('recordings.merged')}</option>
+                  <option value="false">{t('recordings.unmerged')}</option>
+                </select>
+              </div>
+              <div class="flex-1 min-w-[120px]">
+                <label class="input-label" for="show-archived">&nbsp;</label>
+                <label class="input flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    class="w-4 h-4 rounded cursor-pointer"
+                    bind:checked={showArchived}
+                    id="show-archived"
+                  />
+                  <span class="text-sm th-text-primary">{t('archives.title')}</span>
+                </label>
+              </div>
+              <div class="flex-1 min-w-[180px]">
+                <label class="input-label" for="search-input">{t('recordings.search')}</label>
+                <div class="relative">
+                  <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
+                  <input
+                    id="search-input"
+                    type="text"
+                    class="input pl-9"
+                    placeholder={t('recordings.search')}
+                    bind:value={searchQuery}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
-    </div>
 
-    {#if isTimelapseSelected}
       <!-- Timeline density bar -->
       <div class="mb-4">
         <TimelineBar {recordings} {currentMonth} bind:timeRange onselectDay={onTimelineSelectDay} />
       </div>
-      <!-- View Mode Tabs -->
-      <div class="flex items-center gap-1 mb-4 border-b th-border pb-2">
-        <button
-          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'table' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
-          onclick={() => viewMode = 'table'}
-        >
-          {t('recordings.viewTable')}
-        </button>
-        <button
-          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'gallery' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
-          onclick={() => viewMode = 'gallery'}
-        >
-          {t('recordings.viewGallery')}
-        </button>
-        <button
-          class="px-4 py-2 text-sm font-medium transition-colors rounded-t {viewMode === 'calendar' ? 'th-text-primary border-b-2 border-[var(--color-primary)]' : 'th-text-secondary hover:th-text-primary'}"
-          onclick={() => viewMode = 'calendar'}
-        >
-          {t('recordings.viewCalendar')}
-        </button>
+      <!-- View mode tabs -->
+      <div class="mb-4">
+        <Tab
+          tabs={[
+            { id: 'table', label: t('recordings.viewTable'), icon: Table2 },
+            { id: 'gallery', label: t('recordings.viewGallery'), icon: LayoutGrid },
+            { id: 'calendar', label: t('recordings.viewCalendar'), icon: Calendar }
+          ]}
+          activeTab={viewMode}
+          onchange={handleViewModeChange}
+        />
       </div>
-    {/if}
 
     <!-- Error message -->
     {#if error}
@@ -565,7 +621,7 @@ import { onMount, onDestroy } from 'svelte';
       </div>
     {/if}
 
-    {#if isTimelapseSelected && viewMode !== 'table'}
+    {#if viewMode !== 'table'}
       <!-- Gallery/Calendar View -->
       {#if viewMode === 'gallery'}
         <!-- Gallery tab -->
@@ -870,6 +926,7 @@ import { onMount, onDestroy } from 'svelte';
       {/if}
     </div>
     {/if}
+    </div>
   </main>
   </div>
 

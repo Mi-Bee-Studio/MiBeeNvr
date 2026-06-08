@@ -20,7 +20,7 @@
   "nav.logout": "退出登录",
   "nav.settings": "设置",
   "nav.cameras": "摄像头",
-  "nav.surveillance": "监控",
+  "nav.surveillance": "监控大屏",
   "nav.status": "状态",
   "recordings.title": "录像",
   "recordings.camera": "摄像头",
@@ -402,7 +402,7 @@
   "live.flv.unsupported": "此浏览器不支持 HTTP-FLV",
   "live.snapshot.fallback": "流不可用 — 正在显示快照",
   "live.snapshot.autoRestore": "正在尝试恢复实时流...",
-  "nav.dashboard": "监控大屏",
+  "nav.dashboard": "仪表盘",
   "dashboard.title": "监控大屏",
   "dashboard.noCameras": "没有可预览的摄像头",
   "dashboard.noCamerasHint": "启用 H.264/H.265 摄像头以在此查看",
@@ -1047,5 +1047,10 @@
   "timelapse.gallery.prevMonth": "上月",
   "timelapse.gallery.nextMonth": "下月",
   "timelapse.gallery.timeline": "时间线",
-  "timelapse.gallery.noData": "此时间段无数据"
+  "timelapse.gallery.noData": "此时间段无数据",
+  "surveillance.title": "监控大屏",
+  "dashboard.healthSummary": "摄像头健康",
+  "dashboard.tab.storage": "存储趋势",
+  "dashboard.tab.health": "健康历史",
+  "dashboard.tab.transcoding": "转码历史"
 }
