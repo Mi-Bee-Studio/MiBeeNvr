@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	_ "net/http/pprof"
+	_ "time/tzdata" // embed timezone database for minimal containers (scratch/alpine)
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
@@ -538,11 +539,19 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		})
 	}
 
-	// Step 6.6: Merge scheduler for timelapse cameras.
-	// Uses GoMerger as default (no external deps); FFmpeg concat is attempted at runtime if available.
-	// Per-camera merge durations are handled by MergeScheduler.
+	// Load display timezone for merge window alignment.
+	var appLoc *time.Location = time.UTC
+	if cfg.Timezone != "" && cfg.Timezone != "UTC" {
+		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			appLoc = loc
+			slog.Info("using display timezone", "timezone", cfg.Timezone)
+		} else {
+			slog.Warn("invalid timezone, falling back to UTC", "timezone", cfg.Timezone, "error", err)
+		}
+	}
+
 	periodicMergeDir := filepath.Join(cfg.Storage.RootDir, "periodic-merge")
-	a.mergeScheduler = timelapse.NewMergeScheduler()
+	a.mergeScheduler = timelapse.NewMergeScheduler(appLoc)
 	// Pre-create per-camera merge managers and register them in the scheduler
 	periodicMergeManagers := make(map[string]*timelapse.PeriodicMergeManager)
 	for _, cam := range cfg.Cameras {
@@ -559,7 +568,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 					)
 				}
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur)
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur, appLoc)
 			a.mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info("merge scheduler: configured camera",
 				"camera_id", cam.ID,

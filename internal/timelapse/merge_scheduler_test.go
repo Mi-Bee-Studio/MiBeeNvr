@@ -21,7 +21,7 @@ func TestComputeNextRun_8h(t *testing.T) {
 	t.Helper()
 	// 09:30 UTC on any day → next boundary: 16:00 UTC the same day
 	now := fixedNow()
-	next := computeNextRun(now, 8*time.Hour)
+	next := computeNextRun(now, 8*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 7, 16, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -33,7 +33,7 @@ func TestComputeNextRun_8h_Afternoon(t *testing.T) {
 	t.Helper()
 	// 17:00 UTC → next boundary: 00:00 next day
 	now := time.Date(2026, 6, 7, 17, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 8*time.Hour)
+	next := computeNextRun(now, 8*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -45,7 +45,7 @@ func TestComputeNextRun_8h_AtBoundary(t *testing.T) {
 	t.Helper()
 	// Exactly 08:00 UTC → next should be 16:00 UTC (not 08:00 again)
 	now := time.Date(2026, 6, 7, 8, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 8*time.Hour)
+	next := computeNextRun(now, 8*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 7, 16, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -57,7 +57,7 @@ func TestComputeNextRun_8h_FirstBlock(t *testing.T) {
 	t.Helper()
 	// 01:00 UTC → next boundary: 08:00 UTC same day
 	now := time.Date(2026, 6, 7, 1, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 8*time.Hour)
+	next := computeNextRun(now, 8*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 7, 8, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -91,7 +91,7 @@ func TestComputeNextRun_8h_ScheduledAtBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			next := computeNextRun(tt.now, 8*time.Hour)
+			next := computeNextRun(tt.now, 8*time.Hour, nil)
 			if !next.Equal(tt.expected) {
 				t.Errorf("computeNextRun(%s, 8h) = %v, want %v", tt.now.Format(time.RFC3339), next, tt.expected)
 			}
@@ -103,7 +103,7 @@ func TestComputeNextRun_12h(t *testing.T) {
 	t.Helper()
 	// 09:30 UTC → next boundary: 12:00 UTC same day
 	now := fixedNow()
-	next := computeNextRun(now, 12*time.Hour)
+	next := computeNextRun(now, 12*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -115,7 +115,7 @@ func TestComputeNextRun_12h_Afternoon(t *testing.T) {
 	t.Helper()
 	// 14:00 UTC → next boundary: 00:00 next day
 	now := time.Date(2026, 6, 7, 14, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 12*time.Hour)
+	next := computeNextRun(now, 12*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -144,7 +144,7 @@ func TestComputeNextRun_12h_ScheduledAtBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			next := computeNextRun(tt.now, 12*time.Hour)
+			next := computeNextRun(tt.now, 12*time.Hour, nil)
 			if !next.Equal(tt.expected) {
 				t.Errorf("computeNextRun(%s, 12h) = %v, want %v", tt.now.Format(time.RFC3339), next, tt.expected)
 			}
@@ -155,7 +155,7 @@ func TestComputeNextRun_12h_ScheduledAtBoundaries(t *testing.T) {
 func TestComputeNextRun_24h(t *testing.T) {
 	t.Helper()
 	now := fixedNow()
-	next := computeNextRun(now, 24*time.Hour)
+	next := computeNextRun(now, 24*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -167,7 +167,7 @@ func TestComputeNextRun_7d(t *testing.T) {
 	t.Helper()
 	// Sunday 09:30 UTC → next Monday 00:00 UTC
 	now := fixedNow() // Sunday
-	next := computeNextRun(now, 7*24*time.Hour)
+	next := computeNextRun(now, 7*24*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC) // Monday
 	if !next.Equal(expected) {
@@ -179,7 +179,7 @@ func TestComputeNextRun_7d_OnMonday(t *testing.T) {
 	t.Helper()
 	// Monday 03:00 UTC → next Monday 00:00 UTC
 	now := time.Date(2026, 6, 8, 3, 0, 0, 0, time.UTC) // Monday
-	next := computeNextRun(now, 7*24*time.Hour)
+	next := computeNextRun(now, 7*24*time.Hour, nil)
 
 	expected := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC) // next Monday
 	if !next.Equal(expected) {
@@ -190,7 +190,7 @@ func TestComputeNextRun_7d_OnMonday(t *testing.T) {
 func TestComputeNextRun_30d(t *testing.T) {
 	t.Helper()
 	now := time.Date(2026, 6, 15, 9, 30, 0, 0, time.UTC)
-	next := computeNextRun(now, 30*24*time.Hour)
+	next := computeNextRun(now, 30*24*time.Hour, nil)
 
 	expected := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -201,7 +201,7 @@ func TestComputeNextRun_30d(t *testing.T) {
 func TestComputeNextRun_30d_ExactFirst(t *testing.T) {
 	t.Helper()
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 30*24*time.Hour)
+	next := computeNextRun(now, 30*24*time.Hour, nil)
 
 	expected := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -212,7 +212,7 @@ func TestComputeNextRun_30d_ExactFirst(t *testing.T) {
 func TestComputeNextRun_30d_YearBoundary(t *testing.T) {
 	t.Helper()
 	now := time.Date(2026, 12, 15, 9, 30, 0, 0, time.UTC)
-	next := computeNextRun(now, 30*24*time.Hour)
+	next := computeNextRun(now, 30*24*time.Hour, nil)
 
 	expected := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
@@ -224,13 +224,13 @@ func TestComputeNextRun_30d_YearBoundary(t *testing.T) {
 
 func TestNewMergeScheduler(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	require.NotNil(t, s)
 }
 
 func TestMergeScheduler_AddOrUpdate(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	s.AddOrUpdate("cam-1", 8*time.Hour)
 
 	dur, ok := s.GetDuration("cam-1")
@@ -240,14 +240,14 @@ func TestMergeScheduler_AddOrUpdate(t *testing.T) {
 
 func TestMergeScheduler_GetDuration_NotFound(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	_, ok := s.GetDuration("nonexistent")
 	require.False(t, ok)
 }
 
 func TestMergeScheduler_Remove(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	s.AddOrUpdate("cam-1", 8*time.Hour)
 	s.Remove("cam-1")
 
@@ -257,7 +257,7 @@ func TestMergeScheduler_Remove(t *testing.T) {
 
 func TestMergeScheduler_UpdateDuration(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	s.AddOrUpdate("cam-1", 8*time.Hour)
 	dur, _ := s.GetDuration("cam-1")
@@ -272,14 +272,14 @@ func TestMergeScheduler_8h_ScheduleAtBoundaries(t *testing.T) {
 	t.Helper()
 	// At 00:00 → next is 08:00
 	now := time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)
-	next := computeNextRun(now, 8*time.Hour)
+	next := computeNextRun(now, 8*time.Hour, nil)
 	require.True(t, next.Equal(time.Date(2026, 6, 7, 8, 0, 0, 0, time.UTC)),
 		"00:00 → should be 08:00, got %v", next)
 }
 
 func TestMergeScheduler_8h_AddOrUpdate(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	now := fixedNow() // Sunday 09:30 UTC
 
 	s.mu.Lock()
@@ -302,7 +302,7 @@ func TestMergeScheduler_8h_AddOrUpdate(t *testing.T) {
 
 func TestMergeScheduler_24h_AddOrUpdate(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	now := fixedNow() // Sunday 09:30 UTC
 
 	s.mu.Lock()
@@ -321,7 +321,7 @@ func TestMergeScheduler_24h_AddOrUpdate(t *testing.T) {
 func TestMergeScheduler_7d_AddOrUpdate(t *testing.T) {
 	t.Helper()
 	now := fixedNow() // Sunday 09:30 UTC
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	s.mu.Lock()
 	s.addOrUpdateAt(now, "cam-7d", 7*24*time.Hour)
@@ -339,7 +339,7 @@ func TestMergeScheduler_7d_AddOrUpdate(t *testing.T) {
 func TestMergeScheduler_30d_AddOrUpdate(t *testing.T) {
 	t.Helper()
 	now := time.Date(2026, 6, 15, 9, 30, 0, 0, time.UTC)
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	s.mu.Lock()
 	s.addOrUpdateAt(now, "cam-30d", 30*24*time.Hour)
@@ -357,7 +357,7 @@ func TestMergeScheduler_30d_AddOrUpdate(t *testing.T) {
 func TestMergeScheduler_RescheduleOnUpdate(t *testing.T) {
 	t.Helper()
 	now := fixedNow() // 09:30 UTC
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	// Add with 8h → next should be 16:00
 	s.mu.Lock()
@@ -385,7 +385,7 @@ func TestMergeScheduler_RescheduleOnUpdate(t *testing.T) {
 func TestMergeScheduler_TriggerDue(t *testing.T) {
 	t.Helper()
 	var triggered int32
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	s.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
 		atomic.AddInt32(&triggered, 1)
 		return nil
@@ -409,7 +409,7 @@ func TestMergeScheduler_TriggerDue(t *testing.T) {
 func TestMergeScheduler_TriggerDue_NotDue(t *testing.T) {
 	t.Helper()
 	var triggered int32
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	s.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
 		atomic.AddInt32(&triggered, 1)
 		return nil
@@ -428,7 +428,7 @@ func TestMergeScheduler_TriggerDue_NotDue(t *testing.T) {
 
 func TestMergeScheduler_StartStop(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)
 	s.Stop()
@@ -438,7 +438,7 @@ func TestMergeScheduler_StartStop(t *testing.T) {
 func TestMergeScheduler_MultipleCameras(t *testing.T) {
 	t.Helper()
 	now := fixedNow() // Sunday 09:30 UTC
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	s.mu.Lock()
 	s.addOrUpdateAt(now, "cam-8h", 8*time.Hour)
@@ -486,7 +486,7 @@ func TestMergeScheduler_MultipleCameras(t *testing.T) {
 
 func TestMergeScheduler_RemoveCamera(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 	s.AddOrUpdate("cam-1", 8*time.Hour)
 	s.AddOrUpdate("cam-2", 24*time.Hour)
 
@@ -504,7 +504,7 @@ func TestMergeScheduler_RemoveCamera(t *testing.T) {
 
 func TestMergeScheduler_ConcurrentAddRemove(t *testing.T) {
 	t.Helper()
-	s := NewMergeScheduler()
+	s := NewMergeScheduler(nil)
 
 	done := make(chan struct{})
 	go func() {

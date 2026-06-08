@@ -38,6 +38,7 @@ type Config struct {
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
+	Timezone    string              `yaml:"timezone"`        // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
 }
 
 type ServerConfig struct {
@@ -738,6 +739,10 @@ func Validate(cfg *Config) error {
 }
 
 func (cfg *Config) ApplyDefaults() {
+	// Timezone
+	if cfg.Timezone == "" {
+		cfg.Timezone = "UTC"
+	}
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		cfg.Server.Listen = ":9090"

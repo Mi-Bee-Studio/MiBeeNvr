@@ -35,7 +35,7 @@ RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/
 # ---- Stage 3: Minimal runtime image ----
 FROM alpine:3.21
 
-RUN apk add --no-cache su-exec
+RUN apk add --no-cache su-exec tzdata
 
 # Default data and config directories
 # These can be overridden via volume mounts

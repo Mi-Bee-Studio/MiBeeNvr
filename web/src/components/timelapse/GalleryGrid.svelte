@@ -24,9 +24,18 @@
     ondeleteRecording?: (recording: Recording) => void;
   } = $props();
 
+  function pad(n: number): string {
+    return String(n).padStart(2, '0');
+  }
+
+  function localDateFromISO(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
   let filteredRecordings = $derived.by(() => {
     if (!selectedDate) return [];
-    return recordings.filter((r) => r.started_at.slice(0, 10) === selectedDate);
+    return recordings.filter((r) => localDateFromISO(r.started_at) === selectedDate);
   });
 
   function prevDay() {

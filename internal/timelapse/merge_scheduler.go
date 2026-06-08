@@ -27,6 +27,7 @@ type MergeScheduler struct {
 	mu      sync.Mutex
 	entries map[string]*mergeEntry // cameraID → entry
 	runFunc MergeRunFunc
+	loc     *time.Location // timezone for window alignment
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -34,11 +35,16 @@ type MergeScheduler struct {
 }
 
 // NewMergeScheduler creates a new MergeScheduler with no entries.
+// If loc is nil, UTC is used for window alignment.
 // Call SetRunFunc before Start to set the merge callback.
-func NewMergeScheduler() *MergeScheduler {
+func NewMergeScheduler(loc *time.Location) *MergeScheduler {
+	if loc == nil {
+		loc = time.UTC
+	}
 	return &MergeScheduler{
 		entries: make(map[string]*mergeEntry),
 		updated: make(chan struct{}, 1),
+		loc:     loc,
 	}
 }
 
@@ -49,18 +55,18 @@ func (s *MergeScheduler) SetRunFunc(fn MergeRunFunc) {
 }
 
 // AddOrUpdate adds or updates a camera's merge schedule.
-// The next run time is computed as the next aligned UTC boundary after now.
+// The next run time is computed as the next aligned boundary in the configured timezone.
 func (s *MergeScheduler) AddOrUpdate(cameraID string, duration time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.addOrUpdateAt(time.Now().UTC(), cameraID, duration)
+	s.addOrUpdateAt(time.Now().In(s.loc), cameraID, duration)
 }
 
 // addOrUpdateAt is the internal version that accepts a fixed time for deterministic testing.
 func (s *MergeScheduler) addOrUpdateAt(now time.Time, cameraID string, duration time.Duration) {
 	s.entries[cameraID] = &mergeEntry{
 		duration: duration,
-		nextRun:  computeNextRun(now, duration),
+		nextRun:  computeNextRun(now, duration, s.loc),
 	}
 
 	slog.Debug("merge scheduler: added/updated camera",
@@ -126,7 +132,7 @@ func (s *MergeScheduler) Stop() {
 // Returns the number of cameras triggered. Used for testing.
 // Does NOT block on merge completion — merges run in background goroutines.
 func (s *MergeScheduler) TriggerDue(ctx context.Context) int {
-	return s.triggerDueAt(ctx, time.Now().UTC())
+	return s.triggerDueAt(ctx, time.Now().In(s.loc))
 }
 
 func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
@@ -153,7 +159,7 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 			}(id, now)
 
 			// Recompute next run after this one
-			entry.nextRun = computeNextRun(now, entry.duration)
+		entry.nextRun = computeNextRun(now, entry.duration, s.loc)
 			slog.Debug("merge scheduler: triggered merge",
 				"camera_id", id,
 				"duration", entry.duration,
@@ -179,7 +185,7 @@ func (s *MergeScheduler) runLoop() {
 		var earliest time.Time
 		for _, entry := range s.entries {
 			if entry.nextRun.IsZero() {
-				entry.nextRun = computeNextRun(time.Now().UTC(), entry.duration)
+			entry.nextRun = computeNextRun(time.Now().In(s.loc), entry.duration, s.loc)
 			}
 			if earliest.IsZero() || entry.nextRun.Before(earliest) {
 				earliest = entry.nextRun
@@ -211,36 +217,62 @@ func (s *MergeScheduler) runLoop() {
 		}
 
 		// Trigger all due cameras
-		s.triggerDueAt(s.ctx, time.Now().UTC())
+	s.triggerDueAt(s.ctx, time.Now().In(s.loc))
 	}
 }
 
-// computeNextRun computes the next aligned UTC boundary for the given duration,
-// strictly after (or at) now.
+// computeNextRun computes the next aligned boundary for the given duration
+// in the provided timezone, strictly after (or at) now.
 //
-// Duration-based alignment uses Go's Truncate method. Since Go zero time
-// (0001-01-01 00:00:00 UTC) is a Monday, Truncate for 7d naturally aligns
-// to Monday 00:00 UTC boundaries.
-//
-// For 30d (calendar-month), next run is the 1st of the next month 00:00 UTC.
-func computeNextRun(now time.Time, dur time.Duration) time.Time {
-	now = now.UTC()
+// Alignment rules:
+//   - 8h:  next 00:00/08:00/16:00 local time
+//   - 12h: next 00:00/12:00 local time
+//   - 24h: next 00:00 local time
+//   - 7d:  next Monday 00:00 local time
+//   - 30d: 1st of next month 00:00 local time
+func computeNextRun(now time.Time, dur time.Duration, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = time.UTC
+	}
+	now = now.In(loc)
+	year, month, day := now.Date()
 
 	// Calendar-month alignment for 30d.
 	if dur == 30*24*time.Hour {
-		year, month, _ := now.Date()
-		next := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
+		next := time.Date(year, month+1, 1, 0, 0, 0, 0, loc)
+		if !next.After(now) {
+			next = time.Date(year, month+2, 1, 0, 0, 0, 0, loc)
+		}
 		return next
 	}
 
-	// Duration-based alignment.
-	// Truncate gives the start of the current window; adding dur gives the end.
-	next := now.Truncate(dur).Add(dur)
-
-	// If we're exactly at a boundary, the next boundary is one full duration away.
-	if next.Equal(now) {
-		next = now.Add(dur)
+	// Weekly alignment (7d): next Monday 00:00 local time.
+	if dur == 7*24*time.Hour {
+		weekday := now.Weekday()
+		daysUntilMonday := (1 - int(weekday) + 7) % 7
+		if daysUntilMonday == 0 {
+			// Today is Monday; check if we're past midnight
+			hour, minute, _ := now.Clock()
+			if hour > 0 || minute > 0 {
+				daysUntilMonday = 7
+			}
+		}
+		next := time.Date(year, month, day+daysUntilMonday, 0, 0, 0, 0, loc)
+		return next
 	}
 
+	// Duration-based alignment: find next time-of-day boundary.
+	// For 24h: next midnight local
+	// For 12h: next midnight or noon local
+	// For 8h:  next 00:00/08:00/16:00 local
+	durHours := int(dur.Hours())
+	hour := now.Hour()
+	alignedHour := ((hour / durHours) + 1) * durHours
+	if alignedHour >= 24 {
+		// Roll over to next day
+		next := time.Date(year, month, day+1, 0, 0, 0, 0, loc)
+		return next
+	}
+	next := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
 	return next
 }

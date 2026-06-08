@@ -293,7 +293,16 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 			days = n
 		}
 	}
-	trends, err := h.db.GetRecordingTrends(r.Context(), days)
+
+	// Load display timezone from config
+	loc := time.UTC
+	if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
+		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+			loc = l
+		}
+	}
+
+	trends, err := h.db.GetRecordingTrends(r.Context(), days, loc)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get recording trends")
 		return

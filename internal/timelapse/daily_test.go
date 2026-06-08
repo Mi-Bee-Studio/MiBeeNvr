@@ -37,7 +37,7 @@ func (m *mockMergeStatusUpdater) UpdateMergeProgress(_ context.Context, _ string
 
 func TestNewDailyMergeManager(t *testing.T) {
 	t.Helper()
-	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data")
+	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data", nil)
 	if m == nil {
 		t.Fatal("expected non-nil DailyMergeManager")
 	}
@@ -45,7 +45,7 @@ func TestNewDailyMergeManager(t *testing.T) {
 
 func TestDailyMergeManager_Run(t *testing.T) {
 	t.Helper()
-	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data")
+	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data", nil)
 	err := m.Run(context.Background(), "test-cam", "2026-01-01")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -173,7 +173,7 @@ func TestDailyWire_DailyMergeRun(t *testing.T) {
 	// Create a mock lister that returns segments for a date.
 	mockLister := &mockRecordingListerWithSegments{}
 	updater := &mockMergeStatusUpdater{}
-	mgr := NewDailyMergeManager(mockLister, updater, nil, 10, t.TempDir())
+	mgr := NewDailyMergeManager(mockLister, updater, nil, 10, t.TempDir(), nil)
 	err := mgr.Run(context.Background(), "test-cam", "2026-06-06")
 	// No segments should be found — Run should succeed without error.
 	if err != nil {

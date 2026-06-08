@@ -859,7 +859,7 @@ func TestTimelapseMerge_Accepted(t *testing.T) {
 	// Set up a real daily merge manager with test DB as RecordingLister
 	merger := &testSlowMerger{}
 	dataDir := t.TempDir()
-	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir)
+	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
 
 	h := TestHandler(db, store)
 	h.SetTimelapseDailyMgr(dailyMgr)
@@ -882,7 +882,7 @@ func TestTimelapseMerge_DefaultDate(t *testing.T) {
 
 	merger := &testSlowMerger{}
 	dataDir := t.TempDir()
-	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir)
+	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
 
 	h := TestHandler(db, store)
 	h.SetTimelapseDailyMgr(dailyMgr)

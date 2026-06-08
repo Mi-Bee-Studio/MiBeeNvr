@@ -56,8 +56,8 @@
     const counts = new Map<string, number>();
     let maxCount = 0;
     for (const rec of recordings) {
-      const date = rec.started_at.slice(0, 10);
-      if (date >= formatDateStr(startDate) && date <= formatDateStr(endDate)) {
+      const d = new Date(rec.started_at);
+      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         const c = (counts.get(date) || 0) + 1;
         counts.set(date, c);
         if (c > maxCount) maxCount = c;

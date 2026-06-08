@@ -697,7 +697,14 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+		// Compute "yesterday" in the configured display timezone
+		loc := time.UTC
+		if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
+			if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+				loc = l
+			}
+		}
+		date = time.Now().In(loc).Add(-24 * time.Hour).Format("2006-01-02")
 	}
 
 	go func() {
@@ -745,20 +752,28 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		}
 	}
 
+	// Load display timezone
+	loc := time.UTC
+	if h.config.Timezone != "" && h.config.Timezone != "UTC" {
+		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+			loc = l
+		}
+	}
+
 	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
 
-	// Parse date or use current time as reference
+	// Parse date or use current time as reference in the configured timezone
 	dateStr := r.URL.Query().Get("date")
-	refTime := time.Now().UTC()
+	refTime := time.Now().In(loc)
 	if dateStr != "" {
-		parsed, err := time.Parse("2006-01-02", dateStr)
+		parsed, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 		if err == nil {
 			refTime = parsed
 		}
 	}
 
 	// Create PeriodicMergeManager with the specified duration
-	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur)
+	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc)
 
 	go func() {
 		defer h.activeMerges.Delete(cameraID)

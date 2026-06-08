@@ -26,13 +26,18 @@ type PeriodicMergeManager struct {
 	fps      int
 	dataDir  string
 	duration time.Duration
+	loc      *time.Location
 
 	retryCounts map[string]int
 	retryMu     sync.Mutex
 }
 
 // NewPeriodicMergeManager creates a new PeriodicMergeManager with the given merge duration.
-func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, duration time.Duration) *PeriodicMergeManager {
+// If loc is nil, UTC is used for window alignment.
+func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, duration time.Duration, loc *time.Location) *PeriodicMergeManager {
+	if loc == nil {
+		loc = time.UTC
+	}
 	return &PeriodicMergeManager{
 		store:       store,
 		updater:     updater,
@@ -40,6 +45,7 @@ func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, 
 		fps:         fps,
 		dataDir:     dataDir,
 		duration:    duration,
+		loc:         loc,
 		retryCounts: make(map[string]int),
 	}
 }
@@ -52,7 +58,7 @@ func (m *PeriodicMergeManager) Duration() time.Duration {
 // Run executes the merge pipeline for the given camera for the merge window
 // containing the reference time t.
 func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.Time) error {
-	startTime, endTime := parseMergeRange(t, m.duration)
+	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")
 
 	// 1. Query DB for merged timelapse segments in the date range.
@@ -132,30 +138,49 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 }
 
 // parseMergeRange returns the start and end of the merge window containing t,
-// aligned to the given duration boundary in UTC.
+// aligned to the given duration boundary in the provided timezone.
 //
 // Supported durations and their alignment rules:
-//   - 8h:  aligned to 00:00, 08:00, 16:00 UTC
-//   - 12h: aligned to 00:00, 12:00 UTC
-//   - 24h: aligned to 00:00 UTC daily
-//   - 7d:  aligned to Monday 00:00 UTC
-//   - 30d: aligned to 1st of month 00:00 UTC
-func parseMergeRange(t time.Time, dur time.Duration) (time.Time, time.Time) {
-	t = t.UTC()
+//   - 8h:  aligned to 00:00, 08:00, 16:00 local time
+//   - 12h: aligned to 00:00, 12:00 local time
+//   - 24h: aligned to 00:00 local time
+//   - 7d:  aligned to Monday 00:00 local time
+//   - 30d: aligned to 1st of month 00:00 local time
+func parseMergeRange(t time.Time, dur time.Duration, loc *time.Location) (time.Time, time.Time) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	t = t.In(loc)
+	year, month, day := t.Date()
 
 	// Calendar-month alignment for 30d duration.
 	if dur == 30*24*time.Hour {
-		year, month, _ := t.Date()
-		start := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
-		end := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
+		start := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+		end := time.Date(year, month+1, 1, 0, 0, 0, 0, loc)
 		return start, end
 	}
 
-	// Duration-based alignment using Truncate.
-	// Go zero time (0001-01-01 00:00:00 UTC) is a Monday in the proleptic
-	// Gregorian calendar, so Truncate(7*24*time.Hour) naturally aligns to
-	// Monday 00:00 UTC for weekly windows.
-	start := t.Truncate(dur)
+	// Weekly alignment (7d): align to Monday 00:00 local time.
+	if dur == 7*24*time.Hour {
+		weekday := t.Weekday()
+		// weekday: Sunday=0, Monday=1, ..., Saturday=6
+		// days since last Monday: (weekday - 1 + 7) % 7
+		daysSinceMonday := (int(weekday) - 1 + 7) % 7
+		monday := t.AddDate(0, 0, -daysSinceMonday)
+		y, m, d := monday.Date()
+		start := time.Date(y, m, d, 0, 0, 0, 0, loc)
+		end := start.Add(dur)
+		return start, end
+	}
+
+	// Duration-based alignment: align time-of-day to nearest multiple of dur from midnight local.
+	// For 24h: midnight local
+	// For 12h: midnight or noon local
+	// For 8h:  00:00, 08:00, 16:00 local
+	durHours := int(dur.Hours())
+	hour := t.Hour()
+	alignedHour := (hour / durHours) * durHours
+	start := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
 	end := start.Add(dur)
 	return start, end
 }

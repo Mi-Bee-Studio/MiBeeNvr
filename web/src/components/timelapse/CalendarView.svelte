@@ -66,7 +66,11 @@
   let dailyCounts = $derived.by(() => {
     const counts = new Map<string, number>();
     for (const rec of recordings) {
-      const date = rec.started_at.slice(0, 10);
+      // Parse the UTC timestamp and extract the local date.
+      // This ensures recordings are grouped by the user's local day,
+      // not by the UTC day stored in the database.
+      const d = new Date(rec.started_at);
+      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       counts.set(date, (counts.get(date) || 0) + 1);
     }
     return counts;
@@ -104,7 +108,8 @@
   let dailyFormats = $derived.by(() => {
     const formats = new Map();
     for (const rec of recordings) {
-      const date = rec.started_at.slice(0, 10);
+      const d = new Date(rec.started_at);
+      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       if (!formats.has(date)) formats.set(date, new Set());
       formats.get(date).add(rec.format);
     }
@@ -120,7 +125,7 @@
     const years = new Set<number>();
     const now = new Date();
     for (const rec of recordings) {
-      const year = parseInt(rec.started_at.slice(0, 4), 10);
+      const year = new Date(rec.started_at).getFullYear();
       if (!isNaN(year)) years.add(year);
     }
     if (years.size === 0) {

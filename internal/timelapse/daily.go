@@ -19,25 +19,33 @@ type RecordingLister interface {
 // It wraps PeriodicMergeManager with a 24-hour interval for backward compatibility.
 type DailyMergeManager struct {
 	inner *PeriodicMergeManager
+	loc  *time.Location
 }
 
 // NewDailyMergeManager creates a new DailyMergeManager wrapping a PeriodicMergeManager with 24h duration.
-func NewDailyMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string) *DailyMergeManager {
+// If loc is nil, UTC is used.
+func NewDailyMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, loc *time.Location) *DailyMergeManager {
+	if loc == nil {
+		loc = time.UTC
+	}
 	return &DailyMergeManager{
-		inner: NewPeriodicMergeManager(store, updater, merger, fps, dataDir, 24*time.Hour),
+		inner: NewPeriodicMergeManager(store, updater, merger, fps, dataDir, 24*time.Hour, loc),
+		loc:   loc,
 	}
 }
 
 // Run executes the daily merge pipeline for the given camera on the given date.
-// date format: "2006-01-02"
+// date format: "2006-01-02" (interpreted in the configured timezone)
 func (m *DailyMergeManager) Run(ctx context.Context, cameraID string, date string) error {
-	t, err := time.Parse("2006-01-02", date)
+	// Parse date in the configured timezone so that "2024-01-03"
+	// means local midnight, not UTC midnight.
+	t, err := time.ParseInLocation("2006-01-02", date, m.loc)
 	if err != nil {
 		return fmt.Errorf("daily merge: invalid date %q: %w", date, err)
 	}
 
-	// Compute the 24-hour window and use the old naming scheme for backward compatibility.
-	startTime, endTime := parseMergeRange(t, 24*time.Hour)
+	// Compute the 24-hour window using the configured timezone.
+	startTime, endTime := parseMergeRange(t, 24*time.Hour, m.loc)
 
 	// Query DB for merged timelapse segments in the date range.
 	merged := true
