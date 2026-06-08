@@ -26,6 +26,7 @@ type MergeStatusUpdater interface {
 	SetMergeStatus(ctx context.Context, ids []string, status string) error
 	SetMergeResult(ctx context.Context, id string, mergePath, mergeTier string) error
 	SetMergeError(ctx context.Context, ids []string, mergeError string) error
+	UpdateMergeProgress(ctx context.Context, id string, progress int) error
 }
 
 // RollingMergeManager tracks active async merges per camera.
@@ -89,6 +90,13 @@ func (r *RollingMergeManager) StartSegmentMerge(ctx context.Context, cameraID, s
 		Progress: 0,
 		Status:   "merging",
 	})
+	// Set progress to 0 and status to 'pending' in DB.
+	if r.db != nil && recordingID != "" {
+		if dbErr := r.db.UpdateMergeProgress(ctx, recordingID, 0); dbErr != nil {
+			slog.Warn("rolling merge: failed to set initial progress in DB",
+				"recording_id", recordingID, "error", dbErr)
+		}
+	}
 
 	go r.runMerge(ctx, id, cameraID, segmentDir, outputPath, recordingID, totalFrames)
 }
@@ -135,6 +143,13 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 		Progress: 50,
 		Status:   "merging",
 	})
+	// Update DB progress to indicate merge is in progress.
+	if r.db != nil && recordingID != "" {
+		if dbErr := r.db.UpdateMergeProgress(ctx, recordingID, 50); dbErr != nil {
+			slog.Warn("rolling merge: failed to update merge progress in DB",
+				"recording_id", recordingID, "error", dbErr)
+		}
+	}
 
 	// Perform the merge.
 	result, err := r.merger.Merge(ctx, segmentDir, outputPath, r.fps)

@@ -144,6 +144,6 @@ bind:this={progressFillEl}
 <!-- Keyboard shortcuts hint -->
 <div class="px-4 py-2 th-bg-tertiary">
   <p class="text-xs text-center th-text-muted">
-    {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | {t('detail.escapeBack')}
+    {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
   </p>
 </div>

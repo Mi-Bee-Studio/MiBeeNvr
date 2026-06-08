@@ -81,6 +81,38 @@
   let abortController: AbortController | null = null;
   let refreshInterval: number;
 
+// ── Merge tracking ──
+let prevMergeStatuses = $state<Record<string, string>>({});
+const MERGE_STORAGE_KEY = 'mibee_nvr_merge_active';
+
+function getActiveMergesFromStorage(): Record<string, { progress: number; status: string }> {
+  try {
+    return JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
+  } catch { return {}; }
+}
+
+function detectMergeChanges(recordingsList: Recording[]) {
+  for (const r of recordingsList) {
+    const prev = prevMergeStatuses[r.id];
+    if (prev && prev === 'pending') {
+      if (r.merge_status === 'merged') {
+        showToast(t('detail.mergeCompleted'), 'success');
+      } else if (r.merge_status === 'failed') {
+        showToast(t('detail.mergeFailed', { error: r.merge_error || '' }), 'error');
+      }
+    }
+    // Update stored status
+    prevMergeStatuses[r.id] = r.merge_status || '';
+  }
+  // Clean up stale entries (recordings no longer in the list)
+  const currentIds = new Set(recordingsList.map(r => r.id));
+  for (const id of Object.keys(prevMergeStatuses)) {
+    if (!currentIds.has(id)) {
+      delete prevMergeStatuses[id];
+    }
+  }
+}
+
   // ── Derived ──
   let apiFormat = $derived.by(() => {
     if (formatPill === 'Timelapse') return 'timelapse';
@@ -183,7 +215,31 @@
       const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      if (useTimelapseApi) {
+      if (formatPill === 'All') {
+        // Fetch both normal and timelapse recordings, merge, sort by started_at DESC
+        const [normalRes, tlRes] = await Promise.all([
+          listRecordings({
+            camera_id: cameraId || undefined,
+            search: searchQuery || undefined,
+            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+            archived: showArchived ? true : undefined,
+            start: calStart.toISOString(),
+            end: calEnd.toISOString(),
+            limit: 1000,
+            signal: abortController.signal,
+          }),
+          listTimelapseRecordings({
+            camera_id: cameraId || undefined,
+            start: calStart.toISOString(),
+            end: calEnd.toISOString(),
+            limit: 1000,
+            signal: abortController.signal,
+          }),
+        ]);
+        const merged = [...normalRes.recordings, ...tlRes.recordings];
+        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
+        recordings = merged;
+      } else if (useTimelapseApi) {
         const response = await listTimelapseRecordings({
           camera_id: cameraId || undefined,
           start: calStart.toISOString(),
@@ -206,6 +262,8 @@
         });
         recordings = response.recordings;
       }
+      // Detect merge status changes (completed/failed)
+      detectMergeChanges(recordings);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
       error = e instanceof Error ? e.message : t('common.failedLoadRecordings');
@@ -220,20 +278,50 @@
     listLoading = true;
 
     try {
-      const response = await listRecordings({
-        camera_id: cameraId || undefined,
-        format: apiFormat || undefined,
-        search: searchQuery || undefined,
-        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-        archived: showArchived ? true : undefined,
-        offset,
-        limit,
-        sort_by: sortBy,
-        order: sortOrder,
-        signal: abortController.signal,
-      });
-      listRecordingsData = response.recordings;
-      totalRecordings = response.total || 0;
+      if (formatPill === 'All') {
+        const [normalRes, tlRes] = await Promise.all([
+          listRecordings({
+            camera_id: cameraId || undefined,
+            search: searchQuery || undefined,
+            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+            archived: showArchived ? true : undefined,
+            offset,
+            limit,
+            sort_by: sortBy,
+            order: sortOrder,
+            signal: abortController.signal,
+          }),
+          listTimelapseRecordings({
+            camera_id: cameraId || undefined,
+            offset,
+            limit,
+            sort_by: sortBy,
+            sort_order: sortOrder,
+            signal: abortController.signal,
+          }),
+        ]);
+        const merged = [...normalRes.recordings, ...tlRes.recordings];
+        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
+        listRecordingsData = merged;
+        totalRecordings = (normalRes.total || 0) + (tlRes.total || 0);
+      } else {
+        const response = await listRecordings({
+          camera_id: cameraId || undefined,
+          format: apiFormat || undefined,
+          search: searchQuery || undefined,
+          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+          archived: showArchived ? true : undefined,
+          offset,
+          limit,
+          sort_by: sortBy,
+          order: sortOrder,
+          signal: abortController.signal,
+        });
+        listRecordingsData = response.recordings;
+        totalRecordings = response.total || 0;
+      }
+      // Detect merge status changes
+      detectMergeChanges(listRecordingsData);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
     } finally {

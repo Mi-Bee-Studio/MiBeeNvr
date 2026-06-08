@@ -93,7 +93,8 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
-
+	// Set initial merge progress to 0 for all segments.
+	m.updateProgressBatch(ctx, segments, 0)
 	// Handle single segment — just copy.
 	if len(segments) == 1 {
 		return m.handleSingleSegment(ctx, segments[0], outputPath)
@@ -179,6 +180,16 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 
 	if _, err := io.Copy(dst, src); err != nil {
 		return fmt.Errorf("periodic merge: copy segment %s: %w", seg.ID, err)
+	}
+
+	// Set progress to 100 for completed single segment merge.
+	if m.updater != nil {
+		if err := m.updater.UpdateMergeProgress(ctx, seg.ID, 100); err != nil {
+			slog.Warn("periodic merge: failed to update merge progress",
+				"recording_id", seg.ID,
+				"error", err,
+			)
+		}
 	}
 
 	if m.updater != nil {
@@ -369,6 +380,9 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 	}
 	m.retryMu.Unlock()
 
+	// Update progress to 100 for completed merge.
+	m.updateProgressBatch(ctx, segments, 100)
+
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, "daily_merged"); err != nil {
 			slog.Warn("periodic merge: failed to update merge statuses",
@@ -404,6 +418,9 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	}
 	m.retryMu.Unlock()
 
+	// Update progress to 0 for failed merge.
+	m.updateProgressBatch(ctx, segments, 0)
+
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, model.MergeStatusFailed); err != nil {
 			slog.Warn("periodic merge: failed to set merge status to failed",
@@ -435,6 +452,22 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	}
 
 	return nil
+}
+
+// updateProgressBatch updates merge progress for a batch of segments.
+func (m *PeriodicMergeManager) updateProgressBatch(ctx context.Context, segments []model.Recording, progress int) {
+	if m.updater == nil {
+		return
+	}
+	for _, seg := range segments {
+		if err := m.updater.UpdateMergeProgress(ctx, seg.ID, progress); err != nil {
+			slog.Warn("periodic merge: failed to update merge progress",
+				"recording_id", seg.ID,
+				"progress", progress,
+				"error", err,
+			)
+		}
+	}
 }
 
 // filterEligibleSegments filters recordings to include merged segments

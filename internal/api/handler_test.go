@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2617,4 +2619,261 @@ func TestHandleCreateCamera_ValidURLs(t *testing.T) {
 			require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 		})
 	}
+}
+
+// --- Frame timestamp extraction tests ---
+
+func TestParseFrameFilename(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		filename  string
+		want      string // expected timestamp in RFC3339, empty if should fail
+	}{
+		{name: "timestamp in name", filename: "frame_20240101_120000.jpg", want: "2024-01-01T12:00:00Z"},
+		{name: "timestamp with suffix", filename: "frame_20240101_120000_001.jpg", want: "2024-01-01T12:00:00Z"},
+		{name: "timestamp .jpeg", filename: "frame_20231225_083000.jpeg", want: "2023-12-25T08:30:00Z"},
+		{name: "sequential no match", filename: "frame_000001.jpg", want: ""},
+		{name: "non-frame name", filename: "snapshot_20240101_120000.jpg", want: ""},
+		{name: "short name", filename: "frame_12.jpg", want: ""},
+		{name: "no underscore", filename: "frame20240101120000.jpg", want: ""},
+		{name: "wrong separator", filename: "frame_2024-0101_120000.jpg", want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := parseFrameFilename(tc.filename)
+			if tc.want == "" {
+				if ok {
+					t.Errorf("expected no match for %q, got %v", tc.filename, got)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("expected match for %q, got none", tc.filename)
+				return
+			}
+			expected, err := time.Parse(time.RFC3339, tc.want)
+			if err != nil {
+				t.Fatalf("bad test case time %q: %v", tc.want, err)
+			}
+			if !got.Equal(expected) {
+				t.Errorf("parseFrameFilename(%q) = %v, want %v", tc.filename, got, expected)
+			}
+		})
+	}
+}
+
+func TestExtractEXIFDateTime(t *testing.T) {
+	t.Parallel()
+
+	t.Run("JPEG without EXIF returns false", func(t *testing.T) {
+		t.Parallel()
+		jpeg := createTestJPEG(t, 100, 100)
+		tmpFile := filepath.Join(t.TempDir(), "noexif.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := extractEXIFDateTime(tmpFile)
+		if ok {
+			t.Errorf("expected no EXIF, got %v", got)
+		}
+	})
+
+	t.Run("JPEG with EXIF DateTimeOriginal", func(t *testing.T) {
+		t.Parallel()
+		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
+		tmpFile := filepath.Join(t.TempDir(), "withexif.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := extractEXIFDateTime(tmpFile)
+		if !ok {
+			t.Fatal("expected EXIF match, got none")
+		}
+		expected := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractEXIFDateTime = %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("non-existent file returns false", func(t *testing.T) {
+		t.Parallel()
+		_, ok := extractEXIFDateTime("/nonexistent/path.jpg")
+		if ok {
+			t.Error("expected false for non-existent file")
+		}
+	})
+}
+
+func TestExtractFrameTimestamp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("filename timestamp takes priority", func(t *testing.T) {
+		t.Parallel()
+		ts := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		got := extractFrameTimestamp("frame_20240101_120000.jpg", "/nonexistent", ts)
+		expected := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractFrameTimestamp = %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("EXIF when filename has no timestamp", func(t *testing.T) {
+		t.Parallel()
+		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
+		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		modTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		got := extractFrameTimestamp("frame_000001.jpg", tmpFile, modTime)
+		expected := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractFrameTimestamp = %v, want %v (from EXIF)", got, expected)
+		}
+	})
+
+	t.Run("ModTime fallback when no timestamp available", func(t *testing.T) {
+		t.Parallel()
+		jpeg := createTestJPEG(t, 100, 100) // no EXIF
+		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		// Set explicit ModTime by writing and then modifying
+		modTime := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(tmpFile, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+		got := extractFrameTimestamp("frame_000001.jpg", tmpFile, modTime)
+		if !got.Equal(modTime) {
+			t.Errorf("extractFrameTimestamp = %v, want %v (ModTime fallback)", got, modTime)
+		}
+	})
+}
+
+// makeTestJPEGWithEXIF creates a valid JPEG with an EXIF APP1 segment containing DateTimeOriginal.
+// This constructs a minimal APP1 EXIF segment with DateTimeOriginal (tag 0x9003) set to dateTimeStr.
+func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
+	t.Helper()
+
+	// Create a minimal valid JPEG
+	baseJPEG := createTestJPEG(t, 32, 32)
+
+	// Build EXIF APP1 data in TIFF Little-Endian (II) format
+	// Layout: TIFF header + IFD0 (with ExifIFD pointer) + EXIF IFD (with DateTimeOriginal)
+	
+	// EXIF IFD entries: just DateTimeOriginal (tag 0x9003)
+	// TIFF header (8 bytes): II, 0x002A, offset to IFD0 = 8
+	// IFD0 (minimal): 0 entries + 4 byte next-IFD pointer (0) + ExifIFD sub-IFD
+	// But simpler: put DateTimeOriginal in a sub-IFD pointed to from IFD0
+
+	// Simpler approach: just put DateTime (tag 0x0132) in IFD0 directly
+	// This is more universally supported and simpler to construct
+
+	// TIFF header (8 bytes)
+	tiff := &bytes.Buffer{}
+	tiff.Write([]byte("II"))              // byte order: Little-Endian
+	binary.Write(tiff, binary.LittleEndian, uint16(0x002A)) // TIFF magic
+	binary.Write(tiff, binary.LittleEndian, uint32(8)) // offset to IFD0 = 8
+
+	// IFD0: 1 entry (DateTime) + 4-byte next-IFD pointer = 2+12+4 = 18 bytes
+	// String value needs space — values >4 bytes go at end of IFD
+	// Layout:
+	//   2 bytes: entry count (1)
+	//  12 bytes: DateTime entry
+	//   4 bytes: next IFD pointer (0 = no more IFDs)
+	//  20 bytes: DateTime string value + null terminator
+
+	numEntries := uint16(2) // DateTime (0x0132) + ExifIFD pointer (0x8769)
+	binary.Write(tiff, binary.LittleEndian, numEntries)
+
+	// Entry 1: DateTime (tag 0x0132) in IFD0, type 2 (ASCII), value stored at end
+	// We'll store the string at offset 8 + 2 + 2*12 + 4 = 38
+	dateTimeBytes := []byte(dateTimeStr + "\x00") // include null terminator
+	if len(dateTimeBytes) > 256 {
+		t.Fatal("dateTime string too long")
+	}
+	
+	// Write DateTime entry
+	binary.Write(tiff, binary.LittleEndian, uint16(0x0132)) // DateTime tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))     // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeBytes))) // Count
+	// For strings > 4 bytes, store offset
+	valueOffset := 8 + 2 + 2*12 + 4 // offset to string data = after IFD0
+	binary.Write(tiff, binary.LittleEndian, uint32(valueOffset))
+
+	// Entry 2: ExifIFD pointer (tag 0x8769), type 4 (long), count 1
+	// EXIF IFD goes after IFD0 data
+	exifIFDOffset := valueOffset + len(dateTimeBytes)
+	binary.Write(tiff, binary.LittleEndian, uint16(0x8769)) // ExifIFD tag
+	binary.Write(tiff, binary.LittleEndian, uint16(4))     // Type: LONG
+	binary.Write(tiff, binary.LittleEndian, uint32(1))     // Count
+	binary.Write(tiff, binary.LittleEndian, uint32(exifIFDOffset)) // Offset to EXIF IFD
+
+	// Next IFD pointer (0 = no more IFDs)
+	binary.Write(tiff, binary.LittleEndian, uint32(0))
+
+	// DateTime string value
+	tiff.Write(dateTimeBytes)
+
+	// EXIF IFD at exifIFDOffset
+	// Align to even offset if needed (TIFF requires word alignment for IFDs)
+	for tiff.Len()%2 != 0 {
+		tiff.WriteByte(0)
+	}
+
+	// Verify offset matches
+	if tiff.Len() != exifIFDOffset {
+		t.Fatalf("EXIF IFD offset mismatch: expected %d, got %d", exifIFDOffset, tiff.Len())
+	}
+
+	// EXIF IFD: 1 entry (DateTimeOriginal) + next-IFD pointer
+	binary.Write(tiff, binary.LittleEndian, uint16(1)) // 1 entry
+
+	// DateTimeOriginal string
+	dateTimeOrigBytes := []byte(dateTimeStr + "\x00")
+	
+	// Entry: DateTimeOriginal (tag 0x9003), type 2 (ASCII)
+	origValueOffset := exifIFDOffset + 2 + 1*12 + 4
+	binary.Write(tiff, binary.LittleEndian, uint16(0x9003)) // DateTimeOriginal tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))      // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeOrigBytes))) // Count
+	binary.Write(tiff, binary.LittleEndian, uint32(origValueOffset)) // Offset to value
+
+	// Next IFD pointer (0)
+	binary.Write(tiff, binary.LittleEndian, uint32(0))
+
+	// DateTimeOriginal string value
+	for tiff.Len() < origValueOffset {
+		tiff.WriteByte(0)
+	}
+	tiff.Write(dateTimeOrigBytes)
+
+	tiffData := tiff.Bytes()
+
+	// Build APP1 segment: marker + length + "Exif\0\0" + TIFF data
+	app1 := &bytes.Buffer{}
+	segLen := 2 + 6 + len(tiffData) // 2 for length field, 6 for Exif\0\0 header
+	app1.Write([]byte{0xFF, 0xE1}) // APP1 marker
+	binary.Write(app1, binary.BigEndian, uint16(segLen))
+	app1.Write([]byte("Exif\x00\x00"))
+	app1.Write(tiffData)
+
+	// Inject APP1 after SOI (first 2 bytes) but before the rest of the JPEG
+	// Find the start of image data (SOS marker 0xFFDA) in the base JPEG
+	// Insert APP1 segment right after SOI marker
+	if len(baseJPEG) < 2 || baseJPEG[0] != 0xFF || baseJPEG[1] != 0xD8 {
+		t.Fatal("base JPEG doesn't start with SOI")
+	}
+
+	// Insert APP1 segment after the SOI marker (bytes 0-1)
+	result := make([]byte, 0, len(baseJPEG)+len(app1.Bytes()))
+	result = append(result, baseJPEG[:2]...)
+	result = append(result, app1.Bytes()...)
+	result = append(result, baseJPEG[2:]...)
+
+	return result
 }

@@ -40,8 +40,7 @@
   let isTimelapse = $derived(recording.format === 'timelapse');
   let isVideo = $derived(recording.format === 'h264' || recording.format === 'h265');
   let isMJPEG = $derived(recording.format === 'mjpeg');
-  let isMerged = $derived(!!recording.merged);
-  let showMergeButton = $derived(isTimelapse && !isMerged && recording.merge_status !== 'merged');
+  let showMergeButton = $derived(isTimelapse && !isMerged && recording.merge_status !== 'merged' && recording.merge_status !== 'pending');
   let showDownloadButton = $derived(isMerged);
 
   let formatLabel = $derived.by(() => {
@@ -71,7 +70,7 @@
   let mergeBadgeClass = $derived.by(() => {
     if (recording.merge_status === 'merged') return 'badge-success';
     if (recording.merge_status === 'failed') return 'badge-error';
-    if (recording.merge_status === 'pending') return 'badge-info animate-pulse';
+    if (recording.merge_status === 'pending') return 'badge-info';
     return 'badge-neutral';
   });
 
@@ -86,27 +85,40 @@
   let thumbnailUrl = $state<string | null>(null);
   let thumbnailError = $state(false);
   let thumbnailContainerEl = $state<HTMLElement | null>(null);
+  let thumbnailAbortController = $state<AbortController | null>(null);
 
   function loadThumbnail() {
     if (thumbnailLoaded || thumbnailError) return;
     thumbnailLoaded = true;
 
-    apiRequestBlob(`/recordings/${recording.id}/thumbnail`)
+    // H.264/H.265 recordings don't have thumbnail support
+    if (!isTimelapse && !isMJPEG) {
+      thumbnailError = true;
+      return;
+    }
+
+    // Cancel any previous pending request
+    thumbnailAbortController?.abort();
+    thumbnailAbortController = new AbortController();
+    const signal = thumbnailAbortController.signal;
+
+    // Use timelapse thumbnail endpoint (also supports MJPEG recordings)
+    apiRequestBlob(`/timelapse/${recording.id}/thumbnail`, { signal })
       .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        thumbnailUrl = url;
+        if (signal.aborted) return;
+        thumbnailUrl = URL.createObjectURL(blob);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
         thumbnailError = true;
       });
   }
 
   function setupLazyThumbnail(node: HTMLElement) {
     thumbnailContainerEl = node;
-    let destroyed = false;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !destroyed) {
+        if (entries[0].isIntersecting) {
           loadThumbnail();
           observer.disconnect();
         }
@@ -117,8 +129,8 @@
 
     return {
       destroy() {
-        destroyed = true;
         observer.disconnect();
+        thumbnailAbortController?.abort();
         if (thumbnailUrl) {
           URL.revokeObjectURL(thumbnailUrl);
         }
@@ -207,6 +219,7 @@
         src={thumbnailUrl}
         alt={formatDate(recording.started_at)}
         class="w-full h-full object-cover"
+        onerror={() => { thumbnailError = true; }}
       />
     {:else if !thumbnailError}
       <!-- Skeleton placeholder -->
@@ -214,9 +227,13 @@
         <div class="spinner spinner-lg th-text-muted"></div>
       </div>
     {:else}
-      <!-- Error / fallback icon -->
+      <!-- Error / format-specific fallback icon -->
       <div class="absolute inset-0 flex items-center justify-center">
-        <CameraIcon size={32} class="th-text-tertiary opacity-40" />
+        {#if isTimelapse || isMJPEG}
+          <Image size={32} class="th-text-tertiary opacity-40" />
+        {:else}
+          <CameraIcon size={32} class="th-text-tertiary opacity-40" />
+        {/if}
       </div>
     {/if}
 
@@ -232,6 +249,16 @@
         {/if}
       </span>
     </div>
+
+    <!-- Merge progress bar (bottom edge of thumbnail) -->
+    {#if recording.merge_status === 'pending' && recording.merge_progress != null && recording.merge_progress > 0 && recording.merge_progress < 100}
+      <div class="absolute bottom-0 left-0 right-0 h-1 bg-black/40">
+        <div
+          class="h-full bg-[var(--color-info)] transition-all duration-500"
+          style="width: {recording.merge_progress}%"
+        ></div>
+      </div>
+    {/if}
 
     <!-- Status badges (top-right) -->
     <div class="absolute top-1.5 right-1.5 flex flex-col gap-1 items-end">

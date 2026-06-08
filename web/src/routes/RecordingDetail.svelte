@@ -4,12 +4,13 @@
     getRecording,
     deleteRecording,
     downloadRecording as apiDownloadRecording,
-    loadRecordingVideoBlob,
+    getRecordingVideoUrl,
     listRecordings,
     getTimelapseFrames,
     loadTimelapseFrameBlob,
     triggerTimelapseMerge,
-    subscribeTimelapseMergeProgress
+    subscribeTimelapseMergeProgress,
+    ApiRequestError
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { Recording, TimelapseFrame } from '$lib/api';
@@ -18,6 +19,7 @@
   import { t } from '$lib/i18n';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
+  import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
@@ -26,17 +28,50 @@
   let error = $state('');
   let deleteConfirm = $state(false);
   let mjpegPlayer: MjpegPlayer | undefined = $state();
-  let videoBlobUrl = $state('');
+  let videoUrl = $state('');
   let videoLoading = $state(false);
+let videoSpeed = $state(1);
+let videoFullscreen = $state(false);
+let videoEl = $state<HTMLVideoElement | null>(null);
+let videoCurrentTime = $state(0);
+let videoDuration = $state(0);
+let videoBuffered = $state(0);
+let videoIsPlaying = $state(false);
+let formatBadgeVisible = $state(true);
+let formatBadgeTimeout = $state<ReturnType<typeof setTimeout> | null>(null);
+let videoLoop = $state(false);
+let videoError = $state<string | null>(null);
+let videoErrorMsg = $state('');
+let videoRetryCount = $state(0);
+let videoStalled = $state(false);
+let videoStallTimeout: ReturnType<typeof setTimeout> | null = null;
+const MAX_VIDEO_RETRIES = 3;
+let loadErrorType = $state<'generic' | 'not_found'>('generic');
   let downloadProgress = $state(0);
   let isDownloading = $state(false);
   let nextRecordingId = $state<string | null>(null);
-  let nextBlobUrl = $state<string | null>(null);
   let isTransitioning = $state(false);
   // Transcoding state
   let transcodingStatus = $state<ManagerStatus | null>(null);
   let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
   let transcodeTask = $derived(findTranscodeTask());
+
+let formatLabel = $derived.by(() => {
+  if (!recording) return '';
+  switch (recording.format) {
+    case 'h264': return t('recording.format.h264');
+    case 'h265': return t('recording.format.h265');
+    case 'timelapse': return t('recording.format.timelapse');
+    default: return recording.format;
+  }
+});
+
+let formatBadgeClass = $derived.by(() => {
+  if (!recording) return 'badge-neutral';
+  if (recording.format === 'timelapse') return 'bg-cyan-500/20 text-cyan-300 dark:text-cyan-300';
+  if (recording.format === 'h264' || recording.format === 'h265') return 'bg-[var(--color-info)]/20 text-[var(--color-info)]';
+  return 'bg-white/10 th-text-secondary';
+});
 
   // Timelapse player state
   let timelapseFrames = $state<TimelapseFrame[]>([]);
@@ -59,20 +94,111 @@ let mergeProgressPct = $state(0);
 let mergeErrorMsg = $state('');
 let mergeAbortController = $state<AbortController | null>(null);
 
+// SessionStorage merge tracking — survives navigation away and page refresh
+const MERGE_STORAGE_KEY = 'mibee_nvr_merge_active';
+
+function saveMergeState(data: { cameraId: string; recordingId: string; progress: number; status: string }) {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
+    all[data.cameraId] = data;
+    sessionStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+function clearMergeState(cameraId: string) {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
+    delete all[cameraId];
+    if (Object.keys(all).length === 0) {
+      sessionStorage.removeItem(MERGE_STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(all));
+    }
+  } catch {}
+}
+
+function getMergeStateForCamera(cameraId: string): { progress: number; status: string; recordingId: string } | null {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
+    return all[cameraId] || null;
+  } catch { return null; }
+}
+
+/** Restore merge state from DB or sessionStorage when returning to this page */
+function restoreMergeState(rec: Recording) {
+  // Check sessionStorage first — persists across navigation, cleared on completion
+  const stored = getMergeStateForCamera(rec.camera_id);
+  if (stored && stored.status === 'pending' && stored.progress < 100) {
+    mergeInProgress = true;
+    mergeProgressPct = stored.progress;
+    mergeErrorMsg = '';
+    startMergeSse(rec.camera_id, rec.id);
+    return;
+  }
+
+  // Fallback: check DB-persisted progress (survives page refresh)
+  if (rec.merge_status === 'pending' && rec.merge_progress != null && rec.merge_progress > 0 && rec.merge_progress < 100) {
+    mergeInProgress = true;
+    mergeProgressPct = rec.merge_progress;
+    mergeErrorMsg = '';
+    // Re-establish SSE subscription for live progress updates
+    startMergeSse(rec.camera_id, rec.id);
+    // Also store in sessionStorage for other pages
+    saveMergeState({
+      cameraId: rec.camera_id,
+      recordingId: rec.id,
+      progress: rec.merge_progress,
+      status: 'pending',
+    });
+  }
+}
+
+/** Subscribe to merge SSE progress updates for a camera */
+function startMergeSse(cameraId: string, recordingId: string) {
+  // Abort any existing subscription first
+  mergeAbortController?.abort();
+  mergeAbortController = null;
+
+  const ac = subscribeTimelapseMergeProgress(cameraId, (data) => {
+    if (data.status === 'completed') {
+      mergeInProgress = false;
+      mergeProgressPct = 100;
+      mergeAbortController = null;
+      clearMergeState(cameraId);
+      loadRecording();
+      showToast(t('detail.mergeCompleted'), 'success');
+    } else if (data.status === 'failed') {
+      mergeInProgress = false;
+      mergeErrorMsg = data.error || '';
+      clearMergeState(cameraId);
+      showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
+    } else if (data.progress !== undefined) {
+      mergeProgressPct = data.progress;
+      saveMergeState({
+        cameraId,
+        recordingId,
+        progress: data.progress,
+        status: 'pending',
+      });
+    }
+  });
+
+  mergeAbortController = ac;
+}
+
   async function loadRecording() {
     loading = true;
     error = '';
-    if (nextBlobUrl) { URL.revokeObjectURL(nextBlobUrl); }
     nextRecordingId = null;
-    nextBlobUrl = null;
     try {
       recording = await getRecording(currentId);
       if (recording) {
+        // Restore merge state from DB if merge is in progress
+        restoreMergeState(recording);
+
         if (recording.format === 'mjpeg') {
-          await tick();
-          if (mjpegPlayer) await mjpegPlayer.initPlayer();
+          // initPlayer called reactively via $effect when mjpegPlayer ref is set
         } else if (recording.format === 'timelapse') {
-          // For merged timelapse, use video player instead of JPEG player
           if (recording.merge_status === 'merged') {
             initVideoPlayer();
           } else {
@@ -83,7 +209,14 @@ let mergeAbortController = $state<AbortController | null>(null);
         }
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : t('common.failedLoadRecording');
+      const errMsg = e instanceof Error ? e.message : '';
+      if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('RECORDING_NOT_FOUND')) {
+        loadErrorType = 'not_found';
+        error = t('errors.RECORDING_NOT_FOUND');
+      } else {
+        loadErrorType = 'generic';
+        error = e instanceof Error ? e.message : t('common.failedLoadRecording');
+      }
       recording = null;
     } finally {
       loading = false;
@@ -106,12 +239,19 @@ let mergeAbortController = $state<AbortController | null>(null);
     } catch (e) { return null; }
   }
   async function handleVideoEnded() {
+    if (videoLoop && videoEl) {
+      videoEl.currentTime = 0;
+      await videoEl.play();
+      return;
+    }
     const next = await loadNextRecording();
     if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
   }
 
   function handleTimeUpdate(e: Event) {
     const video = e.target as HTMLVideoElement;
+    videoCurrentTime = video.currentTime;
+    videoDuration = video.duration || 0;
     if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) prefetchNextRecording();
   }
 
@@ -120,11 +260,6 @@ let mergeAbortController = $state<AbortController | null>(null);
     const next = await loadNextRecording();
     if (next) {
       nextRecordingId = next.id;
-      // Only prefetch video blob for MP4 formats (h264/h265)
-      if (next.format !== 'timelapse' && next.format !== 'mjpeg') {
-        try { nextBlobUrl = await loadRecordingVideoBlob(next.id); }
-        catch (e) { console.warn('Failed to prefetch next recording:', e); nextRecordingId = null; }
-      }
     }
   }
 
@@ -133,19 +268,158 @@ let mergeAbortController = $state<AbortController | null>(null);
     if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
   }
 
-  async function initVideoPlayer() {
-    videoLoading = true;
-    if (videoBlobUrl) { URL.revokeObjectURL(videoBlobUrl); videoBlobUrl = ''; }
-    try { videoBlobUrl = await loadRecordingVideoBlob(currentId); }
-    catch (e) { console.error('Failed to load video:', e); error = t('detail.failedLoadVideo'); }
-    finally { videoLoading = false; }
+function initVideoPlayer() {
+  videoSpeed = 1;
+  videoLoading = true;
+  videoUrl = getRecordingVideoUrl(currentId);
+  formatBadgeVisible = true;
+  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
+  videoError = null;
+  videoErrorMsg = '';
+  videoRetryCount = 0;
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+}
+
+function setVideoSpeed(speed: number) {
+  videoSpeed = speed;
+  const video = document.querySelector('video');
+  if (video) video.playbackRate = speed;
+}
+
+
+function handleVideoLoadedMetadata(e: Event) {
+  const video = e.target as HTMLVideoElement;
+  videoDuration = video.duration || 0;
+}
+
+function handleVideoLoadedData() {
+  videoLoading = false;
+  videoError = null;
+  videoErrorMsg = '';
+  videoRetryCount = 0;
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+}
+function handleVideoProgress() {
+  if (!videoEl || !videoEl.buffered.length || !videoEl.duration) {
+    videoBuffered = 0;
+    return;
   }
+  const bf = videoEl.buffered;
+  for (let i = 0; i < bf.length; i++) {
+    if (bf.start(i) <= videoEl.currentTime && bf.end(i) >= videoEl.currentTime) {
+      videoBuffered = (bf.end(i) / videoEl.duration) * 100;
+      return;
+    }
+  }
+  videoBuffered = (bf.end(bf.length - 1) / videoEl.duration) * 100;
+}
+function handleVideoPlay() {
+  videoIsPlaying = true;
+  // Auto-hide format badge after 3 seconds of playback
+  if (formatBadgeTimeout) clearTimeout(formatBadgeTimeout);
+  formatBadgeTimeout = setTimeout(() => { formatBadgeVisible = false; }, 3000);
+}
+function handleVideoPause() {
+  videoIsPlaying = false;
+  formatBadgeVisible = true;
+  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
+}
+
+function handleVideoContainerMouseEnter() {
+  formatBadgeVisible = true;
+  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
+}
+function handleVideoContainerMouseLeave() {
+  if (videoIsPlaying) {
+    formatBadgeTimeout = setTimeout(() => { formatBadgeVisible = false; }, 3000);
+  }
+}
+function toggleVideoLoop() {
+  videoLoop = !videoLoop;
+}
+
+function handleVideoError(e: Event) {
+  const video = e.target as HTMLVideoElement;
+  const mediaError = video.error;
+  if (!mediaError) return;
+
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+
+  const code = mediaError.code;
+  // MEDIA_ERR_ABORTED (1) is user-initiated — no recovery UI needed
+  if (code === MediaError.MEDIA_ERR_ABORTED) return;
+
+  videoLoading = false;
+
+  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    videoError = 'src_not_supported';
+    videoErrorMsg = t('detail.videoFormatNotSupported');
+  } else if (code === MediaError.MEDIA_ERR_NETWORK) {
+    videoError = 'network';
+    videoErrorMsg = t('detail.videoNetworkError');
+  } else if (code === MediaError.MEDIA_ERR_DECODE) {
+    videoError = 'decode';
+    videoErrorMsg = t('detail.videoDecodeError');
+  } else {
+    videoError = 'unknown';
+    videoErrorMsg = t('detail.videoUnknownError');
+  }
+}
+
+function handleVideoRetry() {
+  if (videoRetryCount >= MAX_VIDEO_RETRIES) return;
+  videoRetryCount++;
+  videoError = null;
+  videoErrorMsg = '';
+  videoLoading = true;
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+
+  const video = document.querySelector('video');
+  if (video) {
+    video.removeAttribute('src');
+    video.load();
+    video.src = videoUrl;
+    video.load();
+  }
+}
+
+function handleVideoCanPlay(e: Event) {
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+  videoError = null;
+  videoErrorMsg = '';
+  videoRetryCount = 0;
+}
+
+function handleVideoWaiting() {
+  if (videoStallTimeout) clearTimeout(videoStallTimeout);
+  videoStallTimeout = setTimeout(() => {
+    videoStalled = true;
+  }, 3000);
+}
+
+function handleVideoPlaying() {
+  videoStalled = false;
+  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+}
 
 async function handleMergeAndPlay() {
   if (!recording) return;
   mergeInProgress = true;
   mergeProgressPct = 0;
   mergeErrorMsg = '';
+
+  // Store in sessionStorage so other pages can track this merge
+  saveMergeState({
+    cameraId: recording.camera_id,
+    recordingId: recording.id,
+    progress: 0,
+    status: 'pending',
+  });
 
   try {
     await triggerTimelapseMerge(recording.camera_id);
@@ -155,12 +429,22 @@ async function handleMergeAndPlay() {
         mergeInProgress = false;
         mergeProgressPct = 100;
         mergeAbortController = null;
+        clearMergeState(recording!.camera_id);
         loadRecording();
+        showToast(t('detail.mergeCompleted'), 'success');
       } else if (data.status === 'failed') {
         mergeInProgress = false;
         mergeErrorMsg = data.error || '';
+        clearMergeState(recording!.camera_id);
+        showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
       } else if (data.progress !== undefined) {
         mergeProgressPct = data.progress;
+        saveMergeState({
+          cameraId: recording!.camera_id,
+          recordingId: recording!.id,
+          progress: data.progress,
+          status: 'pending',
+        });
       }
     });
 
@@ -168,6 +452,7 @@ async function handleMergeAndPlay() {
   } catch (e) {
     mergeInProgress = false;
     mergeErrorMsg = e instanceof Error ? e.message : 'Failed to start merge';
+    clearMergeState(recording.camera_id);
   }
 }
 
@@ -403,7 +688,30 @@ async function handleMergeAndPlay() {
         else if (recording?.format === 'timelapse') tlSeek(tlCurrentFrame + 1);
         else { const v = document.querySelector('video'); if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
         break;
-      case 'Escape': goBack(); break;
+      case 'Escape':
+        if (document.fullscreenElement) { document.exitFullscreen(); break; }
+        goBack();
+        break;
+      case 'f':
+      case 'F':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleFullscreen');
+        else if (recording?.format === 'timelapse') toggleFullscreen();
+        else toggleVideoFullscreen();
+        break;
+      case 'l':
+      case 'L':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleLoop');
+        else if (recording?.format === 'timelapse') tlToggleLoop();
+        else if (recording?.format === 'h264' || recording?.format === 'h265') toggleVideoLoop();
+        break;
+      case 'Home':
+        e.preventDefault();
+        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('home');
+        else if (recording?.format === 'timelapse') tlSeek(0);
+        else if (recording?.format === 'h264' || recording?.format === 'h265') setVideoSpeed(1);
+        break;
     }
   }
   function tlToggleLoop() {
@@ -419,6 +727,27 @@ async function handleMergeAndPlay() {
       el.requestFullscreen();
     }
   }
+
+  function toggleVideoFullscreen() {
+    const el = document.querySelector('.video-container');
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      el.requestFullscreen();
+    }
+  }
+
+  $effect(() => {
+    function onFSChange() {
+      videoFullscreen = !!document.fullscreenElement;
+    }
+    document.addEventListener('fullscreenchange', onFSChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFSChange);
+    };
+  });
+
 
   function getFrameTimestamp(): string {
     if (!recording || !timelapseFrames[tlCurrentFrame]) return '';
@@ -446,24 +775,50 @@ async function handleMergeAndPlay() {
 
   $effect(() => {
     return () => {
+      // Save current merge state before cleanup so other pages can pick it up
+      if (mergeInProgress && recording) {
+        saveMergeState({
+          cameraId: recording.camera_id,
+          recordingId: recording.id,
+          progress: mergeProgressPct,
+          status: 'pending',
+        });
+      }
       // Abort all in-flight timelapse frame requests
       tlAbortController?.abort();
       tlAbortController = null;
-      // Abort merge SSE connection
+      // Abort merge SSE connection (merge continues on server, progress in DB)
       mergeAbortController?.abort();
       mergeAbortController = null;
-      if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
-      if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
       tlBlobCache.forEach(url => URL.revokeObjectURL(url));
       tlBlobCache = new Map();
       stopTimelapsePlayback();
+      // Clear format badge auto-hide timeout
+      if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
+      if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
     };
   });
 
-  onMount(() => {
-    currentId = recordingId;
-    if (!currentId) { error = t('detail.recordingIdRequired'); loading = false; return; }
+// --- MJPEG player auto-init when component mounts ---
+
+$effect(() => {
+  if (recording?.format === 'mjpeg' && mjpegPlayer) {
+    mjpegPlayer.initPlayer();
+  }
+});
+
+  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings)
+  $effect(() => {
+    const id = recordingId;
+    if (!id) return;
+    if (currentId === id && recording) return; // already loaded this recording
+    currentId = id;
+    loading = true;
+    error = '';
     loadRecording();
+  });
+
+  onMount(() => {
     startTranscodingPoll();
     window.addEventListener('keydown', handleKeydown);
     return () => {
@@ -485,10 +840,12 @@ async function handleMergeAndPlay() {
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
         <div class="flex justify-center gap-3">
+          {#if loadErrorType === 'generic'}
           <button onclick={loadRecording} class="btn btn-primary btn-sm flex items-center gap-1">
             <RefreshCw size={14} />
             {t('common.retry')}
           </button>
+          {/if}
           <button onclick={goBack} class="btn btn-secondary btn-sm">
             {t('detail.goBack')}
           </button>
@@ -499,25 +856,76 @@ async function handleMergeAndPlay() {
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
           {#if recording.format === 'h264' || recording.format === 'h265' || (recording.format === 'timelapse' && recording.merge_status === 'merged')}
-            <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
+            <div role="presentation"
+              class="video-container relative max-w-full bg-black rounded-t-[var(--radius-md)]"
+              onmouseenter={handleVideoContainerMouseEnter}
+              onmouseleave={handleVideoContainerMouseLeave}>
               {#if isTransitioning}
                 <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
                   <Loader2 size={32} class="animate-spin th-text-secondary" />
                 </div>
               {/if}
-              {#if videoLoading}
-                <div class="flex items-center justify-center h-64"><div class="spinner spinner-lg"></div></div>
-              {:else if videoBlobUrl}
-                <video controls preload="auto" class="w-full max-h-[80vh]" src={videoBlobUrl}
-                  onended={handleVideoEnded} ontimeupdate={handleTimeUpdate}>
+              {#if videoUrl}
+                <video bind:this={videoEl} preload="metadata" controlsList="nodownload" class="w-full max-h-[80vh]" src={videoUrl}
+                  onended={handleVideoEnded} ontimeupdate={handleTimeUpdate} onplay={handleVideoPlay} onpause={handleVideoPause}
+                  onloadedmetadata={handleVideoLoadedMetadata} onprogress={handleVideoProgress} onloadeddata={handleVideoLoadedData}
+                  onerror={handleVideoError} onwaiting={handleVideoWaiting} oncanplay={handleVideoCanPlay} onplaying={handleVideoPlaying}>
                   <track kind="captions" />
                   {t('detail.videoUnsupported')}
                 </video>
-              {:else}
+                {#if videoLoading}
+                  <div class="absolute inset-0 skeleton-shimmer" style="border-radius: var(--radius-md) var(--radius-md) 0 0;"></div>
+                {/if}
+                {#if videoError}
+                <div class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 p-6">
+                  <AlertTriangle size={48} class="th-color-danger mb-3" />
+                  <p class="text-white text-center text-sm mb-4">{videoErrorMsg}</p>
+                  {#if videoRetryCount < MAX_VIDEO_RETRIES}
+                    <button onclick={handleVideoRetry} class="btn btn-primary btn-sm flex items-center gap-1">
+                      <RefreshCw size={14} />
+                      {videoRetryCount > 0 ? t('detail.videoRetrying', { count: String(videoRetryCount), max: String(MAX_VIDEO_RETRIES) }) : t('common.retry')}
+                    </button>
+                  {:else}
+                    <p class="text-white/70 text-xs mb-3">{t('detail.videoMaxRetries')}</p>
+                    <button onclick={goBack} class="btn btn-secondary btn-sm">{t('detail.goBack')}</button>
+                  {/if}
+                </div>
+                {:else if videoStalled}
+                <div class="absolute inset-0 bg-black/40 flex items-center justify-center z-20">
+                  <div class="flex items-center gap-2 text-white/80">
+                    <Loader2 size={20} class="animate-spin" />
+                    <span class="text-sm">{t('detail.videoBuffering')}</span>
+                  </div>
+                </div>
+                {/if}
+              {:else if !loading}
                 <div class="flex items-center justify-center h-64 th-text-muted">{t('detail.failedLoadVideo')}</div>
               {/if}
+
+            <!-- Format badge overlay -->
+            <div class="absolute top-2 left-2 z-10 pointer-events-none transition-opacity duration-300 ease-in-out"
+              style="opacity: {formatBadgeVisible ? 1 : 0};">
+              <span class="badge text-[10px] leading-none py-0.5 px-1.5 {formatBadgeClass}">
+                {formatLabel}
+              </span>
             </div>
-            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary">
+            </div>
+            <VideoPlaybackControls
+              currentTime={videoCurrentTime}
+              duration={videoDuration}
+              isPlaying={videoIsPlaying}
+              playbackRate={videoSpeed}
+              buffered={videoBuffered}
+              isLooping={videoLoop}
+              ontoggleplay={() => { if (videoEl) { if (videoEl.paused) videoEl.play(); else videoEl.pause(); } }}
+              onseek={(ratio) => { if (videoEl) videoEl.currentTime = ratio * videoDuration; }}
+              onsetspeed={(speed) => setVideoSpeed(speed)}
+              onfullscreen={toggleVideoFullscreen}
+              ontoggleloop={toggleVideoLoop}
+              onarrowleft={() => { if (videoEl) videoEl.currentTime = Math.max(0, videoEl.currentTime - 5); }}
+              onarrowright={() => { if (videoEl) videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 5); }}
+            />
+            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary border-t th-border">
               <span class="text-sm th-text-muted">{t('detail.playing')} <span class="font-mono th-text-primary">{recording.camera_id}</span></span>
               <button onclick={navigateToNext} class="btn btn-ghost btn-sm flex items-center gap-1">
                 {t('detail.nextRecording')} <SkipForward size={16} />
@@ -723,12 +1131,20 @@ async function handleMergeAndPlay() {
               <!-- Keyboard shortcuts hint -->
               <div class="px-4 py-2 th-bg-tertiary">
                 <p class="text-xs text-center th-text-muted">
-                  {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | {t('detail.escapeBack')}
+                  {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
                 </p>
               </div>
             {/if}
           {/if}
-          {#if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse'}
+          {#if recording.format === 'mjpeg'}
+            <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
+            <!-- Keyboard shortcuts hint -->
+            <div class="px-4 py-2 th-bg-tertiary">
+              <p class="text-xs text-center th-text-muted">
+                {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
+              </p>
+            </div>
+          {:else if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse'}
             <div class="flex items-center justify-center h-64 bg-black">
               <div class="text-center th-text-tertiary">
                 <div class="text-4xl mb-2 flex justify-center"><HelpCircle size={48} /></div>

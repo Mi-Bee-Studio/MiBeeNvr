@@ -59,6 +59,7 @@ type Recording struct {
 	MergeStatus string   `json:"merge_status"`
 	MergePath   string    `json:"merge_path"`
 	MergeTier   string    `json:"merge_tier"`
+	MergeProgress int     `json:"merge_progress"`
 	MergeError  string    `json:"merge_error"`
 	RetryCount  int       `json:"retry_count"`
 	Archived   bool      `json:"archived"`
@@ -208,6 +209,7 @@ const (
 const (
 	MergeStatusPending = "pending"
 	MergeStatusMerged  = "merged"
+	MergeStatusMerging = "merging"
 	MergeStatusFailed  = "failed"
 )
 

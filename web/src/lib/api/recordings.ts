@@ -17,6 +17,7 @@ export interface Recording {
   frame_count: number;
   merged: boolean;
   merge_status?: 'pending' | 'merged' | 'failed';
+  merge_progress?: number; // 0-100, persisted to DB
   merge_path?: string;
   archived?: boolean;
   merge_tier?: string;
@@ -161,6 +162,11 @@ export async function batchDeleteRecordings(ids: string[], signal?: AbortSignal)
 export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
 }
+
+export function getRecordingVideoUrl(id: string): string {
+  return `/api/recordings/${id}/download`;
+}
+
 export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
 }
@@ -242,6 +248,10 @@ export async function loadFrameBlob(recordingId: string, frameIndex: number, sig
   return URL.createObjectURL(blob);
 }
 
+/**
+ * @deprecated Use direct URL playback via getRecordingVideoUrl() or <video src={getRecordingVideoUrl(id)}> instead.
+ * Loading entire recordings as blobs causes memory crashes with large files.
+ */
 export async function loadRecordingVideoBlob(recordingId: string, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download`, { signal });
   return URL.createObjectURL(blob);

@@ -115,9 +115,47 @@
     'calendar.weekdaySun','calendar.weekdayMon','calendar.weekdayTue','calendar.weekdayWed',
     'calendar.weekdayThu','calendar.weekdayFri','calendar.weekdaySat'
   ];
+
+  let availableYears = $derived.by(() => {
+    const years = new Set<number>();
+    const now = new Date();
+    for (const rec of recordings) {
+      const year = parseInt(rec.started_at.slice(0, 4), 10);
+      if (!isNaN(year)) years.add(year);
+    }
+    if (years.size === 0) {
+      for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 2; y++) {
+        years.add(y);
+      }
+    }
+    return Array.from(years).sort((a, b) => a - b);
+  });
+
+  function selectYear(e: Event) {
+    const target = e.target as HTMLSelectElement;
+    const year = parseInt(target.value, 10);
+    const d = new Date(currentMonth);
+    d.setFullYear(year);
+    d.setMonth(0);
+    currentMonth = d;
+  }
 </script>
 
 <div class="card p-5 mb-6 border th-border">
+  <!-- Year Selector -->
+  <div class="flex items-center justify-center mb-3">
+    <select
+      onchange={selectYear}
+      class="select select-bordered select-sm text-center font-semibold th-text-primary th-bg-primary"
+      aria-label="Select year"
+    >
+      {#each availableYears as year}
+        <option value={year} selected={year === currentMonth.getFullYear()}>
+          {year}
+        </option>
+      {/each}
+    </select>
+  </div>
   <!-- Calendar Nav -->
   <div class="flex items-center justify-between mb-4">
     <button

@@ -894,7 +894,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "16", version)
+	require.Equal(t, "18", version)
 }
 
 func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
@@ -916,7 +916,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "16", version)
+	require.Equal(t, "18", version)
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
@@ -1294,4 +1294,89 @@ func TestEscapeLike(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestMergeProgressCRUD(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_progress.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	// Insert a recording.
+	started := time.Now()
+	rec := &model.Recording{
+		ID:         "mp-001",
+		CameraID:   "camMP",
+		FilePath:   "/mp/test.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  started,
+		EndedAt:    started.Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   1024,
+		FrameCount: 60,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec))
+
+	// Verify merge_progress defaults to 0.
+	got, err := db.GetRecording(ctx, "mp-001")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, 0, got.MergeProgress, "merge_progress should default to 0")
+
+	// Update merge_progress to 50 (merging).
+	require.NoError(t, db.UpdateMergeProgress(ctx, "mp-001", 50))
+	got, err = db.GetRecording(ctx, "mp-001")
+	require.NoError(t, err)
+	require.Equal(t, 50, got.MergeProgress)
+	require.Equal(t, "merging", got.MergeStatus)
+
+	// Update merge_progress to 100 (complete).
+	require.NoError(t, db.UpdateMergeProgress(ctx, "mp-001", 100))
+	got, err = db.GetRecording(ctx, "mp-001")
+	require.NoError(t, err)
+	require.Equal(t, 100, got.MergeProgress)
+	require.Equal(t, "merged", got.MergeStatus)
+
+	// Test SetMergeResult also sets merge_progress=100.
+	rec2 := &model.Recording{
+		ID:         "mp-002",
+		CameraID:   "camMP",
+		FilePath:   "/mp/test2.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  started,
+		EndedAt:    started.Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   2048,
+		FrameCount: 120,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec2))
+	require.NoError(t, db.SetMergeResult(ctx, "mp-002", "/mp/merged.mp4", "ffmpeg"))
+	got2, err := db.GetRecording(ctx, "mp-002")
+	require.NoError(t, err)
+	require.Equal(t, 100, got2.MergeProgress)
+	require.Equal(t, "merged", got2.MergeStatus)
+	require.Equal(t, "/mp/merged.mp4", got2.MergePath)
+	require.Equal(t, "ffmpeg", got2.MergeTier)
+
+	// Test SetMergeError also sets merge_progress=0.
+	rec3 := &model.Recording{
+		ID:         "mp-003",
+		CameraID:   "camMP",
+		FilePath:   "/mp/test3.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  started,
+		EndedAt:    started.Add(time.Minute),
+		Duration:   60.0,
+		FileSize:   4096,
+		FrameCount: 240,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec3))
+	require.NoError(t, db.SetMergeError(ctx, []string{"mp-003"}, "merge failed"))
+	got3, err := db.GetRecording(ctx, "mp-003")
+	require.NoError(t, err)
+	require.Equal(t, 0, got3.MergeProgress)
+	require.Equal(t, "failed", got3.MergeStatus)
+	require.Equal(t, "merge failed", got3.MergeError)
 }
