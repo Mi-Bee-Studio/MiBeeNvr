@@ -118,11 +118,10 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	for i := range videoTrack.samples {
 		videoTrack.samples[i].duration = 33 // placeholder
 	}
-
 	// Build audio track placeholder for size calculation.
 	var audioTrack *mergeTrack
+	var totalAudioSamples int
 	if hasAudio {
-		var totalAudioSamples int
 		for _, seg := range segments {
 			totalAudioSamples += seg.AudioSampleCount
 		}
@@ -137,7 +136,6 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			audioTrack.samples[i].duration = 23 // placeholder
 		}
 	}
-
 	// Write moov to a buffer to get its exact size.
 	moovBuf := &bytesWriter{}
 	moovW := mp4.NewWriter(moovBuf)
@@ -145,6 +143,13 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		return fmt.Errorf("calculate moov size: %w", err)
 	}
 	moovSize := moovBuf.len()
+	// Add headroom for stts entry expansion — real video may have varying frame durations
+	// that prevent full RLE compression, requiring more stts entries than the uniform-duration
+	// placeholder (which compresses to 1 entry). Max overhead: 8 bytes per sample per track.
+	moovSize += int64(totalVideoSamples) * 8
+	if hasAudio {
+		moovSize += int64(totalAudioSamples) * 8
+	}
 
 	// Clear placeholder samples; real ones will be set after streaming mdat.
 	videoTrack.samples = nil
@@ -310,6 +315,17 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 
 	if moovOut.remaining < 0 {
 		return fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
+	}
+
+	// If the real moov is smaller than the reserved space, pad with a "free" box.
+	// This ensures parsers can traverse from moov → free → mdat without breaking.
+	if moovOut.remaining > 0 {
+		padBuf := make([]byte, moovOut.remaining)
+		binary.BigEndian.PutUint32(padBuf[0:4], uint32(moovOut.remaining))
+		copy(padBuf[4:8], "free")
+		if _, err := out.Write(padBuf); err != nil {
+			return fmt.Errorf("write moov padding: %w", err)
+		}
 	}
 
 	// Sync and close.
