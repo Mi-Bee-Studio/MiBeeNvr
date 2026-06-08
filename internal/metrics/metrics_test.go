@@ -3,6 +3,7 @@ package metrics
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -386,4 +387,170 @@ func TestCameraConnectionMetrics_CounterInc(t *testing.T) {
 		}
 	}
 	t.Fatal("expected nvr_camera_connection_errors_total metric family")
+}
+
+func TestMergeMetrics_Registration(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	require.NotNil(t, m.MergeAttemptsTotal)
+	require.NotNil(t, m.MergeSuccessesTotal)
+	require.NotNil(t, m.MergeFailuresTotal)
+	require.NotNil(t, m.MergeDurationSeconds)
+	require.NotNil(t, m.MergeSizeBytes)
+	require.NotNil(t, m.MergePendingSegments)
+}
+
+func TestMergeMetrics_RecordMergeSuccess(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.RecordMergeSuccess(5*time.Second, 10485760)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	// verify nvr_merge_attempts_total incremented
+	found := false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_attempts_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_attempts_total metric family")
+
+	// verify nvr_merge_successes_total incremented
+	found = false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_successes_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_successes_total metric family")
+
+	// verify nvr_merge_duration_seconds histogram observed
+	found = false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_duration_seconds" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, uint64(1), f.GetMetric()[0].GetHistogram().GetSampleCount())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_duration_seconds metric family")
+
+	// verify nvr_merge_size_bytes histogram observed
+	found = false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_size_bytes" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, uint64(1), f.GetMetric()[0].GetHistogram().GetSampleCount())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_size_bytes metric family")
+}
+
+func TestMergeMetrics_RecordMergeFailure(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.RecordMergeFailure("parse_error")
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	// verify nvr_merge_attempts_total incremented
+	found := false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_attempts_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_attempts_total metric family")
+
+	// verify nvr_merge_failures_total with reason label
+	found = false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_failures_total" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, "parse_error", f.GetMetric()[0].GetLabel()[0].GetValue())
+			require.Equal(t, float64(1), f.GetMetric()[0].GetCounter().GetValue())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_failures_total metric family")
+}
+
+func TestMergeMetrics_UpdateMergePending(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.UpdateMergePending("cam-1", 5.0)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	found := false
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_pending_segments" {
+			require.Len(t, f.GetMetric(), 1)
+			require.Equal(t, "cam-1", f.GetMetric()[0].GetLabel()[0].GetValue())
+			require.Equal(t, float64(5.0), f.GetMetric()[0].GetGauge().GetValue())
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected nvr_merge_pending_segments metric family")
+}
+
+func TestMergeMetrics_NilSafety(t *testing.T) {
+	t.Parallel()
+	var m *Metrics
+	// All three methods must not panic on nil receiver
+	m.RecordMergeSuccess(time.Second, 1024)
+	m.RecordMergeFailure("some_error")
+	m.UpdateMergePending("cam-1", 1.0)
+}
+
+func TestMergeMetrics_FailureReasons(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	m.RecordMergeFailure("parse_error")
+	m.RecordMergeFailure("io_error")
+	m.RecordMergeFailure("parse_error")
+	m.RecordMergeFailure("timeout")
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() == "nvr_merge_failures_total" {
+			require.Len(t, f.GetMetric(), 3)
+			for _, metric := range f.GetMetric() {
+				reason := metric.GetLabel()[0].GetValue()
+				val := metric.GetCounter().GetValue()
+				switch reason {
+				case "parse_error":
+					require.Equal(t, float64(2), val)
+				case "io_error":
+					require.Equal(t, float64(1), val)
+				case "timeout":
+					require.Equal(t, float64(1), val)
+				default:
+					t.Fatalf("unexpected reason label: %s", reason)
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("expected nvr_merge_failures_total metric family")
 }

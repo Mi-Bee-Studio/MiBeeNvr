@@ -498,6 +498,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			return nil
 		},
 		func() []config.CameraConfig { return cfg.Cameras },
+		a.metrics,
 	)
 
 	// Step 5.5: Transcode manager (after merge, before camera)

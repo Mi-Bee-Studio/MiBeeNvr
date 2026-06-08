@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,40 +31,6 @@ var queueLogger = slog.Default().With("component", "transcode-queue")
 // causes SQLITE_BUSY contention under concurrent load.
 const progressUpdateInterval = 2 * time.Second
 
-// maxDBRetries is the maximum number of retry attempts for SQLITE_BUSY errors.
-const maxDBRetries = 3
-
-// retryInitialDelay is the base delay for exponential backoff on SQLITE_BUSY.
-const retryInitialDelay = 100 * time.Millisecond
-
-// isBusyError returns true if the error indicates SQLITE_BUSY contention.
-func isBusyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "busy") || strings.Contains(msg, "SQLITE_BUSY")
-}
-
-// retryOnBusy retries fn on SQLITE_BUSY errors with exponential backoff.
-func retryOnBusy(ctx context.Context, fn func() error) error {
-	var err error
-	delay := retryInitialDelay
-	for attempt := 0; attempt <= maxDBRetries; attempt++ {
-		if err = fn(); err == nil || !isBusyError(err) {
-			return err
-		}
-		if attempt < maxDBRetries {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-			delay *= 2
-		}
-	}
-	return err
-}
 
 // TranscodeQueue manages async transcoding tasks with a bounded worker pool.
 // Tasks are dequeued from the database (FIFO) and dispatched to worker goroutines.
@@ -275,7 +240,7 @@ func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 
 	for i := 0; i < slotsAvailable; i++ {
 		var task *storage.TranscodeTask
-		err := retryOnBusy(ctx, func() error {
+		err := storage.RetryOnBusy(ctx, func() error {
 			var err error
 			task, err = q.store.DequeueTask(ctx)
 			return err
@@ -465,7 +430,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 // finishTask updates the task status in the database.
 // Uses a separate context (typically Background) so cancelled tasks still get their final status written.
 func (q *TranscodeQueue) finishTask(ctx context.Context, task *storage.TranscodeTask, status string, progress float64, errMsg string) {
-	if err := retryOnBusy(ctx, func() error {
+	if err := storage.RetryOnBusy(ctx, func() error {
 		return q.store.UpdateTaskStatus(ctx, task.ID, status, progress, errMsg)
 	}); err != nil {
 		queueLogger.Warn("failed to update task status", "task_id", task.ID, "error", err)

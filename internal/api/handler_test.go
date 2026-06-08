@@ -2317,7 +2317,8 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
-	)
+		nil,
+)
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
@@ -2344,7 +2345,8 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
-	)
+		nil,
+)
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")

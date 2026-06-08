@@ -55,7 +55,7 @@ func TestMergeMJPEGSegments_MultipleSources(t *testing.T) {
 		},
 	}
 
-	merged, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
+	merged, sourceDirs, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
 	require.NoError(t, err)
 	require.NotNil(t, merged)
 	require.Equal(t, model.FormatMJPEG, merged.Format)
@@ -69,11 +69,13 @@ func TestMergeMJPEGSegments_MultipleSources(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 
-	// Verify source directories are removed
+	// Verify source directories still exist (deletion deferred to caller).
 	_, err = os.Stat(srcDir1)
-	require.True(t, os.IsNotExist(err))
+	require.NoError(t, err, "source dir should still exist after merge")
 	_, err = os.Stat(srcDir2)
-	require.True(t, os.IsNotExist(err))
+	require.NoError(t, err, "source dir should still exist after merge")
+
+	require.Len(t, sourceDirs, 2)
 }
 
 func TestMergeMJPEGSegments_EmptyList(t *testing.T) {
@@ -82,7 +84,7 @@ func TestMergeMJPEGSegments_EmptyList(t *testing.T) {
 	store, err := storage.NewManager(storeDir)
 	require.NoError(t, err)
 
-	_, err = MergeMJPEGSegments(context.Background(), nil, store, "cam1")
+	_, _, err = MergeMJPEGSegments(context.Background(), nil, store, "cam1")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no segments")
 }
@@ -112,7 +114,7 @@ func TestMergeMJPEGSegments_SingleSource(t *testing.T) {
 		},
 	}
 
-	merged, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
+	merged, sourceDirs, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
 	require.NoError(t, err)
 	require.NotNil(t, merged)
 	require.Equal(t, 1, merged.FrameCount)
@@ -120,4 +122,92 @@ func TestMergeMJPEGSegments_SingleSource(t *testing.T) {
 	entries, err := os.ReadDir(merged.FilePath)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
+
+	require.Len(t, sourceDirs, 1)
+}
+
+func TestMergeMJPEGSegments_SourceDirsPersist(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	store, err := storage.NewManager(storeDir)
+	require.NoError(t, err)
+
+	cameraID := "cam1"
+	srcDir1 := filepath.Join(storeDir, cameraID, "src1")
+	require.NoError(t, os.MkdirAll(srcDir1, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0644))
+
+	srcDir2 := filepath.Join(storeDir, cameraID, "src2")
+	require.NoError(t, os.MkdirAll(srcDir2, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir2, "frame002.jpg"), []byte("fake-jpeg-2"), 0644))
+
+	segments := []*model.Recording{
+		{
+			ID: "seg1", CameraID: cameraID, FilePath: srcDir1,
+			Format: model.FormatMJPEG, StartedAt: time.Now().Add(-2 * time.Hour),
+			EndedAt: time.Now().Add(-time.Hour), Duration: 3600.0,
+			FileSize: 12, FrameCount: 1,
+		},
+		{
+			ID: "seg2", CameraID: cameraID, FilePath: srcDir2,
+			Format: model.FormatMJPEG, StartedAt: time.Now().Add(-time.Hour),
+			EndedAt: time.Now(), Duration: 3600.0,
+			FileSize: 12, FrameCount: 1,
+		},
+	}
+
+	merged, sourceDirs, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
+	require.NoError(t, err)
+	require.NotNil(t, merged)
+	require.Len(t, sourceDirs, 2)
+	require.Equal(t, srcDir1, sourceDirs[0])
+	require.Equal(t, srcDir2, sourceDirs[1])
+
+	// Verify source directories still exist (deletion deferred to caller).
+	_, err = os.Stat(srcDir1)
+	require.NoError(t, err)
+	_, err = os.Stat(srcDir2)
+	require.NoError(t, err)
+}
+
+func TestMergeMJPEGSegments_PartialFailure(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	store, err := storage.NewManager(storeDir)
+	require.NoError(t, err)
+
+	cameraID := "cam1"
+
+	// First segment exists and has files.
+	srcDir1 := filepath.Join(storeDir, cameraID, "src1")
+	require.NoError(t, os.MkdirAll(srcDir1, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0644))
+
+	// Second segment directory does not exist (simulates partial failure).
+	srcDir2 := filepath.Join(storeDir, cameraID, "src2")
+
+	segments := []*model.Recording{
+		{
+			ID: "seg1", CameraID: cameraID, FilePath: srcDir1,
+			Format: model.FormatMJPEG, StartedAt: time.Now().Add(-2 * time.Hour),
+			EndedAt: time.Now().Add(-time.Hour), Duration: 3600.0,
+			FileSize: 12, FrameCount: 1,
+		},
+		{
+			ID: "seg2", CameraID: cameraID, FilePath: srcDir2,
+			Format: model.FormatMJPEG, StartedAt: time.Now().Add(-time.Hour),
+			EndedAt: time.Now(), Duration: 3600.0,
+			FileSize: 12, FrameCount: 1,
+		},
+	}
+
+	// Merge should fail because srcDir2 doesn't exist.
+	merged, sourceDirs, err := MergeMJPEGSegments(context.Background(), segments, store, cameraID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read segment dir")
+	require.Nil(t, merged)
+
+	// sourceDirs should contain srcDir1 (the successfully processed one).
+	require.Len(t, sourceDirs, 1)
+	require.Equal(t, srcDir1, sourceDirs[0])
 }

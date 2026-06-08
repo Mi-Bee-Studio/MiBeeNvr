@@ -1,5 +1,7 @@
 package merge
 
+import "fmt"
+
 // SPS resolution parsing for H.264 and H.265.
 // Extracted from internal/muxer/mp4mux.go to avoid cross-package dependency.
 
@@ -9,46 +11,64 @@ type bitReader struct {
 	offset int
 }
 
-func (r *bitReader) readBit() int {
+func (r *bitReader) readBit() (int, error) {
 	if r.offset >= len(r.data)*8 {
-		return 0
+		return 0, fmt.Errorf("merge: bitReader overflow at offset %d (data length %d bits)", r.offset, len(r.data)*8)
 	}
 	byteIdx := r.offset / 8
 	bitIdx := 7 - (r.offset % 8)
 	r.offset++
-	return int((r.data[byteIdx] >> bitIdx) & 1)
+	return int((r.data[byteIdx] >> bitIdx) & 1), nil
 }
 
-func (r *bitReader) readBits(n int) int {
+func (r *bitReader) readBits(n int) (int, error) {
 	var val int
 	for i := 0; i < n; i++ {
-		val = (val << 1) | r.readBit()
+		bit, err := r.readBit()
+		if err != nil {
+			return 0, err
+		}
+		val = (val << 1) | bit
 	}
-	return val
+	return val, nil
 }
 
 // readUE reads an unsigned Exp-Golomb coded value.
-func (r *bitReader) readUE() int {
+func (r *bitReader) readUE() (int, error) {
 	leadingZeros := 0
-	for r.readBit() == 0 {
+	for {
+		bit, err := r.readBit()
+		if err != nil {
+			return 0, err
+		}
+		if bit == 1 {
+			break
+		}
 		leadingZeros++
 		if leadingZeros > 32 {
-			return 0
+			return 0, fmt.Errorf("merge: sps readUE leadingZeros overflow (%d)", leadingZeros)
 		}
 	}
 	if leadingZeros == 0 {
-		return 0
+		return 0, nil
 	}
-	return (1 << leadingZeros) - 1 + r.readBits(leadingZeros)
+	bits, err := r.readBits(leadingZeros)
+	if err != nil {
+		return 0, err
+	}
+	return (1 << leadingZeros) - 1 + bits, nil
 }
 
 // readSE reads a signed Exp-Golomb coded value.
-func (r *bitReader) readSE() int {
-	val := r.readUE()
-	if val%2 == 0 {
-		return -(val / 2)
+func (r *bitReader) readSE() (int, error) {
+	val, err := r.readUE()
+	if err != nil {
+		return 0, err
 	}
-	return (val + 1) / 2
+	if val%2 == 0 {
+		return -(val / 2), nil
+	}
+	return (val + 1) / 2, nil
 }
 
 // removeEmulationPrevention removes H.264/H.265 emulation prevention bytes (0x00 0x00 0x03).
@@ -68,24 +88,32 @@ func removeEmulationPrevention(data []byte) []byte {
 }
 
 // parseSPSResolution extracts width and height from an H.264 SPS NAL unit.
-// Returns (0, 0) if parsing fails.
-func parseSPSResolution(sps []byte) (width, height int) {
+func parseSPSResolution(sps []byte) (width, height int, err error) {
 	if len(sps) < 8 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: sps too short (%d bytes)", len(sps))
 	}
 
 	rbsp := removeEmulationPrevention(sps[1:])
 	if len(rbsp) < 4 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: sps rbsp too short (%d bytes)", len(rbsp))
 	}
 
 	r := &bitReader{data: rbsp}
 
-	profileIDC := r.readBits(8)
-	r.readBits(8) // constraint_set_flags
-	r.readBits(8) // level_idc
+	var profileIDC int
+	if profileIDC, err = r.readBits(8); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBits(8); err != nil { // constraint_set_flags
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBits(8); err != nil { // level_idc
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 
-	r.readUE() // seq_parameter_set_id
+	if _, err = r.readUE(); err != nil { // seq_parameter_set_id
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 
 	highProfile := profileIDC == 100 || profileIDC == 110 || profileIDC == 122 ||
 		profileIDC == 244 || profileIDC == 44 || profileIDC == 83 ||
@@ -94,21 +122,37 @@ func parseSPSResolution(sps []byte) (width, height int) {
 
 	chromaFormatIDC := 1
 	if highProfile {
-		chromaFormatIDC = r.readUE()
-		if chromaFormatIDC == 3 {
-			r.readBit() // separate_colour_plane_flag
+		if chromaFormatIDC, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 		}
-		r.readUE()  // bit_depth_luma_minus8
-		r.readUE()  // bit_depth_chroma_minus8
-		r.readBit() // qpprime_y_zero_transform_bypass_flag
-		scalingPresent := r.readBit()
+		if chromaFormatIDC == 3 {
+			if _, err = r.readBit(); err != nil { // separate_colour_plane_flag
+				return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+			}
+		}
+		if _, err = r.readUE(); err != nil { // bit_depth_luma_minus8
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if _, err = r.readUE(); err != nil { // bit_depth_chroma_minus8
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if _, err = r.readBit(); err != nil { // qpprime_y_zero_transform_bypass_flag
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		var scalingPresent int
+		if scalingPresent, err = r.readBit(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 		if scalingPresent == 1 {
 			count := 8
 			if chromaFormatIDC == 3 {
 				count = 12
 			}
 			for i := 0; i < count; i++ {
-				present := r.readBit()
+				var present int
+				if present, err = r.readBit(); err != nil {
+					return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+				}
 				if present == 1 {
 					size := 16
 					if i >= 6 {
@@ -116,7 +160,10 @@ func parseSPSResolution(sps []byte) (width, height int) {
 					}
 					lastScale := 8
 					for j := 0; j < size; j++ {
-						delta := r.readSE()
+						var delta int
+						if delta, err = r.readSE(); err != nil {
+							return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+						}
 						nextScale := (lastScale + delta + 256) % 256
 						if nextScale == 0 {
 							nextScale = 256
@@ -128,39 +175,86 @@ func parseSPSResolution(sps []byte) (width, height int) {
 		}
 	}
 
-	r.readUE() // log2_max_frame_num_minus4
+	if _, err = r.readUE(); err != nil { // log2_max_frame_num_minus4
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 
-	picOrderCntType := r.readUE()
+	var picOrderCntType int
+	if picOrderCntType, err = r.readUE(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 	if picOrderCntType == 0 {
-		r.readUE() // log2_max_pic_order_cnt_lsb_minus4
+		if _, err = r.readUE(); err != nil { // log2_max_pic_order_cnt_lsb_minus4
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 	} else if picOrderCntType == 1 {
-		r.readBit() // delta_pic_order_always_zero_flag
-		r.readSE()  // offset_for_non_ref_pic
-		r.readSE()  // offset_for_top_to_bottom_field
-		numRefFrames := r.readUE()
+		if _, err = r.readBit(); err != nil { // delta_pic_order_always_zero_flag
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if _, err = r.readSE(); err != nil { // offset_for_non_ref_pic
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if _, err = r.readSE(); err != nil { // offset_for_top_to_bottom_field
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		var numRefFrames int
+		if numRefFrames, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 		for i := 0; i < numRefFrames; i++ {
-			r.readSE()
+			if _, err = r.readSE(); err != nil {
+				return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+			}
 		}
 	}
 
-	r.readUE()  // max_num_ref_frames
-	r.readBit() // gaps_in_frame_num_value_allowed_flag
-
-	picWidthInMbs := r.readUE() + 1
-	picHeightInMapUnits := r.readUE() + 1
-	frameMbsOnly := r.readBit()
-	if frameMbsOnly == 0 {
-		r.readBit() // mb_adaptive_frame_field_flag
+	if _, err = r.readUE(); err != nil { // max_num_ref_frames
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 	}
-	r.readBit() // direct_8x8_inference_flag
-	frameCropping := r.readBit()
+	if _, err = r.readBit(); err != nil { // gaps_in_frame_num_value_allowed_flag
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+
+	var picWidthInMbs, picHeightInMapUnits, frameMbsOnly int
+	if picWidthInMbs, err = r.readUE(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	picWidthInMbs++
+	if picHeightInMapUnits, err = r.readUE(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	picHeightInMapUnits++
+	if frameMbsOnly, err = r.readBit(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if frameMbsOnly == 0 {
+		if _, err = r.readBit(); err != nil { // mb_adaptive_frame_field_flag
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+	}
+	if _, err = r.readBit(); err != nil { // direct_8x8_inference_flag
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	var frameCropping int
+	if frameCropping, err = r.readBit(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 
 	var cropLeft, cropRight, cropTop, cropBottom int
 	if frameCropping == 1 {
-		cropLeftMinus1 := r.readUE()
-		cropRightMinus1 := r.readUE()
-		cropTopMinus1 := r.readUE()
-		cropBottomMinus1 := r.readUE()
+		var cropLeftMinus1, cropRightMinus1, cropTopMinus1, cropBottomMinus1 int
+		if cropLeftMinus1, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if cropRightMinus1, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if cropTopMinus1, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
+		if cropBottomMinus1, err = r.readUE(); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 
 		var cropUnitX, cropUnitY int
 		if chromaFormatIDC == 0 {
@@ -182,47 +276,77 @@ func parseSPSResolution(sps []byte) (width, height int) {
 	height = (2-frameMbsOnly)*picHeightInMapUnits*16 - cropTop - cropBottom
 
 	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: invalid sps resolution: width=%d, height=%d", width, height)
 	}
-	return width, height
+	return width, height, nil
 }
 
 // parseHEVCSPSResolution extracts width and height from an HEVC SPS NAL unit.
-// Returns (0, 0) if parsing fails.
-func parseHEVCSPSResolution(sps []byte) (width, height int) {
+func parseHEVCSPSResolution(sps []byte) (width, height int, err error) {
 	if len(sps) < 8 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: hevc sps too short (%d bytes)", len(sps))
 	}
 	rbsp := removeEmulationPrevention(sps[2:]) // skip 2-byte NAL header
 	if len(rbsp) < 13 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: hevc sps rbsp too short (%d bytes)", len(rbsp))
 	}
 	r := &bitReader{data: rbsp}
-	r.readBits(4) // sps_video_parameter_set_id
-	maxSubLayersMinus1 := r.readBits(3)
-	r.readBit() // sps_temporal_id_nesting_flag
+
+	if _, err = r.readBits(4); err != nil { // sps_video_parameter_set_id
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	var maxSubLayersMinus1 int
+	if maxSubLayersMinus1, err = r.readBits(3); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBit(); err != nil { // sps_temporal_id_nesting_flag
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 	// profile_tier_level
-	r.readBits(8)  // general_profile_space + tier + profile_idc
-	r.readBits(32) // general_profile_compatibility_flag[32]
-	r.readBits(48) // general constraint indicator flags
-	r.readBits(8)  // general_level_idc
+	if _, err = r.readBits(8); err != nil { // general_profile_space + tier + profile_idc
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBits(32); err != nil { // general_profile_compatibility_flag[32]
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBits(48); err != nil { // general constraint indicator flags
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if _, err = r.readBits(8); err != nil { // general_level_idc
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 	for i := 0; i < maxSubLayersMinus1; i++ {
-		r.readBits(2)
+		if _, err = r.readBits(2); err != nil {
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 	}
 	if maxSubLayersMinus1 > 0 {
 		for i := 0; i < maxSubLayersMinus1; i++ {
-			r.readBit()
+			if _, err = r.readBit(); err != nil {
+				return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+			}
 		}
 	}
-	r.readUE()                // sps_seq_parameter_set_id
-	chromaFormatIDC := r.readUE()
+	if _, err = r.readUE(); err != nil { // sps_seq_parameter_set_id
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	var chromaFormatIDC int
+	if chromaFormatIDC, err = r.readUE(); err != nil {
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 	if chromaFormatIDC == 3 {
-		r.readBit() // separate_colour_plane_flag
+		if _, err = r.readBit(); err != nil { // separate_colour_plane_flag
+			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+		}
 	}
-	width = r.readUE()  // pic_width_in_luma_samples
-	height = r.readUE() // pic_height_in_luma_samples
+	if width, err = r.readUE(); err != nil { // pic_width_in_luma_samples
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
+	if height, err = r.readUE(); err != nil { // pic_height_in_luma_samples
+		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
+	}
 	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("merge: invalid hevc sps resolution: width=%d, height=%d", width, height)
 	}
-	return width, height
+	return width, height, nil
 }

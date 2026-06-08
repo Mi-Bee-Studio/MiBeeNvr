@@ -1110,7 +1110,7 @@ func TestRetryOnBusy(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := 0
-	err := retryOnBusy(ctx, func() error {
+	err := storage.RetryOnBusy(ctx, func() error {
 		attempts++
 		if attempts < 3 {
 			return fmt.Errorf("database is locked (SQLITE_BUSY)")
@@ -1127,13 +1127,13 @@ func TestRetryOnBusyMaxRetries(t *testing.T) {
 	defer cancel()
 
 	attempts := 0
-	err := retryOnBusy(ctx, func() error {
+	err := storage.RetryOnBusy(ctx, func() error {
 		attempts++
 		return fmt.Errorf("database is locked (SQLITE_BUSY)")
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SQLITE_BUSY")
-	require.Equal(t, maxDBRetries+1, attempts)
+	require.Equal(t, storage.MaxDBRetries+1, attempts)
 }
 
 func TestRetryOnBusyNonBusyError(t *testing.T) {
@@ -1141,7 +1141,7 @@ func TestRetryOnBusyNonBusyError(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := 0
-	err := retryOnBusy(ctx, func() error {
+	err := storage.RetryOnBusy(ctx, func() error {
 		attempts++
 		return fmt.Errorf("some other error")
 	})
