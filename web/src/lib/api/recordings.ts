@@ -259,8 +259,11 @@ export async function loadRecordingVideoBlob(recordingId: string, signal?: Abort
 
 // --- Timelapse Merge ---
 
-export async function triggerTimelapseMerge(cameraId: string, date?: string): Promise<void> {
-  const query = date ? `?date=${encodeURIComponent(date)}` : '';
+export async function triggerTimelapseMerge(cameraId: string, date?: string, duration?: string): Promise<void> {
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  if (duration) params.set('duration', duration);
+  const query = params.toString() ? `?${params.toString()}` : '';
   const url = `${API_BASE}/timelapse/${cameraId}/merge${query}`;
   const headers: Record<string, string> = {};
   const authHeader = getAuthHeader();

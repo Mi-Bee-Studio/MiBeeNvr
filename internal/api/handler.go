@@ -161,6 +161,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/api/setup", h.handleSetup)
 	// Public routes
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
+	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
 
 	// Protected routes
 	r.Group(func(r chi.Router) {

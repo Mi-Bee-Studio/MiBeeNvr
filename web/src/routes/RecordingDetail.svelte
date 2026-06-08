@@ -8,6 +8,7 @@
     listRecordings,
     getTimelapseFrames,
     loadTimelapseFrameBlob,
+    getTimelapseConfig,
     triggerTimelapseMerge,
     subscribeTimelapseMergeProgress,
     ApiRequestError
@@ -133,6 +134,7 @@ function restoreMergeState(rec: Recording) {
     mergeProgressPct = stored.progress;
     mergeErrorMsg = '';
     startMergeSse(rec.camera_id, rec.id);
+    startMergePolling(rec.id, rec.camera_id);
     return;
   }
 
@@ -143,6 +145,7 @@ function restoreMergeState(rec: Recording) {
     mergeErrorMsg = '';
     // Re-establish SSE subscription for live progress updates
     startMergeSse(rec.camera_id, rec.id);
+    startMergePolling(rec.id, rec.camera_id);
     // Also store in sessionStorage for other pages
     saveMergeState({
       cameraId: rec.camera_id,
@@ -422,10 +425,19 @@ async function handleMergeAndPlay() {
   });
 
   try {
-    await triggerTimelapseMerge(recording.camera_id);
-
+    // Fetch camera's timelapse config to pass merge_duration
+    let mergeDuration = undefined;
+    try {
+      const tlConfig = await getTimelapseConfig(recording.camera_id);
+      mergeDuration = tlConfig.merge_duration || undefined;
+    } catch {
+      // Config fetch failed, proceed without duration
+    }
+    await triggerTimelapseMerge(recording.camera_id, undefined, mergeDuration);
     const ac = subscribeTimelapseMergeProgress(recording.camera_id, (data) => {
       if (data.status === 'completed') {
+        stopMergePolling();
+        mergeInProgress = false;
         mergeInProgress = false;
         mergeProgressPct = 100;
         mergeAbortController = null;
@@ -433,6 +445,8 @@ async function handleMergeAndPlay() {
         loadRecording();
         showToast(t('detail.mergeCompleted'), 'success');
       } else if (data.status === 'failed') {
+        stopMergePolling();
+        mergeInProgress = false;
         mergeInProgress = false;
         mergeErrorMsg = data.error || '';
         clearMergeState(recording!.camera_id);
@@ -449,6 +463,9 @@ async function handleMergeAndPlay() {
     });
 
     mergeAbortController = ac;
+
+    // DB polling fallback when SSE is unavailable (e.g. RollingMergeManager is nil)
+    startMergePolling(recording.id, recording.camera_id);
   } catch (e) {
     mergeInProgress = false;
     mergeErrorMsg = e instanceof Error ? e.message : 'Failed to start merge';
@@ -456,6 +473,53 @@ async function handleMergeAndPlay() {
   }
 }
 
+// DB polling fallback for merge progress (SSE may be unavailable)
+let mergePollTimer = null;
+
+function startMergePolling(recId, camId) {
+  stopMergePolling();
+  let attempts = 0;
+  const maxAttempts = 60; // 2 minutes at 2s interval
+  mergePollTimer = setInterval(async () => {
+    attempts++;
+    try {
+      const rec = await getRecording(recId);
+      if (!rec) { stopMergePolling(); return; }
+      if (rec.merge_progress > 0 && rec.merge_progress < 100) {
+        mergeProgressPct = rec.merge_progress;
+        attempts = 0; // reset timeout when progress changes
+      }
+      if (rec.merge_status === 'merged') {
+        stopMergePolling();
+        mergeInProgress = false;
+        mergeProgressPct = 100;
+        mergeAbortController?.abort();
+        mergeAbortController = null;
+        clearMergeState(camId);
+        loadRecording();
+        showToast(t('detail.mergeCompleted'), 'success');
+      } else if (rec.merge_status === 'failed') {
+        stopMergePolling();
+        mergeInProgress = false;
+        mergeErrorMsg = rec.merge_error || 'Merge failed';
+        mergeAbortController?.abort();
+        mergeAbortController = null;
+        clearMergeState(camId);
+        showToast(t('detail.mergeFailed', { error: mergeErrorMsg }), 'error');
+      } else if (attempts >= maxAttempts) {
+        // Timeout: merge didn't progress, stop polling
+        stopMergePolling();
+        mergeInProgress = false;
+        mergeErrorMsg = 'Merge timed out — no progress detected';
+        clearMergeState(camId);
+      }
+    } catch (_e) { /* retry next interval */ }
+  }, 2000);
+}
+
+function stopMergePolling() {
+  if (mergePollTimer) { clearInterval(mergePollTimer); mergePollTimer = null; }
+}
   // --- Timelapse JPEG sequence player ---
 
   async function initTimelapsePlayer() {
@@ -824,6 +888,7 @@ $effect(() => {
     return () => {
       window.removeEventListener('keydown', handleKeydown);
       stopTranscodingPoll();
+      stopMergePolling();
     };
   });
 </script>

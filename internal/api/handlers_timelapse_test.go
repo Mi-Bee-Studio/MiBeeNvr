@@ -906,6 +906,63 @@ func TestTimelapseMerge_DurationInvalid(t *testing.T) {
 	}
 }
 
+// TestTimelapseMerge_ErrorPathCleansActiveMerges verifies that error paths
+// properly clean up the activeMerges dedup map so the camera is not permanently blocked.
+func TestTimelapseMerge_ErrorPathCleansActiveMerges(t *testing.T) {
+	t.Parallel()
+	{
+		// Sub-test: no daily manager (nil timelapseDailyMgr)
+		db, store := setupTestDB(t)
+		defer db.Close()
+		h := TestHandler(db, store) // No daily merge manager
+
+		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-stuck/merge", nil, "", "")
+		if rr1.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rr1.Code)
+		}
+
+		// Retry should NOT get 409 Conflict — activeMerges must be cleaned up
+		rr2 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-stuck/merge", nil, "", "")
+		if rr2.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 (not 409), got %d: %s", rr2.Code, rr2.Body.String())
+		}
+	}
+	{
+		// Sub-test: invalid duration string
+		db, store := setupTestDB(t)
+		defer db.Close()
+		h := TestHandler(db, store)
+
+		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-dur/merge?duration=badvalue", nil, "", "")
+		if rr1.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rr1.Code)
+		}
+
+		// Retry should NOT get 409 Conflict
+		rr2 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-dur/merge?duration=badvalue", nil, "", "")
+		if rr2.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 (not 409), got %d: %s", rr2.Code, rr2.Body.String())
+		}
+	}
+	{
+		// Sub-test: nil config with duration path
+		db, store := setupTestDB(t)
+		defer db.Close()
+		h := TestHandler(db, store) // no config set
+
+		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-nocfg/merge?duration=8h", nil, "", "")
+		if rr1.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d", rr1.Code)
+		}
+
+		// Retry should NOT get 409 Conflict
+		rr2 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-nocfg/merge?duration=8h", nil, "", "")
+		if rr2.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 (not 409), got %d: %s", rr2.Code, rr2.Body.String())
+		}
+	}
+}
+
 func TestTimelapseMerge_DurationNeedsConfig(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

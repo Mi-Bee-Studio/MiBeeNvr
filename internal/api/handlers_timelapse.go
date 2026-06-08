@@ -690,6 +690,7 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 
 	// No duration — use configured DailyMergeManager (backward compat)
 	if h.timelapseDailyMgr == nil {
+		h.activeMerges.Delete(cameraID)
 		writeError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
 		return
 	}
@@ -718,14 +719,17 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *http.Request, cameraID, durationStr string) {
 	dur, err := config.ParseMergeDuration(durationStr)
 	if err != nil {
+		h.activeMerges.Delete(cameraID)
 		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
 		return
 	}
 	if h.db == nil {
+		h.activeMerges.Delete(cameraID)
 		writeError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if h.config == nil {
+		h.activeMerges.Delete(cameraID)
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
