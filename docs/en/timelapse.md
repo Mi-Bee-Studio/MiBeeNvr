@@ -151,7 +151,7 @@ cameras:
 
 ## Unified Recordings Interface (v2)
 
-The v2 release merges timelapse and regular recordings into a unified interface with multiple view modes.
+The v2 release merges timelapse and regular recordings into a unified Library page with enhanced navigation and filtering capabilities.
 
 ### View Modes
 
@@ -159,43 +159,78 @@ Access different views through the URL hash parameters:
 
 - **Table View**: `#/recordings?view=table` - Detailed list with metadata
 - **Gallery View**: `#/recordings?view=gallery` - Thumbnail grid layout
-- **Calendar View**: `#/recordings?view=calendar` - Calendar-based navigation
+- **List View**: `#/recordings?view=list` - Compact list layout
+
+### Format Filters
+
+Filter recordings by format using the `format` parameter:
+
+- **All Formats**: `format=all` - Show all recording types
+- **Video Only**: `format=video` - Show regular video recordings
+- **Timelapse Only**: `format=timelapse` - Show timelapse recordings only
+- **MJPEG Only**: `format=mjpeg` - Show MJPEG recordings only
+
+Primary navigation format filter pills are always visible in the interface, allowing quick switching between recording formats.
 
 ### Gallery View
 
 ```bash
-# URL: /#recordings?view=gallery
+# URL: /#recordings?view=gallery&format=all
 ```
 
-Displays timelapse recordings in a responsive grid layout with:
+Displays recordings in a responsive grid layout with:
 
 - Thumbnail previews
 - Date/time labels
+- Format badges (video/timelapse/mjpeg)
 - Lazy loading for performance
 - Click to view/download recordings
+
+<!-- TODO: screenshot -->
+
+### List View
+
+```bash
+# URL: /#recordings?view=list&format=all
+```
+
+Provides a compact list view with:
+
+- Recording metadata
+- Duration and file size information
+- Format indicators
+- Quick download buttons
+- Search and filter capabilities
+
+<!-- TODO: screenshot -->
 
 ### Calendar View
 
 ```bash
-# URL: /#recordings?view=calendar  
+# URL: /#recordings?view=calendar&format=all
 ```
 
 Provides calendar-based navigation with:
 
 - Month/week/day views
 - Recording density visualization
+- Format-specific filtering
 - Click dates to filter recordings
 - Timeline navigation controls
 
+<!-- TODO: screenshot -->
+
 ### Timeline Bar
 
-Above the view mode tabs when viewing timelapse recordings:
+Above the view mode tabs, the timeline bar is always visible and provides:
 
 - Horizontal timeline showing recording density
 - Time range selector (week/month/3months)
+- Format filter integration
 - Clickable navigation between time periods
 - Visual indicators for recording availability
 
+<!-- TODO: screenshot -->
 <!-- TODO: Add screenshot of unified Recordings page -->
 
 ## Migration Guide
@@ -420,7 +455,7 @@ Optional query parameter `duration` for specific time windows.
 GET /api/recordings?format=timelapse
 ```
 
-List timelapse recordings. Use `view=gallery|calendar` in the web interface.
+List timelapse recordings. Use `view=gallery|list&format=timelapse` in the web interface, or access the unified Library page at `#/recordings?format=timelapse`.
 
 ### Configuration API
 

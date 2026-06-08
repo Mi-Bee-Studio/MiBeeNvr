@@ -80,7 +80,11 @@ async function handleCodecInfo(data: {
       self.postMessage({ type: 'frame', data: frame }, [frame] as any);
     } catch {
       // postMessage failed — frame still owned by worker, must close to prevent GPU leak
-      try { frame.close(); } catch { /* already closed */ }
+      try {
+        frame.close();
+      } catch {
+        /* already closed */
+      }
       throw new Error('Failed to transfer frame to main thread');
     }
   });
@@ -104,11 +108,7 @@ async function handleCodecInfo(data: {
   }
 }
 
-function handleVideoFrame(data: {
-  pts: number;
-  isKeyframe: boolean;
-  nalus: Uint8Array[];
-}): void {
+function handleVideoFrame(data: { pts: number; isKeyframe: boolean; nalus: Uint8Array[] }): void {
   if (!decoder) return;
 
   try {

@@ -87,7 +87,6 @@ export class ConnectionManager {
 
   // ─── Public API ────────────────────────────────────────────────────────
 
-
   /** Whether incoming frames are being skipped due to backpressure. */
   get paused(): boolean {
     return this._paused;
@@ -125,7 +124,10 @@ export class ConnectionManager {
       this._ws = socket;
 
       socket.onopen = () => {
-        if (this._destroyed) { socket.close(); return; }
+        if (this._destroyed) {
+          socket.close();
+          return;
+        }
         this._setState('buffering');
         this._startZombieDetection();
         // Notify coordinator that reconnect succeeded
@@ -168,7 +170,11 @@ export class ConnectionManager {
           this._setState('offline');
           this._opts.onCameraOffline?.();
           // Close WS without triggering reconnect — server already did
-          try { this._ws.close(1000); } catch { /* already closed */ }
+          try {
+            this._ws.close(1000);
+          } catch {
+            /* already closed */
+          }
         }
       };
 
@@ -282,7 +288,11 @@ export class ConnectionManager {
 
   private _closeWebSocket(): void {
     if (this._ws) {
-      try { this._ws.close(); } catch { /* already closed */ }
+      try {
+        this._ws.close();
+      } catch {
+        /* already closed */
+      }
       this._ws = null;
     }
   }
@@ -373,19 +383,25 @@ function decodeCodecInfoInline(data: ArrayBuffer): CodecInfo {
 
   let off = 4;
 
-  const spsLen = dv.getUint16(off); off += 2;
+  const spsLen = dv.getUint16(off);
+  off += 2;
   if (off + spsLen > data.byteLength) throw new Error('CodecInfo truncated at SPS');
-  const sps = new Uint8Array(data, off, spsLen); off += spsLen;
+  const sps = new Uint8Array(data, off, spsLen);
+  off += spsLen;
 
-  const ppsLen = dv.getUint16(off); off += 2;
+  const ppsLen = dv.getUint16(off);
+  off += 2;
   if (off + ppsLen > data.byteLength) throw new Error('CodecInfo truncated at PPS');
-  const pps = new Uint8Array(data, off, ppsLen); off += ppsLen;
+  const pps = new Uint8Array(data, off, ppsLen);
+  off += ppsLen;
 
   let vps: Uint8Array | undefined;
   if (codec === 'h265') {
-    const vpsLen = dv.getUint16(off); off += 2;
+    const vpsLen = dv.getUint16(off);
+    off += 2;
     if (off + vpsLen > data.byteLength) throw new Error('CodecInfo truncated at VPS');
-    vps = new Uint8Array(data, off, vpsLen); off += vpsLen;
+    vps = new Uint8Array(data, off, vpsLen);
+    off += vpsLen;
   }
 
   return { codec, profile, level, sps, pps, vps };

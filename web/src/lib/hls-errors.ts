@@ -42,10 +42,15 @@ export function createAutoRetryScheduler(onRetry: () => void) {
       }, delay);
     },
     clear() {
-      if (timer) { clearTimeout(timer); timer = null; }
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       count = 0;
     },
-    getCount() { return count; },
+    getCount() {
+      return count;
+    },
   };
 }
 
@@ -77,11 +82,7 @@ type Cleanup = () => void;
  * @param Hls   The Hls constructor (needed for static enum access).
  * @param config  Error handling callbacks.
  */
-export function setupHlsErrorHandling(
-  hls: any,
-  Hls: any,
-  config: HlsErrorConfig,
-): void {
+export function setupHlsErrorHandling(hls: any, Hls: any, config: HlsErrorConfig): void {
   let retryCount = 0;
   let recoverTimer: ReturnType<typeof setTimeout> | null = null;
   let recoverCount = 0;
@@ -118,7 +119,11 @@ export function setupHlsErrorHandling(
             retryCount++;
             // First attempt: swap audio codec before standard recovery
             if (retryCount === 1) {
-              try { hls.swapAudioCodec(); } catch { /* ignore */ }
+              try {
+                hls.swapAudioCodec();
+              } catch {
+                /* ignore */
+              }
             }
             hls.recoverMediaError();
           } else {
@@ -223,7 +228,6 @@ export function setupZombieDetector(
   let lastFragLoadedTime = Date.now();
   let readyStateZeroSince: number | null = null;
 
-
   // Track fragment loads
   const onFragLoaded = () => {
     lastFragLoadedTime = Date.now();
@@ -258,7 +262,6 @@ export function setupZombieDetector(
     hls.off(Hls.Events.FRAG_LOADED, onFragLoaded);
   };
 }
-
 
 /**
  * Destroy an Hls instance and create a fresh one.
@@ -319,10 +322,7 @@ export function destroyAndRecreate(
  * @param onRebuild Called with cameraId for each stream that needs rebuilding.
  * @returns Cleanup function to remove the listener.
  */
-export function handleVisibilityChange(
-  cameras: () => string[],
-  onRebuild: (cameraId: string) => void,
-): Cleanup {
+export function handleVisibilityChange(cameras: () => string[], onRebuild: (cameraId: string) => void): Cleanup {
   let wasHidden = false;
 
   const handler = () => {

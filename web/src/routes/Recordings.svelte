@@ -1,94 +1,141 @@
 <script lang="ts">
-import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import {
     listRecordings,
+    listTimelapseRecordings,
     listCameras,
     deleteRecording,
-    batchDeleteRecordings
+    batchDeleteRecordings,
+    downloadRecording,
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
-  import { downloadRecording } from '$lib/api';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
   import type { Recording, Camera } from '$lib/api';
-  import Pagination from '../components/Pagination.svelte';
   import { t } from '$lib/i18n';
-  import { formatDate, formatDuration, formatFileSize } from '$lib/format';
+  import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Trash2, Search, ChevronUp, ChevronDown, CheckSquare, Square, ArrowUp, Video, AlertCircle, Eye, RefreshCw, Download, XCircle, ChevronLeft, ChevronRight, Filter, Table2, LayoutGrid, Calendar } from 'lucide-svelte';
+  import { Search, ChevronUp, LayoutGrid, Table2, ArrowUp, AlertCircle, Trash2 } from 'lucide-svelte';
+
+  // New components
+  import FormatFilter from '../components/library/FormatFilter.svelte';
+  import CompactList from '../components/library/CompactList.svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
-  import TimelineBar from '../components/timelapse/TimelineBar.svelte';
-  import Tab from '../lib/components/Tab.svelte';
 
-  // Helper function to get camera name by ID
-  function getCameraName(cameraId: string): string {
-    const camera = cameras.find(c => c.id === cameraId);
-    return camera ? camera.name : cameraId; // Fallback to camera_id if camera not found
-  }
-
-
-  // Filter state
-  let cameraId = $state('');
-  let searchQuery = $state('');
-  let mergedFilter = $state('');
-  let showArchived = $state(false);
-  const pad = (n) => String(n).padStart(2, '0');
-  const toLocalDT = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  let startDate = $state(toLocalDT(new Date(Date.now() - 3600000)));
-  let endDate = $state(toLocalDT(new Date()));
-  let cameras = $state<Camera[]>([]);
-  let limit = $state(getItemsPerPage());
-  let offset = $state(0);
-  let sortBy = $state('started_at');
-  let sortOrder = $state<'asc' | 'desc'>('desc');
-  let selectedIds = $state<Set<string>>(new Set());
-  let showBatchDeleteConfirm = $state(false);
-
-  // Data state
-  let recordings = $state<Recording[]>([]);
-  let totalRecordings = $state(0);
-  let loading = $state(false);
-  let error = $state('');
-  let deleteConfirm = $state<Recording | null>(null);
-  let showBackToTop = $state(false);
-  let abortController: AbortController | null = null;
-
-  // Transcoding state
-  let transcodingStatus = $state<ManagerStatus | null>(null);
-  let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
-  let transcodeTargetMap = $state<Record<string, string>>({}); // recording_id -> target_codec
-
-  // View mode state
-  let initialViewMode: 'table' | 'gallery' | 'calendar' = 'table';
+  // ── URL params initialization ──
+  let initialViewMode: 'gallery' | 'list' = 'gallery';
+  let initialFormat = 'All';
+  let initialCameraId = '';
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'gallery' || v === 'calendar' || v === 'timelapse') initialViewMode = v === 'timelapse' ? 'gallery' : v;
+    if (v === 'list') initialViewMode = v;
+    const f = params.get('format');
+    if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
+    const c = params.get('camera');
+    if (c) initialCameraId = c;
   } catch {}
-  let viewMode = $state<'table' | 'gallery' | 'calendar'>(initialViewMode);
-  let selectedDate = $state<string | null>(null);
-  // When navigating from Timelapse nav item (URL ?view=gallery/calendar), auto-select timelapse format
-  let format = $state('');
+
+  // ── Filter state ──
+  let formatPill = $state(initialFormat);
+  let cameraId = $state(initialCameraId);
+  let searchQuery = $state('');
+  let mergedFilter = $state('');
+  let showArchived = $state(false);
+  let cameras = $state<Camera[]>([]);
+
+  // ── Date/time state ──
   let currentMonth = $state(new Date());
-  let timeRange = $state<'week' | 'month' | '3months'>('month');
-  let showAdvancedFilters = $state(false);
+  let selectedDate = $state<string | null>(null);
 
-  function onTimelineSelectDay(date: string) {
-    const d = new Date(date + 'T12:00:00');
-    const calMonth = new Date(d.getFullYear(), d.getMonth());
-    currentMonth = calMonth;
-    selectedDate = date;
+  // ── Calendar data (always loaded for calendar + gallery) ──
+  let recordings = $state<Recording[]>([]);
+  let loading = $state(false);
+  let error = $state('');
+
+  // ── List mode data (paginated) ──
+  let listRecordingsData = $state<Recording[]>([]);
+  let listLoading = $state(false);
+  let totalRecordings = $state(0);
+  let offset = $state(0);
+  let limit = $state(getItemsPerPage());
+  let sortBy = $state('started_at');
+  let sortOrder = $state<'asc' | 'desc'>('desc');
+
+  // ── View mode ──
+  let viewMode = $state<'gallery' | 'list'>(initialViewMode);
+
+  // ── Selection ──
+  let selectedIds = $state<Set<string>>(new Set());
+  let showBatchDeleteConfirm = $state(false);
+  let deleteConfirm = $state<Recording | null>(null);
+
+  // ── Transcoding ──
+  let transcodingStatus = $state<ManagerStatus | null>(null);
+  let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
+
+  // ── UI state ──
+  let showBackToTop = $state(false);
+  let abortController: AbortController | null = null;
+  let refreshInterval: number;
+
+  // ── Derived ──
+  let apiFormat = $derived.by(() => {
+    if (formatPill === 'Timelapse') return 'timelapse';
+    if (formatPill === 'MJPEG') return 'mjpeg';
+    return '';
+  });
+  let useTimelapseApi = $derived(formatPill === 'Timelapse');
+  let currentPage = $derived(offset > 0 || limit > 0 ? Math.floor(offset / limit) + 1 : 1);
+  let totalPages = $derived(totalRecordings > 0 && limit > 0 ? Math.ceil(totalRecordings / limit) : 0);
+
+  // ── Helper functions ──
+  function getCameraName(cameraId: string): string {
+    const camera = cameras.find(c => c.id === cameraId);
+    return camera ? camera.name : cameraId;
   }
-  function toggleSelectAll() {
-    if (selectedIds.size === recordings.length) {
-      selectedIds = new Set();
+
+  function pad(n: number): string {
+    return String(n).padStart(2, '0');
+  }
+
+  function getRefreshInterval(): number {
+    return parseRefreshInterval(getAutoRefresh());
+  }
+
+
+  function viewRecording(recording: Recording) {
+    window.location.hash = `#/recordings/${recording.id}`;
+  }
+
+  function handleSort(field: string) {
+    if (sortBy === field) {
+      sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
     } else {
-      selectedIds = new Set(recordings.map(r => r.id));
+      sortBy = field;
+      sortOrder = 'asc';
     }
+    offset = 0;
   }
 
+  function handlePageChange(newPage: number) {
+    offset = (newPage - 1) * limit;
+    window.scrollTo(0, 0);
+  }
+
+  function clearFilters() {
+    searchQuery = '';
+    cameraId = '';
+    formatPill = 'All';
+    mergedFilter = '';
+    showArchived = false;
+    selectedDate = null;
+    offset = 0;
+  }
+
+  // ── Selection ──
   function toggleSelect(id: string) {
     const newSet = new Set(selectedIds);
     if (newSet.has(id)) {
@@ -99,98 +146,98 @@ import { onMount, onDestroy } from 'svelte';
     selectedIds = newSet;
   }
 
+  async function confirmDelete() {
+    if (!deleteConfirm) return;
+    try {
+      await deleteRecording(deleteConfirm.id);
+      recordings = recordings.filter(r => r.id !== deleteConfirm.id);
+      listRecordingsData = listRecordingsData.filter(r => r.id !== deleteConfirm.id);
+      showToast(t('common.recordingDeleted'), 'success');
+      deleteConfirm = null;
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('common.failedDeleteRecording'), 'error');
+    }
+  }
+
   async function confirmBatchDelete() {
     try {
       await batchDeleteRecordings(Array.from(selectedIds));
       showToast(t('recordings.batchDeleteSuccess', { count: String(selectedIds.size) }), 'success');
       selectedIds = new Set();
       showBatchDeleteConfirm = false;
-      loadRecordings();
+      loadTimelineData();
+      if (viewMode === 'list') loadListData();
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
     }
   }
 
-  function handleSort(field: string) {
-    if (sortBy === field) {
-      sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
-    } else {
-      sortBy = field;
-      sortOrder = 'asc';
-    }
-  }
-
-  // Auto-refresh interval
-  let refreshInterval: number;
-
-
-  // Get the current auto-refresh preference
-  function getRefreshInterval(): number {
-    return parseRefreshInterval(getAutoRefresh());
-  }
-  // Load data
-  async function loadRecordings() {
-    // Abort previous in-flight request
-    if (abortController) {
-      abortController.abort();
-    }
+  // ── Data loading ──
+  async function loadTimelineData() {
+    if (abortController) abortController.abort();
     abortController = new AbortController();
-
     loading = true;
     error = '';
 
     try {
-      // In gallery/calendar mode, use wider date range for all recording types
-      if (viewMode !== 'table') {
-        // Calculate calendar month range for gallery view
-        const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
-        const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
-        // Extend range to include timeline data
-        const rangeStart = calStart;
-        let rangeEnd = calEnd;
-        if (timeRange === 'week') {
-          rangeEnd = new Date();
-        } else if (timeRange === '3months') {
-          rangeEnd = new Date();
-        }
-        const response = await listRecordings({
+      const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+      const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
+
+      if (useTimelapseApi) {
+        const response = await listTimelapseRecordings({
           camera_id: cameraId || undefined,
-          format: format || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          start: rangeStart.toISOString(),
-          end: rangeEnd.toISOString(),
+          start: calStart.toISOString(),
+          end: calEnd.toISOString(),
           limit: 1000,
-          signal: abortController.signal
+          signal: abortController.signal,
         });
         recordings = response.recordings;
-        totalRecordings = response.total || 0;
       } else {
         const response = await listRecordings({
           camera_id: cameraId || undefined,
-          format: format || undefined,
+          format: apiFormat || undefined,
           search: searchQuery || undefined,
           merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
           archived: showArchived ? true : undefined,
-          start: startDate ? new Date(startDate).toISOString() : undefined,
-          end: endDate ? new Date(endDate).toISOString() : undefined,
-          offset,
-          limit,
-          sort_by: sortBy,
-          order: sortOrder,
-          signal: abortController.signal
+          start: calStart.toISOString(),
+          end: calEnd.toISOString(),
+          limit: 1000,
+          signal: abortController.signal,
         });
         recordings = response.recordings;
-        totalRecordings = response.total || 0;
       }
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        return;
-      }
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       error = e instanceof Error ? e.message : t('common.failedLoadRecordings');
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadListData() {
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+    listLoading = true;
+
+    try {
+      const response = await listRecordings({
+        camera_id: cameraId || undefined,
+        format: apiFormat || undefined,
+        search: searchQuery || undefined,
+        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+        archived: showArchived ? true : undefined,
+        offset,
+        limit,
+        sort_by: sortBy,
+        order: sortOrder,
+        signal: abortController.signal,
+      });
+      listRecordingsData = response.recordings;
+      totalRecordings = response.total || 0;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+    } finally {
+      listLoading = false;
     }
   }
 
@@ -202,63 +249,12 @@ import { onMount, onDestroy } from 'svelte';
     }
   }
 
-  // Actions
-
-  async function confirmDelete() {
-    if (!deleteConfirm) return;
-
-    try {
-      await deleteRecording(deleteConfirm.id);
-      recordings = recordings.filter(r => r.id !== deleteConfirm.id);
-      showToast(t('common.recordingDeleted'), 'success');
-      deleteConfirm = null;
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : t('common.failedDeleteRecording'), 'error');
-    }
-  }
-
-
-  function clearFilters() {
-    searchQuery = '';
-    cameraId = '';
-    format = '';
-    mergedFilter = '';
-    showArchived = false;
-    startDate = toLocalDT(new Date(Date.now() - 3600000));
-    endDate = toLocalDT(new Date());
-    offset = 0;
-  }
-
-  function viewRecording(recording: Recording) {
-    window.location.hash = `#/recordings/${recording.id}`;
-  }
-
-  function prevDay() {
-    if (!selectedDate) return;
-    const d = new Date(selectedDate + 'T12:00:00');
-    d.setDate(d.getDate() - 1);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    selectedDate = `${y}-${m}-${day}`;
-  }
-
-  function nextDay() {
-    if (!selectedDate) return;
-    const d = new Date(selectedDate + 'T12:00:00');
-    d.setDate(d.getDate() + 1);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    selectedDate = `${y}-${m}-${day}`;
-  }
-
-  // --- Transcoding ---
+  // ── Transcoding ──
   async function loadTranscodingStatus() {
     try {
       transcodingStatus = await getTranscodingStatus();
-    } catch (e) {
-      // Silently fail — not critical
+    } catch {
+      // Silently fail
     }
   }
 
@@ -297,23 +293,17 @@ import { onMount, onDestroy } from 'svelte';
   }
 
   async function handleTranscode(recording: Recording) {
-    const targetCodec = transcodeTargetMap[recording.id];
-    if (!targetCodec) {
-      showToast(t('transcoding.recordings.selectTargetCodec'), 'error');
-      return;
-    }
+    const target = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
     try {
       await enqueueTranscodeTask({
         camera_id: recording.camera_id,
         recording_id: recording.id,
-        target_codec: targetCodec,
+        target_codec: target,
         replace_original: true,
       });
       showToast(t('transcoding.recordings.transcodeSuccess', { camera: getCameraName(recording.camera_id) }), 'success');
-      delete transcodeTargetMap[recording.id];
-      transcodeTargetMap = { ...transcodeTargetMap };
       loadTranscodingStatus();
-    } catch (e) {
+    } catch {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
     }
   }
@@ -328,7 +318,6 @@ import { onMount, onDestroy } from 'svelte';
     let queued = 0;
     let failed = 0;
     for (const rec of selectedRecordings) {
-      // Skip recordings already being transcoded
       if (isTranscodingRecording(rec.id)) continue;
       const target = rec.format === 'h264' ? 'h265' : rec.format === 'h265' ? 'h264' : 'h264';
       try {
@@ -353,31 +342,23 @@ import { onMount, onDestroy } from 'svelte';
     }
   }
 
-  async function handleCancelTranscode(task: TranscodeTask) {
-    if (!confirm(t('transcoding.cancel_confirm'))) return;
-    try {
-      await cancelTranscodeTask(task.id);
-      showToast(t('transcoding.task_cancelled'), 'success');
-      loadTranscodingStatus();
-    } catch {
-      showToast(t('common.error'), 'error');
-    }
+  async function handleDownload(recordingId: string) {
+    await downloadRecording(recordingId);
   }
 
+  // ── Deferred load timers ──
+  let timelineLoadTimeout: number;
+  let listLoadTimeout: number;
 
-
-  // Lifecycle
+  // ── Lifecycle ──
   onMount(() => {
     loadCameras();
-    loadRecordings();
     startTranscodingPoll();
 
-    // Auto-refresh using preference
     refreshInterval = window.setInterval(() => {
-      loadRecordings();
+      loadTimelineData();
     }, getRefreshInterval());
 
-    // Scroll listener for back to top button
     const handleScroll = () => {
       showBackToTop = window.scrollY > 300;
     };
@@ -390,85 +371,74 @@ import { onMount, onDestroy } from 'svelte';
     };
   });
 
-  // When filters change, track previous values to detect changes
-  let prevFilters = "";
+  // ── Effects ──
+
+  // Watch timeline-related filters → reload calendar data
   $effect(() => {
-    const current = `${cameraId}|${format}|${startDate}|${endDate}|${searchQuery}|${mergedFilter}|${showArchived}`;
-    if (current !== prevFilters) {
-      prevFilters = current;
-      offset = 0;
+    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth, selectedDate];
+    clearTimeout(timelineLoadTimeout);
+    timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
+    return () => clearTimeout(timelineLoadTimeout);
+  });
+
+  // Watch list mode pagination/sort → reload list data
+  $effect(() => {
+    if (viewMode === 'list') {
+      const _ = [offset, limit, sortBy, sortOrder, cameraId, formatPill, searchQuery, mergedFilter, showArchived];
+      clearTimeout(listLoadTimeout);
+      listLoadTimeout = window.setTimeout(() => loadListData(), 100);
+      return () => clearTimeout(listLoadTimeout);
     }
   });
 
-  // Watch all filter + pagination changes — debounce to avoid double-fire with onMount
-  let loadTimeout: number;
+  // Handle preference changes (refresh interval, items per page)
   $effect(() => {
-    const _ = [cameraId, format, startDate, endDate, offset, limit, sortBy, sortOrder, searchQuery, mergedFilter, showArchived, viewMode];
-    clearTimeout(loadTimeout);
-    loadTimeout = window.setTimeout(() => loadRecordings(), 100);
-    return () => clearTimeout(loadTimeout);
-  });
-
-  // Handle preference changes
-  $effect(() => {
-    // Update refresh interval when auto-refresh preference changes
-    if (refreshInterval) {
-      clearInterval(refreshInterval);
-    }
+    if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = window.setInterval(() => {
-      loadRecordings();
+      loadTimelineData();
     }, getRefreshInterval());
-    
-    // Update limit when items per page preference changes
     limit = getItemsPerPage();
-    
     return () => {
-      if (refreshInterval) {
-        clearInterval(refreshInterval);
-      }
+      if (refreshInterval) clearInterval(refreshInterval);
     };
   });
 
-  // Sync viewMode to URL hash
+  // Sync viewMode + formatPill + cameraId to URL
   $effect(() => {
     const hash = window.location.hash;
     const qIdx = hash.indexOf('?');
     const base = qIdx !== -1 ? hash.slice(0, qIdx) : hash;
-    if (viewMode !== 'table') {
-      const newHash = base + '?view=' + viewMode;
-      if (window.location.hash !== newHash) {
-        window.location.hash = newHash;
-      }
-    } else {
-      if (hash.includes('?view=')) {
-        const params = new URLSearchParams(hash.split('?')[1] || '');
-        params.delete('view');
-        const qs = params.toString();
-        const newHash = qs ? base + '?' + qs : base;
-        if (window.location.hash !== newHash) {
-          window.location.hash = newHash;
-        }
-      }
+
+    const params = new URLSearchParams();
+    if (viewMode !== 'gallery') params.set('view', viewMode);
+    if (formatPill !== 'All') params.set('format', formatPill);
+    if (cameraId) params.set('camera', cameraId);
+
+    const qs = params.toString();
+    const newHash = qs ? base + '?' + qs : base;
+    if (window.location.hash !== newHash) {
+      window.location.hash = newHash;
     }
   });
 
-  // React to URL hash changes from nav clicks (e.g. #/recordings?view=gallery)
+  // React to URL hash changes from nav clicks
   $effect(() => {
     const handler = () => {
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'gallery' || v === 'calendar' || v === 'timelapse') {
-          const newMode = v === 'timelapse' ? 'gallery' : v;
-          if (viewMode !== newMode) viewMode = newMode;
-        }
+        if (v === 'gallery' || v === 'list') viewMode = v;
+        const f = params.get('format');
+        if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
+        const c = params.get('camera');
+        if (c !== null) cameraId = c;
       } catch {}
     };
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   });
 
-  // Auto-select today's date when entering gallery mode
+  // Auto-select today's date when in gallery mode and no date selected
   $effect(() => {
     if (viewMode === 'gallery' && !selectedDate) {
       const today = new Date();
@@ -478,34 +448,19 @@ import { onMount, onDestroy } from 'svelte';
       selectedDate = `${y}-${m}-${d}`;
     }
   });
-  // Pagination calculations
-  let currentPage = $derived(Math.floor(offset / limit) + 1);
-  let totalPages = $derived(Math.ceil(totalRecordings / limit));
-  let startRecordings = $derived(offset + 1);
-  let endRecordings = $derived(Math.min(offset + recordings.length, totalRecordings));
-  
-  // Handle page change
-  function handlePageChange(newPage: number) {
-    offset = (newPage - 1) * limit;
-    window.scrollTo(0, 0);
-  }
-
-  function handleViewModeChange(id: string) {
-    viewMode = id as 'table' | 'gallery' | 'calendar';
-  }
 </script>
 
-  <div class="min-h-screen th-bg-primary pt-[68px]">
-
-  <!-- Main content -->
+<div class="min-h-screen th-bg-primary pt-[68px]">
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">
       <h2 class="text-2xl font-bold th-text-primary mb-4">{t('nav.recordings')}</h2>
 
-      <!-- Collapsible Filters -->
+      <!-- ── Filter bar ── -->
       <div class="card p-4 mb-6 border th-border">
-        <!-- Compact filter bar -->
         <div class="flex flex-wrap items-end gap-3">
+          <div class="flex items-center gap-2 pb-[2px]">
+            <FormatFilter bind:selectedFormat={formatPill} />
+          </div>
           <div class="flex-1 min-w-[160px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
             <select id="camera" class="input" bind:value={cameraId}>
@@ -515,503 +470,179 @@ import { onMount, onDestroy } from 'svelte';
               {/each}
             </select>
           </div>
-          <div class="flex-1 min-w-[200px]">
-            <label class="input-label">{t('recordings.startDate')}</label>
-            <div class="flex items-center gap-2">
-              <input type="datetime-local" class="input flex-1" bind:value={startDate} />
-              <span class="th-text-tertiary shrink-0">~</span>
-              <input type="datetime-local" class="input flex-1" bind:value={endDate} />
+          <div class="flex-1 min-w-[180px]">
+            <label class="input-label" for="search-input">{t('recordings.search')}</label>
+            <div class="relative">
+              <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
+              <input
+                id="search-input"
+                type="text"
+                class="input pl-9"
+                placeholder={t('recordings.search')}
+                bind:value={searchQuery}
+              />
             </div>
           </div>
           <div class="flex items-center gap-1 pb-[2px]">
-            <button
-              class="btn btn-ghost btn-sm"
-              onclick={() => showAdvancedFilters = !showAdvancedFilters}
-              title="{showAdvancedFilters ? 'Hide' : 'Show'} advanced filters"
-            >
-              <Filter size={16} />
-              {#if showAdvancedFilters}
-                <ChevronUp size={14} class="ml-1" />
-              {:else}
-                <ChevronDown size={14} class="ml-1" />
-              {/if}
-            </button>
             <button onclick={clearFilters} class="btn btn-ghost btn-sm">
               {t('recordings.clearFilters')}
             </button>
           </div>
         </div>
-        {#if showAdvancedFilters}
-          <div class="mt-3 pt-3 border-t th-border">
-            <div class="flex flex-wrap gap-3 items-end">
-              <div class="flex-1 min-w-[120px]">
-                <label for="format" class="input-label">{t('recordings.format')}</label>
-                <select id="format" class="input" bind:value={format}>
-                  <option value="">{t('recordings.allFormats')}</option>
-                  <option value="h264">{t('recordings.h264')}</option>
-                  <option value="mjpeg">{t('recordings.mjpeg')}</option>
-                  <option value="h265">{t('recordings.h265')}</option>
-                  <option value="timelapse">{t('recording.format.timelapse')}</option>
-                </select>
-              </div>
-              <div class="flex-1 min-w-[120px]">
-                <label for="merged" class="input-label">{t('recordings.allStatus')}</label>
-                <select id="merged" class="input" bind:value={mergedFilter}>
-                  <option value="">{t('recordings.all')}</option>
-                  <option value="true">{t('recordings.merged')}</option>
-                  <option value="false">{t('recordings.unmerged')}</option>
-                </select>
-              </div>
-              <div class="flex-1 min-w-[120px]">
-                <label class="input-label" for="show-archived">&nbsp;</label>
-                <label class="input flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    class="w-4 h-4 rounded cursor-pointer"
-                    bind:checked={showArchived}
-                    id="show-archived"
-                  />
-                  <span class="text-sm th-text-primary">{t('archives.title')}</span>
-                </label>
-              </div>
-              <div class="flex-1 min-w-[180px]">
-                <label class="input-label" for="search-input">{t('recordings.search')}</label>
-                <div class="relative">
-                  <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
-                  <input
-                    id="search-input"
-                    type="text"
-                    class="input pl-9"
-                    placeholder={t('recordings.search')}
-                    bind:value={searchQuery}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        {/if}
       </div>
 
-      <!-- Timeline density bar -->
-      <div class="mb-4">
-        <TimelineBar {recordings} {currentMonth} bind:timeRange onselectDay={onTimelineSelectDay} />
+
+      <!-- ── Calendar view (always visible) ── -->
+      <CalendarView bind:currentMonth bind:selectedDate {recordings} />
+
+      <!-- ── View mode tabs ── -->
+      <div class="flex items-center gap-2 mb-4 mt-4">
+        <button
+          class="btn btn-sm {viewMode === 'gallery' ? 'btn-primary' : 'btn-ghost'}"
+          onclick={() => viewMode = 'gallery'}
+        >
+          <LayoutGrid size={16} class="mr-1" />
+          {t('library.viewGallery')}
+        </button>
+        <button
+          class="btn btn-sm {viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}"
+          onclick={() => viewMode = 'list'}
+        >
+          <Table2 size={16} class="mr-1" />
+          {t('library.viewList')}
+        </button>
       </div>
-      <!-- View mode tabs -->
-      <div class="mb-4">
-        <Tab
-          tabs={[
-            { id: 'table', label: t('recordings.viewTable'), icon: Table2 },
-            { id: 'gallery', label: t('recordings.viewGallery'), icon: LayoutGrid },
-            { id: 'calendar', label: t('recordings.viewCalendar'), icon: Calendar }
-          ]}
-          activeTab={viewMode}
-          onchange={handleViewModeChange}
+
+      <!-- ── Error state ── -->
+      {#if error}
+        <div class="card border th-border-danger p-8 text-center">
+          <div class="flex justify-center mb-4 th-color-danger">
+            <AlertCircle size={48} />
+          </div>
+          <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
+          <p class="th-text-secondary mb-4">{error}</p>
+          <button onclick={loadTimelineData} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+        </div>
+      {:else if viewMode === 'gallery'}
+        <!-- ── Gallery view ── -->
+        <GalleryGrid
+          bind:selectedDate
+          {recordings}
+          {cameras}
+          onselectRecording={viewRecording}
+          selectedIds={[]}
+          ontoggleselect={(r: Recording) => toggleSelect(r.id)}
+          selectMode={selectedIds.size > 0}
+          ondeleteRecording={(r: Recording) => deleteConfirm = r}
         />
-      </div>
-
-    <!-- Error message -->
-    {#if error}
-      <div class="card border th-border-danger p-8 text-center">
-        <div class="flex justify-center mb-4 th-color-danger">
-          <AlertCircle size={48} />
-        </div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
-        <p class="th-text-secondary mb-4">{error}</p>
-        <button onclick={loadRecordings} class="btn btn-primary btn-sm">{t('common.retry')}</button>
-      </div>
-    {/if}
-
-    {#if viewMode !== 'table'}
-      <!-- Gallery/Calendar View -->
-      {#if viewMode === 'gallery'}
-        <!-- Gallery tab -->
-        <div class="card p-5 mb-4 border th-border">
-          <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-semibold th-text-primary">
-              {t('recordings.viewGallery')}
-            </h3>
-            <div class="flex items-center gap-2">
-              <button onclick={prevDay} class="btn btn-ghost btn-sm px-2" aria-label="Previous day">
-                <ChevronLeft size={16} />
-              </button>
-              <span class="text-sm th-text-secondary min-w-[100px] text-center">
-                {selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString(
-                  document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US',
-                  { weekday: 'short', month: 'short', day: 'numeric' }
-                ) : ''}
-              </span>
-              <button onclick={nextDay} class="btn btn-ghost btn-sm px-2" aria-label="Next day">
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-          <GalleryGrid {selectedDate} {recordings} {cameras} onselectRecording={viewRecording} />
-        </div>
-      {:else if viewMode === 'calendar'}
-        <!-- Calendar tab -->
-        <CalendarView bind:currentMonth bind:selectedDate {recordings} />
-        <div class="card p-5 mb-4 border th-border">
-          <GalleryGrid {selectedDate} {recordings} {cameras} onselectRecording={viewRecording} />
-        </div>
-      {/if}
-    {:else}
-      <!-- Recordings table (existing) -->
-      <div class="card border th-border">
-      {#if loading && recordings.length === 0}
-        <div class="p-6 space-y-4">
-          <!-- Skeleton header -->
-          <div class="flex justify-between items-center">
-            <div class="h-8 w-48 th-bg-tertiary rounded animate-pulse"></div>
-            <div class="h-8 w-24 th-bg-tertiary rounded animate-pulse"></div>
-          </div>
-          <!-- Skeleton filter bar -->
-          <div class="h-12 th-bg-tertiary rounded animate-pulse"></div>
-          <!-- Skeleton table -->
-          <div class="space-y-3">
-            {#each Array(5) as _}
-              <div class="flex gap-4 items-center">
-                <div class="h-4 w-4 th-bg-tertiary rounded animate-pulse"></div>
-                <div class="h-4 w-32 th-bg-tertiary rounded animate-pulse"></div>
-                <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
-                <div class="h-4 w-16 th-bg-tertiary rounded animate-pulse"></div>
-                <div class="h-4 w-20 th-bg-tertiary rounded animate-pulse"></div>
-                <div class="h-4 w-24 th-bg-tertiary rounded animate-pulse ml-auto"></div>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {:else if recordings.length === 0}
-        <div class="p-12 text-center">
-          <div class="flex justify-center mb-4 th-text-muted">
-            <Video size={48} />
-          </div>
-          <h3 class="text-lg font-medium th-text-primary mb-2">{t('recordings.noRecordings')}</h3>
-          <p class="text-sm th-text-muted mb-4">{t('recordings.noRecordingsHint')}</p>
-          <button onclick={clearFilters} class="btn btn-primary btn-sm">{t('recordings.clearFilters')}</button>
-        </div>
       {:else}
-        <div class="table-container th-border">
-          <table class="table">
-            <thead>
-              <tr>
-                <th class="w-10">
-                  <button onclick={toggleSelectAll} class="th-text-secondary hover:th-text-primary transition-colors">
-                    {#if selectedIds.size === recordings.length && recordings.length > 0}
-                      <CheckSquare size={18} />
-                    {:else}
-                      <Square size={18} />
-                    {/if}
-                  </button>
-                </th>
-                <th class="min-w-[80px] sm:min-w-[100px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('camera_id')}>
-                  <span class="inline-flex items-center gap-1">
-                    {t('recordings.tableCamera')}
-                    {#if sortBy === 'camera_id'}
-                      {#if sortOrder === 'asc'}
-                        <ChevronUp size={14} />
-                      {:else}
-                        <ChevronDown size={14} />
-                      {/if}
-                    {/if}
-                  </span>
-                </th>
-                <th class="min-w-[80px]">{t('recordings.tableFormat')}</th>
-                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('duration')}>
-                  <span class="inline-flex items-center gap-1">
-                    {t('recordings.tableDuration')}
-                    {#if sortBy === 'duration'}
-                      {#if sortOrder === 'asc'}
-                        <ChevronUp size={14} />
-                      {:else}
-                        <ChevronDown size={14} />
-                      {/if}
-                    {/if}
-                  </span>
-                </th>
-                <th class="min-w-[80px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('file_size')}>
-                  <span class="inline-flex items-center gap-1">
-                    {t('recordings.tableSize')}
-                    {#if sortBy === 'file_size'}
-                      {#if sortOrder === 'asc'}
-                        <ChevronUp size={14} />
-                      {:else}
-                        <ChevronDown size={14} />
-                      {/if}
-                    {/if}
-                  </span>
-                </th>
-                <th class="min-w-[100px] sm:min-w-[120px] cursor-pointer hover:th-bg-tertiary select-none" onclick={() => handleSort('started_at')}>
-                  <span class="inline-flex items-center gap-1">
-                    {t('recordings.tableDate')}
-                    {#if sortBy === 'started_at'}
-                      {#if sortOrder === 'asc'}
-                        <ChevronUp size={14} />
-                      {:else}
-                        <ChevronDown size={14} />
-                      {/if}
-                    {/if}
-                  </span>
-                </th>
-                <th class="hidden sm:table-cell min-w-[80px]">{t('recordings.tableStatus')}</th>
-                <th class="text-right min-w-[100px] sm:min-w-[140px]">{t('recordings.tableActions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each recordings as recording}
-                <tr class="transition-all duration-200 hover:th-bg-hover">
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(recording.id)}
-                      onchange={() => toggleSelect(recording.id)}
-                      class="w-4 h-4 rounded cursor-pointer"
-                    />
-                  </td>
-                  <td>
-                    <div class="flex flex-col">
-                      <span class="font-medium th-text-primary">{getCameraName(recording.camera_id)}</span>
-                      <span class="text-xs th-text-tertiary hidden sm:inline">{recording.camera_id}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <span class="badge {recording.format === 'timelapse' ? 'badge-info' : 'badge-neutral'} text-xs">
-                      {recording.format === 'timelapse'
-                        ? t('recording.format.timelapse')
-                        : (recording.format === 'h264' || recording.format === 'h265')
-                          ? t('recording.format.h264')
-                          : t('recording.format.mjpeg')}
-                    </span>
-                  </td>
-                  <td class="font-mono text-sm">{formatDuration(recording.duration)}</td>
-                  <td>{formatFileSize(recording.file_size)}</td>
-                  <td class="whitespace-nowrap">{formatDate(recording.started_at)}</td>
-                  <td class="hidden sm:table-cell">
-                    <div class="flex items-center gap-1.5 flex-wrap">
-                      {#if recording.archived}
-                        <span class="badge bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">{t('archives.archivedAt')}</span>
-                      {/if}
-                      {#if recording.merged}
-                        <span class="badge badge-success">{t('recordings.merged')}</span>
-                      {:else}
-                        <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
-                      {/if}
-                      {#if recording.format === 'timelapse'}
-                        <span class="badge bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300">{t('recording.format.timelapse')}</span>
-                      {/if}
-                      {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}
-                        <span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse">{t('transcoding.running')}</span>
-                      {/if}
-                      {#if transcodingStatus?.enabled}
-                        {@const completedTask = getCompletedTranscodeTask(recording.id)}
-                        {#if completedTask}
-                          {#if completedTask.original_deleted}
-                            <span class="badge badge-info">{t('transcoding.original_replaced')}</span>
-                          {:else}
-                            <span class="badge badge-success">{t('transcoding.transcoded')}</span>
-                          {/if}
-                        {/if}
-                      {/if}
-                    </div>
-                  </td>
-                  <td class="text-right">
-                    <div class="flex justify-end gap-1">
-                      <button
-                        onclick={() => viewRecording(recording)}
-                        class="btn btn-ghost px-2 sm:px-3 py-1.5 text-sm transition-all duration-200"
-                        title={t('recordings.view')}
-                      >
-                        <span class="hidden sm:inline">{t('recordings.view')}</span>
-                        <Eye size={16} class="sm:hidden" />
-                      </button>
-                      {#if transcodingStatus?.enabled && !isTranscodingRecording(recording.id)}
-                        <div class="relative group">
-                          <button
-                            onclick={() => {
-                              const target = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
-                              transcodeTargetMap[recording.id] = target;
-                              transcodeTargetMap = { ...transcodeTargetMap };
-                              handleTranscode(recording);
-                            }}
-                            class="btn btn-ghost px-2 py-1.5 text-sm th-text-secondary hover:text-blue-500 transition-all duration-200"
-                            title={t('transcoding.recordings.transcodeBtn')}
-                          >
-                            <RefreshCw size={16} />
-                          </button>
-                        </div>
-                      {/if}
-                      {#if transcodingStatus?.enabled && getCompletedTranscodeTask(recording.id) && !getCompletedTranscodeTask(recording.id)!.original_deleted}
-                        <button
-                          onclick={() => downloadRecording(recording.id)}
-                          class="btn btn-ghost px-2 py-1.5 text-sm th-text-secondary hover:text-green-500 transition-all duration-200"
-                          title={t('transcoding.download_transcoded')}
-                        >
-                          <Download size={16} />
-                        </button>
-                      {/if}
-                      <button
-                        onclick={() => deleteConfirm = recording}
-                        class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger transition-all duration-200"
-                        title={t('recordings.delete')}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-                {#if transcodingStatus?.enabled && isTranscodingRecording(recording.id)}
-                  {@const task = isTranscodingRecording(recording.id)}
-                  <tr class="th-bg-hover/50">
-                    <td colspan="8" class="py-1 px-4">
-                      <div class="flex items-center gap-3">
-                        <span class="text-xs th-text-secondary">{t('transcoding.recordings.transcodingProgress', { percent: String(task?.progress ?? 0) })}</span>
-                        <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
-                          <div
-                            class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
-                            style="width: {Math.max(task?.progress ?? 0, 2)}%"
-                          ></div>
-                        </div>
-                        <button
-                          onclick={() => task && handleCancelTranscode(task)}
-                          class="btn btn-ghost px-1 py-0.5 text-xs th-color-danger hover:text-red-600 transition-colors"
-                          title={t('transcoding.cancel')}
-                        >
-                          <XCircle size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                {/if}
-                {#if transcodingStatus?.enabled && getFailedTranscodeTask(recording.id)}
-                  {@const failedTask = getFailedTranscodeTask(recording.id)}
-                  <tr class="th-bg-hover/50">
-                    <td colspan="8" class="py-1 px-4">
-                      <details class="group">
-                        <summary class="flex items-center gap-2 cursor-pointer text-xs th-color-danger select-none">
-                          <AlertCircle size={12} />
-                          <span>{t('transcoding.error_details')}</span>
-                          <span class="text-[10px] th-text-tertiary group-open:rotate-180 transition-transform">▼</span>
-                        </summary>
-                        <pre class="mt-1 p-2 rounded text-[11px] th-bg-tertiary th-text-secondary whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{failedTask?.error}</pre>
-                      </details>
-                    </td>
-                  </tr>
-                {/if}
-              {/each}
-            </tbody>
-          </table>
-        </div>
-
-      {#if totalPages > 1}
-        <!-- Page info -->
-        <div class="px-4 py-2 border-t th-border">
-          <span class="text-sm th-text-muted">
-            {t('recordings.showing', { start: String(startRecordings), end: String(endRecordings), total: String(totalRecordings) })}
-          </span>
-        </div>
-        
-        <!-- Pagination -->
-        <Pagination 
+        <!-- ── List view ── -->
+        <CompactList
+          recordings={listRecordingsData}
+          {cameras}
+          bind:selectedIds
+          ontoggleselect={toggleSelect}
+          onview={viewRecording}
+          ondelete={(r: Recording) => deleteConfirm = r}
+          ontranscode={handleTranscode}
+          ondownload={handleDownload}
+          bind:sortBy
+          bind:sortOrder
+          onsort={handleSort}
+          {transcodingStatus}
+          loading={listLoading}
           {currentPage}
           {totalPages}
-          onPageChange={handlePageChange}
+          totalRecordings={totalRecordings}
+          onpagechange={handlePageChange}
         />
       {/if}
-
-      <!-- Loading indicator for refresh -->
-      {#if loading && recordings.length > 0}
-        <div class="px-4 py-2 th-bg-secondary border-t th-border text-center">
-          <span class="text-sm th-text-muted">{t('recordings.refreshing')}</span>
-        </div>
-      {/if}
-      {/if}
-    </div>
-    {/if}
     </div>
   </main>
-  </div>
+</div>
 
-
-  <!-- Floating batch action bar -->
-  {#if selectedIds.size > 0}
-    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-lg shadow-lg border th-border th-bg-primary">
-      <span class="text-sm font-medium th-text-primary">
-        {t('recordings.selected', { count: String(selectedIds.size) })}
-      </span>
-      <button
-        onclick={() => showBatchDeleteConfirm = true}
-        class="btn btn-danger btn-sm"
-      >
-        {t('recordings.deleteSelected')}
-      </button>
-      {#if transcodingStatus?.enabled}
-        <button
-          onclick={handleBatchTranscode}
-          class="btn btn-primary btn-sm"
-        >
-          {t('transcoding.transcode_selected')}
-        </button>
-      {/if}
-      <button
-        onclick={() => selectedIds = new Set()}
-        class="btn btn-ghost btn-sm"
-      >
-        {t('recordings.cancel')}
-      </button>
-    </div>
-  {/if}
-
-  <!-- Batch delete confirmation modal -->
-  {#if showBatchDeleteConfirm}
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div class="card max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.batchDeleteTitle')}</h3>
-        <p class="th-text-secondary mb-6">
-          {t('recordings.batchDeleteMessage', { count: String(selectedIds.size) })}
-        </p>
-        <div class="flex gap-3 justify-end">
-          <button onclick={() => showBatchDeleteConfirm = false} class="btn btn-secondary">
-            {t('recordings.cancel')}
-          </button>
-          <button onclick={confirmBatchDelete} class="btn btn-danger">
-            {t('recordings.deleteConfirm')}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Delete confirmation modal -->
-  {#if deleteConfirm}
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div class="card max-w-md w-full p-6">
-        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.deleteTitle')}</h3>
-        <p class="th-text-secondary mb-6">
-          {t('recordings.deleteMessage', { camera_id: deleteConfirm.camera_id })}
-        </p>
-        <div class="flex gap-3 justify-end">
-          <button
-            onclick={() => deleteConfirm = null}
-            class="btn btn-secondary"
-          >
-            {t('recordings.cancel')}
-          </button>
-          <button
-            onclick={confirmDelete}
-            class="btn btn-danger"
-          >
-            {t('recordings.deleteConfirm')}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-  <!-- Back to top button -->
-  {#if showBackToTop}
+<!-- ── Floating batch action bar ── -->
+{#if selectedIds.size > 0}
+  <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-lg shadow-lg border th-border th-bg-primary">
+    <span class="text-sm font-medium th-text-primary">
+      {t('recordings.selected', { count: String(selectedIds.size) })}
+    </span>
     <button
-      onclick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-      class="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-all duration-300"
-      title={t('recordings.backToTop')}
+      onclick={() => showBatchDeleteConfirm = true}
+      class="btn btn-danger btn-sm"
     >
-      <ArrowUp size={20} />
+      {t('recordings.deleteSelected')}
     </button>
-  {/if}
+    {#if transcodingStatus?.enabled}
+      <button
+        onclick={handleBatchTranscode}
+        class="btn btn-primary btn-sm"
+      >
+        {t('transcoding.transcode_selected')}
+      </button>
+    {/if}
+    <button
+      onclick={() => selectedIds = new Set()}
+      class="btn btn-ghost btn-sm"
+    >
+      {t('recordings.cancel')}
+    </button>
+  </div>
+{/if}
+
+<!-- ── Batch delete confirmation modal ── -->
+{#if showBatchDeleteConfirm}
+  <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div class="card max-w-md w-full p-6">
+      <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.batchDeleteTitle')}</h3>
+      <p class="th-text-secondary mb-6">
+        {t('recordings.batchDeleteMessage', { count: String(selectedIds.size) })}
+      </p>
+      <div class="flex gap-3 justify-end">
+        <button onclick={() => showBatchDeleteConfirm = false} class="btn btn-secondary">
+          {t('recordings.cancel')}
+        </button>
+        <button onclick={confirmBatchDelete} class="btn btn-danger">
+          {t('recordings.deleteConfirm')}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ── Delete confirmation modal ── -->
+{#if deleteConfirm}
+  <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div class="card max-w-md w-full p-6">
+      <h3 class="text-lg font-semibold th-text-primary mb-4">{t('recordings.deleteTitle')}</h3>
+      <p class="th-text-secondary mb-6">
+        {t('recordings.deleteMessage', { camera_id: deleteConfirm.camera_id })}
+      </p>
+      <div class="flex gap-3 justify-end">
+        <button
+          onclick={() => deleteConfirm = null}
+          class="btn btn-secondary"
+        >
+          {t('recordings.cancel')}
+        </button>
+        <button
+          onclick={confirmDelete}
+          class="btn btn-danger"
+        >
+          {t('recordings.deleteConfirm')}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ── Back to top button ── -->
+{#if showBackToTop}
+  <button
+    onclick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+    class="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-all duration-300"
+    title={t('recordings.backToTop')}
+  >
+    <ArrowUp size={20} />
+  </button>
+{/if}

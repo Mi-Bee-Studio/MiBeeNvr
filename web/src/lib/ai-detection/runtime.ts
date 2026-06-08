@@ -156,9 +156,10 @@ export class AiRuntime {
     }
 
     // Non-whitelisted external domain
-    throw new Error(`Model URL rejected: domain not in whitelist: ${hostname}. Allowed: github.com, raw.githubusercontent.com`);
+    throw new Error(
+      `Model URL rejected: domain not in whitelist: ${hostname}. Allowed: github.com, raw.githubusercontent.com`,
+    );
   }
-
 
   private async _doInit(modelUrl: string, options?: AiRuntimeInitOptions): Promise<void> {
     // Validate URL before loading

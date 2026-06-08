@@ -122,9 +122,7 @@ describe('detectWebGPU', () => {
 // ---------------------------------------------------------------------------
 describe('detectWebGL2', () => {
   it('should return true when webgl2 context is available', () => {
-    const spy = vi
-      .spyOn(HTMLCanvasElement.prototype, 'getContext')
-      .mockReturnValue({} as unknown as RenderingContext);
+    const spy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as unknown as RenderingContext);
     expect(detectWebGL2()).toBe(true);
     expect(spy).toHaveBeenCalledWith('webgl2');
   });

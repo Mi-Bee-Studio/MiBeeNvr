@@ -94,6 +94,27 @@
   function selectDay(date: string) {
     selectedDate = date;
   }
+
+  function goToday() {
+    const today = new Date();
+    currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    selectedDate = formatDateStr(today);
+  }
+
+  let dailyFormats = $derived.by(() => {
+    const formats = new Map();
+    for (const rec of recordings) {
+      const date = rec.started_at.slice(0, 10);
+      if (!formats.has(date)) formats.set(date, new Set());
+      formats.get(date).add(rec.format);
+    }
+    return formats;
+  });
+
+  const weekdayKeys = [
+    'calendar.weekdaySun','calendar.weekdayMon','calendar.weekdayTue','calendar.weekdayWed',
+    'calendar.weekdayThu','calendar.weekdayFri','calendar.weekdaySat'
+  ];
 </script>
 
 <div class="card p-5 mb-6 border th-border">
@@ -107,7 +128,16 @@
       <ChevronLeft size={18} />
       <span class="hidden sm:inline">{t('timelapse.gallery.prevMonth')}</span>
     </button>
-    <h2 class="text-lg font-semibold th-text-primary">{monthLabel}</h2>
+    <div class="flex items-center gap-2">
+      <h2 class="text-lg font-semibold th-text-primary">{monthLabel}</h2>
+      <button
+        onclick={goToday}
+        class="btn btn-ghost btn-xs"
+        aria-label={t('calendar.today')}
+      >
+        {t('calendar.today')}
+      </button>
+    </div>
     <button
       onclick={nextMonth}
       class="btn btn-ghost btn-sm flex items-center gap-1"
@@ -120,8 +150,8 @@
 
   <!-- Weekday Headers -->
   <div class="grid grid-cols-7 mb-2">
-    {#each ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as day}
-      <div class="text-center text-xs font-medium th-text-tertiary py-1">{day}</div>
+    {#each weekdayKeys as key}
+      <div class="text-center text-xs font-medium th-text-tertiary py-1">{t(key)}</div>
     {/each}
   </div>
 
@@ -138,6 +168,19 @@
         onclick={() => selectDay(day.date)}
       >
         <span class="text-sm {day.isToday ? 'font-bold th-text-accent' : ''}">{day.day}</span>
+        {#if dailyFormats.has(day.date)}
+          <div class="flex gap-0.5 mt-0.5">
+            {#if dailyFormats.get(day.date).has('h264') || dailyFormats.get(day.date).has('h265')}
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-500" title="Video"></span>
+            {/if}
+            {#if dailyFormats.get(day.date).has('timelapse')}
+              <span class="w-1.5 h-1.5 rounded-full bg-cyan-400" title="Timelapse"></span>
+            {/if}
+            {#if dailyFormats.get(day.date).has('mjpeg')}
+              <span class="w-1.5 h-1.5 rounded-full bg-gray-400" title="MJPEG"></span>
+            {/if}
+          </div>
+        {/if}
         {#if dailyCounts.has(day.date)}
           <span class="mt-0.5 text-[10px] leading-none px-1.5 py-0.5 rounded-full badge badge-info min-w-[18px] text-center">
             {dailyCounts.get(day.date)}

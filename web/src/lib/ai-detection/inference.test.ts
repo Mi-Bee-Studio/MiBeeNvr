@@ -1,12 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  ObjectDetector,
-  parseYoloOutput,
-  nms,
-  iou,
-  sigmoid,
-  COCO_CLASSES,
-} from './inference';
+import { ObjectDetector, parseYoloOutput, nms, iou, sigmoid, COCO_CLASSES } from './inference';
 import type { AiRuntime, AiRunResult } from './runtime';
 import type { RawDetection } from './inference';
 
@@ -28,7 +21,10 @@ function createMockRuntime(outputData: Float32Array, outputDims: number[]): AiRu
 function buildYoloOutput(
   detections: Array<{
     boxIndex: number;
-    cx: number; cy: number; w: number; h: number;
+    cx: number;
+    cy: number;
+    w: number;
+    h: number;
     classId: number;
     // Pass pre-sigmoid score so parseYoloOutput applies sigmoid
     rawScore: number;
@@ -169,9 +165,7 @@ describe('inference', () => {
     });
 
     it('returns single box for single input', () => {
-      const boxes: RawDetection[] = [
-        { x1: 10, y1: 10, x2: 50, y2: 50, score: 0.9, classId: 0 },
-      ];
+      const boxes: RawDetection[] = [{ x1: 10, y1: 10, x2: 50, y2: 50, score: 0.9, classId: 0 }];
       const result = nms(boxes, 0.45);
       expect(result).toHaveLength(1);
     });
@@ -249,9 +243,7 @@ describe('ObjectDetector', () => {
     setupBrowserMocks();
 
     // Default mock: single high-confidence person detection at center
-    const { data, dims } = buildYoloOutput([
-      { boxIndex: 0, cx: 320, cy: 320, w: 80, h: 160, classId: 0, rawScore: 6 },
-    ]);
+    const { data, dims } = buildYoloOutput([{ boxIndex: 0, cx: 320, cy: 320, w: 80, h: 160, classId: 0, rawScore: 6 }]);
     mockRuntime = createMockRuntime(data, dims);
   });
 
@@ -336,10 +328,7 @@ describe('ObjectDetector', () => {
 
       await detector.detect(mockFrame);
 
-      expect(mockRuntime.run).toHaveBeenCalledWith(
-        expect.any(Float32Array),
-        [1, 84, 8400],
-      );
+      expect(mockRuntime.run).toHaveBeenCalledWith(expect.any(Float32Array), [1, 84, 8400]);
     });
 
     it('filters by confidence threshold', async () => {
@@ -402,9 +391,7 @@ describe('ObjectDetector', () => {
 
     it('gradually converges EMA on changing detections', async () => {
       // Frame 1: person at position A
-      let { data, dims } = buildYoloOutput([
-        { boxIndex: 0, cx: 300, cy: 300, w: 80, h: 160, classId: 0, rawScore: 6 },
-      ]);
+      let { data, dims } = buildYoloOutput([{ boxIndex: 0, cx: 300, cy: 300, w: 80, h: 160, classId: 0, rawScore: 6 }]);
       const runtime1 = createMockRuntime(data, dims);
       const detector = new ObjectDetector(runtime1, { frameSkip: 1, emaAlpha: 0.5 });
       const mockFrame = createMockVideoFrame();
@@ -484,20 +471,23 @@ function setupBrowserMocks(): void {
   );
 
   // Mock OffscreenCanvas
-  vi.stubGlobal('OffscreenCanvas', vi.fn().mockImplementation(function (w, h: number) {
-    return {
-      width: w,
-      height: h,
-      getContext: vi.fn().mockReturnValue({
-        fillStyle: '',
-        fillRect: vi.fn(),
-        drawImage: vi.fn(),
-        getImageData: vi.fn().mockReturnValue({
-          data: new Uint8ClampedArray(w * h * 4).fill(128), // gray image
+  vi.stubGlobal(
+    'OffscreenCanvas',
+    vi.fn().mockImplementation(function (w, h: number) {
+      return {
+        width: w,
+        height: h,
+        getContext: vi.fn().mockReturnValue({
+          fillStyle: '',
+          fillRect: vi.fn(),
+          drawImage: vi.fn(),
+          getImageData: vi.fn().mockReturnValue({
+            data: new Uint8ClampedArray(w * h * 4).fill(128), // gray image
+          }),
         }),
-      }),
-    };
-  }));
+      };
+    }),
+  );
 }
 
 /**

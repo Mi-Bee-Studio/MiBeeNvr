@@ -81,23 +81,43 @@ export function detectSharedArrayBuffer(): boolean {
  */
 export function detectWasmSimd(): boolean {
   try {
-    if (
-      typeof WebAssembly === 'undefined' ||
-      WebAssembly === null ||
-      typeof WebAssembly.validate !== 'function'
-    ) {
+    if (typeof WebAssembly === 'undefined' || WebAssembly === null || typeof WebAssembly.validate !== 'function') {
       return false;
     }
     // Minimal WASM module using a SIMD v128 instruction (i8x16.splat)
     const binary = new Uint8Array([
-      0x00, 0x61, 0x73, 0x6d, // \0asm  magic
-      0x01, 0x00, 0x00, 0x00, // version 1
+      0x00,
+      0x61,
+      0x73,
+      0x6d, // \0asm  magic
+      0x01,
+      0x00,
+      0x00,
+      0x00, // version 1
       // Type section: one function () -> v128
-      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
+      0x01,
+      0x05,
+      0x01,
+      0x60,
+      0x00,
+      0x01,
+      0x7b,
       // Function section: declare 1 function (index 0)
-      0x03, 0x02, 0x01, 0x00,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
       // Code section: 1 body with i32.const 0; i8x16.splat; end
-      0x0a, 0x08, 0x01, 0x06, 0x00, 0x41, 0x00, 0xfd, 0x0f, 0x0b,
+      0x0a,
+      0x08,
+      0x01,
+      0x06,
+      0x00,
+      0x41,
+      0x00,
+      0xfd,
+      0x0f,
+      0x0b,
     ]);
     return WebAssembly.validate(binary);
   } catch {

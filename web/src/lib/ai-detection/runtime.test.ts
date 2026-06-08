@@ -57,7 +57,7 @@ function setupOrtMock(session?: MockSession) {
     InferenceSession: {
       create: vi.fn().mockResolvedValue(s),
     },
-    Tensor: vi.fn().mockImplementation(function(this: any, data: Float32Array, dims: number[]) {
+    Tensor: vi.fn().mockImplementation(function (this: any, data: Float32Array, dims: number[]) {
       this.data = data;
       this.dims = dims;
       this.dispose = vi.fn();
@@ -86,9 +86,9 @@ function setupCacheMock() {
 }
 
 function setupFetchWithResponse(modelData: ArrayBuffer) {
-  mockFetchImpl = vi.fn().mockImplementation(() =>
-    Promise.resolve(new Response(modelData.slice(0), { status: 200, statusText: 'OK' })),
-  );
+  mockFetchImpl = vi
+    .fn()
+    .mockImplementation(() => Promise.resolve(new Response(modelData.slice(0), { status: 200, statusText: 'OK' })));
   vi.stubGlobal('fetch', mockFetchImpl);
 }
 
@@ -98,9 +98,7 @@ function setupFetchWithError(error: Error) {
 }
 
 function setupFetchWithStatus(status: number, statusText: string) {
-  mockFetchImpl = vi.fn().mockResolvedValue(
-    new Response(null, { status, statusText }),
-  );
+  mockFetchImpl = vi.fn().mockResolvedValue(new Response(null, { status, statusText }));
   vi.stubGlobal('fetch', mockFetchImpl);
 }
 
@@ -256,9 +254,7 @@ describe('AiRuntime', () => {
     });
 
     it('throws on session creation failure', async () => {
-      mockOrtModule.InferenceSession.create.mockRejectedValue(
-        new Error('Session creation failed'),
-      );
+      mockOrtModule.InferenceSession.create.mockRejectedValue(new Error('Session creation failed'));
 
       const rt = new AiRuntime();
       await expect(rt.init('/models/test.onnx')).rejects.toThrow('Session creation failed');
@@ -325,18 +321,14 @@ describe('AiRuntime', () => {
     it('throws on inference timeout', async () => {
       const s = createMockSession(['images'], ['output0']);
       s.run.mockImplementation(
-        () => new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Inference timed out')), 100),
-        ),
+        () => new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Inference timed out')), 100)),
       );
       setupOrtMock(s);
 
       const rt = new AiRuntime();
       await rt.init('/models/test.onnx');
 
-      await expect(
-        rt.run(new Float32Array(10), [1, 3, 10, 10], { timeoutMs: 50 }),
-      ).rejects.toThrow();
+      await expect(rt.run(new Float32Array(10), [1, 3, 10, 10], { timeoutMs: 50 })).rejects.toThrow();
     });
   });
 

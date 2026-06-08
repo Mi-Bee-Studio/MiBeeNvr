@@ -6,8 +6,12 @@ import { ApiRequestError } from '$lib/api/client.ts';
 const mockStorage: Record<string, string> = {};
 vi.stubGlobal('sessionStorage', {
   getItem: vi.fn((key: string) => mockStorage[key] ?? null),
-  setItem: vi.fn((key: string, value: string) => { mockStorage[key] = value; }),
-  removeItem: vi.fn((key: string) => { delete mockStorage[key]; }),
+  setItem: vi.fn((key: string, value: string) => {
+    mockStorage[key] = value;
+  }),
+  removeItem: vi.fn((key: string) => {
+    delete mockStorage[key];
+  }),
 });
 
 // -----------------------------------------------

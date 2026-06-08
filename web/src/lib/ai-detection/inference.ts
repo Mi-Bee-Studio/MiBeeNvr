@@ -75,16 +75,86 @@ const LETTERBOX_COLOR = 114; // Gray padding (0–255)
 
 /** COCO 80-class labels. */
 const COCO_CLASSES: string[] = [
-  'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
-  'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
-  'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
-  'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-  'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-  'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-  'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair',
-  'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse',
-  'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator',
-  'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush',
+  'person',
+  'bicycle',
+  'car',
+  'motorcycle',
+  'airplane',
+  'bus',
+  'train',
+  'truck',
+  'boat',
+  'traffic light',
+  'fire hydrant',
+  'stop sign',
+  'parking meter',
+  'bench',
+  'bird',
+  'cat',
+  'dog',
+  'horse',
+  'sheep',
+  'cow',
+  'elephant',
+  'bear',
+  'zebra',
+  'giraffe',
+  'backpack',
+  'umbrella',
+  'handbag',
+  'tie',
+  'suitcase',
+  'frisbee',
+  'skis',
+  'snowboard',
+  'sports ball',
+  'kite',
+  'baseball bat',
+  'baseball glove',
+  'skateboard',
+  'surfboard',
+  'tennis racket',
+  'bottle',
+  'wine glass',
+  'cup',
+  'fork',
+  'knife',
+  'spoon',
+  'bowl',
+  'banana',
+  'apple',
+  'sandwich',
+  'orange',
+  'broccoli',
+  'carrot',
+  'hot dog',
+  'pizza',
+  'donut',
+  'cake',
+  'chair',
+  'couch',
+  'potted plant',
+  'bed',
+  'dining table',
+  'toilet',
+  'tv',
+  'laptop',
+  'mouse',
+  'remote',
+  'keyboard',
+  'cell phone',
+  'microwave',
+  'oven',
+  'toaster',
+  'sink',
+  'refrigerator',
+  'book',
+  'clock',
+  'vase',
+  'scissors',
+  'teddy bear',
+  'hair drier',
+  'toothbrush',
 ];
 
 // ─── OffscreenCanvas helpers ──────────────────────────────────────────────────
@@ -136,11 +206,7 @@ async function preprocessFrame(
   // createImageBitmap for safe drawing
   const bitmap = await createImageBitmap(videoFrame);
 
-  const { scale, padX, padY } = letterboxParams(
-    bitmap.width,
-    bitmap.height,
-    inputSize,
-  );
+  const { scale, padX, padY } = letterboxParams(bitmap.width, bitmap.height, inputSize);
 
   const { canvas, ctx } = getCanvas(inputSize);
 
@@ -168,7 +234,7 @@ async function preprocessFrame(
       const dstIdx = y * inputSize + x;
 
       // CHW layout: tensor[c * channelSize + dstIdx]
-      tensor[0 * channelSize + dstIdx] = pixels[srcIdx] / 255.0;     // R
+      tensor[0 * channelSize + dstIdx] = pixels[srcIdx] / 255.0; // R
       tensor[1 * channelSize + dstIdx] = pixels[srcIdx + 1] / 255.0; // G
       tensor[2 * channelSize + dstIdx] = pixels[srcIdx + 2] / 255.0; // B
     }
@@ -204,7 +270,7 @@ function parseYoloOutput(
   // YOLOv11 ONNX export: [1, 84, 8400] → transposed in data as [8400, 84] row-major
   // OR could be [1, 8400, 84] — check which axis is channels
   const channels = dims[1]; // 84 for COCO
-  const boxes = dims[2];     // 8400 for YOLOv11-nano
+  const boxes = dims[2]; // 8400 for YOLOv11-nano
 
   const boxStride = channels; // Each box has 'channels' values
 
@@ -309,12 +375,7 @@ function iou(a: RawDetection, b: RawDetection): number {
  * Map detections from input-space (640×640) back to original frame coordinates.
  * Reverses letterbox padding and scaling.
  */
-function mapToOriginal(
-  detections: RawDetection[],
-  padX: number,
-  padY: number,
-  scale: number,
-): RawDetection[] {
+function mapToOriginal(detections: RawDetection[], padX: number, padY: number, scale: number): RawDetection[] {
   return detections.map((det) => ({
     x1: (det.x1 - padX) / scale,
     y1: (det.y1 - padY) / scale,
@@ -382,8 +443,10 @@ export class ObjectDetector {
 
     try {
       // 1. Preprocess
-      const { tensor, letterboxPadX, letterboxPadY, letterboxScale } =
-        await preprocessFrame(videoFrame, this._inputSize);
+      const { tensor, letterboxPadX, letterboxPadY, letterboxScale } = await preprocessFrame(
+        videoFrame,
+        this._inputSize,
+      );
 
       // 2. Run inference
       const dims = [1, 4 + this._numClasses, this._numBoxes];

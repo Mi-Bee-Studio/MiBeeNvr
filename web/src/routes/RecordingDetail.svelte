@@ -45,7 +45,7 @@
   let tlSpeed = $state(1);
   let tlLoading = $state(false);
   let tlError = $state('');
-  const tlSpeeds = [1, 2, 5, 10, 20, 50];
+  const tlSpeeds = [1, 2, 4];
   let tlPlayTimeout: ReturnType<typeof setTimeout> | null = null;
   let tlBlobCache = $state<Map<number, string>>(new Map());
   let tlAbortController: AbortController | null = null;
@@ -498,7 +498,7 @@ async function handleMergeAndPlay() {
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-          {#if recording.format === 'h264' || recording.format === 'h265'}
+          {#if recording.format === 'h264' || recording.format === 'h265' || (recording.format === 'timelapse' && recording.merge_status === 'merged')}
             <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
               {#if isTransitioning}
                 <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
@@ -524,7 +524,7 @@ async function handleMergeAndPlay() {
               </button>
             </div>
           {/if}
-          {#if recording.format === 'timelapse'}
+          {#if recording.format === 'timelapse' && recording.merge_status !== 'merged'}
             <!-- Timelapse JPEG sequence player -->
             {#if tlLoading}
               <div class="flex items-center justify-center h-64 bg-black">
@@ -577,6 +577,33 @@ async function handleMergeAndPlay() {
                   {/if}
                 {/if}
               </div>
+
+              <!-- Merge & Play banner for unmerged timelapse -->
+              {#if recording.merge_status !== 'merged' && !mergeInProgress}
+                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
+                  <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2 mx-auto">
+                    <Play size={16} /> {t('detail.mergeAndPlay')}
+                  </button>
+                </div>
+              {/if}
+              {#if mergeInProgress}
+                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
+                  <div class="flex items-center gap-3 justify-center">
+                    <div class="w-32 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
+                      <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
+                    </div>
+                    <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
+                  </div>
+                </div>
+              {/if}
+              {#if mergeErrorMsg}
+                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
+                  <div class="flex items-center gap-3 justify-center">
+                    <span class="text-xs th-color-danger">{t('detail.mergeFailed', { error: mergeErrorMsg })}</span>
+                    <button onclick={handleMergeAndPlay} class="btn btn-secondary btn-sm">{t('detail.mergeRetry')}</button>
+                  </div>
+                </div>
+              {/if}
 
               <!-- Controls -->
               <div class="th-bg-secondary px-4 py-3 space-y-2">

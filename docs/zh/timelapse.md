@@ -149,53 +149,88 @@
 #BN|      frame_source: "rtsp_keyframe"
 #QV|```
 #HV|
-#NH|## 统一录制界面（v2）
-#VX|
-#XZ|v2 版本将延时摄影和常规录制合并到统一界面中，支持多种视图模式。
-#NT|
-#QY|### 视图模式
-#HJ|
-#PQ|通过 URL 参数访问不同视图：
-#XK|
-#NW|- **表格视图**：`#/recordings?view=table` - 包含详细信息的列表
-#BW|- **图库视图**：`#/recordings?view=gallery` - 缩略图画格布局
-#RZ|- **日历视图**：`#/recordings?view=calendar` - 基于日历的导航
-#VQ|
-#RT|### 图库视图
-#NX|
-#BV|```bash
-#VZ|# URL: /#recordings?view=gallery
-#PJ|```
-#PN|
-#XS|响应式网格布局中显示延时摄影录制，包含：
-#NV|
-#VK|- 缩略图预览
-#WN|- 日期/时间标签
-#SH>- 延迟加载以提升性能
-#WV>- 点击查看/下载录制文件
-#QN|
-#VP|### 日历视图
-#VY|
-#BV|```bash
-#VW|# URL: /#recordings?view=calendar  
-#MN|```
-#NT|
-#QN|提供基于日历的导航，包含：
-#NB|
-#BW>- 月/周/日视图
-#SJ>- 录制密度可视化
-#ZT>- 点击日期过滤录制
-#PK>- 时间线导航控件
-#RS|
-#ZX|### 时间线栏
-#BH|
-#SQ>在查看延时摄影录制的视图模式选项卡上方：
-#XN>
-#RH>- 水平时间线显示录制密度
-#YQ>- 时间范围选择器（周/月/3个月）
-#RJ>- 可点击的时间期间导航
-#KT>- 录制可用性的视觉指示器
-#JR>
+## 统一录制界面（v2）
+
+v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有增强的导航和过滤功能。
+
+### 视图模式
+
+通过 URL 参数访问不同视图：
+
+- **表格视图**：`#/recordings?view=table` - 包含详细信息的列表
+- **图库视图**：`#/recordings?view=gallery` - 缩略图画格布局
+- **列表视图**：`#/recordings?view=list` - 紧凑列表布局
+
+### 格式过滤器
+
+使用 `format` 参数按格式过滤录制：
+
+- **所有格式**：`format=all` - 显示所有录制类型
+- **仅视频**：`format=video` - 显示常规视频录制
+- **仅延时摄影**：`format=timelapse` - 仅显示延时摄影录制
+- **仅 MJPEG**：`format=mjpeg` - 显示 MJPEG 录制
+
+主导航格式过滤器按钮始终可见在界面中，允许在录制格式之间快速切换。
+
+### 图库视图
+
+```bash
+# URL: /#recordings?view=gallery&format=all
+```
+
+响应式网格布局中显示录制，包含：
+
+- 缩略图预览
+- 日期/时间标签
+- 格式徽章（视频/延时摄影/mjpeg）
+- 延迟加载以提升性能
+- 点击查看/下载录制
+
+<!-- TODO: screenshot -->
+
+### 列表视图
+
+```bash
+# URL: /#recordings?view=list&format=all
+```
+
+提供紧凑的列表视图，包含：
+
+- 录制元数据
+- 持续时间和文件大小信息
+- 格式指示器
+- 快速下载按钮
+- 搜索和过滤功能
+
+<!-- TODO: screenshot -->
+
+### 日历视图
+
+```bash
+# URL: /#recordings?view=calendar&format=all
+```
+
+提供基于日历的导航，包含：
+
+- 月/周/日视图
+- 录制密度可视化
+- 格式特定过滤
+- 点击日期过滤录制
+- 时间线导航控件
+
+<!-- TODO: screenshot -->
+
+### 时间线栏
+
+在视图模式选项卡上方，时间线栏始终可见，提供：
+
+- 水平时间线显示录制密度
+- 时间范围选择器（周/月/3个月）
+- 格式过滤器集成
+- 可点击的时间期间导航
+- 录制可用性的视觉指示器
+
+<!-- TODO: screenshot -->
 #WY><!-- TODO: Add screenshot of unified Recordings page -->
 #MV|
 #ZV## 迁移指南
@@ -422,7 +457,7 @@
 #YW>GET /api/recordings?format=timelapse
 #XK>```
 #XH>
-#VV>列出延时摄影录制文件。在 Web 界面中使用 `view=gallery|calendar`。
+列出延时摄影录制文件。在 Web 界面中使用 `view=gallery|list&format=timelapse`，或在统一 Library 页面中访问 `#/recordings?format=timelapse`。
 #PX>
 #KQ### 配置 API
 #XT>

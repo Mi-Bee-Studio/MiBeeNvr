@@ -198,10 +198,7 @@ export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   return apiRequest<Camera[]>('/cameras', { signal });
 }
 
-export async function createCamera(
-  data: CreateCameraRequest,
-  signal?: AbortSignal
-): Promise<Camera> {
+export async function createCamera(data: CreateCameraRequest, signal?: AbortSignal): Promise<Camera> {
   return apiRequest<Camera>('/cameras', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -213,11 +210,7 @@ export async function getCamera(id: string, signal?: AbortSignal): Promise<Camer
   return apiRequest<Camera>(`/cameras/${id}`, { signal });
 }
 
-export async function updateCamera(
-  id: string,
-  data: UpdateCameraRequest,
-  signal?: AbortSignal
-): Promise<Camera> {
+export async function updateCamera(id: string, data: UpdateCameraRequest, signal?: AbortSignal): Promise<Camera> {
   return apiRequest<Camera>(`/cameras/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
@@ -249,20 +242,14 @@ export async function disableCamera(id: string, signal?: AbortSignal): Promise<C
   return updateCamera(id, { enabled: false }, signal);
 }
 
-export async function startCamera(
-  id: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function startCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/start`, {
     method: 'POST',
     signal,
   });
 }
 
-export async function stopCamera(
-  id: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function stopCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
     method: 'POST',
     signal,
@@ -290,10 +277,7 @@ export interface TestConnectionResult {
   latency_ms: number;
 }
 
-export async function testConnection(
-  data: TestConnectionRequest,
-  signal?: AbortSignal
-): Promise<TestConnectionResult> {
+export async function testConnection(data: TestConnectionRequest, signal?: AbortSignal): Promise<TestConnectionResult> {
   return apiRequest<TestConnectionResult>('/cameras/test-connection', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -317,10 +301,7 @@ export interface MergeConfig {
   min_segments_to_merge?: number;
 }
 
-export async function getMergeConfig(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<MergeConfig | null> {
+export async function getMergeConfig(cameraId: string, signal?: AbortSignal): Promise<MergeConfig | null> {
   try {
     return await apiRequest<MergeConfig>(`/cameras/${cameraId}/merge-config`, { signal });
   } catch {
@@ -331,7 +312,7 @@ export async function getMergeConfig(
 export async function updateMergeConfig(
   cameraId: string,
   config: MergeConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'PUT',
@@ -340,10 +321,7 @@ export async function updateMergeConfig(
   });
 }
 
-export async function deleteCameraMergeConfig(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function deleteCameraMergeConfig(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'DELETE',
     signal,
@@ -355,7 +333,7 @@ export async function deleteCameraMergeConfig(
 export async function ptzMove(
   cameraId: string,
   request: PTZMoveRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/move`, {
     method: 'POST',
@@ -364,29 +342,20 @@ export async function ptzMove(
   });
 }
 
-export async function ptzStop(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function ptzStop(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/stop`, {
     method: 'POST',
     signal,
   });
 }
 
-export async function getPTZStatus(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<PTZStatus> {
+export async function getPTZStatus(cameraId: string, signal?: AbortSignal): Promise<PTZStatus> {
   return apiRequest<PTZStatus>(`/cameras/${cameraId}/ptz/status`, { signal });
 }
 
 // --- ONVIF Discovery ---
 
-export async function discoverONVIFDevices(
-  timeout: number = 5,
-  signal?: AbortSignal
-): Promise<DiscoveryResult> {
+export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSignal): Promise<DiscoveryResult> {
   const result = await apiRequest<DiscoveryResult>('/onvif/discover', {
     method: 'POST',
     body: JSON.stringify({ timeout }),
@@ -398,17 +367,14 @@ export async function discoverONVIFDevices(
   };
 }
 
-export async function getONVIFDeviceDetail(
-  ip: string,
-  signal?: AbortSignal
-): Promise<ONVIFDeviceDetail> {
+export async function getONVIFDeviceDetail(ip: string, signal?: AbortSignal): Promise<ONVIFDeviceDetail> {
   return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
 export async function probeONVIFDevice(
   host: string,
   port: number = 80,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<DiscoveredDevice | null> {
   const result = await apiRequest<{ device: DiscoveredDevice | null }>('/onvif/probe', {
     method: 'POST',
@@ -497,17 +463,14 @@ export interface ImagingOptions {
   color_temperature?: ImagingOptionRange;
 }
 
-export async function getImagingSettings(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<ImagingSettings> {
+export async function getImagingSettings(cameraId: string, signal?: AbortSignal): Promise<ImagingSettings> {
   return apiRequest<ImagingSettings>(`/cameras/${cameraId}/imaging/settings`, { signal });
 }
 
 export async function setImagingSettings(
   cameraId: string,
   settings: Partial<ImagingSettings>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/imaging/settings`, {
     method: 'PUT',
@@ -516,10 +479,7 @@ export async function setImagingSettings(
   });
 }
 
-export async function getImagingOptions(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<ImagingOptions> {
+export async function getImagingOptions(cameraId: string, signal?: AbortSignal): Promise<ImagingOptions> {
   return apiRequest<ImagingOptions>(`/cameras/${cameraId}/imaging/options`, { signal });
 }
 
@@ -530,18 +490,11 @@ export interface PTZPreset {
   name: string;
 }
 
-export async function getPTZPresets(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<PTZPreset[]> {
+export async function getPTZPresets(cameraId: string, signal?: AbortSignal): Promise<PTZPreset[]> {
   return apiRequest<PTZPreset[]>(`/cameras/${cameraId}/ptz/presets`, { signal });
 }
 
-export async function createPTZPreset(
-  cameraId: string,
-  name: string,
-  signal?: AbortSignal
-): Promise<PTZPreset> {
+export async function createPTZPreset(cameraId: string, name: string, signal?: AbortSignal): Promise<PTZPreset> {
   return apiRequest<PTZPreset>(`/cameras/${cameraId}/ptz/presets`, {
     method: 'POST',
     body: JSON.stringify({ name }),
@@ -552,7 +505,7 @@ export async function createPTZPreset(
 export async function goToPTZPreset(
   cameraId: string,
   token: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/presets/${encodeURIComponent(token)}/goto`, {
     method: 'POST',
@@ -563,7 +516,7 @@ export async function goToPTZPreset(
 export async function deletePTZPreset(
   cameraId: string,
   token: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/presets/${encodeURIComponent(token)}`, {
     method: 'DELETE',
@@ -577,10 +530,7 @@ export interface SnapshotUriResponse {
   uri: string;
 }
 
-export async function getSnapshotUri(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<SnapshotUriResponse> {
+export async function getSnapshotUri(cameraId: string, signal?: AbortSignal): Promise<SnapshotUriResponse> {
   return apiRequest<SnapshotUriResponse>(`/cameras/${cameraId}/snapshot/uri`, { signal });
 }
 
@@ -601,10 +551,7 @@ export interface DeviceCapabilitiesInfo {
   };
 }
 
-export async function getDeviceCapabilities(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<DeviceCapabilitiesInfo> {
+export async function getDeviceCapabilities(cameraId: string, signal?: AbortSignal): Promise<DeviceCapabilitiesInfo> {
   return apiRequest<DeviceCapabilitiesInfo>(`/cameras/${cameraId}/onvif/capabilities`, { signal });
 }
 
@@ -646,10 +593,7 @@ export interface ONVIFDeviceUser {
   level: string; // "Administrator", "Operator", "User", "Anonymous"
 }
 
-export async function rebootDevice(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function rebootDevice(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/reboot`, {
     method: 'POST',
     signal,
@@ -658,7 +602,7 @@ export async function rebootDevice(
 
 export async function getNetworkInterfaces(
   cameraId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ interfaces: NetworkInterface[] }> {
   return apiRequest<{ interfaces: NetworkInterface[] }>(`/cameras/${cameraId}/onvif/network`, { signal });
 }
@@ -666,7 +610,7 @@ export async function getNetworkInterfaces(
 export async function setNetworkInterfaces(
   cameraId: string,
   interfaces: NetworkInterface[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/network`, {
     method: 'PUT',
@@ -675,17 +619,14 @@ export async function setNetworkInterfaces(
   });
 }
 
-export async function getDeviceUsers(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<{ users: ONVIFDeviceUser[] }> {
+export async function getDeviceUsers(cameraId: string, signal?: AbortSignal): Promise<{ users: ONVIFDeviceUser[] }> {
   return apiRequest<{ users: ONVIFDeviceUser[] }>(`/cameras/${cameraId}/onvif/users`, { signal });
 }
 
 export async function createDeviceUsers(
   cameraId: string,
   users: ONVIFDeviceUser[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/users`, {
     method: 'POST',
@@ -697,7 +638,7 @@ export async function createDeviceUsers(
 export async function deleteDeviceUsers(
   cameraId: string,
   usernames: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/onvif/users`, {
     method: 'DELETE',
@@ -733,21 +674,26 @@ export interface TimelapseConfig {
   merge_duration?: string;
 }
 
-export async function getTimelapseConfig(
-  cameraId: string,
-  signal?: AbortSignal
-): Promise<TimelapseConfig> {
+export async function getTimelapseConfig(cameraId: string, signal?: AbortSignal): Promise<TimelapseConfig> {
   return apiRequest<TimelapseConfig>(`/cameras/${cameraId}/timelapse`, { signal });
 }
 
 export async function updateTimelapseConfig(
   cameraId: string,
   config: TimelapseConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<any> {
   return apiRequest(`/cameras/${cameraId}/timelapse`, {
     method: 'PUT',
     body: JSON.stringify(config),
     signal,
   });
+}
+
+export async function pauseTimelapse(cameraId: string, signal?: AbortSignal): Promise<void> {
+  await apiRequest(`/cameras/${cameraId}/timelapse/pause`, { method: 'POST', signal });
+}
+
+export async function resumeTimelapse(cameraId: string, signal?: AbortSignal): Promise<void> {
+  await apiRequest(`/cameras/${cameraId}/timelapse/resume`, { method: 'POST', signal });
 }

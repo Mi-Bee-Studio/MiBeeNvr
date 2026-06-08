@@ -118,9 +118,6 @@ function parseRoute(hash: string) {
       return { route: 'transcoding-history', params: {} };
     }
 
-    if (segments[0] === 'timelapse') {
-      return { route: 'recordings', params: {} };
-    }
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };

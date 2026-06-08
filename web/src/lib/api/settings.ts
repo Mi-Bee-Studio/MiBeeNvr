@@ -43,7 +43,7 @@ export interface RTMPConfig {
 export interface SRTStreamConfig {
   stream_id: string;
   camera_id: string;
-  mode: string;       // "listener" or "caller"
+  mode: string; // "listener" or "caller"
   address: string;
   passphrase: string;
 }
@@ -92,10 +92,7 @@ export async function getSettings(signal?: AbortSignal): Promise<SettingsConfig>
   return apiRequest<SettingsConfig>('/settings', { signal });
 }
 
-export async function updateSettings(
-  settings: SettingsConfig,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function updateSettings(settings: SettingsConfig, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>('/settings', {
     method: 'PUT',
     body: JSON.stringify(settings),
@@ -109,10 +106,7 @@ export async function getMergeSettings(signal?: AbortSignal): Promise<MergeConfi
   return apiRequest<MergeConfig>('/settings/merge', { signal });
 }
 
-export async function updateMergeSettings(
-  config: MergeConfig,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function updateMergeSettings(config: MergeConfig, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>('/settings/merge', {
     method: 'PUT',
     body: JSON.stringify(config),
@@ -139,10 +133,7 @@ export async function getFeatures(signal?: AbortSignal): Promise<FeatureFlags> {
   return apiRequest<FeatureFlags>('/features', { signal });
 }
 
-export async function updateFeatures(
-  features: FeatureFlags,
-  signal?: AbortSignal
-): Promise<void> {
+export async function updateFeatures(features: FeatureFlags, signal?: AbortSignal): Promise<void> {
   await apiRequest('/features', {
     method: 'PUT',
     body: JSON.stringify(features),
@@ -158,7 +149,7 @@ export async function getStreamingSettings(signal?: AbortSignal): Promise<Stream
 
 export async function updateStreamingSettings(
   config: StreamingConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>('/settings/streaming', {
     method: 'PUT',

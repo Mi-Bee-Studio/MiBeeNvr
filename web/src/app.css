@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /*
  * MiBee NVR Design System — Minimalist Black/White Tech
@@ -79,7 +79,7 @@
 }
 
 /* --- Light theme override --- */
-[data-theme="light"] {
+[data-theme='light'] {
   --bg-primary: #ffffff;
   --bg-secondary: #f9fafb;
   --bg-tertiary: #f3f4f6;
@@ -115,34 +115,69 @@
   body {
     background-color: var(--bg-primary);
     color: var(--text-primary);
-    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family:
+      Inter,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     font-weight: 600;
     letter-spacing: -0.025em;
     color: var(--text-primary);
   }
 
-  h1 { font-size: 1.875rem; }
-  h2 { font-size: 1.5rem; }
-  h3 { font-size: 1.25rem; }
-  h4 { font-size: 1.125rem; }
+  h1 {
+    font-size: 1.875rem;
+  }
+  h2 {
+    font-size: 1.5rem;
+  }
+  h3 {
+    font-size: 1.25rem;
+  }
+  h4 {
+    font-size: 1.125rem;
+  }
 
   @media (min-width: 768px) {
-    h1 { font-size: 2.25rem; }
-    h2 { font-size: 1.875rem; }
-    h3 { font-size: 1.5rem; }
-    h4 { font-size: 1.25rem; }
+    h1 {
+      font-size: 2.25rem;
+    }
+    h2 {
+      font-size: 1.875rem;
+    }
+    h3 {
+      font-size: 1.5rem;
+    }
+    h4 {
+      font-size: 1.25rem;
+    }
   }
 
   @media (min-width: 1024px) {
-    h1 { font-size: 3rem; }
-    h2 { font-size: 2.25rem; }
-    h3 { font-size: 1.875rem; }
-    h4 { font-size: 1.5rem; }
+    h1 {
+      font-size: 3rem;
+    }
+    h2 {
+      font-size: 2.25rem;
+    }
+    h3 {
+      font-size: 1.875rem;
+    }
+    h4 {
+      font-size: 1.5rem;
+    }
   }
 
   /* Focus ring — purple glow */
@@ -183,16 +218,16 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
-    transition: transform var(--duration-normal) var(--ease-out),
-                box-shadow var(--duration-normal) var(--ease-out),
-                border-color var(--duration-normal) var(--ease-out);
+    transition:
+      transform var(--duration-normal) var(--ease-out),
+      box-shadow var(--duration-normal) var(--ease-out),
+      border-color var(--duration-normal) var(--ease-out);
   }
 
   .card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
     border-color: var(--border-hover);
-
   }
   /* --- Buttons --- */
   .btn {
@@ -228,7 +263,6 @@
     background: #7c3aed;
     box-shadow: var(--shadow-md);
     transform: translateY(-1px);
-
   }
   .btn-primary:focus-visible {
     box-shadow: var(--focus-ring);
@@ -311,25 +345,21 @@
     background-color: rgba(16, 185, 129, 0.1);
     color: var(--color-success-light);
     border-color: rgba(16, 185, 129, 0.2);
-
   }
   .badge-warning {
     background-color: rgba(245, 158, 11, 0.1);
     color: var(--color-warning-light);
     border-color: rgba(245, 158, 11, 0.2);
-
   }
   .badge-error {
     background-color: rgba(239, 68, 68, 0.1);
     color: var(--color-danger-light);
     border-color: rgba(239, 68, 68, 0.2);
-
   }
   .badge-info {
     background-color: rgba(59, 130, 246, 0.1);
     color: var(--color-info);
     border-color: rgba(59, 130, 246, 0.2);
-
   }
   .badge-neutral {
     background-color: var(--bg-tertiary);
@@ -396,7 +426,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* --- Accent utility classes --- */
@@ -413,32 +445,84 @@
   }
 
   /* --- Theme-aware utility classes (replaces Tailwind bracket syntax) --- */
-  .th-bg-primary { background-color: var(--bg-primary); }
-  .th-bg-secondary { background-color: var(--bg-secondary); }
-  .th-bg-tertiary { background-color: var(--bg-tertiary); }
-  .th-bg-hover { background-color: var(--bg-hover); }
-  .th-bg-elevated { background-color: var(--bg-elevated); }
-  .th-text-primary { color: var(--text-primary); }
-  .th-text-secondary { color: var(--text-secondary); }
-  .th-text-tertiary { color: var(--text-tertiary); }
-  .th-text-body { color: var(--text-body); }
-  .th-text-muted { color: var(--text-tertiary); }
-  .th-border { border-color: var(--border); }
-  .th-border-hover { border-color: var(--border-hover); }
-  .th-color-danger { color: var(--color-danger); }
-  .th-color-success { color: var(--color-success-light); }
-  .th-color-accent { color: var(--color-accent); }
-  .th-color-info { color: var(--color-info); }
-  .th-bg-danger { background-color: var(--color-danger); }
-  .th-bg-danger-light { background-color: var(--color-danger-light); }
-  .th-bg-info { background-color: var(--color-info); }
-  .th-bg-accent { background-color: var(--color-accent); }
-  .hover\:th-bg-danger-light:hover { background-color: var(--color-danger-light); }
-  .hover\:th-bg-accent:hover { background-color: var(--color-accent); }
-  .hover\:th-bg-info:hover { background-color: var(--color-info); }
-  .hover\:th-bg-hover:hover { background-color: var(--bg-hover); }
-  .hover\:th-text-primary:hover { color: var(--text-primary); }
-  .hover\:th-bg-secondary:hover { background-color: var(--bg-secondary); }
+  .th-bg-primary {
+    background-color: var(--bg-primary);
+  }
+  .th-bg-secondary {
+    background-color: var(--bg-secondary);
+  }
+  .th-bg-tertiary {
+    background-color: var(--bg-tertiary);
+  }
+  .th-bg-hover {
+    background-color: var(--bg-hover);
+  }
+  .th-bg-elevated {
+    background-color: var(--bg-elevated);
+  }
+  .th-text-primary {
+    color: var(--text-primary);
+  }
+  .th-text-secondary {
+    color: var(--text-secondary);
+  }
+  .th-text-tertiary {
+    color: var(--text-tertiary);
+  }
+  .th-text-body {
+    color: var(--text-body);
+  }
+  .th-text-muted {
+    color: var(--text-tertiary);
+  }
+  .th-border {
+    border-color: var(--border);
+  }
+  .th-border-hover {
+    border-color: var(--border-hover);
+  }
+  .th-color-danger {
+    color: var(--color-danger);
+  }
+  .th-color-success {
+    color: var(--color-success-light);
+  }
+  .th-color-accent {
+    color: var(--color-accent);
+  }
+  .th-color-info {
+    color: var(--color-info);
+  }
+  .th-bg-danger {
+    background-color: var(--color-danger);
+  }
+  .th-bg-danger-light {
+    background-color: var(--color-danger-light);
+  }
+  .th-bg-info {
+    background-color: var(--color-info);
+  }
+  .th-bg-accent {
+    background-color: var(--color-accent);
+  }
+  .hover\:th-bg-danger-light:hover {
+    background-color: var(--color-danger-light);
+  }
+  .hover\:th-bg-accent:hover {
+    background-color: var(--color-accent);
+  }
+  .hover\:th-bg-info:hover {
+    background-color: var(--color-info);
+  }
+  .hover\:th-bg-hover:hover {
+    background-color: var(--bg-hover);
+  }
+  .hover\:th-text-primary:hover {
+    color: var(--text-primary);
+  }
+  .hover\:th-bg-secondary:hover {
+    background-color: var(--bg-secondary);
+  }
 }
 
 /* ================================================================

@@ -1,179 +1,139 @@
 <script lang="ts">
-  import { Video, Camera as CameraIcon, Clock, HardDrive } from 'lucide-svelte';
+  import { ChevronLeft, ChevronRight, Video } from 'lucide-svelte';
   import { t } from '$lib/i18n';
-  import { formatDate, formatDuration, formatFileSize } from '$lib/format';
-  import { apiRequestBlob } from '$lib/api';
   import type { Recording, Camera } from '$lib/api';
+  import RecordingCard from '../library/RecordingCard.svelte';
 
   let {
-    selectedDate = null,
+    selectedDate = $bindable(null),
     recordings = [],
     cameras = [],
-    onselectRecording = (recording: Recording) => {},
+    onselectRecording = (r: Recording) => {},
+    selectedIds = $bindable([]) as string[],
+    ontoggleselect = (r: Recording) => {},
+    selectMode = false,
+    ondeleteRecording = (r: Recording) => {},
   }: {
-    selectedDate: string | null;
+    selectedDate?: string | null;
     recordings: Recording[];
     cameras: Camera[];
     onselectRecording?: (recording: Recording) => void;
+    selectedIds?: string[];
+    ontoggleselect?: (recording: Recording) => void;
+    selectMode?: boolean;
+    ondeleteRecording?: (recording: Recording) => void;
   } = $props();
 
-  let selectedRecordings = $derived.by(() => {
+  let filteredRecordings = $derived.by(() => {
     if (!selectedDate) return [];
-    return recordings.filter(r => r.started_at.slice(0, 10) === selectedDate);
+    return recordings.filter((r) => r.started_at.slice(0, 10) === selectedDate);
   });
 
-  function getCameraName(cameraId: string): string {
-    const cam = cameras.find(c => c.id === cameraId);
-    return cam ? cam.name : cameraId;
+  function prevDay() {
+    if (!selectedDate) return;
+    const d = new Date(selectedDate + 'T12:00:00');
+    d.setDate(d.getDate() - 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    selectedDate = `${y}-${m}-${day}`;
   }
 
-  // --- Thumbnail lazy loading ---
-  let thumbnailCache = $state<Map<string, string>>(new Map());
+  function nextDay() {
+    if (!selectedDate) return;
+    const d = new Date(selectedDate + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    selectedDate = `${y}-${m}-${day}`;
+  }
 
-  function loadThumbnail(recordingId: string): Promise<string | null> {
-    if (thumbnailCache.has(recordingId)) {
-      return Promise.resolve(thumbnailCache.get(recordingId)!);
+  function handleView(recording: Recording) {
+    if (selectMode) {
+      toggleSelection(recording);
+    } else {
+      onselectRecording(recording);
     }
-    return apiRequestBlob(`/timelapse/${recordingId}/thumbnail`)
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        thumbnailCache.set(recordingId, url);
-        thumbnailCache = new Map(thumbnailCache);
-        return url;
-      })
-      .catch(() => null);
   }
 
-  function lazyThumbnail(node: HTMLImageElement, recordingId: string) {
-    let destroyed = false;
-    let loadedUrl: string | null = null;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !destroyed) {
-          loadThumbnail(recordingId).then(url => {
-            if (!destroyed && url) {
-              node.src = url;
-              loadedUrl = url;
-            }
-          });
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '200px' }
-    );
-
-    observer.observe(node);
-
-    return {
-      destroy() {
-        destroyed = true;
-        observer.disconnect();
-        if (loadedUrl) {
-          URL.revokeObjectURL(loadedUrl);
-        }
-      }
-    };
+  function toggleSelection(recording: Recording) {
+    if (selectedIds.includes(recording.id)) {
+      selectedIds = selectedIds.filter((id) => id !== recording.id);
+    } else {
+      selectedIds = [...selectedIds, recording.id];
+    }
+    ontoggleselect(recording);
   }
-
-  // Cleanup on destroy
-  $effect(() => {
-    return () => {
-      thumbnailCache.forEach(url => URL.revokeObjectURL(url));
-      thumbnailCache = new Map();
-    };
-  });
 </script>
 
-<div id="timelapse-gallery" class="mb-6">
+<div id="recording-gallery" class="mb-6">
   {#if selectedDate}
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold th-text-primary">
-        {new Date(selectedDate + 'T12:00:00').toLocaleDateString(
-          document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US',
-          { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }
-        )}
-      </h2>
+      <div class="flex items-center gap-2">
+        <button
+          onclick={prevDay}
+          class="btn btn-ghost btn-sm px-2"
+          aria-label="Previous day"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <h2 class="text-lg font-semibold th-text-primary">
+          {new Date(selectedDate + 'T12:00:00').toLocaleDateString(
+            document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US',
+            { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }
+          )}
+        </h2>
+        <button
+          onclick={nextDay}
+          class="btn btn-ghost btn-sm px-2"
+          aria-label="Next day"
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
       <span class="text-sm th-text-muted">
-        {selectedRecordings.length} {t('timelapse.gallery.recordings')}
+        {filteredRecordings.length} {t('timelapse.gallery.recordings')}
       </span>
     </div>
 
-    {#if selectedRecordings.length === 0}
+    {#if filteredRecordings.length === 0}
       <div class="card p-12 text-center border th-border">
         <div class="flex justify-center mb-4 th-text-muted">
           <Video size={48} />
         </div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">{t('timelapse.gallery.noTimelapses')}</h3>
-        <p class="text-sm th-text-muted">{t('timelapse.gallery.noTimelapsesHint')}</p>
+        <h3 class="text-lg font-medium th-text-primary mb-2">
+          {t('recordings.noRecordings')}
+        </h3>
+        <p class="text-sm th-text-muted">
+          {t('recordings.noRecordingsHint')}
+        </p>
       </div>
     {:else}
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-        {#each selectedRecordings as recording}
-          <button
-            onclick={() => onselectRecording(recording)}
-            class="card border th-border overflow-hidden text-left transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 group cursor-pointer"
-          >
-            <!-- Thumbnail -->
-            <div class="aspect-video th-bg-tertiary overflow-hidden relative">
-              {#if thumbnailCache.has(recording.id)}
-                <img
-                  src={thumbnailCache.get(recording.id)}
-                  alt={recording.started_at}
-                  class="w-full h-full object-cover"
-                />
-              {:else}
-                <img
-                  use:lazyThumbnail={recording.id}
-                  alt={recording.started_at}
-                  class="w-full h-full object-cover"
-                />
-                <div class="absolute inset-0 flex items-center justify-center">
-                  <CameraIcon size={24} class="th-text-muted opacity-50" />
-                </div>
-            {/if}
-            {#if recording.merge_status}
-              <div class="absolute top-1.5 right-1.5">
-                <span
-                  class="badge text-[10px] leading-none py-0.5 px-1.5 {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : 'badge-neutral'}"
-                  title={recording.merge_status === 'failed' && recording.merge_error ? recording.merge_error : ''}
-                >
-                  {recording.merge_status === 'merged' ? t('detail.mergeStatusMerged') : recording.merge_status === 'failed' ? t('detail.mergeStatusFailed') : t('detail.mergeStatusPending')}
-                </span>
-              </div>
-            {/if}
-          </div>
-            <!-- Info -->
-            <div class="p-3 space-y-1.5">
-              <p class="text-sm font-medium th-text-primary truncate">
-                {getCameraName(recording.camera_id)}
-              </p>
-              <p class="text-xs th-text-tertiary">
-                {formatDate(recording.started_at)}
-              </p>
-              <div class="flex items-center gap-3 text-xs th-text-muted">
-                <span class="inline-flex items-center gap-1">
-                  <Clock size={12} />
-                  {formatDuration(recording.duration)}
-                </span>
-                <span class="inline-flex items-center gap-1">
-                  <HardDrive size={12} />
-                  {formatFileSize(recording.file_size)}
-                </span>
-              </div>
-            </div>
-          </button>
+        {#each filteredRecordings as recording}
+          <RecordingCard
+            {recording}
+            {cameras}
+            selected={selectedIds.includes(recording.id)}
+            onview={handleView}
+            onselect={toggleSelection}
+            ondelete={ondeleteRecording}
+          />
         {/each}
       </div>
     {/if}
   {:else}
-    <!-- No day selected -->
     <div class="card p-12 text-center border th-border">
       <div class="flex justify-center mb-4 th-text-muted">
         <Video size={48} />
       </div>
-      <h3 class="text-lg font-medium th-text-primary mb-2">{t('timelapse.gallery.selectDay')}</h3>
-      <p class="text-sm th-text-muted">{t('timelapse.gallery.selectDayHint')}</p>
+      <h3 class="text-lg font-medium th-text-primary mb-2">
+        {t('timelapse.gallery.selectDay')}
+      </h3>
+      <p class="text-sm th-text-muted">
+        {t('timelapse.gallery.selectDayHint')}
+      </p>
     </div>
   {/if}
 </div>

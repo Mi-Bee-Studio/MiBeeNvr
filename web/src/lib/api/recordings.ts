@@ -73,20 +73,22 @@ export interface ArchiveListResponse {
 
 // --- Recordings ---
 
-export async function listRecordings(params: {
-  camera_id?: string;
-  format?: string;
-  merged?: boolean;
-  offset?: number;
-  limit?: number;
-  start?: string;
-  end?: string;
-  sort_by?: string;
-  order?: string;
-  search?: string;
-  archived?: boolean;
-  signal?: AbortSignal;
-} = {}): Promise<RecordingListResponse> {
+export async function listRecordings(
+  params: {
+    camera_id?: string;
+    format?: string;
+    merged?: boolean;
+    offset?: number;
+    limit?: number;
+    start?: string;
+    end?: string;
+    sort_by?: string;
+    order?: string;
+    search?: string;
+    archived?: boolean;
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
 
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
@@ -108,16 +110,18 @@ export async function listRecordings(params: {
   return apiRequest<RecordingListResponse>(endpoint, { signal });
 }
 
-export async function listTimelapseRecordings(params: {
-  camera_id?: string;
-  start?: string;
-  end?: string;
-  limit?: number;
-  offset?: number;
-  sort_by?: string;
-  sort_order?: string;
-  signal?: AbortSignal;
-} = {}): Promise<RecordingListResponse> {
+export async function listTimelapseRecordings(
+  params: {
+    camera_id?: string;
+    start?: string;
+    end?: string;
+    limit?: number;
+    offset?: number;
+    sort_by?: string;
+    sort_order?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
 
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
@@ -139,20 +143,14 @@ export async function getRecording(id: string, signal?: AbortSignal): Promise<Re
   return apiRequest<Recording>(`/recordings/${id}`, { signal });
 }
 
-export async function deleteRecording(
-  id: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function deleteRecording(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/recordings/${id}`, {
     method: 'DELETE',
     signal,
   });
 }
 
-export async function batchDeleteRecordings(
-  ids: string[],
-  signal?: AbortSignal
-): Promise<void> {
+export async function batchDeleteRecordings(ids: string[], signal?: AbortSignal): Promise<void> {
   await apiRequest<void>('/recordings/batch-delete', {
     method: 'POST',
     body: JSON.stringify({ ids }),
@@ -167,9 +165,13 @@ export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
 }
 
+export function getTimelapseThumbnailUrl(id: string): string {
+  return `${API_BASE}/timelapse/${id}/thumbnail`;
+}
+
 export async function downloadRecording(
   id: string,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<void> {
   const url = `/api/recordings/${id}/download`;
 
@@ -217,43 +219,30 @@ export async function downloadRecording(
 
 // --- Frames (MJPEG recordings) ---
 
-export async function listFrames(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<FramesResponse> {
+export async function listFrames(recordingId: string, signal?: AbortSignal): Promise<FramesResponse> {
   return apiRequest<FramesResponse>(`/recordings/${recordingId}/frames`, { signal });
 }
 
 // --- Timelapse frames ---
 
-export async function getTimelapseFrames(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<TimelapseFrame[]> {
+export async function getTimelapseFrames(recordingId: string, signal?: AbortSignal): Promise<TimelapseFrame[]> {
   return apiRequest<TimelapseFrame[]>(`/recordings/${recordingId}/timelapse-frames`, { signal });
 }
 
 export async function loadTimelapseFrameBlob(
   recordingId: string,
   filename: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/timelapse-frames/${filename}`, { signal });
   return URL.createObjectURL(blob);
 }
-export async function loadFrameBlob(
-  recordingId: string,
-  frameIndex: number,
-  signal?: AbortSignal
-): Promise<string> {
+export async function loadFrameBlob(recordingId: string, frameIndex: number, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download?frame=${frameIndex}`, { signal });
   return URL.createObjectURL(blob);
 }
 
-export async function loadRecordingVideoBlob(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<string> {
+export async function loadRecordingVideoBlob(recordingId: string, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download`, { signal });
   return URL.createObjectURL(blob);
 }
@@ -276,7 +265,7 @@ export async function triggerTimelapseMerge(cameraId: string, date?: string): Pr
 export function subscribeTimelapseMergeProgress(
   cameraId: string,
   onProgress: (data: any) => void,
-  onError?: (e: Event) => void
+  onError?: (e: Event) => void,
 ): AbortController {
   const abortController = new AbortController();
 
@@ -340,10 +329,7 @@ export async function getStats(signal?: AbortSignal): Promise<StorageStats> {
   return apiRequest<StorageStats>('/stats', { signal });
 }
 
-export async function getStatsTrends(
-  days: number = 7,
-  signal?: AbortSignal
-): Promise<DailyStats[]> {
+export async function getStatsTrends(days: number = 7, signal?: AbortSignal): Promise<DailyStats[]> {
   return apiRequest<DailyStats[]>(`/stats/trends?days=${days}`, { signal });
 }
 
@@ -355,7 +341,7 @@ export async function listArchives(signal?: AbortSignal): Promise<ArchiveListRes
 
 export async function listArchiveRecordings(
   cameraID: string,
-  params?: { offset?: number; limit?: number; signal?: AbortSignal }
+  params?: { offset?: number; limit?: number; signal?: AbortSignal },
 ): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.offset !== undefined) queryParams.set('offset', String(params.offset));
@@ -365,17 +351,14 @@ export async function listArchiveRecordings(
   return apiRequest<RecordingListResponse>(endpoint, { signal: params?.signal });
 }
 
-export async function deleteArchiveGroup(
-  cameraID: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function deleteArchiveGroup(cameraID: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}`, { method: 'DELETE', signal });
 }
 
 export async function deleteArchiveRecording(
   cameraID: string,
   recordingID: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}/recordings/${recordingID}`, {
     method: 'DELETE',
@@ -386,7 +369,7 @@ export async function deleteArchiveRecording(
 export async function setArchiveRetention(
   cameraID: string,
   retentionDays: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}/retention`, {
     method: 'PUT',

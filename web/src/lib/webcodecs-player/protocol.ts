@@ -19,15 +19,15 @@ export const MsgType = {
   VideoFrame: 0x02,
   AudioFrame: 0x03,
   KeyframeReq: 0x04,
-  EOS: 0xFF,
+  EOS: 0xff,
 } as const;
 
 export type MsgType = (typeof MsgType)[keyof typeof MsgType];
 
 /** Codec identifier strings matching Go wsstream package. */
 export const CodecId = {
-  H264: "h264",
-  H265: "h265",
+  H264: 'h264',
+  H265: 'h265',
 } as const;
 
 export type CodecId = (typeof CodecId)[keyof typeof CodecId];
@@ -76,20 +76,30 @@ export function encodeCodecInfo(ci: CodecInfo): ArrayBuffer {
   const dv = new DataView(buf);
   let off = 0;
 
-  dv.setUint8(off, MsgType.CodecInfo); off += 1;
-  dv.setUint8(off, codecByte); off += 1;
-  dv.setUint8(off, ci.profile); off += 1;
-  dv.setUint8(off, ci.level); off += 1;
+  dv.setUint8(off, MsgType.CodecInfo);
+  off += 1;
+  dv.setUint8(off, codecByte);
+  off += 1;
+  dv.setUint8(off, ci.profile);
+  off += 1;
+  dv.setUint8(off, ci.level);
+  off += 1;
 
-  dv.setUint16(off, spsLen); off += 2;
-  new Uint8Array(buf, off, spsLen).set(ci.sps); off += spsLen;
+  dv.setUint16(off, spsLen);
+  off += 2;
+  new Uint8Array(buf, off, spsLen).set(ci.sps);
+  off += spsLen;
 
-  dv.setUint16(off, ppsLen); off += 2;
-  new Uint8Array(buf, off, ppsLen).set(ci.pps); off += ppsLen;
+  dv.setUint16(off, ppsLen);
+  off += 2;
+  new Uint8Array(buf, off, ppsLen).set(ci.pps);
+  off += ppsLen;
 
   if (hasVps && ci.vps) {
-    dv.setUint16(off, vpsLen); off += 2;
-    new Uint8Array(buf, off, vpsLen).set(ci.vps); off += vpsLen;
+    dv.setUint16(off, vpsLen);
+    off += 2;
+    new Uint8Array(buf, off, vpsLen).set(ci.vps);
+    off += vpsLen;
   }
 
   return buf;
@@ -113,19 +123,25 @@ export function decodeCodecInfo(data: ArrayBuffer): CodecInfo {
 
   let off = 4;
 
-  const spsLen = dv.getUint16(off); off += 2;
-  if (off + spsLen > data.byteLength) throw new Error("CodecInfo truncated at SPS");
-  const sps = new Uint8Array(data, off, spsLen); off += spsLen;
+  const spsLen = dv.getUint16(off);
+  off += 2;
+  if (off + spsLen > data.byteLength) throw new Error('CodecInfo truncated at SPS');
+  const sps = new Uint8Array(data, off, spsLen);
+  off += spsLen;
 
-  const ppsLen = dv.getUint16(off); off += 2;
-  if (off + ppsLen > data.byteLength) throw new Error("CodecInfo truncated at PPS");
-  const pps = new Uint8Array(data, off, ppsLen); off += ppsLen;
+  const ppsLen = dv.getUint16(off);
+  off += 2;
+  if (off + ppsLen > data.byteLength) throw new Error('CodecInfo truncated at PPS');
+  const pps = new Uint8Array(data, off, ppsLen);
+  off += ppsLen;
 
   let vps: Uint8Array | undefined;
   if (codec === CodecId.H265) {
-    const vpsLen = dv.getUint16(off); off += 2;
-    if (off + vpsLen > data.byteLength) throw new Error("CodecInfo truncated at VPS");
-    vps = new Uint8Array(data, off, vpsLen); off += vpsLen;
+    const vpsLen = dv.getUint16(off);
+    off += 2;
+    if (off + vpsLen > data.byteLength) throw new Error('CodecInfo truncated at VPS');
+    vps = new Uint8Array(data, off, vpsLen);
+    off += vpsLen;
   }
 
   return { codec, profile, level, sps, pps, vps };
@@ -149,14 +165,20 @@ export function encodeVideoFrame(vf: VideoFrame): ArrayBuffer {
   const dv = new DataView(buf);
   let off = 0;
 
-  dv.setUint8(off, MsgType.VideoFrame); off += 1;
-  dv.setBigInt64(off, BigInt(vf.pts)); off += 8;
-  dv.setUint8(off, vf.isKeyframe ? 1 : 0); off += 1;
-  dv.setUint16(off, vf.nalus.length); off += 2;
+  dv.setUint8(off, MsgType.VideoFrame);
+  off += 1;
+  dv.setBigInt64(off, BigInt(vf.pts));
+  off += 8;
+  dv.setUint8(off, vf.isKeyframe ? 1 : 0);
+  off += 1;
+  dv.setUint16(off, vf.nalus.length);
+  off += 2;
 
   for (const nalu of vf.nalus) {
-    dv.setUint32(off, nalu.byteLength); off += 4;
-    new Uint8Array(buf, off, nalu.byteLength).set(nalu); off += nalu.byteLength;
+    dv.setUint32(off, nalu.byteLength);
+    off += 4;
+    new Uint8Array(buf, off, nalu.byteLength).set(nalu);
+    off += nalu.byteLength;
   }
 
   return buf;
@@ -182,7 +204,8 @@ export function decodeVideoFrame(data: ArrayBuffer): VideoFrame {
 
   for (let i = 0; i < naluCount; i++) {
     if (off + 4 > data.byteLength) throw new Error(`VideoFrame truncated at NALU ${i} length`);
-    const naluLen = dv.getUint32(off); off += 4;
+    const naluLen = dv.getUint32(off);
+    off += 4;
     if (off + naluLen > data.byteLength) throw new Error(`VideoFrame truncated at NALU ${i} data`);
     nalus.push(new Uint8Array(data, off, naluLen));
     off += naluLen;

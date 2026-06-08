@@ -31,7 +31,7 @@ describe('ArchiveConfirmDialog', () => {
     const { getAllByRole } = render(ArchiveConfirmDialog, {
       props: { ...defaultProps, oncancel },
     });
-    const cancelBtns = getAllByRole('button').filter(b => b.textContent?.includes('Cancel'));
+    const cancelBtns = getAllByRole('button').filter((b) => b.textContent?.includes('Cancel'));
     await fireEvent.click(cancelBtns[0]);
     expect(oncancel).toHaveBeenCalled();
   });

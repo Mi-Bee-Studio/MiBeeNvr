@@ -322,11 +322,7 @@ export class WebGPURenderer {
       this.stagingHeight = h;
     }
 
-    encoder.copyExternalImageToTexture(
-      { source: frame },
-      { texture: this.stagingTexture },
-      [w, h],
-    );
+    encoder.copyExternalImageToTexture({ source: frame }, { texture: this.stagingTexture }, [w, h]);
   }
 
   private drawExternalTexture(device: GPUDevice, frame: VideoFrame, pass: GPURenderPassEncoder): void {
