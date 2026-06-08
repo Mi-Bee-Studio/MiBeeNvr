@@ -40,9 +40,9 @@
   let isTimelapse = $derived(recording.format === 'timelapse');
   let isVideo = $derived(recording.format === 'h264' || recording.format === 'h265');
   let isMJPEG = $derived(recording.format === 'mjpeg');
-  let showMergeButton = $derived(isTimelapse && !isMerged && recording.merge_status !== 'merged' && recording.merge_status !== 'pending');
-  let showDownloadButton = $derived(isMerged);
-
+  let isMerged = $derived(recording.format === 'timelapse' && recording.merge_status === 'merged');
+  let showMergeButton = $derived(isTimelapse && !isMerged && recording.merge_status !== 'pending');
+  let showDownloadButton = $derived(isMerged || isVideo);
   let formatLabel = $derived.by(() => {
     // Prefer i18n keys, fallback to hardcoded
     switch (recording.format) {

@@ -159,6 +159,8 @@ func (h *Handler) Routes() http.Handler {
 	})
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
+	// Public routes
+	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -169,7 +171,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
-				r.Get("/download", h.handleDownloadRecording)
+
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
