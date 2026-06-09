@@ -400,6 +400,12 @@ func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
+	// Timezone validation
+	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
+		if _, err := time.LoadLocation(cfg.Timezone); err != nil {
+			return fmt.Errorf("timezone: invalid IANA name %q: %w", cfg.Timezone, err)
+		}
+	}
 	// cameras must have id and url
 	seen := make(map[string]int)
 	for i, c := range cfg.Cameras {
@@ -750,7 +756,7 @@ func Validate(cfg *Config) error {
 func (cfg *Config) ApplyDefaults() {
 	// Timezone
 	if cfg.Timezone == "" {
-		cfg.Timezone = "UTC"
+		cfg.Timezone = "Local"
 	}
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {

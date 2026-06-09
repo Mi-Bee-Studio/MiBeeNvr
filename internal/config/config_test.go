@@ -51,6 +51,7 @@ func TestDefaultsApplied(t *testing.T) {
     require.Equal(t, true, *cfg.FTP.Enabled)
     require.Equal(t, true, *cfg.WebDAV.Enabled)
     require.Equal(t, "/dav", cfg.WebDAV.PathPrefix)
+	require.Equal(t, "Local", cfg.Timezone)
 }
 
 func TestFrameWatchdogTimeoutDefaultEmpty(t *testing.T) {
@@ -1289,4 +1290,34 @@ func TestValidateTimelapseMergeDuration_Invalid(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "merge_duration")
+}
+
+func TestValidate_Timezone_Valid(t *testing.T) {
+	tests := []struct {
+		name     string
+		timezone string
+	}{
+		{name: "Local timezone", timezone: "Local"},
+		{name: "UTC timezone", timezone: "UTC"},
+		{name: "Asia/Shanghai", timezone: "Asia/Shanghai"},
+		{name: "America/New_York", timezone: "America/New_York"},
+		{name: "empty timezone", timezone: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			cfg := &Config{Timezone: tt.timezone}
+			cfg.ApplyDefaults()
+			err := Validate(cfg)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidate_Timezone_Invalid(t *testing.T) {
+	cfg := &Config{Timezone: "Invalid/TZ"}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timezone")
 }

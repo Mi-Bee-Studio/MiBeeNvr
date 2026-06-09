@@ -83,7 +83,7 @@ func TestScheduler_IsRecordingTime(t *testing.T) {
 	})
 
 	t.Run("paused with nil schedule returns false", func(t *testing.T) {
-		s := &Scheduler{}
+		s := NewScheduler(time.UTC)
 		cfg := config.CameraTimelapseConfig{
 			Paused:   true,
 			Schedule: nil,
@@ -266,7 +266,7 @@ func TestScheduler_NextTransition(t *testing.T) {
 	})
 
 	t.Run("no schedule returns 0", func(t *testing.T) {
-		s := &Scheduler{}
+		s := NewScheduler(time.UTC)
 		cfg := config.CameraTimelapseConfig{Schedule: nil}
 		got := s.NextTransition(cfg)
 		if got != 0 {
@@ -275,7 +275,7 @@ func TestScheduler_NextTransition(t *testing.T) {
 	})
 
 	t.Run("paused returns 0", func(t *testing.T) {
-		s := &Scheduler{}
+		s := NewScheduler(time.UTC)
 		cfg := config.CameraTimelapseConfig{Paused: true}
 		got := s.NextTransition(cfg)
 		if got != 0 {
@@ -284,7 +284,7 @@ func TestScheduler_NextTransition(t *testing.T) {
 	})
 
 	t.Run("empty TimeRanges returns 0 (all day)", func(t *testing.T) {
-		s := &Scheduler{}
+		s := NewScheduler(time.UTC)
 		cfg := config.CameraTimelapseConfig{
 			Schedule: &config.ScheduleConfig{
 				TimeRanges: nil,
@@ -369,4 +369,41 @@ func TestScheduler_NextTransition(t *testing.T) {
 			t.Errorf("NextTransition = %v, want %v", got, want)
 		}
 	})
+}
+
+func TestScheduler_Timezone(t *testing.T) {
+	t.Helper()
+	// Create scheduler with Asia/Shanghai timezone (UTC+8)
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("failed to load Asia/Shanghai: %v", err)
+	}
+	s := NewScheduler(loc)
+
+	// Monday 09:00 Shanghai = Monday 01:00 UTC
+	// Create a fixed time function for testing with Shanghai timezone
+	monSH := time.Date(2026, 6, 8, 9, 0, 0, 0, loc) // Monday 09:00 Shanghai
+	s.now = func() time.Time { return monSH }
+
+	// Schedule that allows Monday 09:00-17:00 Shanghai time
+	cfg := config.CameraTimelapseConfig{
+		Schedule: &config.ScheduleConfig{
+			DaysOfWeek: []int{1}, // Monday
+			TimeRanges: []config.TimeRange{
+				{Start: "09:00", End: "17:00"},
+			},
+		},
+	}
+
+	if !s.IsRecordingTime(cfg) {
+		t.Error("expected recording time: Monday 09:00 Shanghai should match Monday 09:00-17:00")
+	}
+
+	// Tuesday 07:00 Shanghai = Monday 23:00 UTC (different day!)
+	tuesSH := time.Date(2026, 6, 9, 7, 0, 0, 0, loc) // Tuesday 07:00 Shanghai
+	s.now = func() time.Time { return tuesSH }
+
+	if s.IsRecordingTime(cfg) {
+		t.Error("expected NOT recording time: Tuesday 07:00 Shanghai, schedule is Monday only")
+	}
 }

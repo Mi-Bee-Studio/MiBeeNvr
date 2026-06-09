@@ -378,7 +378,7 @@ func TestCreateRecorder_TimelapseWithMergeManager(t *testing.T) {
 
 func TestSchedulerCheck_IsRecordingTime(t *testing.T) {
 	t.Helper()
-	scheduler := timelapse.NewScheduler()
+	scheduler := timelapse.NewScheduler(time.UTC)
 
 	// No schedule = 24/7 recording
 	cfg := config.CameraTimelapseConfig{
@@ -398,7 +398,7 @@ func TestSchedulerCheck_IsRecordingTime(t *testing.T) {
 
 func TestSchedulerCheck_WithSchedule(t *testing.T) {
 	t.Helper()
-	scheduler := timelapse.NewScheduler()
+	scheduler := timelapse.NewScheduler(time.UTC)
 
 	// Schedule covering all days, all day
 	cfg := config.CameraTimelapseConfig{

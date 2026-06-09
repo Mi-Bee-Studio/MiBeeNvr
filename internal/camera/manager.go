@@ -75,6 +75,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	var mm *merge.MergeManager
 	var tm *transcoding.TranscodeManager
 	var tmm *timelapse.RollingMergeManager
+	var appLoc *time.Location
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
@@ -85,6 +86,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			tm = v
 		case *timelapse.RollingMergeManager:
 			tmm = v
+		case *time.Location:
+			appLoc = v
 		}
 	}
 	return &CameraManager{
@@ -97,7 +100,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:         mm,
 		transcodeMgr:     tm,
 		timelapseMergeMgr: tmm,
-		scheduler:        timelapse.NewScheduler(),
+		scheduler:        timelapse.NewScheduler(appLoc),
 		scheduleMonitors: make(map[string]context.CancelFunc),
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
