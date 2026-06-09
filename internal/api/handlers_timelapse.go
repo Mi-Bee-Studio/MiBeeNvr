@@ -54,6 +54,10 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 			"frame_source":    "auto",
 			"paused":          false,
 			"delete_original": false,
+			"merge_output_fps": 30,
+			"merge_mode":       "auto",
+			"daily_merge":      true,
+			"merge_duration":   "natural-day",
 		})
 		return
 	}
@@ -128,7 +132,7 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Validate merge_output_fps
-	if body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60 {
+	if body.MergeOutputFPS != 0 && (body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60) {
 		writeError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
 		return
 	}

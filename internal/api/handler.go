@@ -156,6 +156,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/cameras", h.handleHealthCameras)
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
+		// Generic event streaming (SSE)
+		r.Get("/api/events", h.handleEvents)
 	})
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
@@ -307,8 +309,6 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
-		// Generic event streaming (SSE)
-		r.Get("/api/events", h.handleEvents)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
