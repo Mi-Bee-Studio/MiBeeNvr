@@ -799,12 +799,18 @@ func (a *App) buildRouter() http.Handler {
 		slog.Error("static fs", "error", err)
 		os.Exit(1)
 	}
-	fileServer := http.FileServer(http.FS(staticContent))
-	// Static files served without auth — SPA handles login flow client-side.
-	// All sensitive data is protected via API endpoints in handler.Routes().
-	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileServer.ServeHTTP(w, r)
-	}))
+fileServer := http.FileServer(http.FS(staticContent))
+// Static files served without auth — SPA handles login flow client-side.
+// All sensitive data is protected via API endpoints in handler.Routes().
+// Cache: index.html must not be cached (always fresh after deploy).
+// Assets have content-hash filenames — safe to cache long-term.
+r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if path == "/" || path == "/index.html" {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	}
+	fileServer.ServeHTTP(w, r)
+}))
 
 	return r
 }
