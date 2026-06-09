@@ -6,7 +6,7 @@
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import { t } from '$lib/i18n';
-  import { AlertCircle, Settings as SettingsIcon, RefreshCw, CircleDot, Download, Cpu, ChevronDown, ChevronUp, RotateCw } from 'lucide-svelte';
+  import { AlertCircle, AlertTriangle, Settings as SettingsIcon, RefreshCw, CircleDot, Download, Cpu, ChevronDown, ChevronUp, RotateCw } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Tab from '$lib/components/Tab.svelte';

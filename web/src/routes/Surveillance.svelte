@@ -4,7 +4,7 @@
   import type { Camera, ProtocolInfo } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -146,7 +146,7 @@
       return { class: 'badge-success', label: '●', icon: CircleCheck, text: t('cameras.statusRecording') };
     }
     if (status === 'error' || status === 'failed') {
-      return { class: 'badge-error', label: '●', icon: CircleAlert, text: t('cameras.statusError') };
+      return { class: 'badge-error', label: '●', icon: AlertCircle, text: t('cameras.statusError') };
     }
     return { class: 'badge-neutral', label: '●', icon: CirclePause, text: t('cameras.statusStopped') };
   }

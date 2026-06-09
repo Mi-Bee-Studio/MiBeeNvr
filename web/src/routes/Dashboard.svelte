@@ -4,7 +4,7 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize, formatDate } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, CircleAlert, CirclePause, BarChart3 } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3 } from 'lucide-svelte';
   import { loadChart, createTrendChart, aggregateCameraTotals, BAR_COLORS } from '$lib/charts';
   import { getEffectiveTheme } from '$lib/preferences';
   import Tab from '$lib/components/Tab.svelte';
@@ -321,7 +321,7 @@
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <CircleAlert size={16} class="text-[var(--color-warning)]" />
+            <AlertCircle size={16} class="text-[var(--color-warning)]" />
             <span class="text-sm th-text-primary">
               <span class="font-semibold">{healthSummary.warning}</span> {t('stats.degraded')}
             </span>
