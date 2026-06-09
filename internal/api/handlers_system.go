@@ -401,6 +401,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			PathPrefix *string `json:"path_prefix"`
 			ReadWrite  *bool   `json:"read_write"`
 		} `json:"webdav"`
+		Timezone *string `json:"timezone"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -447,6 +448,18 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.WebDAV.ReadWrite != nil {
 			h.config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
 		}
+	}
+
+	// Update timezone
+	if body.Timezone != nil {
+		tz := strings.TrimSpace(*body.Timezone)
+		if tz != "" && tz != "UTC" && tz != "Local" {
+			if _, err := time.LoadLocation(tz); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid timezone: %q", tz))
+				return
+			}
+		}
+		h.config.Timezone = tz
 	}
 
 	// Persist config to disk
