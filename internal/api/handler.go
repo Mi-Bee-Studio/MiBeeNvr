@@ -222,6 +222,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
 				r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
 				r.Get("/snapshot", h.handleSnapshot)
+				r.Get("/merge-config", h.handleGetCameraMergeConfig)
 				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 				r.Get("/stats", h.handleCameraRecordingStats)

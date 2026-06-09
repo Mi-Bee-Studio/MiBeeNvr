@@ -2271,6 +2271,85 @@ func TestDeleteCameraMergeConfig_CameraNotFound(t *testing.T) {
 	}
 }
 
+func TestGetCameraMergeConfig_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	// Set per-camera merge config
+	mergeEnabled := true
+	checkInterval := "30m"
+	windowSize := "2h"
+	batchLimit := 50
+	minSegmentAge := "5m"
+	minSegments := 5
+	err = db.UpsertCameraMerge(context.Background(), "cam1",
+		&mergeEnabled, &checkInterval, &windowSize, &minSegmentAge, &batchLimit, &minSegments)
+	require.NoError(t, err)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	require.Equal(t, true, resp["enabled"])
+	require.Equal(t, "30m", resp["check_interval"])
+	require.Equal(t, "2h", resp["window_size"])
+	require.Equal(t, float64(50), resp["batch_limit"])
+	require.Equal(t, "5m", resp["min_segment_age"])
+	require.Equal(t, float64(5), resp["min_segments_to_merge"])
+}
+
+func TestGetCameraMergeConfig_NoConfig(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera with NO merge config
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+		"cam2", "No Merge", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	// All fields should be nil when no config is set
+	require.Nil(t, resp["enabled"])
+	require.Nil(t, resp["check_interval"])
+	require.Nil(t, resp["window_size"])
+	require.Nil(t, resp["batch_limit"])
+	require.Nil(t, resp["min_segment_age"])
+	require.Nil(t, resp["min_segments_to_merge"])
+}
+
+func TestGetCameraMergeConfig_NotFound(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/merge-config", nil, "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // --- Merge status API tests ---
 
 func TestHandleMergeStatus_NilManager(t *testing.T) {
