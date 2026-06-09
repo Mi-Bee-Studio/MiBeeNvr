@@ -64,6 +64,7 @@ type TimelapseRecorder struct {
 	frameCount   int
 
 	Hub *model.StreamHub
+	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out (nil for timelapse — no live streaming).
@@ -332,6 +333,18 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		}
 		if !r.lastCapture.CompareAndSwap(last, now) {
 			continue // another goroutine captured first
+		}
+		// Check storage health — if failed, skip recording but keep stream alive.
+		if isStorageFailed(r.store) {
+			if r.curTempPath != "" {
+				r.closeCurrentSegment()
+			}
+			if logNow, ok := shouldLogHealth(r.lastHealthLogAt); ok {
+				r.lastHealthLogAt = logNow
+				timelapseLogger.Warn("storage health failed, skipping recording (stream kept alive)",
+					"camera_id", r.cfg.CameraID)
+			}
+			continue
 		}
 
 		// Create segment if needed

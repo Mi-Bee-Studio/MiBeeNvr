@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -40,7 +41,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		hasError = true
 	}
 
-	// Storage check
+	// Storage check — combines disk usage with I/O health state.
 	if h.store != nil {
 		total, used, err := h.store.GetDiskUsage()
 		if err != nil {
@@ -52,11 +53,26 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 				pct = int(float64(used) / float64(total) * 100)
 			}
 			msg := fmt.Sprintf("%d%% used (%d / %d bytes)", pct, used, total)
-			if pct > 95 {
-				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg}
+
+			// Check I/O health state
+			storageHealth := h.store.StorageHealth()
+			var healthMsg string
+			switch storageHealth {
+			case storage.HealthFailed:
+				healthMsg = " I/O failed — writes disabled"
 				hasError = true
-			} else if pct > 90 {
-				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg}
+			case storage.HealthDegraded:
+				healthMsg = " I/O degraded — possible failures"
+				hasWarning = true
+			}
+
+			if storageHealth >= storage.HealthFailed {
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
+			} else if pct > 95 {
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
+				hasError = true
+			} else if pct > 90 || storageHealth >= storage.HealthDegraded {
+				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg + healthMsg}
 				hasWarning = true
 			} else {
 				resp.Checks["storage"] = HealthCheck{Status: "ok", Message: msg}
@@ -66,7 +82,6 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
 		hasError = true
 	}
-
 	// Goroutine check
 	numGoroutines := runtime.NumGoroutine()
 	if numGoroutines > 1000 {

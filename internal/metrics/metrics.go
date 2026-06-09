@@ -20,6 +20,7 @@ type Metrics struct {
 	StorageTotalBytes  prometheus.Gauge
 	RecordingCount     prometheus.Gauge
 	CameraErrors       *prometheus.CounterVec // labels: camera_id, error_type
+	StorageWriteErrors prometheus.Counter    // total storage write I/O errors
 	HLSFramesDropped  *prometheus.CounterVec // labels: camera_id
 	HLSWriteErrors      *prometheus.CounterVec // labels: camera_id
 	HLSMuxerRestarts    *prometheus.CounterVec // labels: camera_id
@@ -127,6 +128,11 @@ func NewMetrics() *Metrics {
 		Name: "nvr_camera_errors_total",
 		Help: "Total camera errors, partitioned by camera and error type.",
 	}, []string{"camera_id", "error_type"})
+
+	storageWriteErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_storage_write_errors_total",
+		Help: "Total number of storage write I/O errors across all cameras.",
+	})
 	hlsFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_hls_frames_dropped_total",
 		Help: "Total HLS frames dropped due to buffer full, partitioned by camera.",
@@ -341,6 +347,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		storageTotalBytes,
 		recordingCount,
 		cameraErrors,
+		storageWriteErrors,
 		hlsFramesDropped,
 		hlsWriteErrors,
 		hlsMuxerRestarts,
@@ -398,6 +405,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		StorageTotalBytes:   storageTotalBytes,
 		RecordingCount:      recordingCount,
 		CameraErrors:        cameraErrors,
+		StorageWriteErrors: storageWriteErrors,
 		HLSFramesDropped:    hlsFramesDropped,
 		HLSWriteErrors:      hlsWriteErrors,
 		HLSMuxerRestarts:    hlsMuxerRestarts,
@@ -472,4 +480,12 @@ func (m *Metrics) UpdateMergePending(cameraID string, count float64) {
 		return
 	}
 	m.MergePendingSegments.WithLabelValues(cameraID).Set(count)
+}
+
+// IncStorageWriteErrors increments the storage write errors counter.
+func (m *Metrics) IncStorageWriteErrors() {
+	if m == nil {
+		return
+	}
+	m.StorageWriteErrors.Inc()
 }

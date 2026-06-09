@@ -6,6 +6,13 @@ type Event struct {
 	Data  interface{}
 }
 
+// StorageHealthChanged is published when storage health state transitions occur.
+type StorageHealthChanged struct {
+	PreviousState string `json:"previous_state"`
+	CurrentState  string `json:"current_state"`
+	Message       string `json:"message"`
+}
+
 // SegmentCompleted is published when a recording segment finishes writing.
 type SegmentCompleted struct {
 	CameraID    string

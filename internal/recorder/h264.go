@@ -101,6 +101,7 @@ type H264Recorder struct {
 	lastPTS atomic.Int64 // tracks last RTP PTS for monotonicity check
 
 	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -567,6 +568,27 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		if naluType != 5 && naluType != 1 {
 			continue
 		}
+
+		// Check storage health — if failed, skip recording but keep stream alive.
+		if isStorageFailed(r.store) {
+			// Close any existing segment cleanly without storage I/O.
+			if r.muxer != nil {
+				r.muxer.Close()
+				os.Remove(r.curTempPath)
+				r.muxer = nil
+				r.curTempPath = ""
+				r.curFinalPath = ""
+				r.audioTrackID = 0
+				r.frameCount = 0
+			}
+			if logNow, ok := shouldLogHealth(r.lastHealthLogAt); ok {
+				r.lastHealthLogAt = logNow
+				h264Logger.Warn("storage health failed, skipping recording (stream kept alive)",
+					"camera_id", r.cfg.CameraID)
+			}
+			continue
+		}
+
 		if r.sps == nil || r.pps == nil {
 			continue
 		}
@@ -626,6 +648,7 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		}
 	}
 }
+
 
 func (r *H264Recorder) closeCurrentSegment() {
 	if r.muxer == nil {
