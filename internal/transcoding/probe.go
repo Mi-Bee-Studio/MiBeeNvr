@@ -45,6 +45,12 @@ func ProbeHardwareCapabilities(ffmpegPath string) *HardwareCapabilities {
 	return cachedCaps
 }
 
+// ProbeHardwareCapabilitiesExplicit probes with a specific FFmpeg path without caching.
+// Used when FFmpeg was downloaded after startup and the cached probe result is stale.
+func ProbeHardwareCapabilitiesExplicit(ffmpegPath string) *HardwareCapabilities {
+	return probeHardware(ffmpegPath)
+}
+
 func probeHardware(ffmpegPath string) *HardwareCapabilities {
 	caps := &HardwareCapabilities{
 		Arch:            runtime.GOARCH,

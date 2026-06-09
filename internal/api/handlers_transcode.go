@@ -33,8 +33,9 @@ type TranscodeManagerAPI interface {
 // --- Self-check endpoint ---
 
 // handleTranscodingCheck handles GET /api/transcoding/check.
-// Returns cached hardware probe data and FFmpeg availability.
-// Idempotent — calls ProbeHardwareCapabilities which uses sync.Once internally.
+// Returns hardware probe data and FFmpeg availability.
+// When FFmpeg was downloaded after startup (probe cached "not installed"),
+// re-probes with the downloader's FFmpeg path to get fresh results.
 func (h *Handler) handleTranscodingCheck(w http.ResponseWriter, r *http.Request) {
 	// Let probe auto-detect FFmpeg via PATH — do NOT pass downloader's custom path
 	// because probeHardware() only does LookPath when ffmpegPath is empty.
@@ -50,6 +51,12 @@ func (h *Handler) handleTranscodingCheck(w http.ResponseWriter, r *http.Request)
 	if h.downloader != nil {
 		status := h.downloader.GetFFmpegStatus()
 		ffmpegStatus = status.Status
+
+		// If downloader reports FFmpeg available but cached probe says no,
+		// the binary was downloaded after startup. Re-probe with the downloader's path.
+		if status.Status == "available" && !caps.FFmpegAvailable {
+			caps = transcoding.ProbeHardwareCapabilitiesExplicit(h.downloader.FFmpegPath())
+		}
 	} else if caps.FFmpegAvailable {
 		ffmpegStatus = "available"
 	} else {
