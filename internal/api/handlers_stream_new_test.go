@@ -46,7 +46,7 @@ func TestWHEP_AuthRequired(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
@@ -148,7 +148,7 @@ func TestFLV_AuthRequired(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
@@ -212,7 +212,7 @@ func TestCameraProtocols_AuthRequired(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()

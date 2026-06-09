@@ -208,7 +208,7 @@ func TestAuthMiddlewareBlocksUnauthenticated(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
@@ -226,7 +226,7 @@ func TestAuthMiddlewareAllowsAuthenticated(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
@@ -246,7 +246,7 @@ func TestAuthMiddlewareSetupModeWhenNoPassword(t *testing.T) {
 	createTestFiles(t, tmpDir)
 
 	// No password hash = setup required (auth returns 503)
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "" }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "" }}, "", middleware.AuthRateLimitConfig{})
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 

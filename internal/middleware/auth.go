@@ -14,9 +14,7 @@ import (
 var logger = slog.Default().With("component", "auth")
 
 const (
-	authMaxFailures   = 20
-	authWindowMinutes = 1
-	authCacheTTL      = 5 * time.Minute
+	authCacheTTL = 5 * time.Minute
 )
 
 type rateLimitEntry struct {
@@ -25,6 +23,13 @@ type rateLimitEntry struct {
 }
 
 var authFailures sync.Map
+
+// AuthRateLimitConfig controls auth failure rate limiting.
+type AuthRateLimitConfig struct {
+	Enabled       bool
+	MaxFailures   int
+	WindowMinutes int
+}
 
 // AuthProvider returns the current username and effective password hash.
 // Used by the auth middleware to dynamically read credentials (e.g. after setup).
@@ -38,7 +43,8 @@ type AuthProvider struct {
 // Returns the middleware and the effective hash used (for config persistence).
 // If both are empty, all requests return 503 Service Unavailable with setup guidance.
 // The provider is called on every request so changes (e.g. setup) take effect immediately.
-func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(http.Handler) http.Handler, string) {
+// rateLimit controls auth failure rate limiting; when .Enabled is false, no limiting is applied.
+func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimit AuthRateLimitConfig) (func(http.Handler) http.Handler, string) {
 	initialHash := provider.GetHash()
 	effectiveHash := initialHash
 	if strings.TrimSpace(initialHash) == "" && strings.TrimSpace(plaintextPassword) != "" {
@@ -55,16 +61,29 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(ht
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := extractIP(r.RemoteAddr)
 
-			if v, ok := authFailures.Load(ip); ok {
-				entry := v.(rateLimitEntry)
-				if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {
-					authFailures.Delete(ip)
-				} else if entry.count >= authMaxFailures {
-					logger.Info("rate limited request", "ip", ip, "failures", entry.count)
-					w.WriteHeader(http.StatusTooManyRequests)
-					return
+			// Auth failure rate limiting (optional — enabled via config).
+			if rateLimit.Enabled {
+				maxFailures := rateLimit.MaxFailures
+				windowMin := rateLimit.WindowMinutes
+				if maxFailures <= 0 {
+					maxFailures = 20
+				}
+				if windowMin <= 0 {
+					windowMin = 1
+				}
+				if v, ok := authFailures.Load(ip); ok {
+					entry := v.(rateLimitEntry)
+					if time.Since(entry.windowStart) > time.Duration(windowMin)*time.Minute {
+						authFailures.Delete(ip)
+					} else if entry.count >= maxFailures {
+						logger.Info("rate limited request", "ip", ip, "failures", entry.count)
+						w.WriteHeader(http.StatusTooManyRequests)
+						return
+					}
 				}
 			}
+
+			// Dynamic hash: prefer provider's current value (supports setup),
 
 			// Dynamic hash: prefer provider's current value (supports setup),
 			// fall back to auto-hashed value from initialization.
@@ -100,23 +119,32 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string) (func(ht
 				}
 			}
 			if !ok || user != currentUsername || !CheckPassword(pass, currentHash) {
-				if v, ok := authFailures.Load(ip); ok {
-					entry := v.(rateLimitEntry)
-					if time.Since(entry.windowStart) > time.Duration(authWindowMinutes)*time.Minute {
-						authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
-					} else {
-						entry.count++
-						authFailures.Store(ip, entry)
+				// Track auth failure only when rate limiting is enabled.
+				if rateLimit.Enabled {
+					windowMin := rateLimit.WindowMinutes
+					if windowMin <= 0 {
+						windowMin = 1
 					}
-				} else {
-					authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
+					if v, ok := authFailures.Load(ip); ok {
+						entry := v.(rateLimitEntry)
+						if time.Since(entry.windowStart) > time.Duration(windowMin)*time.Minute {
+							authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
+						} else {
+							entry.count++
+							authFailures.Store(ip, entry)
+						}
+					} else {
+						authFailures.Store(ip, rateLimitEntry{count: 1, windowStart: time.Now()})
+					}
 				}
 
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 
-			authFailures.Delete(ip)
+			if rateLimit.Enabled {
+				authFailures.Delete(ip)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}, effectiveHash

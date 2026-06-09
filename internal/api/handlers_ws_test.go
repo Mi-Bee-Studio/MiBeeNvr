@@ -23,7 +23,7 @@ func TestStreamWS_AuthRequired(t *testing.T) {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return "a$dummyhashdummyhashdummyhashdum" },
-	}, "")
+	}, "", middleware.AuthRateLimitConfig{})
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()

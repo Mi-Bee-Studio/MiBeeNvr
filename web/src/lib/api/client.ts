@@ -123,6 +123,12 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
   });
 
   if (!response.ok) {
+    // 401 → session expired or invalid credentials → force re-login
+    if (response.status === 401) {
+      clearCredentials();
+      window.location.hash = '#/login';
+      throw new ApiRequestError('Session expired', 'AUTH_EXPIRED');
+    }
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
     const apiErr = errorData as ApiError;
     throw new ApiRequestError(apiErr.error || `HTTP ${response.status}`, apiErr.code);
@@ -143,6 +149,11 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
 
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
+    if (response.status === 401) {
+      clearCredentials();
+      window.location.hash = '#/login';
+      throw new Error('Session expired');
+    }
     throw new Error(`HTTP ${response.status}`);
   }
   return response.blob();

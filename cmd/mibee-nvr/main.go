@@ -474,7 +474,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
-	}, cfg.Auth.Password)
+	}, cfg.Auth.Password, authmw.AuthRateLimitConfig{
+		Enabled:       cfg.Auth.RateLimit.Enabled != nil && *cfg.Auth.RateLimit.Enabled,
+		MaxFailures:   cfg.Auth.RateLimit.MaxFailures,
+		WindowMinutes: cfg.Auth.RateLimit.WindowMinutes,
+	})
 	a.authMW = authMW
 	if effectiveHash != "" && cfg.Auth.PasswordHash == "" && cfg.Auth.Password != "" {
 		slog.Info("persisting auto-hashed password to config", "component", "main")
@@ -767,7 +771,7 @@ func (a *App) buildRouter() http.Handler {
 		metricsAuthMW, _ := authmw.NewAuthMiddleware(authmw.AuthProvider{
 			GetUsername: func() string { return cfg.MetricsAuth.Username },
 			GetHash:     func() string { return cfg.MetricsAuth.PasswordHash },
-		}, cfg.MetricsAuth.Password)
+		}, cfg.MetricsAuth.Password, authmw.AuthRateLimitConfig{})
 		r.With(metricsAuthMW).Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	} else {
 		r.Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))

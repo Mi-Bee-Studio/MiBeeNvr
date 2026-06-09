@@ -151,9 +151,18 @@ type CameraTimelapseConfig struct {
 }
 
 type AuthConfig struct {
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
-	Password     string `yaml:"password"`
+	Username     string         `yaml:"username"`
+	PasswordHash string         `yaml:"password_hash"`
+	Password     string         `yaml:"password"`
+	RateLimit    RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig controls auth failure rate limiting.
+// When Enabled is false (default), no rate limiting is applied.
+type RateLimitConfig struct {
+	Enabled       *bool  `yaml:"enabled"`        // default false
+	MaxFailures   int    `yaml:"max_failures"`   // default 20
+	WindowMinutes int    `yaml:"window_minutes"` // default 1
 }
 
 type FTPConfig struct {
@@ -765,7 +774,13 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Cleanup.DiskThresholdPercent == 0 {
 		cfg.Cleanup.DiskThresholdPercent = 95
 	}
-	// Auth - no defaults
+	// Auth - rate limit defaults
+	if cfg.Auth.RateLimit.MaxFailures == 0 {
+		cfg.Auth.RateLimit.MaxFailures = 20
+	}
+	if cfg.Auth.RateLimit.WindowMinutes == 0 {
+		cfg.Auth.RateLimit.WindowMinutes = 1
+	}
 	// FTP
 	if cfg.FTP.Enabled == nil {
 		// set default to true only if not configured by user

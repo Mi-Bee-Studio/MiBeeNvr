@@ -639,7 +639,7 @@ func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Co
 	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 }
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "", middleware.AuthRateLimitConfig{})
 	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil)
 }
 func TestGetSettings_NoConfig(t *testing.T) {
@@ -2478,7 +2478,7 @@ func TestXiaomiDevicesNoAuth(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$testhash" }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$testhash" }}, "", middleware.AuthRateLimitConfig{})
 	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	// Without auth should return 401

@@ -387,7 +387,7 @@ func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
-	}, "")
+	}, "", middleware.AuthRateLimitConfig{})
 	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 }
 
