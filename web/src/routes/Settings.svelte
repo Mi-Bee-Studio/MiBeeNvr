@@ -19,6 +19,18 @@
 let retentionDays = $state(30);
 let diskThresholdPercent = $state(90);
 let checkInterval = $state('1h');
+let selectedTimezone = $state('Local');
+let timezoneOptions = $derived([
+  { value: 'Local', label: t('settings.timezoneLocal') },
+  { value: 'UTC', label: 'UTC' },
+  { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
+  { value: 'America/New_York', label: 'America/New_York' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
+  { value: 'Europe/London', label: 'Europe/London' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+  { value: 'Australia/Sydney', label: 'Australia/Sydney' },
+]);
 let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
 let webdavEnabled = $state(false);
@@ -134,7 +146,7 @@ let settingsTabs = $derived([
 let isDirty = $derived(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      retentionDays, diskThresholdPercent, checkInterval,
+      retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
@@ -230,7 +242,7 @@ function getAffectedCameraCount(protocol: string): number {
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      retentionDays, diskThresholdPercent, checkInterval,
+      retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       mergeEnabled, mergeCheckInterval, mergeWindowSize,
       mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
@@ -253,6 +265,7 @@ function getAffectedCameraCount(protocol: string): number {
       retentionDays = settings.cleanup.retention_days;
       diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       checkInterval = settings.cleanup.check_interval;
+      selectedTimezone = settings.timezone || 'Local';
       webdavEnabled = settings.webdav?.enabled ?? false;
       webdavPathPrefix = settings.webdav?.path_prefix ?? '/dav';
       webdavReadWrite = settings.webdav?.read_write ?? false;
@@ -333,6 +346,7 @@ function getAffectedCameraCount(protocol: string): number {
           path_prefix: webdavPathPrefix,
           read_write: webdavReadWrite,
         },
+        timezone: selectedTimezone,
       };
 
       await updateSettings(payload);
@@ -779,6 +793,23 @@ function getAffectedCameraCount(protocol: string): number {
       <Tab tabs={settingsTabs} activeTab={activeSettingsTab} onchange={(id) => activeSettingsTab = id} />
       <div class="space-y-6 mt-6">
       {#if activeSettingsTab === 'general'}
+        <!-- Timezone -->
+        <div class="card p-8 border th-border">
+          <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.timezone')}</h3>
+          <p class="text-sm th-text-tertiary mb-8">{t('settings.timezoneDesc')}</p>
+          <div class="max-w-sm">
+            <label for="timezone" class="input-label">{t('settings.timezone')}</label>
+            <select
+              id="timezone"
+              class="input"
+              bind:value={selectedTimezone}
+            >
+              {#each timezoneOptions as opt}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
         <!-- Cleanup Policy -->
         <div class="card p-8 border th-border">
           <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.cleanup')}</h3>

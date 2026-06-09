@@ -67,6 +67,8 @@ export interface SettingsConfig {
   cleanup: CleanupConfig;
   webdav: WebDAVConfig;
   streaming?: StreamingConfig;
+  timezone?: string;  // "Local", "UTC", or IANA timezone name
+  timezone_display?: string;  // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
 }
 
 export interface MergeStatus {

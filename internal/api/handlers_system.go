@@ -333,6 +333,24 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute timezone display string
+	tzDisplay := h.config.Timezone
+	if tzDisplay != "" && tzDisplay != "UTC" && tzDisplay != "Local" {
+		if loc, err := time.LoadLocation(tzDisplay); err == nil {
+			_, offset := time.Now().In(loc).Zone()
+			tzDisplay = fmt.Sprintf("%s (UTC%s)", tzDisplay, formatOffset(offset))
+		}
+	} else if tzDisplay == "UTC" {
+		tzDisplay = "UTC"
+	} else if tzDisplay == "Local" {
+		if loc, err := time.LoadLocation("Local"); err == nil {
+			name, offset := time.Now().In(loc).Zone()
+			tzDisplay = fmt.Sprintf("%s (UTC%s)", name, formatOffset(offset))
+		} else {
+			tzDisplay = "Local"
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cleanup": map[string]any{
 			"retention_days":         h.config.Cleanup.RetentionDays,
@@ -348,9 +366,24 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"username":        h.config.Auth.Username,
 			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
 		},
+		"timezone":         h.config.Timezone,
+		"timezone_display": tzDisplay,
 	})
 }
 
+func formatOffset(seconds int) string {
+	sign := "+"
+	if seconds < 0 {
+		sign = "-"
+		seconds = -seconds
+	}
+	hours := seconds / 3600
+	mins := (seconds % 3600) / 60
+	if mins == 0 {
+		return fmt.Sprintf("%s%d", sign, hours)
+	}
+	return fmt.Sprintf("%s%d:%02d", sign, hours, mins)
+}
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")

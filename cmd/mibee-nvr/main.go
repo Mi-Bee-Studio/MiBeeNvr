@@ -528,8 +528,22 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 
+	// Load display timezone for merge window alignment and camera scheduling.
+	var appLoc *time.Location = time.Local // Default: use server's local timezone
+	if cfg.Timezone != "" && cfg.Timezone != "Local" {
+		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			appLoc = loc
+			slog.Info("using configured timezone", "timezone", cfg.Timezone)
+		} else {
+			slog.Warn("invalid timezone, falling back to server local time", "timezone", cfg.Timezone, "error", err)
+			appLoc = time.Local
+		}
+	} else if cfg.Timezone == "Local" {
+		slog.Info("using server local timezone")
+	}
+
 	// Step 6: Camera manager
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr)
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, appLoc)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -542,17 +556,6 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			cam := a.camMgr.GetCameraConfig(cameraID)
 			return cam != nil && cam.Enabled
 		})
-	}
-
-	// Load display timezone for merge window alignment.
-	var appLoc *time.Location = time.UTC
-	if cfg.Timezone != "" && cfg.Timezone != "UTC" {
-		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
-			appLoc = loc
-			slog.Info("using display timezone", "timezone", cfg.Timezone)
-		} else {
-			slog.Warn("invalid timezone, falling back to UTC", "timezone", cfg.Timezone, "error", err)
-		}
 	}
 
 	periodicMergeDir := filepath.Join(cfg.Storage.RootDir, "periodic-merge")

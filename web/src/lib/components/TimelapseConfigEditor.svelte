@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { getTimelapseConfig, updateTimelapseConfig } from '$lib/api';
+  import { getTimelapseConfig, updateTimelapseConfig, getSettings } from '$lib/api';
   import type { TimelapseConfig, ScheduleConfig } from '$lib/api';
   import { showToast } from '$lib/toast';
 
@@ -13,6 +13,7 @@
   let config = $state<TimelapseConfig | null>(null);
   let loading = $state(true);
   let saving = $state(false);
+  let timezoneDisplay = $state('UTC');
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -26,6 +27,13 @@
       config = null;
     } finally {
       loading = false;
+    }
+    // Load settings for timezone display
+    try {
+      const settings = await getSettings();
+      timezoneDisplay = settings.timezone_display || settings.timezone || 'UTC';
+    } catch (e) {
+      console.warn('Failed to load settings:', e);
     }
   }
 
@@ -257,7 +265,7 @@
               <button class="text-xs th-text-accent hover:underline mt-1" onclick={addTimeRange}>
                 + {t('common.add')}
               </button>
-            <p class="th-text-muted text-xs mt-1">{t('timelapse.scheduleUtcHint')}</p>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.scheduleTimezoneHint', { timezone: timezoneDisplay })}</p>
             {/if}
           </div>
 
