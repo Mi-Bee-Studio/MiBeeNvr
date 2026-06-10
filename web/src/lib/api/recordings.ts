@@ -171,10 +171,6 @@ export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
 }
 
-export function getTimelapseThumbnailUrl(id: string): string {
-  return `${API_BASE}/timelapse/${id}/thumbnail`;
-}
-
 export async function downloadRecording(
   id: string,
   onProgress?: (loaded: number, total: number) => void,

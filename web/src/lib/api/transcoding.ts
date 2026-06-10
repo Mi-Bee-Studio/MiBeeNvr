@@ -149,11 +149,6 @@ export async function getUntranscodedRecordingCount(cameraID: string): Promise<{
   const query = new URLSearchParams({ camera_id: cameraID }).toString();
   return apiRequest<{ count: number }>(`/transcoding/recordings-without-transcode?${query}`);
 }
-// --- Cameras ---
-
-export async function getTranscodingCameras(): Promise<Record<string, unknown>> {
-  return apiRequest<Record<string, unknown>>('/transcoding/cameras');
-}
 
 // --- Settings ---
 

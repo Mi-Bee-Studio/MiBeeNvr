@@ -96,21 +96,6 @@ export interface HealthCamerasResponse {
   [cameraId: string]: CameraHealthDetail;
 }
 
-// Per-camera stability metrics
-export interface StabilityMetrics {
-  uptime_percent: number;
-  total_failures: number;
-  mtbf: string;
-  avg_session: string;
-  trend: string;
-  current_status: string;
-}
-
-// Stability data response (map of camera ID to metrics)
-export interface StabilityDataResponse {
-  cameras: { [cameraId: string]: StabilityMetrics };
-}
-
 // Fetch health cameras (public, no auth required)
 export async function getHealthCameras(): Promise<HealthCamerasResponse> {
   const response = await fetch('/api/health/cameras');
@@ -118,9 +103,4 @@ export async function getHealthCameras(): Promise<HealthCamerasResponse> {
     throw new Error(`HTTP ${response.status}`);
   }
   return response.json();
-}
-
-// Fetch stability data (auth required)
-export async function getStabilityData(): Promise<StabilityDataResponse> {
-  return apiRequest<StabilityDataResponse>('/health/stability');
 }
