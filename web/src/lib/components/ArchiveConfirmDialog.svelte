@@ -52,7 +52,7 @@
         {t('cameras.archive.confirm.title')}
       </span>
       <span class="text-xs th-text-tertiary ml-auto">
-        Step {step} of 2
+        {t('cameras.archive.confirm.step', { step })}
       </span>
     </div>
 

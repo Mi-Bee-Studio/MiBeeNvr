@@ -225,6 +225,7 @@
     >
       <span class="toggle-thumb"></span>
     </button>
+    <span class="text-xs th-text-tertiary ml-1.5">{camera.enabled ? t('cameras.action.enable') : t('cameras.action.disable')}</span>
 
     <!-- Action buttons (right) -->
     <div class="flex items-center gap-1">
@@ -300,12 +301,6 @@
 
         {#if menuOpen}
           <div class="dropdown-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-            {#if isHls}
-              <a href="#/live/{camera.id}" class="dropdown-item" onclick={closeMenu}>
-                <Eye size={14} />
-                {t('cameras.live')}
-              </a>
-            {/if}
             <button class="dropdown-item" onclick={() => { closeMenu(); onedit(camera); }}>
               <Pencil size={14} />
               {t('cameras.edit')}

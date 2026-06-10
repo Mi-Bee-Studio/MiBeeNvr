@@ -293,7 +293,6 @@
 
   function openEditForm(camera: Camera) {
     editingCamera = camera;
-    showForm = true;
   }
 
   function handleFormSave() {
@@ -512,10 +511,10 @@
           />
         {/if}
 
-        <!-- Add/Edit Form -->
-        {#if showForm}
+        <!-- Add Form (only for new camera) -->
+        {#if showForm && !editingCamera}
           <CameraForm
-            {editingCamera}
+            editingCamera={null}
             {protocols}
             {protocolsMap}
             {xiaomiDeviceList}
@@ -566,6 +565,22 @@
                 ontoggle={handleToggleCamera}
                 onsaveName={handleSaveName}
               />
+              <!-- Inline Edit Form for this camera -->
+              {#if editingCamera && editingCamera.id === camera.id}
+                <div class="col-span-1 sm:col-span-2 lg:col-span-3 animate-slide-down">
+                  <CameraForm
+                    {editingCamera}
+                    {protocols}
+                    {protocolsMap}
+                    {xiaomiDeviceList}
+                    globalTranscodingEnabled={globalTranscodingEnabled}
+                    h265Available={h265Available}
+                    onsave={handleFormSave}
+                    oncancel={handleFormCancel}
+                    onbackfillneeded={handleBackfillNeeded}
+                  />
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}
