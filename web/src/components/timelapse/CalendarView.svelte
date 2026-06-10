@@ -137,8 +137,6 @@
     d.setFullYear(year);
     currentMonth = d;
   }
-</script>
-
   let monthNames = $derived.by(() => {
     const lang = document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US';
     return Array.from({ length: 12 }, (_, i) => {
@@ -154,6 +152,9 @@
     d.setMonth(month);
     currentMonth = d;
   }
+
+</script>
+
 
 <div class="card p-5 mb-6 border th-border">
   <!-- Calendar Navigation -->

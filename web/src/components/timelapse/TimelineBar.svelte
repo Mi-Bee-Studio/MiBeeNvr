@@ -62,10 +62,9 @@
         counts.set(date, c);
         if (c > maxCount) maxCount = c;
       }
-    }
 
     // Build timeline entries
-    const days: Array<{ date: string; count: number; height: number; label: string }> = [];
+    const days = [];
     const cursor = new Date(startDate);
     while (cursor <= endDate) {
       const ds = formatDateStr(cursor);
