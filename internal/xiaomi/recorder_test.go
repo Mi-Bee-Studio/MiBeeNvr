@@ -188,8 +188,6 @@ func TestXiaomiRecorderStartAndStop(t *testing.T) {
 		CameraID:    "test-cam",
 		DID: "test-device", // Will fail to connect, that's expected
 		SegmentDur:  1 * time.Minute,
-		MaxBackoff:  1 * time.Second,
-		InitBackoff: 1 * time.Second,
 	}, store)
 
 	ctx := context.Background()
@@ -209,7 +207,6 @@ func TestXiaomiRecorderDoubleStart(t *testing.T) {
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
 		DID: "test-device",
-		InitBackoff: 10 * time.Second, // Long backoff so status stays recording
 	}, &noopSegmentStore{})
 
 	ctx := context.Background()
@@ -228,8 +225,6 @@ func TestXiaomiRecorderContextCancel(t *testing.T) {
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
 		DID: "test-device",
-		InitBackoff: 100 * time.Millisecond,
-		MaxBackoff:  100 * time.Millisecond,
 	}, &noopSegmentStore{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -354,11 +349,14 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 	r.streamStart = time.Now()
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 
 	var mu sync.Mutex
 	var receivedPTS int64
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au
@@ -764,28 +762,6 @@ func TestXiaomiRecorderAudioNilHub(t *testing.T) {
 	r.forwardAudio(missCodecPCMA, []byte{0x01, 0x02})
 }
 
-// --- Backoff and jitter tests ---
-
-func TestBackoffJitterNoPanic(t *testing.T) {
-	t.Helper()
-	// InitBackoff=1ns causes backoff/2=0, which panics in rand.Int63n(0) without the guard.
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:    "jitter-test",
-		DID:         "test-device",
-		InitBackoff: 1, // 1 nanosecond
-		MaxBackoff:  1,
-	}, &noopSegmentStore{})
-
-	ctx := context.Background()
-	err := r.Start(ctx)
-	require.NoError(t, err)
-
-	// Let it cycle through cloud resolve loop a few times with tiny backoff.
-	time.Sleep(100 * time.Millisecond)
-
-	err = r.Stop()
-	require.NoError(t, err)
-}
 
 func TestBackoffResetOnSuccessfulConnection(t *testing.T) {
 	t.Helper()

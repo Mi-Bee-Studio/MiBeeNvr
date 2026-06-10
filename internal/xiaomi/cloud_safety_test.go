@@ -30,23 +30,6 @@ func TestNewXiaomiRecorderDefaultSegmentDur(t *testing.T) {
 	require.Equal(t, defaultSegmentDur, r.cfg.SegmentDur)
 }
 
-func TestNewXiaomiRecorderDefaultMaxBackoff(t *testing.T) {
-	t.Helper()
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "cam1",
-		DID:      "dev1",
-	}, &noopSegmentStore{})
-	require.Equal(t, defaultMaxBackoff, r.cfg.MaxBackoff)
-}
-
-func TestNewXiaomiRecorderDefaultInitBackoff(t *testing.T) {
-	t.Helper()
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "cam1",
-		DID:      "dev1",
-	}, &noopSegmentStore{})
-	require.Equal(t, defaultInitBackoff, r.cfg.InitBackoff)
-}
 
 func TestNewXiaomiRecorderCustomSegmentDur(t *testing.T) {
 	t.Helper()
@@ -288,8 +271,6 @@ func TestXiaomiRecorderContextCancelRace(t *testing.T) {
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
 		DID:         "dev1",
-		InitBackoff: 50 * time.Millisecond,
-		MaxBackoff:  50 * time.Millisecond,
 	}, &noopSegmentStore{})
 
 	// Start and immediately cancel — tests race-free shutdown
@@ -399,10 +380,13 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 	r.vps = []byte{0x40, 0x01, 0x0c}
 	r.sps = []byte{0x42, 0x01, 0x01}
 	r.pps = []byte{0x44, 0x01, 0xc1}
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -434,10 +418,13 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 	r.codec = model.Format("unknown")
 	r.codecOK = true
 	r.streamStart = time.Now()
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()

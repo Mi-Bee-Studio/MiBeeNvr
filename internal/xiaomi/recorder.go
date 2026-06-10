@@ -11,7 +11,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"os"
 	"runtime"
 	"strings"
@@ -47,8 +46,6 @@ type ErrorReporter interface {
 
 const (
 	defaultSegmentDur  = 10 * time.Minute
-	defaultMaxBackoff  = 60 * time.Second  // Deprecated: no longer used, kept for config backward compatibility
-	defaultInitBackoff = 1 * time.Second   // Deprecated: no longer used, kept for config backward compatibility
 )
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
@@ -65,8 +62,6 @@ type XiaomiRecorderConfig struct {
 	Model        string            // Camera model (e.g. ModelC200, ModelC300)
 	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
 	SegmentDur   time.Duration
-	MaxBackoff   time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	DB           RecordingDB
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
@@ -122,12 +117,6 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = defaultSegmentDur
-	}
-	if cfg.MaxBackoff == 0 {
-		cfg.MaxBackoff = defaultMaxBackoff
-	}
-	if cfg.InitBackoff == 0 {
-		cfg.InitBackoff = defaultInitBackoff
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = defaultIdleTimeout
@@ -195,17 +184,6 @@ func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte
 	return r.codec, r.sps, r.pps, r.vps
 }
 
-// SetOnHLSFrame subscribes a callback as an HLS frame consumer via StreamHub.
-// Implements model.HLSProvider.
-// Deprecated: use Hub.Subscribe() directly instead. This method is kept for
-// backward compatibility during migration and will be removed in a future version.
-func (r *XiaomiRecorder) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
-	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
-	}
-	r.Hub.Unsubscribe("hls") // clean up stale consumer from previous session
-	_ = r.Hub.Subscribe("hls", cb)
-}
 
 // incActive increments the active recordings gauge if metrics is available.
 func (r *XiaomiRecorder) incActive() {
@@ -309,17 +287,6 @@ func extractQuotedValue(s string) string {
 	return s[start+1 : start+1+end]
 }
 
-// expandBackoff is deprecated: the recorder now uses TieredBackoff from the recorder package.
-// Kept for backward compatibility — no longer used in the reconnect loop.
-func (r *XiaomiRecorder) expandBackoff(backoff time.Duration) time.Duration {
-	half := max(1, int64(backoff/2))
-	jitter := time.Duration(rand.Int63n(half))
-	backoff = backoff*2 + jitter
-	if backoff > r.cfg.MaxBackoff {
-		backoff = r.cfg.MaxBackoff
-	}
-	return backoff
-}
 
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {

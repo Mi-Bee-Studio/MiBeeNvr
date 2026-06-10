@@ -10,6 +10,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -192,9 +193,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				}
 					return
 				}
-				provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH264(id, pts, au)
-				})
+				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, false)
 			case model.FormatH265:
 				if vps == nil {
 					writeError(w, http.StatusServiceUnavailable, "VPS not ready yet, waiting for video stream")
@@ -210,9 +209,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				}
 					return
 				}
-				provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-					_ = h.hlsMgr.WriteH265(id, pts, au)
-				})
+				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, true)
 			default:
 				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 				return
@@ -273,6 +270,8 @@ func getRecorderHub(rec model.Recorder) *model.StreamHub {
 	case *recorder.MJPEGRecorder:
 		return r.Hub
 	case *recorder.HTTPJPEGRecorder:
+		return r.Hub
+	case *xiaomi.XiaomiRecorder:
 		return r.Hub
 	default:
 		return nil

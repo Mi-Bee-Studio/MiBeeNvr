@@ -3,13 +3,11 @@ package api
 import (
 	"errors"
 	"log/slog"
-	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
-	"github.com/go-chi/chi/v5"
 )
 
 // StreamHandler is a protocol-agnostic interface for live streaming handlers.
@@ -101,15 +99,6 @@ func (r *StreamRegistry) ProtocolsDetailForCodec(codec model.Format) []ProtocolD
 	return result
 }
 
-// Handler returns the stream handler by name, or nil if not found.
-func (r *StreamRegistry) Handler(name string) StreamHandler {
-	for _, h := range r.handlers {
-		if h.Name() == name {
-			return h
-		}
-	}
-	return nil
-}
 
 // --- HLSStreamHandler ---
 
@@ -198,10 +187,7 @@ func (h *HLSStreamHandler) startFromProvider(
 		if err := h.Mgr.StartStream(camID, sps, pps, opts.MaxFPS); err != nil {
 			return err
 		}
-		// Use deprecated SetOnHLSFrame for HLSProvider backward compat
-		provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-			_ = h.Mgr.WriteH264(camID, pts, au)
-		})
+		h.subscribeHub(camID, hub, false, opts)
 
 	case model.FormatH265:
 		if sps == nil || pps == nil {
@@ -213,9 +199,7 @@ func (h *HLSStreamHandler) startFromProvider(
 		if err := h.Mgr.StartStreamH265(camID, vps, sps, pps, opts.MaxFPS); err != nil {
 			return err
 		}
-		provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-			_ = h.Mgr.WriteH265(camID, pts, au)
-		})
+		h.subscribeHub(camID, hub, true, opts)
 
 	default:
 		return &model.HLSSupportedCodecError{CameraID: camID}
@@ -343,88 +327,7 @@ func getStreamHub(rec model.Recorder) *model.StreamHub {
 
 // --- HTTP handler for /api/cameras/{id}/stream/* (HLS proxy) ---
 
-// handleHLSStreamViaRegistry is the registry-based HLS stream handler.
-// It replaces the type-switch spaghetti in handleHLSStream with a
-// delegation to the HLSStreamHandler via the StreamRegistry.
-func (h *Handler) handleHLSStreamViaRegistry(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 
-	if h.hlsMgr == nil || h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "HLS not available")
-		return
-	}
-
-	cam, err := h.db.GetCamera(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
-		return
-	}
-	if cam == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
-		return
-	}
-
-	// If stream not active, start it via HLSStreamHandler
-	if !h.hlsMgr.IsActive(id) {
-		rec := h.camMgr.GetRecorder(id)
-		if rec == nil {
-			writeError(w, http.StatusBadRequest, "camera recorder not running")
-			return
-		}
-
-		// Get camera config for HLS options
-		camCfg := h.camMgr.GetCameraConfig(id)
-		opts := StreamStartOptions{}
-		if camCfg != nil {
-			opts.MaxFPS = camCfg.HLSMaxFPS
-			opts.SubStreamURL = camCfg.SubStreamURL
-		}
-
-		hlsHandler := &HLSStreamHandler{Mgr: h.hlsMgr}
-		if err := hlsHandler.StartStream(id, rec, opts); err != nil {
-			if errors.Is(err, hls.ErrMaxStreamsReached) {
-				writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-			} else if _, ok := err.(*model.HLSSupportedCodecError); ok {
-				writeAPIError(w, http.StatusBadRequest, err)
-			} else {
-				streamLogger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-			}
-			return
-		}
-	}
-
-	// Proxy to muxer handler
-	if !h.hlsMgr.Handle(id, w, r) {
-		writeError(w, http.StatusServiceUnavailable, "HLS stream not available")
-	}
-}
-
-// handleStopHLSStreamViaRegistry stops the HLS stream via the HLSStreamHandler.
-func (h *Handler) handleStopHLSStreamViaRegistry(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	if h.hlsMgr == nil {
-		writeError(w, http.StatusInternalServerError, "HLS not available")
-		return
-	}
-
-	if !h.hlsMgr.IsActive(id) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "not active"})
-		return
-	}
-
-	// Unsubscribe HLS consumer from StreamHub before stopping the stream
-	var rec model.Recorder
-	if h.camMgr != nil {
-		rec = h.camMgr.GetRecorder(id)
-	}
-
-	hlsHandler := &HLSStreamHandler{Mgr: h.hlsMgr}
-	_ = hlsHandler.StopStreamWithRecorder(id, rec)
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
-}
 
 // SetStreamRegistry sets the stream registry on the handler for protocol queries.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
