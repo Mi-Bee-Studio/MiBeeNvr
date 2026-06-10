@@ -79,6 +79,12 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	}
 	fileSize := fileInfo.Size()
 
+	// Warn if segment was recently modified — may still be actively written.
+	if time.Since(fileInfo.ModTime()) < 2*time.Second {
+		logger.Warn("segment appears to be actively written, parsing may be unsafe",
+			"file_path", filePath, "mod_time", fileInfo.ModTime())
+	}
+
 	// Per-track accumulators.
 	var (
 		mdatOffset int64
@@ -233,6 +239,28 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("detect keyframes: %w", err)
 	}
 
+	// Validate per-sample bounds.
+	for i, s := range videoSamples {
+		if s.Offset < 0 || s.Offset >= fileSize {
+			return nil, fmt.Errorf("video sample %d has invalid offset %d (file size %d)", i, s.Offset, fileSize)
+		}
+		if s.Size == 0 {
+			return nil, fmt.Errorf("video sample %d has zero size", i)
+		}
+		if s.Offset+int64(s.Size) > fileSize {
+			return nil, fmt.Errorf("video sample %d at offset %d with size %d exceeds file size %d", i, s.Offset, s.Size, fileSize)
+		}
+	}
+
+	// Validate mdat box location.
+	if mdatOffset <= 0 || mdatSize <= 0 {
+		return nil, fmt.Errorf("invalid mdat box: offset=%d, size=%d", mdatOffset, mdatSize)
+	}
+	if mdatOffset+mdatSize > fileSize {
+		return nil, fmt.Errorf("mdat box at offset %d with size %d exceeds file size %d", mdatOffset, mdatSize, fileSize)
+	}
+
+
 	// Calculate total video duration from stts.
 	totalDur := time.Duration(0)
 	for _, e := range videoTrack.sttsEntries {
@@ -312,11 +340,26 @@ func buildSampleEntries(
 	if len(stsc) == 0 {
 		return nil, fmt.Errorf("no stsc entries")
 	}
+
+	if stsc[0].SampleDescriptionIndex != 1 {
+		return nil, fmt.Errorf("stsc SampleDescriptionIndex must be 1, got %d", stsc[0].SampleDescriptionIndex)
+	}
 	if len(chunkOffsets) == 0 {
 		return nil, fmt.Errorf("no chunk offsets")
 	}
 
 	samples := make([]SampleEntry, n)
+
+	// Validate stts total count matches stsz sample count.
+	if len(stts) > 0 {
+		var totalDurCount uint32
+		for _, e := range stts {
+			totalDurCount += e.SampleCount
+		}
+		if int(totalDurCount) != n {
+			return nil, fmt.Errorf("stts total sample count %d does not match stsz count %d", totalDurCount, n)
+		}
+	}
 
 	// --- Durations from stts (run-length encoded). ---
 	if len(stts) > 0 {
@@ -368,6 +411,15 @@ func buildSampleEntries(
 		return nil, fmt.Errorf("sample count mismatch: got %d from stsc, expected %d from stsz", sampleIdx, n)
 	}
 
+	// Validate temporal ordering: cumulative PTS must be monotonically non-decreasing.
+	var cumPTS uint64
+	for i := range samples {
+		if cumPTS+uint64(samples[i].Duration) > uint64(^uint32(0)) {
+			return nil, fmt.Errorf("temporal ordering violation at sample %d: PTS overflow", i)
+		}
+		cumPTS += uint64(samples[i].Duration)
+	}
+
 	return samples, nil
 }
 
@@ -399,7 +451,7 @@ func detectKeyframes(f *os.File, samples []SampleEntry, codec string) error {
 		switch codec {
 		case "h264":
 			nalType := buf[4] & 0x1F
-			samples[i].IsKeyFrame = (nalType == 5) // IDR slice
+			samples[i].IsKeyFrame = (nalType == 5) || (nalType == 7) || (nalType == 8) // IDR, SPS, or PPS
 		case "h265":
 			// H.265 NAL header: forbidden_zero_bit(1) + nal_unit_type(6) + nuh_layer_id(6) + nuh_temporal_id_plus1(3).
 			// Type is in bits 1-6 of the first NAL header byte.

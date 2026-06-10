@@ -27,10 +27,7 @@ function createMockPipeline() {
   };
 }
 
-function createMockVideoFrame(
-  displayWidth = 1920,
-  displayHeight = 1080,
-): VideoFrame {
+function createMockVideoFrame(displayWidth = 1920, displayHeight = 1080): VideoFrame {
   return {
     displayWidth,
     displayHeight,
@@ -160,12 +157,14 @@ function setupMocks() {
   });
 
   const originalGetContext = HTMLCanvasElement.prototype.getContext;
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
-    function (this: HTMLCanvasElement, contextId: string, ...args: unknown[]) {
-      if (contextId === 'webgpu') return canvasContext;
-      return originalGetContext.call(this, contextId, ...args);
-    },
-  );
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (
+    this: HTMLCanvasElement,
+    contextId: string,
+    ...args: unknown[]
+  ) {
+    if (contextId === 'webgpu') return canvasContext;
+    return originalGetContext.call(this, contextId, ...args);
+  });
 }
 
 // ─── Setup / Teardown ─────────────────────────────────────────────────────────
@@ -266,9 +265,7 @@ describe('WebGPURenderer', () => {
       renderer.render(frame);
       await vi.advanceTimersByTimeAsync(17);
 
-      expect(device.importExternalTexture).toHaveBeenCalledWith(
-        expect.objectContaining({ source: frame }),
-      );
+      expect(device.importExternalTexture).toHaveBeenCalledWith(expect.objectContaining({ source: frame }));
       expect(capturedExternalSource).toBe(frame);
       renderer.destroy();
     });
@@ -424,9 +421,7 @@ describe('WebGPURenderer', () => {
       await vi.advanceTimersByTimeAsync(17);
 
       expect(device.importExternalTexture).toHaveBeenCalled();
-      expect(device.createTexture).toHaveBeenCalledWith(
-        expect.objectContaining({ size: [1280, 720] }),
-      );
+      expect(device.createTexture).toHaveBeenCalledWith(expect.objectContaining({ size: [1280, 720] }));
       expect(commandEncoder.copyExternalImageToTexture).toHaveBeenCalledWith(
         expect.objectContaining({ source: frame }),
         expect.objectContaining({ texture: expect.any(Object) }),

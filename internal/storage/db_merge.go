@@ -28,8 +28,8 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	}
 	defer tx.Rollback()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged, merged.MergeTier)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier, merge_progress) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged, merged.MergeTier, 100)
 	if err != nil {
 		return err
 	}
@@ -134,11 +134,11 @@ func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) er
 	return tx.Commit()
 }
 
-// SetMergeResult updates merge_status to 'merged' and sets merge_path and merge_tier for a recording.
+// SetMergeResult updates merge_status to 'merged' and sets merge_path, merge_tier, and merge_progress for a recording.
 func (d *DB) SetMergeResult(ctx context.Context, id string, mergePath, mergeTier string) error {
 	_, err := d.db.ExecContext(ctx,
-		`UPDATE recordings SET merge_status=?, merge_path=?, merge_tier=? WHERE id=?;`,
-		model.MergeStatusMerged, mergePath, mergeTier, id)
+		`UPDATE recordings SET merge_status=?, merge_path=?, merge_tier=?, merge_progress=? WHERE id=?;`,
+		model.MergeStatusMerged, mergePath, mergeTier, 100, id)
 	return err
 }
 
@@ -152,13 +152,30 @@ func (d *DB) SetMergeError(ctx context.Context, ids []string, mergeError string)
 		return err
 	}
 	defer tx.Rollback()
-	q := `UPDATE recordings SET merge_status=?, merge_error=? WHERE id=?;`
+	q := `UPDATE recordings SET merge_status=?, merge_error=?, merge_progress=? WHERE id=?;`
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, q, model.MergeStatusFailed, mergeError, id); err != nil {
+		if _, err := tx.ExecContext(ctx, q, model.MergeStatusFailed, mergeError, 0, id); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// UpdateMergeProgress updates merge_progress and automatically sets merge_status for a recording.
+//   - progress=0: sets merge_status='pending'
+//   - progress>0 and progress<100: sets merge_status='merging'
+//   - progress=100: sets merge_status='merged'
+func (d *DB) UpdateMergeProgress(ctx context.Context, id string, progress int) error {
+	status := model.MergeStatusPending
+	if progress >= 100 {
+		status = model.MergeStatusMerged
+	} else if progress > 0 {
+		status = model.MergeStatusMerging
+	}
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET merge_progress=?, merge_status=? WHERE id=?;`,
+		progress, string(status), id)
+	return err
 }
 
 // ListSingletonPendingRecordings returns pending recordings for a camera that are

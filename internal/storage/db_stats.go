@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -23,55 +24,95 @@ func (d *DB) CountRecordingsByCamera(ctx context.Context, cameraID string) (int,
 
 // GetRecordingTrends returns daily aggregated recording statistics.
 // Days defaults to 7, clamped to [1, 30].
-func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailyStats, error) {
+func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Location) ([]model.DailyStats, error) {
 	if days <= 0 {
 		days = 7
 	}
 	if days > 30 {
 		days = 30
 	}
+	if loc == nil {
+		loc = time.UTC
+	}
 	cutoff := time.Now().AddDate(0, 0, -days).UTC()
-	
-	query := `SELECT DATE(r.started_at) as date, COUNT(*) as recordings, SUM(r.file_size) as total_size, r.camera_id, COALESCE(c.name, r.camera_id) as camera_name
+
+	// Select raw started_at timestamps and group by local date in Go
+	// to respect the configured display timezone.
+	query := `SELECT r.started_at, r.file_size, r.camera_id, COALESCE(c.name, r.camera_id) as camera_name
 		FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
 		WHERE r.started_at >= ?
-		GROUP BY DATE(r.started_at), r.camera_id
-		ORDER BY date`
-	
+		ORDER BY r.started_at`
+
 	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
-	// Aggregate per-camera rows into per-date stats
-	dateIndex := make(map[string]int) // date -> index into result slice
-	var result []model.DailyStats
-	
+
+	// Aggregate into per-date stats using local timezone dates
+	type dailyKey struct {
+		date     string
+		camID    string
+	}
+	agg := make(map[dailyKey]*model.DailyStats)
+
 	for rows.Next() {
-		var date string
-		var count int
-		var totalSize int64
+		var startedAtStr sql.NullString
+		var fileSize int64
 		var cameraID, cameraName string
-		if err := rows.Scan(&date, &count, &totalSize, &cameraID, &cameraName); err != nil {
+		if err := rows.Scan(&startedAtStr, &fileSize, &cameraID, &cameraName); err != nil {
 			return nil, err
 		}
-		idx, ok := dateIndex[date]
+		startedAt := scanTime(startedAtStr)
+		localDate := startedAt.In(loc).Format("2006-01-02")
+
+		key := dailyKey{date: localDate, camID: cameraID}
+		entry, ok := agg[key]
 		if !ok {
-			idx = len(result)
-			dateIndex[date] = idx
-			result = append(result, model.DailyStats{
-				Date:         date,
+			entry = &model.DailyStats{
+				Date:         localDate,
 				CameraCounts: make(map[string]int),
-			})
+			}
+			agg[key] = entry
 		}
-		result[idx].Recordings += count
-		result[idx].TotalSize += totalSize
-		result[idx].CameraCounts[cameraName] += count
+		entry.Recordings++
+		entry.TotalSize += fileSize
+		entry.CameraCounts[cameraName]++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	// Sort by date ascending
+	dates := make(map[string]bool)
+	for _, entry := range agg {
+		dates[entry.Date] = true
+	}
+	sorted := make([]string, 0, len(dates))
+	for d := range dates {
+		sorted = append(sorted, d)
+	}
+	sort.Strings(sorted)
+
+	result := make([]model.DailyStats, 0, len(sorted))
+	for _, d := range sorted {
+		// Merge per-camera entries for the same date
+		merged := model.DailyStats{
+			Date:         d,
+			CameraCounts: make(map[string]int),
+		}
+		for _, entry := range agg {
+			if entry.Date == d {
+				merged.Recordings += entry.Recordings
+				merged.TotalSize += entry.TotalSize
+				for camName, count := range entry.CameraCounts {
+					merged.CameraCounts[camName] += count
+				}
+			}
+		}
+		result = append(result, merged)
+	}
+
 	if result == nil {
 		result = []model.DailyStats{}
 	}

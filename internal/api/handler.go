@@ -19,9 +19,9 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -132,11 +132,13 @@ type Handler struct {
 	aiDetector        AIDetector
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
-	timelapseDailyMgr  *timelapse.DailyMergeManager
+	timelapseDailyMgr *timelapse.DailyMergeManager
+	mergeScheduler    *timelapse.MergeScheduler
+	activeMerges      sync.Map
 }
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -154,9 +156,14 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/cameras", h.handleHealthCameras)
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
+		// Generic event streaming (SSE)
+		r.Get("/api/events", h.handleEvents)
 	})
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
+	// Public routes
+	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
+	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -167,7 +174,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
-				r.Get("/download", h.handleDownloadRecording)
+
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
@@ -215,6 +222,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
 				r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
 				r.Get("/snapshot", h.handleSnapshot)
+				r.Get("/merge-config", h.handleGetCameraMergeConfig)
 				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 				r.Get("/stats", h.handleCameraRecordingStats)
@@ -302,8 +310,6 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
-		// Generic event streaming (SSE)
-		r.Get("/api/events", h.handleEvents)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
@@ -367,7 +373,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 }
 
 // --- Test helper exported for handler_test.go ---
@@ -382,8 +388,8 @@ func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
-	}, "")
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	}, "", middleware.AuthRateLimitConfig{})
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.

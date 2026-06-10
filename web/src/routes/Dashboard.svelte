@@ -1,626 +1,386 @@
 <script lang="ts">
-  import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
-  import type { Camera, ProtocolInfo } from '$lib/api';
+  import { onMount, onDestroy } from 'svelte';
+  import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends } from '$lib/api';
+  import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, CircleAlert } from 'lucide-svelte';
-  import PtzControl from '../components/PtzControl.svelte';
-  import VideoPlayer from '../components/VideoPlayer.svelte';
-  import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
-  import FlvPlayer from '../components/FlvPlayer.svelte';
-  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
-  import { getStreamingSettings } from '$lib/api/settings';
-  import { formatDate } from '$lib/format';
-  import { createSnapshotManager } from '$lib/snapshot';
-  import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { formatFileSize, formatDate } from '$lib/format';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3 } from 'lucide-svelte';
+  import { loadChart, createTrendChart, aggregateCameraTotals, BAR_COLORS } from '$lib/charts';
+  import { getEffectiveTheme } from '$lib/preferences';
+  import Tab from '$lib/components/Tab.svelte';
+  import HealthHistory from './HealthHistory.svelte';
+  import TranscodingHistory from './TranscodingHistory.svelte';
 
+  let { initialTab = 'storage' }: { initialTab?: string } = $props();
+
+  // Tab state
+  let activeTab = $state('storage');
+
+  $effect(() => {
+    activeTab = initialTab;
+  });
+
+  let tabs = $derived([
+    { id: 'storage', label: t('dashboard.tab.storage'), icon: HardDrive },
+    { id: 'health', label: t('dashboard.tab.health'), icon: Activity },
+    { id: 'transcoding', label: t('dashboard.tab.transcoding'), icon: Cpu },
+  ]);
+
+  function handleTabChange(tabId: string) {
+    activeTab = tabId;
+    const hash = tabId === 'storage' ? '#/dashboard' : `#/dashboard/${tabId}`;
+    window.location.hash = hash;
+  }
+
+  // System resource state
+  let stats = $state<StorageStats | null>(null);
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
-  let error = $state('');
-  let expandedCameraId = $state<string | null>(null);
+  let prevSystemStats = $state<SystemStats | null>(null);
+  let currentSystemStats = $state<SystemStats | null>(null);
+  let cpuPercent = $state<string | null>(null);
+  let memoryPercent = $state<string | null>(null);
+  let netRateUp = $state<string | null>(null);
+  let netRateDown = $state<string | null>(null);
+  let health = $state<HealthResponse | null>(null);
+  let healthCameras = $state<Record<string, CameraHealthDetail>>({});
 
-  // Page Visibility — pause/resume all players when tab hidden/visible
-  let tabVisible = $state(true);
+  // Chart state
+  let ChartJs: any = null;
+  let trendChart: any = null;
+  let lastTrends = $state<any>(null);
 
-  let ptzOpenIndex = $state(-1);
-
-  let allCameras = $state<Camera[]>([]);
-  let configOpen = $state(false);
-  let selectedCameraIds = $state<string[]>([]);
-  let pendingCameraIds = $state<string[]>([]);
-
-  // Snapshot state
-  let snapshotUrls = $state<Record<string, string>>({});
-  let snapshotLoading = $state<Record<string, boolean>>({});
-  let snapshotTransientErrors = $state<Record<string, boolean>>({});
-  let healthScores = $state<Record<string, number>>({});
-
-  // Snapshot manager — handles fetch, interval, and cleanup lifecycle
-  const snapshotMgr = createSnapshotManager({
-    intervalMs: 3000,
-    getCredentials,
-    onUrlUpdate: (id, url) => { snapshotUrls[id] = url; },
-    onUrlRevoke: (id) => {
-      if (snapshotUrls[id]) { URL.revokeObjectURL(snapshotUrls[id]); delete snapshotUrls[id]; }
-    },
-    onLoadingChange: (id, val) => { snapshotLoading[id] = val; },
-    onErrorChange: (id, val) => {
-      if (val) { snapshotTransientErrors[id] = true; } else { delete snapshotTransientErrors[id]; }
-    },
-    onUnsupported: (id) => { /* tracked internally by manager */ },
-  });
-
-  // Protocol capabilities for capability-based checks
-  let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
-  const STORAGE_KEY = 'dashboard-selected-cameras';
-
-  // Default streaming protocol from settings
-  let defaultProtocol = $state<string>('flv');
-
-  // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
-  let WasmPlayerComponent = $state<any>(null);
-  let wasmPlayerLoading = $state(false);
-  let wasmPlayerError = $state('');
-
-  async function loadWasmPlayer() {
-    if (WasmPlayerComponent || wasmPlayerLoading) return;
-    wasmPlayerLoading = true;
-    wasmPlayerError = '';
-    try {
-      const mod = await import('../components/WasmPlayer.svelte');
-      WasmPlayerComponent = mod.default;
-    } catch (e) {
-      console.error('Failed to load WasmPlayer:', e);
-      wasmPlayerError = String(e);
-      showToast(t('dashboard.wasmPlayerFailed'), 'error');
-    } finally {
-      wasmPlayerLoading = false;
-    }
+  function formatPercentage(used: number, total: number): string {
+    if (total === 0) return '0%';
+    const pct = (used / total) * 100;
+    return `${pct.toFixed(1)}%`;
   }
 
-  // Reconnection coordinator — limits concurrent reconnects, global exponential backoff,
-  // and backend pressure detection (HTTP 503 triggers 10s global cooldown)
-  const reconnectCoordinator = createReconnectCoordinator();
-  setContext('reconnect-coordinator', reconnectCoordinator);
-
-  function loadSavedCameraIds(): string[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const ids: string[] = JSON.parse(raw);
-        if (Array.isArray(ids)) return ids;
-      }
-    } catch (e) { console.warn('Failed to load saved camera IDs:', e); }
-    return [];
+  function getUsageColor(percentage: number): string {
+    if (percentage < 50) return 'bg-[var(--color-success)]';
+    if (percentage < 80) return 'bg-[var(--color-warning)]';
+    return 'th-bg-danger';
   }
 
-  function saveCameraIds(ids: string[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
-  }
-
-  function toggleCameraSelection(cameraId: string) {
-    if (pendingCameraIds.includes(cameraId)) {
-      pendingCameraIds = pendingCameraIds.filter(id => id !== cameraId);
-    } else if (pendingCameraIds.length < 4) {
-      pendingCameraIds = [...pendingCameraIds, cameraId];
-    }
-  }
-
-  function applyCameraSelection() {
-    selectedCameraIds = [...pendingCameraIds];
-    saveCameraIds(selectedCameraIds);
-    const available = new Map(allCameras.map(c => [c.id, c]));
-    const filtered = selectedCameraIds
-      .map(id => available.get(id))
-      .filter((c): c is Camera => c !== undefined);
-    cameras = filtered;
-    configOpen = false;
-  }
-
-  function getStreamUrl(cameraId: string): string {
-    return `/api/cameras/${cameraId}/stream/index.m3u8`;
-  }
-
-  function getGridClass(count: number): string {
-    if (count <= 1) return 'grid-cols-1';
-    if (count === 2) return 'grid-cols-1 sm:grid-cols-2';
-    return 'grid-cols-1 sm:grid-cols-2';
-  }
-
-  function getCellClass(camera: Camera, index: number, count: number): string {
-    if (expandedCameraId) {
-      return camera.id === expandedCameraId
-        ? 'col-span-2 row-span-2'
-        : 'hidden';
-    }
-    if (count === 3 && index === 0) {
-      return 'col-span-2';
-    }
-    return '';
-  }
-
-  function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
-    const status = camera.status?.toLowerCase() || '';
-    if (status === 'recording' || status === 'active') {
-      return { class: 'badge-success', label: '●', icon: CircleCheck, text: t('cameras.statusRecording') };
-    }
-    if (status === 'error' || status === 'failed') {
-      return { class: 'badge-error', label: '●', icon: CircleAlert, text: t('cameras.statusError') };
-    }
-    return { class: 'badge-neutral', label: '●', icon: CirclePause, text: t('cameras.statusStopped') };
-  }
-
-  function isHlsSupported(camera: Camera): boolean {
-    return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
-  }
-
-  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
-
-  function getCameraMode(camera: Camera): CameraMode {
-    if (!isHlsSupported(camera)) {
-      if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
-      return 'snapshot';
-    }
-    if (defaultProtocol === 'wasm') return 'wasm';
-    if (defaultProtocol === 'webrtc') return 'webrtc';
-    if (defaultProtocol === 'flv') return 'flv';
-    // hls, ll-hls, or default
-    return 'hls';
-  }
-
-  // Preload WasmPlayer when any camera would use 'wasm' mode
-  $effect(() => {
-    if (defaultProtocol === 'wasm' && cameras.some(c => isHlsSupported(c))) {
-      loadWasmPlayer();
-    }
-  });
-
-  // --- Expand / shrink ---
-
-  function expandToHls(cameraId: string) {
-    expandedCameraId = cameraId;
-  }
-
-  function shrinkToGrid() {
-    expandedCameraId = null;
-  }
-
-  function handleFullscreenChange() {
-    if (!document.fullscreenElement) {
-      shrinkToGrid();
-    }
-  }
-  function handleCellClick(camera: Camera, index: number) {
-    if (expandedCameraId === camera.id) {
-      shrinkToGrid();
-      return;
-    }
-    if (isHlsSupported(camera)) {
-      expandToHls(camera.id);
-    }
-  }
-  function handleCellDblClick(camera: Camera) {
-    if (expandedCameraId === camera.id) {
-      shrinkToGrid();
-    }
-  }
-
-
-  function closePtz() {
-    ptzOpenIndex = -1;
-  }
-
-
-  // --- Lifecycle ---
-
-  onMount(async () => {
-    try {
-      const fetched = await getDashboardCameras();
-      const activeFetched = fetched.filter(c => c.enabled !== false);
-      allCameras = activeFetched;
-      const savedIds = loadSavedCameraIds();
-      if (savedIds.length > 0) {
-        const available = new Map(activeFetched.map(c => [c.id, c]));
-        const filtered = savedIds
-          .map(id => available.get(id))
-          .filter((c): c is Camera => c !== undefined);
-        selectedCameraIds = filtered.map(c => c.id);
-        cameras = filtered;
+  // Compute health summary from health cameras
+  let healthSummary = $derived.by(() => {
+    const entries = Object.values(healthCameras);
+    let online = 0, warning = 0, offline = 0;
+    for (const cam of entries) {
+      const s = cam.latest_status?.toLowerCase() || '';
+      if (s === 'recording' || s === 'active' || s === 'healthy') {
+        online++;
+      } else if (s === 'reconnecting' || s === 'warning' || s === 'degraded') {
+        warning++;
+      } else if (s === 'error' || s === 'failed' || s === 'unhealthy') {
+        offline++;
       } else {
-        cameras = activeFetched.slice(0, 4);
-        selectedCameraIds = cameras.map(c => c.id);
+        // Any other status: count as offline
+        offline++;
       }
-      pendingCameraIds = [...selectedCameraIds];
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
     }
-    // Fetch camera health scores (public, no auth)
-    try {
-      const healthData = await getHealthCameras();
-      const scores: Record<string, number> = {};
-      for (const [id, detail] of Object.entries(healthData)) {
-        scores[id] = detail.score;
-      }
-      healthScores = scores;
-    } catch (e) {
-      console.warn('Failed to load camera health scores:', e);
-    }
-    // Load protocol capabilities
-    try {
-      const list = await listProtocols();
-      if (list && list.length > 0) {
-        protocolsMap = buildProtocolsMap(list);
-      }
-    } catch (e) {
-      console.warn('Failed to load protocol capabilities:', e);
-    }
-    // Load default streaming protocol from settings
-    try {
-      const config = await getStreamingSettings();
-      if (config.default_protocol) {
-        defaultProtocol = config.default_protocol;
-      }
-    } catch (e) {
-      console.warn('Failed to load streaming settings:', e);
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return { online, warning, offline, total: entries.length };
+  });
 
-    // Page Visibility API: pause players when tab hidden, resume when visible
-    const visibilityHandler = () => {
-      tabVisible = !document.hidden;
-    };
-    document.addEventListener('visibilitychange', visibilityHandler);
-
-    // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
-    const originalFetch = window.fetch;
-    window.fetch = async function (...args: Parameters<typeof fetch>): Promise<Response> {
-      const response = await originalFetch.apply(this, args);
-      if (response.status === 503) {
-        reconnectCoordinator.reportBackendPressure();
+  // Load system stats
+  async function loadSystemStats() {
+    try {
+      const s = await getSystemStats();
+      currentSystemStats = s;
+      if (prevSystemStats) {
+        const dt = s.timestamp - prevSystemStats.timestamp;
+        if (dt > 0) {
+          const totalDelta = s.cpu.total - prevSystemStats.cpu.total;
+          const idleDelta = s.cpu.idle - prevSystemStats.cpu.idle;
+          if (totalDelta > 0) {
+            cpuPercent = ((totalDelta - idleDelta) / totalDelta * 100).toFixed(1) + '%';
+          }
+          netRateUp = formatFileSize((s.network.bytes_sent - prevSystemStats.network.bytes_sent) / dt) + '/s';
+          netRateDown = formatFileSize((s.network.bytes_recv - prevSystemStats.network.bytes_recv) / dt) + '/s';
+        }
       }
-      return response;
-    };
+      if (s.memory.total > 0) {
+        memoryPercent = ((s.memory.total - s.memory.available) / s.memory.total * 100).toFixed(1) + '%';
+      }
+      prevSystemStats = s;
+    } catch (e) {
+      console.error('Failed to load system stats:', e);
+    }
+  }
 
+  async function loadStats() {
+    try {
+      stats = await getStats();
+    } catch (e) {
+      console.error('Failed to load stats:', e);
+    }
+  }
+
+  async function loadCameras() {
+    try {
+      cameras = await listCameras();
+    } catch (e) {
+      console.error('Failed to load cameras:', e);
+    }
+  }
+
+  async function loadHealth() {
+    try {
+      health = await healthCheck();
+    } catch (e) {
+      console.error('Failed to load health:', e);
+    }
+  }
+
+  async function loadHealthCameras() {
+    try {
+      healthCameras = await getHealthCameras();
+    } catch (e) {
+      console.warn('Failed to load health cameras:', e);
+    }
+  }
+
+  // Trend chart loading
+  async function loadTrends() {
+    try {
+      const trends = await getStatsTrends(7);
+      if (trends && trends.length > 0) {
+        if (!ChartJs) ChartJs = await loadChart();
+        createChart(trends);
+      }
+    } catch (e) {
+      console.error('Failed to load trends:', e);
+    }
+  }
+
+  function createChart(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
+    lastTrends = trends;
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
+    if (ctx) {
+      trendChart = createTrendChart(ChartJs, ctx, trends);
+    }
+  }
+
+  function rebuildTrendChart() {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
+    const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
+    if (ctx && lastTrends) {
+      trendChart = createTrendChart(ChartJs, ctx, lastTrends);
+    }
+    // If canvas is not yet in DOM (tab just switched), try again after DOM update
+    if (!ctx && lastTrends) {
+      requestAnimationFrame(() => {
+        const retryCtx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
+        if (retryCtx && lastTrends) {
+          trendChart = createTrendChart(ChartJs, retryCtx, lastTrends);
+        }
+      });
+    }
+  }
+
+  let refreshInterval: number;
+
+  onMount(() => {
+    loading = true;
+    Promise.all([
+      loadStats(),
+      loadCameras(),
+      loadSystemStats(),
+      loadHealth(),
+      loadHealthCameras(),
+      loadTrends(),
+    ]).finally(() => { loading = false; });
+
+    // Quick second sample after 2s so CPU/network show without waiting 30s
+    const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
+
+    // Auto-refresh every 30 seconds
+    refreshInterval = window.setInterval(() => {
+      loadStats();
+      loadCameras();
+      loadSystemStats();
+      loadHealth();
+      loadHealthCameras();
+      loadTrends();
+    }, 30000);
+
+    // Re-create charts when theme changes
+    const observer = new MutationObserver(() => {
+      if (trendChart) {
+        loadTrends();
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
 
     return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('visibilitychange', visibilityHandler);
-      window.fetch = originalFetch;
-      reconnectCoordinator.dispose();
+      if (refreshInterval) clearInterval(refreshInterval);
+      clearTimeout(quickSample);
+      observer.disconnect();
     };
   });
 
-  let prevVisibleIds: Set<string> = new Set();
-
-  // React to camera list changes — init/teardown snapshot cameras
-  // Cleanup return ensures intervals are cleared on component destroy
-  $effect(() => {
-    const _cameras = cameras;
-    const _loading = loading;
-    if (_loading || _cameras.length === 0) return;
-
-    const visibleIds = new Set(_cameras.map(c => c.id));
-
-    // Cleanup snapshot cameras that were removed
-    for (const id of prevVisibleIds) {
-      if (!visibleIds.has(id)) {
-        snapshotMgr.stopRefresh(id);
-      }
-    }
-
-    // Init snapshot cameras that were added
-    for (const cam of _cameras) {
-      if (prevVisibleIds.has(cam.id)) continue;
-
-      const mode = getCameraMode(cam);
-      if (mode === 'snapshot') {
-        snapshotMgr.startRefresh(cam.id);
-      }
-    }
-
-    prevVisibleIds = visibleIds;
-
-    // Cleanup: stop all snapshot refreshes when effect re-runs or component unmounts
-    return () => {
-      snapshotMgr.stopAll();
-    };
+  onDestroy(() => {
+    if (trendChart) { trendChart.destroy(); trendChart = null; }
   });
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
-  <main class="mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6" style="max-width: 100%;">
-
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-4 sm:mb-6">
-      <h1 class="text-lg sm:text-xl font-bold th-text-primary flex items-center gap-2">
-        <Video size={20} class="text-accent" />
-        {t('dashboard.title')}
-      </h1>
-      <button
-        class="btn btn-ghost p-2"
-        onclick={() => { configOpen = !configOpen; pendingCameraIds = [...selectedCameraIds]; }}
-        title={t('dashboard.configure')}
-      >
-        <Settings size={18} />
-      </button>
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="mb-6">
+      <h2 class="text-2xl font-bold th-text-primary">{t('nav.dashboard')}</h2>
     </div>
 
-    <!-- Camera configuration panel -->
-    {#if configOpen}
-      <div class="card p-4 mb-4">
-        <h3 class="text-sm font-semibold th-text-primary mb-3">{t('dashboard.selectCameras')}</h3>
-        <p class="text-xs th-text-secondary mb-3">{t('dashboard.maxCameras')}</p>
-        <div class="space-y-1 max-h-48 overflow-y-auto mb-4">
-          {#each allCameras as camera}
-            <label class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[var(--bg-tertiary)] cursor-pointer transition-colors">
-              <input
-                type="checkbox"
-                checked={pendingCameraIds.includes(camera.id)}
-                onchange={() => toggleCameraSelection(camera.id)}
-                disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= 4}
-                class="accent-[var(--color-primary)]"
-              />
-              <span class="text-sm th-text-primary">{camera.name || camera.id}</span>
-              <span class="text-xs th-text-muted ml-auto">{camera.protocol}</span>
-            </label>
-          {/each}
+    <!-- System Resource Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <!-- CPU -->
+      <div class="card p-5 border th-border">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium th-text-muted">{t('stats.cpu')}</h3>
+          <Cpu size={18} class="th-text-secondary" />
         </div>
-        <div class="flex justify-end gap-2">
-          <button
-            class="btn btn-ghost text-sm px-3 py-1.5"
-            onclick={() => configOpen = false}
-          >
-            {t('common.dismiss')}
-          </button>
-          <button
-            class="btn btn-primary text-sm px-3 py-1.5"
-            onclick={applyCameraSelection}
-          >
-            {t('dashboard.apply')}
-          </button>
+        <p class="text-2xl font-bold th-text-primary">{cpuPercent ?? '--'}</p>
+        <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
+          {#if cpuPercent}
+            <div class="h-full {getUsageColor(parseFloat(cpuPercent))} transition-all duration-500" style="width: {cpuPercent}"></div>
+          {/if}
         </div>
       </div>
-    {/if}
 
-    <!-- Loading state -->
-    {#if loading}
-      <div class="flex justify-center items-center h-64">
-        <div class="flex flex-col items-center gap-3">
-          <div class="spinner spinner-lg"></div>
-          <span class="text-sm th-text-secondary">{t('common.loading')}</span>
+      <!-- Memory -->
+      <div class="card p-5 border th-border">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium th-text-muted">{t('stats.memory')}</h3>
+          <MemoryStick size={18} class="th-text-secondary" />
+        </div>
+        <p class="text-2xl font-bold th-text-primary">
+          {currentSystemStats ? formatFileSize(currentSystemStats.memory.total - currentSystemStats.memory.available) : '--'}
+          <span class="text-sm font-normal th-text-muted">{memoryPercent ?? ''}</span>
+        </p>
+        <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
+          {#if memoryPercent}
+            <div class="h-full {getUsageColor(parseFloat(memoryPercent))} transition-all duration-500" style="width: {memoryPercent}"></div>
+          {/if}
         </div>
       </div>
-    {:else if error}
-      <div class="card p-8 text-center">
-        <div class="th-color-danger mb-4 flex justify-center"><AlertCircle size={48} /></div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
-        <p class="th-text-secondary mb-4">{error}</p>
-      </div>
-    {:else if cameras.length === 0}
-      <!-- Empty state -->
-      <div class="card p-8 sm:p-12 text-center">
-        <div class="th-text-muted mb-4 flex justify-center"><VideoOff size={48} /></div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">{t('dashboard.noCameras')}</h3>
-        <p class="th-text-secondary text-sm">{t('dashboard.noCamerasHint')}</p>
-      </div>
-    {:else}
-      <!-- Camera grid -->
-      <div
-        class="grid gap-2 sm:gap-3 {getGridClass(cameras.length)}"
-        onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
-        onshrink={(e: CustomEvent) => shrinkToGrid()}
-      >
-        {#each cameras as camera, index}
-{@const status = getStatusBadge(camera)}
-          {@const mode = getCameraMode(camera)}
-          {@const StatusIcon = status.icon}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)}"
-            class:cell-expanded={expandedCameraId === camera.id}
-            style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
-            role="button"
-            tabindex="0"
-            aria-label="{camera.name || camera.id} — {status.text}"
-            onclick={() => handleCellClick(camera, index)}
-            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
-            ondblclick={() => handleCellDblClick(camera)}
-          >
-            {#if mode === 'snapshot'}
-              <!-- Snapshot thumbnail mode (HTTP_JPEG cameras) -->
-              {#if snapshotLoading[camera.id] && !snapshotUrls[camera.id]}
-                <!-- Initial loading -->
-                <div class="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <div class="flex flex-col items-center gap-2">
-                    <Loader2 size={24} class="text-white animate-spin" />
-                    <span class="text-white/70 text-xs">{t('common.loading')}</span>
-                  </div>
-                </div>
-              {:else if snapshotUrls[camera.id]}
-                <!-- Snapshot image -->
-                <img
-                  src={snapshotUrls[camera.id]}
-                  alt={camera.name || camera.id}
-                  class="w-full h-full object-contain"
-                />
-                <!-- Transient error overlay (keeps last good image visible) -->
-                {#if snapshotTransientErrors[camera.id]}
-                  <div class="absolute inset-0 bg-black/30 flex items-center justify-center pointer-events-none">
-                    <span class="text-white/50 text-xs">{t('dashboard.snapshotError')}</span>
-                  </div>
-                {/if}
-              {:else if snapshotTransientErrors[camera.id]}
-                <!-- Error with no previous image -->
-                <div class="absolute inset-0 flex items-center justify-center">
-                  <div class="flex flex-col items-center gap-2">
-                    <ImageOff size={24} class="text-white/40" />
-                    <span class="text-white/50 text-xs">{t('dashboard.snapshotError')}</span>
-                  </div>
-                </div>
-              {/if}
 
-              <!-- Camera name + status overlay -->
-              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
-                <div class="flex items-center gap-2">
-                  <span class="badge {status.class} text-[10px] px-1.5 py-0.5 flex items-center gap-1">
-
-                    <StatusIcon size={10} />
-                    {status.text}
-                  </span>
-                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
-                </div>
-              </div>
-
-            {:else if mode === 'hls'}
-              <VideoPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                streamUrl={getStreamUrl(camera.id)}
-                cameraProtocol={camera.protocol}
-                protocol={defaultProtocol}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-              />
-
-            {:else if mode === 'webrtc'}
-              <WebRTCPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-              />
-
-            {:else if mode === 'flv'}
-              <FlvPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-              />
-            {:else if mode === 'wasm'}
-              {#if WasmPlayerComponent}
-                {@const WasmPlayer = WasmPlayerComponent}
-                <WasmPlayer
-                  cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
-                  expanded={expandedCameraId === camera.id}
-                  tabVisible={tabVisible}
-                />
-              {:else if wasmPlayerLoading}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-                  <div class="flex flex-col items-center gap-2">
-                    <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-                    <span class="text-white/50 text-xs">{t('dashboard.loadingWasmPlayer')}</span>
-                  </div>
-                </div>
-              {:else}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-                  <div class="flex flex-col items-center gap-2">
-                    <AlertCircle size={20} class="text-red-400/60" />
-                    <span class="text-white/50 text-xs">{t('dashboard.wasmPlayerLoadError')}</span>
-                    <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
-                  </div>
-                </div>
-              {/if}
-
-            {:else}
-              <!-- Unsupported protocol (no snapshot, no HLS) -->
-              <div class="absolute inset-0 flex items-center justify-center">
-                <div class="flex flex-col items-center gap-2 text-center px-4">
-                  <VideoOff size={24} class="text-white/40" />
-                  <span class="text-white/50 text-xs">{t('live.notSupported')}</span>
-                  <span class="text-white/30 text-[10px] font-mono">{camera.protocol}</span>
-                </div>
-              </div>
-              <!-- Camera name overlay -->
-              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-neutral text-[10px] px-1.5 py-0.5 flex items-center gap-1">
-                    <CirclePause size={10} />
-                    {t('live.notSupported')}
-                  </span>
-                  <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
-                </div>
-              </div>
-            {/if}
-
-            <!-- Streaming protocol badge -->
-            {#if mode !== 'unsupported'}
-              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
-              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
-              <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
-                {protocolLabel}
-              </span>
-            {/if}
-
-            <!-- Health indicator dot + score -->
-            {#if healthScores[camera.id] !== undefined}
-              {@const hs = healthScores[camera.id]}
-              {@const healthColor = hs >= 80 ? 'var(--color-success)' : hs >= 30 ? 'var(--color-warning)' : 'var(--color-danger)'}
-              <span
-                class="absolute top-2 left-2 z-10 flex items-center gap-1 bg-black/60 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full select-none"
-                title={t('dashboard.healthScore', { score: hs })}
-              >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {healthColor}"></span>
-                {hs}
-              </span>
-            {/if}
-
-            <!-- PTZ Overlay for PTZ-capable cameras -->
-            {#if ptzOpenIndex === index && getProtocolCapabilities(camera.protocol, protocolsMap).ptz}
-              <div
-                class="absolute top-2 left-2 z-10"
-                onclick={(e: MouseEvent) => { e.stopPropagation(); }}
-              >
-                <div class="relative">
-                  <button
-                    class="absolute -top-1.5 -right-1.5 z-20 p-0.5 rounded-full bg-black/70 text-white/80 hover:text-white hover:bg-black/90 transition-all"
-                    onclick={(e: MouseEvent) => { e.stopPropagation(); closePtz(); }}
-                    aria-label={t('common.close')}
-                  >
-                    <X size={12} />
-                  </button>
-                  <PtzControl cameraId={camera.id} enabled={true} />
-                </div>
-              </div>
-            {/if}
+      <!-- Disk (Storage) -->
+      <div class="card p-5 border th-border">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium th-text-muted">{t('stats.totalStorage')}</h3>
+          <HardDrive size={18} class="th-text-secondary" />
+        </div>
+        <p class="text-2xl font-bold th-text-primary">
+          {stats ? formatFileSize(stats.used_bytes) : '--'}
+          <span class="text-sm font-normal th-text-muted">
+            {stats ? formatPercentage(stats.used_bytes, stats.total_bytes) : ''}
+          </span>
+        </p>
+        {#if stats}
+          <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
+            <div
+              class="h-full {getUsageColor((stats.used_bytes / stats.total_bytes) * 100)} transition-all duration-500"
+              style="width: {formatPercentage(stats.used_bytes, stats.total_bytes)}"
+            ></div>
           </div>
-        {/each}
+        {/if}
       </div>
+
+      <!-- Network -->
+      <div class="card p-5 border th-border">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium th-text-muted">{t('stats.network')}</h3>
+          <Wifi size={18} class="th-text-secondary" />
+        </div>
+        <p class="text-2xl font-bold th-text-primary">
+          <span class="text-base font-medium">↑</span> {netRateUp ?? '--'}
+          <span class="text-base font-medium ml-2">↓</span> {netRateDown ?? '--'}
+        </p>
+        <p class="text-xs th-text-muted mt-1">
+          {t('stats.totalUpload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_sent) : '--'}
+          · {t('stats.totalDownload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_recv) : '--'}
+        </p>
+      </div>
+    </div>
+
+    <!-- Camera Health Summary -->
+    <div class="card p-5 border th-border mb-6">
+      <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+        <Activity size={16} class="text-accent" />
+        {t('dashboard.healthSummary')}
+      </h3>
+      {#if healthSummary.total > 0}
+        <div class="flex flex-wrap gap-6">
+          <div class="flex items-center gap-2">
+            <CircleCheck size={16} class="text-[var(--color-success)]" />
+            <span class="text-sm th-text-primary">
+              <span class="font-semibold">{healthSummary.online}</span> {t('stats.healthy')}
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <AlertCircle size={16} class="text-[var(--color-warning)]" />
+            <span class="text-sm th-text-primary">
+              <span class="font-semibold">{healthSummary.warning}</span> {t('stats.degraded')}
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <CirclePause size={16} class="text-[var(--color-danger)]" />
+            <span class="text-sm th-text-primary">
+              <span class="font-semibold">{healthSummary.offline}</span> {t('stats.unhealthy')}
+            </span>
+          </div>
+          <div class="flex items-center gap-2 text-sm th-text-muted ml-auto">
+            {t('stats.activeCameras')}: {cameras.filter(c => c.enabled).length}/{cameras.length}
+          </div>
+        </div>
+      {:else}
+        <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
+      {/if}
+    </div>
+
+    <!-- Tabs -->
+    <Tab {tabs} {activeTab} onchange={handleTabChange} />
+
+    <!-- Tab Content -->
+    {#if activeTab === 'storage'}
+      <!-- Storage Trends Tab -->
+      <div class="mt-4 space-y-4">
+        {#if loading && !lastTrends}
+          <div class="card p-8 flex justify-center">
+            <div class="spinner spinner-lg"></div>
+          </div>
+        {:else if lastTrends}
+          <div class="card p-5 border th-border">
+            <div class="h-56 sm:h-64">
+              <canvas id="dashboardTrendChart"></canvas>
+            </div>
+          </div>
+        {:else}
+          <div class="card p-8 text-center th-text-muted">
+            <BarChart3 size={32} class="mx-auto mb-2 opacity-50" />
+            <p class="text-sm">{t('stats.storageTrend')}</p>
+          </div>
+        {/if}
+      </div>
+    {:else if activeTab === 'health'}
+      <div class="health-tab-content">
+        <HealthHistory />
+      </div>
+    {:else if activeTab === 'transcoding'}
+      <TranscodingHistory />
     {/if}
   </main>
 </div>
 
 <style>
-  /* Grid cell expand/shrink transitions */
-  .camera-grid-cell {
-    transition: opacity var(--duration-normal) var(--ease-out),
-                transform var(--duration-normal) var(--ease-out);
+  .health-tab-content > :global(:first-child) {
+    padding-top: 0 !important;
   }
 
-  /* Subtle hover lift on grid cells */
-  .camera-grid-cell:not(.hidden):hover {
-    opacity: 0.92;
+  .health-tab-content > :global(.min-h-screen) {
+    min-height: auto !important;
   }
-
-  /* Fade-in + scale-up when a cell expands */
-  .cell-expanded {
-    animation: cell-expand var(--duration-normal) var(--ease-out);
-  }
-
-  @keyframes cell-expand {
-    from {
-      opacity: 0.3;
-      transform: scale(0.96);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
 </style>

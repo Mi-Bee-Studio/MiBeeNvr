@@ -52,11 +52,14 @@ export function getAiSettings(): AiDetectionSettings {
  */
 export function saveAiSettings(settings: AiDetectionSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      enabled: settings.enabled,
-      confidenceThreshold: clampConfidence(settings.confidenceThreshold),
-      frameSkip: clampFrameSkip(settings.frameSkip),
-    }));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        enabled: settings.enabled,
+        confidenceThreshold: clampConfidence(settings.confidenceThreshold),
+        frameSkip: clampFrameSkip(settings.frameSkip),
+      }),
+    );
   } catch (e) {
     console.error('Failed to save AI settings:', e);
   }

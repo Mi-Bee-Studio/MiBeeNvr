@@ -251,7 +251,7 @@ func TestAuthMiddlewareWrongPassword(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	ts := setupTestServer(t, tmpDir, authMW)
 	defer ts.Close()
 
@@ -677,7 +677,7 @@ func TestAuthEnforcedOnPUT(t *testing.T) {
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	srv := NewServer(store, "/dav", authMW, nil, true)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -704,7 +704,7 @@ func TestAuthEnforcedOnDELETE(t *testing.T) {
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	srv := NewServer(store, "/dav", authMW, nil, true)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -730,7 +730,7 @@ func TestAuthEnforcedOnPROPFIND(t *testing.T) {
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "")
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return hash }}, "", middleware.AuthRateLimitConfig{})
 	srv := NewServer(store, "/dav", authMW, nil, true)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

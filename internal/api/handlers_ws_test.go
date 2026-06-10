@@ -23,8 +23,8 @@ func TestStreamWS_AuthRequired(t *testing.T) {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return "a$dummyhashdummyhashdummyhashdum" },
-	}, "")
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	}, "", middleware.AuthRateLimitConfig{})
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest("GET", "/api/cameras/test-cam/stream/ws", nil)
@@ -40,7 +40,7 @@ func TestStreamWS_NoManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/test-cam/stream/ws", nil, "admin", "pass")
 
@@ -54,7 +54,7 @@ func TestStreamWS_CameraNotFound(t *testing.T) {
 	defer db.Close()
 
 	wsMgr := wsstream.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 	h.SetWSManager(wsMgr)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/stream/ws", nil, "admin", "pass")
@@ -72,7 +72,7 @@ func TestStreamWS_NoCamMgr(t *testing.T) {
 
 	wsMgr := wsstream.NewManager()
 	// Create handler with no camMgr (nil camera manager)
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 	h.SetWSManager(wsMgr)
 
 	// Stream not active and camMgr is nil -> 404
@@ -92,7 +92,7 @@ func TestStreamWS_RecorderNotRunning(t *testing.T) {
 		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
 		Cameras: []config.CameraConfig{},
 	}, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), nil, camMgr, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, camMgr, nil, "", nil, nil, nil)
 
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 

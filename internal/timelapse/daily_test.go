@@ -31,9 +31,13 @@ func (m *mockMergeStatusUpdater) SetMergeError(_ context.Context, ids []string, 
 	return nil
 }
 
+func (m *mockMergeStatusUpdater) UpdateMergeProgress(_ context.Context, _ string, _ int) error {
+	return nil
+}
+
 func TestNewDailyMergeManager(t *testing.T) {
 	t.Helper()
-	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data")
+	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data", nil)
 	if m == nil {
 		t.Fatal("expected non-nil DailyMergeManager")
 	}
@@ -41,7 +45,7 @@ func TestNewDailyMergeManager(t *testing.T) {
 
 func TestDailyMergeManager_Run(t *testing.T) {
 	t.Helper()
-	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data")
+	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data", nil)
 	err := m.Run(context.Background(), "test-cam", "2026-01-01")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -67,6 +71,7 @@ type trackDB struct {
 	statuses map[string]string // recordingID -> status
 	errors   map[string]string // recordingID -> error message
 	results  map[string]struct{ path, tier string } // recordingID -> result
+	progress map[string]int    // recordingID -> progress
 }
 
 func newTrackDB() *trackDB {
@@ -74,6 +79,7 @@ func newTrackDB() *trackDB {
 		statuses: make(map[string]string),
 		errors:   make(map[string]string),
 		results:  make(map[string]struct{ path, tier string }),
+		progress: make(map[string]int),
 	}
 }
 
@@ -100,6 +106,19 @@ func (d *trackDB) SetMergeError(_ context.Context, ids []string, mergeError stri
 	for _, id := range ids {
 		d.statuses[id] = "failed"
 		d.errors[id] = mergeError
+	}
+	return nil
+}
+func (d *trackDB) UpdateMergeProgress(_ context.Context, id string, progress int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.progress[id] = progress
+	if progress >= 100 {
+		d.statuses[id] = "merged"
+	} else if progress > 0 {
+		d.statuses[id] = "merging"
+	} else {
+		d.statuses[id] = "pending"
 	}
 	return nil
 }
@@ -154,7 +173,7 @@ func TestDailyWire_DailyMergeRun(t *testing.T) {
 	// Create a mock lister that returns segments for a date.
 	mockLister := &mockRecordingListerWithSegments{}
 	updater := &mockMergeStatusUpdater{}
-	mgr := NewDailyMergeManager(mockLister, updater, nil, 10, t.TempDir())
+	mgr := NewDailyMergeManager(mockLister, updater, nil, 10, t.TempDir(), nil)
 	err := mgr.Run(context.Background(), "test-cam", "2026-06-06")
 	// No segments should be found — Run should succeed without error.
 	if err != nil {

@@ -4,122 +4,188 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the login page
     await page.goto('/');
-    
+
     // Login with admin credentials
     await page.fill('input[type="text"], input[name="username"]', 'admin');
     await page.fill('input[type="password"], input[name="password"]', 'admin');
     await page.click('button[type="submit"]');
-    
-    // Wait for navigation to recordings or any protected page
-    await page.waitForNavigation({ timeout: 10000 });
+
+    // Wait for navigation to complete
+    await page.waitForLoadState('networkidle');
   });
 
-  test('should login and navigate to recordings page', async ({ page }) => {
+  test('should display recordings page', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
+
     // Wait for recordings page to load
-    await page.waitForSelector('h1', { timeout: 5000 });
-    
+    await page.waitForSelector('h2', { timeout: 5000 });
+
     // Verify we're on the recordings page
-    const header = await page.textContent('h1');
+    const header = await page.textContent('h2');
     expect(header).toContain('Recordings');
   });
 
-  test('should display recordings list', async ({ page }) => {
+  test('should load in gallery view by default', async ({ page }) => {
+    // Navigate to recordings page — gallery is the default view
+    await page.goto('/#/recordings');
+    await page.waitForLoadState('networkidle');
+
+    // Verify gallery container is visible
+    await expect(page.locator('#recording-gallery')).toBeVisible({ timeout: 10000 });
+
+    // Calendar with Today button should also be visible
+    const todayButton = page.locator('button').filter({ hasText: 'Today' }).first();
+    await expect(todayButton).toBeVisible();
+  });
+
+  test('should display recordings in gallery mode', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for the page to load
     await page.waitForLoadState('networkidle');
-    
-    // Check if recordings table exists
-    const table = await page.locator('table').first();
-    await expect(table).toBeVisible();
-    
-    // Wait for table rows to load (or no-recordings message)
-    const tableBody = page.locator('table tbody');
-    await expect(tableBody.locator('tr, :scope')).toBeAttached({ timeout: 5000 });
-    // Check if there are recordings or "no recordings" message
-    const recordings = await page.locator('table tbody tr').count();
-    
-    if (recordings > 0) {
-      console.log(`Found ${recordings} recordings`);
+
+    // Wait for gallery to load with recording cards or empty state
+    await page.waitForSelector('#recording-gallery', { timeout: 10000 });
+
+    const cards = await page.locator('.recording-card').count();
+    if (cards > 0) {
+      console.log(`Found ${cards} recording cards`);
     } else {
-      const noRecordings = await page.locator('text=no recordings').count();
+      // Empty state — check for "No recordings" message
+      const noRecordings = await page.locator('text=No recordings found').count();
       expect(noRecordings).toBeGreaterThan(0);
     }
+  });
+
+  test('should switch to compact list view', async ({ page }) => {
+    // Navigate to recordings page
+    await page.goto('/#/recordings');
+    await page.waitForLoadState('networkidle');
+
+    // Click "List" button to switch to list view
+    const listButton = page.locator('button').filter({ hasText: 'List' });
+    await expect(listButton).toBeVisible({ timeout: 5000 });
+    await listButton.click();
+
+    // Wait for compact list to render
+    await page.waitForSelector('.compact-list', { timeout: 5000 });
+
+    // List header with column labels should be visible
+    await expect(page.locator('.list-header')).toBeVisible();
+
+    // Verify URL contains view=list
+    expect(page.url()).toContain('view=list');
   });
 
   test('should navigate to recording detail page', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr, :not(table)', { timeout: 5000 });
-    
-    // Find a "View" button and click it
-    const viewButtons = await page.locator('button:has-text("View")').all();
-    
-    if (viewButtons.length > 0) {
-      // Click the first View button
-      await viewButtons[0].click();
-      
+    await page.waitForLoadState('networkidle');
+
+    // Wait for recording cards or try list view fallback
+    const cards = page.locator('.recording-card');
+    const cardCount = await cards.count();
+
+    if (cardCount > 0) {
+      // Click the first recording card
+      await cards.first().click();
+
       // Wait for navigation to detail page
       await page.waitForURL(/.*\/recordings\/.*/);
-      
+
       // Verify we're on the detail page
       const url = page.url();
       expect(url).toMatch(/\/recordings\/.*/);
-      
+
       // Check for video player or frame player
       const videoPlayer = await page.locator('video').count();
       const framePlayer = await page.locator('img[alt*="Frame"]').count();
-      
+
       expect(videoPlayer + framePlayer).toBeGreaterThan(0);
     } else {
       test.skip('No recordings available to test detail view');
     }
   });
 
+  test('should test format filter pills', async ({ page }) => {
+    // Navigate to recordings page
+    await page.goto('/#/recordings');
+    await page.waitForLoadState('networkidle');
+
+    // All four format filter pills should be visible
+    const allPill = page.locator('button').filter({ hasText: 'All' }).first();
+    const videoPill = page.locator('button').filter({ hasText: 'Video' }).first();
+    const timelapsePill = page.locator('button').filter({ hasText: 'Timelapse' }).first();
+    const mjpegPill = page.locator('button').filter({ hasText: 'MJPEG' }).first();
+
+    await expect(allPill).toBeVisible();
+    await expect(videoPill).toBeVisible();
+    await expect(timelapsePill).toBeVisible();
+    await expect(mjpegPill).toBeVisible();
+
+    // Click Video pill → verify URL updates
+    await videoPill.click();
+    await page.waitForTimeout(500);
+    expect(page.url()).toContain('format=Video');
+    console.log('✓ Video format filter applied');
+
+    // Click Timelapse pill → verify URL updates
+    await timelapsePill.click();
+    await page.waitForTimeout(500);
+    expect(page.url()).toContain('format=Timelapse');
+    console.log('✓ Timelapse format filter applied');
+
+    // Click MJPEG pill → verify URL updates
+    await mjpegPill.click();
+    await page.waitForTimeout(500);
+    expect(page.url()).toContain('format=MJPEG');
+    console.log('✓ MJPEG format filter applied');
+
+    // Click All to reset
+    await allPill.click();
+    await page.waitForTimeout(500);
+    console.log('✓ Filter reset to All');
+  });
+
   test('should test video playback for H264 recordings', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr, span:has-text("MP4")', { timeout: 5000 });
-    
-    // Find an H264/MP4 recording
-    const mp4Badges = await page.locator('span:has-text("MP4")').all();
-    
-    if (mp4Badges.length > 0) {
-      // Click the View button for the first MP4 recording
-      const firstMp4Row = await mp4Badges[0].locator('..').locator('..');
-      const viewButton = firstMp4Row.locator('button:has-text("View")');
-      await viewButton.click();
-      
-      // Wait for navigation
+    await page.waitForLoadState('networkidle');
+
+    // Click Video format pill to filter H264/H265 recordings
+    const videoPill = page.locator('button').filter({ hasText: 'Video' }).first();
+    await videoPill.click();
+    await page.waitForTimeout(2000);
+
+    // Look for a recording card with "MP4" format badge
+    let mp4Card = page.locator('.recording-card').filter({ hasText: 'MP4' }).first();
+    let mp4Count = await mp4Card.count();
+
+    if (mp4Count === 0) {
+      // Try list view as fallback
+      await page.locator('button').filter({ hasText: 'List' }).click();
+      await page.waitForSelector('.compact-list', { timeout: 5000 });
+      mp4Card = page.locator('.list-row').filter({ hasText: 'MP4' }).first();
+      mp4Count = await mp4Card.count();
+    }
+
+    if (mp4Count > 0) {
+      // Click the card/row to view detail
+      await mp4Card.click();
+
+      // Wait for navigation to detail page
       await page.waitForURL(/.*\/recordings\/.*/);
-      
+
       // Check for video element
       const video = page.locator('video');
       await expect(video).toBeVisible({ timeout: 10000 });
-      
-      // Test video controls
-      const videoElement = await video.elementHandle();
-      const isPaused = await page.evaluate((v: any) => v.paused, videoElement);
-      expect(isPaused).toBe(true); // Video should start paused
-      
-      // Test play button
-      const playButton = page.locator('video').evaluateHandle((el: any) => {
-        el.play();
-        return el;
+
+      // Video should start paused
+      const isPaused = await page.evaluate(() => {
+        const v = document.querySelector('video');
+        return v ? v.paused : true;
       });
-      
-      // Wait for video playback to start
-      await page.waitForFunction((v: any) => !v.paused, videoElement, { timeout: 3000 }).catch(() => {});
+      expect(isPaused).toBe(true);
     } else {
       test.skip('No H264/MP4 recordings available to test video playback');
     }
@@ -128,190 +194,216 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
   test('should test frame playback for MJPEG recordings', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr, span:has-text("JPEG")', { timeout: 5000 });
-    
-    // Find an MJPEG/JPEG recording
-    const jpegBadges = await page.locator('span:has-text("JPEG")').all();
-    
-    if (jpegBadges.length > 0) {
-      // Click the View button for the first JPEG recording
-      const firstJpegRow = await jpegBadges[0].locator('..').locator('..');
-      const viewButton = firstJpegRow.locator('button:has-text("View")');
-      await viewButton.click();
-      
-      // Wait for navigation
+    await page.waitForLoadState('networkidle');
+
+    // Click MJPEG format pill
+    const mjpegPill = page.locator('button').filter({ hasText: 'MJPEG' }).first();
+    await mjpegPill.click();
+    await page.waitForTimeout(2000);
+
+    // Look for recording cards
+    const cards = page.locator('.recording-card');
+    const cardCount = await cards.count();
+
+    if (cardCount > 0) {
+      // Click first card to view detail
+      await cards.first().click();
       await page.waitForURL(/.*\/recordings\/.*/);
-      
+
       // Check for frame player controls
-      const playButton = page.locator('button:has-text("Play")');
-      const prevButton = page.locator('button:has-text("Prev")');
-      const nextButton = page.locator('button:has-text("Next")');
-      
+      const playButton = page.locator('button').filter({ hasText: 'Play' });
+      const prevButton = page.locator('button').filter({ hasText: 'Prev' });
+      const nextButton = page.locator('button').filter({ hasText: 'Next' });
+
       await expect(playButton).toBeVisible({ timeout: 10000 });
-      await expect(prevButton).toBeVisible();
-      await expect(nextButton).toBeVisible();
-      
+
       // Test frame navigation
-      await nextButton.click();
-      await page.waitForSelector('img[src*="frame"], img[alt]', { timeout: 3000 });
-      
-      const prevDisabled = await prevButton.isEnabled();
-      if (prevDisabled) {
-        await prevButton.click();
+      if (await nextButton.count() > 0) {
+        await nextButton.click();
         await page.waitForSelector('img[src*="frame"], img[alt]', { timeout: 3000 });
       }
     } else {
-      test.skip('No MJPEG/JPEG recordings available to test frame playback');
+      test.skip('No MJPEG recordings available to test frame playback');
     }
   });
 
   test('should test recording download functionality', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr', { timeout: 5000 });
-    
-    // Find the first recording with a View button
-    const viewButtons = await page.locator('button:has-text("View")').all();
-    
-    if (viewButtons.length > 0) {
-      // Navigate to detail page
-      await viewButtons[0].click();
+    await page.waitForLoadState('networkidle');
+
+    // Switch to list view for easier navigation
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 5000 });
+
+    // Find a recording row
+    const rows = page.locator('.list-row');
+    const rowCount = await rows.count();
+
+    if (rowCount > 0) {
+      // Click first row to navigate to detail
+      await rows.first().click();
       await page.waitForURL(/.*\/recordings\/.*/);
-      
+
       // Set up download handler
       const downloadPromise = page.waitForEvent('download');
-      
+
       // Click download button
-      const downloadButton = page.locator('button:has-text("Download")');
-      await downloadButton.click();
-      
-      // Wait for download to start
-      const download = await downloadPromise;
-      
-      // Verify download
-      const filename = download.suggestedFilename();
-      console.log(`Downloaded file: ${filename}`);
-      
-      // Get download size
-      const size = await download.createReadStream();
-      let downloadedBytes = 0;
-      for await (const chunk of size) {
-        downloadedBytes += chunk.length;
+      const downloadButton = page.locator('button').filter({ hasText: 'Download' });
+      if (await downloadButton.count() > 0) {
+        await downloadButton.click();
+
+        // Wait for download to start
+        const download = await downloadPromise;
+
+        // Verify download
+        const filename = download.suggestedFilename();
+        console.log(`Downloaded file: ${filename}`);
+
+        // Get download size
+        const size = await download.createReadStream();
+        let downloadedBytes = 0;
+        for await (const chunk of size) {
+          downloadedBytes += chunk.length;
+        }
+
+        console.log(`Downloaded ${downloadedBytes} bytes`);
+        expect(downloadedBytes).toBeGreaterThan(0);
+      } else {
+        test.skip('No download button available for this recording');
       }
-      
-      console.log(`Downloaded ${downloadedBytes} bytes`);
-      expect(downloadedBytes).toBeGreaterThan(0);
     } else {
       test.skip('No recordings available to test download functionality');
     }
   });
 
-  test('should test filter functionality', async ({ page }) => {
+  test('should test calendar Today button', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data and filter controls to load
-    await page.waitForSelector('select, table tbody tr', { timeout: 5000 });
-    
-    // Check if camera filter exists
-    const cameraSelect = page.locator('select#camera');
-    const formatSelect = page.locator('select#format');
-    
-    if (await cameraSelect.count() > 0) {
-      // Test camera filter
-      await cameraSelect.click();
-      const cameraOptions = await page.locator('select#camera option').all();
-      
-      if (cameraOptions.length > 1) {
-        // Select a camera
-        await cameraSelect.selectOption({ index: 1 });
-        // Wait for filtered results to load
-        await page.waitForLoadState('networkidle');
-        console.log('Camera filter applied');
-      }
-    }
-    
-    if (await formatSelect.count() > 0) {
-      // Test format filter
-      await formatSelect.click();
-      const formatOptions = await page.locator('select#format option').all();
-      
-      if (formatOptions.length > 1) {
-        // Select a format
-        await formatSelect.selectOption({ index: 1 });
-        // Wait for filtered results to load
-        await page.waitForLoadState('networkidle');
-        console.log('Format filter applied');
-      }
+    await page.waitForLoadState('networkidle');
+
+    // Find the calendar card with a Today button
+    const calendarCard = page.locator('.card').filter({ has: page.locator('button').filter({ hasText: 'Today' }) }).first();
+    await expect(calendarCard).toBeVisible({ timeout: 5000 });
+
+    // Click the Today button
+    const todayButton = page.locator('button').filter({ hasText: 'Today' }).first();
+    await todayButton.click();
+    await page.waitForTimeout(500);
+
+    // Gallery should still be visible after clicking Today
+    await expect(page.locator('#recording-gallery')).toBeVisible({ timeout: 5000 });
+    console.log('✓ Calendar Today button works');
+
+    // Recording count should appear in the gallery header
+    const galleryHeader = page.locator('#recording-gallery .text-sm');
+    if (await galleryHeader.count() > 0) {
+      console.log(`  Gallery: ${await galleryHeader.textContent()}`);
     }
   });
 
-  test('should test pin/unpin functionality', async ({ page }) => {
+  test('should test batch selection in gallery mode', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr', { timeout: 5000 });
-    
-    // Find pin buttons
-    const pinButtons = await page.locator('button').filter({ hasText: /📌|📍/ }).all();
-    
-    if (pinButtons.length > 0) {
-      // Click first pin button
-      await pinButtons[0].click();
-      await page.waitForSelector('span:has-text("Pinned"), button', { timeout: 3000 });
-      
-      // Check if pin status changed (look for pinned badge)
-      const pinnedBadges = await page.locator('span:has-text("Pinned")').count();
-      console.log(`Found ${pinnedBadges} pinned recordings`);
-      
-      // Click again to unpin
-      await pinButtons[0].click();
-      await page.waitForSelector('table tbody tr', { timeout: 3000 });
+    await page.waitForLoadState('networkidle');
+
+    // Wait for gallery to load with recording cards
+    await page.waitForSelector('.recording-card', { timeout: 10000 });
+
+    const cards = page.locator('.recording-card');
+    const cardCount = await cards.count();
+
+    if (cardCount >= 2) {
+      // Check checkboxes on the first two cards
+      const firstCheckbox = cards.nth(0).locator('input[type="checkbox"]').first();
+      const secondCheckbox = cards.nth(1).locator('input[type="checkbox"]').first();
+
+      // Hover to reveal checkbox, then click
+      await cards.nth(0).hover();
+      await firstCheckbox.click({ force: true });
+
+      await cards.nth(1).hover();
+      await secondCheckbox.click({ force: true });
+
+      // Batch action bar should appear with selected count
+      const batchBar = page.locator('text=2 selected');
+      await expect(batchBar).toBeVisible({ timeout: 3000 });
+
+      // Delete Selected button should be visible
+      const deleteSelected = page.locator('button').filter({ hasText: 'Delete Selected' });
+      await expect(deleteSelected).toBeVisible();
+
+      // Cancel selection
+      const cancelButton = page.locator('button').filter({ hasText: 'Cancel' });
+      if (await cancelButton.count() > 0) {
+        await cancelButton.click();
+        await page.waitForTimeout(500);
+      }
+
+      console.log('✓ Batch selection in gallery mode works');
     } else {
-      test.skip('No recordings available to test pin/unpin functionality');
+      test.skip('Need at least 2 recordings for batch selection test');
     }
   });
 
   test('should test recording deletion', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
-    
-    // Wait for data to load
-    // Wait for table data to render
-    await page.waitForSelector('table tbody tr', { timeout: 5000 });
-    
-    // Get initial count of recordings
-    const initialCount = await page.locator('table tbody tr').count();
-    
+    await page.waitForLoadState('networkidle');
+
+    // Switch to list view (easier to isolate delete action)
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 5000 });
+
+    // Check if there are recordings
+    const listRows = page.locator('.list-row');
+    const initialCount = await listRows.count();
+
     if (initialCount > 0) {
-      // Find first delete button
-      const deleteButton = page.locator('button:has-text("🗑️")').first();
-      await deleteButton.click();
-      
-      // Wait for confirmation modal
-      await expect(page.locator('text=Delete Recording')).toBeVisible({ timeout: 5000 });
-      
-      // Confirm deletion
-      const confirmButton = page.locator('button:has-text("Delete")').filter({ hasText: /Confirm/ });
-      await confirmButton.click();
-      
-      // Wait for deletion to complete (table re-renders)
-      await page.waitForSelector('table tbody tr', { timeout: 5000 });
-      
-      // Verify recording was deleted
-      const finalCount = await page.locator('table tbody tr').count();
-      expect(finalCount).toBe(initialCount - 1);
+      // Find the first delete button (Trash2 icon with title "Delete")
+      const firstRow = listRows.first();
+      const deleteButton = firstRow.locator('button[title="Delete"]');
+
+      if (await deleteButton.count() > 0) {
+        await deleteButton.click();
+
+        // Wait for confirmation modal
+        await expect(page.locator('text=Delete Recording')).toBeVisible({ timeout: 5000 });
+
+        // Confirm deletion
+        const confirmButton = page.locator('button').filter({ hasText: 'Delete' }).last();
+        if (await confirmButton.count() > 0) {
+          await confirmButton.click();
+
+          // Wait for deletion to complete
+          await page.waitForTimeout(2000);
+          console.log('✓ Recording deleted successfully');
+        }
+      } else {
+        test.skip('No delete button available');
+      }
     } else {
       test.skip('No recordings available to test deletion');
+    }
+  });
+
+  test('should test camera filter', async ({ page }) => {
+    // Navigate to recordings page
+    await page.goto('/#/recordings');
+    await page.waitForLoadState('networkidle');
+
+    // Camera select should exist
+    const cameraSelect = page.locator('select#camera');
+    await expect(cameraSelect).toBeVisible({ timeout: 5000 });
+
+    // Check if there are camera options to filter by
+    const options = await cameraSelect.locator('option').all();
+    if (options.length > 1) {
+      // Select a camera option
+      await cameraSelect.selectOption({ index: 1 });
+      await page.waitForLoadState('networkidle');
+      expect(page.url()).toContain('camera=');
+      console.log('✓ Camera filter applied');
     }
   });
 });

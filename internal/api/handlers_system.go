@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -40,7 +41,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		hasError = true
 	}
 
-	// Storage check
+	// Storage check — combines disk usage with I/O health state.
 	if h.store != nil {
 		total, used, err := h.store.GetDiskUsage()
 		if err != nil {
@@ -52,11 +53,26 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 				pct = int(float64(used) / float64(total) * 100)
 			}
 			msg := fmt.Sprintf("%d%% used (%d / %d bytes)", pct, used, total)
-			if pct > 95 {
-				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg}
+
+			// Check I/O health state
+			storageHealth := h.store.StorageHealth()
+			var healthMsg string
+			switch storageHealth {
+			case storage.HealthFailed:
+				healthMsg = " I/O failed — writes disabled"
 				hasError = true
-			} else if pct > 90 {
-				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg}
+			case storage.HealthDegraded:
+				healthMsg = " I/O degraded — possible failures"
+				hasWarning = true
+			}
+
+			if storageHealth >= storage.HealthFailed {
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
+			} else if pct > 95 {
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
+				hasError = true
+			} else if pct > 90 || storageHealth >= storage.HealthDegraded {
+				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg + healthMsg}
 				hasWarning = true
 			} else {
 				resp.Checks["storage"] = HealthCheck{Status: "ok", Message: msg}
@@ -66,7 +82,6 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
 		hasError = true
 	}
-
 	// Goroutine check
 	numGoroutines := runtime.NumGoroutine()
 	if numGoroutines > 1000 {
@@ -293,7 +308,16 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 			days = n
 		}
 	}
-	trends, err := h.db.GetRecordingTrends(r.Context(), days)
+
+	// Load display timezone from config
+	loc := time.UTC
+	if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
+		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+			loc = l
+		}
+	}
+
+	trends, err := h.db.GetRecordingTrends(r.Context(), days, loc)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get recording trends")
 		return
@@ -307,6 +331,24 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")
 		return
+	}
+
+	// Compute timezone display string
+	tzDisplay := h.config.Timezone
+	if tzDisplay != "" && tzDisplay != "UTC" && tzDisplay != "Local" {
+		if loc, err := time.LoadLocation(tzDisplay); err == nil {
+			_, offset := time.Now().In(loc).Zone()
+			tzDisplay = fmt.Sprintf("%s (UTC%s)", tzDisplay, formatOffset(offset))
+		}
+	} else if tzDisplay == "UTC" {
+		tzDisplay = "UTC"
+	} else if tzDisplay == "Local" {
+		if loc, err := time.LoadLocation("Local"); err == nil {
+			name, offset := time.Now().In(loc).Zone()
+			tzDisplay = fmt.Sprintf("%s (UTC%s)", name, formatOffset(offset))
+		} else {
+			tzDisplay = "Local"
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -324,9 +366,24 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"username":        h.config.Auth.Username,
 			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
 		},
+		"timezone":         h.config.Timezone,
+		"timezone_display": tzDisplay,
 	})
 }
 
+func formatOffset(seconds int) string {
+	sign := "+"
+	if seconds < 0 {
+		sign = "-"
+		seconds = -seconds
+	}
+	hours := seconds / 3600
+	mins := (seconds % 3600) / 60
+	if mins == 0 {
+		return fmt.Sprintf("%s%d", sign, hours)
+	}
+	return fmt.Sprintf("%s%d:%02d", sign, hours, mins)
+}
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")
@@ -344,6 +401,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			PathPrefix *string `json:"path_prefix"`
 			ReadWrite  *bool   `json:"read_write"`
 		} `json:"webdav"`
+		Timezone *string `json:"timezone"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -390,6 +448,18 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.WebDAV.ReadWrite != nil {
 			h.config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
 		}
+	}
+
+	// Update timezone
+	if body.Timezone != nil {
+		tz := strings.TrimSpace(*body.Timezone)
+		if tz != "" && tz != "UTC" && tz != "Local" {
+			if _, err := time.LoadLocation(tz); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid timezone: %q", tz))
+				return
+			}
+		}
+		h.config.Timezone = tz
 	}
 
 	// Persist config to disk

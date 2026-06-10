@@ -4,6 +4,7 @@
   interface TabItem {
     id: string;
     label: string;
+    shortLabel?: string;
     icon?: Component;
     count?: number;
   }
@@ -36,7 +37,12 @@
         {@const Icon = tab.icon}
         <Icon size={16} />
       {/if}
-      <span>{tab.label}</span>
+      <span class="hidden sm:inline">{tab.label}</span>
+      {#if tab.shortLabel}
+        <span class="sm:hidden">{tab.shortLabel}</span>
+      {:else}
+        <span class="sm:hidden">{tab.label}</span>
+      {/if}
       {#if tab.count !== undefined}
         <span class="tab-count">{tab.count}</span>
       {/if}

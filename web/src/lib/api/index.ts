@@ -83,6 +83,8 @@ export {
   // Timelapse
   getTimelapseConfig,
   updateTimelapseConfig,
+  pauseTimelapse,
+  resumeTimelapse,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -129,14 +131,16 @@ export type {
 // Recordings — list, download, frames, stats, archives
 export {
   listRecordings,
+  listTimelapseRecordings,
   getRecording,
   deleteRecording,
   batchDeleteRecordings,
   getRecordingDownloadUrl,
+  getRecordingVideoUrl,
+  getMergedRecordingUrl,
   downloadRecording,
   listFrames,
   loadFrameBlob,
-  loadRecordingVideoBlob,
   getStats,
   getStatsTrends,
   listArchives,
@@ -148,6 +152,7 @@ export {
   loadTimelapseFrameBlob,
   triggerTimelapseMerge,
   subscribeTimelapseMergeProgress,
+  getTimelapseThumbnailUrl,
 } from './recordings';
 
 export type {
@@ -192,28 +197,12 @@ export type {
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync
-export {
-  xiaomiAuth,
-  xiaomiDevices,
-  xiaomiCaptcha,
-  xiaomiVerify,
-  xiaomiSync,
-} from './xiaomi';
+export { xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync } from './xiaomi';
 
-export type {
-  XiaomiDevice,
-  XiaomiDevicesResponse,
-  XiaomiAuthResponse,
-} from './xiaomi';
+export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiAuthResponse } from './xiaomi';
 
 // Health — camera health status and events
-export {
-  getHealthStatus,
-  getHealthEvents,
-  getCameraHealth,
-  getHealthCameras,
-  getStabilityData,
-} from './health';
+export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStabilityData } from './health';
 export type {
   HealthStatus,
   HealthEventType,
@@ -230,20 +219,20 @@ export type {
 
 // Transcoding — hardware check, FFmpeg, task management
 export {
-    getTranscodingCheck,
-    getFFmpegStatus,
-    downloadFFmpeg,
-    retryDownload,
-    getTranscodingStatus,
-    getTranscodingTasks,
-    enqueueTranscodeTask,
-    cancelTranscodeTask,
-    retryTranscodeTask,
-    startBackfill,
-    getUntranscodedRecordingCount,
-    getTranscodingCameras,
-    getTranscodingSettings,
-    updateTranscodingSettings,
+  getTranscodingCheck,
+  getFFmpegStatus,
+  downloadFFmpeg,
+  retryDownload,
+  getTranscodingStatus,
+  getTranscodingTasks,
+  enqueueTranscodeTask,
+  cancelTranscodeTask,
+  retryTranscodeTask,
+  startBackfill,
+  getUntranscodedRecordingCount,
+  getTranscodingCameras,
+  getTranscodingSettings,
+  updateTranscodingSettings,
 } from './transcoding';
 
 export type {
@@ -256,12 +245,6 @@ export type {
 } from './transcoding';
 
 // AI Detection — localStorage-backed settings
-export {
-  getAiSettings,
-  saveAiSettings,
-  detectAiBackend,
-} from './ai';
+export { getAiSettings, saveAiSettings, detectAiBackend } from './ai';
 
-export type {
-  AiDetectionSettings,
-} from './ai';
+export type { AiDetectionSettings } from './ai';

@@ -14,17 +14,17 @@ import (
 
 // MergeMJPEGSegments merges multiple MJPEG segment directories into a single
 // merged segment directory by moving (not copying) JPEG files from each source
-// segment into a new output directory. Source directories are deleted after
-// all files have been moved.
-func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store *storage.Manager, cameraID string) (*model.Recording, error) {
+// segment into a new output directory. Source directories are returned to the
+// caller for deferred deletion after DB commit.
+func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store *storage.Manager, cameraID string) (*model.Recording, []string, error) {
 	if len(segments) == 0 {
-		return nil, fmt.Errorf("no segments to merge")
+		return nil, nil, fmt.Errorf("no segments to merge")
 	}
 
 	// Step 1: Create output directory via store.CreateSegment.
 	tempPath, finalPath, err := store.CreateSegment(cameraID, string(model.FormatMJPEG))
 	if err != nil {
-		return nil, fmt.Errorf("create merged segment: %w", err)
+		return nil, nil, fmt.Errorf("create merged segment: %w", err)
 	}
 
 	// Track timing and counts from all source segments.
@@ -45,12 +45,13 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 	}
 
 	// Step 2: Move files from each source segment directory into the output directory.
+	var sourceDirs []string
 	for _, seg := range segments {
 		srcDir := seg.FilePath
 
 		entries, err := os.ReadDir(srcDir)
 		if err != nil {
-			return nil, fmt.Errorf("read segment dir %q: %w", srcDir, err)
+			return nil, sourceDirs, fmt.Errorf("read segment dir %q: %w", srcDir, err)
 		}
 
 		// Sort by name for deterministic ordering.
@@ -67,15 +68,12 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 			dstFile := filepath.Join(tempPath, entry.Name())
 
 			if err := os.Rename(srcFile, dstFile); err != nil {
-				return nil, fmt.Errorf("move file %q to %q: %w", srcFile, dstFile, err)
+				return nil, sourceDirs, fmt.Errorf("move file %q to %q: %w", srcFile, dstFile, err)
 			}
 		}
 
-		// Step 3: Delete the now-empty source directory.
-		if err := os.Remove(srcDir); err != nil {
-			// Non-fatal: log but don't fail the merge.
-			// Source directory might not be empty if there were subdirectories.
-		}
+		// Track successfully processed source directories for deferred cleanup.
+		sourceDirs = append(sourceDirs, srcDir)
 	}
 
 	// Step 4: Calculate total size via filepath.Walk on the output directory.
@@ -89,7 +87,7 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 
 	// Step 5: Close the segment (atomic rename from temp to final).
 	if err := store.CloseSegment(tempPath, finalPath); err != nil {
-		return nil, fmt.Errorf("close merged segment: %w", err)
+		return nil, sourceDirs, fmt.Errorf("close merged segment: %w", err)
 	}
 
 	// Step 6: Build the merged recording metadata.
@@ -105,5 +103,5 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 		FrameCount: totalFrameCount,
 	}
 
-	return merged, nil
+	return merged, sourceDirs, nil
 }

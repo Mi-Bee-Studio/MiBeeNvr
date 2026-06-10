@@ -13,8 +13,8 @@ import {
 // ---------------------------------------------------------------------------
 
 /** H.264: first byte = forbidden(1) | nal_ref_idc(2) | nal_unit_type(5). */
-function h264Nalu(type: H264NaluType, payload = new Uint8Array([0xDE, 0xAD])): Uint8Array {
-  const header = new Uint8Array([type & 0x3F]);
+function h264Nalu(type: H264NaluType, payload = new Uint8Array([0xde, 0xad])): Uint8Array {
+  const header = new Uint8Array([type & 0x3f]);
   const result = new Uint8Array(header.length + payload.length);
   result.set(header, 0);
   result.set(payload, header.length);
@@ -25,8 +25,8 @@ function h264Nalu(type: H264NaluType, payload = new Uint8Array([0xDE, 0xAD])): U
  * H.265: first two bytes = forbidden(1) | nal_unit_type(6) | nuh_layer_id(6) | nuh_temporal_id_plus1(3).
  * We set layer_id=0, temporal_id_plus1=1 for simplicity.
  */
-function h265Nalu(type: H265NaluType, payload = new Uint8Array([0xCA, 0xFE])): Uint8Array {
-  const header = new Uint8Array([(type << 1) & 0x7E, 0x01]);
+function h265Nalu(type: H265NaluType, payload = new Uint8Array([0xca, 0xfe])): Uint8Array {
+  const header = new Uint8Array([(type << 1) & 0x7e, 0x01]);
   const result = new Uint8Array(header.length + payload.length);
   result.set(header, 0);
   result.set(payload, header.length);
@@ -34,7 +34,7 @@ function h265Nalu(type: H265NaluType, payload = new Uint8Array([0xCA, 0xFE])): U
 }
 
 const SC4 = new Uint8Array([0x00, 0x00, 0x00, 0x01]); // 4-byte start code
-const SC3 = new Uint8Array([0x00, 0x00, 0x01]);       // 3-byte start code
+const SC3 = new Uint8Array([0x00, 0x00, 0x01]); // 3-byte start code
 
 function annexB(...nalus: Uint8Array[]): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -116,8 +116,8 @@ describe('parseAccessUnit — H.264 with Annex B', () => {
 
   it('should parse an access unit with SPS + PPS + IDR', () => {
     const sps = h264Nalu(7, new Uint8Array([0x67, 0x42]));
-    const pps = h264Nalu(8, new Uint8Array([0x68, 0xCE]));
-    const idr = h264Nalu(5, new Uint8Array([0x65, 0xB8]));
+    const pps = h264Nalu(8, new Uint8Array([0x68, 0xce]));
+    const idr = h264Nalu(5, new Uint8Array([0x65, 0xb8]));
     const data = annexB(sps, pps, idr);
 
     const result = parseAccessUnit(data, 'h264');
@@ -336,7 +336,7 @@ describe('Edge cases', () => {
   });
 
   it('should treat raw NALU without start codes as single NALU', () => {
-    const rawNalu = h264Nalu(5, new Uint8Array([0xAA, 0xBB]));
+    const rawNalu = h264Nalu(5, new Uint8Array([0xaa, 0xbb]));
     const result = parseAccessUnit(rawNalu, 'h264');
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe(5);
@@ -344,7 +344,7 @@ describe('Edge cases', () => {
   });
 
   it('should handle single NALU without start codes for H.265', () => {
-    const rawNalu = h265Nalu(19, new Uint8Array([0xCC, 0xDD]));
+    const rawNalu = h265Nalu(19, new Uint8Array([0xcc, 0xdd]));
     const result = parseAccessUnit(rawNalu, 'h265');
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe(19);
@@ -424,7 +424,7 @@ describe('Invalid NALU handling', () => {
 
   it('should skip short H.265 NALU (< 2 bytes) and continue with valid ones', () => {
     // Build stream: start-code + 1-byte invalid NALU + start-code + valid VPS (2 bytes)
-    const invalidNalu = new Uint8Array([0xA5]); // 1 byte — too short for H.265
+    const invalidNalu = new Uint8Array([0xa5]); // 1 byte — too short for H.265
     const vps = h265Nalu(32); // valid VPS
     const data = annexBMixed(['4', '4'], [invalidNalu, vps]);
 
@@ -437,8 +437,8 @@ describe('Invalid NALU handling', () => {
 
   it('should return empty array when all NALUs are invalid (H.265)', () => {
     // Only invalid short NALUs between start codes
-    const invalid1 = new Uint8Array([0xB0]);
-    const invalid2 = new Uint8Array([0xC0]);
+    const invalid1 = new Uint8Array([0xb0]);
+    const invalid2 = new Uint8Array([0xc0]);
     const data = annexBMixed(['4', '4', '4'], [invalid1, invalid2, invalid1]);
 
     const result = parseAccessUnit(data, 'h265');
@@ -447,7 +447,7 @@ describe('Invalid NALU handling', () => {
 
   it('should not crash with mixed valid/invalid H.265 NALUs', () => {
     // Interleave invalid short NALUs with valid ones
-    const invalid = new Uint8Array([0xA5]);
+    const invalid = new Uint8Array([0xa5]);
     const sps = h265Nalu(33);
     const pps = h265Nalu(34);
     const idr = h265Nalu(19);
@@ -468,32 +468,44 @@ describe('Invalid NALU handling', () => {
 // ---------------------------------------------------------------------------
 describe('isKeyframeNalus', () => {
   it('should return true for H.264 IDR', () => {
-    const nalus: NaluInfo[] = [{ type: 5, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false }];
+    const nalus: NaluInfo[] = [
+      { type: 5, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(true);
   });
 
   it('should return true for H.264 SPS', () => {
-    const nalus: NaluInfo[] = [{ type: 7, data: new Uint8Array(), isKeyframe: true, isSPS: true, isPPS: false, isVPS: false }];
+    const nalus: NaluInfo[] = [
+      { type: 7, data: new Uint8Array(), isKeyframe: true, isSPS: true, isPPS: false, isVPS: false },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(true);
   });
 
   it('should return false for P-frame slices', () => {
-    const nalus: NaluInfo[] = [{ type: 1, data: new Uint8Array(), isKeyframe: false, isSPS: false, isPPS: false, isVPS: false }];
+    const nalus: NaluInfo[] = [
+      { type: 1, data: new Uint8Array(), isKeyframe: false, isSPS: false, isPPS: false, isVPS: false },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(false);
   });
 
   it('should return true for H.265 IDR', () => {
-    const nalus: NaluInfo[] = [{ type: 19, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false }];
+    const nalus: NaluInfo[] = [
+      { type: 19, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(true);
   });
 
   it('should return true for H.265 VPS', () => {
-    const nalus: NaluInfo[] = [{ type: 32, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: true }];
+    const nalus: NaluInfo[] = [
+      { type: 32, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: true },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(true);
   });
 
   it('should return true for H.265 CRA', () => {
-    const nalus: NaluInfo[] = [{ type: 21, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false }];
+    const nalus: NaluInfo[] = [
+      { type: 21, data: new Uint8Array(), isKeyframe: true, isSPS: false, isPPS: false, isVPS: false },
+    ];
     expect(isKeyframeNalus(nalus)).toBe(true);
   });
 

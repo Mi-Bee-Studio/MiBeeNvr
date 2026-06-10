@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { checkStreamAvailable, MAX_RECREATE_ATTEMPTS, ZOMBIE_READYSTATE_DURATION_MS, ZOMBIE_FRAG_GAP_MS, createAutoRetryScheduler, AUTO_RETRY_DELAYS, MAX_AUTO_RETRIES } from '$lib/hls-errors';
+import {
+  checkStreamAvailable,
+  MAX_RECREATE_ATTEMPTS,
+  ZOMBIE_READYSTATE_DURATION_MS,
+  ZOMBIE_FRAG_GAP_MS,
+  createAutoRetryScheduler,
+  AUTO_RETRY_DELAYS,
+  MAX_AUTO_RETRIES,
+} from '$lib/hls-errors';
 
 describe('checkStreamAvailable', () => {
   beforeEach(() => {

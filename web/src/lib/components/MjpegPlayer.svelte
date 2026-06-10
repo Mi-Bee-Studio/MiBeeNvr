@@ -40,6 +40,8 @@
   // DOM refs
   let canvasEl: HTMLCanvasElement | undefined = $state();
   let controlsRef: PlaybackControls | undefined = $state();
+let isFullscreen = $state(false);
+let isLooping = $state(false);
 
   // --- Canvas rendering ---
 
@@ -159,6 +161,12 @@ return null;
     playInterval = setInterval(() => {
       const next = _playbackFrame + 1;
       if (next >= frames.length) {
+        if (isLooping) {
+          _playbackFrame = 0;
+          renderFrame(0);
+          controlsRef?.updatePlaybackUI(0, frames.length);
+          return;
+        }
         stopPlaying();
         return;
       }
@@ -201,6 +209,29 @@ return null;
     ensureFramesLoaded(index);
   }
 
+function toggleFullscreen() {
+  const el = canvasEl?.parentElement;
+  if (!el) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    el.requestFullscreen();
+  }
+}
+
+function toggleLoop() {
+isLooping = !isLooping;
+}
+
+function goHome() {
+const wasPlaying = isPlaying;
+if (wasPlaying) stopPlaying();
+currentFrameIndex = 0;
+_playbackFrame = 0;
+renderFrame(0);
+controlsRef?.updatePlaybackUI(0, frames.length);
+}
+
   // --- Public API for parent ---
 
   export async function initPlayer() {
@@ -222,11 +253,14 @@ return null;
     oninitdone();
   }
 
-  export function handleKeyAction(action: 'togglePlay' | 'prevFrame' | 'nextFrame') {
-    if (action === 'togglePlay') togglePlay();
-    else if (action === 'prevFrame') prevFrame();
-    else if (action === 'nextFrame') nextFrame();
-  }
+  export function handleKeyAction(action: 'togglePlay' | 'prevFrame' | 'nextFrame' | 'toggleFullscreen' | 'toggleLoop' | 'home') {
+  if (action === 'togglePlay') togglePlay();
+  else if (action === 'prevFrame') prevFrame();
+  else if (action === 'nextFrame') nextFrame();
+  else if (action === 'toggleFullscreen') toggleFullscreen();
+  else if (action === 'toggleLoop') toggleLoop();
+  else if (action === 'home') goHome();
+}
 
   // --- Cleanup: fix memory leak ---
 
@@ -243,6 +277,19 @@ return null;
       preloadedImages = [];
     };
   });
+
+// --- Fullscreen state tracking ---
+
+$effect(() => {
+  function onFullscreenChange() {
+    isFullscreen = !!document.fullscreenElement;
+  }
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  return () => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange);
+  };
+});
+
 </script>
 
 {#if framesLoading}
@@ -270,11 +317,25 @@ return null;
   </div>
 {:else}
   <!-- Canvas frame display -->
-  <div class="max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
-    <canvas
-      bind:this={canvasEl}
-      class="max-w-full max-h-[75vh]"
-    ></canvas>
+  <div class="relative overflow-hidden flex items-center justify-center bg-black min-h-[200px]"
+  class:max-h-screen={isFullscreen}
+  class:max-h-[75vh]={!isFullscreen}
+>
+  <canvas
+    bind:this={canvasEl}
+    class="max-w-full"
+    class:max-h-screen={isFullscreen}
+    class:max-h-[75vh]={!isFullscreen}
+>  </canvas>
+
+  <!-- Fullscreen button overlay -->
+  <button
+    onclick={toggleFullscreen}
+    class="absolute top-2 right-2 px-2 py-1 rounded text-xs font-medium transition-colors th-bg-tertiary th-text-secondary opacity-70 hover:opacity-100"
+    title={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+>
+    {isFullscreen ? '✕' : '⛶'}
+  </button>
   </div>
 
   <!-- Playback controls (delegated to sub-component) -->

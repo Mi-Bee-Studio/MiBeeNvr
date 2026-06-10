@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -18,6 +20,7 @@ type Metrics struct {
 	StorageTotalBytes  prometheus.Gauge
 	RecordingCount     prometheus.Gauge
 	CameraErrors       *prometheus.CounterVec // labels: camera_id, error_type
+	StorageWriteErrors prometheus.Counter    // total storage write I/O errors
 	HLSFramesDropped  *prometheus.CounterVec // labels: camera_id
 	HLSWriteErrors      *prometheus.CounterVec // labels: camera_id
 	HLSMuxerRestarts    *prometheus.CounterVec // labels: camera_id
@@ -58,6 +61,13 @@ type Metrics struct {
 	CameraConnectionErrorsTotal    *prometheus.CounterVec // labels: camera_id, error_type
 	CameraReconnectAttemptsTotal  *prometheus.CounterVec // labels: camera_id
 	CameraReconnectBackoffSeconds *prometheus.GaugeVec    // labels: camera_id
+	// Merge metrics
+	MergeAttemptsTotal    prometheus.Counter
+	MergeSuccessesTotal   prometheus.Counter
+	MergeFailuresTotal    *prometheus.CounterVec // labels: reason
+	MergeDurationSeconds  prometheus.Histogram
+	MergeSizeBytes        prometheus.Histogram
+	MergePendingSegments  *prometheus.GaugeVec   // labels: camera_id
 
 }
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -118,6 +128,11 @@ func NewMetrics() *Metrics {
 		Name: "nvr_camera_errors_total",
 		Help: "Total camera errors, partitioned by camera and error type.",
 	}, []string{"camera_id", "error_type"})
+
+	storageWriteErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_storage_write_errors_total",
+		Help: "Total number of storage write I/O errors across all cameras.",
+	})
 	hlsFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_hls_frames_dropped_total",
 		Help: "Total HLS frames dropped due to buffer full, partitioned by camera.",
@@ -295,6 +310,33 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Help: "Current reconnect backoff duration in seconds for a camera.",
 	}, []string{"camera_id"})
 
+	mergeAttemptsTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_merge_attempts_total",
+		Help: "Total number of merge attempts.",
+	})
+	mergeSuccessesTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_merge_successes_total",
+		Help: "Total number of successful merges.",
+	})
+	mergeFailuresTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_merge_failures_total",
+		Help: "Total number of failed merges, partitioned by reason.",
+	}, []string{"reason"})
+	mergeDurationSeconds := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "nvr_merge_duration_seconds",
+		Help:    "Duration of merge operations in seconds.",
+		Buckets: []float64{0.5, 1, 5, 10, 30, 60, 300, 600},
+	})
+	mergeSizeBytes := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "nvr_merge_size_bytes",
+		Help:    "Size of merged output in bytes.",
+		Buckets: []float64{10485760, 52428800, 104857600, 524288000, 1073741824, 3221225472},
+	})
+	mergePendingSegments := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_merge_pending_segments",
+		Help: "Number of segments pending merge, partitioned by camera.",
+	}, []string{"camera_id"})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -305,6 +347,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		storageTotalBytes,
 		recordingCount,
 		cameraErrors,
+		storageWriteErrors,
 		hlsFramesDropped,
 		hlsWriteErrors,
 		hlsMuxerRestarts,
@@ -343,6 +386,12 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		cameraConnectionErrorsTotal,
 		cameraReconnectAttemptsTotal,
 		cameraReconnectBackoffSeconds,
+		mergeAttemptsTotal,
+		mergeSuccessesTotal,
+		mergeFailuresTotal,
+		mergeDurationSeconds,
+		mergeSizeBytes,
+		mergePendingSegments,
 	)
 
 	return &Metrics{
@@ -356,6 +405,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		StorageTotalBytes:   storageTotalBytes,
 		RecordingCount:      recordingCount,
 		CameraErrors:        cameraErrors,
+		StorageWriteErrors: storageWriteErrors,
 		HLSFramesDropped:    hlsFramesDropped,
 		HLSWriteErrors:      hlsWriteErrors,
 		HLSMuxerRestarts:    hlsMuxerRestarts,
@@ -394,6 +444,48 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		CameraConnectionErrorsTotal:   cameraConnectionErrorsTotal,
 		CameraReconnectAttemptsTotal: cameraReconnectAttemptsTotal,
 		CameraReconnectBackoffSeconds: cameraReconnectBackoffSeconds,
+		MergeAttemptsTotal:    mergeAttemptsTotal,
+		MergeSuccessesTotal:   mergeSuccessesTotal,
+		MergeFailuresTotal:    mergeFailuresTotal,
+		MergeDurationSeconds:  mergeDurationSeconds,
+		MergeSizeBytes:        mergeSizeBytes,
+		MergePendingSegments:  mergePendingSegments,
 	}
 
+}
+
+// RecordMergeSuccess records a successful merge operation.
+func (m *Metrics) RecordMergeSuccess(duration time.Duration, size int64) {
+	if m == nil {
+		return
+	}
+	m.MergeAttemptsTotal.Inc()
+	m.MergeSuccessesTotal.Inc()
+	m.MergeDurationSeconds.Observe(duration.Seconds())
+	m.MergeSizeBytes.Observe(float64(size))
+}
+
+// RecordMergeFailure records a failed merge operation with the given reason.
+func (m *Metrics) RecordMergeFailure(reason string) {
+	if m == nil {
+		return
+	}
+	m.MergeAttemptsTotal.Inc()
+	m.MergeFailuresTotal.WithLabelValues(reason).Inc()
+}
+
+// UpdateMergePending updates the pending segment count gauge for a camera.
+func (m *Metrics) UpdateMergePending(cameraID string, count float64) {
+	if m == nil {
+		return
+	}
+	m.MergePendingSegments.WithLabelValues(cameraID).Set(count)
+}
+
+// IncStorageWriteErrors increments the storage write errors counter.
+func (m *Metrics) IncStorageWriteErrors() {
+	if m == nil {
+		return
+	}
+	m.StorageWriteErrors.Inc()
 }

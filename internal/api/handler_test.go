@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -634,11 +636,11 @@ func TestLogin_ResponseContentType(t *testing.T) {
 
 // newHandlerWithConfig creates a Handler with a real config for testing.
 func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 }
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "")
-	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil)
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "", middleware.AuthRateLimitConfig{})
+	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil)
 }
 func TestGetSettings_NoConfig(t *testing.T) {
 	t.Parallel()
@@ -1582,7 +1584,7 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
 	return h, camMgr, cfg
 }
 
@@ -1860,7 +1862,7 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 			},
 		},
 	}
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 }
 
 func TestHandleSnapshot_NoURL(t *testing.T) {
@@ -1872,7 +1874,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
 		},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -1886,7 +1888,7 @@ func TestHandleSnapshot_CameraNotFound(t *testing.T) {
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -2269,6 +2271,85 @@ func TestDeleteCameraMergeConfig_CameraNotFound(t *testing.T) {
 	}
 }
 
+func TestGetCameraMergeConfig_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	// Set per-camera merge config
+	mergeEnabled := true
+	checkInterval := "30m"
+	windowSize := "2h"
+	batchLimit := 50
+	minSegmentAge := "5m"
+	minSegments := 5
+	err = db.UpsertCameraMerge(context.Background(), "cam1",
+		&mergeEnabled, &checkInterval, &windowSize, &minSegmentAge, &batchLimit, &minSegments)
+	require.NoError(t, err)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	require.Equal(t, true, resp["enabled"])
+	require.Equal(t, "30m", resp["check_interval"])
+	require.Equal(t, "2h", resp["window_size"])
+	require.Equal(t, float64(50), resp["batch_limit"])
+	require.Equal(t, "5m", resp["min_segment_age"])
+	require.Equal(t, float64(5), resp["min_segments_to_merge"])
+}
+
+func TestGetCameraMergeConfig_NoConfig(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Seed a camera with NO merge config
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+		"cam2", "No Merge", "rtsp_h264", "rtsp://camera/stream")
+	require.NoError(t, err)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/merge-config", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	// All fields should be nil when no config is set
+	require.Nil(t, resp["enabled"])
+	require.Nil(t, resp["check_interval"])
+	require.Nil(t, resp["window_size"])
+	require.Nil(t, resp["batch_limit"])
+	require.Nil(t, resp["min_segment_age"])
+	require.Nil(t, resp["min_segments_to_merge"])
+}
+
+func TestGetCameraMergeConfig_NotFound(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/merge-config", nil, "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // --- Merge status API tests ---
 
 func TestHandleMergeStatus_NilManager(t *testing.T) {
@@ -2315,8 +2396,9 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
-	)
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil)
+		nil,
+)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2342,8 +2424,9 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
-	)
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil)
+		nil,
+)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2388,7 +2471,7 @@ func TestHandleStopHLSStream_NotActive(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/nonexistent/stream", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2403,7 +2486,7 @@ func TestHandleStopHLSStream_Active(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil)
 
 	// Manually insert a stream entry
 	hlsMgr.StartStream("cam-1",
@@ -2448,7 +2531,7 @@ func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{})
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	// Test empty body
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth", strings.NewReader("{}"), "", "")
@@ -2474,8 +2557,8 @@ func TestXiaomiDevicesNoAuth(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$testhash" }}, "")
-	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{})
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$testhash" }}, "", middleware.AuthRateLimitConfig{})
+	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	// Without auth should return 401
 	req := httptest.NewRequest("GET", "/api/xiaomi/devices", nil)
@@ -2489,7 +2572,7 @@ func TestXiaomiDevicesEmpty(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{})
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	// With no token configured, should return empty list
 	rr := doRequest(t, h.Routes(), "GET", "/api/xiaomi/devices", nil, "", "")
@@ -2506,7 +2589,7 @@ func TestXiaomiCaptchaRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{})
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/captcha", body, "", "")
@@ -2518,7 +2601,7 @@ func TestXiaomiVerifyRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{})
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/verify", body, "", "")
@@ -2531,7 +2614,7 @@ func TestXiaomiCloudUnavailableWithoutProxy(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	// No cloudProxy passed — should return 503 for all xiaomi endpoints
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 
 	for _, tc := range []struct {
 		method string
@@ -2617,4 +2700,261 @@ func TestHandleCreateCamera_ValidURLs(t *testing.T) {
 			require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 		})
 	}
+}
+
+// --- Frame timestamp extraction tests ---
+
+func TestParseFrameFilename(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		filename  string
+		want      string // expected timestamp in RFC3339, empty if should fail
+	}{
+		{name: "timestamp in name", filename: "frame_20240101_120000.jpg", want: "2024-01-01T12:00:00Z"},
+		{name: "timestamp with suffix", filename: "frame_20240101_120000_001.jpg", want: "2024-01-01T12:00:00Z"},
+		{name: "timestamp .jpeg", filename: "frame_20231225_083000.jpeg", want: "2023-12-25T08:30:00Z"},
+		{name: "sequential no match", filename: "frame_000001.jpg", want: ""},
+		{name: "non-frame name", filename: "snapshot_20240101_120000.jpg", want: ""},
+		{name: "short name", filename: "frame_12.jpg", want: ""},
+		{name: "no underscore", filename: "frame20240101120000.jpg", want: ""},
+		{name: "wrong separator", filename: "frame_2024-0101_120000.jpg", want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := parseFrameFilename(tc.filename)
+			if tc.want == "" {
+				if ok {
+					t.Errorf("expected no match for %q, got %v", tc.filename, got)
+				}
+				return
+			}
+			if !ok {
+				t.Errorf("expected match for %q, got none", tc.filename)
+				return
+			}
+			expected, err := time.Parse(time.RFC3339, tc.want)
+			if err != nil {
+				t.Fatalf("bad test case time %q: %v", tc.want, err)
+			}
+			if !got.Equal(expected) {
+				t.Errorf("parseFrameFilename(%q) = %v, want %v", tc.filename, got, expected)
+			}
+		})
+	}
+}
+
+func TestExtractEXIFDateTime(t *testing.T) {
+	t.Parallel()
+
+	t.Run("JPEG without EXIF returns false", func(t *testing.T) {
+		t.Parallel()
+		jpeg := createTestJPEG(t, 100, 100)
+		tmpFile := filepath.Join(t.TempDir(), "noexif.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := extractEXIFDateTime(tmpFile)
+		if ok {
+			t.Errorf("expected no EXIF, got %v", got)
+		}
+	})
+
+	t.Run("JPEG with EXIF DateTimeOriginal", func(t *testing.T) {
+		t.Parallel()
+		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
+		tmpFile := filepath.Join(t.TempDir(), "withexif.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := extractEXIFDateTime(tmpFile)
+		if !ok {
+			t.Fatal("expected EXIF match, got none")
+		}
+		expected := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractEXIFDateTime = %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("non-existent file returns false", func(t *testing.T) {
+		t.Parallel()
+		_, ok := extractEXIFDateTime("/nonexistent/path.jpg")
+		if ok {
+			t.Error("expected false for non-existent file")
+		}
+	})
+}
+
+func TestExtractFrameTimestamp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("filename timestamp takes priority", func(t *testing.T) {
+		t.Parallel()
+		ts := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		got := extractFrameTimestamp("frame_20240101_120000.jpg", "/nonexistent", ts)
+		expected := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractFrameTimestamp = %v, want %v", got, expected)
+		}
+	})
+
+	t.Run("EXIF when filename has no timestamp", func(t *testing.T) {
+		t.Parallel()
+		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
+		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		modTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		got := extractFrameTimestamp("frame_000001.jpg", tmpFile, modTime)
+		expected := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
+		if !got.Equal(expected) {
+			t.Errorf("extractFrameTimestamp = %v, want %v (from EXIF)", got, expected)
+		}
+	})
+
+	t.Run("ModTime fallback when no timestamp available", func(t *testing.T) {
+		t.Parallel()
+		jpeg := createTestJPEG(t, 100, 100) // no EXIF
+		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
+		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+			t.Fatal(err)
+		}
+		// Set explicit ModTime by writing and then modifying
+		modTime := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(tmpFile, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+		got := extractFrameTimestamp("frame_000001.jpg", tmpFile, modTime)
+		if !got.Equal(modTime) {
+			t.Errorf("extractFrameTimestamp = %v, want %v (ModTime fallback)", got, modTime)
+		}
+	})
+}
+
+// makeTestJPEGWithEXIF creates a valid JPEG with an EXIF APP1 segment containing DateTimeOriginal.
+// This constructs a minimal APP1 EXIF segment with DateTimeOriginal (tag 0x9003) set to dateTimeStr.
+func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
+	t.Helper()
+
+	// Create a minimal valid JPEG
+	baseJPEG := createTestJPEG(t, 32, 32)
+
+	// Build EXIF APP1 data in TIFF Little-Endian (II) format
+	// Layout: TIFF header + IFD0 (with ExifIFD pointer) + EXIF IFD (with DateTimeOriginal)
+	
+	// EXIF IFD entries: just DateTimeOriginal (tag 0x9003)
+	// TIFF header (8 bytes): II, 0x002A, offset to IFD0 = 8
+	// IFD0 (minimal): 0 entries + 4 byte next-IFD pointer (0) + ExifIFD sub-IFD
+	// But simpler: put DateTimeOriginal in a sub-IFD pointed to from IFD0
+
+	// Simpler approach: just put DateTime (tag 0x0132) in IFD0 directly
+	// This is more universally supported and simpler to construct
+
+	// TIFF header (8 bytes)
+	tiff := &bytes.Buffer{}
+	tiff.Write([]byte("II"))              // byte order: Little-Endian
+	binary.Write(tiff, binary.LittleEndian, uint16(0x002A)) // TIFF magic
+	binary.Write(tiff, binary.LittleEndian, uint32(8)) // offset to IFD0 = 8
+
+	// IFD0: 1 entry (DateTime) + 4-byte next-IFD pointer = 2+12+4 = 18 bytes
+	// String value needs space — values >4 bytes go at end of IFD
+	// Layout:
+	//   2 bytes: entry count (1)
+	//  12 bytes: DateTime entry
+	//   4 bytes: next IFD pointer (0 = no more IFDs)
+	//  20 bytes: DateTime string value + null terminator
+
+	numEntries := uint16(2) // DateTime (0x0132) + ExifIFD pointer (0x8769)
+	binary.Write(tiff, binary.LittleEndian, numEntries)
+
+	// Entry 1: DateTime (tag 0x0132) in IFD0, type 2 (ASCII), value stored at end
+	// We'll store the string at offset 8 + 2 + 2*12 + 4 = 38
+	dateTimeBytes := []byte(dateTimeStr + "\x00") // include null terminator
+	if len(dateTimeBytes) > 256 {
+		t.Fatal("dateTime string too long")
+	}
+	
+	// Write DateTime entry
+	binary.Write(tiff, binary.LittleEndian, uint16(0x0132)) // DateTime tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))     // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeBytes))) // Count
+	// For strings > 4 bytes, store offset
+	valueOffset := 8 + 2 + 2*12 + 4 // offset to string data = after IFD0
+	binary.Write(tiff, binary.LittleEndian, uint32(valueOffset))
+
+	// Entry 2: ExifIFD pointer (tag 0x8769), type 4 (long), count 1
+	// EXIF IFD goes after IFD0 data
+	exifIFDOffset := valueOffset + len(dateTimeBytes)
+	binary.Write(tiff, binary.LittleEndian, uint16(0x8769)) // ExifIFD tag
+	binary.Write(tiff, binary.LittleEndian, uint16(4))     // Type: LONG
+	binary.Write(tiff, binary.LittleEndian, uint32(1))     // Count
+	binary.Write(tiff, binary.LittleEndian, uint32(exifIFDOffset)) // Offset to EXIF IFD
+
+	// Next IFD pointer (0 = no more IFDs)
+	binary.Write(tiff, binary.LittleEndian, uint32(0))
+
+	// DateTime string value
+	tiff.Write(dateTimeBytes)
+
+	// EXIF IFD at exifIFDOffset
+	// Align to even offset if needed (TIFF requires word alignment for IFDs)
+	for tiff.Len()%2 != 0 {
+		tiff.WriteByte(0)
+	}
+
+	// Verify offset matches
+	if tiff.Len() != exifIFDOffset {
+		t.Fatalf("EXIF IFD offset mismatch: expected %d, got %d", exifIFDOffset, tiff.Len())
+	}
+
+	// EXIF IFD: 1 entry (DateTimeOriginal) + next-IFD pointer
+	binary.Write(tiff, binary.LittleEndian, uint16(1)) // 1 entry
+
+	// DateTimeOriginal string
+	dateTimeOrigBytes := []byte(dateTimeStr + "\x00")
+	
+	// Entry: DateTimeOriginal (tag 0x9003), type 2 (ASCII)
+	origValueOffset := exifIFDOffset + 2 + 1*12 + 4
+	binary.Write(tiff, binary.LittleEndian, uint16(0x9003)) // DateTimeOriginal tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))      // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeOrigBytes))) // Count
+	binary.Write(tiff, binary.LittleEndian, uint32(origValueOffset)) // Offset to value
+
+	// Next IFD pointer (0)
+	binary.Write(tiff, binary.LittleEndian, uint32(0))
+
+	// DateTimeOriginal string value
+	for tiff.Len() < origValueOffset {
+		tiff.WriteByte(0)
+	}
+	tiff.Write(dateTimeOrigBytes)
+
+	tiffData := tiff.Bytes()
+
+	// Build APP1 segment: marker + length + "Exif\0\0" + TIFF data
+	app1 := &bytes.Buffer{}
+	segLen := 2 + 6 + len(tiffData) // 2 for length field, 6 for Exif\0\0 header
+	app1.Write([]byte{0xFF, 0xE1}) // APP1 marker
+	binary.Write(app1, binary.BigEndian, uint16(segLen))
+	app1.Write([]byte("Exif\x00\x00"))
+	app1.Write(tiffData)
+
+	// Inject APP1 after SOI (first 2 bytes) but before the rest of the JPEG
+	// Find the start of image data (SOS marker 0xFFDA) in the base JPEG
+	// Insert APP1 segment right after SOI marker
+	if len(baseJPEG) < 2 || baseJPEG[0] != 0xFF || baseJPEG[1] != 0xD8 {
+		t.Fatal("base JPEG doesn't start with SOI")
+	}
+
+	// Insert APP1 segment after the SOI marker (bytes 0-1)
+	result := make([]byte, 0, len(baseJPEG)+len(app1.Bytes()))
+	result = append(result, baseJPEG[:2]...)
+	result = append(result, app1.Bytes()...)
+	result = append(result, baseJPEG[2:]...)
+
+	return result
 }

@@ -64,7 +64,7 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
       if (creds) {
         initParams.headers = {
           ...initParams.headers,
-          'Authorization': 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+          Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
         };
       }
       return new Request(context.url, initParams);

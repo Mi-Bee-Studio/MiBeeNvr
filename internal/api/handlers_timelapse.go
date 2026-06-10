@@ -8,13 +8,14 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"log/slog"
 	"math"
 	"net/http"
-	"strconv"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,10 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 			"frame_source":    "auto",
 			"paused":          false,
 			"delete_original": false,
+			"merge_output_fps": 30,
+			"merge_mode":       "auto",
+			"daily_merge":      true,
+			"merge_duration":   "natural-day",
 		})
 		return
 	}
@@ -74,10 +79,26 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var body config.CameraTimelapseConfig
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	var body config.CameraTimelapseConfig
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Backward compat: accept mergeDuration as alias for merge_duration
+	if body.MergeDuration == "" {
+		var legacy struct {
+			MergeDuration string `json:"mergeDuration"`
+		}
+		if err := json.Unmarshal(raw, &legacy); err == nil && legacy.MergeDuration != "" {
+			body.MergeDuration = legacy.MergeDuration
+		}
 	}
 
 	// Validate interval
@@ -111,7 +132,7 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Validate merge_output_fps
-	if body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60 {
+	if body.MergeOutputFPS != 0 && (body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60) {
 		writeError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
 		return
 	}
@@ -154,6 +175,14 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		logger.Warn("failed to save config after timelapse update", "camera_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to save config")
 		return
+	}
+
+	// Update merge scheduler if MergeDuration changed
+	if h.mergeScheduler != nil && body.MergeDuration != "" {
+		if dur, err := config.ParseMergeDuration(body.MergeDuration); err == nil {
+			h.mergeScheduler.AddOrUpdate(id, dur)
+			slog.Debug("timelapse: updated merge scheduler", "camera_id", id, "duration", dur)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, h.config.Cameras)
@@ -227,6 +256,8 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 	// Stream progress updates until completion.
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -235,7 +266,7 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
-		default:
+		case <-ticker.C:
 			// Poll progress.
 			info, ok = h.timelapseMergeMgr.GetProgress(cameraID)
 			if !ok {
@@ -250,9 +281,6 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 			if info.Status == "completed" || info.Status == "failed" {
 				return
 			}
-
-			// Poll every 500ms.
-			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }
@@ -586,91 +614,184 @@ func min(a, b int) int {
 func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse pagination params
+	// Parse pagination params with abuse prevention
 	limit := 0
-	offset := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	offset := 0
 	if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
 		}
 	}
 
-	// Query without pagination (need full sets to combine)
-	tlFilter := model.RecordingFilter{Format: model.Format("timelapse")}
-	tlRecordings, err := h.db.ListRecordings(ctx, tlFilter)
+	// Parse optional filters
+	cameraID := r.URL.Query().Get("camera_id")
+	sortBy := r.URL.Query().Get("sort_by")
+	sortOrder := r.URL.Query().Get("sort_order")
+
+	// Build filter for both timelapse and MJPEG recordings
+	filter := model.RecordingFilter{
+		Formats:   []model.Format{model.FormatTimelapse, model.FormatMJPEG},
+		CameraID:  cameraID,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+	}
+
+	// Get total count for pagination
+	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count recordings")
+		return
+	}
+
+	// Get paginated results from DB
+	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
-	mjFilter := model.RecordingFilter{Format: model.FormatMJPEG}
-	mjRecordings, err := h.db.ListRecordings(ctx, mjFilter)
-	if err != nil {
-		mjRecordings = nil
+	if recordings == nil {
+		recordings = []model.Recording{}
 	}
-
-	// Combine
-	all := append(tlRecordings, mjRecordings...)
-	if all == nil {
-		all = []model.Recording{}
-	}
-
-	// Sort by started_at desc
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].StartedAt.After(all[j].StartedAt)
-	})
-
-	// Apply pagination
-	total := len(all)
-	start := offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
-	all = all[start:end]
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recordings": all,
+		"recordings": recordings,
 		"total":      total,
 	})
 }
 
 // handleTimelapseMerge handles POST /api/timelapse/{id}/merge.
-// Triggers a daily merge for the specified camera and date.
+// Triggers a merge for the specified camera. Accepts optional duration
+// query param (e.g., "8h", "12h", "24h", "natural-day", "7d", "30d")
+// for custom merge windows. Without duration, uses daily merge (backward compat).
 func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
+	// Dedup: prevent concurrent merges for the same camera
+	_, loaded := h.activeMerges.LoadOrStore(cameraID, struct{}{})
+	if loaded {
+		writeError(w, http.StatusConflict, "a merge is already in progress for this camera")
+		return
+	}
+
+	// Parse optional duration query param for custom merge windows
+	durationStr := r.URL.Query().Get("duration")
+	if durationStr != "" {
+		h.handleTimelapseMergeWithDuration(w, r, cameraID, durationStr)
+		return
+	}
+
+	// No duration — use configured DailyMergeManager (backward compat)
 	if h.timelapseDailyMgr == nil {
+		h.activeMerges.Delete(cameraID)
 		writeError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
 		return
 	}
 
-	// Accept date query param (YYYY-MM-DD, default yesterday)
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		date = time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+		// Compute "yesterday" in the configured display timezone
+		loc := time.UTC
+		if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
+			if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+				loc = l
+			}
+		}
+		date = time.Now().In(loc).Add(-24 * time.Hour).Format("2006-01-02")
 	}
 
-	// Run merge in background to avoid blocking the response
 	go func() {
+		defer h.activeMerges.Delete(cameraID)
 		ctx := context.Background()
 		if err := h.timelapseDailyMgr.Run(ctx, cameraID, date); err != nil {
 			logger.Warn("timelapse daily merge failed", "camera_id", cameraID, "date", date, "error", err)
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":    "merge_initiated",
 		"camera_id": cameraID,
 		"date":      date,
+	})
+}
+
+// handleTimelapseMergeWithDuration handles merge with a custom duration.
+func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *http.Request, cameraID, durationStr string) {
+	dur, err := config.ParseMergeDuration(durationStr)
+	if err != nil {
+		h.activeMerges.Delete(cameraID)
+		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		return
+	}
+	if h.db == nil {
+		h.activeMerges.Delete(cameraID)
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.config == nil {
+		h.activeMerges.Delete(cameraID)
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	// Get FPS from camera's timelapse config, default 10
+	fps := 10
+	for i := range h.config.Cameras {
+		if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
+			if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
+				fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
+			}
+			break
+		}
+	}
+
+	// Load display timezone
+	loc := time.UTC
+	if h.config.Timezone != "" && h.config.Timezone != "UTC" {
+		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+			loc = l
+		}
+	}
+
+	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
+
+	// Parse date or use current time as reference in the configured timezone
+	dateStr := r.URL.Query().Get("date")
+	refTime := time.Now().In(loc)
+	if dateStr != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		if err == nil {
+			refTime = parsed
+		}
+	}
+
+	// Create PeriodicMergeManager with the specified duration
+	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc)
+
+	go func() {
+		defer h.activeMerges.Delete(cameraID)
+		ctx := context.Background()
+		if err := mgr.Run(ctx, cameraID, refTime); err != nil {
+			logger.Warn("timelapse merge failed", "camera_id", cameraID, "duration", durationStr, "error", err)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":    "merge_initiated",
+		"camera_id": cameraID,
+		"date":      refTime.Format("2006-01-02"),
+		"duration":  durationStr,
 	})
 }
 

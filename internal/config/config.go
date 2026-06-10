@@ -38,6 +38,7 @@ type Config struct {
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Version       string              `yaml:"version"`
+	Timezone    string              `yaml:"timezone"`        // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
 }
 
 type ServerConfig struct {
@@ -144,14 +145,24 @@ type CameraTimelapseConfig struct {
 	DeleteOriginal bool            `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`                   // remove original segments after timelapse, default false
 	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`                       // auto-detect (nil=auto)
 	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`                             // auto, mp4, jpeg — default auto
-	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
+	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
+	MergeDuration  string `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
 	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"`                 // default 30, range 1-60
 }
 
 type AuthConfig struct {
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
-	Password     string `yaml:"password"`
+	Username     string         `yaml:"username"`
+	PasswordHash string         `yaml:"password_hash"`
+	Password     string         `yaml:"password"`
+	RateLimit    RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig controls auth failure rate limiting.
+// When Enabled is false (default), no rate limiting is applied.
+type RateLimitConfig struct {
+	Enabled       *bool  `yaml:"enabled"`        // default false
+	MaxFailures   int    `yaml:"max_failures"`   // default 20
+	WindowMinutes int    `yaml:"window_minutes"` // default 1
 }
 
 type FTPConfig struct {
@@ -388,6 +399,12 @@ func Save(path string, cfg *Config) error {
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
+	}
+	// Timezone validation
+	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
+		if _, err := time.LoadLocation(cfg.Timezone); err != nil {
+			return fmt.Errorf("timezone: invalid IANA name %q: %w", cfg.Timezone, err)
+		}
 	}
 	// cameras must have id and url
 	seen := make(map[string]int)
@@ -629,6 +646,9 @@ func Validate(cfg *Config) error {
 		if cam.Timelapse.MergeOutputFPS < 1 || cam.Timelapse.MergeOutputFPS > 60 {
 			return fmt.Errorf("cameras.%s.timelapse.merge_output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.MergeOutputFPS)
 		}
+		if _, err := ParseMergeDuration(cam.Timelapse.MergeDuration); err != nil {
+			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %v", cam.ID, err)
+		}
 	}
 
 	// Validate hls.segment_count
@@ -734,6 +754,10 @@ func Validate(cfg *Config) error {
 }
 
 func (cfg *Config) ApplyDefaults() {
+	// Timezone
+	if cfg.Timezone == "" {
+		cfg.Timezone = "Local"
+	}
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		cfg.Server.Listen = ":9090"
@@ -756,7 +780,13 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Cleanup.DiskThresholdPercent == 0 {
 		cfg.Cleanup.DiskThresholdPercent = 95
 	}
-	// Auth - no defaults
+	// Auth - rate limit defaults
+	if cfg.Auth.RateLimit.MaxFailures == 0 {
+		cfg.Auth.RateLimit.MaxFailures = 20
+	}
+	if cfg.Auth.RateLimit.WindowMinutes == 0 {
+		cfg.Auth.RateLimit.WindowMinutes = 1
+	}
 	// FTP
 	if cfg.FTP.Enabled == nil {
 		// set default to true only if not configured by user
@@ -990,6 +1020,9 @@ func (cfg *Config) ApplyDefaults() {
 			if cam.Timelapse.MergeOutputFPS == 0 {
 				cam.Timelapse.MergeOutputFPS = 30
 			}
+			if cam.Timelapse.MergeDuration == "" {
+				cam.Timelapse.MergeDuration = "natural-day"
+			}
 			// MergeEnabled defaults to nil (auto-detect)
 		}
 	}
@@ -1176,4 +1209,26 @@ func mergeTimeRanges(ranges []TimeRange) []TimeRange {
 		}
 	}
 	return result
+}
+
+// ParseMergeDuration parses a MergeDuration value and returns the corresponding time.Duration.
+// Valid values: "8h", "12h", "24h", "natural-day", "7d", "30d"
+// Empty string defaults to "natural-day" (24 hours).
+func ParseMergeDuration(s string) (time.Duration, error) {
+	switch s {
+	case "", "natural-day":
+		return 24 * time.Hour, nil
+	case "8h":
+		return 8 * time.Hour, nil
+	case "12h":
+		return 12 * time.Hour, nil
+	case "24h":
+		return 24 * time.Hour, nil
+	case "7d":
+		return 7 * 24 * time.Hour, nil
+	case "30d":
+		return 30 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid merge duration %q: must be one of \"8h\", \"12h\", \"24h\", \"natural-day\", \"7d\", \"30d\"", s)
+	}
 }

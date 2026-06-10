@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	_ "net/http/pprof"
+	_ "time/tzdata" // embed timezone database for minimal containers (scratch/alpine)
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
@@ -357,7 +358,7 @@ type App struct {
 	hlsMgr     *hls.Manager
 	cleanupMgr *cleanup.CleanupManager
 	healthMgr  *health.Manager
-	dailyMergeMgr *timelapse.DailyMergeManager
+	mergeScheduler *timelapse.MergeScheduler
 
 	// Optional network services (nil when disabled)
 	mqttClient  *mqtt.Client
@@ -473,7 +474,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
-	}, cfg.Auth.Password)
+	}, cfg.Auth.Password, authmw.AuthRateLimitConfig{
+		Enabled:       cfg.Auth.RateLimit.Enabled != nil && *cfg.Auth.RateLimit.Enabled,
+		MaxFailures:   cfg.Auth.RateLimit.MaxFailures,
+		WindowMinutes: cfg.Auth.RateLimit.WindowMinutes,
+	})
 	a.authMW = authMW
 	if effectiveHash != "" && cfg.Auth.PasswordHash == "" && cfg.Auth.Password != "" {
 		slog.Info("persisting auto-hashed password to config", "component", "main")
@@ -497,6 +502,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 			return nil
 		},
 		func() []config.CameraConfig { return cfg.Cameras },
+		a.metrics,
 	)
 
 	// Step 5.5: Transcode manager (after merge, before camera)
@@ -522,8 +528,22 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 
+	// Load display timezone for merge window alignment and camera scheduling.
+	var appLoc *time.Location = time.Local // Default: use server's local timezone
+	if cfg.Timezone != "" && cfg.Timezone != "Local" {
+		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			appLoc = loc
+			slog.Info("using configured timezone", "timezone", cfg.Timezone)
+		} else {
+			slog.Warn("invalid timezone, falling back to server local time", "timezone", cfg.Timezone, "error", err)
+			appLoc = time.Local
+		}
+	} else if cfg.Timezone == "Local" {
+		slog.Info("using server local timezone")
+	}
+
 	// Step 6: Camera manager
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr)
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, appLoc)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -538,11 +558,39 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		})
 	}
 
-	// Step 6.6: Timelapse daily merge manager.
-	// Uses GoMerger as default (no external deps); FFmpeg concat is attempted at runtime if available.
-	dailyFPS := 10
-	dailyMergeDir := filepath.Join(cfg.Storage.RootDir, "daily-merge")
-	a.dailyMergeMgr = timelapse.NewDailyMergeManager(db, db, timelapse.NewGoMerger(), dailyFPS, dailyMergeDir)
+	periodicMergeDir := filepath.Join(cfg.Storage.RootDir, "periodic-merge")
+	a.mergeScheduler = timelapse.NewMergeScheduler(appLoc)
+	// Pre-create per-camera merge managers and register them in the scheduler
+	periodicMergeManagers := make(map[string]*timelapse.PeriodicMergeManager)
+	for _, cam := range cfg.Cameras {
+		if cam.Timelapse != nil {
+			dur := 24 * time.Hour
+			if cam.Timelapse.MergeDuration != "" {
+				if parsed, err := config.ParseMergeDuration(cam.Timelapse.MergeDuration); err == nil {
+					dur = parsed
+				} else {
+					slog.Warn("merge scheduler: invalid merge duration, defaulting to 24h",
+						"camera_id", cam.ID,
+						"merge_duration", cam.Timelapse.MergeDuration,
+						"error", err,
+					)
+				}
+			}
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur, appLoc)
+			a.mergeScheduler.AddOrUpdate(cam.ID, dur)
+			slog.Info("merge scheduler: configured camera",
+				"camera_id", cam.ID,
+				"duration", dur.String(),
+			)
+		}
+	}
+	a.mergeScheduler.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
+		manager, ok := periodicMergeManagers[cameraID]
+		if !ok {
+			return fmt.Errorf("merge scheduler: no manager for camera %s", cameraID)
+		}
+		return manager.Run(ctx, cameraID, refTime)
+	})
 
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
@@ -659,7 +707,7 @@ func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.hlsMgr, a.configPath, a.mergeMgr, cloudProxy)
+	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.hlsMgr, a.configPath, a.mergeMgr, cloudProxy, a.mergeScheduler)
 
 	// Wire streaming managers
 	handler.SetWebRTCManager(a.webrtcMgr)
@@ -726,7 +774,7 @@ func (a *App) buildRouter() http.Handler {
 		metricsAuthMW, _ := authmw.NewAuthMiddleware(authmw.AuthProvider{
 			GetUsername: func() string { return cfg.MetricsAuth.Username },
 			GetHash:     func() string { return cfg.MetricsAuth.PasswordHash },
-		}, cfg.MetricsAuth.Password)
+		}, cfg.MetricsAuth.Password, authmw.AuthRateLimitConfig{})
 		r.With(metricsAuthMW).Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	} else {
 		r.Handle("/metrics", promhttp.HandlerFor(a.metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
@@ -751,12 +799,18 @@ func (a *App) buildRouter() http.Handler {
 		slog.Error("static fs", "error", err)
 		os.Exit(1)
 	}
-	fileServer := http.FileServer(http.FS(staticContent))
-	// Static files served without auth — SPA handles login flow client-side.
-	// All sensitive data is protected via API endpoints in handler.Routes().
-	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileServer.ServeHTTP(w, r)
-	}))
+fileServer := http.FileServer(http.FS(staticContent))
+// Static files served without auth — SPA handles login flow client-side.
+// All sensitive data is protected via API endpoints in handler.Routes().
+// Cache: index.html must not be cached (always fresh after deploy).
+// Assets have content-hash filenames — safe to cache long-term.
+r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if path == "/" || path == "/index.html" {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	}
+	fileServer.ServeHTTP(w, r)
+}))
 
 	return r
 }
@@ -794,9 +848,9 @@ func (a *App) Start() error {
 		go a.transcodeMgr.Run(ctx)
 	}
 
-	// Start daily merge cron (midnight UTC) for timelapse cameras.
-	if a.dailyMergeMgr != nil {
-		go a.runDailyMergeLoop(ctx)
+	// Start merge scheduler for timelapse cameras.
+	if a.mergeScheduler != nil {
+		a.mergeScheduler.Start(ctx)
 	}
 
 	// Start cleanup manager
@@ -856,45 +910,6 @@ func (a *App) Start() error {
 	return a.Stop()
 }
 
-// runDailyMergeLoop runs the daily merge for all timelapse cameras at midnight UTC.
-// It calculates the time until the next midnight, waits, runs the merge, then loops every 24h.
-func (a *App) runDailyMergeLoop(ctx context.Context) {
-	now := time.Now().UTC()
-	nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-	initialDelay := nextMidnight.Sub(now)
-
-	slog.Info("daily merge: starting cron loop",
-		"next_run", nextMidnight.Format(time.RFC3339),
-		"delay_seconds", initialDelay.Seconds(),
-	)
-
-	select {
-	case <-time.After(initialDelay):
-	case <-ctx.Done():
-		return
-	}
-
-	for {
-		yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
-		for _, cam := range a.cfg.Cameras {
-			if cam.Timelapse != nil {
-				slog.Info("daily merge: running for camera",
-					"camera_id", cam.ID, "date", yesterday)
-				if err := a.dailyMergeMgr.Run(ctx, cam.ID, yesterday); err != nil {
-					slog.Error("daily merge: camera merge failed",
-						"camera_id", cam.ID, "date", yesterday, "error", err)
-				}
-			}
-		}
-
-		// Wait 24h until next midnight.
-		select {
-		case <-time.After(24 * time.Hour):
-		case <-ctx.Done():
-			return
-		}
-	}
-}
 
 // Stop gracefully shuts down all components in reverse dependency order
 // with a 30-second timeout. Shutdown order:
@@ -979,6 +994,13 @@ func (a *App) Stop() error {
 
 		// 6. Merge manager — stopped via context cancellation above
 		log.Info("merge manager stopped")
+
+		// 6.1. Merge scheduler
+		if a.mergeScheduler != nil {
+			log.Info("stopping merge scheduler")
+			a.mergeScheduler.Stop()
+		}
+		log.Info("merge scheduler stopped")
 
 		// 7. HLS manager
 		log.Info("stopping HLS streams")

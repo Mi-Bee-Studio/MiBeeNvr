@@ -3,20 +3,20 @@
   import { isAuthenticated, healthCheck } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
-  import Login from './routes/Login.svelte';
-  import Recordings from './routes/Recordings.svelte';
-  import RecordingDetail from './routes/RecordingDetail.svelte';
-  import Stats from './routes/Stats.svelte';
-  import Settings from './routes/Settings.svelte';
-  import Cameras from './routes/Cameras.svelte';
-  import LiveView from './routes/LiveView.svelte';
-  import Dashboard from './routes/Dashboard.svelte';
-  import Setup from './routes/Setup.svelte';
-
-  import TranscodingHistory from './routes/TranscodingHistory.svelte';
-  import Surveillance from './routes/Surveillance.svelte';
-  import Status from './routes/Status.svelte';
-  import Timelapse from './routes/Timelapse.svelte';
+  // Route loader map — lazy loaded on demand
+  const routeLoaders = {
+    login: () => import('./routes/Login.svelte'),
+    setup: () => import('./routes/Setup.svelte'),
+    recordings: () => import('./routes/Recordings.svelte'),
+    'recording-detail': () => import('./routes/RecordingDetail.svelte'),
+    cameras: () => import('./routes/Cameras.svelte'),
+    'cameras-detail': () => import('./routes/Cameras.svelte'),
+    live: () => import('./routes/LiveView.svelte'),
+    surveillance: () => import('./routes/Surveillance.svelte'),
+    settings: () => import('./routes/Settings.svelte'),
+    dashboard: () => import('./routes/Dashboard.svelte'),
+    'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
+  };
   import Header from './components/Header';
 
   // Network status
@@ -54,8 +54,14 @@
 
 
   // Parse hash-based routes (hoisted — function declarations are available before this line)
-  function parseRoute(hash: string) {
-    const path = hash.slice(1); // Remove #
+function parseRoute(hash: string) {
+    let path = hash.slice(1); // Remove #
+
+    // Strip query parameters from hash for routing
+    const qIdx = path.indexOf('?');
+    if (qIdx !== -1) {
+        path = path.slice(0, qIdx);
+    }
 
     if (!path || path === '/') {
       return isAuthenticated() ? { route: 'recordings', params: {} } : { route: 'login', params: {} };
@@ -97,17 +103,14 @@
       return { route: 'cameras', params: {} };
     }
 
-    if (segments[0] === 'surveillance') {
-      const tab = segments[1] === 'recordings' ? 'recordings' : 'cameras';
-      return { route: 'surveillance', params: { tab } };
-    }
 
     if (segments[0] === 'status') {
-      const tab = segments[1] === 'transcoding' ? 'transcoding' : 'health';
-      return { route: 'status', params: { tab } };
+      window.location.replace('#/dashboard/health');
+      return parseRoute('#/dashboard/health');
     }
     if (segments[0] === 'stats') {
-      return { route: 'stats', params: {} };
+      window.location.replace('#/dashboard');
+      return parseRoute('#/dashboard');
     }
 
     if (segments[0] === 'settings') {
@@ -118,12 +121,12 @@
       return { route: 'transcoding-history', params: {} };
     }
 
-    if (segments[0] === 'timelapse') {
-      return { route: 'timelapse', params: {} };
-    }
     if (segments[0] === 'dashboard') {
-      const tab = segments[1] === 'health' ? 'health' : 'dashboard';
+      const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };
+    }
+    if (segments[0] === 'surveillance') {
+      return { route: 'surveillance', params: {} };
     }
 
     // Default to login for unknown routes
@@ -132,9 +135,17 @@
 
   // Current route — initialize from hash synchronously to prevent
   // Login component from redirecting to recordings before onMount runs
-  // Redirect legacy #/health route
-  if (typeof window !== 'undefined' && window.location.hash === '#/health') {
-    window.location.replace('#/status');
+  // Redirect legacy routes
+  if (typeof window !== 'undefined') {
+    if (window.location.hash === '#/health' || window.location.hash.startsWith('#/health/')) {
+      window.location.replace('#/dashboard/health');
+    } else if (window.location.hash === '#/stats' || window.location.hash.startsWith('#/stats/')) {
+      window.location.replace('#/dashboard');
+    } else if (window.location.hash === '#/status' || window.location.hash.startsWith('#/status/')) {
+      window.location.replace('#/dashboard/health');
+    } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse')) {
+      window.location.replace('#/recordings');
+    }
   }
 
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
@@ -144,9 +155,21 @@
 
   function updateRoute() {
     const hash = window.location.hash;
-    // Redirect legacy #/health route
-    if (hash === '#/health') {
-      window.location.replace('#/status');
+    // Redirect legacy routes
+    if (hash === '#/health' || hash.startsWith('#/health/')) {
+      window.location.replace('#/dashboard/health');
+      return;
+    }
+    if (hash === '#/stats' || hash.startsWith('#/stats/')) {
+      window.location.replace('#/dashboard');
+      return;
+    }
+    if (hash === '#/status' || hash.startsWith('#/status/')) {
+      window.location.replace('#/dashboard/health');
+      return;
+    }
+    if (hash === '#/timelapse' || hash.startsWith('#/timelapse')) {
+      window.location.replace('#/recordings');
       return;
     }
     const { route, params: routeParams } = parseRoute(hash);
@@ -182,6 +205,15 @@
       if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     };
   });
+
+  function getRouteProps(route: string) {
+    switch (route) {
+      case 'recording-detail': return { recordingId: params.id };
+      case 'live': return { cameraId: params.id };
+      case 'dashboard': return { initialTab: params.tab || 'storage' };
+      default: return {};
+    }
+  }
 </script>
 
 <!-- Offline banner -->
@@ -199,38 +231,20 @@
   </div>
 {/if}
 
-{#if currentRoute === 'login'}
-    <Login />
-  {:else if currentRoute === 'setup'}
-    <Setup />
-  {:else}
-    <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
-    {#if currentRoute === 'recordings'}
-      <Recordings />
-    {:else if currentRoute === 'recording-detail'}
-      <RecordingDetail recordingId={params.id} />
-    {:else if currentRoute === 'cameras'}
-      <Cameras />
-    {:else if currentRoute === 'cameras-detail'}
-      <Cameras />
-    {:else if currentRoute === 'live'}
-      <LiveView cameraId={params.id} />
-    {:else if currentRoute === 'surveillance'}
-      <Surveillance initialTab={params.tab || 'cameras'} />
-    {:else if currentRoute === 'status'}
-      <Status initialTab={params.tab || 'health'} />
-    {:else if currentRoute === 'stats'}
-      <Stats />
-    {:else if currentRoute === 'settings'}
-      <Settings />
-    {:else if currentRoute === 'dashboard'}
-      <Dashboard initialTab={params.tab || 'dashboard'} />
-    {:else if currentRoute === 'transcoding-history'}
-      <TranscodingHistory />
-    {:else if currentRoute === 'timelapse'}
-      <Timelapse />
-    {/if}
-  {/if}
+{#if currentRoute === 'login' || currentRoute === 'setup'}
+  {#await routeLoaders[currentRoute]()}
+    <div class="skeleton skeleton--page"></div>
+  {:then module}
+    <module.default />
+  {/await}
+{:else}
+  <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
+  {#await routeLoaders[currentRoute]()}
+    <div class="skeleton skeleton--page"></div>
+  {:then module}
+    <module.default {...getRouteProps(currentRoute)} />
+  {/await}
+{/if}
 
 <style>
   .offline-banner {
@@ -281,4 +295,21 @@
       opacity: 1;
     }
   }
+
+  .skeleton {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .skeleton--page {
+    min-height: 60vh;
+    margin: 1rem;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.8; }
+  }
+
 </style>

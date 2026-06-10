@@ -26,11 +26,11 @@ func defaultDownloadURL(goos, goarch string) string {
 	base := "https://johnvansickle.com/ffmpeg/builds"
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-	return base + "/ffmpeg-git-amd64-static.tar.gz"
+	return base + "/ffmpeg-git-amd64-static.tar.xz"
 case "linux/arm64":
-	return base + "/ffmpeg-git-arm64-static.tar.gz"
+	return base + "/ffmpeg-git-arm64-static.tar.xz"
 case "linux/arm":
-	return base + "/ffmpeg-git-armhf-static.tar.gz"
+	return base + "/ffmpeg-git-armhf-static.tar.xz"
 	default:
 		return ""
 	}
@@ -326,7 +326,7 @@ func (d *Downloader) downloadOnceWithURL(ctx context.Context, url string) error 
 	return nil
 }
 
-// extractArchive extracts ffmpeg and ffprobe from a .tar.gz archive.
+// extractArchive extracts ffmpeg and ffprobe from a .tar.gz or .tar.xz archive.
 // It handles both flat files and files nested inside a directory (e.g. ffmpeg-git-amd64-static/ffmpeg).
 func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 	f, err := os.Open(archivePath)
@@ -335,7 +335,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 	}
 	defer f.Close()
 
-	// Detect format: .tar.gz or plain binary
+	// Detect format: .tar.gz, .tar.xz, or plain binary
 	var tarReader *tar.Reader
 
 	if strings.HasSuffix(url, ".tar.gz") || strings.HasSuffix(url, ".tgz") {
@@ -346,8 +346,21 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 		defer gzr.Close()
 		tarReader = tar.NewReader(gzr)
 	} else if strings.HasSuffix(url, ".tar.xz") {
-		// xz is not natively supported in Go stdlib.
-		return fmt.Errorf("tar.xz archives not supported (use .tar.gz URL)")
+		// Use xz command for decompression (pure Go xz not in stdlib)
+		f.Close() // close file, xz will read it directly
+		cmd := exec.Command("xz", "-dc", archivePath)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("xz stdout pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("xz start failed: %w", err)
+		}
+		tarReader = tar.NewReader(stdout)
+		defer func() {
+			// Wait for xz to finish after tar reading completes
+			_ = cmd.Wait()
+		}()
 	} else {
 		// Not an archive — treat as raw binary (legacy behavior)
 		if err := os.Rename(archivePath, d.FFmpegPath()); err != nil {
@@ -355,8 +368,8 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 		}
 		// Don't remove archive since we renamed it
 		return os.Chmod(d.FFmpegPath(), 0755)
-	}
 
+	}
 	// Extract ffmpeg and ffprobe from tar archive
 	extracted := 0
 	for {

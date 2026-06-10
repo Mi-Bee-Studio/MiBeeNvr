@@ -296,6 +296,22 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='16' WHERE key='schema_version'")
 
+	// Migration v16 → v17: add merge_duration column to cameras
+	var mergeDurColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_duration'`).Scan(&mergeDurColExists)
+	if mergeDurColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN merge_duration TEXT DEFAULT 'natural-day'`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='17' WHERE key='schema_version'")
+
+	// Migration v17 → v18: add merge_progress column to recordings
+	var mergeProgressColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_progress'`).Scan(&mergeProgressColExists)
+	if mergeProgressColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_progress INTEGER DEFAULT 0`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
+
 	return nil
 
 }

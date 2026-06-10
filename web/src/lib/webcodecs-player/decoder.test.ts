@@ -58,19 +58,20 @@ function createMockDecoderClass(): any {
 
 // ─── Sample data ────────────────────────────────────────────────────────────
 
-const H264_SPS = new Uint8Array([
-  0x67, 0x42, 0xC0, 0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0x88,
+const H264_SPS = new Uint8Array([0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88]);
+const H264_PPS = new Uint8Array([0x68, 0xce, 0x38, 0x80]);
+const H265_VPS = new Uint8Array([0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60]);
+const H265_SPS = new Uint8Array([
+  0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x7b,
+  0xac, 0x09,
 ]);
-const H264_PPS = new Uint8Array([0x68, 0xCE, 0x38, 0x80]);
-const H265_VPS = new Uint8Array([0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF, 0x01, 0x60]);
-const H265_SPS = new Uint8Array([0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x7B, 0xAC, 0x09]);
-const H265_PPS = new Uint8Array([0x44, 0x01, 0xC1, 0x72, 0xB4, 0x62, 0x40]);
+const H265_PPS = new Uint8Array([0x44, 0x01, 0xc1, 0x72, 0xb4, 0x62, 0x40]);
 
 function makeH264CodecInfo(): CodecInfo {
   return {
     codec: 'h264',
     profile: 0x42, // 66 = High
-    level: 0x1E,   // 30 = Level 3.0
+    level: 0x1e, // 30 = Level 3.0
     sps: H264_SPS,
     pps: H264_PPS,
   };
@@ -79,8 +80,8 @@ function makeH264CodecInfo(): CodecInfo {
 function makeH265CodecInfo(): CodecInfo {
   return {
     codec: 'h265',
-    profile: 1,    // Main
-    level: 0x5D,   // 93 = Level 3.1
+    profile: 1, // Main
+    level: 0x5d, // 93 = Level 3.1
     sps: H265_SPS,
     pps: H265_PPS,
     vps: H265_VPS,
@@ -95,16 +96,19 @@ beforeEach(() => {
   mockDecoderInstances = [];
   mockIsConfigSupported = vi.fn().mockResolvedValue({ supported: true });
   vi.stubGlobal('VideoDecoder', createMockDecoderClass());
-  vi.stubGlobal('EncodedVideoChunk', class MockEncodedVideoChunk {
-    type: string;
-    timestamp: number;
-    data: Uint8Array;
-    constructor(opts: { type: string; timestamp: number; data: Uint8Array }) {
-      this.type = opts.type;
-      this.timestamp = opts.timestamp;
-      this.data = opts.data;
-    }
-  });
+  vi.stubGlobal(
+    'EncodedVideoChunk',
+    class MockEncodedVideoChunk {
+      type: string;
+      timestamp: number;
+      data: Uint8Array;
+      constructor(opts: { type: string; timestamp: number; data: Uint8Array }) {
+        this.type = opts.type;
+        this.timestamp = opts.timestamp;
+        this.data = opts.data;
+      }
+    },
+  );
 });
 
 afterEach(() => {
@@ -119,7 +123,7 @@ afterEach(() => {
 describe('prependAnnexB', () => {
   it('should prepend 00 00 00 01 before each NALU', () => {
     const nalu1 = new Uint8Array([0x67, 0x42]);
-    const nalu2 = new Uint8Array([0x65, 0xAA, 0xBB]);
+    const nalu2 = new Uint8Array([0x65, 0xaa, 0xbb]);
     const result = prependAnnexB([nalu1, nalu2]);
 
     // Expected: 4 + 2 + 4 + 3 = 13 bytes
@@ -135,12 +139,12 @@ describe('prependAnnexB', () => {
     expect(result[8]).toBe(0x00);
     expect(result[9]).toBe(0x01);
     expect(result[10]).toBe(0x65);
-    expect(result[11]).toBe(0xAA);
-    expect(result[12]).toBe(0xBB);
+    expect(result[11]).toBe(0xaa);
+    expect(result[12]).toBe(0xbb);
   });
 
   it('should handle single NALU', () => {
-    const nalu = new Uint8Array([0x67, 0x42, 0xC0]);
+    const nalu = new Uint8Array([0x67, 0x42, 0xc0]);
     const result = prependAnnexB([nalu]);
     expect(result.length).toBe(7);
     expect(result[0]).toBe(0x00);
@@ -166,25 +170,25 @@ describe('prependAnnexB', () => {
 // ---------------------------------------------------------------------------
 describe('buildH264CodecString', () => {
   it('should build avc1.42C01E for profile=0x42, level=0x1E', () => {
-    const sps = new Uint8Array([0x67, 0x42, 0xC0, 0x1E, 0x00]);
-    const result = buildH264CodecString(sps, 0x42, 0x1E);
+    const sps = new Uint8Array([0x67, 0x42, 0xc0, 0x1e, 0x00]);
+    const result = buildH264CodecString(sps, 0x42, 0x1e);
     expect(result).toBe('avc1.42C01E');
   });
 
   it('should build avc1.42001E for profile=0x42 with constraint=0x00', () => {
-    const sps = new Uint8Array([0x67, 0x42, 0x00, 0x1E, 0x00]);
-    const result = buildH264CodecString(sps, 0x42, 0x1E);
+    const sps = new Uint8Array([0x67, 0x42, 0x00, 0x1e, 0x00]);
+    const result = buildH264CodecString(sps, 0x42, 0x1e);
     expect(result).toBe('avc1.42001E');
   });
 
   it('should fallback to avc1.42001E when sps is too short', () => {
     const sps = new Uint8Array([0x67]);
-    const result = buildH264CodecString(sps, 0x42, 0x1E);
+    const result = buildH264CodecString(sps, 0x42, 0x1e);
     expect(result).toBe('avc1.42001E');
   });
 
   it('should fallback when sps is empty', () => {
-    const result = buildH264CodecString(new Uint8Array(0), 0x42, 0x1E);
+    const result = buildH264CodecString(new Uint8Array(0), 0x42, 0x1e);
     expect(result).toBe('avc1.42001E');
   });
 });
@@ -196,7 +200,7 @@ describe('buildH265CodecString', () => {
   it('should build hvc1.1.6.L93.B0 for Main profile L3.1', () => {
     // SPS byte[1] has general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5)
     // 0x01 = 00 0 00001 → profile_space=0, tier=0, profile_idc=1 (Main)
-    const sps = new Uint8Array([0x42, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x5D]);
+    const sps = new Uint8Array([0x42, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x5d]);
     const result = buildH265CodecString(sps, 93);
     expect(result).toBe('hvc1.1.6.L93.B0');
   });
@@ -313,8 +317,8 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
-      const nalu1 = new Uint8Array([0x65, 0xAA, 0xBB]);
-      const nalu2 = new Uint8Array([0x01, 0xCC, 0xDD]);
+      const nalu1 = new Uint8Array([0x65, 0xaa, 0xbb]);
+      const nalu2 = new Uint8Array([0x01, 0xcc, 0xdd]);
       decoder.decode([nalu1, nalu2], 3000, false);
 
       const instance = mockDecoderInstances[0];
@@ -430,7 +434,9 @@ describe('Decoder', () => {
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
 
-      decoder.onFrame((frame: any) => { frame.close(); });
+      decoder.onFrame((frame: any) => {
+        frame.close();
+      });
       decoder.decode([new Uint8Array([0x65])], 0, false);
 
       // Frame should be closed after callback
@@ -488,10 +494,16 @@ describe('Decoder', () => {
       let errorCb: ((e: Error) => void) | null = null;
 
       const mockClass = class MockVideoDecoder {
-        configure = vi.fn().mockImplementation(async () => { this.state = 'configured'; });
+        configure = vi.fn().mockImplementation(async () => {
+          this.state = 'configured';
+        });
         decode = vi.fn();
-        reset = vi.fn().mockImplementation(() => { this.state = 'unconfigured'; });
-        close = vi.fn().mockImplementation(() => { this.state = 'closed'; });
+        reset = vi.fn().mockImplementation(() => {
+          this.state = 'unconfigured';
+        });
+        close = vi.fn().mockImplementation(() => {
+          this.state = 'closed';
+        });
         state = 'unconfigured';
         decodeQueueSize = 0;
         constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
@@ -684,7 +696,9 @@ describe('Decoder', () => {
       const decoder = new Decoder();
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
-      decoder.onFrame(() => { /* noop — frame not closed by callback */ });
+      decoder.onFrame(() => {
+        /* noop — frame not closed by callback */
+      });
 
       // Schedule output via setTimeout (macrotask, runs after close())
       if (outputCallback) {
@@ -695,7 +709,7 @@ describe('Decoder', () => {
       decoder.close();
 
       // Let macrotasks run — handleOutput processes frames on closed decoder
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Frames should have been closed by handleOutput (no callback registered after close)
       expect(pendingFrames[0].close).toHaveBeenCalledTimes(1);
@@ -709,10 +723,16 @@ describe('Decoder', () => {
       const pendingFrames = [{ close: vi.fn() }, { close: vi.fn() }];
 
       const mockClass = class MockVideoDecoder {
-        configure = vi.fn().mockImplementation(async () => { this.state = 'configured'; });
+        configure = vi.fn().mockImplementation(async () => {
+          this.state = 'configured';
+        });
         decode = vi.fn();
-        reset = vi.fn().mockImplementation(() => { this.state = 'unconfigured'; });
-        close = vi.fn().mockImplementation(() => { this.state = 'closed'; });
+        reset = vi.fn().mockImplementation(() => {
+          this.state = 'unconfigured';
+        });
+        close = vi.fn().mockImplementation(() => {
+          this.state = 'closed';
+        });
         state = 'configured';
         decodeQueueSize = 0;
         constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
@@ -727,7 +747,9 @@ describe('Decoder', () => {
       const decoder = new Decoder();
       const ci = makeH264CodecInfo();
       await decoder.configure(ci);
-      decoder.onFrame(() => { /* noop */ });
+      decoder.onFrame(() => {
+        /* noop */
+      });
 
       // Capture the original output callback BEFORE error recovery triggers.
       // The mock constructor reassigns outputCb when the recovery decoder is created,
@@ -747,14 +769,14 @@ describe('Decoder', () => {
       await vi.waitFor(() => {
         expect(mockDecoderInstances.length).toBeGreaterThanOrEqual(2);
       });
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Frames delivered after error should still be closed by handleOutput
       expect(pendingFrames[0].close).toHaveBeenCalledTimes(1);
       expect(pendingFrames[1].close).toHaveBeenCalledTimes(1);
       decoder.close();
     });
-});
+  });
 
   // ---------------------------------------------------------------------------
   // Backpressure
@@ -916,7 +938,9 @@ describe('Decoder', () => {
       const mockClass = class MockVideoDecoder {
         configure = vi.fn().mockImplementation(async () => {});
         decode = vi.fn();
-        reset = vi.fn().mockImplementation(() => { this.state = 'unconfigured'; });
+        reset = vi.fn().mockImplementation(() => {
+          this.state = 'unconfigured';
+        });
         close = vi.fn();
         state = 'configured';
         decodeQueueSize = 0;

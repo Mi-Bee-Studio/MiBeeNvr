@@ -15,16 +15,16 @@
 
 /** H.264 NAL unit type (0-28 defined by spec, 24-31 unspecified). */
 export type H264NaluType =
-  | 0  // Unspecified
-  | 1  // Non-IDR slice
-  | 2  // Slice data A
-  | 3  // Slice data B
-  | 4  // Slice data C
-  | 5  // IDR slice
-  | 6  // SEI
-  | 7  // SPS
-  | 8  // PPS
-  | 9  // AUD
+  | 0 // Unspecified
+  | 1 // Non-IDR slice
+  | 2 // Slice data A
+  | 3 // Slice data B
+  | 4 // Slice data C
+  | 5 // IDR slice
+  | 6 // SEI
+  | 7 // SPS
+  | 8 // PPS
+  | 9 // AUD
   | 10 // End of sequence
   | 11 // End of stream
   | 12 // Filler
@@ -34,31 +34,51 @@ export type H264NaluType =
   | 19 // Coded slice of auxiliary coded picture
   | 20 // Coded slice extension
   | 21 // Coded slice extension for depth view
-  | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31;
+  | 22
+  | 23
+  | 24
+  | 25
+  | 26
+  | 27
+  | 28
+  | 29
+  | 30
+  | 31;
 
 /** H.265 NAL unit type (0-63). */
 export type H265NaluType =
-  | 0  // TRAIL_N
-  | 1  // TRAIL_R
-  | 2  // TSA_N
-  | 3  // TSA_R
-  | 4  // STSA_N
-  | 5  // STSA_R
-  | 6  // RADL_N
-  | 7  // RADL_R
-  | 8  // RASL_N
-  | 9  // RASL_R
+  | 0 // TRAIL_N
+  | 1 // TRAIL_R
+  | 2 // TSA_N
+  | 3 // TSA_R
+  | 4 // STSA_N
+  | 5 // STSA_R
+  | 6 // RADL_N
+  | 7 // RADL_R
+  | 8 // RASL_N
+  | 9 // RASL_R
   | 10 // Reserved
-  | 11 | 12 | 13 | 14 | 15 // Reserved
+  | 11
+  | 12
+  | 13
+  | 14
+  | 15 // Reserved
   | 16 // BLA_W_LP
   | 17 // BLA_W_RADL
   | 18 // BLA_N_LP
   | 19 // IDR_W_RADL
   | 20 // IDR_N_LP
   | 21 // CRA_NUT
-  | 22 | 23 // Reserved
+  | 22
+  | 23 // Reserved
   | 24 // RSV_IRAP_VCL23
-  | 25 | 26 | 27 | 28 | 29 | 30 | 31
+  | 25
+  | 26
+  | 27
+  | 28
+  | 29
+  | 30
+  | 31
   | 32 // VPS
   | 33 // SPS
   | 34 // PPS
@@ -68,8 +88,29 @@ export type H265NaluType =
   | 38 // Filler
   | 39 // SEI prefixed
   | 40 // SEI suffix
-  | 41 | 42 | 43 | 44 | 45 | 46 | 47 // Reserved
-  | 48 | 49 | 50 | 51 | 52 | 53 | 54 | 55 | 56 | 57 | 58 | 59 | 60 | 61 | 62 | 63;
+  | 41
+  | 42
+  | 43
+  | 44
+  | 45
+  | 46
+  | 47 // Reserved
+  | 48
+  | 49
+  | 50
+  | 51
+  | 52
+  | 53
+  | 54
+  | 55
+  | 56
+  | 57
+  | 58
+  | 59
+  | 60
+  | 61
+  | 62
+  | 63;
 
 /** Parsed NAL unit metadata and raw data. */
 export interface NaluInfo {
@@ -100,7 +141,6 @@ export class InvalidNaluError extends Error {
   }
 }
 
-
 // ─── H.264 Keyframe NAL Types ──────────────────────────────────────────────
 
 const H264_KEYFRAME_TYPES = new Set<number>([5, 7, 8]); // IDR, SPS, PPS
@@ -110,10 +150,15 @@ const H264_PPS_TYPE = 8;
 // ─── H.265 Keyframe NAL Types ──────────────────────────────────────────────
 
 const H265_KEYFRAME_TYPES = new Set<number>([
-  16, 17, 18,            // BLA variants
-  19, 20,                // IDR variants
-  21,                    // CRA
-  32, 33, 34,            // VPS, SPS, PPS
+  16,
+  17,
+  18, // BLA variants
+  19,
+  20, // IDR variants
+  21, // CRA
+  32,
+  33,
+  34, // VPS, SPS, PPS
 ]);
 const H265_VPS_TYPE = 32;
 const H265_SPS_TYPE = 33;
@@ -136,7 +181,11 @@ function splitAnnexB(data: Uint8Array): Uint8Array[] {
   // Check if data contains any start codes
   let hasStartCode = false;
   for (let i = 0; i <= data.length - 3; i++) {
-    if (data[i] === 0 && data[i + 1] === 0 && (data[i + 2] === 1 || (data[i + 2] === 0 && i + 3 < data.length && data[i + 3] === 1))) {
+    if (
+      data[i] === 0 &&
+      data[i + 1] === 0 &&
+      (data[i + 2] === 1 || (data[i + 2] === 0 && i + 3 < data.length && data[i + 3] === 1))
+    ) {
       hasStartCode = true;
       break;
     }
@@ -149,7 +198,7 @@ function splitAnnexB(data: Uint8Array): Uint8Array[] {
   }
 
   const nalus: Uint8Array[] = [];
-  let naluStart = -1;  // Start of NALU payload (after start code)
+  let naluStart = -1; // Start of NALU payload (after start code)
   let i = 0;
 
   // Skip leading zero bytes before first start code
@@ -221,7 +270,7 @@ function getH264NaluType(data: Uint8Array): number {
   if (data.length === 0) {
     throw new InvalidNaluError('H.264 NALU data is empty');
   }
-  return data[0] & 0x1F;
+  return data[0] & 0x1f;
 }
 
 // ─── H.265 NAL Type Extraction ─────────────────────────────────────────────
@@ -235,7 +284,7 @@ function getH265NaluType(data: Uint8Array): number {
   if (data.length < 2) {
     throw new InvalidNaluError(`H.265 NALU requires at least 2 bytes, got ${data.length}`);
   }
-  return (data[0] >> 1) & 0x3F;
+  return (data[0] >> 1) & 0x3f;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────

@@ -325,8 +325,9 @@ func TestCreateRecorder_TimelapseRTSPKeyframeSource(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := mgr.createRecorder(cam, segDur)
-	// rtsp_keyframe returns nil from createRecorder since KeyframeExtractor is not a Recorder
-	assert.Nil(t, rec, "rtsp_keyframe timelapse source should return nil from createRecorder")
+	// rtsp_keyframe now creates an H264Recorder for standalone timelapse cameras
+	assert.NotNil(t, rec, "rtsp_keyframe should return a recorder from createRecorder")
+	assert.IsType(t, &recorder.H264Recorder{}, rec, "should be an H264Recorder")
 }
 
 func TestCreateRecorder_TimelapseWithMergeManager(t *testing.T) {
@@ -377,7 +378,7 @@ func TestCreateRecorder_TimelapseWithMergeManager(t *testing.T) {
 
 func TestSchedulerCheck_IsRecordingTime(t *testing.T) {
 	t.Helper()
-	scheduler := timelapse.NewScheduler()
+	scheduler := timelapse.NewScheduler(time.UTC)
 
 	// No schedule = 24/7 recording
 	cfg := config.CameraTimelapseConfig{
@@ -397,7 +398,7 @@ func TestSchedulerCheck_IsRecordingTime(t *testing.T) {
 
 func TestSchedulerCheck_WithSchedule(t *testing.T) {
 	t.Helper()
-	scheduler := timelapse.NewScheduler()
+	scheduler := timelapse.NewScheduler(time.UTC)
 
 	// Schedule covering all days, all day
 	cfg := config.CameraTimelapseConfig{
@@ -699,14 +700,14 @@ func TestStartRecorder_TimelapseRTSPKeyframe(t *testing.T) {
 	require.NoError(t, err)
 
 	err = mgr.startRecorder(ctx, cam, segDur)
-	// Should NOT error (rtsp_keyframe returns nil, but startRecorder handles it gracefully)
+	// Should NOT error — startRecorder creates and registers H264Recorder for standalone timelapse with rtsp_keyframe
 	require.NoError(t, err, "rtsp_keyframe should not cause an error")
-
-	// Verify no recorder is registered (rtsp_keyframe doesn't register one)
+	// Verify H264Recorder is registered (createRecorder now returns H264Recorder for rtsp_keyframe)
 	mgr.mu.RLock()
-	_, exists := mgr.recorders[cam.ID]
+	rec, exists := mgr.recorders[cam.ID]
 	mgr.mu.RUnlock()
-	assert.False(t, exists, "rtsp_keyframe should not register a recorder")
+	assert.True(t, exists, "rtsp_keyframe should register a recorder")
+	assert.IsType(t, &recorder.H264Recorder{}, rec, "should be an H264Recorder")
 }
 
 // --- GetRecorderHub Tests ---

@@ -30,7 +30,9 @@ function createMockWSClass() {
     onmessage: ((ev: MessageEvent) => void) | null = null;
     onclose: ((ev: CloseEvent) => void) | null = null;
     onerror: (() => void) | null = null;
-    close = vi.fn(() => { this.readyState = WS_CLOSED; });
+    close = vi.fn(() => {
+      this.readyState = WS_CLOSED;
+    });
     readyState = WS_OPEN;
     send = vi.fn();
 
@@ -98,16 +100,16 @@ function buildCodecInfoBuffer(): ArrayBuffer {
   return encodeCodecInfo({
     codec: 'h264',
     profile: 0x42,
-    level: 0x1E,
-    sps: new Uint8Array([0x67, 0x42, 0xC0, 0x1E]),
-    pps: new Uint8Array([0x68, 0xCE, 0x38, 0x80]),
+    level: 0x1e,
+    sps: new Uint8Array([0x67, 0x42, 0xc0, 0x1e]),
+    pps: new Uint8Array([0x68, 0xce, 0x38, 0x80]),
   });
 }
 
 function buildVideoFrameBuffer(): ArrayBuffer {
   const buf = new ArrayBuffer(2);
   new Uint8Array(buf)[0] = MsgType.VideoFrame;
-  new Uint8Array(buf)[1] = 0xFF;
+  new Uint8Array(buf)[1] = 0xff;
   return buf;
 }
 
@@ -336,10 +338,7 @@ describe('destroy', () => {
     const cm = createManager();
     cm.connect();
     cm.destroy();
-    expect(document.removeEventListener).toHaveBeenCalledWith(
-      'visibilitychange',
-      expect.any(Function),
-    );
+    expect(document.removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
   });
 
   it('should prevent any further operations', () => {
@@ -445,7 +444,7 @@ describe('callbacks', () => {
       const ci = fn.mock.calls[0][0];
       expect(ci.codec).toBe('h264');
       expect(ci.profile).toBe(0x42);
-      expect(ci.level).toBe(0x1E);
+      expect(ci.level).toBe(0x1e);
     });
   });
 
@@ -889,7 +888,7 @@ describe('edge cases', () => {
     cm.connect();
     simulateOpen();
     const buf = new ArrayBuffer(1);
-    new Uint8Array(buf)[0] = 0xFF;
+    new Uint8Array(buf)[0] = 0xff;
     simulateMessage(getLastWS(), buf);
     expect(fn).not.toHaveBeenCalled();
   });
@@ -924,9 +923,14 @@ describe('edge cases', () => {
 
   it('should handle WebSocket constructor throwing', () => {
     const errorFn = vi.fn();
-    vi.stubGlobal('WebSocket', class {
-      constructor() { throw new Error('WebSocket not supported'); }
-    });
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        constructor() {
+          throw new Error('WebSocket not supported');
+        }
+      },
+    );
     const cm = createManager({ onStateChange: errorFn });
     cm.connect();
     expect(errorFn).toHaveBeenCalledWith('error');

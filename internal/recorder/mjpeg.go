@@ -55,6 +55,7 @@ type MJPEGRecorder struct {
 	frameCh chan []byte
 	dropped atomic.Int64
 	Hub     *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -301,6 +302,19 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		// Frame sampling: only save every Nth frame
 		seq := atomic.AddInt64(&r.frameSeq, 1)
 		if int(seq)%r.cfg.SampleInterval != 0 {
+			continue
+		}
+
+		// Check storage health — if failed, skip recording but keep stream alive.
+		if isStorageFailed(r.store) {
+			if r.curTempPath != "" {
+				r.closeCurrentSegment()
+			}
+			if logNow, ok := shouldLogHealth(r.lastHealthLogAt); ok {
+				r.lastHealthLogAt = logNow
+				mjpegLogger.Warn("storage health failed, skipping recording (stream kept alive)",
+					"camera_id", r.cfg.CameraID)
+			}
 			continue
 		}
 

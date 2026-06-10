@@ -11,18 +11,22 @@ import (
 // Scheduler evaluates timelapse recording schedules based on current time.
 // Thread-safe when used read-only after config load.
 type Scheduler struct {
-	// now returns the current time. If nil, time.Now().UTC() is used.
+	// now returns the current time. If nil, time.Now().In(s.loc) is used.
 	// Exposed as a field for testing only — do not set in production code.
-	now func() time.Time
+now func() time.Time
+loc *time.Location
 }
 
 // NewScheduler creates a new Scheduler with default time source.
-func NewScheduler() *Scheduler {
-	return &Scheduler{}
+func NewScheduler(loc *time.Location) *Scheduler {
+	if loc == nil {
+		loc = time.Local
+	}
+	return &Scheduler{loc: loc}
 }
 
 // IsRecordingTime reports whether timelapse recording should be active
-// based on the current UTC time and the given schedule configuration.
+// based on the current time in the scheduler's timezone and the given schedule configuration.
 //
 // Rules:
 //   - If Paused is true, always returns false.
@@ -155,12 +159,13 @@ func (s *Scheduler) NextTransition(cfg config.CameraTimelapseConfig) time.Durati
 	return 0
 }
 
-// getNow returns the current UTC time, or the injected mock time for testing.
+// getNow returns the current time in the scheduler's configured timezone,
+// or the injected mock time for testing.
 func (s *Scheduler) getNow() time.Time {
 	if s.now != nil {
 		return s.now()
 	}
-	return time.Now().UTC()
+	return time.Now().In(s.loc)
 }
 
 // parseHHMM parses a validated HH:MM string into hours and minutes.

@@ -27,7 +27,7 @@ export interface TranscodingSettings {
 export interface SelfCheckResult {
   supported: boolean;
   ffmpeg_status: string;
-  encoders: Record<string, string>;  // {h264: encoder_name, h265: encoder_name}
+  encoders: Record<string, string>; // {h264: encoder_name, h265: encoder_name}
   warnings: string[];
   max_concurrent: number;
   estimated_fps: number;
@@ -39,12 +39,12 @@ export interface SelfCheckResult {
 }
 
 export interface DownloadStatus {
-	status: string;
-	progress: number;
-	version: string;
-	error: string;
-	total_bytes: number;
-	downloaded_bytes: number;
+  status: string;
+  progress: number;
+  version: string;
+  error: string;
+  total_bytes: number;
+  downloaded_bytes: number;
 }
 
 export interface TranscodeTask {
@@ -100,9 +100,12 @@ export async function getTranscodingStatus(): Promise<ManagerStatus> {
 
 // --- Tasks ---
 
-export async function getTranscodingTasks(
-  params?: { status?: string; camera_id?: string; page?: number; limit?: number }
-): Promise<{ tasks: TranscodeTask[]; total: number; page: number }> {
+export async function getTranscodingTasks(params?: {
+  status?: string;
+  camera_id?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{ tasks: TranscodeTask[]; total: number; page: number }> {
   const query = new URLSearchParams();
   if (params?.status) query.set('status', params.status);
   if (params?.camera_id) query.set('camera_id', params.camera_id);
@@ -128,7 +131,7 @@ export async function cancelTranscodeTask(id: number): Promise<void> {
 }
 
 export async function retryTranscodeTask(id: number): Promise<TranscodeTask> {
-	return apiRequest<TranscodeTask>(`/transcoding/tasks/${id}/retry`, { method: 'POST' });
+  return apiRequest<TranscodeTask>(`/transcoding/tasks/${id}/retry`, { method: 'POST' });
 }
 
 export async function startBackfill(cameraID: string): Promise<{
@@ -137,15 +140,14 @@ export async function startBackfill(cameraID: string): Promise<{
   total: number;
 }> {
   const query = new URLSearchParams({ camera_id: cameraID }).toString();
-  return apiRequest<{ enqueued: number; skipped: number; total: number }>(
-    `/transcoding/backfill?${query}`,
-    { method: 'POST' }
-  );
+  return apiRequest<{ enqueued: number; skipped: number; total: number }>(`/transcoding/backfill?${query}`, {
+    method: 'POST',
+  });
 }
 
 export async function getUntranscodedRecordingCount(cameraID: string): Promise<{ count: number }> {
-    const query = new URLSearchParams({ camera_id: cameraID }).toString();
-    return apiRequest<{ count: number }>(`/transcoding/recordings-without-transcode?${query}`);
+  const query = new URLSearchParams({ camera_id: cameraID }).toString();
+  return apiRequest<{ count: number }>(`/transcoding/recordings-without-transcode?${query}`);
 }
 // --- Cameras ---
 

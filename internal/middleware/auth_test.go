@@ -12,7 +12,7 @@ import (
 
 func TestValidCredentials(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -27,7 +27,7 @@ func TestValidCredentials(t *testing.T) {
 
 func TestInvalidPassword(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -42,7 +42,7 @@ func TestInvalidPassword(t *testing.T) {
 
 func TestMissingAuthHeader(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -56,7 +56,7 @@ func TestMissingAuthHeader(t *testing.T) {
 
 func TestMalformedAuth(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -70,7 +70,7 @@ func TestMalformedAuth(t *testing.T) {
 }
 
 func TestEmptyHashReturnsSetupRequired(t *testing.T) {
-	mw, _ := NewAuthMiddleware(staticProvider("user", ""), "")
+	mw, _ := NewAuthMiddleware(staticProvider("user", ""), "", AuthRateLimitConfig{})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -93,7 +93,7 @@ func TestHashCheckRoundTrip(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
     hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("u", hash), "")
+    mw, _ := NewAuthMiddleware(staticProvider("u", hash), "", AuthRateLimitConfig{})
     handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     }))
@@ -131,7 +131,7 @@ func staticProvider(username, hash string) AuthProvider {
 }
 
 func TestPlaintextPasswordAutoHash(t *testing.T) {
-	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", ""), "mypassword")
+	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", ""), "mypassword", AuthRateLimitConfig{})
 	require.NotEmpty(t, effectiveHash, "effectiveHash should be populated when plaintext is provided")
 	require.True(t, CheckPassword("mypassword", effectiveHash), "original password should authenticate against auto-hash")
 
@@ -149,7 +149,7 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 	preHashed, err := HashPassword("prehashed-pass")
 	require.NoError(t, err)
 
-	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", preHashed), "ignored-plaintext")
+	mw, effectiveHash := NewAuthMiddleware(staticProvider("admin", preHashed), "ignored-plaintext", AuthRateLimitConfig{})
 	require.Equal(t, preHashed, effectiveHash, "pre-existing hash should take priority over plaintext")
 
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +240,7 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 		GetHash:     func() string { return currentHash },
 	}
 
-	mw, _ := NewAuthMiddleware(provider, "")
+	mw, _ := NewAuthMiddleware(provider, "", AuthRateLimitConfig{})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

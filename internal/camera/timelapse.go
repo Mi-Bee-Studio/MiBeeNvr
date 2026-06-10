@@ -165,7 +165,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		interval = d
 	}
 
-	isH265 := cam.Encoding == "h265"
+	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265"
 
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
 		CameraID:   cameraID,
@@ -284,7 +284,7 @@ func (cm *CameraManager) ResumeTimelapse(ctx context.Context, cameraID string) e
 
 	rec := cm.createRecorder(*cam, segDur)
 	if rec == nil {
-		return nil // e.g., rtsp_keyframe — no recorder to start
+		return nil
 	}
 
 	cm.recorders[cameraID] = rec

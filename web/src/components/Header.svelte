@@ -57,12 +57,11 @@
 
   // Navigation items
   const navItems = [
-    { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
-    { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },
-    { href: '#/status', labelKey: 'nav.status', route: '/status' },
+    { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
+    { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
+    { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
-    { href: '#/timelapse', labelKey: 'nav.timelapse', route: '/timelapse' },
   ];
 
   function isActive(route: string): boolean {
@@ -83,7 +82,7 @@
           <span>{backLabel || t('detail.back')}</span>
         </button>
       {/if}
-      <a href="#/dashboard" class="logo">MiBee NVR</a>
+      <a href="#/surveillance" class="logo">MiBee NVR</a>
       
       <!-- Desktop Navigation -->
       <nav class="nav-links">

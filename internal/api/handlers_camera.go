@@ -237,6 +237,13 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// Notify merge scheduler if camera has timelapse config
+	if body.Timelapse != nil && body.Timelapse.MergeDuration != "" && h.mergeScheduler != nil {
+		if dur, err := config.ParseMergeDuration(body.Timelapse.MergeDuration); err == nil {
+			h.mergeScheduler.AddOrUpdate(id, dur)
+		}
+	}
 	// Persist DB-only metadata fields
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
@@ -487,6 +494,11 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.db.ArchiveAllRecordings(ctx, id); err != nil {
 			logger.Warn("failed to archive recordings", "camera_id", id, "error", err)
 		}
+	}
+
+	// Remove from merge scheduler if present
+	if h.mergeScheduler != nil {
+		h.mergeScheduler.Remove(id)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})

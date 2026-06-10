@@ -21,7 +21,10 @@ export interface ApiError {
 
 // API error with machine-readable code for i18n mapping
 export class ApiRequestError extends Error {
-  constructor(message: string, public code?: string) {
+  constructor(
+    message: string,
+    public code?: string,
+  ) {
     super(message);
     this.name = 'ApiRequestError';
   }
@@ -72,9 +75,10 @@ export function getCredentials(): AuthCredentials | null {
     const decoded = atob(encoded);
     const [username, password] = decoded.split(':');
     return { username, password };
-  } catch (e) { console.warn('Failed to decode credentials:', e);
-return null;
-}
+  } catch (e) {
+    console.warn('Failed to decode credentials:', e);
+    return null;
+  }
 }
 
 // Clear credentials
@@ -100,10 +104,7 @@ export function getAuthHeader(): string | null {
 export const API_BASE = '/api';
 
 // Generic API request function
-export async function apiRequest<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
+export async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
 
   const headers: HeadersInit = {
@@ -122,6 +123,12 @@ export async function apiRequest<T>(
   });
 
   if (!response.ok) {
+    // 401 → session expired or invalid credentials → force re-login
+    if (response.status === 401) {
+      clearCredentials();
+      window.location.hash = '#/login';
+      throw new ApiRequestError('Session expired', 'AUTH_EXPIRED');
+    }
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
     const apiErr = errorData as ApiError;
     throw new ApiRequestError(apiErr.error || `HTTP ${response.status}`, apiErr.code);
@@ -131,10 +138,7 @@ export async function apiRequest<T>(
 }
 
 // Generic API request for blob responses (e.g. file downloads)
-export async function apiRequestBlob(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<Blob> {
+export async function apiRequestBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
   const url = `${API_BASE}${endpoint}`;
 
   const headers: HeadersInit = {};
@@ -145,23 +149,24 @@ export async function apiRequestBlob(
 
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
+    if (response.status === 401) {
+      clearCredentials();
+      window.location.hash = '#/login';
+      throw new Error('Session expired');
+    }
     throw new Error(`HTTP ${response.status}`);
   }
   return response.blob();
 }
 
 // Login endpoint
-export async function login(
-  username: string,
-  password: string,
-  signal?: AbortSignal
-): Promise<LoginResponse> {
+export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
 
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     headers: {
-      'Authorization': authHeader,
+      Authorization: authHeader,
     },
     signal,
   });

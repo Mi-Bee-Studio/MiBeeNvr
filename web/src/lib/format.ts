@@ -24,20 +24,14 @@ export function formatDuration(seconds: number): string {
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
   const isZh = state.currentLang === 'zh';
-  
+
   if (hrs > 0) {
-    return isZh
-      ? `${hrs}时 ${mins}分 ${secs}秒`
-      : `${hrs}h ${mins}m ${secs}s`;
+    return isZh ? `${hrs}时 ${mins}分 ${secs}秒` : `${hrs}h ${mins}m ${secs}s`;
   }
   if (mins > 0) {
-    return isZh
-      ? `${mins}分 ${secs}秒`
-      : `${mins}m ${secs}s`;
+    return isZh ? `${mins}分 ${secs}秒` : `${mins}m ${secs}s`;
   }
-  return isZh
-    ? `${secs}秒`
-    : `${secs}s`;
+  return isZh ? `${secs}秒` : `${secs}s`;
 }
 
 /**
@@ -68,7 +62,7 @@ export function formatChartValue(bytes: number): { value: number; unit: string; 
     unitIndex++;
   }
   return {
-    value: Math.round(value * 10) / 10,  // 1 decimal place
+    value: Math.round(value * 10) / 10, // 1 decimal place
     unit: units[unitIndex],
     label: units[unitIndex],
   };
@@ -86,12 +80,12 @@ export function getChartUnit(bytesArray: number[]): { divisor: number; unit: str
     { threshold: 1024 * 1024, divisor: 1024 * 1024, unit: 'MB' },
     { threshold: 1024 * 1024 * 1024, divisor: 1024 * 1024 * 1024, unit: 'GB' },
   ];
-  
+
   // Default to TB for very large values
   if (maxBytes >= 1024 * 1024 * 1024 * 1024) {
     return { divisor: 1024 * 1024 * 1024 * 1024, unit: 'TB' };
   }
-  
+
   // Find the largest unit whose threshold is <= maxBytes
   for (let i = units.length - 1; i >= 0; i--) {
     if (maxBytes >= units[i].threshold) {

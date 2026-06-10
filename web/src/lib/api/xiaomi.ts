@@ -21,10 +21,10 @@ export interface XiaomiDevicesResponse {
 export interface XiaomiAuthResponse {
   user_id?: string;
   status?: string;
-  captcha?: string;       // base64-encoded image
-  verify_phone?: string;  // masked phone number
-  verify_email?: string;  // masked email
-  session_id?: string;    // for captcha/verify continuation
+  captcha?: string; // base64-encoded image
+  verify_phone?: string; // masked phone number
+  verify_email?: string; // masked email
+  session_id?: string; // for captcha/verify continuation
 }
 
 // --- Functions ---
@@ -33,7 +33,7 @@ export async function xiaomiAuth(
   username: string,
   password: string,
   region?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<XiaomiAuthResponse> {
   return apiRequest('/xiaomi/auth', {
     method: 'POST',
@@ -49,7 +49,7 @@ export async function xiaomiDevices(signal?: AbortSignal): Promise<XiaomiDevices
 export async function xiaomiCaptcha(
   sessionId: string,
   captchaCode: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<XiaomiAuthResponse> {
   return apiRequest('/xiaomi/captcha', {
     method: 'POST',
@@ -61,7 +61,7 @@ export async function xiaomiCaptcha(
 export async function xiaomiVerify(
   sessionId: string,
   ticket: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<XiaomiAuthResponse> {
   return apiRequest('/xiaomi/verify', {
     method: 'POST',

@@ -65,12 +65,7 @@ function getAuthCredentials(): { username: string; password: string } | null {
  * @param durationMs Optional duration in milliseconds
  * @param details    Optional extra data (error codes, buffer stats, etc.)
  */
-export function sendTelemetry(
-  event: string,
-  cameraId: string,
-  durationMs?: number,
-  details?: object,
-  ): void {
+export function sendTelemetry(event: string, cameraId: string, durationMs?: number, details?: object): void {
   // Production guard: silently skip unless opted in
   if (import.meta.env.PROD && !_telemetryOptedIn) return;
 

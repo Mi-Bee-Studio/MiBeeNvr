@@ -43,10 +43,17 @@ export async function loadChart() {
   } = await import('chart.js');
 
   Chart.register(
-    CategoryScale, LinearScale,
-    BarController, BarElement,
-    LineController, LineElement,
-    PointElement, Filler, Tooltip, Legend, Title
+    CategoryScale,
+    LinearScale,
+    BarController,
+    BarElement,
+    LineController,
+    LineElement,
+    PointElement,
+    Filler,
+    Tooltip,
+    Legend,
+    Title,
   );
 
   _chartModule = Chart;
@@ -75,25 +82,27 @@ export function createTrendChart(Chart, canvas, trends) {
   if (!canvas) return null;
 
   const { gridColor, textColor, accentColor, accentFill } = getChartThemeColors();
-  const labels = trends.map(d => d.date.slice(5));
-  const rawSizes = trends.map(d => d.total_size);
+  const labels = trends.map((d) => d.date.slice(5));
+  const rawSizes = trends.map((d) => d.total_size);
   const chartUnit = getChartUnit(rawSizes);
-  const sizes = rawSizes.map(s => +(s / chartUnit.divisor).toFixed(1));
+  const sizes = rawSizes.map((s) => +(s / chartUnit.divisor).toFixed(1));
 
   return new Chart(canvas, {
     type: 'line',
     data: {
       labels,
-      datasets: [{
-        label: `Storage (${chartUnit.unit})`,
-        data: sizes,
-        borderColor: accentColor,
-        backgroundColor: accentFill,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 4,
-        pointBackgroundColor: accentColor,
-      }],
+      datasets: [
+        {
+          label: `Storage (${chartUnit.unit})`,
+          data: sizes,
+          borderColor: accentColor,
+          backgroundColor: accentFill,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 4,
+          pointBackgroundColor: accentColor,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -117,7 +126,7 @@ export function createTrendChart(Chart, canvas, trends) {
  */
 export function aggregateCameraTotals(trends) {
   const totals = {};
-  trends.forEach(d => {
+  trends.forEach((d) => {
     if (d.cameras) {
       Object.entries(d.cameras).forEach(([cam, count]) => {
         totals[cam] = (totals[cam] || 0) + count;
@@ -140,11 +149,11 @@ export function createCameraChart(Chart, canvas, cameraTotals, allCameraNames, s
   if (!canvas || Object.keys(cameraTotals).length === 0) return null;
 
   const { gridColor, textColor } = getChartThemeColors();
-  const camLabels = Object.keys(cameraTotals).filter(name => selectedCameras.has(name));
-  const camData = camLabels.map(name => cameraTotals[name]);
+  const camLabels = Object.keys(cameraTotals).filter((name) => selectedCameras.has(name));
+  const camData = camLabels.map((name) => cameraTotals[name]);
   if (camLabels.length === 0) return null;
 
-  const camBarColors = camLabels.map(name => {
+  const camBarColors = camLabels.map((name) => {
     const idx = allCameraNames.indexOf(name) % BAR_COLORS.length;
     return BAR_COLORS[idx];
   });
@@ -153,12 +162,14 @@ export function createCameraChart(Chart, canvas, cameraTotals, allCameraNames, s
     type: 'bar',
     data: {
       labels: camLabels,
-      datasets: [{
-        label: 'Recordings',
-        data: camData,
-        backgroundColor: camBarColors,
-        borderRadius: 6,
-      }],
+      datasets: [
+        {
+          label: 'Recordings',
+          data: camData,
+          backgroundColor: camBarColors,
+          borderRadius: 6,
+        },
+      ],
     },
     options: {
       responsive: true,

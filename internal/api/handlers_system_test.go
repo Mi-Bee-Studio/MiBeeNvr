@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 )
 
 // --- handleGetSettings tests ---
@@ -46,6 +47,57 @@ func TestUpdateSettings_NilConfig(t *testing.T) {
 	body := `{"cleanup":{"retention_days":7}}`
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+func TestUpdateSettings_ValidTimezone(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := `{"timezone":"Asia/Shanghai"}`
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "Asia/Shanghai", h.config.Timezone)
+}
+
+func TestUpdateSettings_TimezoneEmpty(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Timezone: "Asia/Shanghai", Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := `{"timezone":""}`
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "", h.config.Timezone)
+}
+
+func TestUpdateSettings_TimezoneUTC(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Timezone: "Asia/Shanghai", Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := `{"timezone":"UTC"}`
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "UTC", h.config.Timezone)
+}
+
+func TestUpdateSettings_InvalidTimezone(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := `{"timezone":"Invalid/TZ"}`
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 // --- handleReadyz tests ---

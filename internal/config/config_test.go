@@ -51,6 +51,7 @@ func TestDefaultsApplied(t *testing.T) {
     require.Equal(t, true, *cfg.FTP.Enabled)
     require.Equal(t, true, *cfg.WebDAV.Enabled)
     require.Equal(t, "/dav", cfg.WebDAV.PathPrefix)
+	require.Equal(t, "Local", cfg.Timezone)
 }
 
 func TestFrameWatchdogTimeoutDefaultEmpty(t *testing.T) {
@@ -1228,4 +1229,95 @@ func TestAIConfigDefaults(t *testing.T) {
 	require.Equal(t, 0, cfg.AI.FrameSkipRate)
 	require.Equal(t, 0.0, cfg.AI.ConfidenceThreshold)
 	require.Equal(t, "", cfg.AI.ModelPath)
+}
+
+func TestParseMergeDuration_Valid(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected time.Duration
+	}{
+		{"", 24 * time.Hour},
+		{"natural-day", 24 * time.Hour},
+		{"8h", 8 * time.Hour},
+		{"12h", 12 * time.Hour},
+		{"24h", 24 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"30d", 30 * 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			dur, err := ParseMergeDuration(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, dur)
+		})
+	}
+}
+
+func TestParseMergeDuration_Invalid(t *testing.T) {
+	_, err := ParseMergeDuration("invalid")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be one of")
+}
+
+func TestValidateTimelapseMergeDuration_Valid(t *testing.T) {
+	for _, md := range []string{"8h", "12h", "24h", "natural-day", "7d", "30d"} {
+		cfg := &Config{
+			Cameras: []CameraConfig{{
+				ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
+				Timelapse: &CameraTimelapseConfig{
+					MergeDuration: md,
+				},
+			}},
+		}
+		cfg.ApplyDefaults()
+		err := Validate(cfg)
+		require.NoError(t, err, "merge_duration=%s should be valid", md)
+	}
+}
+
+func TestValidateTimelapseMergeDuration_Invalid(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
+			Timelapse: &CameraTimelapseConfig{
+				MergeDuration: "invalid",
+			},
+		}},
+	}
+	cfg.ApplyDefaults()
+	// Override the default that ApplyDefaults would set
+	cfg.Cameras[0].Timelapse.MergeDuration = "invalid"
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "merge_duration")
+}
+
+func TestValidate_Timezone_Valid(t *testing.T) {
+	tests := []struct {
+		name     string
+		timezone string
+	}{
+		{name: "Local timezone", timezone: "Local"},
+		{name: "UTC timezone", timezone: "UTC"},
+		{name: "Asia/Shanghai", timezone: "Asia/Shanghai"},
+		{name: "America/New_York", timezone: "America/New_York"},
+		{name: "empty timezone", timezone: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			cfg := &Config{Timezone: tt.timezone}
+			cfg.ApplyDefaults()
+			err := Validate(cfg)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidate_Timezone_Invalid(t *testing.T) {
+	cfg := &Config{Timezone: "Invalid/TZ"}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timezone")
 }

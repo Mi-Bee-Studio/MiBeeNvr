@@ -42,3 +42,34 @@ mjpegmerge.go    # MergeMJPEGSegments() — directory-based JPEG file moves
 - **DO NOT** construct stsc entries without `SampleDescriptionIndex: 1` — merge builds new moov from scratch, same rule as MP4Muxer applies
 - **DO NOT** merge segments younger than `MinSegmentAge` — recorder may still be writing
 - **DO NOT** assume merge always succeeds — disk full, permission errors, corrupt segments all handled gracefully with warnings
+
+
+## METRICS
+
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| nvr_merge_attempts_total | Counter | — | Total merge attempts |
+| nvr_merge_successes_total | Counter | — | Successful merges |
+| nvr_merge_failures_total | CounterVec | reason | Failed merges by reason (sps_pps_mismatch, parse_error, db_error, disk_space, timeout, audio_mismatch, zero_resolution, io_error) |
+| nvr_merge_duration_seconds | Histogram | — | Merge operation duration |
+| nvr_merge_size_bytes | Histogram | — | Merged file size |
+| nvr_merge_pending_segments | GaugeVec | camera_id | Pending segments per camera |
+
+
+- **DO NOT** use null-byte string concatenation for SPS/PPS grouping — use SHA-256 hash (embedded null bytes cause false matches)
+- **DO NOT** silently ignore SPS parse failures — always return error and reject segment
+- **DO NOT** delete MJPEG source dirs before DB commit — data loss on DB failure
+- **DO NOT** use `readBit()`/`readBits()` return of 0 as valid data — may be bounds overflow
+- **DO NOT** use `stco` for files with chunk offsets > 4GB — use `co64`
+
+
+- **Per-camera merge mutex**: `sync.Map` with try-lock pattern prevents concurrent merges for same camera
+- **retryOnBusy on all DB ops**: All merge DB operations wrapped with `storage.RetryOnBusy()` for SQLITE_BUSY resilience
+- **SHA-256 hash for SPS/PPS grouping**: Replacing null-byte string concatenation with `fmt.Sprintf("%x", sha256.Sum256(sps+pps+vps))`
+- **co64 atom support**: For merged files >4GB, uses `co64` box instead of `stco`
+- **stts compression**: Run-length encoded consecutive same-duration samples to reduce moov size
+- **SPS/PPS error returns**: `parseSPSResolution` and `parseHEVCSPSResolution` now return `(int, int, error)` instead of silently returning (0, 0)
+- **BitReader bounds checking**: `readBit()`, `readBits()`, `readUE()`, `readSE()` return errors on overflow instead of corrupted zero values
+- **Deferred MJPEG deletion**: Source dirs deleted AFTER successful DB commit, not before
+- **Context cancellation**: `MergeMP4Segments` accepts `ctx context.Context` for cancellation support

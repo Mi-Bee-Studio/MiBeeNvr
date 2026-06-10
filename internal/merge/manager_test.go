@@ -1,17 +1,20 @@
 package merge
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
+"context"
+"fmt"
+"os"
+"path/filepath"
+	"sync"
 	"testing"
-	"time"
-
+"time"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // mergeTestEnv holds test dependencies for merge manager tests.
@@ -86,7 +89,7 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 }
 // newTestMergeManager creates a MergeManager with the given config for testing.
 func newTestMergeManager(db *storage.DB, store *storage.Manager, cfg config.MergeConfig, cameras []config.CameraConfig) *MergeManager {
-	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras })
+	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras }, nil)
 }
 
 func TestRunOnce_NoCameras(t *testing.T) {
@@ -415,7 +418,8 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 			return nil
 		},
 		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID, Enabled: true}} },
-	)
+		nil,
+)
 
 	// Per-camera override enables merge even when global is disabled.
 	err := mgr.RunOnce(ctx)
@@ -816,4 +820,519 @@ func TestRunOnce_TimelapseSkipped(t *testing.T) {
 	require.NoError(t, err)
 	// Should have tl1, tl2, and the merged recording (3 total).
 	require.Len(t, recsAfter, 3)
+}
+
+func TestHashGrouping_SPSWithEmbeddedNull(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+
+	// Use valid H.264 SPS values (0x67-prefixed, 8+ bytes) with embedded nulls.
+	// Both are valid NAL units the muxer can accept.
+	// SHA-256 hash must correctly differentiate the two groups.
+	// SPS_A: Baseline profile, standard params
+	spsA := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04}
+	ppsA := []byte{0x68, 0xce, 0x38, 0x80}
+
+	// SPS_B: different SPS with embedded nulls (profile differs)
+	spsB := []byte{0x67, 0x42, 0x00, 0x0a, 0xff, 0x00, 0x40, 0x04}
+	ppsB := []byte{0x68, 0xaa, 0x38, 0x80}
+
+	env.insertMergeableH264WithCustomParams(t, "rec-a", cameraID, oldTime, oldTime.Add(30*time.Second), spsA, ppsA)
+	env.insertMergeableH264WithCustomParams(t, "rec-b", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), spsB, ppsB)
+
+	// With MinSegmentsToMerge=2 but different SPS/PPS groups, each group has 1 segment.
+	// They MUST NOT be merged into the same group.
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	require.NoError(t, mgr.RunOnce(ctx))
+
+	// Verify both recordings still exist (were NOT merged — different SPS hash groups).
+	recA, err := env.db.GetRecording(ctx, "rec-a")
+	require.NoError(t, err)
+	require.NotNil(t, recA)
+
+	recB, err := env.db.GetRecording(ctx, "rec-b")
+	require.NoError(t, err)
+	require.NotNil(t, recB)
+
+	// They should be marked failed as undersized groups (each group only has 1 segment).
+	require.Equal(t, model.MergeStatusFailed, recA.MergeStatus, "rec-a should be marked failed (undersized SPS group)")
+	require.Equal(t, model.MergeStatusFailed, recB.MergeStatus, "rec-b should be marked failed (undersized SPS group)")
+}
+
+func TestMJPEGDeferredDelete_OnDBFailure(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	// Insert MJPEG recordings.
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	src1 := env.insertMergeableMJPEGRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second), 2, 0)
+	src2 := env.insertMergeableMJPEGRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), 1, 2)
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+
+	// Run merge once — should succeed.
+	err := mgr.RunOnce(ctx)
+	require.NoError(t, err)
+
+	// Source dirs should be deleted after successful merge.
+	_, err = os.Stat(src1)
+	require.True(t, os.IsNotExist(err), "source dir should be deleted after successful merge: %s", src1)
+	_, err = os.Stat(src2)
+	require.True(t, os.IsNotExist(err), "source dir should be deleted after successful merge: %s", src2)
+
+	// Verify merged recording exists.
+	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.True(t, recs[0].Merged)
+}
+
+func TestMergeStatusRace(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+
+	var wg sync.WaitGroup
+
+	// Launch concurrent readers.
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = mgr.Status()
+		}()
+	}
+
+	// Launch concurrent writers.
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = mgr.RunOnce(ctx)
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestRunOnce_BatchLimitTruncation(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	// Insert 3 recordings in the same window
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
+	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+	env.insertMergeableRecording(t, "rec3", cameraID, oldTime.Add(60*time.Second), oldTime.Add(90*time.Second))
+
+	// With BatchLimit=2, only 2 segments should be merged in a single pass
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         2,
+		MinSegmentsToMerge: 2,
+	}
+	
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	require.NoError(t, mgr.RunOnce(ctx))
+
+	// After first pass: 2 segments merged into 1 file, 1 singleton marked as merged
+	recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	require.Len(t, recsAfter, 2)
+
+	// One recording should be the merged file (Merged=true)
+	var mergedCount int
+	for _, r := range recsAfter {
+		if r.Merged {
+			mergedCount++
+		}
+	}
+	require.Equal(t, 1, mergedCount, "expected exactly 1 merged recording")
+
+	// Second pass should be no-op (everything already processed)
+	require.NoError(t, mgr.RunOnce(ctx))
+	recsAfter2, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	// Still 2 recordings (merged file + singleton)
+	require.Len(t, recsAfter2, 2)
+}
+
+func TestRunOnce_MJPEGNotEnoughSegments(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", true, "", "", ""))
+
+	// Insert only 1 MJPEG recording - below MinSegmentsToMerge=2
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	env.insertMergeableMJPEGRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second), 3, 0)
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	require.NoError(t, mgr.RunOnce(ctx))
+
+	// Recording should still exist (not enough segments to merge)
+	rec, err := env.db.GetRecording(ctx, "rec1")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.False(t, rec.Merged)
+}
+
+
+// insertMergeableH265Recording creates a real H.265 MP4 file and inserts a recording into the DB.
+func (e *mergeTestEnv) insertMergeableH265Recording(t *testing.T, id string, cameraID string, startedAt, endedAt time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+
+	tempPath, finalPath, err := e.store.CreateSegment(cameraID, "h265")
+	require.NoError(t, err)
+
+	segDir := filepath.Dir(tempPath)
+	segFile := createTestH265Segment(t, segDir)
+
+	data, err := os.ReadFile(segFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	os.Remove(segFile)
+
+	require.NoError(t, e.store.CloseSegment(tempPath, finalPath))
+
+	fi, err := os.Stat(finalPath)
+	require.NoError(t, err)
+
+	rec := &model.Recording{
+		ID:         id,
+		CameraID:   cameraID,
+		FilePath:   finalPath,
+		Format:     model.FormatH265,
+		StartedAt:  startedAt,
+		EndedAt:    endedAt,
+		Duration:   endedAt.Sub(startedAt).Seconds(),
+		FileSize:   fi.Size(),
+		FrameCount: 2,
+		Merged:     false,
+	}
+	require.NoError(t, e.db.InsertRecording(ctx, rec))
+
+	return finalPath
+}
+
+// readCounterValue reads the current value of a prometheus Counter.
+func readCounterValue(c prometheus.Counter) float64 {
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		return -1
+	}
+	return m.GetCounter().GetValue()
+}
+
+func TestIntegration_FullMergeWorkflow(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	ctx := context.Background()
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+
+	t.Run("H264", func(t *testing.T) {
+		cameraID := "cam-h264-int"
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H264 Test", "rtsp", "", "rtsp://localhost/h264", "", "", true, "", "", ""))
+
+		env.insertMergeableRecording(t, "int-h264-1", cameraID, oldTime, oldTime.Add(30*time.Second))
+		env.insertMergeableRecording(t, "int-h264-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+		env.insertMergeableRecording(t, "int-h264-3", cameraID, oldTime.Add(60*time.Second), oldTime.Add(90*time.Second))
+
+		recsBefore, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsBefore, 3)
+
+		m := metrics.NewMetrics()
+		cfg := config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "1h",
+			MinSegmentAge:      "1m",
+			BatchLimit:         100,
+			MinSegmentsToMerge: 2,
+		}
+		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		mgr := NewMergeManager(env.db, env.store,
+			func() config.MergeConfig { return cfg },
+			func(string) *config.MergeConfig { return nil },
+			func() []config.CameraConfig { return cameras },
+			m,
+		)
+
+		require.NoError(t, mgr.RunOnce(ctx))
+
+		recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsAfter, 1)
+
+		merged := recsAfter[0]
+		require.Equal(t, cameraID, merged.CameraID)
+		require.Equal(t, model.FormatH264, merged.Format)
+		require.True(t, merged.Merged)
+		require.False(t, merged.StartedAt.IsZero())
+		require.False(t, merged.EndedAt.IsZero())
+		require.Greater(t, merged.FileSize, int64(0))
+		require.Greater(t, merged.FrameCount, 0)
+
+		// Verify merged file exists on disk
+		_, err = os.Stat(merged.FilePath)
+		require.NoError(t, err)
+
+		// Verify prometheus merge metrics
+		require.Equal(t, float64(1), readCounterValue(m.MergeAttemptsTotal))
+		require.Equal(t, float64(1), readCounterValue(m.MergeSuccessesTotal))
+
+		// Verify MergeManager Status
+		status := mgr.Status()
+		require.Equal(t, 3, status.SegmentsMerged)
+		require.Equal(t, 1, status.FilesCreated)
+		require.Equal(t, 0, status.ErrorCount)
+	})
+
+	t.Run("H265", func(t *testing.T) {
+		cameraID := "cam-h265-int"
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H265 Test", "rtsp", "", "rtsp://localhost/h265", "", "", true, "", "", ""))
+
+		env.insertMergeableH265Recording(t, "int-h265-1", cameraID, oldTime, oldTime.Add(30*time.Second))
+		env.insertMergeableH265Recording(t, "int-h265-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+		env.insertMergeableH265Recording(t, "int-h265-3", cameraID, oldTime.Add(60*time.Second), oldTime.Add(90*time.Second))
+
+		recsBefore, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsBefore, 3)
+
+		m := metrics.NewMetrics()
+		cfg := config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "1h",
+			MinSegmentAge:      "1m",
+			BatchLimit:         100,
+			MinSegmentsToMerge: 2,
+		}
+		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		mgr := NewMergeManager(env.db, env.store,
+			func() config.MergeConfig { return cfg },
+			func(string) *config.MergeConfig { return nil },
+			func() []config.CameraConfig { return cameras },
+			m,
+		)
+
+		require.NoError(t, mgr.RunOnce(ctx))
+
+		recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsAfter, 1)
+
+		merged := recsAfter[0]
+		require.Equal(t, cameraID, merged.CameraID)
+		require.Equal(t, model.FormatH265, merged.Format)
+		require.True(t, merged.Merged)
+		require.False(t, merged.StartedAt.IsZero())
+		require.False(t, merged.EndedAt.IsZero())
+		require.Greater(t, merged.FileSize, int64(0))
+		require.Greater(t, merged.FrameCount, 0)
+
+		// Verify merged file exists on disk
+		_, err = os.Stat(merged.FilePath)
+		require.NoError(t, err)
+
+		// Verify prometheus merge metrics
+		require.Equal(t, float64(1), readCounterValue(m.MergeAttemptsTotal))
+		require.Equal(t, float64(1), readCounterValue(m.MergeSuccessesTotal))
+
+		// Verify MergeManager Status
+		status := mgr.Status()
+		require.Equal(t, 3, status.SegmentsMerged)
+		require.Equal(t, 1, status.FilesCreated)
+		require.Equal(t, 0, status.ErrorCount)
+	})
+
+	t.Run("MJPEG", func(t *testing.T) {
+		cameraID := "cam-mjpeg-int"
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "MJPEG Test", "rtsp", "mjpeg", "rtsp://localhost/mjpeg", "", "", true, "", "", ""))
+
+		src1 := env.insertMergeableMJPEGRecording(t, "int-mjpeg-1", cameraID, oldTime, oldTime.Add(30*time.Second), 2, 0)
+		src2 := env.insertMergeableMJPEGRecording(t, "int-mjpeg-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), 2, 2)
+		src3 := env.insertMergeableMJPEGRecording(t, "int-mjpeg-3", cameraID, oldTime.Add(60*time.Second), oldTime.Add(90*time.Second), 2, 4)
+
+		recsBefore, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsBefore, 3)
+
+		m := metrics.NewMetrics()
+		cfg := config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "1h",
+			MinSegmentAge:      "1m",
+			BatchLimit:         100,
+			MinSegmentsToMerge: 2,
+		}
+		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		mgr := NewMergeManager(env.db, env.store,
+			func() config.MergeConfig { return cfg },
+			func(string) *config.MergeConfig { return nil },
+			func() []config.CameraConfig { return cameras },
+			m,
+		)
+
+		require.NoError(t, mgr.RunOnce(ctx))
+
+		recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recsAfter, 1)
+
+		merged := recsAfter[0]
+		require.Equal(t, cameraID, merged.CameraID)
+		require.Equal(t, model.FormatMJPEG, merged.Format)
+		require.True(t, merged.Merged)
+		require.False(t, merged.StartedAt.IsZero())
+		require.False(t, merged.EndedAt.IsZero())
+		require.Greater(t, merged.FileSize, int64(0))
+		require.Equal(t, 6, merged.FrameCount)
+
+		// Verify merged directory has all 6 JPEG files
+		entries, err := os.ReadDir(merged.FilePath)
+		require.NoError(t, err)
+		require.Len(t, entries, 6)
+
+		// Verify source directories are removed
+		_, err = os.Stat(src1)
+		require.True(t, os.IsNotExist(err), "source dir should be deleted: %s", src1)
+		_, err = os.Stat(src2)
+		require.True(t, os.IsNotExist(err), "source dir should be deleted: %s", src2)
+		_, err = os.Stat(src3)
+		require.True(t, os.IsNotExist(err), "source dir should be deleted: %s", src3)
+
+		// Verify prometheus merge metrics
+		require.Equal(t, float64(1), readCounterValue(m.MergeAttemptsTotal))
+		require.Equal(t, float64(1), readCounterValue(m.MergeSuccessesTotal))
+
+		// Verify MergeManager Status
+		status := mgr.Status()
+		require.Equal(t, 3, status.SegmentsMerged)
+		require.Equal(t, 1, status.FilesCreated)
+		require.Equal(t, 0, status.ErrorCount)
+	})
+
+	t.Run("ConcurrentMergeProtection", func(t *testing.T) {
+		concEnv := newMergeTestEnv(t)
+		defer concEnv.close(t)
+
+		cameraID := "cam-concurrent"
+		require.NoError(t, concEnv.db.UpsertCamera(ctx, cameraID, "Concurrent Test", "rtsp", "", "rtsp://localhost/conc", "", "", true, "", "", ""))
+
+		concEnv.insertMergeableRecording(t, "conc-1", cameraID, oldTime, oldTime.Add(30*time.Second))
+		concEnv.insertMergeableRecording(t, "conc-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
+
+		concM := metrics.NewMetrics()
+		cfg := config.MergeConfig{
+			Enabled:            true,
+			CheckInterval:      "1h",
+			MinSegmentAge:      "1m",
+			BatchLimit:         100,
+			MinSegmentsToMerge: 2,
+		}
+		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		mgr := NewMergeManager(concEnv.db, concEnv.store,
+			func() config.MergeConfig { return cfg },
+			func(string) *config.MergeConfig { return nil },
+			func() []config.CameraConfig { return cameras },
+			concM,
+		)
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		successCount := 0
+
+		// Barrier: all goroutines block on channel, released simultaneously
+		start := make(chan struct{})
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if err := mgr.MergeCamera(ctx, cameraID); err == nil {
+					mu.Lock()
+					successCount++
+					mu.Unlock()
+				}
+			}()
+		}
+		close(start) // release all goroutines simultaneously
+		wg.Wait()
+
+		require.Equal(t, 1, successCount, "exactly 1 merge should succeed, got %d", successCount)
+
+		// Verify the merge actually completed
+		recs, err := concEnv.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+		require.NoError(t, err)
+		require.Len(t, recs, 1)
+		require.True(t, recs[0].Merged)
+	})
 }

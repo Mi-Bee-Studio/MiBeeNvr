@@ -57,6 +57,7 @@ type HTTPJPEGRecorder struct {
 	segStart     time.Time
 	frameCount   int
 	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -315,6 +316,19 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			httpJpegLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
 		}
+		// Check storage health — if failed, skip recording but keep stream alive.
+		if isStorageFailed(r.store) {
+			if r.curTempPath != "" {
+				r.closeCurrentSegment()
+			}
+			if logNow, ok := shouldLogHealth(r.lastHealthLogAt); ok {
+				r.lastHealthLogAt = logNow
+				httpJpegLogger.Warn("storage health failed, skipping recording (stream kept alive)",
+					"camera_id", r.cfg.CameraID)
+			}
+			// Continue with next frame — keep HTTP connection alive.
+			continue
+		}
 
 		// Create segment if needed
 		if r.curTempPath == "" {
@@ -339,9 +353,11 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		// Check if segment duration elapsed
 		if time.Since(r.segStart) >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
-		}
+	}
 	}
 }
+
+
 
 func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	if r.curTempPath == "" {

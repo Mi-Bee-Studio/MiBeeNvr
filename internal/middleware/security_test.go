@@ -37,13 +37,13 @@ func TestSecurityHeaders(t *testing.T) {
 func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 	ResetAuthFailures()
 	hash, _ := HashPassword("secret")
-	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Send authMaxFailures failed requests
-	for i := 0; i < authMaxFailures; i++ {
+	// Send 20 failed requests
+	for i := 0; i < 20; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
@@ -68,13 +68,13 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
 	ResetAuthFailures()
 	hash, _ := HashPassword("secret")
-	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	// Send some failed requests but don't hit the limit
-	for i := 0; i < authMaxFailures-5; i++ {
+	for i := 0; i < 15; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
@@ -94,7 +94,7 @@ func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
 func TestRateLimitResetsOnSuccess(t *testing.T) {
 	ResetAuthFailures()
 	hash, _ := HashPassword("secret")
-	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -118,8 +118,8 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 		t.Fatalf("valid auth failed: %d", w.Code)
 	}
 
-	// Should be able to try authMaxFailures more times
-	for i := 0; i < authMaxFailures; i++ {
+	// Should be able to try 20 more times
+	for i := 0; i < 20; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
@@ -135,7 +135,7 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429 after reset + %d failures, got %d", authMaxFailures, w.Code)
+		t.Fatalf("expected 429 after reset + 20 failures, got %d", w.Code)
 	}
 }
 

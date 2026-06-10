@@ -19,16 +19,16 @@ func TestHandleTelemetry_ValidPayload(t *testing.T) {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890" },
-	}, "")
+	}, "", middleware.AuthRateLimitConfig{})
 	// Pre-compute a known bcrypt hash for "admin123"
 	validHash, err := middleware.HashPassword("admin123")
 	require.NoError(t, err)
 	authMW, _ = middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return validHash },
-	}, "")
+	}, "", middleware.AuthRateLimitConfig{})
 
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"event":"playback_start","camera_id":"front-door","duration_ms":5000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))
@@ -83,9 +83,9 @@ func TestHandleTelemetry_Unauthenticated(t *testing.T) {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return validHash },
-	}, "")
+	}, "", middleware.AuthRateLimitConfig{})
 
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	body := `{"event":"playback_start","camera_id":"front-door"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))

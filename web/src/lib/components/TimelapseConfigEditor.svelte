@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { getTimelapseConfig, updateTimelapseConfig } from '$lib/api';
+  import { getTimelapseConfig, updateTimelapseConfig, getSettings } from '$lib/api';
   import type { TimelapseConfig, ScheduleConfig } from '$lib/api';
   import { showToast } from '$lib/toast';
 
@@ -13,6 +13,7 @@
   let config = $state<TimelapseConfig | null>(null);
   let loading = $state(true);
   let saving = $state(false);
+  let timezoneDisplay = $state('UTC');
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -26,6 +27,13 @@
       config = null;
     } finally {
       loading = false;
+    }
+    // Load settings for timezone display
+    try {
+      const settings = await getSettings();
+      timezoneDisplay = settings.timezone_display || settings.timezone || 'UTC';
+    } catch (e) {
+      console.warn('Failed to load settings:', e);
     }
   }
 
@@ -257,6 +265,7 @@
               <button class="text-xs th-text-accent hover:underline mt-1" onclick={addTimeRange}>
                 + {t('common.add')}
               </button>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.scheduleTimezoneHint', { timezone: timezoneDisplay })}</p>
             {/if}
           </div>
 
@@ -300,6 +309,24 @@
               onchange={(e) => updateField('daily_merge', (e.target as HTMLInputElement).checked)}
             />
             <label for="timelapse-daily-merge" class="th-text-secondary text-sm">{t('timelapse.dailyMerge')}</label>
+          </div>
+
+          <!-- Merge Duration -->
+          <div>
+            <label for="timelapse-merge-duration" class="input-label">{t('timelapse.mergeDuration')}</label>
+            <select
+              id="timelapse-merge-duration"
+              class="input"
+              value={config.merge_duration || 'natural-day'}
+              onchange={(e) => updateField('merge_duration', (e.target as HTMLSelectElement).value)}
+            >
+              <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+              <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+              <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+              <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+              <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+              <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+            </select>
           </div>
 
           <!-- Merge Output FPS -->

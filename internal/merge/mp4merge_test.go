@@ -1,6 +1,10 @@
 package merge
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +53,7 @@ func TestMergeMP4Segments_SameSPS(t *testing.T) {
 
 	// Merge
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	// Verify output file exists and has content
@@ -88,7 +92,7 @@ func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SPS/PPS mismatch")
 }
@@ -107,7 +111,7 @@ func TestMergeMP4Segments_SingleSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
 	require.NoError(t, err)
 
 	// Verify merged file is parseable and has same samples
@@ -119,7 +123,7 @@ func TestMergeMP4Segments_SingleSegment(t *testing.T) {
 
 func TestMergeMP4Segments_EmptyList(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "merged.mp4")
-	err := MergeMP4Segments(nil, outputPath)
+	err := MergeMP4Segments(context.Background(), nil, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no segments")
 }
@@ -144,7 +148,7 @@ func TestMergeMP4Segments_ThreeSegments(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2, info3}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2, info3}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -179,7 +183,7 @@ func TestMergeMP4Segments_H265(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged_h265.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -334,7 +338,7 @@ func TestMergeMP4Segments_WithAudio(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -373,7 +377,7 @@ func TestMergeMP4Segments_AudioConfigMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "audio config mismatch")
 }
@@ -397,7 +401,7 @@ func TestMergeMP4Segments_MixedAudioPresence(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "audio")
 }
@@ -422,7 +426,7 @@ func TestMergeMP4Segments_H265WithAudio(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged_h265.mp4")
-	err = MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath)
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -432,4 +436,385 @@ func TestMergeMP4Segments_H265WithAudio(t *testing.T) {
 	require.True(t, merged.HasAudio)
 	require.Equal(t, 3, merged.AudioSampleCount) // 2 + 1 audio
 	require.Equal(t, testAudioConfig, merged.AudioConfig)
+}
+
+// --- Additional error path tests ---
+
+func TestMergeMP4Segments_CodecMismatch(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	h264Seg := createH264SegmentWithSamples(t, dir, "h264.mp4", sps, pps, [][]byte{idr})
+	h264Info, err := ParseSegment(h264Seg)
+	require.NoError(t, err)
+
+	vps := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xac, 0x59}
+	h265Sps := []byte{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xa0, 0x02, 0x80, 0x80, 0x2d, 0x16, 0x59, 0x59, 0xa4, 0x93, 0x2b, 0x80, 0x40, 0x00, 0x00, 0x07, 0x92}
+	h265Pps := []byte{0x44, 0x01, 0xc1, 0x73, 0xd1, 0x89}
+	h265idr := []byte{0x27, 0x01, 0xaf, 0x15, 0x6a}
+
+	h265Seg := createH265SegmentWithSamples(t, dir, "h265.mp4", vps, h265Sps, h265Pps, [][]byte{h265idr})
+	h265Info, err := ParseSegment(h265Seg)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{h264Info, h265Info}, outputPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "codec mismatch")
+}
+
+func TestMergeMP4Segments_VPSMismatch(t *testing.T) {
+	dir := t.TempDir()
+
+	vps1 := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xac, 0x59}
+	vps2 := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xac, 0x58} // different
+	sps := []byte{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xa0, 0x02, 0x80, 0x80, 0x2d, 0x16, 0x59, 0x59, 0xa4, 0x93, 0x2b, 0x80, 0x40, 0x00, 0x00, 0x07, 0x92}
+	pps := []byte{0x44, 0x01, 0xc1, 0x73, 0xd1, 0x89}
+	idr := []byte{0x27, 0x01, 0xaf, 0x15, 0x6a}
+
+	seg1 := createH265SegmentWithSamples(t, dir, "seg1.mp4", vps1, sps, pps, [][]byte{idr})
+	seg2 := createH265SegmentWithSamples(t, dir, "seg2.mp4", vps2, sps, pps, [][]byte{idr})
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "VPS mismatch")
+}
+
+func TestMergeMP4Segments_EmptyFirstSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+
+	// Create a dummy SegmentInfo with no samples (no SampleCount, no HasAudio)
+	emptyInfo := &SegmentInfo{
+		Codec: "h264",
+		SPS:   sps,
+		PPS:   pps,
+	}
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err := MergeMP4Segments(context.Background(), []*SegmentInfo{emptyInfo}, outputPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty sample table")
+}
+
+func TestMergeMP4Segments_ContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	seg := createH264SegmentWithSamples(t, dir, "seg.mp4", sps, pps, [][]byte{idr, idr})
+	info, err := ParseSegment(seg)
+	require.NoError(t, err)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err = MergeMP4Segments(ctx, []*SegmentInfo{info}, outputPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "context canceled")
+}
+
+func TestMergeMP4Segments_SpsParseWarning(t *testing.T) {
+	dir := t.TempDir()
+
+	// Malformed SPS but valid enough for the muxer (just bytes).
+	// If SPS parsing fails, MergeMP4Segments logs a warning and continues with 0x0 resolution.
+	sps := []byte{0x67, 0x64, 0x00, 0x1e, 0xac, 0xd9, 0x40, 0xb4}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	seg := createH264SegmentWithSamples(t, dir, "seg.mp4", sps, pps, [][]byte{idr})
+	info, err := ParseSegment(seg)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
+	require.NoError(t, err)
+
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.Equal(t, 1, merged.SampleCount)
+}
+
+func TestMergeMP4Segments_EmptyFilePath(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	path := createH264SegmentWithSamples(t, dir, "seg.mp4", sps, pps, [][]byte{idr})
+	info, err := ParseSegment(path)
+	require.NoError(t, err)
+	// Clear the file path to trigger the error
+	info.FilePath = ""
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty FilePath")
+}
+
+// --- limitedWriter tests ---
+
+func TestLimitedWriter_WriteEOF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	lw := &limitedWriter{w: f, remaining: 5, pos: 0}
+
+	n, err := lw.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.Equal(t, 5, n)
+
+	// Second write should return EOF
+	n, err = lw.Write([]byte("world"))
+	require.Error(t, err)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, 0, n)
+}
+
+func TestLimitedWriter_WriteTruncated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	lw := &limitedWriter{w: f, remaining: 3, pos: 0}
+
+	n, err := lw.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+
+	// Read back to verify
+	data := make([]byte, 3)
+	f.Seek(0, 0)
+	f.Read(data)
+	require.Equal(t, "hel", string(data))
+}
+
+func TestLimitedWriter_SeekForward(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	f.Write([]byte("hello"))
+
+	lw := &limitedWriter{w: f, remaining: 10, pos: 5}
+
+	newPos, serr := lw.Seek(3, 1) // relative seek forward
+	require.NoError(t, serr)
+	require.Equal(t, int64(8), newPos)
+	require.Equal(t, int64(8), lw.pos)
+}
+
+func TestLimitedWriter_SeekBackward(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	f.Write([]byte("hello world"))
+	f.Seek(5, 0) // sync underlying file to pos 5
+
+	lw := &limitedWriter{w: f, remaining: 10, pos: 5}
+
+	newPos, rerr := lw.Seek(-3, 1) // relative seek backward
+	require.NoError(t, rerr)
+	require.Equal(t, int64(2), newPos)
+	require.Equal(t, int64(2), lw.pos)
+}
+
+func TestParseAudioConfig_ExtendedSampleRate(t *testing.T) {
+	// sampleRateIndex = (config[0] >> 3) & 0x0F = 0x0F → extended
+	// config[0] = 0x78 = 0111 1000 → bits 7-3 = 01111 = 15 (extended)
+	// config[0] bit 0 = 0, config[1] >> 6 = 0 → channelConfig = 0 (default 2)
+	// Extended rate 48000 = 0xBB80
+	// config[1]<<16 | config[2]<<8 | config[3]&0xFC = 0x00BB80
+	config := []byte{0x78, 0x00, 0xBB, 0x80}
+	ch, rate := parseAudioConfig(config)
+	if ch != 2 {
+		t.Errorf("channelCount = %d, want 2", ch)
+	}
+	if rate != 48000 {
+		t.Errorf("sampleRate = %d, want 48000", rate)
+	}
+}
+
+func TestParseAudioConfig_ChannelConfig(t *testing.T) {
+	// sampleRateIndex = (config[0] >> 3) & 0x0F = 4 → 44100Hz
+	// config[0] = 0x20 = 0010 0000 → bits 7-3 = 00100 = 4
+	// config[0] bit 0 = 0, config[1] bits 7-6 = 01 → channelConfig = 1
+	config := []byte{0x20, 0x40}
+	ch, rate := parseAudioConfig(config)
+	if ch != 1 {
+		t.Errorf("channelCount = %d, want 1", ch)
+	}
+	if rate != 44100 {
+		t.Errorf("sampleRate = %d, want 44100", rate)
+	}
+}
+
+func TestParseAudioConfig_DefaultValues(t *testing.T) {
+	// Empty config should return defaults: 2 channels, 44100 Hz
+	ch, rate := parseAudioConfig(nil)
+	if ch != 2 {
+		t.Errorf("channelCount = %d, want 2", ch)
+	}
+	if rate != 44100 {
+		t.Errorf("sampleRate = %d, want 44100", rate)
+	}
+
+	ch, rate = parseAudioConfig([]byte{0})
+	if ch != 2 {
+		t.Errorf("channelCount = %d, want 2 (default for single byte)", ch)
+	}
+	if rate != 44100 {
+		t.Errorf("sampleRate = %d, want 44100", rate)
+	}
+}
+
+// --- writeMergeFtyp tests ---
+
+func TestWriteMergeFtyp_H264(t *testing.T) {
+	var buf bytes.Buffer
+	n, err := writeMergeFtyp(&buf, "h264")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 32 bytes: 8 (box) + 4 (major) + 4 (version) + 4*4 (4 brands) = 32
+	if n != 32 {
+		t.Errorf("written = %d, want 32", n)
+	}
+	if buf.Len() != 32 {
+		t.Errorf("buf.Len() = %d, want 32", buf.Len())
+	}
+
+	// Verify expected bytes
+	want := []byte{
+		0x00, 0x00, 0x00, 0x20, // box size = 32
+		'f', 't', 'y', 'p', // ftyp box type
+		'i', 's', 'o', 'm', // major brand
+		0x00, 0x00, 0x00, 0x00, // minor version
+		'i', 's', 'o', 'm', // compatible brand 0
+		'i', 's', 'o', '2', // compatible brand 1
+		'm', 'p', '4', '1', // compatible brand 2
+		'a', 'v', 'c', '1', // compatible brand 3 (h264)
+	}
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Errorf("writeMergeFtyp output mismatch\ngot:  % x\nwant: % x", buf.Bytes(), want)
+	}
+}
+
+func TestWriteMergeFtyp_H265(t *testing.T) {
+	var buf bytes.Buffer
+	n, err := writeMergeFtyp(&buf, "h265")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 32 {
+		t.Errorf("written = %d, want 32", n)
+	}
+	// Verify the last brand is hev1 instead of avc1
+	data := buf.Bytes()
+	if len(data) < 32 {
+		t.Fatalf("output too short: %d bytes", len(data))
+	}
+	brand := string(data[28:32])
+	if brand != "hev1" {
+		t.Errorf("last brand = %q, want hev1", brand)
+	}
+}
+
+func TestWriteMergeFtyp_Unknown(t *testing.T) {
+	var buf bytes.Buffer
+	n, err := writeMergeFtyp(&buf, "mjpeg")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 28 bytes: 8 + 4 + 4 + 4*3 = 28 (no codec-specific brand)
+	if n != 28 {
+		t.Errorf("written = %d, want 28", n)
+	}
+	// Verify no avc1 or hev1 brand
+	data := buf.Bytes()
+	if len(data) < 28 {
+		t.Fatalf("output too short: %d bytes", len(data))
+	}
+	brand := string(data[24:28])
+	if brand != "mp41" {
+		t.Errorf("last brand = %q, want mp41", brand)
+	}
+}
+
+// --- bytesWriter tests ---
+
+func TestBytesWriter_SeekEnd(t *testing.T) {
+	bw := &bytesWriter{data: []byte("hello world"), pos: 5}
+	newPos, err := bw.Seek(-3, 2) // seek from end
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if newPos != 8 {
+		t.Errorf("newPos = %d, want 8", newPos)
+	}
+	if bw.pos != 8 {
+		t.Errorf("bw.pos = %d, want 8", bw.pos)
+	}
+}
+
+func TestBytesWriter_SeekNegative(t *testing.T) {
+	bw := &bytesWriter{data: []byte("hello world"), pos: 5}
+	newPos, err := bw.Seek(-10, 1) // seek backward past 0
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// pos clamped to 0
+	if newPos != 0 {
+		t.Errorf("newPos = %d, want 0", newPos)
+	}
+	if bw.pos != 0 {
+		t.Errorf("bw.pos = %d, want 0", bw.pos)
+	}
+}
+
+// --- limitedWriter Seek error test ---
+
+type errWriteSeeker struct{}
+
+func (e *errWriteSeeker) Write(p []byte) (int, error) { return len(p), nil }
+func (e *errWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+	return 0, fmt.Errorf("seek error")
+}
+
+func TestLimitedWriter_SeekError(t *testing.T) {
+	lw := &limitedWriter{w: &errWriteSeeker{}, remaining: 100, pos: 0}
+	_, err := lw.Seek(10, 0)
+	if err == nil {
+		t.Fatal("expected error from seek")
+	}
+	if err.Error() != "seek error" {
+		t.Errorf("unexpected error: %v", err)
+	}
 }

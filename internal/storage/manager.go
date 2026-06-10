@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -20,6 +21,14 @@ type Manager struct {
 	rootDir string
 	metrics *metrics.Metrics
 	mu      sync.Mutex
+
+	// Health tracking
+	healthMu       sync.Mutex
+	healthState    HealthState
+	writeFailCount int
+
+	// Optional event bus for health state change notifications
+	eventBus *event.EventBus
 }
 
 // NewManager creates a new storage Manager and ensures the root directory exists.
@@ -57,6 +66,7 @@ func (m *Manager) EnsureCameraDir(cameraID string) error {
 // Returns the temp path (for writing) and the suggested final path (for CloseSegment).
 func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string, finalPath string, err error) {
 	if err := m.EnsureCameraDir(cameraID); err != nil {
+		m.recordWriteFailure()
 		return "", "", err
 	}
 
@@ -70,6 +80,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
+			m.recordWriteFailure()
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
 		}
 		f.Close()
@@ -79,6 +90,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
 		if err := os.MkdirAll(tempPath, 0755); err != nil {
+			m.recordWriteFailure()
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
 		}
 
@@ -94,6 +106,7 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 	// Check if temp is a directory (MJPEG) or file (H.264)
 	info, err := os.Stat(tempPath)
 	if err != nil {
+		m.recordWriteFailure()
 		return fmt.Errorf("storage: temp path not found: %w", err)
 	}
 
@@ -101,32 +114,38 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		// Sync the directory for MJPEG
 		dirFd, err := os.Open(tempPath)
 		if err != nil {
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
 		}
 		if err := dirFd.Sync(); err != nil {
 			dirFd.Close()
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: failed to sync temp dir: %w", err)
 		}
 		dirFd.Close()
 
 		// Atomic rename of directory
 		if err := os.Rename(tempPath, finalPath); err != nil {
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: failed to rename temp dir to final: %w", err)
 		}
 	} else {
 		// Sync and close the file for H.264
 		f, err := os.OpenFile(tempPath, os.O_WRONLY, 0)
 		if err != nil {
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
 		}
 		if err := f.Sync(); err != nil {
 			f.Close()
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: failed to sync temp file: %w", err)
 		}
 		f.Close()
 
 		// Atomic rename
 		if err := os.Rename(tempPath, finalPath); err != nil {
+			m.recordWriteFailure()
 			return fmt.Errorf("storage: failed to rename temp file to final: %w", err)
 		}
 	}
@@ -143,6 +162,7 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 
 	info, err := os.Stat(tempPath)
 	if err != nil {
+		m.recordWriteFailure()
 		return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
 	}
 
@@ -150,25 +170,29 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 		// MJPEG: write individual JPEG file with timestamp name
 		ts := time.Now().Format("20060102_150405.000")
 		jpgPath := filepath.Join(tempPath, ts+".jpg")
-		return 0, func() error {
-			if err := os.WriteFile(jpgPath, data, 0644); err != nil {
-				return fmt.Errorf("storage: failed to write JPEG frame: %w", err)
-			}
-			return nil
-		}()
+		if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+			m.recordWriteFailure()
+			return 0, fmt.Errorf("storage: failed to write JPEG frame: %w", err)
+		}
+		m.recordWriteSuccess()
+		return 0, nil
 	}
 
 	// H.264: append to temp file
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		m.recordWriteFailure()
 		return 0, fmt.Errorf("storage: failed to open temp file for writing: %w", err)
 	}
 	defer f.Close()
 
 	n, err := f.Write(data)
 	if err != nil {
+		m.recordWriteFailure()
 		return n, fmt.Errorf("storage: write failed: %w", err)
 	}
+
+	m.recordWriteSuccess()
 	return n, nil
 }
 

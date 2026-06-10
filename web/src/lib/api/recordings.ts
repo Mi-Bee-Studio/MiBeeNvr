@@ -17,6 +17,7 @@ export interface Recording {
   frame_count: number;
   merged: boolean;
   merge_status?: 'pending' | 'merged' | 'failed';
+  merge_progress?: number; // 0-100, persisted to DB
   merge_path?: string;
   archived?: boolean;
   merge_tier?: string;
@@ -73,20 +74,22 @@ export interface ArchiveListResponse {
 
 // --- Recordings ---
 
-export async function listRecordings(params: {
-  camera_id?: string;
-  format?: string;
-  merged?: boolean;
-  offset?: number;
-  limit?: number;
-  start?: string;
-  end?: string;
-  sort_by?: string;
-  order?: string;
-  search?: string;
-  archived?: boolean;
-  signal?: AbortSignal;
-} = {}): Promise<RecordingListResponse> {
+export async function listRecordings(
+  params: {
+    camera_id?: string;
+    format?: string;
+    merged?: boolean;
+    offset?: number;
+    limit?: number;
+    start?: string;
+    end?: string;
+    sort_by?: string;
+    order?: string;
+    search?: string;
+    archived?: boolean;
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
 
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
@@ -108,24 +111,47 @@ export async function listRecordings(params: {
   return apiRequest<RecordingListResponse>(endpoint, { signal });
 }
 
+export async function listTimelapseRecordings(
+  params: {
+    camera_id?: string;
+    start?: string;
+    end?: string;
+    limit?: number;
+    offset?: number;
+    sort_by?: string;
+    sort_order?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingListResponse> {
+  const queryParams = new URLSearchParams();
+
+  if (params.camera_id) queryParams.set('camera_id', params.camera_id);
+  if (params.start) queryParams.set('start', params.start);
+  if (params.end) queryParams.set('end', params.end);
+  if (params.limit !== undefined) queryParams.set('limit', String(params.limit));
+  if (params.offset !== undefined) queryParams.set('offset', String(params.offset));
+  if (params.sort_by) queryParams.set('sort_by', params.sort_by);
+  if (params.sort_order) queryParams.set('sort_order', params.sort_order);
+
+  const query = queryParams.toString();
+  const endpoint = query ? `/timelapse?${query}` : '/timelapse';
+
+  const { signal } = params;
+  return apiRequest<RecordingListResponse>(endpoint, { signal });
+}
+
 export async function getRecording(id: string, signal?: AbortSignal): Promise<Recording> {
   return apiRequest<Recording>(`/recordings/${id}`, { signal });
 }
 
-export async function deleteRecording(
-  id: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function deleteRecording(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/recordings/${id}`, {
     method: 'DELETE',
     signal,
   });
 }
 
-export async function batchDeleteRecordings(
-  ids: string[],
-  signal?: AbortSignal
-): Promise<void> {
+export async function batchDeleteRecordings(ids: string[], signal?: AbortSignal): Promise<void> {
   await apiRequest<void>('/recordings/batch-delete', {
     method: 'POST',
     body: JSON.stringify({ ids }),
@@ -136,13 +162,22 @@ export async function batchDeleteRecordings(
 export function getRecordingDownloadUrl(id: string): string {
   return `/api/recordings/${id}/download`;
 }
+
+export function getRecordingVideoUrl(id: string): string {
+  return `/api/recordings/${id}/download`;
+}
+
 export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
 }
 
+export function getTimelapseThumbnailUrl(id: string): string {
+  return `${API_BASE}/timelapse/${id}/thumbnail`;
+}
+
 export async function downloadRecording(
   id: string,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<void> {
   const url = `/api/recordings/${id}/download`;
 
@@ -190,51 +225,45 @@ export async function downloadRecording(
 
 // --- Frames (MJPEG recordings) ---
 
-export async function listFrames(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<FramesResponse> {
+export async function listFrames(recordingId: string, signal?: AbortSignal): Promise<FramesResponse> {
   return apiRequest<FramesResponse>(`/recordings/${recordingId}/frames`, { signal });
 }
 
 // --- Timelapse frames ---
 
-export async function getTimelapseFrames(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<TimelapseFrame[]> {
+export async function getTimelapseFrames(recordingId: string, signal?: AbortSignal): Promise<TimelapseFrame[]> {
   return apiRequest<TimelapseFrame[]>(`/recordings/${recordingId}/timelapse-frames`, { signal });
 }
 
 export async function loadTimelapseFrameBlob(
   recordingId: string,
   filename: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/timelapse-frames/${filename}`, { signal });
   return URL.createObjectURL(blob);
 }
-export async function loadFrameBlob(
-  recordingId: string,
-  frameIndex: number,
-  signal?: AbortSignal
-): Promise<string> {
+export async function loadFrameBlob(recordingId: string, frameIndex: number, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download?frame=${frameIndex}`, { signal });
   return URL.createObjectURL(blob);
 }
 
-export async function loadRecordingVideoBlob(
-  recordingId: string,
-  signal?: AbortSignal
-): Promise<string> {
+/**
+ * @deprecated Use direct URL playback via getRecordingVideoUrl() or <video src={getRecordingVideoUrl(id)}> instead.
+ * Loading entire recordings as blobs causes memory crashes with large files.
+ */
+export async function loadRecordingVideoBlob(recordingId: string, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download`, { signal });
   return URL.createObjectURL(blob);
 }
 
 // --- Timelapse Merge ---
 
-export async function triggerTimelapseMerge(cameraId: string, date?: string): Promise<void> {
-  const query = date ? `?date=${encodeURIComponent(date)}` : '';
+export async function triggerTimelapseMerge(cameraId: string, date?: string, duration?: string): Promise<void> {
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  if (duration) params.set('duration', duration);
+  const query = params.toString() ? `?${params.toString()}` : '';
   const url = `${API_BASE}/timelapse/${cameraId}/merge${query}`;
   const headers: Record<string, string> = {};
   const authHeader = getAuthHeader();
@@ -249,27 +278,61 @@ export async function triggerTimelapseMerge(cameraId: string, date?: string): Pr
 export function subscribeTimelapseMergeProgress(
   cameraId: string,
   onProgress: (data: any) => void,
-  onError?: (e: Event) => void
+  onError?: (e: Event) => void,
 ): AbortController {
   const abortController = new AbortController();
-  const es = new EventSource(`${API_BASE}/timelapse/merge/progress/${cameraId}`);
 
-  es.onmessage = (event) => {
+  (async () => {
     try {
-      const data = JSON.parse(event.data);
-      onProgress(data);
-    } catch (e) {
-      console.warn('Failed to parse merge progress event:', e);
+      const authHeader = getAuthHeader();
+      const headers: Record<string, string> = {};
+      if (authHeader) headers['Authorization'] = authHeader;
+
+      const response = await fetch(`${API_BASE}/timelapse/merge/progress/${cameraId}`, {
+        headers,
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        console.warn('SSE connection failed:', response.status);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        console.warn('SSE response body not readable');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            try {
+              const data = JSON.parse(jsonStr);
+              onProgress(data);
+            } catch (e) {
+              console.warn('Failed to parse merge progress event:', e);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+      console.warn('SSE stream error:', err);
+      if (onError) onError(new Event('error'));
     }
-  };
-
-  es.onerror = () => {
-    es.close();
-  };
-
-  abortController.signal.addEventListener('abort', () => {
-    es.close();
-  });
+  })();
 
   return abortController;
 }
@@ -279,10 +342,7 @@ export async function getStats(signal?: AbortSignal): Promise<StorageStats> {
   return apiRequest<StorageStats>('/stats', { signal });
 }
 
-export async function getStatsTrends(
-  days: number = 7,
-  signal?: AbortSignal
-): Promise<DailyStats[]> {
+export async function getStatsTrends(days: number = 7, signal?: AbortSignal): Promise<DailyStats[]> {
   return apiRequest<DailyStats[]>(`/stats/trends?days=${days}`, { signal });
 }
 
@@ -294,7 +354,7 @@ export async function listArchives(signal?: AbortSignal): Promise<ArchiveListRes
 
 export async function listArchiveRecordings(
   cameraID: string,
-  params?: { offset?: number; limit?: number; signal?: AbortSignal }
+  params?: { offset?: number; limit?: number; signal?: AbortSignal },
 ): Promise<RecordingListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.offset !== undefined) queryParams.set('offset', String(params.offset));
@@ -304,17 +364,14 @@ export async function listArchiveRecordings(
   return apiRequest<RecordingListResponse>(endpoint, { signal: params?.signal });
 }
 
-export async function deleteArchiveGroup(
-  cameraID: string,
-  signal?: AbortSignal
-): Promise<{ status: string }> {
+export async function deleteArchiveGroup(cameraID: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}`, { method: 'DELETE', signal });
 }
 
 export async function deleteArchiveRecording(
   cameraID: string,
   recordingID: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}/recordings/${recordingID}`, {
     method: 'DELETE',
@@ -325,7 +382,7 @@ export async function deleteArchiveRecording(
 export async function setArchiveRetention(
   cameraID: string,
   retentionDays: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/archives/${cameraID}/retention`, {
     method: 'PUT',

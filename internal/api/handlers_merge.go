@@ -172,6 +172,39 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
+func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera ID is required")
+		return
+	}
+
+	cam, err := h.db.GetCamera(r.Context(), cameraID)
+	if err != nil {
+		logger.Warn("failed to get camera", "error", err, "camera_id", cameraID)
+		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		return
+	}
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":               cam.MergeEnabled,
+		"check_interval":         cam.MergeCheckInterval,
+		"window_size":            cam.MergeWindowSize,
+		"batch_limit":            cam.MergeBatchLimit,
+		"min_segment_age":        cam.MergeMinSegmentAge,
+		"min_segments_to_merge":  cam.MergeMinSegmentsToMerge,
+	})
+}
+
 // --- Merge status endpoints ---
 
 func (h *Handler) handleMergeStatus(w http.ResponseWriter, r *http.Request) {

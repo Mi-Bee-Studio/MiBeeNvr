@@ -2,9 +2,11 @@ package merge
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"github.com/abema/go-mp4"
@@ -25,7 +27,7 @@ type mergedSample struct {
 // MergeMP4Segments performs a streaming merge of multiple MP4 segments into a single output file.
 // All segments must share the same codec and SPS/PPS (for H.264) or VPS/SPS/PPS (for H.265).
 // The output file is written to outputPath directly (caller handles temp→final rename).
-func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
+func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string) error {
 	if len(segments) == 0 {
 		return fmt.Errorf("no segments to merge")
 	}
@@ -64,6 +66,11 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		}
 	}
 
+	// Validate that segments have samples.
+	if first.SampleCount == 0 && (!hasAudio || first.AudioSampleCount == 0) {
+		return fmt.Errorf("first segment has empty sample table")
+	}
+
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("create output: %w", err)
@@ -94,10 +101,16 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	// Parse resolution from first segment's SPS.
 	switch codec {
 	case "h265":
-		w, h := parseHEVCSPSResolution(first.SPS)
+		w, h, err := parseHEVCSPSResolution(first.SPS)
+		if err != nil {
+			logger.Warn("failed to parse SPS resolution", "error", err)
+		}
 		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
 	case "h264":
-		w, h := parseSPSResolution(first.SPS)
+		w, h, err := parseSPSResolution(first.SPS)
+		if err != nil {
+			logger.Warn("failed to parse SPS resolution", "error", err)
+		}
 		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
 	}
 	// Populate placeholder samples so the size calculation includes per-sample tables.
@@ -105,11 +118,10 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	for i := range videoTrack.samples {
 		videoTrack.samples[i].duration = 33 // placeholder
 	}
-
 	// Build audio track placeholder for size calculation.
 	var audioTrack *mergeTrack
+	var totalAudioSamples int
 	if hasAudio {
-		var totalAudioSamples int
 		for _, seg := range segments {
 			totalAudioSamples += seg.AudioSampleCount
 		}
@@ -124,7 +136,6 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 			audioTrack.samples[i].duration = 23 // placeholder
 		}
 	}
-
 	// Write moov to a buffer to get its exact size.
 	moovBuf := &bytesWriter{}
 	moovW := mp4.NewWriter(moovBuf)
@@ -132,6 +143,13 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		return fmt.Errorf("calculate moov size: %w", err)
 	}
 	moovSize := moovBuf.len()
+	// Add headroom for stts entry expansion — real video may have varying frame durations
+	// that prevent full RLE compression, requiring more stts entries than the uniform-duration
+	// placeholder (which compresses to 1 entry). Max overhead: 8 bytes per sample per track.
+	moovSize += int64(totalVideoSamples) * 8
+	if hasAudio {
+		moovSize += int64(totalAudioSamples) * 8
+	}
 
 	// Clear placeholder samples; real ones will be set after streaming mdat.
 	videoTrack.samples = nil
@@ -171,6 +189,12 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		}
 
 		for _, s := range seg.Samples {
+			select {
+			case <-ctx.Done():
+				src.Close()
+				return ctx.Err()
+			default:
+			}
 			sampleAbsOffset := currentOffset + mdatDataStart
 
 			_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
@@ -204,6 +228,12 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 			}
 
 			for _, s := range seg.AudioSamples {
+				select {
+				case <-ctx.Done():
+					src.Close()
+					return ctx.Err()
+				default:
+				}
 				sampleAbsOffset := currentOffset + mdatDataStart
 
 				_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
@@ -225,12 +255,15 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	}
 
 	// Step 6: Patch mdat box size.
-	mdatBoxSize := uint32(8 + currentOffset)
+	mdatBoxSize := uint64(8 + currentOffset)
+	if mdatBoxSize > math.MaxUint32 {
+		return fmt.Errorf("mdat box size %d exceeds MaxUint32", mdatBoxSize)
+	}
 	if _, err := out.Seek(mdatHeaderOffset, io.SeekStart); err != nil {
 		return fmt.Errorf("seek to mdat header: %w", err)
 	}
 	var sizeBuf [4]byte
-	binary.BigEndian.PutUint32(sizeBuf[:], mdatBoxSize)
+	binary.BigEndian.PutUint32(sizeBuf[:], uint32(mdatBoxSize))
 	if _, err := out.Write(sizeBuf[:]); err != nil {
 		return fmt.Errorf("write mdat size: %w", err)
 	}
@@ -241,20 +274,26 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 	}
 
 	// Calculate total video duration in timescale units.
-	var totalVideoDuration uint32
+	var totalVideoDuration uint64
 	for _, s := range allVideoSamples {
-		totalVideoDuration += s.duration
+		totalVideoDuration += uint64(s.duration)
 	}
-	videoTrack.duration = totalVideoDuration
+	if totalVideoDuration > math.MaxUint32 {
+		return fmt.Errorf("DurationV0 overflow: video duration %d exceeds MaxUint32", totalVideoDuration)
+	}
+	videoTrack.duration = uint32(totalVideoDuration)
 	videoTrack.samples = allVideoSamples
 
 	// Set real audio track data.
 	if hasAudio {
-		var totalAudioDuration uint32
+		var totalAudioDuration uint64
 		for _, s := range allAudioSamples {
-			totalAudioDuration += s.duration
+			totalAudioDuration += uint64(s.duration)
 		}
-		audioTrack.duration = totalAudioDuration
+		if totalAudioDuration > math.MaxUint32 {
+			return fmt.Errorf("DurationV0 overflow: audio duration %d exceeds MaxUint32", totalAudioDuration)
+		}
+		audioTrack.duration = uint32(totalAudioDuration)
 		audioTrack.samples = allAudioSamples
 	}
 
@@ -276,6 +315,17 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 
 	if moovOut.remaining < 0 {
 		return fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
+	}
+
+	// If the real moov is smaller than the reserved space, pad with a "free" box.
+	// This ensures parsers can traverse from moov → free → mdat without breaking.
+	if moovOut.remaining > 0 {
+		padBuf := make([]byte, moovOut.remaining)
+		binary.BigEndian.PutUint32(padBuf[0:4], uint32(moovOut.remaining))
+		copy(padBuf[4:8], "free")
+		if _, err := out.Write(padBuf); err != nil {
+			return fmt.Errorf("write moov padding: %w", err)
+		}
 	}
 
 	// Sync and close.
@@ -583,19 +633,35 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi2
 
-	// stts — one entry per sample.
+	// stts — run-length encoded (compressed).
 	bi6, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stts")})
 	if err != nil {
 		return err
 	}
-	sttsEntries := make([]mp4.SttsEntry, n)
-	for i, s := range samples {
-		sttsEntries[i] = mp4.SttsEntry{
-			SampleCount: 1,
-			SampleDelta: s.duration,
+	var sttsEntries []mp4.SttsEntry
+	if n > 0 {
+		sttsEntries = make([]mp4.SttsEntry, 0, n)
+		prevDur := samples[0].duration
+		runCount := uint32(1)
+		for i := 1; i < n; i++ {
+			if samples[i].duration == prevDur {
+				runCount++
+				continue
+			}
+			sttsEntries = append(sttsEntries, mp4.SttsEntry{
+				SampleCount: runCount,
+				SampleDelta: prevDur,
+			})
+			prevDur = samples[i].duration
+			runCount = 1
 		}
+		// Flush final run.
+		sttsEntries = append(sttsEntries, mp4.SttsEntry{
+			SampleCount: runCount,
+			SampleDelta: prevDur,
+		})
 	}
-	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(n), Entries: sttsEntries}, mp4.Context{}); err != nil {
+	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(len(sttsEntries)), Entries: sttsEntries}, mp4.Context{}); err != nil {
 		return err
 	}
 	if _, err := w.EndBox(); err != nil {
@@ -639,23 +705,45 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	}
 	_ = bi8
 
-	// stco — single chunk at chunkOffset.
-	bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stco")})
-	if err != nil {
-		return err
+	// stco or co64 — single chunk at chunkOffset.
+	if uint64(chunkOffset) > math.MaxUint32 {
+		bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("co64")})
+		if err != nil {
+			return err
+		}
+		co64 := &mp4.Co64{
+			EntryCount:  0,
+			ChunkOffset: nil,
+		}
+		if n > 0 {
+			co64.EntryCount = 1
+			co64.ChunkOffset = []uint64{uint64(chunkOffset)}
+		}
+		if _, err := mp4.Marshal(w, co64, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi9
+	} else {
+		bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stco")})
+		if err != nil {
+			return err
+		}
+		stco := &mp4.Stco{EntryCount: 0, ChunkOffset: nil}
+		if n > 0 {
+			stco.EntryCount = 1
+			stco.ChunkOffset = []uint32{uint32(chunkOffset)}
+		}
+		if _, err := mp4.Marshal(w, stco, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = bi9
 	}
-	stco := &mp4.Stco{EntryCount: 0, ChunkOffset: nil}
-	if n > 0 {
-		stco.EntryCount = 1
-		stco.ChunkOffset = []uint32{uint32(chunkOffset)}
-	}
-	if _, err := mp4.Marshal(w, stco, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi9
 
 	_, err = w.EndBox()
 	_ = bi

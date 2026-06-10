@@ -75,6 +75,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	var mm *merge.MergeManager
 	var tm *transcoding.TranscodeManager
 	var tmm *timelapse.RollingMergeManager
+	var appLoc *time.Location
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
@@ -85,6 +86,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			tm = v
 		case *timelapse.RollingMergeManager:
 			tmm = v
+		case *time.Location:
+			appLoc = v
 		}
 	}
 	return &CameraManager{
@@ -97,7 +100,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		mergeMgr:         mm,
 		transcodeMgr:     tm,
 		timelapseMergeMgr: tmm,
-		scheduler:        timelapse.NewScheduler(),
+		scheduler:        timelapse.NewScheduler(appLoc),
 		scheduleMonitors: make(map[string]context.CancelFunc),
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
@@ -264,8 +267,41 @@ case "timelapse":
 		case "snapshot":
 			rec = cm.createTimelapseSnapshotRecorder(cam, segDur)
 		case "rtsp_keyframe":
-			logger.Info("rtsp_keyframe timelapse source requires an active regular recorder", "camera_id", cam.ID)
-			return nil
+			// For standalone timelapse with rtsp_keyframe, create an RTSP recorder
+			// to provide frames for keyframe extraction.
+			switch cam.Encoding {
+			case "h264", "":
+				h264Cfg := recorder.H264Config{
+					CameraID:     cam.ID,
+					RTSPURL:      cam.URL,
+					Username:     cam.Username,
+					Password:     cam.Password,
+					SegmentDur:   segDur,
+					DB:           cm.db,
+					AudioEnabled: cam.AudioEnabled,
+				}
+				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+					h264Cfg.FrameWatchdogTimeout = d
+				}
+				rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+			case "h265":
+				h265Cfg := recorder.H265Config{
+					CameraID:     cam.ID,
+					RTSPURL:      cam.URL,
+					Username:     cam.Username,
+					Password:     cam.Password,
+					SegmentDur:   segDur,
+					DB:           cm.db,
+					AudioEnabled: cam.AudioEnabled,
+				}
+				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+					h265Cfg.FrameWatchdogTimeout = d
+				}
+				rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+			default:
+				logger.Warn("unsupported encoding for rtsp_keyframe timelapse frame source", "camera_id", cam.ID, "encoding", cam.Encoding)
+				return nil
+			}
 		case "mjpeg", "auto", "":
 			rec = cm.createTimelapseMJPEGRecorder(cam, segDur)
 		default:
@@ -307,6 +343,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+	case *recorder.StubRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	}
 	if hub != nil {
 		hub.SetCameraID(cameraID)
@@ -345,10 +384,6 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
 	if rec == nil {
-		// Check if this is due to rtsp_keyframe timelapse config (handled elsewhere)
-		if cam.Protocol == "timelapse" && cam.Timelapse != nil && cam.Timelapse.FrameSource == "rtsp_keyframe" {
-			return nil
-		}
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
 	}
 	cm.recorders[cam.ID] = rec
@@ -380,8 +415,8 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		cm.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
 	}
 
-	// Start keyframe extractor for regular recorders with rtsp_keyframe timelapse config
-	if cam.Protocol != "timelapse" && cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config
+	if cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
 		if hub := getRecorderHub(rec); hub != nil {
 			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
 				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
@@ -672,6 +707,14 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		}
 	}
 
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+		}
+	}
+
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
@@ -716,6 +759,14 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		delete(cm.recorders, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
+		}
+	}
+
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
 		}
 	}
 
@@ -869,6 +920,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			}
 			delete(cm.recorders, cam.ID)
 		}
+		// Stop keyframe extractor if running
+		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
+			delete(cm.keyframeExtractors, cam.ID)
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
 	// Start recorder if newly enabled or protocol changed to a recordable one
@@ -892,6 +950,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			delete(cm.recorders, cam.ID)
 			if cm.metrics != nil {
 				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+		// Stop keyframe extractor if running
+		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
+			delete(cm.keyframeExtractors, cam.ID)
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
 			}
 		}
 	}
@@ -1018,6 +1083,15 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 		cm.metrics.ActiveCameras.Dec()
 	}
 	logger.Info("stopped recorder for camera", "camera_id", cameraID)
+
+	// Stop keyframe extractor if running
+	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+		delete(cm.keyframeExtractors, cameraID)
+		if err := ext.Stop(); err != nil {
+			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1231,6 +1305,13 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 			delete(cm.recorders, id)
 			if cm.metrics != nil {
 				cm.metrics.ActiveCameras.Dec()
+			}
+			// Stop keyframe extractor if running
+			if ext, ok := cm.keyframeExtractors[id]; ok {
+				delete(cm.keyframeExtractors, id)
+				if err := ext.Stop(); err != nil {
+					logger.Warn("failed to stop keyframe extractor", "camera_id", id, "error", err)
+				}
 			}
 		}
 	}

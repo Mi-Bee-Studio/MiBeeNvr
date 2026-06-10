@@ -76,11 +76,7 @@ export function createReconnectCoordinator(): ReconnectCoordinator {
   let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
 
   function processQueue(): void {
-    while (
-      pendingQueue.length > 0 &&
-      activeReconnects < MAX_CONCURRENT &&
-      !globalCooldown
-    ) {
+    while (pendingQueue.length > 0 && activeReconnects < MAX_CONCURRENT && !globalCooldown) {
       const nextId = pendingQueue.shift()!;
       const cb = pendingCallbacks.get(nextId);
       pendingCallbacks.delete(nextId);
@@ -140,10 +136,7 @@ export function createReconnectCoordinator(): ReconnectCoordinator {
         activeReconnects--;
       }
       // Partial backoff reset — reduce by 25% on success (don't fully reset)
-      globalBackoffMs = Math.max(
-        INITIAL_BACKOFF_MS,
-        Math.floor(globalBackoffMs * 0.75),
-      );
+      globalBackoffMs = Math.max(INITIAL_BACKOFF_MS, Math.floor(globalBackoffMs * 0.75));
       processQueue();
     },
 
