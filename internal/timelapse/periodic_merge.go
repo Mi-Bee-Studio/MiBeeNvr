@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +18,15 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
+
+// frameProgressRegex matches frame=N in ffmpeg stderr progress output.
+var frameProgressRegex = regexp.MustCompile(`frame=\s*(\d+)`)
+
+// retryInfo tracks the retry count and timestamp for a segment merge attempt.
+type retryInfo struct {
+	count     int
+	timestamp time.Time
+}
 
 // PeriodicMergeManager handles merge operations for timelapse recordings
 // with configurable merge intervals (8h, 12h, 24h, 7d, 30d).
@@ -28,7 +39,7 @@ type PeriodicMergeManager struct {
 	duration time.Duration
 	loc      *time.Location
 
-	retryCounts map[string]int
+	retryCounts map[string]retryInfo
 	retryMu     sync.Mutex
 }
 
@@ -46,7 +57,7 @@ func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, 
 		dataDir:     dataDir,
 		duration:    duration,
 		loc:         loc,
-		retryCounts: make(map[string]int),
+		retryCounts: make(map[string]retryInfo),
 	}
 }
 
@@ -293,11 +304,45 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 		return fmt.Errorf("periodic merge: stderr pipe: %w", err)
 	}
 
+	// Count total frames for progress estimation (best-effort).
+	totalFrames := 0
+	for _, seg := range segments {
+		frames, err := probeVideoFrameCount(ctx, seg.FilePath)
+		if err != nil {
+			slog.Warn("periodic merge: failed to probe frame count for progress",
+				"segment_id", seg.ID, "error", err)
+		}
+		totalFrames += frames
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("periodic merge: start ffmpeg: %w", err)
 	}
 
-	errOutput := consumeStderr(stderr)
+	// Read stderr for progress and error capture.
+	var lastLines []string
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		lastLines = append(lastLines, line)
+		if len(lastLines) > 10 {
+			lastLines = lastLines[1:]
+		}
+
+		// Parse frame count from ffmpeg progress output for progress tracking.
+		if totalFrames > 0 {
+			if match := frameProgressRegex.FindStringSubmatch(line); len(match) > 1 {
+				if frame, err := strconv.Atoi(match[1]); err == nil && frame > 0 {
+					pct := frame * 100 / totalFrames
+					if pct > 99 {
+						pct = 99
+					}
+					m.updateProgressBatch(ctx, segments, pct)
+				}
+			}
+		}
+	}
+	errOutput := strings.Join(lastLines, "\n")
 
 	if waitErr := cmd.Wait(); waitErr != nil {
 		if ctx.Err() != nil {
@@ -331,7 +376,22 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Count total frames for progress estimation.
+	totalFrames := 0
+	for _, seg := range segments {
+		entries, err := os.ReadDir(seg.FilePath)
+		if err != nil {
+			return fmt.Errorf("periodic merge: read segment dir %s: %w", seg.ID, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".jpg") || strings.HasSuffix(entry.Name(), ".jpeg")) {
+				totalFrames++
+			}
+		}
+	}
+
 	frameIndex := 0
+	framesCopied := 0
 	for _, seg := range segments {
 		entries, err := os.ReadDir(seg.FilePath)
 		if err != nil {
@@ -349,6 +409,7 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 			}
 
 			frameIndex++
+			framesCopied++
 			frameName := fmt.Sprintf("frame_%06d.jpg", frameIndex)
 			dst, err := os.Create(filepath.Join(tmpDir, frameName))
 			if err != nil {
@@ -363,6 +424,12 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 			}
 			if err != nil {
 				return fmt.Errorf("periodic merge: copy frame %s: %w", frameName, err)
+			}
+
+			// Report copy progress.
+			if totalFrames > 0 && (framesCopied%10 == 0 || framesCopied == totalFrames) {
+				pct := framesCopied * 100 / totalFrames
+				m.updateProgressBatch(ctx, segments, pct)
 			}
 
 			select {
@@ -435,9 +502,13 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	// Increment retry counts and check if any segment has exhausted retries.
 	m.retryMu.Lock()
 	maxRetriesReached := false
+	now := time.Now()
 	for _, seg := range segments {
-		m.retryCounts[seg.ID]++
-		if m.retryCounts[seg.ID] >= 3 {
+		info := m.retryCounts[seg.ID]
+		info.count++
+		info.timestamp = now
+		m.retryCounts[seg.ID] = info
+		if info.count >= 3 {
 			maxRetriesReached = true
 		}
 	}
@@ -468,7 +539,7 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 				m.retryMu.Lock()
 				defer m.retryMu.Unlock()
 				if len(segments) > 0 {
-					return m.retryCounts[segments[0].ID]
+					return m.retryCounts[segments[0].ID].count
 				}
 				return 0
 			}(),
@@ -507,9 +578,21 @@ func (m *PeriodicMergeManager) filterEligibleSegments(recordings []model.Recordi
 			continue
 		}
 		if r.MergeStatus == model.MergeStatusFailed {
-			if count, ok := m.retryCounts[r.ID]; ok && count < 3 {
+			if info, ok := m.retryCounts[r.ID]; ok && info.count < 3 {
 				segments = append(segments, r)
 			}
+		}
+	}
+
+	// Clean stale retryCounts entries: entries not in current recordings and older than 24h.
+	validIDs := make(map[string]struct{}, len(recordings))
+	for _, r := range recordings {
+		validIDs[r.ID] = struct{}{}
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for id, info := range m.retryCounts {
+		if _, exists := validIDs[id]; !exists && info.timestamp.Before(cutoff) {
+			delete(m.retryCounts, id)
 		}
 	}
 	return segments
@@ -526,6 +609,7 @@ func filterMergedSegments(recordings []model.Recording) []model.Recording {
 	}
 	return segments
 }
+
 // checkSegmentCompatibility checks if all segments have compatible resolution and codec.
 // Uses ffprobe to read metadata from each segment.
 func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) (bool, error) {
@@ -598,4 +682,29 @@ func probeSegmentMetadata(ctx context.Context, filePath string) (width, height i
 	}
 
 	return width, height, codec, nil
+}
+
+// probeVideoFrameCount returns the total number of video frames in a file using ffprobe.
+func probeVideoFrameCount(ctx context.Context, filePath string) (int, error) {
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-count_frames",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=nb_read_frames",
+		"-of", "csv=p=0",
+		filePath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe frame count failed: %w", err)
+	}
+	s := strings.TrimSpace(string(output))
+	if s == "" {
+		return 0, fmt.Errorf("ffprobe returned empty frame count")
+	}
+	count, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe frame count parse failed: %w", err)
+	}
+	return count, nil
 }

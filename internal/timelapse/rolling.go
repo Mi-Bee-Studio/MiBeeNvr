@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// progressCleanupDelay is how long completed/failed progress entries are kept
+// before being removed from the map, allowing the UI to read the final state.
+var progressCleanupDelay = 5 * time.Minute
+
 // MergeProgressInfo represents the current progress of a merge operation.
 type MergeProgressInfo struct {
 	CameraID     string  `json:"camera_id"`
@@ -266,7 +270,6 @@ func (r *RollingMergeManager) GetProgress(cameraID string) (MergeProgressInfo, b
 // setProgress sets the progress for a camera merge.
 func (r *RollingMergeManager) setProgress(cameraID string, info MergeProgressInfo) {
 	r.progressMu.Lock()
-	defer r.progressMu.Unlock()
 	entry, ok := r.progress[cameraID]
 	if !ok {
 		entry = &progressEntry{
@@ -281,6 +284,22 @@ func (r *RollingMergeManager) setProgress(cameraID string, info MergeProgressInf
 		case entry.complete <- struct{}{}:
 		default:
 		}
+	}
+	r.progressMu.Unlock()
+
+	// Schedule cleanup after a delay so the UI can read the final state.
+	// This prevents indefinite accumulation of progress entries (memory leak).
+	if info.Status == "completed" || info.Status == "failed" {
+		status := info.Status
+		time.AfterFunc(progressCleanupDelay, func() {
+			r.progressMu.Lock()
+			// Only delete if the entry still exists with the same terminal status.
+			// This prevents deleting a new merge that reuses the same cameraID.
+			if cur, ok := r.progress[cameraID]; ok && cur == entry && cur.info.Status == status {
+				delete(r.progress, cameraID)
+			}
+			r.progressMu.Unlock()
+		})
 	}
 }
 

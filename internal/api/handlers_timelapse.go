@@ -993,3 +993,222 @@ func (h *Handler) handleTimelapseDownload(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(rec.MergePath)))
 	http.ServeFile(w, r, rec.MergePath)
 }
+
+// --- Task 7: Merge Cancellation ---
+// handleTimelapseMergeCancel handles DELETE /api/timelapse/{cameraId}/merge.
+// Cancels an active rolling merge for the specified camera.
+func (h *Handler) handleTimelapseMergeCancel(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "cameraId")
+
+	if h.timelapseMergeMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
+		return
+	}
+
+	if !h.timelapseMergeMgr.IsActive(cameraID) {
+		writeError(w, http.StatusNotFound, "no active merge for this camera")
+		return
+	}
+
+	h.timelapseMergeMgr.StopSegmentMerge(cameraID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// --- Task 12: Batch Merge ---
+// handleTimelapseBatchMerge handles POST /api/timelapse/batch-merge.
+// Triggers a merge for multiple cameras at once (max 10).
+func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CameraIDs []string `json:"camera_ids"`
+		Duration  string   `json:"duration"`
+		Date      string   `json:"date"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(body.CameraIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "camera_ids must not be empty")
+		return
+	}
+
+	if len(body.CameraIDs) > 10 {
+		writeError(w, http.StatusBadRequest, "batch size exceeds maximum of 10 cameras")
+		return
+	}
+
+	if body.Duration == "" {
+		body.Duration = "natural-day"
+	}
+
+	dur, err := config.ParseMergeDuration(body.Duration)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		return
+	}
+
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	// Load timezone
+	loc := time.UTC
+	if h.config.Timezone != "" && h.config.Timezone != "UTC" {
+		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
+			loc = l
+		}
+	}
+
+	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
+
+	// Parse date
+	refTime := time.Now().In(loc)
+	if body.Date != "" {
+		if parsed, err := time.ParseInLocation("2006-01-02", body.Date, loc); err == nil {
+			refTime = parsed
+		}
+	}
+
+	type batchResult struct {
+		CameraID string `json:"camera_id"`
+		Status   string `json:"status"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	results := make([]batchResult, 0, len(body.CameraIDs))
+	triggered := 0
+
+	for _, cameraID := range body.CameraIDs {
+		// Get FPS from camera's timelapse config
+		fps := 10
+		for i := range h.config.Cameras {
+			if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
+				if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
+					fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
+				}
+				break
+			}
+		}
+
+		mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc)
+
+		// Launch merge in background
+		go func(camID string, mgr *timelapse.PeriodicMergeManager, ref time.Time) {
+			ctx := context.Background()
+			if err := mgr.Run(ctx, camID, ref); err != nil {
+				logger.Warn("timelapse batch merge failed", "camera_id", camID, "duration", body.Duration, "error", err)
+			}
+		}(cameraID, mgr, refTime)
+
+		triggered++
+		results = append(results, batchResult{
+			CameraID: cameraID,
+			Status:   "merge_initiated",
+		})
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"results":   results,
+		"triggered": triggered,
+	})
+}
+
+// --- Task 21: Frame Preview ---
+// handleTimelapsePreview handles GET /api/timelapse/{id}/preview.
+// Returns N evenly-spaced frames as a JSON array.
+func (h *Handler) handleTimelapsePreview(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	rec, err := h.db.GetRecording(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.Format != model.Format("timelapse") {
+		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		return
+	}
+
+	info, err := os.Stat(rec.FilePath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "timelapse directory not found")
+		return
+	}
+	if !info.IsDir() {
+		writeError(w, http.StatusNotFound, "timelapse recording is not a directory")
+		return
+	}
+
+	entries, err := os.ReadDir(rec.FilePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read timelapse directory")
+		return
+	}
+
+	// Collect JPEG frames sorted by name
+	var frames []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+			continue
+		}
+		frames = append(frames, name)
+	}
+	sort.Strings(frames)
+
+	// Parse sample parameter (default 6, max 20)
+	sampleCount := 6
+	if v := r.URL.Query().Get("sample"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			sampleCount = n
+		}
+	}
+	if sampleCount > 20 {
+		sampleCount = 20
+	}
+
+	// Select evenly-spaced frames
+	totalFrames := len(frames)
+	var selected []string
+	if totalFrames <= sampleCount {
+		selected = frames
+	} else {
+		step := float64(totalFrames-1) / float64(sampleCount-1)
+		for i := 0; i < sampleCount; i++ {
+			idx := int(math.Round(float64(i) * step))
+			if idx >= totalFrames {
+				idx = totalFrames - 1
+			}
+			selected = append(selected, frames[idx])
+		}
+	}
+
+	type previewFrame struct {
+		Filename string `json:"filename"`
+		URL      string `json:"url"`
+	}
+
+	result := make([]previewFrame, 0, len(selected))
+	for _, f := range selected {
+		result = append(result, previewFrame{
+			Filename: f,
+			URL:      fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", id, f),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}

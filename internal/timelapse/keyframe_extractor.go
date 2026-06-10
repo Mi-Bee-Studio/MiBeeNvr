@@ -38,8 +38,8 @@ type KeyframeExtractorConfig struct {
 	SegmentDur time.Duration // duration of each segment (default: 10min)
 	IsH265     bool          // true if the source stream is H.265
 
-	Store     SegmentStore  // required
-	DB        RecordingDB   // optional — enables DB recording entries
+	Store SegmentStore // required
+	DB    RecordingDB  // optional — enables DB recording entries
 }
 
 // KeyframeExtractor subscribes to a recorder's StreamHub and captures
@@ -358,10 +358,7 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(segStart).Seconds()
 
-		f := model.FormatH264
-		if k.isH265 {
-			f = model.FormatH265
-		}
+		f := model.FormatTimelapse
 
 		rec := &model.Recording{
 			ID:         fmt.Sprintf("%d", now.UnixNano()),
@@ -372,6 +369,7 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: frameCount,
+			Merged:     true,
 		}
 
 		if err := k.db.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {

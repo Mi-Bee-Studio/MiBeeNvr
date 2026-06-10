@@ -367,3 +367,45 @@ func TestDeleteOriginal_ZeroFrames(t *testing.T) {
 		t.Error("segment dir should still have files when FramesMerged == 0")
 	}
 }
+
+func TestRollingMergeManager_ProgressCleanup(t *testing.T) {
+	oldDelay := progressCleanupDelay
+	progressCleanupDelay = 100 * time.Millisecond
+	t.Cleanup(func() { progressCleanupDelay = oldDelay })
+
+	db := newMockDB()
+	merger := &slowMerger{delay: 10 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.StartSegmentMerge(ctx, "cam-cleanup", segmentDir, outputPath, "")
+
+	// The merge goroutine sleeps 100ms before merging, so the merge completes
+	// at roughly t=110ms. With a 100ms cleanup delay, cleanup fires at ~210ms.
+	// Check at 200ms — entry should still exist (before cleanup).
+	time.Sleep(200 * time.Millisecond)
+
+	info, ok := mgr.GetProgress("cam-cleanup")
+	if !ok {
+		t.Fatal("expected progress entry to exist after merge completion")
+	}
+	if info.Status != "completed" {
+		t.Fatalf("expected status 'completed', got %q", info.Status)
+	}
+
+	// Wait past the cleanup delay (now at 400ms, well past the 210ms cleanup).
+	time.Sleep(200 * time.Millisecond)
+
+	// Progress should have been cleaned up.
+	_, ok = mgr.GetProgress("cam-cleanup")
+	if ok {
+		t.Fatal("expected progress entry to be cleaned up after delay")
+	}
+}

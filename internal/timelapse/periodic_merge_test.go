@@ -1,13 +1,13 @@
 package timelapse
 
 import (
-"context"
-"os"
-"path/filepath"
-"testing"
-"time"
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
 
-"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 func TestNewPeriodicMergeManager(t *testing.T) {
@@ -196,8 +196,8 @@ func TestParseMergeRange_7d_Sunday(t *testing.T) {
 	tm := time.Date(2025, 6, 8, 12, 0, 0, 0, time.UTC)
 	start, end := parseMergeRange(tm, 7*24*time.Hour, nil)
 
-	expectedStart := time.Date(2025, 6, 2, 0, 0, 0, 0, time.UTC)  // Monday
-	expectedEnd := time.Date(2025, 6, 9, 0, 0, 0, 0, time.UTC)    // next Monday
+	expectedStart := time.Date(2025, 6, 2, 0, 0, 0, 0, time.UTC) // Monday
+	expectedEnd := time.Date(2025, 6, 9, 0, 0, 0, 0, time.UTC)   // next Monday
 
 	if !start.Equal(expectedStart) {
 		t.Errorf("expected start %v (Monday), got %v", expectedStart, start)
@@ -277,11 +277,11 @@ func TestPeriodicMergeManager_Run_WithSegments(t *testing.T) {
 
 	merger := &successMerger{delay: 10 * time.Millisecond}
 	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
-			segments: []model.Recording{
-				{ID: "seg-1", CameraID: "test-cam", FilePath: segDir1, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
-				{ID: "seg-2", CameraID: "test-cam", FilePath: segDir2, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
-			},
-		}, newTrackDB(), merger, 10, dataDir, 8*time.Hour, nil)
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segDir1, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			{ID: "seg-2", CameraID: "test-cam", FilePath: segDir2, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+	}, newTrackDB(), merger, 10, dataDir, 8*time.Hour, nil)
 
 	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
 	if err != nil {
@@ -298,10 +298,10 @@ func TestPeriodicMergeManager_Run_CancelledContext(t *testing.T) {
 
 	merger := &successMerger{delay: 1 * time.Second}
 	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
-			segments: []model.Recording{
-				{ID: "seg-1", CameraID: "test-cam", FilePath: segDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
-			},
-		}, newTrackDB(), merger, 10, dataDir, 24*time.Hour, nil)
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+	}, newTrackDB(), merger, 10, dataDir, 24*time.Hour, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -309,5 +309,89 @@ func TestPeriodicMergeManager_Run_CancelledContext(t *testing.T) {
 	err := mgr.Run(ctx, "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
+	}
+}
+
+// --- RetryCounts cleanup tests ---
+
+func TestPeriodicRetryCountCleanup(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, dataDir, 8*time.Hour, nil)
+
+	// Manually insert a stale retryCounts entry for a non-existent segment.
+	mgr.retryMu.Lock()
+	mgr.retryCounts["non-existent-seg"] = retryInfo{
+		count:     1,
+		timestamp: time.Now().Add(-48 * time.Hour), // older than 24h cutoff
+	}
+	mgr.retryMu.Unlock()
+
+	// Run merge — triggers filterEligibleSegments which cleans stale entries.
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify stale entry was removed.
+	mgr.retryMu.Lock()
+	_, exists := mgr.retryCounts["non-existent-seg"]
+	mgr.retryMu.Unlock()
+	if exists {
+		t.Error("expected stale retryCounts entry to be cleaned")
+	}
+}
+
+// --- Progress tracking tests ---
+
+func TestPeriodicMergeProgress(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	camDir := filepath.Join(dataDir, "test-cam")
+	os.MkdirAll(camDir, 0755)
+
+	// Create 3 segments with dummy frames for Go merge.
+	segDir1 := filepath.Join(dataDir, "seg-1")
+	os.MkdirAll(segDir1, 0755)
+	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.WriteFile(filepath.Join(segDir1, "frame_000002.jpg"), []byte("dummy"), 0644)
+
+	segDir2 := filepath.Join(dataDir, "seg-2")
+	os.MkdirAll(segDir2, 0755)
+	os.WriteFile(filepath.Join(segDir2, "frame_000003.jpg"), []byte("dummy"), 0644)
+
+	segDir3 := filepath.Join(dataDir, "seg-3")
+	os.MkdirAll(segDir3, 0755)
+	os.WriteFile(filepath.Join(segDir3, "frame_000004.jpg"), []byte("dummy"), 0644)
+
+	db := newTrackDB()
+	merger := &successMerger{delay: 5 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segDir1, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			{ID: "seg-2", CameraID: "test-cam", FilePath: segDir2, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			{ID: "seg-3", CameraID: "test-cam", FilePath: segDir3, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+	}, db, merger, 10, dataDir, 8*time.Hour, nil)
+
+	// Run merge which should produce progress updates.
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify progress was tracked for all segments and final is 100.
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for _, id := range []string{"seg-1", "seg-2", "seg-3"} {
+		p, ok := db.progress[id]
+		if !ok {
+			t.Errorf("expected progress entry for %s", id)
+			continue
+		}
+		if p != 100 {
+			t.Errorf("expected final progress 100 for %s, got %d", id, p)
+		}
 	}
 }

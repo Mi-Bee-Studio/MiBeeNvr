@@ -20,9 +20,9 @@ import (
 // mockSegmentStore implements SegmentStore using the real storage.Manager
 // backed by a temp directory for integration-style testing.
 type mockSegmentStore struct {
-	t      *testing.T
-	root   string
-	mu     sync.Mutex
+	t        *testing.T
+	root     string
+	mu       sync.Mutex
 	segments []segmentInfo
 }
 
@@ -475,8 +475,8 @@ func TestKeyframeExtractor_StoresRecordingInDB(t *testing.T) {
 		if rec.CameraID != "cam-1" {
 			t.Errorf("expected camera ID 'cam-1', got %q", rec.CameraID)
 		}
-		if rec.Format != model.FormatH264 {
-			t.Errorf("expected format 'h264', got %q", rec.Format)
+		if rec.Format != model.FormatTimelapse {
+			t.Errorf("expected format 'timelapse', got %q", rec.Format)
 		}
 		if rec.FrameCount == 0 {
 			t.Errorf("expected frame count > 0")
@@ -728,4 +728,53 @@ func countNALUs(data []byte) int {
 		}
 	}
 	return count
+}
+
+func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
+	store := newMockSegmentStore(t)
+	db := newMockRecordingDB()
+	hub := model.NewStreamHub()
+	hub.SetCameraID("cam-1")
+
+	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
+		CameraID:   "cam-1",
+		Interval:   50 * time.Millisecond,
+		SegmentDur: 200 * time.Millisecond,
+		Store:      store,
+		DB:         db,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ext.Start(ctx, hub)
+	defer ext.Stop()
+
+	// Broadcast IDR frames to trigger captures and segment rotation.
+	au := makeH264AU(7, 8, 5)
+	for i := 0; i < 5; i++ {
+		hub.Broadcast(1000, au, true)
+		time.Sleep(60 * time.Millisecond)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	// Should have at least one recording in DB.
+	if db.recordingCount() < 1 {
+		t.Fatalf("expected at least 1 recording in DB, got %d", db.recordingCount())
+	}
+
+	// Verify FormatTimelapse and Merged=true on all recordings.
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for _, rec := range db.recs {
+		if rec.Format != model.FormatTimelapse {
+			t.Errorf("expected format %q, got %q", model.FormatTimelapse, rec.Format)
+		}
+		if !rec.Merged {
+			t.Errorf("expected Merged=true for keyframe recording %q", rec.ID)
+		}
+		if rec.FrameCount == 0 {
+			t.Errorf("expected frame count > 0")
+		}
+	}
 }
