@@ -15,6 +15,8 @@
   let saving = $state(false);
   let timezoneDisplay = $state('UTC');
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let intervalError = $state('');
+  let fpsError = $state('');
 
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -35,6 +37,21 @@
     } catch (e) {
       console.warn('Failed to load settings:', e);
     }
+  }
+
+  function parseGoDurationMs(s: string): number | null {
+    if (!s || !s.trim()) return null;
+    if (!/^[+-]?(?:\d+(?:\.\d+)?(?:ns|us|ms|[smh]))+$/.test(s.trim())) return null;
+    const parts = s.trim().match(/\d+(?:\.\d+)?(?:ns|us|ms|[smh])/g);
+    if (!parts) return null;
+    const units: Record<string, number> = { ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+    let total = 0;
+    for (const p of parts) {
+      const m = p.match(/(\d+(?:\.\d+)?)(ns|us|ms|[smh])/);
+      if (!m) return null;
+      total += parseFloat(m[1]) * (units[m[2]] ?? 0);
+    }
+    return total;
   }
 
   function updateField<K extends keyof TimelapseConfig>(key: K, value: TimelapseConfig[K]) {
@@ -100,7 +117,7 @@
   }
 
   async function saveConfig() {
-    if (!config || saving) return;
+    if (!config || saving || hasErrors()) return;
     saving = true;
     try {
       await updateTimelapseConfig(cameraId, config);
@@ -116,6 +133,28 @@
     if (cameraId) loadConfig();
     return () => { if (saveTimer) clearTimeout(saveTimer); };
   });
+
+  $effect(() => {
+    if (!config) return;
+    // Validate interval
+    if (config.interval) {
+      const secs = parseGoDurationMs(config.interval);
+      intervalError = (secs !== null && secs >= 1) ? '' : t('timelapse.invalidInterval');
+    } else {
+      intervalError = '';
+    }
+    // Validate FPS
+    const fps = config.merge_output_fps;
+    if (fps !== undefined && fps !== null) {
+      fpsError = (Number.isInteger(fps) && fps >= 1 && fps <= 60) ? '' : t('timelapse.invalidFps');
+    } else {
+      fpsError = '';
+    }
+  });
+
+  function hasErrors() {
+    return intervalError !== '' || fpsError !== '';
+  }
 </script>
 
 <details class="mt-6 border th-border rounded-lg"
@@ -163,11 +202,15 @@
             <input
               id="timelapse-interval"
               type="text"
-              class="input"
+              class="input {intervalError ? 'input-error' : ''}"
               value={config.interval}
               oninput={(e) => updateField('interval', (e.target as HTMLInputElement).value)}
             />
+            {#if intervalError}
+            <p class="text-xs mt-1 th-text-danger">{intervalError}</p>
+            {:else}
             <p class="th-text-muted text-xs mt-1">{t('timelapse.intervalHint')}</p>
+            {/if}
           </div>
 
           <!-- Frame Source -->
@@ -184,6 +227,7 @@
               <option value="rtsp_keyframe">RTSP Keyframe</option>
               <option value="mjpeg">MJPEG</option>
             </select>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.frameSourceHint')}</p>
           </div>
 
           <!-- Snapshot URL (shown only when frame_source is 'snapshot') -->
@@ -297,6 +341,7 @@
               <option value="mp4">{t('timelapse.mergeModeMp4')}</option>
               <option value="jpeg">{t('timelapse.mergeModeJpeg')}</option>
             </select>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.mergeModeHint')}</p>
           </div>
 
           <!-- Daily Merge -->
@@ -327,6 +372,7 @@
               <option value="7d">{t('timelapse.mergeDuration7d')}</option>
               <option value="30d">{t('timelapse.mergeDuration30d')}</option>
             </select>
+            <p class="th-text-muted text-xs mt-1">{t('timelapse.mergeDurationHint')}</p>
           </div>
 
           <!-- Merge Output FPS -->
@@ -335,13 +381,17 @@
             <input
               id="timelapse-merge-fps"
               type="number"
-              class="input"
+              class="input {fpsError ? 'input-error' : ''}"
               min="1"
               max="60"
               value={config.merge_output_fps || 30}
               oninput={(e) => updateField('merge_output_fps', Number((e.target as HTMLInputElement).value))}
             />
+            {#if fpsError}
+            <p class="text-xs mt-1 th-text-danger">{fpsError}</p>
+            {:else}
             <p class="th-text-muted text-xs mt-1">{t('timelapse.mergeOutputFpsHint')}</p>
+            {/if}
           </div>
 
         {/if}

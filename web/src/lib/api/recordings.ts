@@ -275,6 +275,29 @@ export async function triggerTimelapseMerge(cameraId: string, date?: string, dur
   }
 }
 
+export async function batchMergeTimelapse(params: {
+  camera_ids: string[];
+  duration?: string;
+  date?: string;
+}): Promise<{ results: Array<{ camera_id: string; status: string; error?: string }>; triggered: number }> {
+  const url = `${API_BASE}/timelapse/batch-merge`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const authHeader = getAuthHeader();
+  if (authHeader) headers['Authorization'] = authHeader;
+
+  const body = JSON.stringify({
+    camera_ids: params.camera_ids,
+    duration: params.duration || 'natural-day',
+    date: params.date || '',
+  });
+
+  const res = await fetch(url, { method: 'POST', headers, body });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ error: 'Failed to batch merge' }));
+    throw new ApiRequestError(errorData.error || `HTTP ${res.status}`, errorData.code);
+  }
+  return res.json();
+}
 export function subscribeTimelapseMergeProgress(
   cameraId: string,
   onProgress: (data: any) => void,
@@ -389,4 +412,28 @@ export async function setArchiveRetention(
     body: JSON.stringify({ retention_days: retentionDays }),
     signal,
   });
+}
+
+// --- Timelapse Merge Cancel ---
+
+export async function cancelMerge(cameraId: string): Promise<void> {
+  const url = `${API_BASE}/timelapse/${cameraId}/merge`;
+  const headers: Record<string, string> = {};
+  const authHeader = getAuthHeader();
+  if (authHeader) headers['Authorization'] = authHeader;
+  const res = await fetch(url, { method: 'DELETE', headers });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ error: 'Failed to cancel merge' }));
+    throw new ApiRequestError(errorData.error || `HTTP ${res.status}`, errorData.code);
+  }
+}
+
+export interface TimelapsePreviewFrame {
+  url: string;
+  filename: string;
+  timestamp: string;
+}
+
+export async function fetchTimelapsePreview(id: string, sample: number = 6): Promise<TimelapsePreviewFrame[]> {
+  return apiRequest<TimelapsePreviewFrame[]>(`/timelapse/${id}/preview?sample=${sample}`);
 }

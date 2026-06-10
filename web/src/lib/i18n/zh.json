@@ -324,6 +324,7 @@
   "timelapse.deleteOriginal": "转换后删除原始帧",
   "timelapse.saveFailed": "保存延时摄影设置失败",
   "timelapse.merge": "合并",
+  "timelapse.batchMerge": "批量合并",
   "timelapse.tierFFmpeg": "FFmpeg",
   "timelapse.tierGo": "内置",
   "timelapse.tierJPEG": "JPEG",
@@ -343,6 +344,11 @@
   "timelapse.mergeDuration30d": "30天",
   "timelapse.mergeOutputFps": "合并输出帧率",
   "timelapse.mergeOutputFpsHint": "合并视频的输出帧率（1-60）",
+  "timelapse.frameSourceHint": "自动检测最佳方法。HTTP 摄像头请使用快照模式，RTSP 流请使用 RTSP 关键帧。",
+  "timelapse.mergeModeHint": "自动模式会优先使用 FFmpeg（如可用）。Go 模式无需外部依赖。",
+  "timelapse.mergeDurationHint": "控制视频片段的合并频率。",
+  "timelapse.invalidInterval": "请输入有效的时间间隔（如 30s, 1m, 5m），且至少为 1 秒",
+  "timelapse.invalidFps": "必须在 1 到 60 之间",
   "pagination.jumpToPage": "跳转到",
   "pagination.of": "/",
   "common.backToTop": "回到顶部",
@@ -1105,5 +1111,11 @@
   "dashboard.tab.health": "健康历史",
   "dashboard.tab.transcoding": "转码历史",
   "transcoding.timeout": "下载超时（5分钟）",
-  "transcoding.network_error": "下载中断 — 请检查网络连接"
+  "transcoding.network_error": "下载中断 — 请检查网络连接",
+
+  "detail.cancelMerge": "取消合并",
+  "detail.cancelMergeConfirm": "确定要取消合并吗？合并任务将被停止。",
+  "detail.mergeCancelled": "已取消合并",
+  "detail.mergeEta": "预计剩余：~{time}",
+  "detail.timelapsePreview": "预览帧"
 }

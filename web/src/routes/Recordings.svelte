@@ -7,6 +7,7 @@
     deleteRecording,
     batchDeleteRecordings,
     downloadRecording,
+    batchMergeTimelapse,
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
@@ -23,6 +24,7 @@
   import CompactList from '../components/library/CompactList.svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
+  import TimelineBar from '../components/timelapse/TimelineBar.svelte';
 
   // ── URL params initialization ──
   let initialViewMode: 'gallery' | 'list' = 'gallery';
@@ -113,6 +115,13 @@ function detectMergeChanges(recordingsList: Recording[]) {
   }
 }
 
+// ── Batch merge state ──
+let batchMergeDuration = $state('natural-day');
+let batchMerging = $state(false);
+
+// ── TimelineBar state ──
+let timeRange = $state<'week' | 'month' | '3months'>('week');
+
   // ── Derived ──
   let apiFormat = $derived.by(() => {
     if (formatPill === 'Timelapse') return 'timelapse';
@@ -122,6 +131,10 @@ function detectMergeChanges(recordingsList: Recording[]) {
   let useTimelapseApi = $derived(formatPill === 'Timelapse');
   let currentPage = $derived(offset > 0 || limit > 0 ? Math.floor(offset / limit) + 1 : 1);
   let totalPages = $derived(totalRecordings > 0 && limit > 0 ? Math.ceil(totalRecordings / limit) : 0);
+  let selectedTimelapseRecordings = $derived(
+    recordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
+  );
+  let showBatchMergeButton = $derived(selectedTimelapseRecordings.length >= 2);
 
   // ── Helper functions ──
   function getCameraName(cameraId: string): string {
@@ -434,6 +447,25 @@ function detectMergeChanges(recordingsList: Recording[]) {
     await downloadRecording(recordingId);
   }
 
+  async function handleBatchMerge() {
+    if (selectedTimelapseRecordings.length < 2) return;
+    batchMerging = true;
+    try {
+      const camera_ids = [...new Set(selectedTimelapseRecordings.map(r => r.camera_id))];
+      await batchMergeTimelapse({
+        camera_ids,
+        duration: batchMergeDuration,
+        date: selectedDate || undefined,
+      });
+      showToast(t('detail.mergeCompleted'), 'success');
+      selectedIds = new Set();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('common.error'), 'error');
+    } finally {
+      batchMerging = false;
+    }
+  }
+
   // ── Deferred load timers ──
   let timelineLoadTimeout: number;
   let listLoadTimeout: number;
@@ -613,6 +645,12 @@ function detectMergeChanges(recordingsList: Recording[]) {
         </div>
       {:else if viewMode === 'gallery'}
         <!-- ── Gallery view ── -->
+        <TimelineBar
+          {recordings}
+          bind:currentMonth
+          bind:timeRange
+          onselectDay={(date: string) => selectedDate = date}
+        />
         <GalleryGrid
           bind:selectedDate
           {recordings}
@@ -667,6 +705,27 @@ function detectMergeChanges(recordingsList: Recording[]) {
         class="btn btn-primary btn-sm"
       >
         {t('transcoding.transcode_selected')}
+      </button>
+    {/if}
+    {#if showBatchMergeButton}
+      <select
+        class="input input-sm w-auto"
+        bind:value={batchMergeDuration}
+        disabled={batchMerging}
+      >
+        <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+        <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+        <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+        <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+        <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+        <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+      </select>
+      <button
+        onclick={handleBatchMerge}
+        class="btn btn-primary btn-sm"
+        disabled={batchMerging}
+      >
+        {t('timelapse.batchMerge')}
       </button>
     {/if}
     <button

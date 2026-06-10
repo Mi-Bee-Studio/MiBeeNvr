@@ -151,8 +151,11 @@ export {
   getTimelapseFrames,
   loadTimelapseFrameBlob,
   triggerTimelapseMerge,
+  batchMergeTimelapse,
   subscribeTimelapseMergeProgress,
   getTimelapseThumbnailUrl,
+  cancelMerge,
+  fetchTimelapsePreview,
 } from './recordings';
 
 export type {
@@ -165,6 +168,7 @@ export type {
   ArchiveGroup,
   ArchiveListResponse,
   TimelapseFrame,
+  TimelapsePreviewFrame,
 } from './recordings';
 
 // Settings — cleanup, webdav, merge, features

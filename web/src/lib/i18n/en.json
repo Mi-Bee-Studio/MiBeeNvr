@@ -324,6 +324,7 @@
   "timelapse.deleteOriginal": "Delete original frames after conversion",
   "timelapse.saveFailed": "Failed to save timelapse settings",
   "timelapse.merge": "Merge",
+  "timelapse.batchMerge": "Batch Merge",
   "timelapse.tierFFmpeg": "FFmpeg",
   "timelapse.tierGo": "Built-in",
   "timelapse.tierJPEG": "JPEG",
@@ -343,6 +344,11 @@
   "timelapse.mergeDuration30d": "30 days",
   "timelapse.mergeOutputFps": "Merge Output FPS",
   "timelapse.mergeOutputFpsHint": "FPS of merged output video (1-60)",
+  "timelapse.frameSourceHint": "Auto detects best method. Use Snapshot for HTTP cameras, RTSP Keyframe for RTSP streams.",
+  "timelapse.mergeModeHint": "Auto uses FFmpeg if available. Go works without external dependencies.",
+  "timelapse.mergeDurationHint": "Controls how often segments are combined into a single video.",
+  "timelapse.invalidInterval": "Must be a valid duration (e.g. 30s, 1m, 5m) and at least 1 second",
+  "timelapse.invalidFps": "Must be between 1 and 60",
   "pagination.jumpToPage": "Go to page",
   "pagination.of": "of",
   "common.backToTop": "Back to top",
@@ -1109,5 +1115,11 @@
   "dashboard.tab.health": "Health History",
   "dashboard.tab.transcoding": "Transcoding",
   "transcoding.timeout": "Download timed out after 5 minutes",
-  "transcoding.network_error": "Download interrupted — check your connection"
+  "transcoding.network_error": "Download interrupted — check your connection",
+
+  "detail.cancelMerge": "Cancel Merge",
+  "detail.cancelMergeConfirm": "Are you sure you want to cancel the merge? The merge task will be stopped.",
+  "detail.mergeCancelled": "Merge cancelled",
+  "detail.mergeEta": "ETA: ~{time}",
+  "detail.timelapsePreview": "Preview Frames"
 }

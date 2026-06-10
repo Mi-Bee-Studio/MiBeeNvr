@@ -322,6 +322,15 @@
     box-shadow: var(--focus-ring);
   }
 
+  .input-error {
+    border-color: var(--color-danger);
+  }
+  .input-error:focus {
+    border-color: var(--color-danger);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.3);
+  }
+
+
   .input-label {
     display: block;
     font-size: 0.875rem;

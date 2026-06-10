@@ -74,6 +74,15 @@
     return 'badge-neutral';
   });
 
+  let mergeTierLabel = $derived.by(() => {
+    if (!recording.merge_tier) return '';
+    const tier = recording.merge_tier.toLowerCase();
+    if (tier === 'ffmpeg') return 'FFmpeg';
+    if (tier === 'go') return 'Go';
+    if (tier === 'jpeg') return 'JPEG';
+    return recording.merge_tier;
+  });
+
   function getCameraName(cameraId: string): string {
     const cam = cameras.find((c) => c.id === cameraId);
     return cam ? cam.name : cameraId;
@@ -269,6 +278,15 @@
           title={recording.merge_status === 'failed' && recording.merge_error ? recording.merge_error : ''}
         >
           {mergeStatusLabel}
+        </span>
+      {/if}
+
+      <!-- Merge tier badge -->
+      {#if isMerged && recording.merge_tier}
+        <span
+          class="badge text-[10px] leading-none py-0.5 px-1.5 bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-300"
+        >
+          {mergeTierLabel}
         </span>
       {/if}
 
