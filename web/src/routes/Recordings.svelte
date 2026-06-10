@@ -24,7 +24,6 @@
   import CompactList from '../components/library/CompactList.svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
-  import TimelineBar from '../components/timelapse/TimelineBar.svelte';
 
   // ── URL params initialization ──
   let initialViewMode: 'gallery' | 'list' = 'gallery';
@@ -119,8 +118,6 @@ function detectMergeChanges(recordingsList: Recording[]) {
 let batchMergeDuration = $state('natural-day');
 let batchMerging = $state(false);
 
-// ── TimelineBar state ──
-let timeRange = $state<'week' | 'month' | '3months'>('week');
 
   // ── Derived ──
   let apiFormat = $derived.by(() => {
@@ -645,12 +642,6 @@ let timeRange = $state<'week' | 'month' | '3months'>('week');
         </div>
       {:else if viewMode === 'gallery'}
         <!-- ── Gallery view ── -->
-        <TimelineBar
-          {recordings}
-          bind:currentMonth
-          bind:timeRange
-          onselectDay={(date: string) => selectedDate = date}
-        />
         <GalleryGrid
           bind:selectedDate
           {recordings}
