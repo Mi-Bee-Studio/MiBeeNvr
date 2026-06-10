@@ -3,7 +3,7 @@
   import { getTranscodingCheck, getTranscodingStatus, getFFmpegStatus, downloadFFmpeg, retryDownload, getTranscodingSettings, updateTranscodingSettings } from '$lib/api/transcoding';
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { t } from '$lib/i18n';
-  import { AlertCircle, AlertTriangle, Download, RotateCw, Cpu, ChevronDown, ChevronUp } from 'lucide-svelte';
+  import { AlertCircle, AlertTriangle, Download, RotateCw, Cpu, ChevronDown, ChevronUp, XCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
 
   // Transcoding state
@@ -34,6 +34,15 @@
     const remaining = ffmpegStatus.total_bytes - ffmpegStatus.downloaded_bytes;
     const eta = speed > 0 ? remaining / speed : 0;
     return { speed, eta };
+  });
+
+  // Display state machine: derive current UI state from API responses
+  let displayState = $derived.by(() => {
+    if (ffmpegStatus.status === 'downloading') return 'downloading';
+    if (ffmpegStatus.status === 'failed') return 'failed';
+    if (transcodingEnabled && ffmpegStatus.status === 'available') return 'enabled';
+    if (ffmpegStatus.status === 'available') return 'available';
+    return 'not_installed';
   });
 
   function formatSpeed(bytesPerSec: number): string {
@@ -85,22 +94,7 @@
     }
   }
 
-  async function handleTranscodingToggle() {
-    if (transcodingEnabled) {
-      // Disabling — persist to backend, no self-check needed
-      try {
-        await updateTranscodingSettings({ enabled: false });
-        transcodingEnabled = false;
-        stopFfmpegPolling();
-        stopQueuePolling();
-        managerStatus = null;
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : 'Failed to disable transcoding', 'error');
-      }
-      return;
-    }
-
-    // Enabling — run self-check first
+  async function handleEnable() {
     checkingTranscoding = true;
     transcodingCheckError = '';
     try {
@@ -139,6 +133,18 @@
       showToast(transcodingCheckError, 'error');
     } finally {
       checkingTranscoding = false;
+    }
+  }
+
+  async function handleDisable() {
+    try {
+      await updateTranscodingSettings({ enabled: false });
+      transcodingEnabled = false;
+      stopFfmpegPolling();
+      stopQueuePolling();
+      managerStatus = null;
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to disable transcoding', 'error');
     }
   }
 
@@ -221,6 +227,13 @@
     }
   }
 
+  function handleCancelDownload() {
+    stopFfmpegPolling();
+    ffmpegDownloading = false;
+    downloadStartTime = null;
+    ffmpegStatus = { ...ffmpegStatus, status: 'not_installed', progress: 0, error: '' };
+  }
+
   // Transcoding Queue Status Polling
   function startQueuePolling() {
     stopQueuePolling();
@@ -253,223 +266,257 @@
   });
 </script>
 
-<div class="card p-8 border th-border">
-  <div class="flex items-center justify-between mb-1">
-    <div>
-      <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
-      <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+{#if displayState === 'not_installed'}
+  <!-- State: Not Installed — FFmpeg not available, prompt download -->
+  <div class="card p-8 border th-border">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
+        <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)]">
+        {t('transcoding.state.not_installed')}
+      </span>
     </div>
-    <button
-      type="button"
-      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {transcodingEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-      onclick={handleTranscodingToggle}
-      onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTranscodingToggle(); } }}
-      role="switch"
-      aria-checked={transcodingEnabled}
-      disabled={checkingTranscoding}
-    >
-      {#if checkingTranscoding}
-        <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform translate-x-1">
-          <span class="spinner !w-4 !h-4 !border-2"></span>
-        </span>
-      {:else}
-        <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {transcodingEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-      {/if}
-    </button>
+
+    <p class="mt-4 text-sm th-text-secondary">{t('transcoding.info.download_hint')}</p>
+
+    <div class="mt-4">
+      <button
+        type="button"
+        class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-info)] text-white hover:opacity-90 transition-opacity"
+        onclick={handleDownloadFFmpeg}
+      >
+        <Download size={16} />
+        {t('transcoding.action.download')}
+      </button>
+    </div>
+
+    <!-- Hardware info collapsible (collapsed by default) -->
+    {#if hardwareInfo}
+      <button
+        type="button"
+        class="mt-4 flex items-center gap-1.5 text-sm font-medium th-text-secondary hover:th-text-primary transition-colors"
+        onclick={() => showHardwareInfo = !showHardwareInfo}
+      >
+        <Cpu size={14} />
+        <span>{t('transcoding.hardware_info')}</span>
+        {#if showHardwareInfo}
+          <ChevronUp size={14} />
+        {:else}
+          <ChevronDown size={14} />
+        {/if}
+      </button>
+      <div class="mt-2 overflow-hidden transition-all duration-200 {showHardwareInfo ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}">
+        <div class="p-3 rounded-md th-bg-hover border th-border grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.cpu_cores')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.total_cores}</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.memory')}</div>
+            <div class="text-sm font-medium th-text-primary">{Math.round(hardwareInfo.total_memory_mb)} MB</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.encoder')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.h264_encoder || 'software'}</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.estimated_fps')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.estimated_fps} FPS</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.max_concurrent')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.max_concurrent_streams}</div>
+          </div>
+        </div>
+        {#if hardwareInfo.estimated_fps < 15}
+          <div class="mt-2 p-2 rounded-md bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/30">
+            <div class="flex items-center gap-1.5 text-xs text-[var(--color-warning-light)]">
+              <AlertTriangle size={12} />
+              <span>{t('transcoding.warning_hardware')}</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 
-  <!-- Self-check error -->
-  {#if transcodingCheckError}
-    <div class="mt-3 p-3 rounded-md bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30">
-      <div class="flex items-center gap-2 text-sm text-[var(--color-danger-light)]">
-        <AlertCircle size={16} />
-        <span>{transcodingCheckError}</span>
+{:else if displayState === 'downloading'}
+  <!-- State: Downloading — FFmpeg download in progress with progress bar -->
+  <div class="card p-8 border th-border">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
+        <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-[var(--color-info)]/10 text-[var(--color-info)]">
+        {t('transcoding.state.downloading')}
+      </span>
+    </div>
+
+    <p class="mt-4 text-sm th-text-secondary">{t('transcoding.info.downloading_hint')}</p>
+
+    <!-- Progress bar -->
+    <div class="mt-4">
+      <div class="flex items-center justify-between text-xs th-text-secondary mb-1">
+        <span>{t('transcoding.download_progress')}</span>
+        <span>{ffmpegStatus.progress}%</span>
+      </div>
+      <div class="w-full h-2 rounded-full th-bg-tertiary overflow-hidden">
+        <div
+          class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
+          style="width: {Math.max(ffmpegStatus.progress, 2)}%"
+        ></div>
       </div>
     </div>
-  {/if}
 
-  <!-- Self-check passed indicator -->
-  {#if transcodingEnabled && transcodingCheck?.supported}
-    <div class="mt-3 p-3 rounded-md bg-[var(--color-success)]/10 border border-[var(--color-success)]/30">
-      <div class="flex items-center gap-2 text-sm text-[var(--color-success-light)]">
-        <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-        <span>{t('transcoding.self_check_passed')}</span>
-      </div>
-    </div>
-  {/if}
-
-  <!-- FFmpeg Status Panel -->
-  {#if transcodingEnabled}
-    <div class="mt-4 pt-4 border-t th-border">
-      <h4 class="text-sm font-semibold th-text-primary mb-3">{t('transcoding.ffmpeg_status')}</h4>
-
-      <div class="p-4 rounded-md th-bg-hover border th-border">
-        <!-- Status indicator -->
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            {#if ffmpegStatus.status === 'available'}
-              <span class="w-2.5 h-2.5 rounded-full bg-[var(--color-success)]"></span>
-              <span class="text-sm th-text-primary">{t('transcoding.ffmpeg_available')}</span>
-              {#if ffmpegStatus.version}
-                <span class="text-xs th-text-secondary">{t('transcoding.ffmpeg_version', { version: ffmpegStatus.version })}</span>
-              {/if}
-            {:else if ffmpegStatus.status === 'downloading'}
-              <span class="w-2.5 h-2.5 rounded-full bg-[var(--color-info)] animate-pulse"></span>
-              <span class="text-sm th-text-primary">{t('transcoding.ffmpeg_downloading')}</span>
-            {:else if ffmpegStatus.status === 'failed'}
-              <span class="w-2.5 h-2.5 rounded-full bg-[var(--color-danger)]"></span>
-              <span class="text-sm th-text-primary">{t('transcoding.ffmpeg_failed')}</span>
-            {:else}
-              <span class="w-2.5 h-2.5 rounded-full bg-[var(--color-warning)]"></span>
-              <span class="text-sm th-text-primary">{t('transcoding.ffmpeg_not_installed')}</span>
-            {/if}
-          </div>
-
-          <!-- Action button -->
-          <div>
-            {#if ffmpegStatus.status === 'not_installed'}
-              <button
-                type="button"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--color-info)] text-white hover:opacity-90 transition-opacity"
-                onclick={handleDownloadFFmpeg}
-              >
-                <Download size={12} />
-                {t('transcoding.ffmpeg_download')}
-              </button>
-            {:else if ffmpegStatus.status === 'failed'}
-              <button
-                type="button"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--color-warning)] text-white hover:opacity-90 transition-opacity"
-                onclick={handleRetryDownload}
-              >
-                <RotateCw size={12} />
-                {t('transcoding.ffmpeg_retry')}
-              </button>
-            {:else if ffmpegStatus.status === 'available'}
-              <!-- no action needed -->
-            {:else}
-              <!-- downloading in progress -->
-            {/if}
-          </div>
-        </div>
-
-        <!-- Progress bar (downloading) -->
-        {#if ffmpegDownloading || ffmpegStatus.status === 'downloading'}
-          <div class="mt-3">
-            <div class="flex items-center justify-between text-xs th-text-secondary mb-1">
-              <span>{t('transcoding.download_progress')}</span>
-              <span>{ffmpegStatus.progress}%</span>
-            </div>
-            <div class="w-full h-2 rounded-full th-bg-tertiary overflow-hidden">
-              <div
-                class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
-                style="width: {Math.max(ffmpegStatus.progress, 2)}%"
-              ></div>
-            </div>
-          </div>
-
-          <!-- Download speed + ETA -->
-          <div class="flex items-center gap-3 mt-2 text-xs th-text-secondary">
-            {#if downloadInfo.speed > 0}
-              <span>{t('transcoding.download_speed')}: {formatSpeed(downloadInfo.speed)}</span>
-            {/if}
-            {#if downloadInfo.eta > 0}
-              <span>{t('transcoding.download_eta')}: ~{formatEta(downloadInfo.eta)}</span>
-            {/if}
-          </div>
-        {/if}
-
-        <!-- Error detail -->
-        {#if ffmpegStatus.status === 'failed' && ffmpegStatus.error}
-          <div class="mt-2 text-xs text-[var(--color-danger-light)]">{ffmpegStatus.error}</div>
-        {/if}
-      </div>
-
-      <!-- Hardware Info Card -->
-      {#if hardwareInfo}
-        <button
-          type="button"
-          class="mt-3 flex items-center gap-1.5 text-sm font-medium th-text-secondary hover:th-text-primary transition-colors"
-          onclick={() => showHardwareInfo = !showHardwareInfo}
-        >
-          <Cpu size={14} />
-          <span>{t('transcoding.hardware_info')}</span>
-          {#if showHardwareInfo}
-            <ChevronUp size={14} />
-          {:else}
-            <ChevronDown size={14} />
-          {/if}
-        </button>
-
-        <div class="mt-2 overflow-hidden transition-all duration-200 {showHardwareInfo ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}" >
-          <div class="p-3 rounded-md th-bg-hover border th-border grid grid-cols-2 gap-3">
-            <div>
-              <div class="text-xs th-text-secondary">{t('transcoding.cpu_cores')}</div>
-              <div class="text-sm font-medium th-text-primary">{hardwareInfo.total_cores}</div>
-            </div>
-            <div>
-              <div class="text-xs th-text-secondary">{t('transcoding.memory')}</div>
-              <div class="text-sm font-medium th-text-primary">{Math.round(hardwareInfo.total_memory_mb)} MB</div>
-            </div>
-            <div>
-              <div class="text-xs th-text-secondary">{t('transcoding.encoder')}</div>
-              <div class="text-sm font-medium th-text-primary">{hardwareInfo.h264_encoder || 'software'}</div>
-            </div>
-            <div>
-              <div class="text-xs th-text-secondary">{t('transcoding.estimated_fps')}</div>
-              <div class="text-sm font-medium th-text-primary">{hardwareInfo.estimated_fps} FPS</div>
-            </div>
-            <div>
-              <div class="text-xs th-text-secondary">{t('transcoding.max_concurrent')}</div>
-              <div class="text-sm font-medium th-text-primary">{hardwareInfo.max_concurrent_streams}</div>
-            </div>
-          </div>
-
-          {#if hardwareInfo.estimated_fps < 15}
-            <div class="mt-2 p-2 rounded-md bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/30">
-              <div class="flex items-center gap-1.5 text-xs text-[var(--color-warning-light)]">
-                <AlertTriangle size={12} />
-                <span>{t('transcoding.warning_hardware')}</span>
-              </div>
-            </div>
-          {/if}
-        </div>
+    <!-- Download speed + ETA -->
+    <div class="flex items-center gap-3 mt-2 text-xs th-text-secondary">
+      {#if downloadInfo.speed > 0}
+        <span>{t('transcoding.download_speed')}: {formatSpeed(downloadInfo.speed)}</span>
+      {/if}
+      {#if downloadInfo.eta > 0}
+        <span>{t('transcoding.download_eta')}: ~{formatEta(downloadInfo.eta)}</span>
       {/if}
     </div>
-  {/if}
 
-  <!-- Transcoding Options -->
-  {#if transcodingEnabled && ffmpegStatus.status === 'available'}
-    <div class="mt-4 pt-4 border-t th-border">
-      <h4 class="text-sm font-semibold th-text-primary mb-3">{t('transcoding.options')}</h4>
+    <!-- Cancel button (one primary action) -->
+    <div class="mt-4">
+      <button
+        type="button"
+        class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg border th-border th-text-primary th-bg-hover hover:opacity-80 transition-opacity"
+        onclick={handleCancelDownload}
+      >
+        <XCircle size={16} />
+        {t('transcoding.action.cancel')}
+      </button>
+    </div>
+  </div>
 
-      <div class="space-y-3">
-        <!-- Max Workers -->
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm th-text-primary">{t('transcoding.max_workers')}</div>
-            <div class="text-xs th-text-secondary">{t('transcoding.max_workers_desc')}</div>
-          </div>
-          <select
-            class="input w-20 text-center"
-            bind:value={transcodingMaxWorkers}
-            onchange={async () => { await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers }); showToast(t('common.saved'), 'success'); }}
-          >
-            <option value={1}>1</option>
-            <option value={2}>2</option>
-            <option value={3}>3</option>
-            <option value={4}>4</option>
-          </select>
+{:else if displayState === 'available'}
+  <!-- State: Available — FFmpeg ready, one-click to enable transcoding -->
+  <div class="card p-8 border th-border">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
+        <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-[var(--color-warning)]/10 text-[var(--color-warning)]">
+        {t('transcoding.state.available')}
+      </span>
+    </div>
+
+    <p class="mt-4 text-sm th-text-secondary">{t('transcoding.info.ready_hint')}</p>
+
+    <!-- Enable button (one primary action) -->
+    <div class="mt-4">
+      <button
+        type="button"
+        class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-success)] text-white hover:opacity-90 transition-opacity disabled:opacity-60"
+        onclick={handleEnable}
+        disabled={checkingTranscoding}
+      >
+        {#if checkingTranscoding}
+          <span class="spinner !w-4 !h-4 !border-2"></span>
+          {t('transcoding.self_check_running')}
+        {:else}
+          {t('transcoding.action.enable')}
+        {/if}
+      </button>
+    </div>
+
+    <!-- Hardware capabilities always visible -->
+    {#if hardwareInfo}
+      <div class="mt-4 p-3 rounded-md th-bg-hover border th-border grid grid-cols-2 gap-3">
+        <div>
+          <div class="text-xs th-text-secondary">{t('transcoding.cpu_cores')}</div>
+          <div class="text-sm font-medium th-text-primary">{hardwareInfo.total_cores}</div>
+        </div>
+        <div>
+          <div class="text-xs th-text-secondary">{t('transcoding.memory')}</div>
+          <div class="text-sm font-medium th-text-primary">{Math.round(hardwareInfo.total_memory_mb)} MB</div>
+        </div>
+        <div>
+          <div class="text-xs th-text-secondary">{t('transcoding.encoder')}</div>
+          <div class="text-sm font-medium th-text-primary">{hardwareInfo.h264_encoder || 'software'}</div>
+        </div>
+        <div>
+          <div class="text-xs th-text-secondary">{t('transcoding.estimated_fps')}</div>
+          <div class="text-sm font-medium th-text-primary">{hardwareInfo.estimated_fps} FPS</div>
+        </div>
+        <div>
+          <div class="text-xs th-text-secondary">{t('transcoding.max_concurrent')}</div>
+          <div class="text-sm font-medium th-text-primary">{hardwareInfo.max_concurrent_streams}</div>
         </div>
       </div>
-    </div>
-  {/if}
+      {#if hardwareInfo.estimated_fps < 15}
+        <div class="mt-2 p-2 rounded-md bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/30">
+          <div class="flex items-center gap-1.5 text-xs text-[var(--color-warning-light)]">
+            <AlertTriangle size={12} />
+            <span>{t('transcoding.warning_hardware')}</span>
+          </div>
+        </div>
+      {/if}
+    {/if}
+  </div>
 
-  <!-- Queue Status (when enabled) -->
-  {#if transcodingEnabled && ffmpegStatus.status === 'available'}
+{:else if displayState === 'enabled'}
+  <!-- State: Enabled — Transcoding active with queue monitoring and controls -->
+  <div class="card p-8 border th-border">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
+        <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-[var(--color-success)]/10 text-[var(--color-success)]">
+        {t('transcoding.state.enabled')}
+      </span>
+    </div>
+
+    <!-- Self-check error -->
+    {#if transcodingCheckError}
+      <div class="mt-3 p-3 rounded-md bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30">
+        <div class="flex items-center gap-2 text-sm text-[var(--color-danger-light)]">
+          <AlertCircle size={16} />
+          <span>{transcodingCheckError}</span>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Self-check passed indicator -->
+    {#if transcodingCheck?.supported}
+      <div class="mt-3 p-3 rounded-md bg-[var(--color-success)]/10 border border-[var(--color-success)]/30">
+        <div class="flex items-center gap-2 text-sm text-[var(--color-success-light)]">
+          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+          <span>{t('transcoding.self_check_passed')}</span>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Max Workers -->
+    <div class="mt-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm th-text-primary">{t('transcoding.max_workers')}</div>
+          <div class="text-xs th-text-secondary">{t('transcoding.max_workers_desc')}</div>
+        </div>
+        <select
+          class="input w-20 text-center"
+          bind:value={transcodingMaxWorkers}
+          onchange={async () => { await updateTranscodingSettings({ enabled: true, max_workers: transcodingMaxWorkers }); showToast(t('common.saved'), 'success'); }}
+        >
+          <option value={1}>1</option>
+          <option value={2}>2</option>
+          <option value={3}>3</option>
+          <option value={4}>4</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Queue Status -->
     <div class="mt-4 pt-4 border-t th-border">
       <h4 class="text-sm font-semibold th-text-primary mb-3">{t('transcoding.queue_status')}</h4>
-
       {#if managerStatus}
         <!-- Active Jobs -->
         <div class="space-y-3">
@@ -511,7 +558,7 @@
             <div class="text-xs th-text-secondary">{t('transcoding.active_jobs')}</div>
           </div>
           <div class="p-3 rounded-md th-bg-hover border th-border text-center">
-            <div class="text-lg font-semibold th-text-primary">{managerStatus.recent_results?.filter((t: TranscodeTask) => t.status === 'completed').length ?? 0}<span class="text-xs th-color-danger ml-1">{managerStatus.recent_results?.filter((t: TranscodeTask) => t.status === 'failed').length ?? 0}✗</span></div>
+            <div class="text-lg font-semibold th-text-primary">{managerStatus.recent_results?.filter((t: TranscodeTask) => t.status === 'completed').length ?? 0}<span class="text-xs text-[var(--color-danger)] ml-1">{managerStatus.recent_results?.filter((t: TranscodeTask) => t.status === 'failed').length ?? 0}✗</span></div>
             <div class="text-xs th-text-secondary">{t('transcoding.recent_results')}</div>
           </div>
         </div>
@@ -549,7 +596,7 @@
                 </div>
                 {#if task.status === 'failed' && task.error}
                   <details class="mt-1 group">
-                    <summary class="flex items-center gap-1 cursor-pointer text-[10px] th-color-danger select-none">
+                    <summary class="flex items-center gap-1 cursor-pointer text-[10px] text-[var(--color-danger)] select-none">
                       <span>{t('transcoding.error_details')}</span>
                       <span class="th-text-tertiary group-open:rotate-180 transition-transform">▼</span>
                     </summary>
@@ -566,5 +613,118 @@
         <div class="text-sm th-text-tertiary text-center py-2">{t('common.loading')}</div>
       {/if}
     </div>
-  {/if}
-</div>
+
+    <!-- Hardware info collapsible (collapsed by default) -->
+    {#if hardwareInfo}
+      <button
+        type="button"
+        class="mt-4 flex items-center gap-1.5 text-sm font-medium th-text-secondary hover:th-text-primary transition-colors"
+        onclick={() => showHardwareInfo = !showHardwareInfo}
+      >
+        <Cpu size={14} />
+        <span>{t('transcoding.hardware_info')}</span>
+        {#if showHardwareInfo}
+          <ChevronUp size={14} />
+        {:else}
+          <ChevronDown size={14} />
+        {/if}
+      </button>
+      <div class="mt-2 overflow-hidden transition-all duration-200 {showHardwareInfo ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}">
+        <div class="p-3 rounded-md th-bg-hover border th-border grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.cpu_cores')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.total_cores}</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.memory')}</div>
+            <div class="text-sm font-medium th-text-primary">{Math.round(hardwareInfo.total_memory_mb)} MB</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.encoder')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.h264_encoder || 'software'}</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.estimated_fps')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.estimated_fps} FPS</div>
+          </div>
+          <div>
+            <div class="text-xs th-text-secondary">{t('transcoding.max_concurrent')}</div>
+            <div class="text-sm font-medium th-text-primary">{hardwareInfo.max_concurrent_streams}</div>
+          </div>
+        </div>
+        {#if hardwareInfo.estimated_fps < 15}
+          <div class="mt-2 p-2 rounded-md bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/30">
+            <div class="flex items-center gap-1.5 text-xs text-[var(--color-warning-light)]">
+              <AlertTriangle size={12} />
+              <span>{t('transcoding.warning_hardware')}</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Disable button (separated at bottom) -->
+    <div class="mt-6 pt-4 border-t th-border">
+      <button
+        type="button"
+        class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg border border-[var(--color-danger)]/30 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
+        onclick={handleDisable}
+      >
+        {t('transcoding.action.disable')}
+      </button>
+    </div>
+  </div>
+
+{:else if displayState === 'failed'}
+  <!-- State: Failed — Download/check failed, show error and retry -->
+  <div class="card p-8 border th-border">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h3 class="text-lg font-semibold th-text-primary">{t('transcoding.title')}</h3>
+        <p class="text-sm th-text-secondary mt-1">{t('transcoding.description')}</p>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)]">
+        {t('transcoding.state.failed')}
+      </span>
+    </div>
+
+    <!-- Error message card -->
+    <div class="mt-4 p-3 rounded-md bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30">
+      <div class="flex items-center gap-2 text-sm text-[var(--color-danger-light)]">
+        <AlertCircle size={16} />
+        <span>{ffmpegStatus.error || t('transcoding.ffmpeg_failed')}</span>
+      </div>
+    </div>
+
+    <!-- Error details collapsible -->
+    {#if ffmpegStatus.error}
+      <details class="mt-2 group">
+        <summary class="flex items-center gap-1 cursor-pointer text-xs th-text-secondary select-none">
+          <span>{t('transcoding.error_details')}</span>
+          <span class="group-open:rotate-180 transition-transform">▼</span>
+        </summary>
+        <pre class="mt-1 p-2 rounded text-xs th-bg-tertiary th-text-secondary whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{ffmpegStatus.error}</pre>
+      </details>
+    {/if}
+
+    <p class="mt-4 text-sm th-text-secondary">
+      {#if transcodingCheckError}
+        {transcodingCheckError}
+      {:else}
+        {t('transcoding.ffmpeg_failed')}
+      {/if}
+    </p>
+
+    <!-- Retry button (one primary action) -->
+    <div class="mt-4">
+      <button
+        type="button"
+        class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-warning)] text-white hover:opacity-90 transition-opacity"
+        onclick={handleRetryDownload}
+      >
+        <RotateCw size={16} />
+        {t('transcoding.action.retry')}
+      </button>
+    </div>
+  </div>
+{/if}
