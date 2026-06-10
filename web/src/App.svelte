@@ -3,17 +3,20 @@
   import { isAuthenticated, healthCheck } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
-  import Login from './routes/Login.svelte';
-  import Recordings from './routes/Recordings.svelte';
-  import RecordingDetail from './routes/RecordingDetail.svelte';
-  import Settings from './routes/Settings.svelte';
-  import Cameras from './routes/Cameras.svelte';
-  import LiveView from './routes/LiveView.svelte';
-  import Dashboard from './routes/Dashboard.svelte';
-  import Setup from './routes/Setup.svelte';
-
-  import TranscodingHistory from './routes/TranscodingHistory.svelte';
-  import Surveillance from './routes/Surveillance.svelte';
+  // Route loader map — lazy loaded on demand
+  const routeLoaders = {
+    login: () => import('./routes/Login.svelte'),
+    setup: () => import('./routes/Setup.svelte'),
+    recordings: () => import('./routes/Recordings.svelte'),
+    'recording-detail': () => import('./routes/RecordingDetail.svelte'),
+    cameras: () => import('./routes/Cameras.svelte'),
+    'cameras-detail': () => import('./routes/Cameras.svelte'),
+    live: () => import('./routes/LiveView.svelte'),
+    surveillance: () => import('./routes/Surveillance.svelte'),
+    settings: () => import('./routes/Settings.svelte'),
+    dashboard: () => import('./routes/Dashboard.svelte'),
+    'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
+  };
   import Header from './components/Header';
 
   // Network status
@@ -202,6 +205,15 @@ function parseRoute(hash: string) {
       if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     };
   });
+
+  function getRouteProps(route: string) {
+    switch (route) {
+      case 'recording-detail': return { recordingId: params.id };
+      case 'live': return { cameraId: params.id };
+      case 'dashboard': return { initialTab: params.tab || 'storage' };
+      default: return {};
+    }
+  }
 </script>
 
 <!-- Offline banner -->
@@ -219,32 +231,20 @@ function parseRoute(hash: string) {
   </div>
 {/if}
 
-{#if currentRoute === 'login'}
-    <Login />
-  {:else if currentRoute === 'setup'}
-    <Setup />
-  {:else}
-    <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
-    {#if currentRoute === 'recordings'}
-      <Recordings />
-    {:else if currentRoute === 'recording-detail'}
-      <RecordingDetail recordingId={params.id} />
-    {:else if currentRoute === 'cameras'}
-      <Cameras />
-    {:else if currentRoute === 'cameras-detail'}
-      <Cameras />
-    {:else if currentRoute === 'live'}
-      <LiveView cameraId={params.id} />
-    {:else if currentRoute === 'surveillance'}
-      <Surveillance />
-    {:else if currentRoute === 'settings'}
-      <Settings />
-    {:else if currentRoute === 'dashboard'}
-      <Dashboard initialTab={params.tab || 'storage'} />
-    {:else if currentRoute === 'transcoding-history'}
-      <TranscodingHistory />
-    {/if}
-  {/if}
+{#if currentRoute === 'login' || currentRoute === 'setup'}
+  {#await routeLoaders[currentRoute]()}
+    <div class="skeleton skeleton--page"></div>
+  {:then module}
+    <module.default />
+  {/await}
+{:else}
+  <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
+  {#await routeLoaders[currentRoute]()}
+    <div class="skeleton skeleton--page"></div>
+  {:then module}
+    <module.default {...getRouteProps(currentRoute)} />
+  {/await}
+{/if}
 
 <style>
   .offline-banner {
@@ -295,4 +295,21 @@ function parseRoute(hash: string) {
       opacity: 1;
     }
   }
+
+  .skeleton {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .skeleton--page {
+    min-height: 60vh;
+    margin: 1rem;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.8; }
+  }
+
 </style>
