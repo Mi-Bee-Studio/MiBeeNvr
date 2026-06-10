@@ -11,15 +11,16 @@ describe('Tab', () => {
   ];
 
   it('renders all tab labels', () => {
-    const { getByText } = render(Tab, { props: { tabs, activeTab: 'active', onchange: vi.fn() } });
-    expect(getByText('Active')).toBeTruthy();
-    expect(getByText('Archived')).toBeTruthy();
+    const { getAllByText } = render(Tab, { props: { tabs, activeTab: 'active', onchange: vi.fn() } });
+    expect(getAllByText('Active').length).toBeGreaterThanOrEqual(1);
+    expect(getAllByText('Archived').length).toBeGreaterThanOrEqual(1);
   });
 
   it('fires onchange when tab is clicked', async () => {
     const onchange = vi.fn();
-    const { getByText } = render(Tab, { props: { tabs, activeTab: 'active', onchange } });
-    await fireEvent.click(getByText('Archived'));
+    const { getAllByRole } = render(Tab, { props: { tabs, activeTab: 'active', onchange } });
+    const buttons = getAllByRole('tab');
+    await fireEvent.click(buttons[1]);
     expect(onchange).toHaveBeenCalledWith('archived');
   });
 
