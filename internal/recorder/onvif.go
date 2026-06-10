@@ -156,7 +156,7 @@ func (r *ONVIFRecorder) RTSPURL() string {
 
 // Delegate returns the internal H264/H265 recorder delegate.
 // Returns nil if the recorder hasn't been started yet.
-// This is used by the HLS handler to access SPS/PPS and set OnHLSFrame callback.
+// This is used by the HLS handler to access SPS/PPS and subscribe to StreamHub for HLS streaming.
 func (r *ONVIFRecorder) Delegate() model.Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -253,8 +253,6 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		Password:            r.cfg.Password,
 		SegmentDur:          r.cfg.SegmentDur,
 		RingBufCap:          DefaultRingBufCap,
-		MaxBackoff:          DefaultMaxBackoff,
-		InitBackoff:         DefaultInitBackoff,
 		DB:                  r.cfg.DB,
 		AudioEnabled:        r.cfg.AudioEnabled,
 		FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
@@ -270,8 +268,6 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		Password:            r.cfg.Password,
 		SegmentDur:          r.cfg.SegmentDur,
 		RingBufCap:          DefaultRingBufCap,
-		MaxBackoff:          DefaultMaxBackoff,
-		InitBackoff:         DefaultInitBackoff,
 		DB:                  r.cfg.DB,
 		AudioEnabled:        r.cfg.AudioEnabled,
 		FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,

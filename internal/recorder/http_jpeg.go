@@ -32,8 +32,6 @@ type HTTPJPEGConfig struct {
 	Username   string // for basic auth (optional)
 	Password   string // for basic auth (optional)
 	DB         RecordingDB
-	MaxBackoff time.Duration   // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff time.Duration  // Deprecated: no longer used, tiered backoff is used instead
 	EventBus    *event.EventBus
 }
 
@@ -107,12 +105,6 @@ func NewHTTPJPEGRecorder(cfg HTTPJPEGConfig, store SegmentStore, opts ...*metric
 	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
-	}
-	if cfg.MaxBackoff == 0 {
-		cfg.MaxBackoff = DefaultMaxBackoff
-	}
-	if cfg.InitBackoff == 0 {
-		cfg.InitBackoff = DefaultInitBackoff
 	}
 	return &HTTPJPEGRecorder{
 		cfg:     cfg,
