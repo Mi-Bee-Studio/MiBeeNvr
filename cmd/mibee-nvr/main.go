@@ -890,6 +890,10 @@ func (a *App) Start() error {
 				slog.Error("srt", "error", err)
 			}
 		}()
+		// Start caller-mode SRT streams that connect outbound to remote sources
+		if err := a.srtListener.StartCallers(); err != nil {
+			slog.Error("srt callers", "error", err)
+		}
 	}
 
 	// Start HTTP server
