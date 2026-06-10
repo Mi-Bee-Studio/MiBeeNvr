@@ -72,4 +72,49 @@ describe('CameraCard', () => {
     const { getByText } = render(CameraCard, { props: defaultProps(camera) });
     expect(getByText('Disabled')).toBeTruthy();
   });
+
+  it('has is-disabled class when camera is disabled', () => {
+    const camera = makeCamera({ enabled: false });
+    const { container } = render(CameraCard, { props: defaultProps(camera) });
+    const card = container.querySelector('.camera-card');
+    expect(card?.classList.contains('is-disabled')).toBe(true);
+  });
+
+  it('toggle switch has aria-label attribute', () => {
+    const camera = makeCamera({ enabled: true });
+    const { getByRole } = render(CameraCard, { props: defaultProps(camera) });
+    const toggle = getByRole('switch');
+    expect(toggle.getAttribute('aria-label')).toBe('Disable');
+  });
+
+  it('action buttons have correct aria-labels', () => {
+    const idle = makeCamera({ status: 'idle' });
+    const { getByRole, unmount } = render(CameraCard, { props: defaultProps(idle) });
+    expect(getByRole('button', { name: 'Start' })).toBeTruthy();
+    unmount();
+
+    const rec = makeCamera({ status: 'recording' });
+    const rendered = render(CameraCard, { props: defaultProps(rec) });
+    expect(rendered.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: 'Restart' })).toBeTruthy();
+  });
+
+  it('action buttons contain text label spans', () => {
+    const idle = makeCamera({ status: 'idle' });
+    const { getByText, unmount } = render(CameraCard, { props: defaultProps(idle) });
+    expect(getByText('Start')).toBeTruthy();
+    unmount();
+
+    const rec = makeCamera({ status: 'recording' });
+    const rendered = render(CameraCard, { props: defaultProps(rec) });
+    expect(rendered.getByText('Stop')).toBeTruthy();
+  });
+
+  it('live link has aria-label when HLS is available', () => {
+    const camera = makeCamera();
+    const { container } = render(CameraCard, { props: defaultProps(camera) });
+    const liveLink = container.querySelector('a[href="#/live/test"]');
+    expect(liveLink).toBeTruthy();
+    expect(liveLink?.getAttribute('aria-label')).toBe('Live');
+  });
 });
