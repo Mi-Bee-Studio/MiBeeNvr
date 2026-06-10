@@ -129,7 +129,6 @@
     >
       <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
     </button>
-  <span class="text-sm th-text-secondary">{t('settings.ai.enabled')}</span>
 
   {#if aiEnabled}
     <div class="space-y-6">

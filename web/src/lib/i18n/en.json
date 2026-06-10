@@ -762,7 +762,6 @@
   "settings.tabs.general": "General",
   "settings.tabs.features": "Features",
   "settings.tabs.advanced": "Advanced",
-  "settings.tabs.advanced": "Advanced",
   "settings.advanced.merge.description": "Configure how video segments are merged. These settings affect recording quality and file sizes.",
   "settings.advanced.webdav.description": "WebDAV provides file-level access to recordings. Useful for external media players or file managers.",
   "settings.advanced.streaming.description": "Fine-tune streaming protocol behavior. These settings affect live view quality and latency.",
