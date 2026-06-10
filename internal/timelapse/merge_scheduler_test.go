@@ -1,12 +1,14 @@
 package timelapse
 
 import (
-	"context"
-	"sync/atomic"
-	"testing"
-	"time"
+"context"
+"fmt"
+"sync"
+"sync/atomic"
+"testing"
+"time"
 
-	"github.com/stretchr/testify/require"
+"github.com/stretchr/testify/require"
 )
 
 // fixedNow returns a fixed UTC time for deterministic testing:
@@ -526,4 +528,74 @@ func TestMergeScheduler_ConcurrentAddRemove(t *testing.T) {
 	// Should not panic and should have consistent state
 	_, ok := s.GetDuration("cam-concurrent")
 	require.True(t, ok)
+}
+
+// ============================================================
+// Concurrent / Race tests
+// ============================================================
+
+// TestMergeScheduler_ConcurrentTriggerDuringLoop calls TriggerDue from multiple goroutines
+// while the scheduler loop is running, to exercise concurrent entry iteration.
+func TestMergeScheduler_ConcurrentTriggerDuringLoop(t *testing.T) {
+	t.Helper()
+	s := NewMergeScheduler(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var triggered atomic.Int32
+	s.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
+		triggered.Add(1)
+		return nil
+	})
+
+	// Add multiple cameras.
+	for i := 0; i < 5; i++ {
+		s.AddOrUpdate(fmt.Sprintf("cam-%d", i), 8*time.Hour)
+	}
+
+	s.Start(ctx)
+
+	// Call TriggerDue from many goroutines concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.TriggerDue(ctx)
+		}()
+	}
+	wg.Wait()
+
+	s.Stop()
+	// Should not panic; at least one trigger may have fired.
+}
+
+// TestMergeScheduler_ConcurrentAddMultipleCameras adds many cameras concurrently
+// while also removing them, to exercise the entries map under high contention.
+func TestMergeScheduler_ConcurrentAddMultipleCameras(t *testing.T) {
+	t.Helper()
+	s := NewMergeScheduler(nil)
+
+	var wg sync.WaitGroup
+	// Add many cameras from different goroutines.
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			camID := fmt.Sprintf("cam-%d", id)
+			if id%4 == 0 {
+				s.AddOrUpdate(camID, 8*time.Hour)
+			} else if id%4 == 1 {
+				s.Remove(camID)
+			} else if id%4 == 2 {
+				s.GetDuration(camID)
+			} else {
+				s.AddOrUpdate(camID, 24*time.Hour)
+				s.Remove(camID)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Should not panic.
 }

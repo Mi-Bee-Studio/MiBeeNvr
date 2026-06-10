@@ -1,16 +1,17 @@
 package timelapse
 
 import (
-	"context"
-	"os"
-	"path/filepath"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
+"context"
+"os"
+"path/filepath"
+"sync"
+"sync/atomic"
+"testing"
+"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+"github.com/stretchr/testify/require"
 )
 
 // ============================================================
@@ -777,4 +778,102 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 			t.Errorf("expected frame count > 0")
 		}
 	}
+}
+
+// ============================================================
+// Concurrent / Race tests
+// ============================================================
+
+// TestKeyframeExtractor_ConcurrentStartStopDuringBroadcast starts the extractor,
+// broadcasts frames from a background goroutine, then stops the extractor
+// while frames continue arriving. This exercises the lifecycle-frames interaction.
+func TestKeyframeExtractor_ConcurrentStartStopDuringBroadcast(t *testing.T) {
+	store := newMockSegmentStore(t)
+	hub := model.NewStreamHub()
+	hub.SetCameraID("cam-1")
+
+	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
+		CameraID:   "cam-1",
+		Interval:   50 * time.Millisecond,
+		SegmentDur: time.Hour,
+		Store:      store,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start the extractor first.
+	require.NoError(t, ext.Start(ctx, hub), "Start should succeed")
+
+	// Broadcast frames from many goroutines while the extractor is running.
+	var broadcastWg sync.WaitGroup
+	for g := 0; g < 5; g++ {
+		broadcastWg.Add(1)
+		go func() {
+			defer broadcastWg.Done()
+			ticker := time.NewTicker(1 * time.Millisecond)
+			defer ticker.Stop()
+			for i := 0; i < 100; i++ {
+				au := makeH264AU(7, 8, 5)
+				hub.Broadcast(int64(i*1000), au, true)
+				<-ticker.C
+			}
+		}()
+	}
+
+	// Allow some frames to arrive, then stop the extractor while broadcast continues.
+	time.Sleep(30 * time.Millisecond)
+	require.NoError(t, ext.Stop(), "Stop should succeed")
+
+	// Wait for all broadcast goroutines to finish.
+	broadcastWg.Wait()
+
+	// Frames broadcast after Stop should not cause races.
+}
+
+// TestKeyframeExtractor_ConcurrentFrameBroadcast broadcasts frames from multiple
+// goroutines simultaneously while the extractor is actively capturing.
+func TestKeyframeExtractor_ConcurrentFrameBroadcast(t *testing.T) {
+	store := newMockSegmentStore(t)
+	hub := model.NewStreamHub()
+	hub.SetCameraID("cam-1")
+
+	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
+		CameraID:   "cam-1",
+		Interval:   30 * time.Millisecond,
+		SegmentDur: time.Hour,
+		Store:      store,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ext.Start(ctx, hub)
+	defer ext.Stop()
+
+	// Give extractor time to start up.
+	time.Sleep(20 * time.Millisecond)
+
+	// Broadcast frames from many goroutines simultaneously.
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	framesPerGoroutine := 50
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(base int) {
+			defer wg.Done()
+			for i := 0; i < framesPerGoroutine; i++ {
+				au := makeH264AU(7, 8, 5)
+				hub.Broadcast(int64(base*framesPerGoroutine+i)+1, au, true)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Give extractor time to capture some frames.
+	time.Sleep(200 * time.Millisecond)
+
+	// Should have captured some frames without races.
+	files := listSegmentFiles(store)
+	t.Logf("captured %d frame files under concurrent broadcast", len(files))
 }

@@ -409,3 +409,230 @@ func TestRollingMergeManager_ProgressCleanup(t *testing.T) {
 		t.Fatal("expected progress entry to be cleaned up after delay")
 	}
 }
+
+// ============================================================
+// Concurrent / Race tests
+// ============================================================
+
+// TestRollingMergeManager_ConcurrentMultiCamera verifies that multiple cameras
+// can trigger merge simultaneously without data races.
+func TestRollingMergeManager_ConcurrentMultiCamera(t *testing.T) {
+	db := newMockDB()
+	merger := &slowMerger{delay: 20 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	numCameras := 10
+	for i := 0; i < numCameras; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			mgr.StartSegmentMerge(ctx, fmt.Sprintf("cam-%d", id), segmentDir, outputPath, "")
+		}(i)
+	}
+	wg.Wait()
+
+	if mgr.ActiveCount() != numCameras {
+		t.Fatalf("expected %d active merges, got %d", numCameras, mgr.ActiveCount())
+	}
+
+	// Wait for all merges to complete (100ms pre-merge delay + 20ms merge delay).
+	time.Sleep(500 * time.Millisecond)
+
+	if mgr.ActiveCount() != 0 {
+		t.Fatalf("expected 0 active merges after completion, got %d", mgr.ActiveCount())
+	}
+
+	mgr.StopAll()
+}
+
+// TestRollingMergeManager_ConcurrentCancelDuringMerge starts a merge with a slow merger,
+// then cancels it from multiple goroutines simultaneously to detect races in StopSegmentMerge.
+func TestRollingMergeManager_ConcurrentCancelDuringMerge(t *testing.T) {
+	db := newMockDB()
+	merger := &slowMerger{delay: 5 * time.Second} // very slow
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.StartSegmentMerge(ctx, "cam-cancel", segmentDir, outputPath, "")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mgr.StopSegmentMerge("cam-cancel")
+		}()
+	}
+	wg.Wait()
+
+	if mgr.IsActive("cam-cancel") {
+		t.Fatal("expected cam-cancel to be inactive after cancellation")
+	}
+}
+
+// TestRollingMergeManager_ConcurrentProgressReadWrite tests concurrent access
+// to the progress map while merges are active and completing.
+func TestRollingMergeManager_ConcurrentProgressReadWrite(t *testing.T) {
+	db := newMockDB()
+	merger := &slowMerger{delay: 50 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start a few merges.
+	const numCameras = 5
+	for i := 0; i < numCameras; i++ {
+		mgr.StartSegmentMerge(ctx, fmt.Sprintf("cam-%d", i), segmentDir, outputPath, "")
+	}
+
+	// Read progress from many goroutines while merges are in flight.
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			camID := fmt.Sprintf("cam-%d", idx%numCameras)
+			_, ok := mgr.GetProgress(camID)
+			_ = ok // just testing concurrent read safety
+		}(i)
+	}
+	wg.Wait()
+
+	// Wait for merges to finish.
+	time.Sleep(300 * time.Millisecond)
+
+	// Read progress concurrently after completion.
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			camID := fmt.Sprintf("cam-%d", idx%numCameras)
+			_, _ = mgr.GetProgress(camID)
+		}(i)
+	}
+	wg.Wait()
+
+	mgr.StopAll()
+}
+
+// TestRollingMergeManager_ConcurrentStopAllAndStart tests that calling StopAll
+// while new merges are being started does not race.
+func TestRollingMergeManager_ConcurrentStopAllAndStart(t *testing.T) {
+	db := newMockDB()
+	merger := &slowMerger{delay: 100 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Concurrently start merges and call StopAll.
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			if id%2 == 0 {
+				mgr.StartSegmentMerge(ctx, fmt.Sprintf("cam-%d", id), segmentDir, outputPath, "")
+			} else {
+				mgr.StopAll()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Should not panic. Final state may have some active entries.
+	mgr.StopAll()
+}
+
+// --- Additional edge case tests ---
+
+func TestRollingMergeManager_MergeEmptyDir(t *testing.T) {
+	t.Helper()
+	db := newMockDB()
+	merger := &zeroFrameMerger{delay: 10 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "empty-segment")
+	os.MkdirAll(segmentDir, 0755)
+	// No files in segment dir — 0 frames.
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.StartSegmentMerge(ctx, "cam-empty", segmentDir, outputPath, "rec-empty")
+	// Wait for merge to complete (100ms pre-merge delay + 10ms merge delay).
+	time.Sleep(300 * time.Millisecond)
+
+	info, ok := mgr.GetProgress("cam-empty")
+	if !ok {
+		t.Fatal("expected progress entry for cam-empty")
+	}
+	t.Logf("empty dir merge: status=%s, frames=%d", info.Status, info.FramesMerged)
+}
+
+func TestRollingMergeManager_GetProgressNonExistent(t *testing.T) {
+	t.Helper()
+	db := newMockDB()
+	merger := &slowMerger{delay: 10 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	_, ok := mgr.GetProgress("nonexistent-cam")
+	if ok {
+		t.Fatal("expected false for non-existent camera progress")
+	}
+}
+
+func TestRollingMergeManager_RapidStartStop(t *testing.T) {
+	t.Helper()
+	db := newMockDB()
+	merger := &slowMerger{delay: 500 * time.Millisecond}
+	mgr := NewRollingMergeManager(merger, db, 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0755)
+	os.WriteFile(filepath.Join(segmentDir, "frame_000001.jpg"), []byte("dummy"), 0644)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for i := 0; i < 10; i++ {
+		mgr.StartSegmentMerge(ctx, "cam-rapid", segmentDir, outputPath, "")
+		mgr.StopSegmentMerge("cam-rapid")
+	}
+
+	if mgr.IsActive("cam-rapid") {
+		t.Fatal("expected cam-rapid to be inactive after rapid start/stop")
+	}
+}

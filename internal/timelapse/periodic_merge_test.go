@@ -2,12 +2,14 @@ package timelapse
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+
 )
 
 func TestNewPeriodicMergeManager(t *testing.T) {
@@ -393,5 +395,220 @@ func TestPeriodicMergeProgress(t *testing.T) {
 		if p != 100 {
 			t.Errorf("expected final progress 100 for %s, got %d", id, p)
 		}
+	}
+}
+
+// --- Retry exhaustion tests ---
+
+func TestRetryExhaustion_PermanentFailure(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, db, &errorMerger{}, 10, dataDir, 8*time.Hour, nil)
+
+	segs := []model.Recording{
+		{ID: "seg-1", CameraID: "test-cam", FilePath: dataDir, Format: model.FormatTimelapse},
+	}
+
+	// 3 failures to exhaust retries.
+	for i := 0; i < 3; i++ {
+		if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("error %d", i+1)); err != nil {
+			t.Fatalf("markMergeFailed failed on attempt %d: %v", i+1, err)
+		}
+	}
+
+	// Verify retryCounts reached 3.
+	mgr.retryMu.Lock()
+	info, ok := mgr.retryCounts["seg-1"]
+	mgr.retryMu.Unlock()
+	if !ok {
+		t.Fatal("expected retryCounts entry for seg-1")
+	}
+	if info.count != 3 {
+		t.Errorf("expected retry count 3, got %d", info.count)
+	}
+
+	// Verify filterEligibleSegments excludes the permanently failed segment.
+	eligible := mgr.filterEligibleSegments([]model.Recording{
+		{ID: "seg-1", CameraID: "test-cam", FilePath: dataDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusFailed},
+	})
+	if len(eligible) != 0 {
+		t.Errorf("expected 0 eligible segments after 3 failures, got %d", len(eligible))
+	}
+}
+
+func TestRetryExhaustion_NotRetried(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+
+	// Segment starts as MergeStatusFailed (from previous failed attempts).
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: dataDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusFailed},
+		},
+	}, db, nil, 10, dataDir, 8*time.Hour, nil)
+
+	// Simulate 3 retries already exhausted.
+	mgr.retryMu.Lock()
+	mgr.retryCounts["seg-1"] = retryInfo{count: 3, timestamp: time.Now()}
+	mgr.retryMu.Unlock()
+
+	// Run should return nil because filterEligibleSegments excludes seg-1 (count >= 3).
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify segment was NOT processed.
+	if got := db.GetStatus("seg-1"); got == "daily_merged" {
+		t.Error("segment should not have been merged after permanent failure")
+	}
+}
+
+func TestRetryExhaustion_Recovery(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, db, &errorMerger{}, 10, dataDir, 8*time.Hour, nil)
+
+	segs := []model.Recording{
+		{ID: "seg-1", CameraID: "test-cam", FilePath: dataDir, Format: model.FormatTimelapse},
+	}
+
+	// 2 failures — retries still remaining.
+	for i := 0; i < 2; i++ {
+		if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("error %d", i+1)); err != nil {
+			t.Fatalf("markMergeFailed failed on attempt %d: %v", i+1, err)
+		}
+	}
+
+	// Verify count is 2.
+	mgr.retryMu.Lock()
+	info, ok := mgr.retryCounts["seg-1"]
+	mgr.retryMu.Unlock()
+	if !ok {
+		t.Fatal("expected retryCounts entry for seg-1")
+	}
+	if info.count != 2 {
+		t.Errorf("expected retry count 2, got %d", info.count)
+	}
+
+	// Now simulate successful merge — finalizeMerge should clear retryCounts.
+	if err := mgr.finalizeMerge(context.Background(), segs, "/tmp/output.mp4"); err != nil {
+		t.Fatalf("finalizeMerge failed: %v", err)
+	}
+
+	// Verify retryCounts was cleaned up.
+	mgr.retryMu.Lock()
+	_, exists := mgr.retryCounts["seg-1"]
+	mgr.retryMu.Unlock()
+	if exists {
+		t.Error("expected retryCounts entry to be cleared after successful recovery")
+	}
+
+	// Verify segment was marked as merged in DB.
+	if got := db.GetStatus("seg-1"); got != "daily_merged" {
+		t.Errorf("expected status 'daily_merged', got %q", got)
+	}
+}
+
+// --- Edge case tests ---
+
+func TestPeriodicMergeManager_Run_DiskFull(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	camDir := filepath.Join(dataDir, "test-cam")
+	os.MkdirAll(camDir, 0755)
+
+	// Make the camera output directory read-only to simulate disk full / ENOSPC.
+	os.Chmod(camDir, 0444)
+	t.Cleanup(func() { os.Chmod(camDir, 0755) })
+
+	// Create a segment directory with frames.
+	segDir := filepath.Join(dataDir, "seg-1")
+	os.MkdirAll(segDir, 0755)
+	os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("dummy"), 0644)
+
+	merger := &successMerger{delay: 10 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+	}, newTrackDB(), merger, 10, dataDir, 8*time.Hour, nil)
+
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("expected error from disk-full-like scenario, got nil")
+	}
+	t.Logf("disk full error (expected): %v", err)
+}
+
+func TestPeriodicMergeManager_Run_CorruptedSegment(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	camDir := filepath.Join(dataDir, "test-cam")
+	os.MkdirAll(camDir, 0755)
+
+	// Segment FilePath points to a non-existent path — simulates a corrupted/missing segment.
+	segPath := filepath.Join(dataDir, "missing-segment")
+
+	merger := &successMerger{delay: 10 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segPath, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+	}, newTrackDB(), merger, 10, dataDir, 8*time.Hour, nil)
+
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("expected error from corrupted/missing segment, got nil")
+	}
+	t.Logf("corrupted segment error (expected): %v", err)
+}
+
+func TestPeriodicMergeManager_Run_AllFailedSegments(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+
+	// All segments have MergeStatusFailed with no retry entries → filterEligibleSegments returns empty.
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: "/tmp/nonexistent", Format: model.FormatTimelapse, MergeStatus: model.MergeStatusFailed},
+		},
+	}, &mockMergeStatusUpdater{}, nil, 10, dataDir, 8*time.Hour, nil)
+
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("expected nil for all-failed segments with no retries, got: %v", err)
+	}
+}
+
+func TestPeriodicMergeManager_Run_MixedFormatSegments(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+
+	// Create 2 segments with different recording formats.
+	segDir1 := filepath.Join(dataDir, "seg-1")
+	os.MkdirAll(segDir1, 0755)
+	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0644)
+
+	segDir2 := filepath.Join(dataDir, "seg-2")
+	os.MkdirAll(segDir2, 0755)
+	os.WriteFile(filepath.Join(segDir2, "frame_000002.jpg"), []byte("dummy"), 0644)
+
+	db := newTrackDB()
+	merger := &successMerger{delay: 10 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
+		segments: []model.Recording{
+			{ID: "seg-1", CameraID: "test-cam", FilePath: segDir1, Format: model.FormatH264, MergeStatus: model.MergeStatusMerged},
+			{ID: "seg-2", CameraID: "test-cam", FilePath: segDir2, Format: model.FormatH265, MergeStatus: model.MergeStatusMerged},
+		},
+	}, db, merger, 10, dataDir, 8*time.Hour, nil)
+
+	err := mgr.Run(context.Background(), "test-cam", time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	// Should succeed via Go merge fallback — format differences don't affect Go merge.
+	if err != nil {
+		t.Fatalf("expected mixed format merge to succeed via Go fallback: %v", err)
 	}
 }
