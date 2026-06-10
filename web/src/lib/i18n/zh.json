@@ -621,6 +621,11 @@
   "settings.featureToggles.warning": "禁用后该协议的所有摄像头将停止录制",
   "settings.featureToggles.saved": "功能开关已保存",
   "settings.featureToggles.error": "保存功能开关失败",
+  "settings.featureToggles.enabled": "已启用",
+  "settings.featureToggles.disabled": "已禁用",
+  "settings.featureToggles.available": "可用",
+  "settings.featureToggles.notInstalled": "未安装",
+  "settings.featureToggles.configured": "已配置",
   "onboarding.welcome": "欢迎使用 MiBee NVR",
   "onboarding.welcomeDesc": "您的轻量级网络录像机已就绪。让我们来设置第一个摄像头。",
   "onboarding.step": "第 {current} 步，共 {total} 步",
@@ -752,6 +757,8 @@
   "setup.errors.confirmRequired": "请确认密码",
   "setup.errors.passwordMismatch": "两次输入的密码不一致",
   "settings.tabs.general": "常规",
+  "settings.tabs.features": "功能",
+  "settings.tabs.advanced": "高级",
   "settings.tabs.advanced": "高级",
   "settings.advanced.merge.description": "配置视频片段的合并方式。这些设置影响录像质量和文件大小。",
   "settings.advanced.webdav.description": "WebDAV 提供对录像文件的直接访问。适用于外部媒体播放器或文件管理器。",
@@ -1097,5 +1104,7 @@
   "dashboard.healthSummary": "摄像头健康",
   "dashboard.tab.storage": "存储趋势",
   "dashboard.tab.health": "健康历史",
-  "dashboard.tab.transcoding": "转码历史"
+  "dashboard.tab.transcoding": "转码历史",
+  "transcoding.timeout": "下载超时（5分钟）",
+  "transcoding.network_error": "下载中断 — 请检查网络连接"
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
+  import { Settings, Cpu, AlertTriangle } from 'lucide-svelte';
   import Tab from '$lib/components/Tab.svelte';
   import GeneralTab from './settings/GeneralTab.svelte';
   import FeaturesTab from './settings/FeaturesTab.svelte';
@@ -7,8 +8,9 @@
 
   let activeSettingsTab = $state('general');
   let settingsTabs = $derived([
-    { id: 'general', label: t('settings.tabs.general') },
-    { id: 'advanced', label: t('settings.tabs.advanced') },
+    { id: 'general', label: t('settings.tabs.general'), shortLabel: 'Gen', icon: Settings },
+    { id: 'features', label: t('settings.tabs.features'), shortLabel: 'Feat', icon: Cpu },
+    { id: 'advanced', label: t('settings.tabs.advanced'), shortLabel: 'Adv', icon: AlertTriangle },
   ]);
 </script>
 
@@ -21,9 +23,10 @@
     <div class="space-y-6 mt-6">
       {#if activeSettingsTab === 'general'}
         <GeneralTab />
-      {:else}
-        <AdvancedTab />
+      {:else if activeSettingsTab === 'features'}
         <FeaturesTab />
+      {:else if activeSettingsTab === 'advanced'}
+        <AdvancedTab />
       {/if}
     </div>
   </main>

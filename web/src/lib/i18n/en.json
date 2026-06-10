@@ -621,6 +621,11 @@
   "settings.featureToggles.warning": "Disabling will stop all cameras using this protocol",
   "settings.featureToggles.saved": "Feature toggles saved",
   "settings.featureToggles.error": "Failed to save feature toggles",
+  "settings.featureToggles.enabled": "Enabled",
+  "settings.featureToggles.disabled": "Disabled",
+  "settings.featureToggles.available": "Available",
+  "settings.featureToggles.notInstalled": "Not Installed",
+  "settings.featureToggles.configured": "Configured",
   "onboarding.welcome": "Welcome to MiBee NVR",
   "onboarding.welcomeDesc": "Your lightweight network video recorder is ready. Let's set up your first camera.",
   "onboarding.step": "Step {current} of {total}",
@@ -755,6 +760,8 @@
   "setup.errors.confirmRequired": "Please confirm your password",
   "setup.errors.passwordMismatch": "Passwords do not match",
   "settings.tabs.general": "General",
+  "settings.tabs.features": "Features",
+  "settings.tabs.advanced": "Advanced",
   "settings.tabs.advanced": "Advanced",
   "settings.advanced.merge.description": "Configure how video segments are merged. These settings affect recording quality and file sizes.",
   "settings.advanced.webdav.description": "WebDAV provides file-level access to recordings. Useful for external media players or file managers.",
@@ -1101,5 +1108,7 @@
   "dashboard.healthSummary": "Camera Health",
   "dashboard.tab.storage": "Storage Trends",
   "dashboard.tab.health": "Health History",
-  "dashboard.tab.transcoding": "Transcoding"
+  "dashboard.tab.transcoding": "Transcoding",
+  "transcoding.timeout": "Download timed out after 5 minutes",
+  "transcoding.network_error": "Download interrupted — check your connection"
 }

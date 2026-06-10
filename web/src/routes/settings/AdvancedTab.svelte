@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import SettingsCard from '$lib/components/SettingsCard.svelte';
   import SettingsStreamingCard from './SettingsStreamingCard.svelte';
 
   let loading = $state(true);
@@ -267,10 +268,11 @@
   </div>
 {:else}
   <!-- Merge Strategy -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('merge.title')}</h3>
-    <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.merge.description')}</p>
-
+  <SettingsCard
+    title={t('merge.title')}
+    subtitle={t('settings.advanced.merge.description')}
+    defaultOpen={false}
+  >
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       <!-- Enable Merge -->
       <div>
@@ -335,13 +337,14 @@
         <input id="mergeBatch" type="number" class="input" bind:value={mergeBatchLimit} min="10" max="1000" />
       </div>
     </div>
-  </div>
+  </SettingsCard>
 
   <!-- WebDAV Settings -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.webdav')}</h3>
-    <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.webdav.description')}</p>
-
+  <SettingsCard
+    title={t('settings.webdav')}
+    subtitle={t('settings.advanced.webdav.description')}
+    defaultOpen={false}
+  >
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       <!-- Enable WebDAV -->
       <div>
@@ -388,14 +391,14 @@
         <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
       </div>
     </div>
-  </div>
+  </SettingsCard>
 
-  <!-- Streaming Sub-protocol Details -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming')}</h3>
-    <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.streaming.description')}</p>
-
-    <!-- WebRTC Settings -->
+  <!-- WebRTC -->
+  <SettingsCard
+    title={t('settings.streaming.webrtc')}
+    subtitle={t('settings.advanced.streaming.description')}
+    defaultOpen={false}
+  >
     <SettingsStreamingCard
       title={t('settings.streaming.webrtc')}
       protocol="webrtc"
@@ -406,8 +409,14 @@
       idleTimeout={streamingWebrtcIdleTimeout}
       onIdleTimeoutChange={(val) => streamingWebrtcIdleTimeout = val}
     />
+  </SettingsCard>
 
-    <!-- FLV Settings -->
+  <!-- HTTP-FLV -->
+  <SettingsCard
+    title={t('settings.streaming.flv')}
+    subtitle={t('settings.advanced.streaming.description')}
+    defaultOpen={false}
+  >
     <SettingsStreamingCard
       title={t('settings.streaming.flv')}
       protocol="flv"
@@ -416,8 +425,14 @@
       maxViewers={streamingFlvMaxViewers}
       onMaxViewersChange={(val) => streamingFlvMaxViewers = val}
     />
+  </SettingsCard>
 
-    <!-- HLS Settings -->
+  <!-- HLS -->
+  <SettingsCard
+    title={t('settings.streaming.hls')}
+    subtitle={t('settings.advanced.streaming.description')}
+    defaultOpen={false}
+  >
     <SettingsStreamingCard
       title={t('settings.streaming.hls')}
       protocol="hls"
@@ -427,8 +442,14 @@
       llHls={streamingHlsLlHls}
       onLlHlsChange={(val) => streamingHlsLlHls = val}
     />
+  </SettingsCard>
 
-    <!-- RTMP Ingest -->
+  <!-- RTMP Ingest -->
+  <SettingsCard
+    title={t('settings.streaming.rtmp')}
+    subtitle={t('settings.advanced.streaming.description')}
+    defaultOpen={false}
+  >
     <SettingsStreamingCard
       title={t('settings.streaming.rtmp')}
       protocol="rtmp"
@@ -436,14 +457,31 @@
       onEnabledChange={(val) => streamingRtmpEnabled = val}
       port={streamingRtmpPort}
       onPortChange={(val) => streamingRtmpPort = val}
-    >
-    </SettingsStreamingCard>
-  </div>
+    />
+  </SettingsCard>
+
+  <!-- SRT -->
+  <SettingsCard
+    title={t('settings.streaming.srt')}
+    subtitle={t('settings.advanced.streaming.description')}
+    defaultOpen={false}
+  >
+    <SettingsStreamingCard
+      title={t('settings.streaming.srt')}
+      protocol="srt"
+      enabled={streamingSrtEnabled}
+      onEnabledChange={(val) => streamingSrtEnabled = val}
+      port={streamingSrtPort}
+      onPortChange={(val) => streamingSrtPort = val}
+    />
+  </SettingsCard>
 
   <!-- Resource Usage Estimates -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming.resourceEstimate')}</h3>
-    <p class="text-xs th-text-tertiary mb-3">{t('settings.streaming.resourceEstimateDesc')}</p>
+  <SettingsCard
+    title={t('settings.streaming.resourceEstimate')}
+    subtitle={t('settings.streaming.resourceEstimateDesc')}
+    defaultOpen={false}
+  >
     <div class="space-y-2">
       <div class="flex items-center gap-2 text-xs th-text-secondary">
         <span class="w-2 h-2 rounded-full bg-[var(--color-danger)]"></span>
@@ -458,7 +496,7 @@
         <span>{t('settings.streaming.resource.hls')}</span>
       </div>
     </div>
-  </div>
+  </SettingsCard>
 
   <!-- Save button -->
   <div class="flex items-center gap-4 pt-2">

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras } from '$lib/api';
-  import type { Camera } from '$lib/api';
+  import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus } from '$lib/api';
+  import type { Camera, DownloadStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { AlertTriangle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import SettingsCard from '$lib/components/SettingsCard.svelte';
   import SettingsTranscodingCard from './SettingsTranscodingCard.svelte';
 
   // AI Detection state
@@ -22,8 +23,25 @@
   // Camera list for feature toggle affected count
   let allCameras = $state<Camera[]>([]);
 
+  // FFmpeg status for Transcoding badge
+  let ffmpegStatus = $state<DownloadStatus | null>(null);
+
   // Feature flags dirty tracking
   let featuresDirty = $derived(JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags));
+
+  // Derived badges
+  let aiBadge = $derived(aiEnabled
+    ? { text: t('settings.featureToggles.enabled'), color: 'success' as const }
+    : { text: t('settings.featureToggles.disabled'), color: 'warning' as const }
+  );
+
+  let transcodingBadge = $derived.by(() => {
+    if (!ffmpegStatus) return undefined;
+    if (ffmpegStatus.status === 'available') return { text: t('settings.featureToggles.available'), color: 'success' as const };
+    if (ffmpegStatus.status === 'downloading') return { text: t('common.loading'), color: 'info' as const };
+    if (ffmpegStatus.status === 'failed') return { text: t('common.error'), color: 'danger' as const };
+    return { text: t('settings.featureToggles.notInstalled'), color: 'warning' as const };
+  });
 
   // Affected camera count for a protocol
   function getAffectedCameraCount(protocol: string): number {
@@ -78,20 +96,28 @@
     showToast(t('settings.ai.saved'), 'success');
   }
 
+  async function loadFFmpegStatus() {
+    try {
+      ffmpegStatus = await getFFmpegStatus();
+    } catch (e) { /* non-critical */ }
+  }
+
   onMount(() => {
     loadFeatures();
     loadAiSettings();
     loadCameraList();
+    loadFFmpegStatus();
   });
 </script>
 
 <!-- AI Detection -->
-<div class="card p-8 border th-border">
-  <div class="flex items-center justify-between mb-1">
-    <div>
-      <h3 class="text-lg font-semibold th-text-primary">{t('settings.ai.title')}</h3>
-      <p class="text-sm th-text-secondary mt-1">{t('settings.ai.description')}</p>
-    </div>
+<SettingsCard
+  title={t('settings.ai.title')}
+  subtitle={t('settings.ai.description')}
+  badge={aiBadge}
+>
+  <div class="flex items-center justify-between mb-4">
+    <span class="text-sm th-text-secondary">{t('settings.ai.enabled')}</span>
     <button
       id="ai-toggle" aria-label={t('settings.ai.title')}
       type="button"
@@ -103,10 +129,10 @@
     >
       <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
     </button>
-  </div>
+  <span class="text-sm th-text-secondary">{t('settings.ai.enabled')}</span>
 
   {#if aiEnabled}
-    <div class="mt-4 pt-4 border-t th-border space-y-6">
+    <div class="space-y-6">
       <!-- Confidence Threshold -->
       <div>
         <div class="flex items-center justify-between mb-2">
@@ -163,13 +189,13 @@
       </div>
     </div>
   {/if}
-</div>
+</SettingsCard>
 
 <!-- Feature Toggles -->
-<div class="card p-8 border th-border">
-  <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.featureToggles.title')}</h3>
-  <p class="text-sm th-text-secondary mt-1 mb-3">{t('settings.advanced.features.description')}</p>
-
+<SettingsCard
+  title={t('settings.featureToggles.title')}
+  subtitle={t('settings.advanced.features.description')}
+>
   {#if featuresLoading}
     <div class="flex items-center gap-2 py-4 th-text-muted">
       <span class="spinner"></span>
@@ -220,7 +246,13 @@
       </button>
     </div>
   {/if}
-</div>
+</SettingsCard>
 
 <!-- Transcoding -->
-<SettingsTranscodingCard />
+<SettingsCard
+  title={t('transcoding.title')}
+  subtitle={t('transcoding.description')}
+  badge={transcodingBadge}
+>
+  <SettingsTranscodingCard />
+</SettingsCard>

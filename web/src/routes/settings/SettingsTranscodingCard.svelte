@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, AlertTriangle, Download, RotateCw, Cpu, ChevronDown, ChevronUp, XCircle } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  const FFMPEG_DOWNLOAD_TIMEOUT = 5 * 60 * 1000; // 5 minutes in ms
 
   // Transcoding state
   let transcodingEnabled = $state(false);
@@ -18,6 +19,7 @@
   let ffmpegPollInterval = $state<ReturnType<typeof setInterval> | null>(null);
   let transcodingCheckError = $state('');
   let downloadStartTime = $state<number | null>(null);
+  let downloadPollStartTime = $state<number | null>(null);
 
   // Transcoding queue status state
   let managerStatus = $state<ManagerStatus | null>(null);
@@ -170,6 +172,7 @@
 
   function startFfmpegPolling() {
     stopFfmpegPolling();
+    downloadPollStartTime = Date.now();
     ffmpegPollInterval = setInterval(async () => {
       try {
         const status = await getFFmpegStatus();
@@ -177,17 +180,31 @@
         if (status.status !== 'downloading') {
           ffmpegDownloading = false;
           downloadStartTime = null;
+          downloadPollStartTime = null;
           stopFfmpegPolling();
           if (status.status === 'available') {
             showToast(t('transcoding.ffmpeg_available'), 'success');
           } else if (status.status === 'failed') {
             showToast(t('transcoding.ffmpeg_failed'), 'error');
           }
+        } else {
+          // Check for download timeout
+          if (downloadPollStartTime && (Date.now() - downloadPollStartTime) >= FFMPEG_DOWNLOAD_TIMEOUT) {
+            downloadPollStartTime = null;
+            ffmpegDownloading = false;
+            downloadStartTime = null;
+            stopFfmpegPolling();
+            ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: t('transcoding.timeout') };
+            showToast(t('transcoding.timeout'), 'error');
+          }
         }
       } catch (e) {
         stopFfmpegPolling();
         ffmpegDownloading = false;
         downloadStartTime = null;
+        downloadPollStartTime = null;
+        ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: t('transcoding.network_error') };
+        showToast(t('transcoding.network_error'), 'error');
       }
     }, 1000);
   }
@@ -203,6 +220,7 @@
     ffmpegDownloading = true;
     ffmpegStatus = { ...ffmpegStatus, status: 'downloading', progress: 0, error: '' };
     downloadStartTime = Date.now();
+    downloadPollStartTime = Date.now();
     try {
       await downloadFFmpeg();
       startFfmpegPolling();
@@ -217,6 +235,7 @@
     ffmpegDownloading = true;
     ffmpegStatus = { ...ffmpegStatus, status: 'downloading', progress: 0, error: '' };
     downloadStartTime = Date.now();
+    downloadPollStartTime = Date.now();
     try {
       await retryDownload();
       startFfmpegPolling();
