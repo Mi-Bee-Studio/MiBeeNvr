@@ -686,6 +686,7 @@
                                       title={t('archives.play')}
                                     >
                                       <Play size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.viewLabel')}</span>
                                     </button>
                                     <button
                                       class="btn btn-ghost px-2 py-1.5 text-sm"
@@ -693,6 +694,7 @@
                                       title={t('archives.download')}
                                     >
                                       <Download size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.downloadLabel')}</span>
                                     </button>
                                     <button
                                       class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger"
@@ -700,6 +702,7 @@
                                       title={t('archives.delete')}
                                     >
                                       <Trash2 size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.deleteLabel')}</span>
                                     </button>
                                   </div>
                                 </td>

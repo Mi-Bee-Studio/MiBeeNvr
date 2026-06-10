@@ -234,16 +234,20 @@
             class="btn btn-ghost px-2 py-1 text-sm"
             onclick={() => onstop(camera)}
             title={t('cameras.stop')}
+            aria-label={t('cameras.action.stopLabel')}
           >
             <Square size={14} />
+            <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.stopLabel')}</span>
           </button>
         {:else}
           <button
             class="btn btn-ghost px-2 py-1 text-sm"
             onclick={() => onstart(camera)}
             title={t('cameras.start')}
+            aria-label={t('cameras.action.startLabel')}
           >
             <Play size={14} />
+            <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.startLabel')}</span>
           </button>
         {/if}
 
@@ -252,19 +256,22 @@
             class="btn btn-ghost px-2 py-1 text-sm"
             onclick={() => onrestart(camera)}
             title={t('cameras.restart')}
+            aria-label={t('cameras.action.restartLabel')}
           >
             <RotateCw size={14} />
+            <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.restartLabel')}</span>
           </button>
      {/if}
      <!-- Retry merge button when merge failed -->
      {#if mergeStatus === 'failed' && onRetryMerge}
-       <button
-         class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
-         onclick={() => onRetryMerge(camera)}
-         title={'Retry merge'}
-       >
-         <RefreshCw size={14} />
-       </button>
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
+          onclick={() => onRetryMerge(camera)}
+          title={'Retry merge'}
+          aria-label="Retry merge"
+        >
+          <RefreshCw size={14} />
+        </button>
      {/if}
    {/if}
 
@@ -273,8 +280,10 @@
           href="#/live/{camera.id}"
           class="btn btn-ghost px-2 py-1 text-sm"
           title={t('cameras.live')}
+          aria-label={t('cameras.action.liveLabel')}
         >
           <Eye size={14} />
+          <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.liveLabel')}</span>
         </a>
       {/if}
 
@@ -284,6 +293,7 @@
           class="btn btn-ghost px-2 py-1 text-sm"
           onclick={toggleMenu}
           title={t('cameras.moreActions')}
+          aria-label={t('cameras.moreActions')}
         >
           <MoreVertical size={14} />
         </button>
@@ -323,7 +333,7 @@
   }
 
   .camera-card.is-disabled {
-    opacity: 0.5;
+    opacity: 0.6;
   }
 
   .camera-card.is-disabled .dropdown-item:not(.dropdown-item--danger),
