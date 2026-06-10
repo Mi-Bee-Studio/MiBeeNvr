@@ -47,8 +47,6 @@ const (
 	FrameSourceMJPEG FrameSource = "mjpeg"
 )
 
-// String returns the string representation of the FrameSource.
-func (s FrameSource) String() string { return string(s) }
 
 // MergeStatus represents the merge process status for a timelapse recording.
 type MergeStatus string
