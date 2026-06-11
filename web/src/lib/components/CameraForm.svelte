@@ -63,7 +63,6 @@
   let formUsername = $state('');
   let formPassword = $state('');
   let showPassword = $state(false);
-  let formEnabled = $state(true);
   let saving = $state(false);
   let formDescription = $state('');
   let formLocation = $state('');
@@ -131,7 +130,6 @@ let validationErrors = $state<Record<string, string>>({});
     formUsername = '';
     formPassword = '';
     showPassword = false;
-    formEnabled = true;
     formDescription = '';
     formLocation = '';
     formBrand = '';
@@ -159,7 +157,6 @@ let validationErrors = $state<Record<string, string>>({});
     formUsername = camera.username || '';
     formPassword = '';
     showPassword = false;
-    formEnabled = camera.enabled;
     formDescription = camera.description || '';
     formLocation = camera.location || '';
     formBrand = camera.brand || '';
@@ -292,7 +289,6 @@ async function performCameraSave() {
             name: formName,
             protocol: formProtocol,
             url: formUrl,
-            enabled: formEnabled,
             description: formDescription || undefined,
             location: formLocation || undefined,
             brand: formBrand || undefined,
@@ -331,7 +327,6 @@ async function performCameraSave() {
             name: formName,
             protocol: formProtocol,
             url: formUrl,
-            enabled: formEnabled,
             description: formDescription || undefined,
             location: formLocation || undefined,
             brand: formBrand || undefined,
@@ -492,11 +487,6 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    <!-- Enabled -->
-    <div class="md:col-span-2 flex items-center gap-2">
-      <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
-      <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
-    </div>
 
   </div>
 

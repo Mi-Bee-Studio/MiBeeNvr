@@ -20,7 +20,6 @@ export interface Camera {
   url: string;
   username?: string;
   has_password?: boolean;
-  enabled: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -44,7 +43,6 @@ export interface CreateCameraRequest {
   url?: string;
   username?: string;
   password?: string;
-  enabled?: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -63,7 +61,6 @@ export interface UpdateCameraRequest {
   encoding?: string;
   username?: string;
   password?: string;
-  enabled?: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -206,13 +203,6 @@ export async function getCameraRecordingStats(id: string, signal?: AbortSignal):
   return apiRequest<CameraRecordingStats>(`/cameras/${id}/stats`, { signal });
 }
 
-export async function enableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
-  return updateCamera(id, { enabled: true }, signal);
-}
-
-export async function disableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
-  return updateCamera(id, { enabled: false }, signal);
-}
 
 export async function startCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/start`, {

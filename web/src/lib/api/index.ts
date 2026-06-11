@@ -38,8 +38,6 @@ export {
   updateCamera,
   deleteCamera,
   getCameraRecordingStats,
-  enableCamera,
-  disableCamera,
   startCamera,
   stopCamera,
   getDashboardCameras,

@@ -333,7 +333,7 @@
             </span>
           </div>
           <div class="flex items-center gap-2 text-sm th-text-muted ml-auto">
-            {t('stats.activeCameras')}: {cameras.filter(c => c.enabled).length}/{cameras.length}
+            {t('stats.activeCameras')}: {cameras.length}/{cameras.length}
           </div>
         </div>
       {:else}

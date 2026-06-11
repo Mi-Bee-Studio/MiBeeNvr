@@ -4,15 +4,6 @@ import CameraCard from '$lib/components/CameraCard.svelte';
 import { buildProtocolsMap, DEFAULT_PROTOCOLS } from '$lib/api';
 import type { Camera } from '$lib/api';
 
-// Mock API calls that CameraCard invokes
-vi.mock('$lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$lib/api')>();
-  return {
-    ...actual,
-    enableCamera: vi.fn().mockResolvedValue({ id: 'test', enabled: true }),
-    disableCamera: vi.fn().mockResolvedValue({ id: 'test', enabled: false }),
-  };
-});
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
@@ -32,7 +23,6 @@ function makeCamera(overrides: Partial<Camera> = {}): Camera {
     name: 'Test Camera',
     protocol: 'rtsp',
     url: 'rtsp://192.168.1.100/stream',
-    enabled: true,
     ...overrides,
   };
 }
@@ -48,7 +38,6 @@ function defaultProps(camera: Camera) {
     onstart: noop,
     onstop: noop,
     onrestart: noop,
-    ontoggle: noop,
     onsaveName: noop,
   };
 }
@@ -67,35 +56,18 @@ describe('CameraCard', () => {
     expect(getByText('Recording')).toBeTruthy();
   });
 
-  it('shows disabled badge for disabled camera', () => {
-    const camera = makeCamera({ enabled: false });
-    const { getByText } = render(CameraCard, { props: defaultProps(camera) });
-    expect(getByText('Disabled')).toBeTruthy();
-  });
 
-  it('has is-disabled class when camera is disabled', () => {
-    const camera = makeCamera({ enabled: false });
-    const { container } = render(CameraCard, { props: defaultProps(camera) });
-    const card = container.querySelector('.camera-card');
-    expect(card?.classList.contains('is-disabled')).toBe(true);
-  });
 
-  it('toggle switch has aria-label attribute', () => {
-    const camera = makeCamera({ enabled: true });
-    const { getByRole } = render(CameraCard, { props: defaultProps(camera) });
-    const toggle = getByRole('switch');
-    expect(toggle.getAttribute('aria-label')).toBe('Disable');
-  });
 
-  it('action buttons have correct aria-labels', () => {
+  it('recording toggle has correct aria-labels', () => {
     const idle = makeCamera({ status: 'idle' });
     const { getByRole, unmount } = render(CameraCard, { props: defaultProps(idle) });
-    expect(getByRole('button', { name: 'Start' })).toBeTruthy();
+    expect(getByRole('switch', { name: 'Start' })).toBeTruthy();
     unmount();
 
     const rec = makeCamera({ status: 'recording' });
     const rendered = render(CameraCard, { props: defaultProps(rec) });
-    expect(rendered.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(rendered.getByRole('switch', { name: 'Stop' })).toBeTruthy();
     expect(rendered.getByRole('button', { name: 'Restart' })).toBeTruthy();
   });
 
