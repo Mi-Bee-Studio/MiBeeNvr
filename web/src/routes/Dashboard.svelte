@@ -3,10 +3,9 @@
   import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatFileSize, formatDate } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3 } from 'lucide-svelte';
-  import { loadChart, createTrendChart, aggregateCameraTotals, BAR_COLORS } from '$lib/charts';
-  import { getEffectiveTheme } from '$lib/preferences';
+  import { formatFileSize } from '$lib/format';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2 } from 'lucide-svelte';
+  import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
@@ -36,6 +35,7 @@
   let stats = $state<StorageStats | null>(null);
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
+  let statsError = $state('');
   let prevSystemStats = $state<SystemStats | null>(null);
   let currentSystemStats = $state<SystemStats | null>(null);
   let cpuPercent = $state<string | null>(null);
@@ -44,6 +44,7 @@
   let netRateDown = $state<string | null>(null);
   let health = $state<HealthResponse | null>(null);
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
+  let healthError = $state('');
 
   // Chart state
   let ChartJs: any = null;
@@ -57,30 +58,63 @@
   }
 
   function getUsageColor(percentage: number): string {
-    if (percentage < 50) return 'bg-[var(--color-success)]';
-    if (percentage < 80) return 'bg-[var(--color-warning)]';
-    return 'th-bg-danger';
+    if (percentage < 50) return 'var(--color-success)';
+    if (percentage < 80) return 'var(--color-warning)';
+    return 'var(--color-danger)';
   }
 
-  // Compute health summary from health cameras
-  let healthSummary = $derived.by(() => {
-    const entries = Object.values(healthCameras);
-    let online = 0, warning = 0, offline = 0;
-    for (const cam of entries) {
-      const s = cam.latest_status?.toLowerCase() || '';
-      if (s === 'recording' || s === 'active' || s === 'healthy') {
-        online++;
-      } else if (s === 'reconnecting' || s === 'warning' || s === 'degraded') {
-        warning++;
-      } else if (s === 'error' || s === 'failed' || s === 'unhealthy') {
-        offline++;
-      } else {
-        // Any other status: count as offline
-        offline++;
-      }
+  // Build camera name lookup map
+  let cameraNameMap = $derived.by(() => {
+    const map = new Map<string, string>();
+    for (const cam of cameras) {
+      map.set(cam.id, cam.name || cam.id);
     }
-    return { online, warning, offline, total: entries.length };
+    return map;
   });
+
+  // Build enriched camera health entries (camera info + health detail)
+  let cameraHealthEntries = $derived.by(() => {
+    const entries: { id: string; name: string; status: string; score: number; factors?: Record<string, number> }[] = [];
+    for (const cam of cameras) {
+      const detail = healthCameras[cam.id];
+      entries.push({
+        id: cam.id,
+        name: cam.name || cam.id,
+        status: detail?.latest_status || cam.status || 'unknown',
+        score: detail?.score ?? -1,
+        factors: detail?.score_factors,
+      });
+    }
+    // Sort: unhealthy first (lowest score), then by name
+    entries.sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      return a.name.localeCompare(b.name);
+    });
+    return entries;
+  });
+
+  function statusColor(status: string): string {
+    const s = status.toLowerCase();
+    if (s === 'recording' || s === 'active' || s === 'healthy') return 'var(--color-success)';
+    if (s === 'reconnecting' || s === 'warning' || s === 'degraded') return 'var(--color-warning)';
+    return 'var(--color-danger)';
+  }
+
+  function statusLabel(status: string): string {
+    const s = status.toLowerCase();
+    if (s === 'recording' || s === 'active') return t('cameras.statusRecording');
+    if (s === 'reconnecting') return t('health.status.reconnecting');
+    if (s === 'error' || s === 'failed') return t('cameras.statusError');
+    if (s === 'stopped') return t('cameras.statusStopped');
+    return s;
+  }
+
+  function scoreColor(score: number): string {
+    if (score < 0) return 'th-text-muted';
+    if (score >= 80) return 'color: var(--color-success)';
+    if (score >= 30) return 'color: var(--color-warning)';
+    return 'color: var(--color-danger)';
+  }
 
   // Load system stats
   async function loadSystemStats() {
@@ -111,8 +145,10 @@
   async function loadStats() {
     try {
       stats = await getStats();
+      statsError = '';
     } catch (e) {
       console.error('Failed to load stats:', e);
+      statsError = String(e);
     }
   }
 
@@ -135,8 +171,10 @@
   async function loadHealthCameras() {
     try {
       healthCameras = await getHealthCameras();
+      healthError = '';
     } catch (e) {
       console.warn('Failed to load health cameras:', e);
+      healthError = String(e);
     }
   }
 
@@ -159,23 +197,6 @@
     const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
     if (ctx) {
       trendChart = createTrendChart(ChartJs, ctx, trends);
-    }
-  }
-
-  function rebuildTrendChart() {
-    if (trendChart) { trendChart.destroy(); trendChart = null; }
-    const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
-    if (ctx && lastTrends) {
-      trendChart = createTrendChart(ChartJs, ctx, lastTrends);
-    }
-    // If canvas is not yet in DOM (tab just switched), try again after DOM update
-    if (!ctx && lastTrends) {
-      requestAnimationFrame(() => {
-        const retryCtx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
-        if (retryCtx && lastTrends) {
-          trendChart = createTrendChart(ChartJs, retryCtx, lastTrends);
-        }
-      });
     }
   }
 
@@ -234,110 +255,153 @@
       <h2 class="text-2xl font-bold th-text-primary">{t('nav.dashboard')}</h2>
     </div>
 
-    <!-- System Resource Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <!-- CPU -->
-      <div class="card p-5 border th-border">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium th-text-muted">{t('stats.cpu')}</h3>
-          <Cpu size={18} class="th-text-secondary" />
+    <!-- System Resources — compact single-row layout -->
+    <div class="card p-4 border th-border mb-4">
+      {#if loading && !currentSystemStats}
+        <div class="flex items-center justify-center py-3">
+          <Loader2 size={18} class="th-text-secondary animate-spin" />
         </div>
-        <p class="text-2xl font-bold th-text-primary">{cpuPercent ?? '--'}</p>
-        <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
-          {#if cpuPercent}
-            <div class="h-full {getUsageColor(parseFloat(cpuPercent))} transition-all duration-500" style="width: {cpuPercent}"></div>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Memory -->
-      <div class="card p-5 border th-border">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium th-text-muted">{t('stats.memory')}</h3>
-          <MemoryStick size={18} class="th-text-secondary" />
-        </div>
-        <p class="text-2xl font-bold th-text-primary">
-          {currentSystemStats ? formatFileSize(currentSystemStats.memory.total - currentSystemStats.memory.available) : '--'}
-          <span class="text-sm font-normal th-text-muted">{memoryPercent ?? ''}</span>
-        </p>
-        <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
-          {#if memoryPercent}
-            <div class="h-full {getUsageColor(parseFloat(memoryPercent))} transition-all duration-500" style="width: {memoryPercent}"></div>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Disk (Storage) -->
-      <div class="card p-5 border th-border">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium th-text-muted">{t('stats.totalStorage')}</h3>
-          <HardDrive size={18} class="th-text-secondary" />
-        </div>
-        <p class="text-2xl font-bold th-text-primary">
-          {stats ? formatFileSize(stats.used_bytes) : '--'}
-          <span class="text-sm font-normal th-text-muted">
-            {stats ? formatPercentage(stats.used_bytes, stats.total_bytes) : ''}
-          </span>
-        </p>
-        {#if stats}
-          <div class="mt-2 w-full th-bg-tertiary rounded-full h-2 overflow-hidden">
-            <div
-              class="h-full {getUsageColor((stats.used_bytes / stats.total_bytes) * 100)} transition-all duration-500"
-              style="width: {formatPercentage(stats.used_bytes, stats.total_bytes)}"
-            ></div>
+      {:else}
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <!-- CPU -->
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium th-text-muted flex items-center gap-1.5">
+                <Cpu size={14} />
+                {t('stats.cpu')}
+              </span>
+              <span class="text-sm font-bold th-text-primary">
+                {#if cpuPercent}
+                  {cpuPercent}
+                {:else if currentSystemStats}
+                  <Loader2 size={12} class="animate-spin th-text-secondary" />
+                {:else}
+                  --
+                {/if}
+              </span>
+            </div>
+            <div class="w-full th-bg-tertiary rounded-full h-1.5 overflow-hidden">
+              {#if cpuPercent}
+                <div class="h-full rounded-full transition-all duration-500" style="width: {cpuPercent}; background-color: {getUsageColor(parseFloat(cpuPercent))}"></div>
+              {/if}
+            </div>
           </div>
-        {/if}
-      </div>
 
-      <!-- Network -->
-      <div class="card p-5 border th-border">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium th-text-muted">{t('stats.network')}</h3>
-          <Wifi size={18} class="th-text-secondary" />
+          <!-- Memory -->
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium th-text-muted flex items-center gap-1.5">
+                <MemoryStick size={14} />
+                {t('stats.memory')}
+              </span>
+              <span class="text-sm font-bold th-text-primary">
+                {#if currentSystemStats}
+                  {formatFileSize(currentSystemStats.memory.total - currentSystemStats.memory.available)}
+                  <span class="text-xs font-normal th-text-muted ml-1">{memoryPercent ?? ''}</span>
+                {:else}
+                  --
+                {/if}
+              </span>
+            </div>
+            <div class="w-full th-bg-tertiary rounded-full h-1.5 overflow-hidden">
+              {#if memoryPercent}
+                <div class="h-full rounded-full transition-all duration-500" style="width: {memoryPercent}; background-color: {getUsageColor(parseFloat(memoryPercent))}"></div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Disk -->
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium th-text-muted flex items-center gap-1.5">
+                <HardDrive size={14} />
+                {t('stats.totalStorage')}
+              </span>
+              <span class="text-sm font-bold th-text-primary">
+                {#if stats}
+                  {formatFileSize(stats.used_bytes)}
+                  <span class="text-xs font-normal th-text-muted ml-1">{formatPercentage(stats.used_bytes, stats.total_bytes)}</span>
+                {:else if statsError}
+                  <span class="text-xs th-text-muted">--</span>
+                {:else}
+                  --
+                {/if}
+              </span>
+            </div>
+            <div class="w-full th-bg-tertiary rounded-full h-1.5 overflow-hidden">
+              {#if stats && stats.total_bytes > 0}
+                {@const diskPct = (stats.used_bytes / stats.total_bytes) * 100}
+                <div class="h-full rounded-full transition-all duration-500" style="width: {diskPct}%; background-color: {getUsageColor(diskPct)}"></div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Network -->
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium th-text-muted flex items-center gap-1.5">
+                <Wifi size={14} />
+                {t('stats.network')}
+              </span>
+              <span class="text-sm font-bold th-text-primary">
+                {#if netRateUp || netRateDown}
+                  <span class="text-xs">↑</span>{netRateUp ?? '--'}
+                  <span class="text-xs ml-1.5">↓</span>{netRateDown ?? '--'}
+                {:else if currentSystemStats}
+                  <Loader2 size={12} class="animate-spin th-text-secondary" />
+                {:else}
+                  --
+                {/if}
+              </span>
+            </div>
+            <p class="text-[10px] th-text-muted truncate">
+              {#if currentSystemStats}
+                {t('stats.totalUpload')}: {formatFileSize(currentSystemStats.network.bytes_sent)}
+                · {t('stats.totalDownload')}: {formatFileSize(currentSystemStats.network.bytes_recv)}
+              {/if}
+            </p>
+          </div>
         </div>
-        <p class="text-2xl font-bold th-text-primary">
-          <span class="text-base font-medium">↑</span> {netRateUp ?? '--'}
-          <span class="text-base font-medium ml-2">↓</span> {netRateDown ?? '--'}
-        </p>
-        <p class="text-xs th-text-muted mt-1">
-          {t('stats.totalUpload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_sent) : '--'}
-          · {t('stats.totalDownload')}: {currentSystemStats ? formatFileSize(currentSystemStats.network.bytes_recv) : '--'}
-        </p>
-      </div>
+      {/if}
     </div>
 
-    <!-- Camera Health Summary -->
-    <div class="card p-5 border th-border mb-6">
+    <!-- Camera Health — per-camera status list -->
+    <div class="card p-4 border th-border mb-6">
       <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
         <Activity size={16} class="text-accent" />
         {t('dashboard.healthSummary')}
       </h3>
-      {#if healthSummary.total > 0}
-        <div class="flex flex-wrap gap-6">
-          <div class="flex items-center gap-2">
-            <CircleCheck size={16} class="text-[var(--color-success)]" />
-            <span class="text-sm th-text-primary">
-              <span class="font-semibold">{healthSummary.online}</span> {t('stats.healthy')}
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <AlertCircle size={16} class="text-[var(--color-warning)]" />
-            <span class="text-sm th-text-primary">
-              <span class="font-semibold">{healthSummary.warning}</span> {t('stats.degraded')}
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <CirclePause size={16} class="text-[var(--color-danger)]" />
-            <span class="text-sm th-text-primary">
-              <span class="font-semibold">{healthSummary.offline}</span> {t('stats.unhealthy')}
-            </span>
-          </div>
-          <div class="flex items-center gap-2 text-sm th-text-muted ml-auto">
-            {t('stats.activeCameras')}: {cameras.length}/{cameras.length}
-          </div>
+      {#if healthError}
+        <div class="flex items-center gap-2 text-sm th-text-muted py-2">
+          <AlertCircle size={14} class="th-text-secondary" />
+          <span>{t('common.error')}</span>
         </div>
-      {:else}
+      {:else if cameraHealthEntries.length === 0}
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
+      {:else}
+        <div class="space-y-1">
+          {#each cameraHealthEntries as cam}
+            <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
+              <!-- Status dot -->
+              <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {statusColor(cam.status)}"></span>
+
+              <!-- Camera name -->
+              <span class="text-sm th-text-primary flex-1 truncate">{cam.name}</span>
+
+              <!-- Status badge -->
+              <span class="text-xs th-text-secondary hidden sm:inline">{statusLabel(cam.status)}</span>
+
+              <!-- Health score -->
+              {#if cam.score >= 0}
+                <span class="text-xs font-semibold tabular-nums min-w-[2rem] text-right" style="{scoreColor(cam.score)}">
+                  {cam.score}
+                </span>
+              {:else}
+                <span class="text-xs th-text-muted tabular-nums min-w-[2rem] text-right">--</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
 

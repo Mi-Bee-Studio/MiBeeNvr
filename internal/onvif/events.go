@@ -81,26 +81,27 @@ func WithEventCallback(cb EventCallback) EventSubscriberOption {
 	}
 }
 
-// WithPollInterval sets the polling interval between PullMessages calls.
-func WithPollInterval(d time.Duration) EventSubscriberOption {
+// withPollInterval sets the polling interval between PullMessages calls.
+func withPollInterval(d time.Duration) EventSubscriberOption {
 	return func(es *EventSubscriberImpl) {
 		es.pollInterval = d
 	}
 }
 
-// WithPullTimeout sets the SOAP timeout for PullMessages requests.
-func WithPullTimeout(d time.Duration) EventSubscriberOption {
+// withPullTimeout sets the SOAP timeout for PullMessages requests.
+func withPullTimeout(d time.Duration) EventSubscriberOption {
 	return func(es *EventSubscriberImpl) {
 		es.pullTimeout = d
 	}
 }
 
-// WithSubscriptionDuration sets the requested PullPoint subscription lifetime.
-func WithSubscriptionDuration(d time.Duration) EventSubscriberOption {
+// withSubscriptionDuration sets the requested PullPoint subscription lifetime.
+func withSubscriptionDuration(d time.Duration) EventSubscriberOption {
 	return func(es *EventSubscriberImpl) {
 		es.subDuration = d
 	}
 }
+
 
 // Subscribe creates a PullPoint subscription for the camera and starts
 // background polling. Safe to call multiple times — returns nil if already

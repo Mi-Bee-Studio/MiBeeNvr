@@ -143,6 +143,7 @@ export {
   batchMergeTimelapse,
   subscribeTimelapseMergeProgress,
   cancelMerge,
+  retryRecordingMerge,
   fetchTimelapsePreview,
 } from './recordings';
 

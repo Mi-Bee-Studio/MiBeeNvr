@@ -145,13 +145,13 @@ func TestIsEncrypted(t *testing.T) {
 
 func TestHasKeyNoEnvVar(t *testing.T) {
 	helperClearEnvKey(t)
-	require.False(t, HasKey())
+	require.False(t, hasKey())
 }
 
 func TestHasKeyWithEnvVar(t *testing.T) {
 	key := helperGenerateKey(t)
 	helperSetEnvKey(t, key)
-	require.True(t, HasKey())
+	require.True(t, hasKey())
 }
 
 func TestGetEncryptionKeyFromRaw(t *testing.T) {

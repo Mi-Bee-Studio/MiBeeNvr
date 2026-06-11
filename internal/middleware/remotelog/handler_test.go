@@ -21,20 +21,6 @@ type testCollector struct {
 	mu       sync.Mutex // guards Bodies
 }
 
-func (tc *testCollector) handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		r.Body.Close()
-		tc.mu.Lock()
-		tc.Bodies = append(tc.Bodies, string(body))
-		tc.mu.Unlock()
-		// Increment Count AFTER body is captured so waitForRequests can rely on
-		// Count >= N implying len(Bodies) >= N. Otherwise getBodies() may observe an
-		// empty slice under CI load, causing "no valid JSON entry found" flakes.
-		tc.Count.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-}
-}
 
 func (tc *testCollector) getBodies() []string {
 	tc.mu.Lock()

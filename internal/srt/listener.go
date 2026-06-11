@@ -128,12 +128,13 @@ func (l *Listener) Running() bool {
 	return l.running
 }
 
-// ReceiverCount returns the number of active receivers.
-func (l *Listener) ReceiverCount() int {
+// receiverCount returns the number of active receivers.
+func (l *Listener) receiverCount() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return len(l.receivers)
 }
+
 
 // StartCallers starts all configured caller-mode streams.
 // Each caller receiver dials the remote SRT address and starts receiving.
@@ -166,16 +167,6 @@ func (l *Listener) StartCallers() error {
 	return nil
 }
 
-// StopCallers stops all caller-mode receivers.
-func (l *Listener) StopCallers() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	for id, rec := range l.receivers {
-		rec.Stop()
-		delete(l.receivers, id)
-	}
-}
 
 // handleConnect is called for each incoming SRT connection.
 // It parses the streamid, finds the camera, and returns PUBLISH or REJECT.

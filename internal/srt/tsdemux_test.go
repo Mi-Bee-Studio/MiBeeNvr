@@ -276,10 +276,10 @@ func TestParsePESHeaderInvalid(t *testing.T) {
 func TestFormatPTS(t *testing.T) {
 	t.Helper()
 
-	require.Equal(t, "1.000s", FormatPTS(90000))
-	require.Equal(t, "0.000s", FormatPTS(0))
-	require.Equal(t, "0.000s", FormatPTS(-1))
-	require.Equal(t, "0.333s", FormatPTS(30000))
+	require.Equal(t, "1.000s", formatPTS(90000))
+	require.Equal(t, "0.000s", formatPTS(0))
+	require.Equal(t, "0.000s", formatPTS(-1))
+	require.Equal(t, "0.333s", formatPTS(30000))
 }
 
 // buildTestTSPackets creates a sequence of MPEG-TS packets containing

@@ -120,10 +120,11 @@ func (r *Receiver) FrameCount() int64 {
 	return r.frameCount.Load()
 }
 
-// DropCount returns total frames dropped by the hub.
-func (r *Receiver) DropCount() int64 {
+// getDropCount returns total frames dropped by the hub.
+func (r *Receiver) getDropCount() int64 {
 	return r.dropCount.Load()
 }
+
 
 // readLoop reads MPEG-TS data from the SRT connection, demuxes it,
 // extracts H.264 NALUs, and broadcasts access units to the StreamHub.

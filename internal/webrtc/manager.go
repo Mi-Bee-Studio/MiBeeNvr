@@ -204,14 +204,15 @@ func WithIdleTimeout(d time.Duration) ManagerOption {
 	}
 }
 
-// WithFrameBufSize sets the per-peer frame buffer size.
-func WithFrameBufSize(n int) ManagerOption {
+// withFrameBufSize sets the per-peer frame buffer size.
+func withFrameBufSize(n int) ManagerOption {
 	return func(m *Manager) {
 		if n > 0 {
 			m.frameBufSize = n
 		}
 	}
 }
+
 
 // WithMetrics sets the Prometheus metrics collector.
 func WithMetrics(m *metrics.Metrics) ManagerOption {
@@ -566,19 +567,6 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 	return nil
 }
 
-// ActivePeerCount returns the number of active WHEP peers for the given camera.
-func (m *Manager) ActivePeerCount(camID string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.camPeers[camID])
-}
-
-// TotalPeerCount returns the total number of active WHEP sessions across all cameras.
-func (m *Manager) TotalPeerCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.peers)
-}
 
 // StopAll closes all active WHEP sessions and releases resources.
 func (m *Manager) StopAll() {
@@ -719,4 +707,18 @@ func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {
 			}
 		}
 	}
+}
+
+// activePeerCount returns the number of active WHEP peers for the given camera.
+func (m *Manager) activePeerCount(camID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.camPeers[camID])
+}
+
+// totalPeerCount returns the total number of active WHEP sessions across all cameras.
+func (m *Manager) totalPeerCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.peers)
 }

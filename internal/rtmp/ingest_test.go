@@ -207,7 +207,7 @@ func TestH264FrameExtraction(t *testing.T) {
 
 	// Verify that the publisher was registered
 	require.Eventually(t, func() bool {
-		return srv.ActivePublishers() > 0
+		return srv.activePublishers() > 0
 	}, 5*time.Second, 100*time.Millisecond, "publisher should be registered")
 
 	// gortmplib Reader has a 2-second analyze period.
@@ -304,7 +304,7 @@ func TestDisconnectCleanup(t *testing.T) {
 
 	// Wait for publisher to register
 	require.Eventually(t, func() bool {
-		return srv.ActivePublishers() > 0
+		return srv.activePublishers() > 0
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Disconnect
@@ -318,7 +318,7 @@ func TestDisconnectCleanup(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond, "disconnect callback should fire")
 
 	require.Eventually(t, func() bool {
-		return srv.ActivePublishers() == 0
+		return srv.activePublishers() == 0
 	}, 3*time.Second, 100*time.Millisecond, "publishers should be cleaned up")
 }
 
@@ -340,7 +340,7 @@ func TestInvalidStreamKey(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// No publishers should be registered (invalid key is rejected)
-	require.Equal(t, 0, srv.ActivePublishers())
+	require.Equal(t, 0, srv.activePublishers())
 	_ = err
 }
 
@@ -353,7 +353,7 @@ func TestServerStartStop(t *testing.T) {
 	}, nil, nil)
 
 	require.NotNil(t, srv.Addr())
-	require.Equal(t, 0, srv.ActivePublishers())
+	require.Equal(t, 0, srv.activePublishers())
 }
 
 // TestExtractStreamKey_NilURL tests that nil URL returns empty string.

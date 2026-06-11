@@ -3,6 +3,7 @@ package srt
 import (
 	"errors"
 	"fmt"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
@@ -328,10 +329,11 @@ func assembleAccessUnit(nalus []NALU) [][][]byte {
 	return frames
 }
 
-// FormatPTS formats PTS from 90kHz ticks to a human-readable string.
-func FormatPTS(pts int64) string {
+// formatPTS formats PTS from 90kHz ticks to a human-readable string.
+func formatPTS(pts int64) string {
 	if pts <= 0 {
 		return "0.000s"
 	}
 	return fmt.Sprintf("%.3fs", float64(pts)/90000.0)
 }
+

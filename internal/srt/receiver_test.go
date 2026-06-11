@@ -124,7 +124,7 @@ func TestNewListener(t *testing.T) {
 	ln := NewListener(cfg)
 
 	require.False(t, ln.Running())
-	require.Equal(t, 0, ln.ReceiverCount())
+	require.Equal(t, 0, ln.receiverCount())
 }
 
 func TestListenerRegisterHub(t *testing.T) {
@@ -247,7 +247,7 @@ func TestReceiverMetrics(t *testing.T) {
 	rec := NewReceiver(config.SRTStream{CameraID: "metrics-test", Mode: "listener"}, hub)
 
 	require.Equal(t, int64(0), rec.FrameCount())
-	require.Equal(t, int64(0), rec.DropCount())
+	require.Equal(t, int64(0), rec.getDropCount())
 	require.False(t, rec.Running())
 }
 

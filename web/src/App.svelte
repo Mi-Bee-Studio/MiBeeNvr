@@ -64,7 +64,7 @@ function parseRoute(hash: string) {
     }
 
     if (!path || path === '/') {
-      return isAuthenticated() ? { route: 'recordings', params: {} } : { route: 'login', params: {} };
+      return isAuthenticated() ? { route: 'surveillance', params: {} } : { route: 'login', params: {} };
     }
 
     const segments = path.split('/').filter(Boolean);

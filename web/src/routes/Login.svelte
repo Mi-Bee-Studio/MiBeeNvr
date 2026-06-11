@@ -16,7 +16,7 @@
 
   // Redirect if already logged in
   if (isAuthenticated()) {
-    window.location.hash = '#/recordings';
+    window.location.hash = '#/surveillance';
   }
 
   function validateUsername() {
@@ -48,8 +48,8 @@
 
     try {
       await login(username, password);
-      // Redirect to recordings on success
-      window.location.hash = '#/recordings';
+      // Redirect to surveillance on success
+      window.location.hash = '#/surveillance';
     } catch (e) {
       if (e instanceof Error && e.message === 'setup_required') {
         window.location.hash = '#/setup';

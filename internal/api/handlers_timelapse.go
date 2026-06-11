@@ -994,6 +994,68 @@ func (h *Handler) handleTimelapseDownload(w http.ResponseWriter, r *http.Request
 	http.ServeFile(w, r, rec.MergePath)
 }
 
+// handleRetryTimelapseMerge handles POST /api/recordings/{id}/retry-merge.
+// Retries the merge for a failed timelapse recording by re-triggering the rolling merge.
+func (h *Handler) handleRetryTimelapseMerge(w http.ResponseWriter, r *http.Request) {
+	recordingID := chi.URLParam(r, "id")
+
+	if h.timelapseMergeMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
+		return
+	}
+
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	// Fetch the recording from DB.
+	rec, err := h.db.GetRecording(r.Context(), recordingID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+
+	// Only timelapse recordings can be retried.
+	if rec.Format != "timelapse" {
+		writeError(w, http.StatusBadRequest, "only timelapse recordings can be retried")
+		return
+	}
+
+	// Allow retry for failed or pending recordings.
+	if rec.MergeStatus != "failed" && rec.MergeStatus != "pending" {
+		writeError(w, http.StatusBadRequest, "recording is not in a retryable state (current: "+rec.MergeStatus+")")
+		return
+	}
+
+	// The file_path points to the frame directory.
+	frameDir := rec.FilePath
+	if frameDir == "" {
+		writeError(w, http.StatusBadRequest, "recording has no frame directory")
+		return
+	}
+
+	outputPath := frameDir + ".mp4"
+
+	// Delete old broken MP4 if it exists.
+	os.Remove(outputPath)
+
+	// Reset merge progress in DB.
+	if dbErr := h.db.UpdateMergeProgress(r.Context(), recordingID, 0); dbErr != nil {
+		logger.Warn("retry-merge: failed to reset progress", "recording_id", recordingID, "error", dbErr)
+	}
+
+	// Trigger the rolling merge.
+	h.timelapseMergeMgr.StartSegmentMerge(context.Background(), rec.CameraID, frameDir, outputPath, recordingID)
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":       "merge_initiated",
+		"recording_id":  recordingID,
+		"camera_id":    rec.CameraID,
+		"frame_dir":    frameDir,
+	})
+}
+
 // --- Task 7: Merge Cancellation ---
 // handleTimelapseMergeCancel handles DELETE /api/timelapse/{cameraId}/merge.
 // Cancels an active rolling merge for the specified camera.

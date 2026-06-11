@@ -116,12 +116,13 @@ func (s *Server) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
-// ActivePublishers returns the number of active publishers.
-func (s *Server) ActivePublishers() int {
+// activePublishers returns the number of active publishers.
+func (s *Server) activePublishers() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.publishers)
 }
+
 
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 	defer close(s.done)

@@ -359,6 +359,7 @@ type App struct {
 	cleanupMgr *cleanup.CleanupManager
 	healthMgr  *health.Manager
 	mergeScheduler *timelapse.MergeScheduler
+	rollingMergeMgr *timelapse.RollingMergeManager
 
 	// Optional network services (nil when disabled)
 	mqttClient  *mqtt.Client
@@ -542,8 +543,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		slog.Info("using server local timezone")
 	}
 
-	// Step 6: Camera manager
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, appLoc)
+	// Step 5.5: Timelapse rolling merge manager (shared between camera manager and API)
+	a.rollingMergeMgr = timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), db, 10, false)
+
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, a.rollingMergeMgr, appLoc)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -715,6 +718,9 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
 	handler.SetEventBus(a.eventBus)
+	if a.rollingMergeMgr != nil {
+		handler.SetTimelapseMergeMgr(a.rollingMergeMgr)
+	}
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

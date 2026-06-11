@@ -56,7 +56,7 @@ func TestHandlePublishPanicCleanup(t *testing.T) {
 
 	// After cleanup, receiver must be removed — subsequent connections for the same
 	// camera ID will not be blocked by a stale receiver entry.
-	require.Equal(t, 0, ln.ReceiverCount())
+	require.Equal(t, 0, ln.receiverCount())
 
 	ln.mu.RLock()
 	_, ok := ln.receivers[cameraID]
