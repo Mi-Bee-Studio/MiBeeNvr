@@ -553,8 +553,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	if a.healthMgr != nil && a.camMgr != nil {
 		a.healthMgr.SetRestarter(a.camMgr.RestartRecorder)
 		a.healthMgr.SetCameraEnabledFn(func(cameraID string) bool {
-			cam := a.camMgr.GetCameraConfig(cameraID)
-			return cam != nil && cam.Enabled
+			return a.camMgr.GetCameraConfig(cameraID) != nil
 		})
 	}
 

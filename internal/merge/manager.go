@@ -101,9 +101,6 @@ func (m *MergeManager) PendingCounts(ctx context.Context) map[string]int {
 	cameras := m.cameras()
 	counts := make(map[string]int, len(cameras))
 	for _, cam := range cameras {
-		if !cam.Enabled {
-			continue
-		}
 		effectiveCfg := config.ResolveMergeConfig(cfg, m.getCameraCfg(cam.ID))
 		if !effectiveCfg.Enabled {
 			continue
@@ -161,9 +158,6 @@ func (m *MergeManager) RunOnce(ctx context.Context) error {
 	var processedSegments int
 
 	for _, cam := range cameras {
-		if !cam.Enabled {
-			continue
-		}
 		if ctx.Err() != nil {
 			break
 		}
