@@ -631,9 +631,11 @@ func TestKeyframeExtractor_ProducesValidFrameFiles(t *testing.T) {
 		}
 
 		// Check that all NALUs from the AU are in the file.
+		// Cached parameter sets (SPS/PPS) are prepended, so the file may have
+		// additional NALUs beyond the original AU.
 		naluCount := countNALUs(data)
-		if naluCount != len(au) {
-			t.Fatalf("file %s: expected %d NALUs, found %d", file, len(au), naluCount)
+		if naluCount < len(au) {
+			t.Fatalf("file %s: expected at least %d NALUs (original AU), found %d", file, len(au), naluCount)
 		}
 		t.Logf("file %s: %d bytes, %d NALUs", filepath.Base(file), len(data), naluCount)
 	}
@@ -771,8 +773,8 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 		if rec.Format != model.FormatTimelapse {
 			t.Errorf("expected format %q, got %q", model.FormatTimelapse, rec.Format)
 		}
-		if !rec.Merged {
-			t.Errorf("expected Merged=true for keyframe recording %q", rec.ID)
+		if rec.Merged {
+			t.Errorf("expected Merged=false (merge not yet run) for keyframe recording %q", rec.ID)
 		}
 		if rec.FrameCount == 0 {
 			t.Errorf("expected frame count > 0")

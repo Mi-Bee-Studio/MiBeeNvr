@@ -38,8 +38,9 @@ type KeyframeExtractorConfig struct {
 	SegmentDur time.Duration // duration of each segment (default: 10min)
 	IsH265     bool          // true if the source stream is H.265
 
-	Store SegmentStore // required
-	DB    RecordingDB  // optional — enables DB recording entries
+	Store    SegmentStore          // required
+	DB       RecordingDB           // optional — enables DB recording entries
+	MergeMgr *RollingMergeManager  // optional — enables rolling merge on segment close
 }
 
 // KeyframeExtractor subscribes to a recorder's StreamHub and captures
@@ -60,9 +61,9 @@ type KeyframeExtractor struct {
 	segmentDur time.Duration
 	isH265     bool
 
-	store SegmentStore
-	db    RecordingDB
-
+	store    SegmentStore
+	db       RecordingDB
+	mergeMgr *RollingMergeManager
 	mu         sync.Mutex
 	hub        *model.StreamHub
 	consumerID string
@@ -74,6 +75,12 @@ type KeyframeExtractor struct {
 	// Latest non-IDR frame (P-frame fallback when no IDR available).
 	latestPFrame   frameData
 	latestPFrameMu sync.Mutex
+
+	// Cached parameter sets (SPS/PPS for H.264, VPS/SPS/PPS for H.265).
+	// Extracted from every AU and prepended to saved frame files so the
+	// H264GoMerger always has parameter sets available.
+	cachedParamSets   [][]byte
+	cachedParamSetsMu sync.Mutex
 
 	// Segment state.
 	curTempPath  string
@@ -108,6 +115,7 @@ func NewKeyframeExtractor(cfg KeyframeExtractorConfig) *KeyframeExtractor {
 		isH265:     cfg.IsH265,
 		store:      cfg.Store,
 		db:         cfg.DB,
+		mergeMgr:   cfg.MergeMgr,
 		consumerID: fmt.Sprintf("keyframe-extractor-%s", cfg.CameraID),
 	}
 }
@@ -184,6 +192,9 @@ func (k *KeyframeExtractor) IsRunning() bool {
 // It deep-copies the access unit and stores it as either the latest
 // IDR frame (if it contains an IDR NALU) or the latest P-frame fallback.
 func (k *KeyframeExtractor) onFrame(pts int64, au [][]byte) {
+	// Cache parameter sets from every AU — they may arrive separately from IDR frames.
+	k.cacheParamSets(au)
+
 	if nalutil.IsIDR(au, k.isH265) {
 		k.latestFrameMu.Lock()
 		k.latestFrame = frameData{
@@ -201,6 +212,41 @@ func (k *KeyframeExtractor) onFrame(pts int64, au [][]byte) {
 			ts:  time.Now(),
 		}
 		k.latestPFrameMu.Unlock()
+	}
+}
+
+// cacheParamSets extracts and caches parameter set NALUs (SPS/PPS for H.264,
+// VPS/SPS/PPS for H.265) from the given access unit. Parameter sets often
+// arrive in separate AUs from IDR frames, so we must cache them and prepend
+// to every saved frame file.
+func (k *KeyframeExtractor) cacheParamSets(au [][]byte) {
+	var psNALUs [][]byte
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		if k.isH265 {
+			// H.265: VPS=32, SPS=33, PPS=34
+			nalType := (nalu[0] >> 1) & 0x3F
+			if nalType == 32 || nalType == 33 || nalType == 34 {
+				cp := make([]byte, len(nalu))
+				copy(cp, nalu)
+				psNALUs = append(psNALUs, cp)
+			}
+		} else {
+			// H.264: SPS=7, PPS=8
+			nalType := nalu[0] & 0x1F
+			if nalType == 7 || nalType == 8 {
+				cp := make([]byte, len(nalu))
+				copy(cp, nalu)
+				psNALUs = append(psNALUs, cp)
+			}
+		}
+	}
+	if len(psNALUs) > 0 {
+		k.cachedParamSetsMu.Lock()
+		k.cachedParamSets = psNALUs
+		k.cachedParamSetsMu.Unlock()
 	}
 }
 
@@ -263,8 +309,19 @@ func (k *KeyframeExtractor) captureFrame() {
 	frameName := fmt.Sprintf("frame_%06d%s", frameCount, ext)
 	framePath := filepath.Join(tempPath, frameName)
 
-	// Concatenate all NALUs with Annex B start codes (0x00000001).
+	// Prepend cached parameter sets (SPS/PPS) so every frame file is self-contained.
+	// Parameter sets often arrive in separate AUs from IDR frames; without them
+	// the H264GoMerger cannot build a valid MP4.
+	k.cachedParamSetsMu.Lock()
+	paramSets := k.cachedParamSets
+	k.cachedParamSetsMu.Unlock()
+
+	// Concatenate parameter sets + frame NALUs with Annex B start codes.
 	var data []byte
+	for _, nalu := range paramSets {
+		data = append(data, []byte{0x00, 0x00, 0x00, 0x01}...)
+		data = append(data, nalu...)
+	}
 	for _, nalu := range frame.au {
 		data = append(data, []byte{0x00, 0x00, 0x00, 0x01}...)
 		data = append(data, nalu...)
@@ -358,18 +415,26 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(segStart).Seconds()
 
-		f := model.FormatTimelapse
+		// Calculate directory size for file_size metadata.
+		var totalSize int64
+		filepath.Walk(finalPath, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				totalSize += info.Size()
+			}
+			return nil
+		})
 
 		rec := &model.Recording{
 			ID:         fmt.Sprintf("%d", now.UnixNano()),
 			CameraID:   k.cameraID,
 			FilePath:   finalPath,
-			Format:     f,
+			Format:     model.FormatTimelapse,
 			StartedAt:  segStart,
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: frameCount,
-			Merged:     true,
+			FileSize:   totalSize,
+			Merged:     false,
 		}
 
 		if err := k.db.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
@@ -377,6 +442,11 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 				"camera_id", k.cameraID,
 				"error", err,
 			)
+		}
+
+		// Trigger async rolling merge if merge manager is configured.
+		if k.mergeMgr != nil {
+			k.mergeMgr.StartSegmentMerge(context.Background(), k.cameraID, finalPath, finalPath+".mp4", rec.ID)
 		}
 	}
 
