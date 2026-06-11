@@ -353,8 +353,15 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 
 // --- Timelapse endpoints ---
 
+// isTimelapseFrame checks if a filename has a supported timelapse frame extension.
+func isTimelapseFrame(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") ||
+		strings.HasSuffix(lower, ".h264") || strings.HasSuffix(lower, ".h265")
+}
+
 // handleTimelapseFrames handles GET /api/recordings/{id}/timelapse-frames.
-// Returns JSON array of JPEG frame metadata for timelapse recordings.
+// Returns JSON array of frame metadata for timelapse recordings.
 func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -400,7 +407,7 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+		if !isTimelapseFrame(name) {
 			continue
 		}
 		fi, err := e.Info()

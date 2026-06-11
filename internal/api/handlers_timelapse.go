@@ -1156,14 +1156,14 @@ func (h *Handler) handleTimelapsePreview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Collect JPEG frames sorted by name
+	// Collect frames sorted by name
 	var frames []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+		if !isTimelapseFrame(name) {
 			continue
 		}
 		frames = append(frames, name)
