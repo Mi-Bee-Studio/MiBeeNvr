@@ -369,13 +369,10 @@ func TestDeleteOriginal_ZeroFrames(t *testing.T) {
 }
 
 func TestRollingMergeManager_ProgressCleanup(t *testing.T) {
-	oldDelay := progressCleanupDelay
-	progressCleanupDelay = 100 * time.Millisecond
-	t.Cleanup(func() { progressCleanupDelay = oldDelay })
-
 	db := newMockDB()
 	merger := &slowMerger{delay: 10 * time.Millisecond}
 	mgr := NewRollingMergeManager(merger, db, 10, false)
+	mgr.progressCleanupDelay = 100 * time.Millisecond
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
