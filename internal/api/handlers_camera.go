@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -69,12 +70,17 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Inject per-camera transcoding config from config (not stored in DB)
+	// Inject per-camera transcoding config and channel from config (not stored in DB)
 	if h.config != nil {
 		for i := range cameras {
 			for _, cam := range h.config.Cameras {
-				if cam.ID == cameras[i].ID && cam.Transcoding != nil {
-					cameras[i].Transcoding = cam.Transcoding
+				if cam.ID == cameras[i].ID {
+					if cam.Transcoding != nil {
+						cameras[i].Transcoding = cam.Transcoding
+					}
+					if cam.Channel != "" {
+						cameras[i].Channel = cam.Channel
+					}
 					break
 				}
 			}
@@ -122,6 +128,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding string `json:"stream_encoding"`
 		Encoding       string `json:"encoding"`
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
+		Channel        string `json:"channel"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -216,6 +223,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
 		Timelapse:      body.Timelapse,
+		Channel:        body.Channel,
 	}
 
 	if h.camMgr == nil {
@@ -284,11 +292,16 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
-	// Inject per-camera transcoding config
+	// Inject per-camera transcoding config and channel from config (not stored in DB)
 	if h.config != nil {
 		for _, cam := range h.config.Cameras {
-			if cam.ID == id && cam.Transcoding != nil {
-				row.Transcoding = cam.Transcoding
+			if cam.ID == id {
+				if cam.Transcoding != nil {
+					row.Transcoding = cam.Transcoding
+				}
+				if cam.Channel != "" {
+					row.Channel = cam.Channel
+				}
 				break
 			}
 		}
@@ -322,6 +335,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken   *string `json:"profile_token"`
 		StreamEncoding *string                          `json:"stream_encoding"`
 		Transcoding    *config.CameraTranscodingConfig  `json:"transcoding"`
+		Channel        *string `json:"channel"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -368,6 +382,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
 		Transcoding:    body.Transcoding,
+		Channel:        body.Channel,
 	}
 
 	// Validate URL format if URL is being updated
@@ -602,6 +617,14 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
     }
     if body.Username != "" {
       req.SetBasicAuth(body.Username, body.Password)
+    } else {
+      // Extract credentials from URL if present (e.g., http://admin:pass@host)
+      if parsed, err := url.Parse(target); err == nil && parsed.User != nil {
+        if u := parsed.User.Username(); u != "" {
+          p, _ := parsed.User.Password()
+          req.SetBasicAuth(u, p)
+        }
+      }
     }
     resp, err := client.Do(req)
     if err != nil {
@@ -623,20 +646,27 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 // stripScheme extracts host:port from a URL string for TCP dialing.
+// Handles URLs with credentials (user:pass@host) by stripping userinfo.
 func stripScheme(rawURL string) string {
-  // Remove scheme
-  u := strings.TrimPrefix(rawURL, "rtsp://")
-  u = strings.TrimPrefix(u, "http://")
-  u = strings.TrimPrefix(u, "https://")
-  // Strip path and query
-  if idx := strings.IndexAny(u, "/?"); idx >= 0 {
-    u = u[:idx]
-  }
-  // Default port
-  if !strings.Contains(u, ":") {
-    u = u + ":554"
-  }
-  return u
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL // fallback
+	}
+	host := parsed.Hostname()
+	port := parsed.Port()
+	if port == "" {
+		switch parsed.Scheme {
+		case "rtsp":
+			port = "554"
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			port = "554"
+		}
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // probeONVIFEncoding connects to an ONVIF device and retrieves the encoding

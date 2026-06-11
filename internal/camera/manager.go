@@ -42,6 +42,7 @@ type CameraUpdate struct {
 	ONVIFEndpoint  *string
 	ProfileToken   *string
 	StreamEncoding *string
+	Channel        *string
 	Transcoding    *config.CameraTranscodingConfig
 }
 
@@ -832,6 +833,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.Password != nil && *updates.Password != cam.Password {
 		needsRestart = true
 	}
+	if updates.Channel != nil && *updates.Channel != cam.Channel {
+		needsRestart = true
+	}
 
 	// Apply updates
 	if updates.Name != nil {
@@ -873,6 +877,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	if updates.Transcoding != nil {
 		cam.Transcoding = updates.Transcoding
+	}
+	if updates.Channel != nil {
+		cam.Channel = *updates.Channel
 	}
 
 

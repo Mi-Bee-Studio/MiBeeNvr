@@ -75,6 +75,7 @@ type CameraConfig struct {
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
+	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.

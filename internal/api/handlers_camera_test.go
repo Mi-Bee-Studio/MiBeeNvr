@@ -82,6 +82,18 @@ func TestStripScheme_RTSPDefaultPort(t *testing.T) {
 	require.Equal(t, "10.0.0.1:554", stripScheme("rtsp://10.0.0.1/path"))
 }
 
+func TestStripScheme_RTSPWithCredentials(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	require.Equal(t, "192.168.1.10:554", stripScheme("rtsp://admin:secret@192.168.1.10/stream"))
+}
+
+func TestStripScheme_RTSPWithCredentialsAndPort(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	require.Equal(t, "192.168.1.10:8554", stripScheme("rtsp://user:pass@192.168.1.10:8554/stream"))
+}
+
 // --- handleTestConnection validation tests ---
 
 func TestTestConnection_MissingURL(t *testing.T) {

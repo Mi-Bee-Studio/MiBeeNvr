@@ -66,7 +66,8 @@ type XiaomiRecorderConfig struct {
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
-	EventBus    *event.EventBus
+	Channel      string            // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	EventBus     *event.EventBus
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -353,8 +354,8 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	}
 	defer client.Conn.Close()
 
-	// Start HD video stream.
-	if err := client.StartMedia("", "hd"); err != nil {
+	// Start HD video stream (use configured channel for dual-lens cameras).
+	if err := client.StartMedia(r.cfg.Channel, "hd"); err != nil {
 		return fmt.Errorf("miss start media: %w", err), false
 	}
 	defer func() {
