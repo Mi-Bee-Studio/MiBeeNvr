@@ -46,6 +46,23 @@ func effectiveDualModeFrameSource(cam config.CameraConfig) string {
 	return fs
 }
 
+// resolveTimelapseMergeMgr returns the global timelapse merge manager if available,
+// or creates a local one with AutoDetectMerger. This ensures rolling merge works
+// even when the global manager is not set (production mode).
+func (cm *CameraManager) resolveTimelapseMergeMgr(interval time.Duration) *timelapse.RollingMergeManager {
+	if cm.timelapseMergeMgr != nil {
+		return cm.timelapseMergeMgr
+	}
+	fps := 10
+	if interval > 0 {
+		fps = int(time.Second / interval)
+		if fps < 1 {
+			fps = 1
+		}
+	}
+	return timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, false)
+}
+
 
 
 // createTimelapseSnapshotRecorder creates a SnapshotCapturer for snapshot frame source.
@@ -67,7 +84,7 @@ func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig
 		DB:          cm.db,
 		Store:       cm.store,
 		Metrics:     cm.metrics,
-		MergeMgr:    cm.timelapseMergeMgr,
+		MergeMgr:    cm.resolveTimelapseMergeMgr(interval),
 		Protocol:    deriveProto,
 		StreamURL:   cam.URL,
 	}
@@ -104,9 +121,7 @@ func (cm *CameraManager) createTimelapseMJPEGRecorder(cam config.CameraConfig, s
 			tlCfg.Interval = d
 		}
 	}
-	if cm.timelapseMergeMgr != nil {
-		tlCfg.MergeMgr = cm.timelapseMergeMgr
-	}
+	tlCfg.MergeMgr = cm.resolveTimelapseMergeMgr(tlCfg.Interval)
 	logger.Info("creating TimelapseRecorder for timelapse", "camera_id", cam.ID, "url", cam.URL)
 	return recorder.NewTimelapseRecorder(tlCfg, cm.store)
 }
@@ -190,21 +205,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 	// so cam.Encoding may be empty even though the stream is H.265.
 	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265" || isRecorderH265(rec)
 
-	// Create a rolling merge manager for this extractor if none available.
-	// Uses AutoDetectMerger which handles both JPEG (.jpg) and H.264/H.265 frames.
-	var mergeMgr *timelapse.RollingMergeManager
-	if cm.timelapseMergeMgr != nil {
-		mergeMgr = cm.timelapseMergeMgr
-	} else {
-		fps := 10
-		if interval > 0 {
-			fps = int(time.Second / interval)
-			if fps < 1 {
-				fps = 1
-			}
-		}
-		mergeMgr = timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, false)
-	}
+	mergeMgr := cm.resolveTimelapseMergeMgr(interval)
 
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
 		CameraID:   cameraID,
