@@ -217,7 +217,7 @@
   onMount(async () => {
     try {
       const fetched = await getDashboardCameras();
-      const activeFetched = fetched.filter(c => c.enabled !== false);
+      const activeFetched = fetched;
       allCameras = activeFetched;
       const savedIds = loadSavedCameraIds();
       if (savedIds.length > 0) {

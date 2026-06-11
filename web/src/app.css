@@ -322,6 +322,14 @@
     box-shadow: var(--focus-ring);
   }
 
+  .input-error {
+    border-color: var(--color-danger);
+  }
+  .input-error:focus {
+    border-color: var(--color-danger);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.3);
+  }
+
   .input-label {
     display: block;
     font-size: 0.875rem;
@@ -558,4 +566,18 @@
   background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-elevated) 37%, var(--bg-tertiary) 50%);
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slide-down {
+  animation: slide-down 0.2s ease-out;
 }

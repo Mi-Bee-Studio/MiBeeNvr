@@ -20,7 +20,6 @@ export interface Camera {
   url: string;
   username?: string;
   has_password?: boolean;
-  enabled: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -44,7 +43,6 @@ export interface CreateCameraRequest {
   url?: string;
   username?: string;
   password?: string;
-  enabled?: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -63,7 +61,6 @@ export interface UpdateCameraRequest {
   encoding?: string;
   username?: string;
   password?: string;
-  enabled?: boolean;
   description?: string;
   location?: string;
   brand?: string;
@@ -95,39 +92,11 @@ export interface DiscoveryResult {
   error: DiscoveryError | null;
 }
 
-export interface DeviceInfo {
-  manufacturer: string;
-  model: string;
-  firmware: string;
-  serial_number: string;
-  hardware_id: string;
-}
-
-export interface DeviceProfile {
-  token: string;
-  name: string;
-  encoding: string;
-  width: number;
-  height: number;
-}
-
-export interface ONVIFDeviceDetail {
-  device_info: DeviceInfo;
-  profiles: DeviceProfile[];
-}
-
 export interface PTZMoveRequest {
   mode: 'continuous' | 'absolute' | 'relative';
   pan: number;
   tilt: number;
   zoom: number;
-}
-
-export interface PTZStatus {
-  pan: number;
-  tilt: number;
-  zoom: number;
-  moving: boolean;
 }
 
 export interface ProtocolCapabilities {
@@ -234,13 +203,6 @@ export async function getCameraRecordingStats(id: string, signal?: AbortSignal):
   return apiRequest<CameraRecordingStats>(`/cameras/${id}/stats`, { signal });
 }
 
-export async function enableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
-  return updateCamera(id, { enabled: true }, signal);
-}
-
-export async function disableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
-  return updateCamera(id, { enabled: false }, signal);
-}
 
 export async function startCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/start`, {
@@ -349,10 +311,6 @@ export async function ptzStop(cameraId: string, signal?: AbortSignal): Promise<{
   });
 }
 
-export async function getPTZStatus(cameraId: string, signal?: AbortSignal): Promise<PTZStatus> {
-  return apiRequest<PTZStatus>(`/cameras/${cameraId}/ptz/status`, { signal });
-}
-
 // --- ONVIF Discovery ---
 
 export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSignal): Promise<DiscoveryResult> {
@@ -365,10 +323,6 @@ export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSi
     devices: result.devices || [],
     error: result.error || null,
   };
-}
-
-export async function getONVIFDeviceDetail(ip: string, signal?: AbortSignal): Promise<ONVIFDeviceDetail> {
-  return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
 export async function probeONVIFDevice(
@@ -688,12 +642,4 @@ export async function updateTimelapseConfig(
     body: JSON.stringify(config),
     signal,
   });
-}
-
-export async function pauseTimelapse(cameraId: string, signal?: AbortSignal): Promise<void> {
-  await apiRequest(`/cameras/${cameraId}/timelapse/pause`, { method: 'POST', signal });
-}
-
-export async function resumeTimelapse(cameraId: string, signal?: AbortSignal): Promise<void> {
-  await apiRequest(`/cameras/${cameraId}/timelapse/resume`, { method: 'POST', signal });
 }

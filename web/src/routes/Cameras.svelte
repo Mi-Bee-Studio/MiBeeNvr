@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, enableCamera, disableCamera, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -74,7 +74,7 @@
   let showOnboarding = $state(false);
 
   let tabItems = $derived([
-    { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.filter(c => c.enabled).length },
+    { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.length },
     { id: 'archived', label: t('cameras.tab.archived'), icon: ArchiveIcon, count: archives.length },
   ]);
 
@@ -293,7 +293,6 @@
 
   function openEditForm(camera: Camera) {
     editingCamera = camera;
-    showForm = true;
   }
 
   function handleFormSave() {
@@ -377,9 +376,6 @@
     confirmAction = { camera, action: 'restart' };
   }
 
-  async function handleToggleCamera(camera: Camera) {
-    await loadCameras();
-  }
 
   async function handleSaveName(camera: Camera, name: string) {
     try {
@@ -512,10 +508,10 @@
           />
         {/if}
 
-        <!-- Add/Edit Form -->
-        {#if showForm}
+        <!-- Add Form (only for new camera) -->
+        {#if showForm && !editingCamera}
           <CameraForm
-            {editingCamera}
+            editingCamera={null}
             {protocols}
             {protocolsMap}
             {xiaomiDeviceList}
@@ -563,9 +559,24 @@
                 onstart={handleStartCamera}
                 onstop={handleStopCamera}
                 onrestart={handleRestartCamera}
-                ontoggle={handleToggleCamera}
                 onsaveName={handleSaveName}
               />
+              <!-- Inline Edit Form for this camera -->
+              {#if editingCamera && editingCamera.id === camera.id}
+                <div class="col-span-1 sm:col-span-2 lg:col-span-3 animate-slide-down">
+                  <CameraForm
+                    {editingCamera}
+                    {protocols}
+                    {protocolsMap}
+                    {xiaomiDeviceList}
+                    globalTranscodingEnabled={globalTranscodingEnabled}
+                    h265Available={h265Available}
+                    onsave={handleFormSave}
+                    oncancel={handleFormCancel}
+                    onbackfillneeded={handleBackfillNeeded}
+                  />
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -686,6 +697,7 @@
                                       title={t('archives.play')}
                                     >
                                       <Play size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.viewLabel')}</span>
                                     </button>
                                     <button
                                       class="btn btn-ghost px-2 py-1.5 text-sm"
@@ -693,6 +705,7 @@
                                       title={t('archives.download')}
                                     >
                                       <Download size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.downloadLabel')}</span>
                                     </button>
                                     <button
                                       class="btn btn-ghost px-2 py-1.5 text-sm th-color-danger"
@@ -700,6 +713,7 @@
                                       title={t('archives.delete')}
                                     >
                                       <Trash2 size={16} />
+                                      <span class="hidden sm:inline-flex ml-1 text-xs">{t('cameras.action.deleteLabel')}</span>
                                     </button>
                                   </div>
                                 </td>

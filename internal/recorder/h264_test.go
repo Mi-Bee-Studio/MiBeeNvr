@@ -347,8 +347,6 @@ func TestH264Recorder_Reconnect(t *testing.T) {
 		RTSPURL:     rtspURL,
 		SegmentDur:  5 * time.Minute,
 		RingBufCap:  100,
-		InitBackoff: 50 * time.Millisecond,
-		MaxBackoff:  200 * time.Millisecond,
 	}, mgr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

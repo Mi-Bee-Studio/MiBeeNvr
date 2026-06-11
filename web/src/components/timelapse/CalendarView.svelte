@@ -76,12 +76,6 @@
     return counts;
   });
 
-  let monthLabel = $derived.by(() => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    const lang = document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US';
-    return new Date(year, month).toLocaleDateString(lang, { year: 'numeric', month: 'long' });
-  });
 
   function prevMonth() {
     const d = new Date(currentMonth);
@@ -141,28 +135,30 @@
     const year = parseInt(target.value, 10);
     const d = new Date(currentMonth);
     d.setFullYear(year);
-    d.setMonth(0);
     currentMonth = d;
   }
+  let monthNames = $derived.by(() => {
+    const lang = document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US';
+    return Array.from({ length: 12 }, (_, i) => {
+      const date = new Date(2000, i, 1);
+      return date.toLocaleDateString(lang, { month: 'long' });
+    });
+  });
+
+  function selectMonth(e: Event) {
+    const target = e.target as HTMLSelectElement;
+    const month = parseInt(target.value, 10);
+    const d = new Date(currentMonth);
+    d.setMonth(month);
+    currentMonth = d;
+  }
+
 </script>
 
+
 <div class="card p-5 mb-6 border th-border">
-  <!-- Year Selector -->
-  <div class="flex items-center justify-center mb-3">
-    <select
-      onchange={selectYear}
-      class="select select-bordered select-sm text-center font-semibold th-text-primary th-bg-primary"
-      aria-label="Select year"
-    >
-      {#each availableYears as year}
-        <option value={year} selected={year === currentMonth.getFullYear()}>
-          {year}
-        </option>
-      {/each}
-    </select>
-  </div>
-  <!-- Calendar Nav -->
-  <div class="flex items-center justify-between mb-4">
+  <!-- Calendar Navigation -->
+  <div class="flex items-center justify-between mb-4 gap-2">
     <button
       onclick={prevMonth}
       class="btn btn-ghost btn-sm flex items-center gap-1"
@@ -171,8 +167,30 @@
       <ChevronLeft size={18} />
       <span class="hidden sm:inline">{t('timelapse.gallery.prevMonth')}</span>
     </button>
+
     <div class="flex items-center gap-2">
-      <h2 class="text-lg font-semibold th-text-primary">{monthLabel}</h2>
+      <select
+        onchange={selectYear}
+        class="select select-bordered select-sm text-center font-semibold th-text-primary th-bg-primary"
+        aria-label="Select year"
+      >
+        {#each availableYears as year}
+          <option value={year} selected={year === currentMonth.getFullYear()}>
+            {year}
+          </option>
+        {/each}
+      </select>
+      <select
+        onchange={selectMonth}
+        class="select select-bordered select-sm text-center font-semibold th-text-primary th-bg-primary"
+        aria-label="Select month"
+      >
+        {#each monthNames as name, i}
+          <option value={i} selected={i === currentMonth.getMonth()}>
+            {name}
+          </option>
+        {/each}
+      </select>
       <button
         onclick={goToday}
         class="btn btn-ghost btn-xs"
@@ -181,6 +199,7 @@
         {t('calendar.today')}
       </button>
     </div>
+
     <button
       onclick={nextMonth}
       class="btn btn-ghost btn-sm flex items-center gap-1"

@@ -251,10 +251,13 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	r.sps = []byte{0x67, 0x42}
 	r.pps = []byte{0x68, 0xce}
 
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 	var mu sync.Mutex
 	var receivedAU [][]byte
 	var receivedPTS int64
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au
@@ -283,10 +286,13 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 	r.vps = []byte{0x40, 0x01}
 	r.sps = []byte{0x42, 0x01}
 	r.pps = []byte{0x44, 0x01}
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -313,10 +319,13 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 	r.streamStart = time.Now()
 	r.sps = []byte{0x67}
 	r.pps = []byte{0x68}
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -452,8 +461,6 @@ func TestRecorderConfigDefaults(t *testing.T) {
 		DID:      "dev",
 	}, &noopSegmentStore{})
 	require.Equal(t, defaultSegmentDur, r.cfg.SegmentDur)
-	require.Equal(t, defaultMaxBackoff, r.cfg.MaxBackoff)
-	require.Equal(t, defaultInitBackoff, r.cfg.InitBackoff)
 	require.Equal(t, model.StatusStopped, r.Status())
 }
 
@@ -463,12 +470,8 @@ func TestRecorderConfigCustom(t *testing.T) {
 		CameraID:   "cam",
 		DID:        "dev",
 		SegmentDur: 5 * time.Minute,
-		MaxBackoff: 30 * time.Second,
-		InitBackoff: 500 * time.Millisecond,
 	}, &noopSegmentStore{})
 	require.Equal(t, 5*time.Minute, r.cfg.SegmentDur)
-	require.Equal(t, 30*time.Second, r.cfg.MaxBackoff)
-	require.Equal(t, 500*time.Millisecond, r.cfg.InitBackoff)
 }
 
 // --- XiaomiRecorder setStatus ---
@@ -617,8 +620,6 @@ func TestRecorderCancelContextDuringRun(t *testing.T) {
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID:    "test-cam",
 		DID:         "dev1",
-		InitBackoff: 10 * time.Millisecond,
-		MaxBackoff:  10 * time.Millisecond,
 	}, &noopSegmentStore{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -645,20 +646,24 @@ func TestRecorderDoubleStartFails(t *testing.T) {
 	require.Contains(t, err.Error(), "already running")
 }
 
-// --- SetOnHLSFrame concurrency ---
+// --- StreamHub HLS subscription concurrency ---
 
-func TestSetOnHLSFrameConcurrent(t *testing.T) {
+func TestHLSSubscribeConcurrent(t *testing.T) {
 	t.Helper()
 	r := makeTestRecorder(t)
 	r.codec = model.FormatH264
 	r.codecOK = true
 	r.streamStart = time.Now()
 
+	if r.Hub == nil {
+		r.Hub = model.NewStreamHub()
+	}
+
 	var calls atomic.Int32
 	done := make(chan struct{})
 
-	// Set callback
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	// Subscribe to HLS stream
+	r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		calls.Add(1)
 	})
 

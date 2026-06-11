@@ -8,19 +8,21 @@
     listRecordings,
     getTimelapseFrames,
     loadTimelapseFrameBlob,
-    getTimelapseConfig,
     triggerTimelapseMerge,
     subscribeTimelapseMergeProgress,
+    cancelMerge,
+    fetchTimelapsePreview,
     ApiRequestError
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
-  import type { Recording, TimelapseFrame } from '$lib/api';
+  import type { Recording, TimelapseFrame, TimelapsePreviewFrame } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
@@ -94,6 +96,16 @@ let mergeInProgress = $state(false);
 let mergeProgressPct = $state(0);
 let mergeErrorMsg = $state('');
 let mergeAbortController = $state<AbortController | null>(null);
+let selectedMergeDuration = $state('natural-day');
+let mergeStartTime = $state(0);
+let mergeEta = $state('');
+let mergeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let cancelMergeConfirm = $state(false);
+
+// Timelapse preview state
+let timelapsePreviewFrames = $state<TimelapsePreviewFrame[]>([]);
+let timelapsePreviewLoading = $state(false);
+let timelapsePreviewError = $state('');
 
 // SessionStorage merge tracking — survives navigation away and page refresh
 const MERGE_STORAGE_KEY = 'mibee_nvr_merge_active';
@@ -154,39 +166,101 @@ function restoreMergeState(rec: Recording) {
       status: 'pending',
     });
   }
+  // Check DB-persisted failed status
+  if (rec.merge_status === 'failed' && rec.merge_error) {
+    mergeErrorMsg = rec.merge_error;
+  }
 }
 
-/** Subscribe to merge SSE progress updates for a camera */
+/** Subscribe to merge SSE progress updates for a camera, with auto-reconnection */
 function startMergeSse(cameraId: string, recordingId: string) {
-  // Abort any existing subscription first
-  mergeAbortController?.abort();
-  mergeAbortController = null;
+  let reconnectAttempt = 0;
+  const maxBackoff = 30000;
+
+  function connect() {
+    mergeAbortController?.abort();
+    mergeAbortController = null;
+
+    if (!mergeInProgress) return;
 
   const ac = subscribeTimelapseMergeProgress(cameraId, (data) => {
-    if (data.status === 'completed') {
-      mergeInProgress = false;
-      mergeProgressPct = 100;
-      mergeAbortController = null;
-      clearMergeState(cameraId);
-      loadRecording();
-      showToast(t('detail.mergeCompleted'), 'success');
-    } else if (data.status === 'failed') {
-      mergeInProgress = false;
-      mergeErrorMsg = data.error || '';
-      clearMergeState(cameraId);
-      showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
-    } else if (data.progress !== undefined) {
-      mergeProgressPct = data.progress;
-      saveMergeState({
-        cameraId,
-        recordingId,
-        progress: data.progress,
-        status: 'pending',
-      });
-    }
-  });
+        reconnectAttempt = 0; // Reset backoff on any event
+        if (data.status === 'completed') {
+          stopMergePolling();
+          mergeInProgress = false;
+          mergeProgressPct = 100;
+          mergeEta = '';
+          mergeAbortController = null;
+          clearMergeState(cameraId);
+          loadRecording();
+          showToast(t('detail.mergeCompleted'), 'success');
+        } else if (data.status === 'failed') {
+          stopMergePolling();
+          mergeInProgress = false;
+          mergeEta = '';
+          mergeErrorMsg = data.error || '';
+          clearMergeState(cameraId);
+          showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
+        } else if (data.progress !== undefined) {
+          mergeProgressPct = data.progress;
+          updateMergeEta();
+          saveMergeState({
+            cameraId,
+            recordingId,
+            progress: data.progress,
+            status: 'pending',
+          });
+        }
+      },
+      () => {
+        // SSE error — schedule reconnect
+        scheduleReconnect(cameraId);
+      }
+    );
 
-  mergeAbortController = ac;
+    mergeAbortController = ac;
+  }
+
+  function scheduleReconnect(cameraId: string) {
+    if (!mergeInProgress) return;
+    const delay = Math.min(maxBackoff, 1000 * Math.pow(2, reconnectAttempt));
+    reconnectAttempt++;
+    if (mergeReconnectTimer) clearTimeout(mergeReconnectTimer);
+    mergeReconnectTimer = setTimeout(async () => {
+      if (!mergeInProgress) return;
+      // Poll DB for current progress before reconnecting
+      try {
+        const rec = await getRecording(recordingId);
+        if (!rec) return;
+        if (rec.merge_status === 'merged') {
+          stopMergePolling();
+          mergeInProgress = false;
+          mergeProgressPct = 100;
+          mergeEta = '';
+          clearMergeState(cameraId);
+          loadRecording();
+          showToast(t('detail.mergeCompleted'), 'success');
+          return;
+        }
+        if (rec.merge_status === 'failed') {
+          stopMergePolling();
+          mergeInProgress = false;
+          mergeEta = '';
+          mergeErrorMsg = rec.merge_error || '';
+          clearMergeState(cameraId);
+          showToast(t('detail.mergeFailed', { error: mergeErrorMsg }), 'error');
+          return;
+        }
+        if (rec.merge_progress > 0) {
+          mergeProgressPct = rec.merge_progress;
+          updateMergeEta();
+        }
+      } catch {}
+      connect();
+    }, delay);
+  }
+
+  connect();
 }
 
   async function loadRecording() {
@@ -201,11 +275,11 @@ function startMergeSse(cameraId: string, recordingId: string) {
 
         if (recording.format === 'mjpeg') {
           // initPlayer called reactively via $effect when mjpegPlayer ref is set
-        } else if (recording.format === 'timelapse') {
           if (recording.merge_status === 'merged') {
             initVideoPlayer();
           } else {
             initTimelapsePlayer();
+            loadTimelapsePreview();
           }
         } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
@@ -415,6 +489,8 @@ async function handleMergeAndPlay() {
   mergeInProgress = true;
   mergeProgressPct = 0;
   mergeErrorMsg = '';
+  mergeStartTime = Date.now();
+  mergeEta = '';
 
   // Store in sessionStorage so other pages can track this merge
   saveMergeState({
@@ -425,45 +501,8 @@ async function handleMergeAndPlay() {
   });
 
   try {
-    // Fetch camera's timelapse config to pass merge_duration
-    let mergeDuration = undefined;
-    try {
-      const tlConfig = await getTimelapseConfig(recording.camera_id);
-      mergeDuration = tlConfig.merge_duration || undefined;
-    } catch {
-      // Config fetch failed, proceed without duration
-    }
-    await triggerTimelapseMerge(recording.camera_id, undefined, mergeDuration);
-    const ac = subscribeTimelapseMergeProgress(recording.camera_id, (data) => {
-      if (data.status === 'completed') {
-        stopMergePolling();
-        mergeInProgress = false;
-        mergeInProgress = false;
-        mergeProgressPct = 100;
-        mergeAbortController = null;
-        clearMergeState(recording!.camera_id);
-        loadRecording();
-        showToast(t('detail.mergeCompleted'), 'success');
-      } else if (data.status === 'failed') {
-        stopMergePolling();
-        mergeInProgress = false;
-        mergeInProgress = false;
-        mergeErrorMsg = data.error || '';
-        clearMergeState(recording!.camera_id);
-        showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
-      } else if (data.progress !== undefined) {
-        mergeProgressPct = data.progress;
-        saveMergeState({
-          cameraId: recording!.camera_id,
-          recordingId: recording!.id,
-          progress: data.progress,
-          status: 'pending',
-        });
-      }
-    });
-
-    mergeAbortController = ac;
-
+    await triggerTimelapseMerge(recording.camera_id, undefined, selectedMergeDuration);
+    startMergeSse(recording.camera_id, recording.id);
     // DB polling fallback when SSE is unavailable (e.g. RollingMergeManager is nil)
     startMergePolling(recording.id, recording.camera_id);
   } catch (e) {
@@ -519,6 +558,65 @@ function startMergePolling(recId, camId) {
 
 function stopMergePolling() {
   if (mergePollTimer) { clearInterval(mergePollTimer); mergePollTimer = null; }
+}
+
+// --- Cancel Merge ---
+async function handleCancelMerge() {
+  if (!recording) return;
+  cancelMergeConfirm = false;
+  try {
+    await cancelMerge(recording.camera_id);
+    mergeInProgress = false;
+    mergeProgressPct = 0;
+    mergeEta = '';
+    mergeErrorMsg = '';
+    mergeAbortController?.abort();
+    mergeAbortController = null;
+    if (mergeReconnectTimer) { clearTimeout(mergeReconnectTimer); mergeReconnectTimer = null; }
+    stopMergePolling();
+    clearMergeState(recording.camera_id);
+    loadRecording();
+    showToast(t('detail.mergeCancelled'), 'success');
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : 'Failed to cancel merge', 'error');
+  }
+}
+
+// --- Merge ETA ---
+function updateMergeEta() {
+  if (!mergeStartTime || mergeProgressPct <= 0) {
+    mergeEta = '';
+    return;
+  }
+  const elapsed = Date.now() - mergeStartTime;
+  if (elapsed < 1000) {
+    mergeEta = '';
+    return;
+  }
+  const totalEstimate = elapsed / mergeProgressPct * 100;
+  const remaining = totalEstimate - elapsed;
+  if (remaining < 60000) {
+    mergeEta = '< 1min';
+  } else {
+    const mins = Math.floor(remaining / 60000);
+    const secs = Math.floor((remaining % 60000) / 1000);
+    mergeEta = `~${mins}m ${secs}s`;
+  }
+}
+
+// --- Timelapse Preview ---
+async function loadTimelapsePreview() {
+  if (!recording || recording.format !== 'timelapse') return;
+  timelapsePreviewLoading = true;
+  timelapsePreviewError = '';
+  try {
+    timelapsePreviewFrames = await fetchTimelapsePreview(currentId, 6);
+  } catch (e) {
+    timelapsePreviewError = e instanceof Error ? e.message : 'Failed to load preview';
+    timelapsePreviewFrames = [];
+  } finally {
+    timelapsePreviewLoading = false;
+  }
 }
   // --- Timelapse JPEG sequence player ---
 
@@ -854,6 +952,8 @@ function stopMergePolling() {
       // Abort merge SSE connection (merge continues on server, progress in DB)
       mergeAbortController?.abort();
       mergeAbortController = null;
+      // Clear merge reconnect timer
+      if (mergeReconnectTimer) { clearTimeout(mergeReconnectTimer); mergeReconnectTimer = null; }
       tlBlobCache.forEach(url => URL.revokeObjectURL(url));
       tlBlobCache = new Map();
       stopTimelapsePlayback();
@@ -1050,22 +1150,60 @@ $effect(() => {
                   {/if}
                 {/if}
               </div>
-
-              <!-- Merge & Play banner for unmerged timelapse -->
-              {#if recording.merge_status !== 'merged' && !mergeInProgress}
+              <!-- Timelapse preview thumbnails -->
+              {#if timelapsePreviewLoading}
                 <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
-                  <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2 mx-auto">
-                    <Play size={16} /> {t('detail.mergeAndPlay')}
-                  </button>
+                  <span class="text-xs th-text-secondary">{t('common.loading')}</span>
+                </div>
+              {:else if timelapsePreviewFrames.length > 0}
+                <div class="th-bg-secondary px-4 py-3 border-t th-border">
+                  <p class="text-xs th-text-muted mb-2">{t('detail.timelapsePreview')}</p>
+                  <div class="grid grid-cols-6 gap-1">
+                    {#each timelapsePreviewFrames as frame}
+                      <img src={frame.url} alt={frame.filename} class="w-full h-16 object-cover rounded" loading="lazy" />
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Merge controls -->
+              {#if recording.merge_status !== 'merged' && !mergeInProgress}
+                <div class="th-bg-secondary px-4 py-3 border-t th-border">
+                  <div class="flex items-center justify-center gap-3">
+                    <select
+                      class="input text-sm py-1 w-auto"
+                      value={selectedMergeDuration}
+                      onchange={(e) => selectedMergeDuration = (e.target as HTMLSelectElement).value}
+                    >
+                      <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+                      <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+                      <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+                      <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+                      <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+                      <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+                    </select>
+                    <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2">
+                      <Play size={16} /> {t('detail.mergeAndPlay')}
+                    </button>
+                  </div>
                 </div>
               {/if}
               {#if mergeInProgress}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
-                  <div class="flex items-center gap-3 justify-center">
+                <div class="th-bg-secondary px-4 py-3 border-t th-border">
+                  <div class="flex items-center gap-3 justify-center flex-wrap">
                     <div class="w-32 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
                       <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
                     </div>
                     <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
+                    {#if mergeEta}
+                      <span class="text-xs th-text-muted">{mergeEta}</span>
+                    {/if}
+                    <button
+                      onclick={() => cancelMergeConfirm = true}
+                      class="btn btn-ghost btn-xs text-xs th-color-danger"
+                    >
+                      {t('detail.cancelMerge')}
+                    </button>
                   </div>
                 </div>
               {/if}
@@ -1294,6 +1432,15 @@ $effect(() => {
                     <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
                   </div>
                   <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
+                  {#if mergeEta}
+                    <span class="text-xs th-text-muted">{mergeEta}</span>
+                  {/if}
+                  <button
+                    onclick={() => cancelMergeConfirm = true}
+                    class="btn btn-ghost btn-xs th-color-danger"
+                  >
+                    {t('detail.cancelMerge')}
+                  </button>
                 </div>
               {/if}
               {#if mergeErrorMsg}
@@ -1380,5 +1527,17 @@ $effect(() => {
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- Cancel merge confirmation dialog -->
+  {#if cancelMergeConfirm}
+    <ConfirmDialog
+      title={t('detail.cancelMerge')}
+      message={t('detail.cancelMergeConfirm')}
+      onconfirm={handleCancelMerge}
+      oncancel={() => cancelMergeConfirm = false}
+      confirmText={t('detail.cancelMerge')}
+      variant="danger"
+    />
   {/if}
 </div>

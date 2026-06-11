@@ -736,10 +736,6 @@ func parseJPEGDimensions(data []byte) (width, height int) {
 	return 0, 0
 }
 
-// MathInt64 is a helper to avoid int64 conversion issues.
-func MathInt64(x int) int64 {
-	return int64(x)
-}
 
 // reencodeJPEG decodes a JPEG image and re-encodes it at the given quality level.
 // This provides file size reduction at the cost of visual quality.

@@ -38,8 +38,6 @@ type H265Config struct {
 	Password             string
 	SegmentDur           time.Duration
 	RingBufCap           int
-	MaxBackoff           time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff          time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	DB                   RecordingDB
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
@@ -140,12 +138,6 @@ func NewH265Recorder(cfg H265Config, store SegmentStore, opts ...*metrics.Metric
 	}
 	if cfg.RingBufCap == 0 {
 		cfg.RingBufCap = DefaultRingBufCap
-	}
-	if cfg.MaxBackoff == 0 {
-		cfg.MaxBackoff = DefaultMaxBackoff
-	}
-	if cfg.InitBackoff == 0 {
-		cfg.InitBackoff = DefaultInitBackoff
 	}
 	if cfg.FrameWatchdogTimeout == 0 {
 		cfg.FrameWatchdogTimeout = defaultFrameWatchdogTimeout

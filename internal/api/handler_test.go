@@ -670,8 +670,8 @@ func TestGetSettings_WithConfig(t *testing.T) {
 			DiskThresholdPercent: 80,
 		},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "Front Door", Protocol: "rtsp_h264", URL: "rtsp://camera1/stream", Enabled: true},
-			{ID: "cam-2", Name: "Backyard", Protocol: "http_jpeg", URL: "http://camera2/stream", Enabled: false},
+			{ID: "cam-1", Name: "Front Door", Protocol: "rtsp_h264", URL: "rtsp://camera1/stream"},
+			{ID: "cam-2", Name: "Backyard", Protocol: "http_jpeg", URL: "http://camera2/stream"},
 		},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
@@ -794,7 +794,7 @@ func TestUpdateSettings_Success(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
-		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true}},
+		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp_h264", URL: "rtsp://x"}},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
 
@@ -1858,7 +1858,6 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 				Protocol:    "http_jpeg",
 				URL:         snapshotServer.URL + "/stream",
 				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
-				Enabled:     true,
 			},
 		},
 	}
@@ -1871,7 +1870,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
+			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x"},
 		},
 	}
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
@@ -2416,7 +2415,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "Test", Protocol: "rtsp_h264", URL: "rtsp://x", Enabled: true},
+			{ID: "cam-1", Name: "Test", Protocol: "rtsp_h264", URL: "rtsp://x"},
 		},
 	}
 	mergeMgr := merge.NewMergeManager(

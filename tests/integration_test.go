@@ -996,7 +996,6 @@ func TestONVIFCameraCreation(t *testing.T) {
 				URL:      "http://192.168.1.100/onvif/device_service",
 				Username: "admin",
 				Password: "pass",
-				Enabled:  true,
 			},
 		},
 	}
@@ -1173,7 +1172,6 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 				Name:     "ONVIF HLS Camera",
 				Protocol: "onvif",
 				URL:      "http://192.168.1.100/onvif/device_service",
-				Enabled:  true,
 			},
 		},
 	}
@@ -1263,8 +1261,6 @@ func TestCameraConnectionFailure(t *testing.T) {
 		RTSPURL:     "rtsp://127.0.0.1:1/nonexistent", // port 1 = connection refused
 		SegmentDur:  5 * time.Minute,
 		RingBufCap:  100,
-		InitBackoff: 50 * time.Millisecond,
-		MaxBackoff:  200 * time.Millisecond,
 	}, store)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1301,8 +1297,6 @@ func TestConcurrentRecordingStress(t *testing.T) {
 			RTSPURL:     fmt.Sprintf("rtsp://127.0.0.1:1/%s", id),
 			SegmentDur:  5 * time.Minute,
 			RingBufCap:  50,
-			InitBackoff: 100 * time.Millisecond,
-			MaxBackoff:  500 * time.Millisecond,
 		}, store)
 	}
 

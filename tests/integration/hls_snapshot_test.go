@@ -41,16 +41,6 @@ func TestHLSProviderInterface_ContractSnapshot(t *testing.T) {
 		_ = f
 	})
 
-	t.Run("SetOnHLSFrame_signature", func(t *testing.T) {
-		// SetOnHLSFrame registers a callback for frame delivery.
-		// Callback signature: func(pts int64, au [][]byte)
-		//   - pts: presentation timestamp in stream timebase units
-		//   - au: access unit (array of NAL units without start codes)
-		// The callback must be non-blocking; frames are dropped if buffer is full.
-		var provider model.HLSProvider = (*mockHLSProvider)(nil)
-		provider.SetOnHLSFrame(func(pts int64, au [][]byte) {})
-		_ = provider
-	})
 }
 
 // mockHLSProvider proves the HLSProvider interface contract at compile time.
@@ -61,7 +51,6 @@ func (m *mockHLSProvider) CodecParams() (codec model.Format, sps, pps, vps []byt
 	return model.FormatH264, []byte{}, []byte{}, nil
 }
 
-func (m *mockHLSProvider) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {}
 
 // ---------------------------------------------------------------------------
 // 2. Format and Protocol constants snapshot
@@ -319,8 +308,8 @@ func TestHLSStreamURLPattern_Snapshot(t *testing.T) {
 		//      a. *recorder.H264Recorder → StartStream(id, sps, pps, maxFPS)
 		//      b. *recorder.H265Recorder → StartStreamH265(id, vps, sps, pps, maxFPS)
 		//      c. *recorder.ONVIFRecorder → unwrap delegate, then a or b
-		//      d. model.HLSProvider → CodecParams() + SetOnHLSFrame()
-		//   4. Set OnHLSFrame callback on recorder for frame delivery
+		//      d. model.HLSProvider → CodecParams() + subscribeHLS()
+		//   4. Subscribe HLS consumer via subscribeHLS(hub, id, hlsMgr, ...)
 		//   5. If sub-stream URL configured, try StartSubStreamReader()
 		//   6. Proxy to hlsMgr.Handle(id, w, r) for muxer response
 		//
@@ -336,7 +325,7 @@ func TestHLSStreamURLPattern_Snapshot(t *testing.T) {
 	t.Run("stop_stream_endpoint", func(t *testing.T) {
 		// The stop endpoint pattern:
 		//   POST /api/cameras/{id}/stream/stop
-		// Calls hlsMgr.StopStream(id) and clears OnHLSFrame callback.
+		// Calls hlsMgr.StopStream(id) and unsubscribes from StreamHub.
 		t.Log("HLS stop endpoint documented")
 	})
 }
@@ -348,10 +337,10 @@ func TestHLSStreamURLPattern_Snapshot(t *testing.T) {
 // This documents the CRITICAL dispatch order in handleHLSStream.
 // The handler checks recorder types in this exact order:
 //
-//   1. *recorder.H264Recorder  — direct field access: .SPS(), .PPS(), .OnHLSFrame
-//   2. *recorder.H265Recorder  — direct field access: .VPS(), .SPS(), .PPS(), .OnHLSFrame
+//   1. *recorder.H264Recorder  — direct field access: .SPS(), .PPS()
+//   2. *recorder.H265Recorder  — direct field access: .VPS(), .SPS(), .PPS()
 //   3. *recorder.ONVIFRecorder — unwrap delegate, then recurse into 1 or 2
-//   4. model.HLSProvider       — interface methods: .CodecParams(), .SetOnHLSFrame()
+//   4. model.HLSProvider       — interface method: .CodecParams()
 //   5. else                    — "camera recorder does not support HLS" (400)
 //
 // IMPORTANT: The HLSProvider interface (path 4) is the FALLBACK for gRPC plugin adapters
@@ -363,18 +352,18 @@ func TestHLSHandler_DispatchOrder_Snapshot(t *testing.T) {
 		// Path 1: *recorder.H264Recorder
 		//   - Calls: h264Rec.SPS(), h264Rec.PPS()
 		//   - Starts: hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
-		//   - Sets: h264Rec.OnHLSFrame = func(pts int64, au [][]byte) { hlsMgr.WriteH264(id, pts, au) }
+		//   - Subscribes: subscribeHLS(hub, id, hlsMgr, false) via StreamHub
 		//   - Sub-stream: hlsMgr.StartSubStreamReader(id, url, false) for H264
-		t.Log("H264 path: SPS(), PPS() → StartStream → OnHLSFrame → WriteH264")
+		t.Log("H264 path: SPS(), PPS() → StartStream → subscribeHLS → WriteH264")
 	})
 
 	t.Run("H265Recorder_direct_field_access", func(t *testing.T) {
 		// Path 2: *recorder.H265Recorder
 		//   - Calls: h265Rec.VPS(), h265Rec.SPS(), h265Rec.PPS()
 		//   - Starts: hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
-		//   - Sets: h265Rec.OnHLSFrame = func(pts int64, au [][]byte) { hlsMgr.WriteH265(id, pts, au) }
+		//   - Subscribes: subscribeHLS(hub, id, hlsMgr, true) via StreamHub
 		//   - Sub-stream: hlsMgr.StartSubStreamReader(id, url, true) for H265
-		t.Log("H265 path: VPS(), SPS(), PPS() → StartStreamH265 → OnHLSFrame → WriteH265")
+		t.Log("H265 path: VPS(), SPS(), PPS() → StartStreamH265 → subscribeHLS → WriteH265")
 	})
 
 	t.Run("ONVIFRecorder_delegate_unwrap", func(t *testing.T) {
@@ -389,13 +378,13 @@ func TestHLSHandler_DispatchOrder_Snapshot(t *testing.T) {
 		// Path 4: model.HLSProvider (interface assertion)
 		//   - Calls: provider.CodecParams() → (codec, sps, pps, vps)
 		//   - codec == FormatH264: StartStream(id, sps, pps, maxFPS)
-		//     + SetOnHLSFrame → WriteH264
-		//   - codec == FormatH265: requires vps != nil
-		//     + StartStreamH265(id, vps, sps, pps, maxFPS)
-		//     + SetOnHLSFrame → WriteH265
+		//     + subscribeHLS via getRecorderHub(rec)
+		//   - codec == FormatH265: requires vps != null
+		//     + StartStreamH265(vps, sps, pps, maxFPS)
+		//     + subscribeHLS via getRecorderHub(rec)
 		//   - other codec: 400 "unsupported codec for HLS streaming"
 		//   - No sub-stream support for HLSProvider path
-		t.Log("HLSProvider path: CodecParams() → codec switch → SetOnHLSFrame")
+		t.Log("HLSProvider path: CodecParams() → codec switch → subscribeHLS")
 	})
 
 	t.Run("unsupported_recorder_type", func(t *testing.T) {

@@ -30,8 +30,6 @@ type MJPEGConfig struct {
 	SegmentDur     time.Duration
 	SampleInterval int // if >1, only save every Nth frame
 	DB             RecordingDB
-	MaxBackoff     time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff    time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	EventBus             *event.EventBus
 }
 
@@ -82,12 +80,6 @@ func (r *MJPEGRecorder) recordSegmentCreated() {
 	}
 }
 
-// recordBytes adds to the recording bytes counter if metrics is available.
-func (r *MJPEGRecorder) recordBytes(bytes int64) {
-	if r.metrics != nil {
-		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "mjpeg").Add(float64(bytes))
-	}
-}
 
 // recordError increments the camera errors counter if metrics is available.
 func (r *MJPEGRecorder) recordError(errorType string) {
@@ -108,12 +100,6 @@ func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore, opts ...*metrics.Metr
 	}
 	if cfg.SampleInterval <= 0 {
 		cfg.SampleInterval = 1
-	}
-	if cfg.MaxBackoff == 0 {
-		cfg.MaxBackoff = DefaultMaxBackoff
-	}
-	if cfg.InitBackoff == 0 {
-		cfg.InitBackoff = DefaultInitBackoff
 	}
 	return &MJPEGRecorder{
 		cfg:     cfg,

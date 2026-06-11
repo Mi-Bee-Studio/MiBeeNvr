@@ -217,11 +217,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding: body.StreamEncoding,
 		Timelapse:      body.Timelapse,
 	}
-	if body.Enabled != nil {
-		cam.Enabled = *body.Enabled
-	} else {
-		cam.Enabled = true
-	}
 
 	if h.camMgr == nil {
 		writeError(w, http.StatusInternalServerError, "camera manager not available")
@@ -363,7 +358,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Encoding:       body.Encoding,
 		Username:       username,
 		Password:       password,
-		Enabled:        body.Enabled,
 		Description:    body.Description,
 		Location:       body.Location,
 		Brand:          body.Brand,
@@ -524,8 +518,6 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.As(err, new(*model.CameraNotFoundError)):
 			writeAPIError(w, http.StatusNotFound, err)
-		case errors.As(err, new(*model.CameraDisabledError)):
-			writeAPIError(w, http.StatusBadRequest, err)
 		case errors.As(err, new(*model.CameraAlreadyRunningError)):
 			writeAPIError(w, http.StatusConflict, err)
 		default:

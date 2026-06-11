@@ -369,7 +369,6 @@ func TestSaveLoadWithEncryption(t *testing.T) {
 				Encoding: "h264",
 				URL:      "rtsp://192.168.1.10/stream",
 				Password: "cam-secret",
-				Enabled:  true,
 			},
 		},
 		FTP: FTPConfig{Enabled: &ftpEnabled, Port: 2121},

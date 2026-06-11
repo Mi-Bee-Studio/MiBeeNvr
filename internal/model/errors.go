@@ -20,13 +20,6 @@ type CameraAlreadyRunningError struct {
 func (e *CameraAlreadyRunningError) Error() string { return "camera already running: " + e.CameraID }
 func (e *CameraAlreadyRunningError) Code() string  { return "CAMERA_ALREADY_RUNNING" }
 
-// CameraDisabledError indicates the camera is disabled and cannot be started.
-type CameraDisabledError struct {
-	CameraID string
-}
-
-func (e *CameraDisabledError) Error() string { return "camera is disabled: " + e.CameraID }
-func (e *CameraDisabledError) Code() string  { return "CAMERA_DISABLED" }
 
 // CameraAlreadyExistsError indicates a camera with the same ID already exists.
 type CameraAlreadyExistsError struct {

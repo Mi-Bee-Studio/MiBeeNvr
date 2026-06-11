@@ -578,9 +578,9 @@ func TestGetDownloadURL(t *testing.T) {
 		goarch string
 		want   string
 	}{
-		{"linux", "amd64", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.gz"},
-		{"linux", "arm64", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-arm64-static.tar.gz"},
-		{"linux", "arm", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-armhf-static.tar.gz"},
+		{"linux", "amd64", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz"},
+		{"linux", "arm64", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-arm64-static.tar.xz"},
+		{"linux", "arm", "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-armhf-static.tar.xz"},
 		{"darwin", "amd64", ""},
 		{"darwin", "arm64", ""},
 		{"windows", "amd64", ""},

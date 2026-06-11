@@ -63,7 +63,6 @@
   let formUsername = $state('');
   let formPassword = $state('');
   let showPassword = $state(false);
-  let formEnabled = $state(true);
   let saving = $state(false);
   let formDescription = $state('');
   let formLocation = $state('');
@@ -131,7 +130,6 @@ let validationErrors = $state<Record<string, string>>({});
     formUsername = '';
     formPassword = '';
     showPassword = false;
-    formEnabled = true;
     formDescription = '';
     formLocation = '';
     formBrand = '';
@@ -159,7 +157,6 @@ let validationErrors = $state<Record<string, string>>({});
     formUsername = camera.username || '';
     formPassword = '';
     showPassword = false;
-    formEnabled = camera.enabled;
     formDescription = camera.description || '';
     formLocation = camera.location || '';
     formBrand = camera.brand || '';
@@ -292,7 +289,6 @@ async function performCameraSave() {
             name: formName,
             protocol: formProtocol,
             url: formUrl,
-            enabled: formEnabled,
             description: formDescription || undefined,
             location: formLocation || undefined,
             brand: formBrand || undefined,
@@ -331,7 +327,6 @@ async function performCameraSave() {
             name: formName,
             protocol: formProtocol,
             url: formUrl,
-            enabled: formEnabled,
             description: formDescription || undefined,
             location: formLocation || undefined,
             brand: formBrand || undefined,
@@ -492,49 +487,54 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    <!-- Enabled -->
-    <div class="md:col-span-2 flex items-center gap-2">
-      <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
-      <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
-    </div>
 
-    <!-- Description -->
-    <div class="md:col-span-2">
-      <label for="cam-desc" class="input-label">{t('cameras.description')}</label>
-      <textarea id="cam-desc" class="input" rows="2" bind:value={formDescription} placeholder={t('cameras.descriptionPlaceholder')}></textarea>
-    </div>
-
-    <!-- Location -->
-    <div>
-      <label for="cam-location" class="input-label">{t('cameras.location')}</label>
-      <input id="cam-location" type="text" class="input" bind:value={formLocation} placeholder={t('cameras.locationPlaceholder')} />
-    </div>
-
-    <!-- Brand -->
-    <div>
-      <label for="cam-brand" class="input-label">{t('cameras.brand')}</label>
-      <input id="cam-brand" type="text" class="input" bind:value={formBrand} />
-    </div>
-
-    <!-- Model -->
-    <div>
-      <label for="cam-model" class="input-label">{t('cameras.model')}</label>
-      <input id="cam-model" type="text" class="input" bind:value={formModel} />
-    </div>
-
-    <!-- Serial Number -->
-    <div>
-      <label for="cam-serial" class="input-label">{t('cameras.serialNumber')}</label>
-      <input id="cam-serial" type="text" class="input" bind:value={formSerialNumber} />
-    </div>
-
-    <!-- Retention Days -->
-    <div>
-      <label for="cam-retention" class="input-label">{t('cameras.retentionDays')}</label>
-      <input id="cam-retention" type="number" min="0" class="input" bind:value={formRetentionDays} />
-      <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint')}</p>
-    </div>
   </div>
+
+  <details class="mt-6 border th-border rounded-lg">
+    <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+      {t('cameras.form.advancedSettings')}
+    </summary>
+    <div class="px-4 pb-4 pt-2">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Description -->
+        <div class="md:col-span-2">
+          <label for="cam-desc" class="input-label">{t('cameras.description')}</label>
+          <textarea id="cam-desc" class="input" rows="2" bind:value={formDescription} placeholder={t('cameras.descriptionPlaceholder')}></textarea>
+        </div>
+
+        <!-- Location -->
+        <div>
+          <label for="cam-location" class="input-label">{t('cameras.location')}</label>
+          <input id="cam-location" type="text" class="input" bind:value={formLocation} placeholder={t('cameras.locationPlaceholder')} />
+        </div>
+
+        <!-- Brand -->
+        <div>
+          <label for="cam-brand" class="input-label">{t('cameras.brand')}</label>
+          <input id="cam-brand" type="text" class="input" bind:value={formBrand} />
+        </div>
+
+        <!-- Model -->
+        <div>
+          <label for="cam-model" class="input-label">{t('cameras.model')}</label>
+          <input id="cam-model" type="text" class="input" bind:value={formModel} />
+        </div>
+
+        <!-- Serial Number -->
+        <div>
+          <label for="cam-serial" class="input-label">{t('cameras.serialNumber')}</label>
+          <input id="cam-serial" type="text" class="input" bind:value={formSerialNumber} />
+        </div>
+
+        <!-- Retention Days -->
+        <div>
+          <label for="cam-retention" class="input-label">{t('cameras.retentionDays')}</label>
+          <input id="cam-retention" type="number" min="0" class="input" bind:value={formRetentionDays} />
+          <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint')}</p>
+        </div>
+      </div>
+    </div>
+  </details>
 
   <!-- Merge Config (edit mode only) -->
   {#if editingCamera}

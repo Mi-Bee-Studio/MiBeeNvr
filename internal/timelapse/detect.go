@@ -8,23 +8,36 @@ import (
 )
 
 var (
-	detectOnce sync.Once
+	mu         sync.Mutex
 	cachedTier MergeTier
+	cached     bool
 )
 
 // DetectMergeTier probes the system and selects the best merge implementation tier.
-// Results are cached with sync.Once — only one probe per app lifecycle.
+// Results are cached — only one probe per app lifecycle unless ResetDetectTier is called.
 // Pass ffmpegPath to proactively check a specific FFmpeg binary path,
 // or "" to let the probe search the system PATH.
 func DetectMergeTier(ffmpegPath string) MergeTier {
-	detectOnce.Do(func() {
-		caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
-		cachedTier = selectTier(caps)
+	mu.Lock()
+	if cached {
+		defer mu.Unlock()
+		return cachedTier
+	}
+	mu.Unlock()
+
+	caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
+	tier := selectTier(caps)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !cached {
+		cachedTier = tier
+		cached = true
 		slog.Info("Merge tier detected",
 			"tier", cachedTier,
 			"reason", tierReason(cachedTier, caps),
 		)
-	})
+	}
 	return cachedTier
 }
 
@@ -57,17 +70,31 @@ func selectTier(caps *transcoding.HardwareCapabilities) MergeTier {
 // AvailableMergeTier returns the cached merge tier.
 // Returns the zero value ("") if DetectMergeTier has not been called yet.
 func AvailableMergeTier() MergeTier {
+	mu.Lock()
+	defer mu.Unlock()
 	return cachedTier
 }
 
 // IsMergeAvailable returns true if the cached merge tier is better than JPEG.
 // Returns false if DetectMergeTier has not been called yet.
 func IsMergeAvailable() bool {
+	mu.Lock()
+	defer mu.Unlock()
 	return cachedTier != TierJPEG && cachedTier != ""
 }
 
-// ResetDetectTier clears the cached detection result (for testing).
+// ResetDetectTier clears the cached detection result.
 func ResetDetectTier() {
-	detectOnce = sync.Once{}
+	mu.Lock()
+	defer mu.Unlock()
+	cached = false
 	cachedTier = ""
+}
+
+// setDetectTier sets the cached detection tier (for testing).
+func setDetectTier(tier MergeTier) {
+	mu.Lock()
+	defer mu.Unlock()
+	cachedTier = tier
+	cached = true
 }

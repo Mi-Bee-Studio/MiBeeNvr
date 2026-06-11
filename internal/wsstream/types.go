@@ -37,11 +37,3 @@ type VideoFrame struct {
 	NALUs      [][]byte // access unit NALUs without start codes
 }
 
-// WSError represents a WebSocket protocol-level error.
-type WSError struct {
-	Message string
-}
-
-func (e *WSError) Error() string {
-	return e.Message
-}

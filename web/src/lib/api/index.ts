@@ -38,8 +38,6 @@ export {
   updateCamera,
   deleteCamera,
   getCameraRecordingStats,
-  enableCamera,
-  disableCamera,
   startCamera,
   stopCamera,
   getDashboardCameras,
@@ -50,9 +48,7 @@ export {
   deleteCameraMergeConfig,
   ptzMove,
   ptzStop,
-  getPTZStatus,
   discoverONVIFDevices,
-  getONVIFDeviceDetail,
   probeONVIFDevice,
   listProtocols,
   normalizeProtocol,
@@ -83,8 +79,6 @@ export {
   // Timelapse
   getTimelapseConfig,
   updateTimelapseConfig,
-  pauseTimelapse,
-  resumeTimelapse,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -94,18 +88,13 @@ export type {
   DiscoveredDevice,
   DiscoveryError,
   DiscoveryResult,
-  DeviceInfo,
-  DeviceProfile,
-  ONVIFDeviceDetail,
   PTZMoveRequest,
-  PTZStatus,
   ProtocolCapabilities,
   ProtocolInfo,
   MergeConfig,
   TestConnectionRequest,
   TestConnectionResult,
   VendorCheckResult,
-  PushTarget,
   // Imaging
   ImagingSettings,
   ImagingOptionRange,
@@ -151,8 +140,10 @@ export {
   getTimelapseFrames,
   loadTimelapseFrameBlob,
   triggerTimelapseMerge,
+  batchMergeTimelapse,
   subscribeTimelapseMergeProgress,
-  getTimelapseThumbnailUrl,
+  cancelMerge,
+  fetchTimelapsePreview,
 } from './recordings';
 
 export type {
@@ -165,6 +156,7 @@ export type {
   ArchiveGroup,
   ArchiveListResponse,
   TimelapseFrame,
+  TimelapsePreviewFrame,
 } from './recordings';
 
 // Settings — cleanup, webdav, merge, features
@@ -202,7 +194,7 @@ export { xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync } fr
 export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiAuthResponse } from './xiaomi';
 
 // Health — camera health status and events
-export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStabilityData } from './health';
+export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras } from './health';
 export type {
   HealthStatus,
   HealthEventType,
@@ -213,8 +205,6 @@ export type {
   HealthEventsParams,
   CameraHealthDetail,
   HealthCamerasResponse,
-  StabilityMetrics,
-  StabilityDataResponse,
 } from './health';
 
 // Transcoding — hardware check, FFmpeg, task management
@@ -230,7 +220,6 @@ export {
   retryTranscodeTask,
   startBackfill,
   getUntranscodedRecordingCount,
-  getTranscodingCameras,
   getTranscodingSettings,
   updateTranscodingSettings,
 } from './transcoding';

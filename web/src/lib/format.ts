@@ -50,25 +50,6 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Determine the best unit for chart axis display based on data range.
- * Returns scaled values and unit label for Chart.js ticks callback.
- */
-export function formatChartValue(bytes: number): { value: number; unit: string; label: string } {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return {
-    value: Math.round(value * 10) / 10, // 1 decimal place
-    unit: units[unitIndex],
-    label: units[unitIndex],
-  };
-}
-
-/**
  * Determine the best unit for a set of byte values (for chart axis).
  * Returns the divisor and unit label so all values use the same scale.
  */

@@ -4,15 +4,6 @@ import CameraCard from '$lib/components/CameraCard.svelte';
 import { buildProtocolsMap, DEFAULT_PROTOCOLS } from '$lib/api';
 import type { Camera } from '$lib/api';
 
-// Mock API calls that CameraCard invokes
-vi.mock('$lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$lib/api')>();
-  return {
-    ...actual,
-    enableCamera: vi.fn().mockResolvedValue({ id: 'test', enabled: true }),
-    disableCamera: vi.fn().mockResolvedValue({ id: 'test', enabled: false }),
-  };
-});
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
@@ -32,7 +23,6 @@ function makeCamera(overrides: Partial<Camera> = {}): Camera {
     name: 'Test Camera',
     protocol: 'rtsp',
     url: 'rtsp://192.168.1.100/stream',
-    enabled: true,
     ...overrides,
   };
 }
@@ -48,7 +38,6 @@ function defaultProps(camera: Camera) {
     onstart: noop,
     onstop: noop,
     onrestart: noop,
-    ontoggle: noop,
     onsaveName: noop,
   };
 }
@@ -67,9 +56,37 @@ describe('CameraCard', () => {
     expect(getByText('Recording')).toBeTruthy();
   });
 
-  it('shows disabled badge for disabled camera', () => {
-    const camera = makeCamera({ enabled: false });
-    const { getByText } = render(CameraCard, { props: defaultProps(camera) });
-    expect(getByText('Disabled')).toBeTruthy();
+
+
+
+  it('recording toggle has correct aria-labels', () => {
+    const idle = makeCamera({ status: 'idle' });
+    const { getByRole, unmount } = render(CameraCard, { props: defaultProps(idle) });
+    expect(getByRole('switch', { name: 'Start' })).toBeTruthy();
+    unmount();
+
+    const rec = makeCamera({ status: 'recording' });
+    const rendered = render(CameraCard, { props: defaultProps(rec) });
+    expect(rendered.getByRole('switch', { name: 'Stop' })).toBeTruthy();
+    expect(rendered.getByRole('button', { name: 'Restart' })).toBeTruthy();
+  });
+
+  it('action buttons contain text label spans', () => {
+    const idle = makeCamera({ status: 'idle' });
+    const { getByText, unmount } = render(CameraCard, { props: defaultProps(idle) });
+    expect(getByText('Start')).toBeTruthy();
+    unmount();
+
+    const rec = makeCamera({ status: 'recording' });
+    const rendered = render(CameraCard, { props: defaultProps(rec) });
+    expect(rendered.getByText('Stop')).toBeTruthy();
+  });
+
+  it('live link has aria-label when HLS is available', () => {
+    const camera = makeCamera();
+    const { container } = render(CameraCard, { props: defaultProps(camera) });
+    const liveLink = container.querySelector('a[href="#/live/test"]');
+    expect(liveLink).toBeTruthy();
+    expect(liveLink?.getAttribute('aria-label')).toBe('Live');
   });
 });

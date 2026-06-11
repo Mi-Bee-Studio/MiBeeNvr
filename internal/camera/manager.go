@@ -33,7 +33,6 @@ type CameraUpdate struct {
 	Encoding       *string
 	Username       *string
 	Password       *string
-	Enabled        *bool
 	Description    *string
 	Location       *string
 	Brand          *string
@@ -459,16 +458,12 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, true, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
 		}
 
-		if !cam.Enabled {
-			logger.Info("camera disabled, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
-			continue
-		}
 
 		switch cam.Protocol {
 		case string(model.ProtoRTSP), string(model.ProtoHTTP):
@@ -639,20 +634,18 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, true, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 	}
 
-	// Start recorder if enabled and protocol supports it
-	if cam.Enabled {
-		segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-		if err != nil {
-			segDur = recorder.DefaultSegmentDur
-		}
-		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
-			logger.Error("failed to start recorder", "error", err)
-		}
+	// Start recorder if protocol supports it
+	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	if err != nil {
+		segDur = recorder.DefaultSegmentDur
+	}
+	if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+		logger.Error("failed to start recorder", "error", err)
 	}
 
 	// Persist config to disk (rollback on failure)
@@ -668,7 +661,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
-	if cam.Protocol == string(model.ProtoONVIF) && cam.SnapshotURL == "" && cam.Enabled {
+	if cam.Protocol == string(model.ProtoONVIF) && cam.SnapshotURL == "" {
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
@@ -882,15 +875,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cam.Transcoding = updates.Transcoding
 	}
 
-	// Handle enabled state changes
-	enabledChanged := updates.Enabled != nil && *updates.Enabled != cam.Enabled
-	if updates.Enabled != nil {
-		cam.Enabled = *updates.Enabled
-	}
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, true, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
@@ -929,37 +917,16 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 	}
 
-	// Start recorder if newly enabled or protocol changed to a recordable one
-	if cam.Enabled {
-		if needsRestart || enabledChanged {
-			// Only start if we don't already have a recorder (needsRestart cleared it, or was never running)
-			if _, exists := cm.recorders[cam.ID]; !exists {
-				if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
-					logger.Error("failed to start recorder", "error", err)
-				}
+	// Start recorder if protocol changed to a recordable one
+	if needsRestart {
+		// Only start if we don't already have a recorder (needsRestart cleared it, or was never running)
+		if _, exists := cm.recorders[cam.ID]; !exists {
+			if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
+				logger.Error("failed to start recorder", "error", err)
 			}
 		}
 	}
 
-	// If disabled, stop recorder
-	if !cam.Enabled && enabledChanged {
-		if rec, ok := cm.recorders[cam.ID]; ok {
-			if err := rec.Stop(); err != nil {
-				logger.Warn("failed to stop recorder", "camera_id", cam.ID, "error", err)
-			}
-			delete(cm.recorders, cam.ID)
-			if cm.metrics != nil {
-				cm.metrics.ActiveCameras.Dec()
-			}
-		}
-		// Stop keyframe extractor if running
-		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
-			delete(cm.keyframeExtractors, cam.ID)
-			if err := ext.Stop(); err != nil {
-				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
-			}
-		}
-	}
 	// If ONVIF endpoint changed, close cached client so a fresh one is created
 	if onvifEndpointChanged {
 		cm.CloseONVIFClient(cam.ID)
@@ -974,7 +941,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
 	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
-	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" && cam.Enabled {
+	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" {
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
@@ -997,9 +964,6 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 	}
 	if cam == nil {
 		return &model.CameraNotFoundError{CameraID: cameraID}
-	}
-	if !cam.Enabled {
-		return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Stop existing recorder
@@ -1037,9 +1001,6 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	}
 	if cam == nil {
 		return &model.CameraNotFoundError{CameraID: cameraID}
-	}
-	if !cam.Enabled {
-		return &model.CameraDisabledError{CameraID: cameraID}
 	}
 
 	// Check if already running — stale recorders (error/stopped) can be restarted

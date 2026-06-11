@@ -1359,3 +1359,314 @@ func TestTimelapseDownload_NotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// --- Merge Cancellation tests (Task 7) ---
+
+func TestTimelapseMergeCancel_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	// Create a RollingMergeManager with an active merge
+	mgr := timelapse.NewRollingMergeManager(nil, nil, 10, false)
+	ctx := context.Background()
+	mgr.StartSegmentMerge(ctx, "cam-1", "/tmp/nonexistent", "/tmp/output.mp4", "rec-1")
+	h.SetTimelapseMergeMgr(mgr)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/timelapse/cam-1/merge", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "cancelled" {
+		t.Fatalf("expected status=cancelled, got %v", resp["status"])
+	}
+
+	// Verify merge is no longer active
+	if mgr.IsActive("cam-1") {
+		t.Fatal("expected merge to be cancelled")
+	}
+}
+
+func TestTimelapseMergeCancel_NotFound(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	// Create a manager with no active merge
+	mgr := timelapse.NewRollingMergeManager(nil, nil, 10, false)
+	h.SetTimelapseMergeMgr(mgr)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/timelapse/cam-nonexistent/merge", nil, "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseMergeCancel_NoManager(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // no merge mgr set
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/timelapse/cam-1/merge", nil, "", "")
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- Batch Merge tests (Task 12) ---
+
+func TestTimelapseBatchMerge_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir: t.TempDir(),
+		},
+		Cameras: []config.CameraConfig{
+			{
+				ID: "cam-1",
+				Timelapse: &config.CameraTimelapseConfig{
+					Enabled:        true,
+					MergeOutputFPS: 15,
+				},
+			},
+			{
+				ID: "cam-2",
+				Timelapse: &config.CameraTimelapseConfig{
+					Enabled:        true,
+					MergeOutputFPS: 10,
+				},
+			},
+		},
+	}
+
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := map[string]any{
+		"camera_ids": []string{"cam-1", "cam-2"},
+		"duration":   "8h",
+		"date":       "2026-06-06",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/batch-merge", bytes.NewReader(bodyJSON), "", "")
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+
+	triggered, ok := resp["triggered"].(float64)
+	if !ok || int(triggered) != 2 {
+		t.Fatalf("expected triggered=2, got %v", resp["triggered"])
+	}
+
+	results, ok := resp["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("expected 2 results, got %v", resp["results"])
+	}
+
+	// Verify first camera result
+	first := results[0].(map[string]any)
+	if first["camera_id"] != "cam-1" || first["status"] != "merge_initiated" {
+		t.Fatalf("unexpected first result: %v", first)
+	}
+}
+
+func TestTimelapseBatchMerge_EmptyIDs(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	body := map[string]any{
+		"camera_ids": []string{},
+		"duration":   "8h",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/batch-merge", bytes.NewReader(bodyJSON), "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseBatchMerge_TooMany(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	cameraIDs := make([]string, 11)
+	for i := 0; i < 11; i++ {
+		cameraIDs[i] = fmt.Sprintf("cam-%d", i)
+	}
+
+	body := map[string]any{
+		"camera_ids": cameraIDs,
+		"duration":   "8h",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/batch-merge", bytes.NewReader(bodyJSON), "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseBatchMerge_InvalidDuration(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: t.TempDir()},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	body := map[string]any{
+		"camera_ids": []string{"cam-1"},
+		"duration":   "badvalue",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/batch-merge", bytes.NewReader(bodyJSON), "", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapseBatchMerge_NoConfig(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store) // no config
+
+	body := map[string]any{
+		"camera_ids": []string{"cam-1"},
+		"duration":   "8h",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/batch-merge", bytes.NewReader(bodyJSON), "", "")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- Frame Preview tests (Task 21) ---
+
+func TestTimelapsePreview_Success(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rec := createTestRecording(t, db, store, "preview-test-1", "cam-1")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/"+rec.ID+"/preview", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var frames []map[string]any
+	parseJSON(t, rr, &frames)
+
+	// createTestRecording creates 3 frames, default sample=6 should return all 3
+	if len(frames) != 3 {
+		t.Fatalf("expected 3 frames, got %d", len(frames))
+	}
+
+	// Verify frame structure
+	for _, f := range frames {
+		if f["filename"] == "" || f["url"] == "" {
+			t.Fatalf("expected filename and url, got %v", f)
+		}
+	}
+}
+
+func TestTimelapsePreview_SampleParam(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rec := createTestRecording(t, db, store, "preview-test-2", "cam-1")
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/"+rec.ID+"/preview?sample=2", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var frames []map[string]any
+	parseJSON(t, rr, &frames)
+
+	// Should return 2 evenly-spaced frames
+	if len(frames) != 2 {
+		t.Fatalf("expected 2 frames, got %d", len(frames))
+	}
+}
+
+func TestTimelapsePreview_MaxSample(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rec := createTestRecording(t, db, store, "preview-test-3", "cam-1")
+
+	// sample=50 should be capped at 20
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/"+rec.ID+"/preview?sample=50", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var frames []map[string]any
+	parseJSON(t, rr, &frames)
+
+	// Only 3 frames exist, so we get all 3 (totalFrames <= sampleCount)
+	if len(frames) != 3 {
+		t.Fatalf("expected 3 frames (capped), got %d", len(frames))
+	}
+}
+
+func TestTimelapsePreview_NotFound(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/nonexistent/preview", nil, "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTimelapsePreview_NotTimelapse(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := &model.Recording{
+		ID:        "preview-not-tl",
+		CameraID:  "cam-1",
+		FilePath:  t.TempDir(),
+		Format:    model.Format("h264"),
+		StartedAt: now,
+		EndedAt:   now.Add(30 * time.Second),
+		Duration:  30.0,
+		FileSize:  1000,
+	}
+	seedRecording(t, db, rec)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/preview-not-tl/preview", nil, "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}

@@ -61,7 +61,6 @@ type CameraConfig struct {
 	ONVIFEndpoint        string                   `yaml:"onvif_endpoint"`
 	ProfileToken         string                   `yaml:"profile_token"`
 	StreamEncoding       string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	Enabled              bool                     `yaml:"enabled"`
 	SubStreamURL         string                   `yaml:"sub_stream_url"`
 	SnapshotURL          string                   `yaml:"snapshot_url"`
 	SampleInterval       int                      `yaml:"sample_interval"`
@@ -480,12 +479,6 @@ func Validate(cfg *Config) error {
 		}
 	}
 	// Validate Xiaomi configuration: non-fatal — disable cameras instead of crashing
-	for i, cam := range cfg.Cameras {
-		if cam.Protocol == "xiaomi" && strings.TrimSpace(cfg.Xiaomi.Token) == "" {
-			slog.Warn("xiaomi camera disabled: xiaomi.token not configured", "camera_id", cam.ID)
-			cfg.Cameras[i].Enabled = false
-		}
-	}
 	// port ranges
 	if cfg.FTP.Port < 1 || cfg.FTP.Port > 65535 {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
@@ -769,7 +762,6 @@ func (cfg *Config) ApplyDefaults() {
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		cfg.Storage.SegmentDuration = "30s"
 	}
-	// Cameras: nothing heavy, but ensure at least enable false
 	// Cleanup
 	if cfg.Cleanup.RetentionDays == 0 {
 		cfg.Cleanup.RetentionDays = 30

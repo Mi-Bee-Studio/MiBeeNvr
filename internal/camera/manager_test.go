@@ -34,7 +34,6 @@ func testConfig() *config.Config {
 				Protocol: "rtsp",
 				Encoding: "h264",
 				URL:      "rtsp://127.0.0.1:1/stream",
-				Enabled:  true,
 			},
 			{
 				ID:       "cam-mjpeg",
@@ -42,7 +41,6 @@ func testConfig() *config.Config {
 				Protocol: "rtsp",
 				Encoding: "mjpeg",
 				URL:      "rtsp://127.0.0.1:1/stream",
-				Enabled:  true,
 			},
 			{
 				ID:       "cam-disabled",
@@ -50,7 +48,6 @@ func testConfig() *config.Config {
 				Protocol: "rtsp",
 				Encoding: "h264",
 				URL:      "rtsp://127.0.0.1:1/stream",
-				Enabled:  false,
 			},
 			{
 				ID:       "cam-jpeg",
@@ -58,7 +55,6 @@ func testConfig() *config.Config {
 				Protocol: "http",
 				Encoding: "jpeg",
 				URL:      "http://192.168.1.13/jpg",
-				Enabled:  true,
 			},
 		},
 	}
@@ -115,59 +111,19 @@ func TestStart_EnabledCameras(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have created recorders for h264, mjpeg, and http_jpeg cameras
-	// (disabled camera is skipped)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	// Should have created recorders for all 4 cameras
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	statuses := mgr.Status()
-	assert.Len(t, statuses, 3)
+	assert.Len(t, statuses, 4)
 	_, hasH264 := statuses["cam-h264"]
 	_, hasMJPEG := statuses["cam-mjpeg"]
 	assert.True(t, hasH264, "should have h264 recorder")
 	assert.True(t, hasMJPEG, "should have mjpeg recorder")
-	_, hasDisabled := statuses["cam-disabled"]
-	assert.False(t, hasDisabled, "should not have disabled recorder")
 	_, hasJPEG := statuses["cam-jpeg"]
 	assert.True(t, hasJPEG, "should have http_jpeg recorder")
 }
 
-func TestStart_DisabledCamerasSkipped(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
-			SegmentDuration: "1m",
-		},
-		Cameras: []config.CameraConfig{
-			{
-				ID:       "cam-1",
-				Protocol: "rtsp",
-				Encoding: "h264",
-				URL:      "rtsp://192.168.1.10:554/stream",
-				Enabled:  false,
-			},
-		},
-	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	db, err := storage.New(dbPath)
-	require.NoError(t, err)
-	defer db.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_ = db.Init(ctx)
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	defer store.CleanupTempFiles()
-
-	mgr := NewCameraManager(cfg, store, db, "")
-	err = mgr.Start(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 0, mgr.RecorderCount())
-}
 
 func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -181,7 +137,6 @@ func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 				ID:       "cam-1",
 				Protocol: "http",
 				Encoding: "jpeg",
-				Enabled:  true,
 			},
 		},
 	}
@@ -221,7 +176,6 @@ func TestStart_InvalidSegmentDuration(t *testing.T) {
 				ID:       "cam-1",
 				Protocol: "rtsp",
 				Encoding: "h264",
-				Enabled:  true,
 			},
 		},
 	}
@@ -255,7 +209,7 @@ func TestStop(t *testing.T) {
 
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Give recorders a moment to start their goroutines
 	time.Sleep(100 * time.Millisecond)
@@ -264,7 +218,7 @@ func TestStop(t *testing.T) {
 	require.NoError(t, err)
 
 	// After stop, recorders should still be in the map (not removed)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Status should be stopped
 	statuses := mgr.Status()
@@ -278,7 +232,7 @@ func TestStop(t *testing.T) {
 	require.NoError(t, err)
 
 	// After stop, recorders should still be in the map (not removed)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Status should be stopped
 }
@@ -352,7 +306,7 @@ func TestGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Let recorders run briefly
 	time.Sleep(100 * time.Millisecond)
@@ -391,7 +345,6 @@ func TestStart_UnknownProtocol(t *testing.T) {
 				ID:       "cam-1",
 				Protocol: "onvif",
 				URL:      "rtsp://192.168.1.10:554/stream",
-				Enabled:  true,
 			},
 		},
 	}
@@ -444,14 +397,12 @@ func TestStart_InsertsCameraRecords(t *testing.T) {
 	require.True(t, exists, "H264 camera should be in database")
 	assert.Equal(t, "H264 Camera", h264Cam.Name)
 	assert.Equal(t, "rtsp", h264Cam.Protocol)
-	assert.True(t, h264Cam.Enabled)
 
 	// Check MJPEG camera
 	mjpegCam, exists := cameraMap["cam-mjpeg"]
 	require.True(t, exists, "MJPEG camera should be in database")
 	assert.Equal(t, "MJPEG Camera", mjpegCam.Name)
 	assert.Equal(t, "rtsp", mjpegCam.Protocol)
-	assert.True(t, mjpegCam.Enabled)
 
 	// Verify disabled camera IS in database (all cameras are inserted)
 	_, exists = cameraMap["cam-disabled"]
@@ -474,7 +425,6 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 		Name:     "New H264 Camera",
 		Protocol: "rtsp",
 			Encoding: "h264",
-		Enabled:  true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "cam-new-h264", id)
@@ -488,24 +438,6 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 	assert.Len(t, mgr.cfg.Cameras, 5) // 4 original + 1 new
 }
 
-func TestAddCamera_Disabled(t *testing.T) {
-	mgr, _, _, _ := newTestManager(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	id, err := mgr.AddCamera(ctx, config.CameraConfig{
-		ID:       "cam-new-disabled",
-		Name:     "Disabled Camera",
-			Protocol: "rtsp",
-				Encoding: "h264",
-		Enabled:  false,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "cam-new-disabled", id)
-
-	// No recorder should be created
-	assert.Equal(t, 0, mgr.RecorderCount())
-}
 
 func TestAddCamera_HTTPJPEG(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
@@ -517,7 +449,6 @@ func TestAddCamera_HTTPJPEG(t *testing.T) {
 		Name:     "JPEG Camera",
 			Protocol: "http",
 				Encoding: "jpeg",
-		Enabled:  true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "cam-new-jpeg", id)
@@ -538,7 +469,6 @@ func TestAddCamera_DuplicateID(t *testing.T) {
 		Name:     "Dup Camera",
 		Protocol: "rtsp",
 				Encoding: "h264",
-		Enabled:  true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
@@ -554,7 +484,6 @@ func TestAddCamera_AutoID(t *testing.T) {
 		Name:     "Auto ID Camera",
 			Protocol: "rtsp",
 				Encoding: "h264",
-		Enabled:  false,
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, id)
@@ -571,7 +500,6 @@ func TestAddCamera_Persists(t *testing.T) {
 		Name:     "Persist Camera",
 			Protocol: "rtsp",
 				Encoding: "h264",
-		Enabled:  false,
 	})
 	require.NoError(t, err)
 
@@ -597,14 +525,14 @@ func TestRemoveCamera_WithRecorder(t *testing.T) {
 	// Start the manager to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Remove a camera that has a recorder
 	err = mgr.RemoveCamera(ctx, "cam-h264")
 	require.NoError(t, err)
 
 	// Recorder should be removed
-	assert.Equal(t, 2, mgr.RecorderCount())
+	assert.Equal(t, 3, mgr.RecorderCount())
 	_, ok := mgr.recorders["cam-h264"]
 	assert.False(t, ok)
 
@@ -660,7 +588,7 @@ func TestUpdateCamera_URL(t *testing.T) {
 	// Start to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	newURL := "rtsp://127.0.0.1:2/new-stream"
 	updated, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{URL: &newURL})
@@ -668,48 +596,9 @@ func TestUpdateCamera_URL(t *testing.T) {
 	assert.Equal(t, newURL, updated.URL)
 
 	// Recorder should still exist (restarted)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 }
 
-func TestUpdateCamera_Disable(t *testing.T) {
-	mgr, _, _, _ := newTestManager(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start to create recorders
-	err := mgr.Start(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
-
-	disabled := false
-	updated, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{Enabled: &disabled})
-	require.NoError(t, err)
-	assert.False(t, updated.Enabled)
-
-	// Recorder should be stopped and removed
-	assert.Equal(t, 2, mgr.RecorderCount())
-	_, ok := mgr.recorders["cam-h264"]
-	assert.False(t, ok)
-}
-
-func TestUpdateCamera_Enable(t *testing.T) {
-	mgr, _, _, _ := newTestManager(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// cam-disabled has no recorder initially
-	assert.Equal(t, 0, mgr.RecorderCount())
-
-	enabled := true
-	updated, err := mgr.UpdateCamera(ctx, "cam-disabled", CameraUpdate{Enabled: &enabled})
-	require.NoError(t, err)
-	assert.True(t, updated.Enabled)
-
-	// Recorder should be created
-	assert.Equal(t, 1, mgr.RecorderCount())
-	_, ok := mgr.recorders["cam-disabled"]
-	assert.True(t, ok)
-}
 
 func TestUpdateCamera_NotFound(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
@@ -730,27 +619,18 @@ func TestRestartRecorder(t *testing.T) {
 	// Start to create recorders
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 
 	// Restart a recorder
 	err = mgr.RestartRecorder(ctx, "cam-h264")
 	require.NoError(t, err)
 
 	// Recorder should still be there
-	assert.Equal(t, 3, mgr.RecorderCount())
+	assert.Equal(t, 4, mgr.RecorderCount())
 	_, ok := mgr.recorders["cam-h264"]
 	assert.True(t, ok)
 }
 
-func TestRestartRecorder_Disabled(t *testing.T) {
-	mgr, _, _, _ := newTestManager(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err := mgr.RestartRecorder(ctx, "cam-disabled")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "disabled")
-}
 
 func TestCreateRecorder_ONVIF(t *testing.T) {
 	t.Helper()
@@ -776,7 +656,6 @@ func TestCreateRecorder_ONVIF(t *testing.T) {
 		URL:      "http://192.168.1.100/onvif/device_service",
 		Username: "admin",
 		Password: "pass",
-		Enabled:  true,
 	}
 	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
 	require.NoError(t, err)
@@ -857,7 +736,6 @@ func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
 			Name:     "H264 Camera",
 			Protocol: "rtsp",
 				Encoding: "h264",
-			Enabled:  true,
 		}},
 	}
 	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
@@ -899,7 +777,6 @@ func TestCreateRecorder_FallbackToBuiltIn(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://127.0.0.1:1/stream",
-		Enabled:  true,
 	}
 	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
 	require.NoError(t, err)
@@ -1050,7 +927,6 @@ func TestCameraConnectionErrorMetrics(t *testing.T) {
 	cfg.Storage.RootDir = filepath.Join(tmpDir, "storage")
 	// Use an unknown protocol so createRecorder returns nil → startRecorder returns error
 	cfg.Cameras[0].Protocol = "unknown_proto"
-	cfg.Cameras[0].Enabled = true
 	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
 	require.NoError(t, config.Save(configPath, cfg))
 
@@ -1153,7 +1029,6 @@ func TestAddCamera_ONVIF_PreservesExistingSnapshotURL(t *testing.T) {
 		URL:          "http://192.168.1.100/onvif/device_service",
 		Username:     "admin",
 		Password:     "pass",
-		Enabled:      true,
 		SnapshotURL:  "http://custom-snapshot.jpg",
 	}
 
@@ -1192,7 +1067,6 @@ func TestUpdateCamera_ONVIFEndpointChange_ClosesClient(t *testing.T) {
 		Name:     "ONVIF Camera",
 		Protocol: "onvif",
 		URL:      "http://192.168.1.100/onvif/device_service",
-		Enabled:  false,
 	})
 
 	// Pre-seed ONVIF client cache
@@ -1233,7 +1107,6 @@ func TestDualModeIntegration(t *testing.T) {
 				Protocol: "rtsp",
 				Encoding: "h265",
 				URL:      "rtsp://127.0.0.1:1/stream",
-				Enabled:  true,
 				Timelapse: &config.CameraTimelapseConfig{
 					Enabled:     true,
 					FrameSource: "rtsp_keyframe",
@@ -1371,7 +1244,6 @@ func TestDualMode_H264Timelapse_CreatesKeyframeExtractor(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -1431,7 +1303,6 @@ func TestDualMode_ONVIFTimelapse_H265_CreatesKeyframeExtractor(t *testing.T) {
 		StreamEncoding: "H265",
 		Username:       "admin",
 		Password:       "pass",
-		Enabled:        true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -1488,7 +1359,6 @@ func TestDualMode_ONVIFTimelapse_H264_CreatesKeyframeExtractor(t *testing.T) {
 		URL:      "http://192.168.1.100/onvif/device_service",
 		Username: "admin",
 		Password: "pass",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -1539,7 +1409,6 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 			Protocol: "rtsp",
 			Encoding: "h264",
 			URL:      "rtsp://192.168.1.100/stream",
-			Enabled:  true,
 		}
 		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
 		assert.NoError(t, err, "no timelapse config should not error")
@@ -1555,7 +1424,6 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 			Protocol: "rtsp",
 			Encoding: "h264",
 			URL:      "rtsp://192.168.1.100/stream",
-			Enabled:  true,
 			Timelapse: &config.CameraTimelapseConfig{
 				Enabled:     false,
 				FrameSource: "rtsp_keyframe",
@@ -1576,7 +1444,6 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 			Protocol: "rtsp",
 			Encoding: "h264",
 			URL:      "rtsp://192.168.1.100/stream",
-			Enabled:  true,
 			Timelapse: &config.CameraTimelapseConfig{
 				Enabled:     trueVal,
 				FrameSource: "snapshot",
@@ -1616,7 +1483,6 @@ func TestDualMode_KeyframeExtractorStopsOnCameraStop(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -1691,7 +1557,6 @@ func TestDualMode_StandaloneTimelapseRTSPKeyframe_GetsValidRecorder(t *testing.T
 		Protocol: "timelapse",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
