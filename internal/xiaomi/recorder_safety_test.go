@@ -447,7 +447,7 @@ func TestMISSPacketSampleRateTableDriven(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Helper()
 			pkt := &MISSPacket{Flags: tt.flags}
-			require.Equal(t, tt.expected, pkt.SampleRate())
+			require.Equal(t, tt.expected, pkt.sampleRate())
 		})
 	}
 }

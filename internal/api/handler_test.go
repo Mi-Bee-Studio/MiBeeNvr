@@ -54,20 +54,6 @@ func seedRecording(t *testing.T, db *storage.DB, r *model.Recording) {
 	}
 }
 
-func seedCamera(t *testing.T, db *storage.DB, id, name, protocol, url string, enabled bool) {
-	t.Helper()
-	// Insert camera directly via raw SQL since storage.DB doesn't have InsertCamera
-	// We use the DB's internal connection - but it's private. So we'll skip this
-	// and instead seed cameras through a test helper in the storage package or
-	// use the recordings endpoint which doesn't need cameras.
-	// For camera listing tests, we'll create the handler_test to work around this.
-	_ = db // We need to add a method or accept this limitation
-	_ = id
-	_ = name
-	_ = protocol
-	_ = url
-	_ = enabled
-}
 
 func doRequest(t *testing.T, handler http.Handler, method, path string, body io.Reader, username, password string) *httptest.ResponseRecorder {
 	t.Helper()

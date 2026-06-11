@@ -424,6 +424,14 @@ export async function cancelMerge(cameraId: string): Promise<void> {
   }
 }
 
+// --- Recording Retry Merge ---
+
+export async function retryRecordingMerge(recordingId: string): Promise<{ status: string; recording_id: string }> {
+  return apiRequest<{ status: string; recording_id: string }>(`/recordings/${recordingId}/retry-merge`, {
+    method: 'POST',
+  });
+}
+
 export interface TimelapsePreviewFrame {
   url: string;
   filename: string;

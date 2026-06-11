@@ -200,12 +200,13 @@ func extractIP(remoteAddr string) string {
 	return remoteAddr
 }
 
-func ResetAuthFailures() {
+func resetAuthFailures() {
 	authFailures.Range(func(key, _ interface{}) bool {
 		authFailures.Delete(key)
 		return true
 	})
 }
+
 
 // RateLimiterConfig defines parameters for a per-IP rate limiter.
 type RateLimiterConfig struct {

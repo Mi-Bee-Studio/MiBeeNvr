@@ -108,9 +108,9 @@ func TestNewEventSubscriber_WithOptions(t *testing.T) {
 
 	es := helperNewEventSubscriberWithMock(nil,
 		WithEventCallback(cb),
-		WithPollInterval(2*time.Second),
-		WithPullTimeout(10*time.Second),
-		WithSubscriptionDuration(12*time.Hour),
+		withPollInterval(2*time.Second),
+		withPullTimeout(10*time.Second),
+		withSubscriptionDuration(12*time.Hour),
 	)
 
 	require.NotNil(t, es)
@@ -280,7 +280,7 @@ func TestEventSubscriberImpl_EventCallbackReceivesEvents(t *testing.T) {
 
 	es := helperNewEventSubscriberWithMock(nil,
 		WithEventCallback(cb),
-		WithPollInterval(50*time.Millisecond),
+		withPollInterval(50*time.Millisecond),
 	)
 
 

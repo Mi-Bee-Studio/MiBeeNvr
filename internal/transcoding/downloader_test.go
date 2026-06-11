@@ -27,11 +27,6 @@ func newTestDownloader(t *testing.T) *Downloader {
 	return NewDownloader(t.TempDir(), nil)
 }
 
-// newTestDownloaderWithProgress creates a Downloader with a progress callback.
-func newTestDownloaderWithProgress(t *testing.T, onProgress func(downloaded, total int64)) *Downloader {
-	t.Helper()
-	return NewDownloader(t.TempDir(), onProgress)
-}
 
 // mustCreateFakeFFmpeg creates a fake ffmpeg shell script that responds to -version.
 func mustCreateFakeFFmpeg(t *testing.T, dir string) string {

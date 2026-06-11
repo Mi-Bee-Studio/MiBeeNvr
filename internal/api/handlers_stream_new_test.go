@@ -27,16 +27,6 @@ func containsProtocol(t *testing.T, protocols []ProtocolDetail, name string) boo
 	return false
 }
 
-// hasUnavailableProtocol checks if the protocol list contains a named unavailable protocol.
-func hasUnavailableProtocol(t *testing.T, protocols []ProtocolDetail, name string) bool {
-	t.Helper()
-	for _, p := range protocols {
-		if p.Protocol == name && !p.Available {
-			return true
-		}
-	}
-	return false
-}
 
 // --- WHEP endpoint tests ---
 

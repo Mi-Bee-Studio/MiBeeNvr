@@ -143,7 +143,7 @@ func TestCreateWHEPSession(t *testing.T) {
 	// Verify answer SDP is valid
 	require.True(t, strings.Contains(string(answerSDP), "m=video"), "answer should contain video m-line")
 	require.NotEmpty(t, sessionID)
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
 }
 
 // TestH264TrackCreation verifies that the WHEP session creates an H.264 track
@@ -247,7 +247,7 @@ func TestMaxViewerLimit(t *testing.T) {
 	_, sid2 := connectWHEP(t, mgr, "test-cam", clients[1].pc, offers[1])
 	require.NotEmpty(t, sid1)
 	require.NotEmpty(t, sid2)
-	require.Equal(t, 2, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 2, mgr.activePeerCount("test-cam"))
 
 	// 3rd session should fail with ErrMaxPeersReached
 	_, _, err := mgr.CreateWHEPSession("test-cam", offers[2])
@@ -255,14 +255,14 @@ func TestMaxViewerLimit(t *testing.T) {
 
 	// Delete one session, now a new one should succeed
 	require.NoError(t, mgr.DeleteWHEPSession(sid1))
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
 
 	// Create new client for the freed slot
 	client4 := newTestClient(t, false)
 	defer client4.close()
 	offer4 := createOfferSDP(t, client4.pc)
 	connectWHEP(t, mgr, "test-cam", client4.pc, offer4)
-	require.Equal(t, 2, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 2, mgr.activePeerCount("test-cam"))
 
 	// Cleanup
 	_ = mgr.DeleteWHEPSession(sid2)
@@ -278,11 +278,11 @@ func TestIdleEviction(t *testing.T) {
 
 	offerSDP := createOfferSDP(t, client.pc)
 	_, sessionID := connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
 
 	// Don't write any frames — wait for idle eviction
 	require.Eventually(t, func() bool {
-		return mgr.ActivePeerCount("test-cam") == 0
+		return mgr.activePeerCount("test-cam") == 0
 	}, 3*time.Second, 100*time.Millisecond, "peer should be evicted after idle timeout")
 
 	// Verify session is truly gone
@@ -338,16 +338,16 @@ func TestPeerDisconnectCleanup(t *testing.T) {
 
 	offerSDP := createOfferSDP(t, client.pc)
 	_, sessionID := connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
-	require.Equal(t, 1, mgr.TotalPeerCount())
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.totalPeerCount())
 
 	// Explicitly delete the session (simulates cleanup after peer disconnect)
 	err := mgr.DeleteWHEPSession(sessionID)
 	require.NoError(t, err)
 
 	// Verify resources are freed
-	require.Equal(t, 0, mgr.ActivePeerCount("test-cam"))
-	require.Equal(t, 0, mgr.TotalPeerCount())
+	require.Equal(t, 0, mgr.activePeerCount("test-cam"))
+	require.Equal(t, 0, mgr.totalPeerCount())
 
 	// Verify session is truly gone
 	err = mgr.DeleteWHEPSession(sessionID)
@@ -403,7 +403,7 @@ func TestConcurrentWHEPSessionCreation(t *testing.T) {
 
 	require.Equal(t, 2, success, "exactly 2 sessions should succeed")
 	require.Equal(t, 1, maxReached, "exactly 1 session should be rejected")
-	require.Equal(t, 2, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 2, mgr.activePeerCount("test-cam"))
 
 	// Cleanup successful sessions
 	for _, sid := range sessions {
@@ -458,7 +458,7 @@ func TestRejectAudioInSDP(t *testing.T) {
 // TestWriteH264NonBlocking verifies that WriteH264 is non-blocking and
 // drops frames when the buffer is full.
 func TestWriteH264NonBlocking(t *testing.T) {
-	mgr := NewManager(WithFrameBufSize(5))
+	mgr := NewManager(withFrameBufSize(5))
 	defer mgr.StopAll()
 
 	client := newTestClient(t, false)
@@ -486,7 +486,7 @@ func TestWriteH264NonBlocking(t *testing.T) {
 func TestWriteH264UpdatesLastUsed(t *testing.T) {
 	mgr := NewManager(
 		WithIdleTimeout(500*time.Millisecond),
-		WithFrameBufSize(10),
+		withFrameBufSize(10),
 	)
 	defer mgr.StopAll()
 
@@ -518,14 +518,14 @@ func TestWriteH264UpdatesLastUsed(t *testing.T) {
 
 	// Wait longer than the idle timeout — session should NOT be evicted
 	time.Sleep(1 * time.Second)
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"), "session should survive with active writes")
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"), "session should survive with active writes")
 
 	// Stop writing and wait for eviction
 	close(stop)
 	wg.Wait()
 
 	require.Eventually(t, func() bool {
-		return mgr.ActivePeerCount("test-cam") == 0
+		return mgr.activePeerCount("test-cam") == 0
 	}, 3*time.Second, 100*time.Millisecond, "session should be evicted after writes stop")
 
 	_ = sessionID
@@ -545,16 +545,16 @@ func TestMultipleCameras(t *testing.T) {
 			offerSDP := createOfferSDP(t, client.pc)
 			_, _ = connectWHEP(t, mgr, camID, client.pc, offerSDP)
 		}
-		require.Equal(t, 2, mgr.ActivePeerCount(camID))
+		require.Equal(t, 2, mgr.activePeerCount(camID))
 	}
 
 	// Total should be 6 peers across 3 cameras
-	require.Equal(t, 6, mgr.TotalPeerCount())
+	require.Equal(t, 6, mgr.totalPeerCount())
 }
 
 // TestAtomicDropCounter verifies the atomic drop counter increments correctly.
 func TestAtomicDropCounter(t *testing.T) {
-	mgr := NewManager(WithFrameBufSize(2))
+	mgr := NewManager(withFrameBufSize(2))
 	defer mgr.StopAll()
 
 	client := newTestClient(t, false)
@@ -572,7 +572,7 @@ func TestAtomicDropCounter(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify the manager is still functional (no crash)
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
 }
 
 // TestDeleteNonexistentSession verifies graceful handling of missing sessions.
@@ -637,7 +637,7 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 	}
 
 	// Manager should still be functional — no crash from hub callback
-	require.Equal(t, 1, mgr.ActivePeerCount("test-cam"))
+	require.Equal(t, 1, mgr.activePeerCount("test-cam"))
 
 	// Unregister
 	mgr.UnregisterStream("test-cam")
@@ -703,7 +703,7 @@ func TestFrameMsgKeyframeDetection(t *testing.T) {
 // TestRTCPDrainWaitGroup verifies that the drainWg WaitGroup correctly
 // tracks RTCP drain goroutines and StopAll waits for them to exit.
 func TestRTCPDrainWaitGroup(t *testing.T) {
-	mgr := NewManager(WithFrameBufSize(5))
+	mgr := NewManager(withFrameBufSize(5))
 
 	client := newTestClient(t, false)
 	defer client.close()
@@ -731,7 +731,7 @@ func TestRTCPDrainWaitGroup(t *testing.T) {
 // TestConnectionStateMetric verifies that the Prometheus metric is incremented
 // when connection state changes occur.
 func TestConnectionStateMetric(t *testing.T) {
-	mgr := NewManager(WithFrameBufSize(5))
+	mgr := NewManager(withFrameBufSize(5))
 	defer mgr.StopAll()
 	require.Nil(t, mgr.mets, "metrics should be nil by default (no WithMetrics option)")
 }

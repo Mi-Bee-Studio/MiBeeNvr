@@ -151,6 +151,10 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 		}
 		nalus := splitAnnexB(frameData)
 		for _, nalu := range nalus {
+			// Skip parameter sets — they belong in hvcC only, not in sample data.
+			if isH265ParamSet(nalu) {
+				continue
+			}
 			sampleSizes[i] += 4 + uint32(len(nalu)) // 4-byte length prefix + NAL data
 		}
 	}
@@ -220,8 +224,8 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	default:
 	}
 
-	// Write mdat box (reuses the codec-agnostic writeMdat from h264_go_merge.go).
-	if err := writeMdat(w, frames, ctx); err != nil {
+	// Write mdat box (strips VPS/SPS/PPS from samples — they are in hvcC only).
+	if err := writeH265Mdat(w, frames, ctx); err != nil {
 		f.Close()
 		os.Remove(outputPath)
 		return &MergeResult{Tier: TierGo, Error: err.Error()}, err
@@ -717,6 +721,86 @@ func writeHvcCArray(buf *bytes.Buffer, nalType byte, nalu []byte) {
 	buf.WriteByte(byte(naluLen >> 8))
 	buf.WriteByte(byte(naluLen))
 	buf.Write(nalu)
+}
+
+// isH265ParamSet returns true if the NAL unit is a parameter set (VPS, SPS, or PPS).
+// These must only appear in the hvcC box, not in sample data.
+func isH265ParamSet(nalu []byte) bool {
+	if len(nalu) == 0 {
+		return false
+	}
+	nalType := (nalu[0] >> 1) & 0x3F
+	return nalType == 32 || nalType == 33 || nalType == 34 // VPS, SPS, PPS
+}
+
+// writeH265Mdat writes the mdat box with H.265 frame data, stripping VPS/SPS/PPS
+// from each frame. Parameter sets belong in hvcC only — including them in sample
+// data causes MEDIA_ERR_SRC_NOT_SUPPORTED in browsers.
+func writeH265Mdat(w *mp4.Writer, framePaths []string, ctx context.Context) error {
+	// First pass: compute total mdat payload size (excluding param sets).
+	var totalPayloadSize uint32
+	for _, path := range framePaths {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read frame %s: %w", path, err)
+		}
+		for _, nalu := range splitAnnexB(data) {
+			if isH265ParamSet(nalu) {
+				continue
+			}
+			totalPayloadSize += 4 + uint32(len(nalu))
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	mdatBoxSize := uint64(8 + totalPayloadSize)
+	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
+	if err != nil {
+		return fmt.Errorf("start mdat: %w", err)
+	}
+
+	// Write each frame as length-prefixed NALUs, skipping param sets.
+	for _, path := range framePaths {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read frame for mdat %s: %w", path, err)
+		}
+
+		for _, nalu := range splitAnnexB(data) {
+			if isH265ParamSet(nalu) {
+				continue
+			}
+			lenBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(lenBytes, uint32(len(nalu)))
+			if _, err := w.Write(lenBytes); err != nil {
+				return fmt.Errorf("write NALU length: %w", err)
+			}
+			if _, err := w.Write(nalu); err != nil {
+				return fmt.Errorf("write NALU data: %w", err)
+			}
+		}
+	}
+
+	if _, err := w.EndBox(); err != nil {
+		return fmt.Errorf("end mdat: %w", err)
+	}
+	return nil
 }
 
 // --- SPS parsing for H.265 ---

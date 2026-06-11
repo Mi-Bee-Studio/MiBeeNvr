@@ -212,27 +212,6 @@ func clientExtractSOAPAction(body string) string {
 	return env.Body.Inner.XMLName.Local
 }
 
-// helperSetupConnectedClient creates a Client connected to a mock ONVIF server
-// with GetCapabilities handler pre-configured (required for Initialize).
-func helperSetupConnectedClient(t *testing.T, mock *onvifMockServer) (*Client, *httptest.Server) {
-	t.Helper()
-
-	// Set up the required GetCapabilities response (called by Initialize)
-	mock.setHandler("GetCapabilities", soapGetCapabilitiesResponse)
-
-	server := mock.startServer(t)
-	t.Cleanup(server.Close)
-
-	client := NewClient(server.URL, "admin", "password")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	err := client.Connect(ctx)
-	require.NoError(t, err)
-	require.True(t, client.ready)
-
-	return client, server
-}
 
 // --- Existing tests (updated) ---
 

@@ -600,6 +600,11 @@ func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
 	return cm.recorders[cameraID]
 }
 
+// GetTimelapseMergeMgr returns the timelapse rolling merge manager, or nil if not set.
+func (cm *CameraManager) GetTimelapseMergeMgr() *timelapse.RollingMergeManager {
+	return cm.timelapseMergeMgr
+}
+
 // GetCameraConfig returns the config for the given camera ID, or nil if not found.
 func (cm *CameraManager) GetCameraConfig(cameraID string) *config.CameraConfig {
 	cm.mu.RLock()

@@ -128,8 +128,6 @@ type Handler struct {
 	streamRegistry    *StreamRegistry
 	downloader        TranscodeDownloader
 	transcodeMgr      TranscodeManagerAPI
-	aiEngine          AIEngine
-	aiDetector        AIDetector
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
 	timelapseDailyMgr *timelapse.DailyMergeManager
@@ -179,6 +177,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 				r.Get("/merged", h.handleMergedRecording)
+				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
@@ -306,13 +305,6 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/transcoding/backfill", h.handleTranscodingBackfill)
 		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
 		r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
-		// AI Detection routes
-		r.Route("/api/ai", func(r chi.Router) {
-			r.Get("/status", h.handleGetAIStatus)
-			r.Post("/enable", h.handleEnableAI)
-			r.Post("/disable", h.handleDisableAI)
-			r.Get("/events", h.handleAIEvents)
-		})
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 	})
@@ -443,6 +435,7 @@ func (h *Handler) SetDownloader(d TranscodeDownloader) {
 func (h *Handler) SetEventBus(bus *event.EventBus) {
 	h.eventBus = bus
 }
+
 
 // SetTimelapseMergeMgr sets the timelapse rolling merge manager on the handler.
 func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {

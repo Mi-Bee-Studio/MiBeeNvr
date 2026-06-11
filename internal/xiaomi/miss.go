@@ -78,8 +78,8 @@ type MISSPacket struct {
 	Payload   []byte
 }
 
-// SampleRate returns the audio sample rate derived from packet flags.
-func (p *MISSPacket) SampleRate() uint32 {
+// sampleRate returns the audio sample rate derived from packet flags.
+func (p *MISSPacket) sampleRate() uint32 {
 	v := (p.Flags >> 3) & 0b1111
 	if v != 0 {
 		return 16000

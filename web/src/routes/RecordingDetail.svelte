@@ -5,10 +5,12 @@
     deleteRecording,
     downloadRecording as apiDownloadRecording,
     getRecordingVideoUrl,
+    getMergedRecordingUrl,
     listRecordings,
     getTimelapseFrames,
     loadTimelapseFrameBlob,
     triggerTimelapseMerge,
+    retryRecordingMerge,
     subscribeTimelapseMergeProgress,
     cancelMerge,
     fetchTimelapsePreview,
@@ -273,7 +275,7 @@ function startMergeSse(cameraId: string, recordingId: string) {
         // Restore merge state from DB if merge is in progress
         restoreMergeState(recording);
 
-        if (recording.format === 'mjpeg') {
+        if (recording.format === 'timelapse' || recording.format === 'mjpeg') {
           // initPlayer called reactively via $effect when mjpegPlayer ref is set
           if (recording.merge_status === 'merged') {
             initVideoPlayer();
@@ -348,8 +350,12 @@ function startMergeSse(cameraId: string, recordingId: string) {
 function initVideoPlayer() {
   videoSpeed = 1;
   videoLoading = true;
-  videoUrl = getRecordingVideoUrl(currentId);
-  formatBadgeVisible = true;
+  // Merged timelapse/MJPEG uses /merged endpoint; regular video uses /download
+  if (recording && (recording.format === 'timelapse' || recording.format === 'mjpeg')) {
+    videoUrl = getMergedRecordingUrl(currentId);
+  } else {
+    videoUrl = getRecordingVideoUrl(currentId);
+  }
   if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
   videoError = null;
   videoErrorMsg = '';
@@ -501,7 +507,12 @@ async function handleMergeAndPlay() {
   });
 
   try {
-    await triggerTimelapseMerge(recording.camera_id, undefined, selectedMergeDuration);
+    if (recording.format === 'timelapse') {
+      // Use direct retry-merge endpoint for timelapse recordings
+      await retryRecordingMerge(recording.id);
+    } else {
+      await triggerTimelapseMerge(recording.camera_id, undefined, selectedMergeDuration);
+    }
     startMergeSse(recording.camera_id, recording.id);
     // DB polling fallback when SSE is unavailable (e.g. RollingMergeManager is nil)
     startMergePolling(recording.id, recording.camera_id);

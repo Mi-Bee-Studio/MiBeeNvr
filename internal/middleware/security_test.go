@@ -35,7 +35,7 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
-	ResetAuthFailures()
+	resetAuthFailures()
 	hash, _ := HashPassword("secret")
 	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +66,7 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 	}
 }
 func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
-	ResetAuthFailures()
+	resetAuthFailures()
 	hash, _ := HashPassword("secret")
 	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,7 @@ func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
 }
 
 func TestRateLimitResetsOnSuccess(t *testing.T) {
-	ResetAuthFailures()
+	resetAuthFailures()
 	hash, _ := HashPassword("secret")
 	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{Enabled: true, MaxFailures: 20, WindowMinutes: 1})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -57,10 +57,11 @@ func GetEncryptionKey() []byte {
 	return nil
 }
 
-// HasKey returns true if an encryption key is available.
-func HasKey() bool {
+// hasKey returns true if an encryption key is available.
+func hasKey() bool {
 	return GetEncryptionKey() != nil
 }
+
 
 // Encrypt encrypts plaintext using AES-256-GCM and returns a string
 // in the format "ENC:base64(nonce+ciphertext+tag)".

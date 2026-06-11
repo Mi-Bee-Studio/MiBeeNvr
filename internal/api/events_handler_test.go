@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -180,3 +181,43 @@ func TestEvents_HeartbeatFormat(t *testing.T) {
 
 // ensure imports compile
 var _ = strings.Builder{}
+
+// sseRecorder implements http.ResponseWriter with buffering and flush support.
+type sseRecorder struct {
+	mu      sync.Mutex
+	headers http.Header
+	body    strings.Builder
+	code    int
+	flushed bool
+}
+
+func newSSERecorder() *sseRecorder {
+	return &sseRecorder{headers: make(http.Header)}
+}
+func (r *sseRecorder) header() http.Header      { return r.headers }
+func (r *sseRecorder) Header() http.Header        { return r.headers }
+func (r *sseRecorder) Flush()                    { r.flushed = true }
+
+func (r *sseRecorder) WriteHeader(code int) {
+	r.mu.Lock()
+	r.code = code
+	r.mu.Unlock()
+}
+
+func (r *sseRecorder) Code() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.code
+}
+
+func (r *sseRecorder) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.Write(b)
+}
+
+func (r *sseRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.String()
+}
