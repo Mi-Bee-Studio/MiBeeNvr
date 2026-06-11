@@ -238,7 +238,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	// Test update existing camera
 
-	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", false, "", "", "")
+	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", true, "", "", "")
 
 	require.NoError(t, err)
 
@@ -260,7 +260,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	require.Equal(t, "rtsp://localhost:555/stream", cameras2[0].URL)
 
-	require.False(t, cameras2[0].Enabled)
+	require.True(t, cameras2[0].Enabled)
 	require.Equal(t, "newuser", cameras2[0].Username)
 	require.True(t, cameras2[0].HasPassword)
 

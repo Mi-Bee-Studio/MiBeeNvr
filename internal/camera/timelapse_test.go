@@ -42,7 +42,6 @@ func TestCreateRecorder_TimelapseSnapshotSource(t *testing.T) {
 		Name:     "Timelapse Snapshot",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/snapshot.jpg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "snapshot",
@@ -84,7 +83,6 @@ func TestCreateRecorder_TimelapseSnapshotSourceAutoDeriveURL(t *testing.T) {
 		Name:     "Timelapse Snapshot Auto",
 		Protocol: "timelapse",
 		URL:      "rtsp://192.168.1.100:554/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "snapshot",
@@ -124,7 +122,6 @@ func TestCreateRecorder_TimelapseSnapshotSourceNoURL(t *testing.T) {
 		Name:     "Timelapse Snapshot No URL",
 		Protocol: "timelapse",
 		URL:      "", // no RTSP/HTTP URL
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "snapshot",
@@ -164,7 +161,6 @@ func TestCreateRecorder_TimelapseMJPEGSource(t *testing.T) {
 		URL:      "http://192.168.1.100/mjpeg",
 		Username: "admin",
 		Password: "pass",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -205,7 +201,6 @@ func TestCreateRecorder_TimelapseAutoSource(t *testing.T) {
 		Name:     "Timelapse Auto",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "auto",
@@ -246,7 +241,6 @@ func TestCreateRecorder_TimelapseEmptyFrameSource(t *testing.T) {
 		Name:     "Timelapse Empty",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled: trueVal,
 			// FrameSource is empty — should default to auto
@@ -281,7 +275,6 @@ func TestCreateRecorder_TimelapseNotEnabled(t *testing.T) {
 		Name:     "Timelapse Disabled",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		// No Timelapse config
 	}
 	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
@@ -314,7 +307,6 @@ func TestCreateRecorder_TimelapseRTSPKeyframeSource(t *testing.T) {
 		Name:     "Timelapse Keyframe",
 		Protocol: "timelapse",
 		URL:      "rtsp://192.168.1.100:554/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -356,7 +348,6 @@ func TestCreateRecorder_TimelapseWithMergeManager(t *testing.T) {
 		Name:     "Timelapse With Merge",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -437,7 +428,6 @@ func TestStartTimelapseScheduleMonitor(t *testing.T) {
 		Name:     "Timelapse Monitor",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -516,7 +506,6 @@ func TestStartTimelapseKeyframeExtractor_NotTimelapse(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		// No Timelapse config
 	}
 
@@ -549,7 +538,6 @@ func TestStartTimelapseKeyframeExtractor_WrongSource(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "snapshot", // not rtsp_keyframe
@@ -626,7 +614,6 @@ func TestStartRecorder_TimelapseMJPEG(t *testing.T) {
 		Name:     "Timelapse Start",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -687,7 +674,6 @@ func TestStartRecorder_TimelapseRTSPKeyframe(t *testing.T) {
 		Name:     "Timelapse Keyframe Start",
 		Protocol: "timelapse",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "rtsp_keyframe",
@@ -759,7 +745,6 @@ func TestCreateRecorder_TimelapseSnapshotWithStore(t *testing.T) {
 		Name:     "Timelapse Snap Store",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/snapshot.jpg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "snapshot",
@@ -840,7 +825,6 @@ func TestTimelapseWiring_PauseStopsRecorder(t *testing.T) {
 		Name:     "Timelapse Wiring Pause",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -921,7 +905,6 @@ func TestTimelapseWiring_ResumeStartsRecorder(t *testing.T) {
 		Name:     "Timelapse Wiring Resume",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -975,7 +958,6 @@ func TestTimelapseWiring_ResumeAlreadyRunningNoOp(t *testing.T) {
 		Name:     "Timelapse Wiring Already",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",
@@ -1060,7 +1042,6 @@ func TestTimelapseWiring_ResumeNoTimelapseConfig(t *testing.T) {
 		Protocol: "rtsp",
 		Encoding: "h264",
 		URL:      "rtsp://192.168.1.100/stream",
-		Enabled:  true,
 		// No Timelapse config
 	}
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
@@ -1094,7 +1075,6 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 		Name:     "Timelapse Wiring Skip",
 		Protocol: "timelapse",
 		URL:      "http://192.168.1.100/mjpeg",
-		Enabled:  true,
 		Timelapse: &config.CameraTimelapseConfig{
 			Enabled:     trueVal,
 			FrameSource: "mjpeg",

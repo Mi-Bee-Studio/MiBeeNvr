@@ -996,7 +996,6 @@ func TestONVIFCameraCreation(t *testing.T) {
 				URL:      "http://192.168.1.100/onvif/device_service",
 				Username: "admin",
 				Password: "pass",
-				Enabled:  true,
 			},
 		},
 	}
@@ -1173,7 +1172,6 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 				Name:     "ONVIF HLS Camera",
 				Protocol: "onvif",
 				URL:      "http://192.168.1.100/onvif/device_service",
-				Enabled:  true,
 			},
 		},
 	}

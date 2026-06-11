@@ -116,7 +116,7 @@ func TestSave(t *testing.T) {
         Storage: StorageConfig{RootDir: "/data/rec", SegmentDuration: "5m"},
         Cameras: []CameraConfig{{
             ID: "cam1", Name: "Front", Protocol: "rtsp", Encoding: "h264",
-            URL: "rtsp://192.168.1.10/stream", Username: "admin", Password: "secret", Enabled: true,
+			URL: "rtsp://192.168.1.10/stream", Username: "admin", Password: "secret",
         }},
         Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
         Auth:    AuthConfig{Username: "admin", PasswordHash: "$2a$10$xxx"},
@@ -141,7 +141,6 @@ func TestSave(t *testing.T) {
     require.Equal(t, "rtsp://192.168.1.10/stream", loaded.Cameras[0].URL)
     require.Equal(t, "admin", loaded.Cameras[0].Username)
     require.Equal(t, "secret", loaded.Cameras[0].Password)
-    require.True(t, loaded.Cameras[0].Enabled)
     require.Equal(t, 7, loaded.Cleanup.RetentionDays)
     require.Equal(t, "30m", loaded.Cleanup.CheckInterval)
     require.Equal(t, 80, loaded.Cleanup.DiskThresholdPercent)
@@ -316,22 +315,20 @@ func TestXiaomiConfigDefaults(t *testing.T) {
 }
 
 func TestXiaomiConfigValidationDisablesCameraWithoutToken(t *testing.T) {
-	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device", Enabled: true}}}
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
-	require.False(t, cfg.Cameras[0].Enabled, "camera should be disabled when xiaomi.token is missing")
 }
 
 func TestXiaomiConfigValidationWithToken(t *testing.T) {
 	cfg := &Config{
-		Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device", Enabled: true}},
+		Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "h264", URL: "xiaomi://device"}},
 		Xiaomi:  XiaomiConfig{Token: "test-token", Region: "cn"},
 	}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
-	require.True(t, cfg.Cameras[0].Enabled, "camera should remain enabled when xiaomi.token is present")
 }
 
 func TestCameraConfigXiaomiFields(t *testing.T) {

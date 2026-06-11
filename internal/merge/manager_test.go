@@ -130,7 +130,7 @@ func TestRunOnce_MergeDisabled(t *testing.T) {
 	env.insertMergeableRecording(t, "rec1", cameraID, now.Add(-2*time.Hour), now.Add(-time.Hour))
 	env.insertMergeableRecording(t, "rec2", cameraID, now.Add(-time.Hour), now)
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestRunOnce_Integration(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	err = mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	err := mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -225,37 +225,6 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 	require.NotNil(t, rec)
 }
 
-func TestRunOnce_DisabledCamera(t *testing.T) {
-	env := newMergeTestEnv(t)
-	defer env.close(t)
-
-	cameraID := "cam1"
-	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", false, "", "", ""))
-
-	now := time.Now()
-	oldTime := now.Add(-2 * time.Hour)
-	env.insertMergeableRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second))
-	env.insertMergeableRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
-
-	cfg := config.MergeConfig{
-		Enabled:            true,
-		CheckInterval:      "1h",
-		MinSegmentAge:      "1m",
-		BatchLimit:         100,
-		MinSegmentsToMerge: 2,
-	}
-
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: false}})
-
-	err := mgr.RunOnce(context.Background())
-	require.NoError(t, err)
-
-	// Recordings should still exist (camera disabled)
-	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
-	require.NoError(t, err)
-	require.Len(t, recs, 2)
-}
 
 func TestRunOnce_ContextCancelled(t *testing.T) {
 	env := newMergeTestEnv(t)
@@ -269,7 +238,7 @@ func TestRunOnce_ContextCancelled(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: "cam1", Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: "cam1"}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -320,7 +289,7 @@ func TestStatus_AfterRunOnce(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	status := mgr.Status()
@@ -351,7 +320,7 @@ func TestPendingCounts(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	counts := mgr.PendingCounts(ctx)
 	require.Equal(t, 2, counts[cameraID])
@@ -378,7 +347,7 @@ func TestPendingCounts_MergeDisabled(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	counts := mgr.PendingCounts(ctx)
 	// Merge disabled — camera should not appear in counts.
@@ -417,7 +386,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 			}
 			return nil
 		},
-		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID, Enabled: true}} },
+		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID}} },
 		nil,
 )
 
@@ -504,7 +473,7 @@ func TestRunOnce_MJPEGIntegration(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	err = mgr.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -659,7 +628,7 @@ func TestRunOnce_ParseFailedMarkedAsFailed(t *testing.T) {
 		BatchLimit:         100,
 		MinSegmentsToMerge: 2,
 	}
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	// First pass: rec2 should be marked failed.
 	require.NoError(t, mgr.RunOnce(ctx))
@@ -701,7 +670,7 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 		BatchLimit:         100,
 		MinSegmentsToMerge: 2,
 	}
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	// First pass: both should be marked failed (undersized SPS/PPS groups).
 	require.NoError(t, mgr.RunOnce(ctx))
@@ -790,7 +759,7 @@ func TestRunOnce_TimelapseSkipped(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	err := mgr.RunOnce(ctx)
 	require.NoError(t, err)
@@ -857,7 +826,7 @@ func TestHashGrouping_SPSWithEmbeddedNull(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	// Verify both recordings still exist (were NOT merged — different SPS hash groups).
@@ -896,7 +865,7 @@ func TestMJPEGDeferredDelete_OnDBFailure(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	// Run merge once — should succeed.
 	err := mgr.RunOnce(ctx)
@@ -936,7 +905,7 @@ func TestMergeStatusRace(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
 	var wg sync.WaitGroup
 
@@ -985,7 +954,7 @@ func TestRunOnce_BatchLimitTruncation(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 	
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	// After first pass: 2 segments merged into 1 file, 1 singleton marked as merged
@@ -1031,7 +1000,7 @@ func TestRunOnce_MJPEGNotEnoughSegments(t *testing.T) {
 		MinSegmentsToMerge: 2,
 	}
 
-	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID, Enabled: true}})
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	// Recording should still exist (not enough segments to merge)
@@ -1117,7 +1086,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			BatchLimit:         100,
 			MinSegmentsToMerge: 2,
 		}
-		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		cameras := []config.CameraConfig{{ID: cameraID}}
 		mgr := NewMergeManager(env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
@@ -1175,7 +1144,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			BatchLimit:         100,
 			MinSegmentsToMerge: 2,
 		}
-		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		cameras := []config.CameraConfig{{ID: cameraID}}
 		mgr := NewMergeManager(env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
@@ -1233,7 +1202,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			BatchLimit:         100,
 			MinSegmentsToMerge: 2,
 		}
-		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		cameras := []config.CameraConfig{{ID: cameraID}}
 		mgr := NewMergeManager(env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
@@ -1298,7 +1267,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			BatchLimit:         100,
 			MinSegmentsToMerge: 2,
 		}
-		cameras := []config.CameraConfig{{ID: cameraID, Enabled: true}}
+		cameras := []config.CameraConfig{{ID: cameraID}}
 		mgr := NewMergeManager(concEnv.db, concEnv.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
