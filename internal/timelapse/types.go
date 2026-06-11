@@ -1,7 +1,11 @@
 // Package timelapse provides types and interfaces for timelapse recording and segment merging.
 package timelapse
 
-import "context"
+import (
+	"context"
+	"os"
+	"strings"
+)
 
 // MergeMode represents the merge output mode for timelapse recordings.
 type MergeMode string
@@ -110,4 +114,72 @@ type TimelapseMerger interface {
 	Merge(ctx context.Context, framesDir, outputPath string, fps int) (*MergeResult, error)
 	// Tier returns the merge tier identifier.
 	Tier() MergeTier
+}
+
+// AutoDetectMerger wraps multiple mergers and picks the right one based on
+// frame file types in the directory. It checks for .h265 files first
+// (uses H265GoMerger), then .h264 files (uses H264GoMerger), then falls back
+// to GoMerger for JPEG frames.
+type AutoDetectMerger struct {
+	jpegMerger *GoMerger
+	h264Merger *H264GoMerger
+	h265Merger *H265GoMerger
+}
+
+// NewAutoDetectMerger creates a merger that auto-detects frame types.
+func NewAutoDetectMerger() *AutoDetectMerger {
+	return &AutoDetectMerger{
+		jpegMerger: NewGoMerger(),
+		h264Merger: &H264GoMerger{},
+		h265Merger: &H265GoMerger{},
+	}
+}
+
+func (m *AutoDetectMerger) CanMerge() bool { return true }
+func (m *AutoDetectMerger) Tier() MergeTier  { return TierGo }
+
+func (m *AutoDetectMerger) Merge(ctx context.Context, framesDir, outputPath string, fps int) (*MergeResult, error) {
+	if hasH265Frames(framesDir) {
+		return m.h265Merger.Merge(ctx, framesDir, outputPath, fps)
+	}
+	if hasH264Frames(framesDir) {
+		return m.h264Merger.Merge(ctx, framesDir, outputPath, fps)
+	}
+	return m.jpegMerger.Merge(ctx, framesDir, outputPath, fps)
+}
+
+// hasH264Frames checks if a directory contains .h264 frame files.
+func hasH264Frames(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if strings.HasSuffix(name, ".h264") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasH265Frames checks if a directory contains .h265 frame files.
+func hasH265Frames(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if strings.HasSuffix(name, ".h265") {
+			return true
+		}
+	}
+	return false
 }

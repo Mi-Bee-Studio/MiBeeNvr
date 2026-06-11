@@ -89,7 +89,7 @@ func (r *RollingMergeManager) StartSegmentMerge(ctx context.Context, cameraID, s
 	r.mu.Unlock()
 
 	// Count total frames in segment dir for progress estimation.
-	totalFrames := countJPGFrames(segmentDir)
+	totalFrames := countFrames(segmentDir)
 
 	r.setProgress(cameraID, MergeProgressInfo{
 		CameraID: cameraID,
@@ -305,8 +305,8 @@ func (r *RollingMergeManager) setProgress(cameraID string, info MergeProgressInf
 	}
 }
 
-// countJPGFrames counts the number of .jpg/.jpeg files in a directory.
-func countJPGFrames(dir string) int {
+// countFrames counts frame files (.jpg/.jpeg/.h264/.h265) in a directory.
+func countFrames(dir string) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
@@ -317,7 +317,8 @@ func countJPGFrames(dir string) int {
 			continue
 		}
 		name := strings.ToLower(e.Name())
-		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") ||
+			strings.HasSuffix(name, ".h264") || strings.HasSuffix(name, ".h265") {
 			count++
 		}
 	}
