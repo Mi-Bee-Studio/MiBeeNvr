@@ -949,6 +949,7 @@
   "transcoding.history.created": "创建时间",
   "transcoding.history.duration": "耗时",
   "transcoding.history.no_tasks": "未找到转码任务",
+  "transcoding.history.actions": "操作",
   "transcoding.retry": "重试",
   "transcoding.retry_success": "任务 {id} 已重新排队",
   "transcoding.retry_failed": "重试任务失败",
