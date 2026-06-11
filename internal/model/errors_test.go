@@ -30,17 +30,6 @@ func TestCameraAlreadyRunningError(t *testing.T) {
 	}
 }
 
-func TestCameraDisabledError(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	err := &CameraDisabledError{CameraID: "cam-2"}
-	if got := err.Error(); got != "camera is disabled: cam-2" {
-		t.Errorf("Error() = %q, want %q", got, "camera is disabled: cam-2")
-	}
-	if got := err.Code(); got != "CAMERA_DISABLED" {
-		t.Errorf("Code() = %q, want %q", got, "CAMERA_DISABLED")
-	}
-}
 
 func TestRecordingNotFoundError(t *testing.T) {
 	t.Helper()
@@ -308,7 +297,6 @@ func TestAllErrorsImplementCodedError(t *testing.T) {
 	errors := []CodedError{
 		&CameraNotFoundError{CameraID: "x"},
 		&CameraAlreadyRunningError{CameraID: "x"},
-		&CameraDisabledError{CameraID: "x"},
 		&CameraAlreadyExistsError{CameraID: "x"},
 		&RecordingNotFoundError{RecordingID: "x"},
 		&StorageFullError{Message: "x"},
@@ -324,7 +312,6 @@ func TestAllErrorsImplementCodedError(t *testing.T) {
 	codes := []string{
 		"CAMERA_NOT_FOUND",
 		"CAMERA_ALREADY_RUNNING",
-		"CAMERA_DISABLED",
 		"CAMERA_ALREADY_EXISTS",
 		"RECORDING_NOT_FOUND",
 		"STORAGE_FULL",
