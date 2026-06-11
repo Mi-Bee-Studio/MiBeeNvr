@@ -1,9 +1,9 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { normalizeProtocol, enableCamera, disableCamera } from '$lib/api';
+  import { normalizeProtocol } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
- import { Pencil, Play, Square, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -14,7 +14,6 @@
     onstart: (camera: Camera) => void;
     onstop: (camera: Camera) => void;
     onrestart: (camera: Camera) => void;
-    ontoggle: (camera: Camera) => void;
    onsaveName: (camera: Camera, name: string) => void;
    mergeStatus?: string;
    mergeProgress?: number;
@@ -31,7 +30,6 @@
     onstart,
     onstop,
     onrestart,
-    ontoggle,
    onsaveName,
    mergeStatus = 'idle',
    mergeProgress = 0,
@@ -45,11 +43,9 @@
   $effect(() => { nameInput = camera.name; });
 
   let variant = $derived(
-    !camera.enabled
-      ? 'disabled'
-      : camera.status === 'recording'
-        ? 'active'
-        : 'stopped'
+    camera.status === 'recording'
+      ? 'active'
+      : 'stopped'
   );
 
   let isHls = $derived(
@@ -87,18 +83,6 @@
     menuOpen = !menuOpen;
   }
 
-  async function handleToggle() {
-    try {
-      if (camera.enabled) {
-        await disableCamera(camera.id);
-      } else {
-        await enableCamera(camera.id);
-      }
-      ontoggle(camera);
-    } catch (e) {
-      console.error('Toggle failed:', e);
-    }
-  }
 
   function startEditName() {
     nameInput = camera.name;
@@ -128,7 +112,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {variant === 'disabled' ? 'is-disabled' : ''} {menuOpen ? 'is-menu-open' : ''}"
+  class="card camera-card border th-border p-4 transition-all {menuOpen ? 'is-menu-open' : ''}"
 >
   <!-- Top: Name + Status -->
   <div class="flex items-start justify-between gap-2 mb-3">
@@ -186,9 +170,7 @@
        Failed
      </span>
    {/if}
-   {#if variant === 'disabled'}
-        <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
-      {:else if camera.status === 'recording'}
+   {#if camera.status === 'recording'}
         <span class="badge badge-success">{t('cameras.statusRecording')}</span>
       {:else if camera.status === 'error'}
         <span class="badge badge-error">{t('cameras.statusError')}</span>
@@ -213,44 +195,24 @@
 
   <!-- Bottom: Action bar -->
   <div class="flex items-center justify-between pt-3 border-t th-border">
-    <!-- Toggle switch (left) -->
-    <button
-      type="button"
-      class="toggle-switch {camera.enabled ? 'is-on' : ''}"
-      onclick={handleToggle}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
-      role="switch"
-      aria-checked={camera.enabled}
-      aria-label={camera.enabled ? t('cameras.action.disable') : t('cameras.action.enable')}
-    >
-      <span class="toggle-thumb"></span>
-    </button>
-    <span class="text-xs th-text-tertiary ml-1.5">{camera.enabled ? t('cameras.action.enable') : t('cameras.action.disable')}</span>
+    <!-- Recording toggle (left) -->
+    <div class="flex items-center gap-1.5">
+      <button
+        type="button"
+        class="rec-toggle {camera.status === 'recording' || camera.status === 'reconnecting' ? 'is-on' : ''}"
+        onclick={() => (camera.status === 'recording' || camera.status === 'reconnecting') ? onstop(camera) : onstart(camera)}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); (camera.status === 'recording' || camera.status === 'reconnecting') ? onstop(camera) : onstart(camera); } }}
+        role="switch"
+        aria-checked={camera.status === 'recording' || camera.status === 'reconnecting'}
+        aria-label={camera.status === 'recording' || camera.status === 'reconnecting' ? t('cameras.action.stopLabel') : t('cameras.action.startLabel')}
+      >
+        <span class="rec-toggle-thumb"></span>
+      </button>
+      <span class="text-xs th-text-tertiary">{camera.status === 'recording' || camera.status === 'reconnecting' ? t('cameras.action.stopLabel') : t('cameras.action.startLabel')}</span>
+    </div>
 
     <!-- Action buttons (right) -->
     <div class="flex items-center gap-1">
-      {#if variant !== 'disabled'}
-        {#if camera.status === 'recording' || camera.status === 'reconnecting'}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onstop(camera)}
-            title={t('cameras.stop')}
-            aria-label={t('cameras.action.stopLabel')}
-          >
-            <Square size={14} />
-            <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.stopLabel')}</span>
-          </button>
-        {:else}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onstart(camera)}
-            title={t('cameras.start')}
-            aria-label={t('cameras.action.startLabel')}
-          >
-            <Play size={14} />
-            <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.startLabel')}</span>
-          </button>
-        {/if}
 
         {#if camera.status === 'recording' || camera.status === 'error' || camera.status === 'reconnecting'}
           <button
@@ -274,7 +236,6 @@
           <RefreshCw size={14} />
         </button>
      {/if}
-   {/if}
 
       {#if isHls}
         <a
@@ -327,17 +288,8 @@
     z-index: 100;
   }
 
-  .camera-card.is-disabled {
-    opacity: 0.6;
-  }
-
-  .camera-card.is-disabled .dropdown-item:not(.dropdown-item--danger),
-  .camera-card.is-disabled .btn:not(.toggle-switch) {
-    pointer-events: none;
-  }
-
-  /* Toggle switch — matches Settings.svelte pattern */
-  .toggle-switch {
+  /* Recording toggle switch */
+  .rec-toggle {
     position: relative;
     display: inline-flex;
     align-items: center;
@@ -352,11 +304,11 @@
     flex-shrink: 0;
   }
 
-  .toggle-switch.is-on {
-    background-color: var(--color-primary);
+  .rec-toggle.is-on {
+    background-color: #22c55e;
   }
 
-  .toggle-switch .toggle-thumb {
+  .rec-toggle .rec-toggle-thumb {
     display: block;
     width: 1rem;
     height: 1rem;
@@ -366,11 +318,11 @@
     transform: translateX(0.25rem);
   }
 
-  .toggle-switch.is-on .toggle-thumb {
+  .rec-toggle.is-on .rec-toggle-thumb {
     transform: translateX(1.5rem);
   }
 
-  .toggle-switch:focus-visible {
+  .rec-toggle:focus-visible {
     box-shadow: var(--focus-ring);
     outline: none;
   }
