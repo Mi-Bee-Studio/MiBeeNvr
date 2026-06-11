@@ -71,6 +71,7 @@
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
+  let formChannel = $state('');
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -143,6 +144,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingBitrate = '2M';
     validationErrors = {};
   }
+    formChannel = '';
 
   function populateForm(camera: Camera) {
     formName = camera.name;
@@ -169,6 +171,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
     validationErrors = {};
+    formChannel = camera.channel || '';
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -303,6 +306,7 @@ async function performCameraSave() {
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
             },
+            channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -341,6 +345,7 @@ async function performCameraSave() {
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
             },
+            channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -391,6 +396,17 @@ async function performCameraSave() {
         {/each}
       </select>
     </div>
+
+    {#if formProtocol === 'xiaomi'}
+      <!-- Lens/Channel -->
+      <div>
+        <label for="cam-channel" class="input-label">{t('cameras.channel')}</label>
+        <select id="cam-channel" class="input" bind:value={formChannel}>
+          <option value="">{t('cameras.channelMain')}</option>
+          <option value="sub">{t('cameras.channelSecondary')}</option>
+        </select>
+      </div>
+    {/if}
 
     <!-- URL -->
     <div class="md:col-span-2">

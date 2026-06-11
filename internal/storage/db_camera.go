@@ -48,6 +48,8 @@ type CameraRow struct {
 	ArchiveRetentionDays int                           `json:"archive_retention_days"`
 	// Transcoding config injected from YAML at API response time
 	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
+	// Channel injected from YAML at API response time (Xiaomi dual-lens)
+	Channel              string `json:"channel,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
