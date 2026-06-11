@@ -27,6 +27,26 @@ func deriveProtocolForSnapshot(cam config.CameraConfig) string {
 	}
 	return cam.Protocol
 }
+// effectiveDualModeFrameSource resolves the effective frame source for dual-mode
+// timelapse (regular recording camera with timelapse enabled alongside).
+// "auto" is resolved to "rtsp_keyframe" for RTSP/ONVIF cameras with h264/h265 encoding.
+func effectiveDualModeFrameSource(cam config.CameraConfig) string {
+	if cam.Timelapse == nil || !cam.Timelapse.Enabled {
+		return ""
+	}
+	fs := cam.Timelapse.FrameSource
+	if fs == "" || fs == "auto" {
+		switch cam.Protocol {
+		case "rtsp", "onvif":
+			if cam.Encoding == "h264" || cam.Encoding == "h265" || cam.Encoding == "" {
+				return "rtsp_keyframe"
+			}
+		}
+	}
+	return fs
+}
+
+
 
 // createTimelapseSnapshotRecorder creates a SnapshotCapturer for snapshot frame source.
 func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
@@ -155,8 +175,8 @@ func (cm *CameraManager) stopTimelapseScheduleMonitor(cameraID string) {
 
 // startTimelapseKeyframeExtractor creates and starts a KeyframeExtractor for the given camera,
 // subscribing it to the provided StreamHub. The extractor is stored in the manager for lifecycle management.
-func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam config.CameraConfig, hub *model.StreamHub) error {
-	if cam.Timelapse == nil || !cam.Timelapse.Enabled || cam.Timelapse.FrameSource != "rtsp_keyframe" {
+func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam config.CameraConfig, hub *model.StreamHub, rec model.Recorder) error {
+	if effectiveDualModeFrameSource(cam) != "rtsp_keyframe" {
 		return nil
 	}
 
@@ -165,7 +185,26 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		interval = d
 	}
 
-	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265"
+	// Determine H.265 from config OR from the actual recorder type.
+	// ONVIF cameras auto-detect encoding at runtime via RTSP DESCRIBE,
+	// so cam.Encoding may be empty even though the stream is H.265.
+	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265" || isRecorderH265(rec)
+
+	// Create a rolling merge manager for this extractor if none available.
+	// Uses AutoDetectMerger which handles both JPEG (.jpg) and H.264/H.265 frames.
+	var mergeMgr *timelapse.RollingMergeManager
+	if cm.timelapseMergeMgr != nil {
+		mergeMgr = cm.timelapseMergeMgr
+	} else {
+		fps := 10
+		if interval > 0 {
+			fps = int(time.Second / interval)
+			if fps < 1 {
+				fps = 1
+			}
+		}
+		mergeMgr = timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, false)
+	}
 
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
 		CameraID:   cameraID,
@@ -174,6 +213,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		IsH265:     isH265,
 		Store:      cm.store,
 		DB:         cm.db,
+		MergeMgr:   mergeMgr,
 	})
 
 	ctx := context.Background()
@@ -301,4 +341,24 @@ func (cm *CameraManager) ResumeTimelapse(ctx context.Context, cameraID string) e
 	}
 	logger.Info("timelapse recorder resumed", "camera_id", cameraID)
 	return nil
+}
+
+// isRecorderH265 checks if the given recorder (or its delegate for ONVIF recorders)
+// is actually an H.265 recorder. This is needed because ONVIF cameras auto-detect
+// encoding at runtime via RTSP DESCRIBE, so cam.Encoding may be empty even though
+// the stream is H.265.
+func isRecorderH265(rec model.Recorder) bool {
+	// Check for ONVIF recorder with delegate
+	type delegater interface {
+		Delegate() model.Recorder
+	}
+	if d, ok := rec.(delegater); ok {
+		if delegate := d.Delegate(); delegate != nil {
+			rec = delegate
+		}
+	}
+	// Check by type name to avoid importing recorder package.
+	// H265Recorder from internal/recorder will match.
+	typeName := fmt.Sprintf("%T", rec)
+	return strings.Contains(typeName, "H265Recorder")
 }

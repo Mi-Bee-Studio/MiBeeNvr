@@ -510,7 +510,7 @@ func TestStartTimelapseKeyframeExtractor_NotTimelapse(t *testing.T) {
 	}
 
 	// Should return nil without doing anything
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 	assert.NoError(t, err, "should not error when no timelapse config")
 }
 
@@ -545,7 +545,7 @@ func TestStartTimelapseKeyframeExtractor_WrongSource(t *testing.T) {
 	}
 
 	// Should return nil without doing anything (wrong frame source)
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 	assert.NoError(t, err, "should not error when frame source is not rtsp_keyframe")
 }
 
@@ -1100,4 +1100,120 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 	_, exists := mgr.recorders[cam.ID]
 	mgr.mu.RUnlock()
 	assert.False(t, exists, "recorder should not be created when not recording time")
+}
+
+// --- effectiveDualModeFrameSource Tests ---
+
+func TestEffectiveDualModeFrameSource_AutoOnvifH265(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "onvif",
+		Encoding: "h265",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + onvif + h265 should resolve to rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_AutoOnvifEmptyEncoding(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "onvif",
+		Encoding: "",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + onvif + empty encoding should resolve to rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_AutoRtspH264(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "rtsp",
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + rtsp + h264 should resolve to rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_AutoOnvifMJPEG(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "onvif",
+		Encoding: "mjpeg",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "auto", result, "auto + onvif + mjpeg should stay as auto")
+}
+
+func TestEffectiveDualModeFrameSource_ExplicitRtspKeyframe(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "rtsp",
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "rtsp_keyframe",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "explicit rtsp_keyframe should return rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_ExplicitSnapshot(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "rtsp",
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "snapshot",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "snapshot", result, "explicit snapshot should return snapshot unchanged")
+}
+
+func TestEffectiveDualModeFrameSource_TimelapseDisabled(t *testing.T) {
+	t.Helper()
+	cam := config.CameraConfig{
+		Protocol: "rtsp",
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     false,
+			FrameSource: "rtsp_keyframe",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "", result, "disabled timelapse should return empty string")
+}
+
+func TestEffectiveDualModeFrameSource_NilTimelapse(t *testing.T) {
+	t.Helper()
+	cam := config.CameraConfig{
+		Protocol: "rtsp",
+		Encoding: "h264",
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "", result, "nil timelapse should return empty string")
 }
