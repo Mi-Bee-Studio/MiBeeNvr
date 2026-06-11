@@ -1262,7 +1262,7 @@ func TestDualMode_H264Timelapse_CreatesKeyframeExtractor(t *testing.T) {
 	require.NotNil(t, hub, "H264Recorder should have a StreamHub")
 
 	// Start keyframe extractor with the hub
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start keyframe extractor for H264 dual-mode")
 
 	// Verify KFE is registered and running
@@ -1320,7 +1320,7 @@ func TestDualMode_ONVIFTimelapse_H265_CreatesKeyframeExtractor(t *testing.T) {
 	require.NotNil(t, hub, "ONVIFRecorder should have a StreamHub")
 
 	// Start keyframe extractor with the hub
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start keyframe extractor for ONVIF dual-mode")
 
 	// Verify KFE is registered and running
@@ -1374,7 +1374,7 @@ func TestDualMode_ONVIFTimelapse_H264_CreatesKeyframeExtractor(t *testing.T) {
 	hub := getRecorderHub(rec)
 	require.NotNil(t, hub)
 
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start keyframe extractor for ONVIF H264 dual-mode")
 
 	mgr.mu.RLock()
@@ -1410,7 +1410,7 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 			Encoding: "h264",
 			URL:      "rtsp://192.168.1.100/stream",
 		}
-		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
+		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "no timelapse config should not error")
 		mgr.mu.RLock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
@@ -1429,7 +1429,7 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 				FrameSource: "rtsp_keyframe",
 			},
 		}
-		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
+		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "disabled timelapse should not error")
 		mgr.mu.RLock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
@@ -1450,7 +1450,7 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 				Interval:    "10s",
 			},
 		}
-		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil)
+		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "wrong frame source should not error")
 		mgr.mu.RLock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
@@ -1508,7 +1508,7 @@ func TestDualMode_KeyframeExtractorStopsOnCameraStop(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// Start KFE
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err)
 
 	// Verify KFE is registered and running
@@ -1576,7 +1576,7 @@ func TestDualMode_StandaloneTimelapseRTSPKeyframe_GetsValidRecorder(t *testing.T
 	require.NotNil(t, hub, "recorder should have StreamHub from initStreamHub")
 
 	// KFE should be startable with this hub
-	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub)
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start KFE with standalone timelapse recorder hub")
 
 	mgr.mu.RLock()
@@ -1585,5 +1585,62 @@ func TestDualMode_StandaloneTimelapseRTSPKeyframe_GetsValidRecorder(t *testing.T
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
+	mgr.stopTimelapseKeyframeExtractor(cam.ID)
+}
+
+func TestDualMode_ONVIFTimelapse_AutoFrameSource_CreatesKeyframeExtractor(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "10m",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.CleanupTempFiles() })
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	trueVal := true
+	cam := config.CameraConfig{
+		ID:             "cam-dual-onvif-auto",
+		Name:           "Dual-Mode ONVIF Auto",
+		Protocol:       "onvif",
+		URL:            "http://192.168.1.100/onvif/device_service",
+		StreamEncoding: "H265",
+		Username:       "admin",
+		Password:       "pass",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto", // should be resolved to rtsp_keyframe
+			Interval:    "10s",
+		},
+	}
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	// createRecorder should produce ONVIFRecorder with a StreamHub
+	rec := mgr.createRecorder(cam, segDur)
+	require.NotNil(t, rec, "ONVIF camera with timelapse should create ONVIFRecorder")
+
+	hub := getRecorderHub(rec)
+	require.NotNil(t, hub, "ONVIFRecorder should have a StreamHub")
+
+	// Start keyframe extractor with the hub — should succeed with auto frame source
+	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
+	require.NoError(t, err, "should start keyframe extractor for ONVIF dual-mode with auto frame source")
+
+	// Verify KFE is registered and running
+	mgr.mu.RLock()
+	ext, exists := mgr.keyframeExtractors[cam.ID]
+	mgr.mu.RUnlock()
+	assert.True(t, exists, "keyframe extractor should be registered")
+	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
+
+	// Cleanup
 	mgr.stopTimelapseKeyframeExtractor(cam.ID)
 }

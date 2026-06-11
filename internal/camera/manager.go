@@ -416,9 +416,9 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	}
 
 	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config
-	if cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+	if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
 		if hub := getRecorderHub(rec); hub != nil {
-			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
+			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
 				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
 			}
 		}
@@ -488,9 +488,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					}
 					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
 					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
-					if cam.Timelapse != nil && cam.Timelapse.Enabled && cam.Timelapse.FrameSource == "rtsp_keyframe" {
+					if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
 						if hub := getRecorderHub(rec); hub != nil {
-							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub); err != nil {
+						if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
 								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
 							}
 						}
