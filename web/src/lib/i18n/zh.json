@@ -1171,5 +1171,8 @@
   "settings.ai.zonePointsCount": "{count} 个点",
   "settings.ai.createZoneFailed": "创建区域失败：{error}",
   "settings.ai.deleteZoneFailed": "删除区域失败",
-  "settings.ai.saveFailed": "保存单摄像头设置失败"
+  "settings.ai.saveFailed": "保存单摄像头设置失败",
+  "ai.source.local": "本地AI",
+  "ai.source.backend": "后端AI",
+  "ai.source.switchTo": "切换至{source}"
 }

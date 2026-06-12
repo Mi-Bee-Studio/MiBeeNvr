@@ -1175,5 +1175,7 @@
   "settings.ai.createZoneFailed": "Failed to create zone: {error}",
   "settings.ai.deleteZoneFailed": "Failed to delete zone",
   "settings.ai.saveFailed": "Failed to save per-camera settings",
-  "settings.ai.saveFailed": "Failed to save per-camera settings"
+  "ai.source.local": "Local AI",
+  "ai.source.backend": "Backend AI",
+  "ai.source.switchTo": "Switch to {source}"
 }
