@@ -133,6 +133,7 @@ type Handler struct {
 	timelapseDailyMgr *timelapse.DailyMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
+	aiHandler         *AIHandler
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
@@ -162,6 +163,8 @@ func (h *Handler) Routes() http.Handler {
 	// Public routes
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
+	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording) // Public for timelapse video playback
+	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -176,7 +179,6 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
-				r.Get("/merged", h.handleMergedRecording)
 				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
 			})
 		})
@@ -307,6 +309,17 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
+		// AI endpoints
+		r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
+		r.Get("/api/ai/status/{cameraID}", h.aiHandler.handleAICameraAIStatus)
+		r.Get("/api/ai/detections", h.aiHandler.handleAIDetections)
+		r.Get("/api/ai/detections/{cameraID}", h.aiHandler.handleAICameraDetections)
+		r.Post("/api/ai/restart/{cameraID}", h.aiHandler.handleAIRestartCamera)
+		r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
+		r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
+		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
+		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
+		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
 	})
 
 	return r
@@ -445,6 +458,11 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 // SetTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
 func (h *Handler) SetTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
 	h.timelapseDailyMgr = mgr
+}
+
+// SetAIHandler sets the AI handler on the Handler.
+func (h *Handler) SetAIHandler(ah *AIHandler) {
+	h.aiHandler = ah
 }
 
 // --- Per-camera streaming protocols endpoint ---

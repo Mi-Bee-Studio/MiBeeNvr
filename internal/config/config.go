@@ -762,6 +762,38 @@ func Validate(cfg *Config) error {
 		if cfg.AI.FrameSkipRate <= 0 {
 			return fmt.Errorf("ai.frame_skip_rate must be > 0, got %d", cfg.AI.FrameSkipRate)
 		}
+		if cfg.AI.InferenceTimeoutMs <= 0 {
+			return fmt.Errorf("ai.inference_timeout_ms must be > 0, got %d", cfg.AI.InferenceTimeoutMs)
+		}
+		// Validate enabled_cameras
+		for i, camID := range cfg.AI.EnabledCameras {
+			if strings.TrimSpace(camID) == "" {
+				return fmt.Errorf("ai.enabled_cameras[%d] must be non-empty", i)
+			}
+		}
+		// Validate zones
+		for cameraID, zones := range cfg.AI.Zones {
+			if strings.TrimSpace(cameraID) == "" {
+				return fmt.Errorf("ai.zones: camera ID must not be empty")
+			}
+			for j, zone := range zones {
+				if strings.TrimSpace(zone.Name) == "" {
+					return fmt.Errorf("ai.zones[%q][%d].name must not be empty", cameraID, j)
+				}
+				if len(zone.Points) < 3 {
+					return fmt.Errorf("ai.zones[%q][%d] (%q) must have at least 3 points, got %d", cameraID, j, zone.Name, len(zone.Points))
+				}
+				for k, p := range zone.Points {
+					if p[0] < 0 || p[0] > 1 || p[1] < 0 || p[1] > 1 {
+						return fmt.Errorf("ai.zones[%q][%d] (%q) point %d coordinates (%.2f, %.2f) outside [0,1] range", cameraID, j, zone.Name, k, p[0], p[1])
+					}
+				}
+			}
+		}
+		// ModelPath warning if empty
+		if cfg.AI.ModelPath == "" {
+			slog.Warn("ai.model_path is empty — model must be downloaded at runtime or set in config")
+		}
 	}
 	return nil
 }
@@ -983,6 +1015,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.AI.ConfidenceThreshold <= 0 {
 		cfg.AI.ConfidenceThreshold = 0.5
+	}
+	if cfg.AI.InferenceTimeoutMs <= 0 {
+		cfg.AI.InferenceTimeoutMs = 5000
 	}
 	if cfg.AI.FrameSkipRate <= 0 {
 		cfg.AI.FrameSkipRate = 10

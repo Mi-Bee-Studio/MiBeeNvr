@@ -1221,11 +1221,13 @@ ai:
 func TestAIConfigDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
-	// No defaults are applied for AIConfig, so Go zero values remain
-	require.Equal(t, 0, cfg.AI.InferenceTimeoutMs)
-	require.Equal(t, 0, cfg.AI.FrameSkipRate)
-	require.Equal(t, 0.0, cfg.AI.ConfidenceThreshold)
+	require.Equal(t, 2, cfg.AI.MaxGoroutines)
+	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
+	require.Equal(t, 10, cfg.AI.FrameSkipRate)
+	require.Equal(t, 5000, cfg.AI.InferenceTimeoutMs)
 	require.Equal(t, "", cfg.AI.ModelPath)
+	require.NotNil(t, cfg.AI.Zones)
+	require.Empty(t, cfg.AI.EnabledCameras)
 }
 
 func TestParseMergeDuration_Valid(t *testing.T) {
