@@ -134,6 +134,7 @@ type Handler struct {
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
+	aiWSHandler        *AIWSHandler
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
@@ -320,6 +321,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
 		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
 		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
+		r.Get("/api/ai/events/ws", h.aiWSHandler.ServeWS)
 	})
 
 	return r
@@ -463,6 +465,11 @@ func (h *Handler) SetTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
 // SetAIHandler sets the AI handler on the Handler.
 func (h *Handler) SetAIHandler(ah *AIHandler) {
 	h.aiHandler = ah
+}
+
+// SetAIWSHandler sets the AI WebSocket handler on the Handler.
+func (h *Handler) SetAIWSHandler(ah *AIWSHandler) {
+	h.aiWSHandler = ah
 }
 
 // --- Per-camera streaming protocols endpoint ---
