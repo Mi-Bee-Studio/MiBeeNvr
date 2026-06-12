@@ -1140,13 +1140,13 @@
   "ai.statusRunning": "运行中",
   "ai.statusStopped": "已停止",
   "ai.model": "模型：{name}",
-  "ai.backend": "NCNN：{available}",
   "ai.fps": "{fps} FPS",
   "ai.detectionsCount": "{count} 次检测",
   "ai.recentDetections": "最近检测",
   "ai.noDetections": "暂无最近检测",
   "ai.collapse": "收起",
   "ai.loadError": "加载 AI 状态失败",
+  "ai.browserOnly": "AI 检测在浏览器中使用 ONNX Runtime Web 运行，无需服务器端推理。",
 
   "settings.ai.perCameraTitle": "单摄像头 AI 设置",
   "settings.ai.perCameraDesc": "为每个摄像头单独配置 AI 检测。",
@@ -1172,7 +1172,5 @@
   "settings.ai.createZoneFailed": "创建区域失败：{error}",
   "settings.ai.deleteZoneFailed": "删除区域失败",
   "settings.ai.saveFailed": "保存单摄像头设置失败",
-  "ai.source.local": "本地AI",
-  "ai.source.backend": "后端AI",
-  "ai.source.switchTo": "切换至{source}"
+  "ai.source.local": "本地AI"
 }

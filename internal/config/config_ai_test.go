@@ -21,7 +21,7 @@ func TestValidateAIConfig_ValidDefaults(t *testing.T) {
 }
 
 func TestValidateAIConfig_InvalidConfidence(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 2, FrameSkipRate: 10, InferenceTimeoutMs: 5000, ConfidenceThreshold: 1.5}}
+	cfg := &Config{AI: AIConfig{Enabled: true, FrameSkipRate: 10, ConfidenceThreshold: 1.5}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -29,7 +29,7 @@ func TestValidateAIConfig_InvalidConfidence(t *testing.T) {
 }
 
 func TestValidateAIConfig_NegativeConfidence(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 2, FrameSkipRate: 10, InferenceTimeoutMs: 5000}}
+	cfg := &Config{AI: AIConfig{Enabled: true, FrameSkipRate: 10}}
 	cfg.ApplyDefaults()
 	cfg.AI.ConfidenceThreshold = -0.1 // override default
 	err := Validate(cfg)
@@ -38,7 +38,7 @@ func TestValidateAIConfig_NegativeConfidence(t *testing.T) {
 }
 
 func TestValidateAIConfig_ZeroFrameSkipRate(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 2, FrameSkipRate: 0, InferenceTimeoutMs: 5000, ConfidenceThreshold: 0.5}}
+	cfg := &Config{AI: AIConfig{Enabled: true, FrameSkipRate: 0, ConfidenceThreshold: 0.5}}
 	cfg.ApplyDefaults()
 	cfg.AI.FrameSkipRate = 0 // override default
 	err := Validate(cfg)
@@ -47,7 +47,7 @@ func TestValidateAIConfig_ZeroFrameSkipRate(t *testing.T) {
 }
 
 func TestValidateAIConfig_NegativeFrameSkipRate(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 2, InferenceTimeoutMs: 5000, ConfidenceThreshold: 0.5}}
+	cfg := &Config{AI: AIConfig{Enabled: true, ConfidenceThreshold: 0.5}}
 	cfg.ApplyDefaults()
 	cfg.AI.FrameSkipRate = -1 // override default
 	err := Validate(cfg)
@@ -55,30 +55,10 @@ func TestValidateAIConfig_NegativeFrameSkipRate(t *testing.T) {
 	require.Contains(t, err.Error(), "frame_skip_rate")
 }
 
-func TestValidateAIConfig_ZeroMaxGoroutines(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 0, FrameSkipRate: 10, InferenceTimeoutMs: 5000, ConfidenceThreshold: 0.5}}
-	cfg.ApplyDefaults()
-	cfg.AI.MaxGoroutines = 0 // override default
-	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "max_goroutines")
-}
-
-func TestValidateAIConfig_ZeroInferenceTimeout(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Enabled: true, MaxGoroutines: 2, FrameSkipRate: 10, InferenceTimeoutMs: 0, ConfidenceThreshold: 0.5}}
-	cfg.ApplyDefaults()
-	cfg.AI.InferenceTimeoutMs = 0 // override default
-	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "inference_timeout_ms")
-}
-
 func TestValidateAIConfig_InvalidZonePoints(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"cam1": {
@@ -94,10 +74,8 @@ func TestValidateAIConfig_InvalidZonePoints(t *testing.T) {
 
 func TestValidateAIConfig_EmptyZoneName(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"cam1": {
@@ -113,10 +91,8 @@ func TestValidateAIConfig_EmptyZoneName(t *testing.T) {
 
 func TestValidateAIConfig_InvalidZoneCoordinates(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"cam1": {
@@ -132,10 +108,8 @@ func TestValidateAIConfig_InvalidZoneCoordinates(t *testing.T) {
 
 func TestValidateAIConfig_NegativeZoneCoordinate(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"cam1": {
@@ -151,10 +125,8 @@ func TestValidateAIConfig_NegativeZoneCoordinate(t *testing.T) {
 
 func TestValidateAIConfig_EmptyCameraID(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"": {
@@ -170,12 +142,10 @@ func TestValidateAIConfig_EmptyCameraID(t *testing.T) {
 
 func TestValidateAIConfig_EmptyEnabledCamera(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		EnabledCameras:     []string{"cam1", ""},
+		EnabledCameras:      []string{"cam1", ""},
 	}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
@@ -185,10 +155,8 @@ func TestValidateAIConfig_EmptyEnabledCamera(t *testing.T) {
 
 func TestValidateAIConfig_DisabledSkipsValidation(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            false,
-		MaxGoroutines:      0,
-		FrameSkipRate:      0,
-		InferenceTimeoutMs: 0,
+		Enabled:             false,
+		FrameSkipRate:       0,
 		ConfidenceThreshold: 1.5, // invalid if enabled
 		Zones: map[string][]ai.ROI{
 			"cam1": {
@@ -204,39 +172,30 @@ func TestValidateAIConfig_DisabledSkipsValidation(t *testing.T) {
 func TestApplyDefaults_AI(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
-	require.Equal(t, 2, cfg.AI.MaxGoroutines)
 	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
 	require.Equal(t, 10, cfg.AI.FrameSkipRate)
-	require.Equal(t, 5000, cfg.AI.InferenceTimeoutMs)
 	require.NotNil(t, cfg.AI.Zones)
 	require.Empty(t, cfg.AI.Zones)
-	require.Empty(t, cfg.AI.ModelPath)
 	require.Empty(t, cfg.AI.EnabledCameras)
 	require.False(t, cfg.AI.Enabled)
 }
 
 func TestApplyDefaults_AI_PreservesExplicitValues(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		MaxGoroutines:      4,
 		ConfidenceThreshold: 0.8,
 		FrameSkipRate:       20,
-		InferenceTimeoutMs:  10000,
 		Enabled:             true,
 	}}
 	cfg.ApplyDefaults()
-	require.Equal(t, 4, cfg.AI.MaxGoroutines, "should preserve explicit value")
 	require.Equal(t, 0.8, cfg.AI.ConfidenceThreshold, "should preserve explicit value")
 	require.Equal(t, 20, cfg.AI.FrameSkipRate, "should preserve explicit value")
-	require.Equal(t, 10000, cfg.AI.InferenceTimeoutMs, "should preserve explicit value")
 	require.True(t, cfg.AI.Enabled)
 }
 
 func TestValidateAIConfig_ValidZones(t *testing.T) {
 	cfg := &Config{AI: AIConfig{
-		Enabled:            true,
-		MaxGoroutines:      2,
-		FrameSkipRate:      10,
-		InferenceTimeoutMs: 5000,
+		Enabled:             true,
+		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
 		Zones: map[string][]ai.ROI{
 			"cam1": {

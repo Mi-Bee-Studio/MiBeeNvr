@@ -96,23 +96,7 @@ export function detectAiBackend(): string {
   return 'WASM SIMD';
 }
 
-// ─── Backend API types ─────────────────────────────────────────────────
-
-export interface AIConfigUpdate {
-  enabled?: boolean;
-  model_path?: string;
-  confidence_threshold?: number;
-  frame_skip_rate?: number;
-  inference_timeout_ms?: number;
-  enabled_cameras?: string[];
-  max_goroutines?: number;
-  camera_configs?: Record<string, CameraAIConfig>;
-}
-
-export interface CameraAIConfig {
-  confidence_threshold?: number;
-  frame_skip_rate?: number;
-}
+// ─── Zone management (server-side) ────────────────────────────────────────────
 
 export interface Zone {
   camera_id: string;
@@ -132,7 +116,24 @@ export interface CreateZoneRequest {
   enabled: boolean;
 }
 
-// ─── Per-camera localStorage ───────────────────────────────────────────
+export async function getAIZones(): Promise<ZoneList> {
+  return apiRequest<ZoneList>('/ai/zones');
+}
+
+export async function createAIZone(zone: CreateZoneRequest): Promise<Zone> {
+  return apiRequest<Zone>('/ai/zones', {
+    method: 'POST',
+    body: JSON.stringify(zone),
+  });
+}
+
+export async function deleteAIZone(id: string): Promise<void> {
+  return apiRequest<void>(`/ai/zones/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+// ─── Per-camera localStorage ──────────────────────────────────────────────────
 
 const PER_CAMERA_STORAGE_KEY = 'mibee_nvr_per_camera_ai';
 
@@ -160,88 +161,4 @@ export function savePerCameraAiSettings(settings: PerCameraAiState): void {
   } catch (e) {
     console.error('Failed to save per-camera AI settings:', e);
   }
-}
-
-// ─── Backend API calls ─────────────────────────────────────────────────
-
-/**
- * Update AI configuration (partial update via PUT /api/ai/config)
- */
-export async function updateAIConfig(config: AIConfigUpdate): Promise<void> {
-  return apiRequest<void>('/ai/config', {
-    method: 'PUT',
-    body: JSON.stringify(config),
-  });
-}
-
-/**
- * Get all ROI zones
- */
-export async function getAIZones(): Promise<ZoneList> {
-  return apiRequest<ZoneList>('/ai/zones');
-}
-
-/**
- * Create a new ROI zone
- */
-export async function createAIZone(zone: CreateZoneRequest): Promise<Zone> {
-  return apiRequest<Zone>('/ai/zones', {
-    method: 'POST',
-    body: JSON.stringify(zone),
-  });
-}
-
-/**
- * Delete an ROI zone by name (ID)
- */
-export async function deleteAIZone(id: string): Promise<void> {
-  return apiRequest<void>(`/ai/zones/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
-}
-
-// ─── Server-side AI Status API ────────────────────────────────────────────────
-
-export interface AIStatus {
-  enabled: boolean;
-  ncnn_available: boolean;
-  model_name: string;
-  active_cameras: number;
-  cameras: Record<string, AICameraStatus>;
-}
-
-export interface AICameraStatus {
-  running: boolean;
-  fps: number;
-  detections: number;
-}
-
-export interface DetectionList {
-  camera_id: string;
-  detections: DetectionEvent[];
-  total: number;
-}
-
-export interface DetectionEvent {
-  timestamp: string;
-  detections: DetectionObj[];
-  source: string;
-}
-
-export interface DetectionObj {
-  class_id: number;
-  class_name: string;
-  confidence: number;
-  bbox: number[];
-}
-
-/** Fetch AI global status with per-camera info */
-export async function getAIStatus(): Promise<AIStatus> {
-  return apiRequest<AIStatus>('/ai/status');
-}
-
-/** Fetch recent detections for a camera */
-export async function getAIDetections(cameraID: string, params?: { limit?: number }): Promise<DetectionList> {
-  const query = params ? '?' + new URLSearchParams({ limit: String(params.limit ?? 10) }).toString() : '';
-  return apiRequest<DetectionList>(`/ai/detections/${encodeURIComponent(cameraID)}${query}`);
 }

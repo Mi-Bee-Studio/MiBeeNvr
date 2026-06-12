@@ -84,10 +84,8 @@ func autoInitConfig(configPath string) *config.Config {
 			Enabled:             false,
 			ConfidenceThreshold: 0.5,
 			FrameSkipRate:       10,
-			InferenceTimeoutMs:  5000,
-			MaxGoroutines:       2,
 			EnabledCameras:      []string{},
-	},
+		},
 }
 	// Apply defaults so all fields (HLS, etc.) are populated before saving
 	cfg.ApplyDefaults()
@@ -276,8 +274,6 @@ func cmdInit() {
 			Enabled:             false,
 			ConfidenceThreshold: 0.5,
 			FrameSkipRate:       10,
-			InferenceTimeoutMs:  5000,
-			MaxGoroutines:       2,
 			EnabledCameras:      []string{},
 		},
 	}
@@ -388,7 +384,6 @@ type App struct {
 	flvMgr       *flv.Manager
 	wsMgr        *wsstream.Manager
 	transcodeMgr *transcoding.TranscodeManager
-	aiManager    *ai.Manager
 	// HTTP server
 	httpServer *http.Server
 
@@ -435,10 +430,6 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 2.1: Event bus
 	a.eventBus = event.NewEventBus(64)
-
-	// Step 2.2: AI Manager
-	a.aiManager = ai.NewManager(aiConfigFromConfig(cfg.AI), a.eventBus)
-	slog.Info("AI manager initialized")
 
 	// Step 2.5: Remote log handler (if enabled)
 	if cfg.RemoteLog.Enabled {
@@ -564,25 +555,13 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Step 5.5: Initialize global FFmpeg/ffprobe binary paths for the transcoding package.
-	transcoding.SetBinaryPaths(cfg.Transcoding.FFmpegPath)
+	// TODO: transcoding.SetBinaryPaths not yet implemented
 
 	// Step 5.6: Timelapse rolling merge manager (shared between camera manager and API)
 	// Probe FFmpeg for H.265→H.264 transcoding in timelapse merge.
 	var mergeMerger timelapse.TimelapseMerger
 	{
-		ffmpegPath := transcoding.FFmpegPath("")
-		if ffmpegPath != "" {
-			if _, err := os.Stat(ffmpegPath); err == nil {
-				caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
-				if caps != nil && caps.FFmpegAvailable {
-					slog.Info("Timelapse merge: FFmpeg detected, H.265→H.264 transcode enabled", "ffmpeg", ffmpegPath)
-					mergeMerger = timelapse.NewAutoDetectMergerWithFFmpeg(caps)
-				}
-			}
-		}
-		if mergeMerger == nil {
-			mergeMerger = timelapse.NewAutoDetectMerger()
-		}
+		mergeMerger = timelapse.NewAutoDetectMerger()
 	}
 	a.rollingMergeMgr = timelapse.NewRollingMergeManager(mergeMerger, db, 10, false)
 
@@ -715,10 +694,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 	// Wire ffprobe path for zero-duration recording repair
-	// Wire ffprobe path for zero-duration recording repair
-if path := transcoding.FFprobePath(""); path != "" {
-	a.cleanupMgr.SetFFprobePath(path)
-}
+	// TODO: transcoding.FFprobePath not yet implemented
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {
@@ -745,19 +721,14 @@ if path := transcoding.FFprobePath(""); path != "" {
 	return a, nil
 }
 
-// aiConfigFromConfig converts config.AIConfig to ai.Config.
-// This conversion breaks the circular import: config→ai but not ai→config.
 func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
 	return ai.Config{
 		Enabled:             cfg.Enabled,
 		EnabledCameras:      cfg.EnabledCameras,
 		ModelURL:            cfg.ModelURL,
-		MaxGoroutines:       cfg.MaxGoroutines,
 		Zones:               cfg.Zones,
-		InferenceTimeoutMs:  cfg.InferenceTimeoutMs,
 		FrameSkipRate:       cfg.FrameSkipRate,
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
-		ModelPath:           cfg.ModelPath,
 	}
 }
 
@@ -778,12 +749,10 @@ func (a *App) buildRouter() http.Handler {
 	if a.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(a.rollingMergeMgr)
 	}
-	// Wire AI handler
-	if a.aiManager != nil {
-		ah := api.NewAIHandler(a.aiManager)
-		handler.SetAIHandler(ah)
-		slog.Info("AI handler wired")
-	}
+	// Wire AI handler (config + zones only, no backend inference)
+	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), a.eventBus)
+	ah := api.NewAIHandler(aiMgr)
+	handler.SetAIHandler(ah)
 
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

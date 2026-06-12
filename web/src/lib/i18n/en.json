@@ -1143,13 +1143,13 @@
   "ai.statusRunning": "Running",
   "ai.statusStopped": "Stopped",
   "ai.model": "Model: {name}",
-  "ai.backend": "NCNN: {available}",
   "ai.fps": "{fps} FPS",
   "ai.detectionsCount": "{count} detections",
   "ai.recentDetections": "Recent Detections",
   "ai.noDetections": "No recent detections",
   "ai.collapse": "Collapse",
   "ai.loadError": "Failed to load AI status",
+  "ai.browserOnly": "AI detection runs in your browser using ONNX Runtime Web. No server-side inference required.",
 
   "settings.ai.perCameraTitle": "Per-Camera AI Settings",
   "settings.ai.perCameraDesc": "Configure AI detection individually for each camera.",
@@ -1175,7 +1175,5 @@
   "settings.ai.createZoneFailed": "Failed to create zone: {error}",
   "settings.ai.deleteZoneFailed": "Failed to delete zone",
   "settings.ai.saveFailed": "Failed to save per-camera settings",
-  "ai.source.local": "Local AI",
-  "ai.source.backend": "Backend AI",
-  "ai.source.switchTo": "Switch to {source}"
+  "ai.source.local": "Local AI"
 }

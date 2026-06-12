@@ -318,12 +318,9 @@ type AIConfig struct {
 	Enabled             bool              `yaml:"enabled" json:"enabled"`
 	EnabledCameras      []string          `yaml:"enabled_cameras" json:"enabledCameras"`
 	ModelURL            string            `yaml:"model_url" json:"modelUrl"`
-	MaxGoroutines       int               `yaml:"max_goroutines" json:"maxGoroutines"`
 	Zones               map[string][]ai.ROI `yaml:"zones" json:"zones"`
-	InferenceTimeoutMs  int               `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
 	FrameSkipRate       int               `yaml:"frame_skip_rate" json:"frameSkipRate"`
 	ConfidenceThreshold float64           `yaml:"confidence_threshold" json:"confidenceThreshold"`
-	ModelPath           string            `yaml:"model_path" json:"modelPath"`
 }
 
 // IsConfigured returns true if both username and a password (or hash) are set.
@@ -753,17 +750,11 @@ func Validate(cfg *Config) error {
 
 	// AI validation
 	if cfg.AI.Enabled {
-		if cfg.AI.MaxGoroutines <= 0 {
-			return fmt.Errorf("ai.max_goroutines must be > 0, got %d", cfg.AI.MaxGoroutines)
-		}
 		if cfg.AI.ConfidenceThreshold < 0 || cfg.AI.ConfidenceThreshold > 1 {
 			return fmt.Errorf("ai.confidence_threshold must be between 0 and 1, got %.2f", cfg.AI.ConfidenceThreshold)
 		}
 		if cfg.AI.FrameSkipRate <= 0 {
 			return fmt.Errorf("ai.frame_skip_rate must be > 0, got %d", cfg.AI.FrameSkipRate)
-		}
-		if cfg.AI.InferenceTimeoutMs <= 0 {
-			return fmt.Errorf("ai.inference_timeout_ms must be > 0, got %d", cfg.AI.InferenceTimeoutMs)
 		}
 		// Validate enabled_cameras
 		for i, camID := range cfg.AI.EnabledCameras {
@@ -789,10 +780,6 @@ func Validate(cfg *Config) error {
 					}
 				}
 			}
-		}
-		// ModelPath warning if empty
-		if cfg.AI.ModelPath == "" {
-			slog.Warn("ai.model_path is empty — model must be downloaded at runtime or set in config")
 		}
 	}
 	return nil
@@ -1010,14 +997,8 @@ func (cfg *Config) ApplyDefaults() {
 	}
 
 	// AI defaults
-	if cfg.AI.MaxGoroutines <= 0 {
-		cfg.AI.MaxGoroutines = 2
-	}
 	if cfg.AI.ConfidenceThreshold <= 0 {
 		cfg.AI.ConfidenceThreshold = 0.5
-	}
-	if cfg.AI.InferenceTimeoutMs <= 0 {
-		cfg.AI.InferenceTimeoutMs = 5000
 	}
 	if cfg.AI.FrameSkipRate <= 0 {
 		cfg.AI.FrameSkipRate = 10

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus } from '$lib/api';
-  import { getPerCameraAiSettings, savePerCameraAiSettings, updateAIConfig, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
+  import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
   import type { Camera, DownloadStatus, Zone, ZoneList, PerCameraAiState } from '$lib/api';
   import { t } from '$lib/i18n';
   import { AlertTriangle, ChevronDown, Plus, Trash2, X } from 'lucide-svelte';
@@ -160,26 +160,6 @@ async function savePerCameraAiSettingsLocal() {
   perCamSaving = true;
   try {
     savePerCameraAiSettings(perCameraAIConfig);
-
-    const enabledCameras: string[] = [];
-    const cameraConfigs: Record<string, { confidence_threshold: number; frame_skip_rate: number }> = {};
-    for (const [cameraId, cfg] of Object.entries(perCameraAIConfig)) {
-      if (cfg.enabled) {
-        enabledCameras.push(cameraId);
-        if (cfg.confidenceThreshold !== aiConfidenceThreshold || cfg.frameSkip !== aiFrameSkip) {
-          cameraConfigs[cameraId] = {
-            confidence_threshold: cfg.confidenceThreshold,
-            frame_skip_rate: cfg.frameSkip,
-          };
-        }
-      }
-    }
-
-    await updateAIConfig({
-      enabled_cameras: enabledCameras,
-      camera_configs: cameraConfigs,
-    });
-
     showToast(t('settings.ai.perCameraSaved'), 'success');
   } catch (e) {
     showToast(e instanceof Error ? e.message : t('settings.ai.saveFailed'), 'error');

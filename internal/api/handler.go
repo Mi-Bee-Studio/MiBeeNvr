@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -134,7 +135,6 @@ type Handler struct {
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
-	aiWSHandler        *AIWSHandler
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
@@ -166,6 +166,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording) // Public for timelapse video playback
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
+	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -312,16 +313,11 @@ func (h *Handler) Routes() http.Handler {
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 		// AI endpoints
 		r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
-		r.Get("/api/ai/status/{cameraID}", h.aiHandler.handleAICameraAIStatus)
-		r.Get("/api/ai/detections", h.aiHandler.handleAIDetections)
-		r.Get("/api/ai/detections/{cameraID}", h.aiHandler.handleAICameraDetections)
-		r.Post("/api/ai/restart/{cameraID}", h.aiHandler.handleAIRestartCamera)
 		r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
 		r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
 		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
 		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
 		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
-		r.Get("/api/ai/events/ws", h.aiWSHandler.ServeWS)
 	})
 
 	return r
@@ -467,10 +463,6 @@ func (h *Handler) SetAIHandler(ah *AIHandler) {
 	h.aiHandler = ah
 }
 
-// SetAIWSHandler sets the AI WebSocket handler on the Handler.
-func (h *Handler) SetAIWSHandler(ah *AIWSHandler) {
-	h.aiWSHandler = ah
-}
 
 // --- Per-camera streaming protocols endpoint ---
 
@@ -581,4 +573,17 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleServeModel serves AI model files from the storage root directory.
+// This is a public endpoint (no auth) so the browser can load ONNX models.
+func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
+	filename := chi.URLParam(r, "filename")
+	if filename == "" {
+		writeError(w, http.StatusBadRequest, "filename required")
+		return
+	}
+	// Serve from {storage_root}/models/ directory
+	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
+	http.ServeFile(w, r, filepath.Join(modelDir, filename))
 }

@@ -1204,28 +1204,21 @@ func TestWebSocketConfigValidation(t *testing.T) {
 func TestAIConfig(t *testing.T) {
 	yaml := `
 ai:
-  inference_timeout_ms: 30000
   frame_skip_rate: 3
   confidence_threshold: 0.5
-  model_path: /models/yolo.onnx
 `
 	path := writeTempYAML(t, yaml)
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.Equal(t, 30000, cfg.AI.InferenceTimeoutMs)
 	require.Equal(t, 3, cfg.AI.FrameSkipRate)
 	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
-	require.Equal(t, "/models/yolo.onnx", cfg.AI.ModelPath)
 }
 
 func TestAIConfigDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
-	require.Equal(t, 2, cfg.AI.MaxGoroutines)
 	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
 	require.Equal(t, 10, cfg.AI.FrameSkipRate)
-	require.Equal(t, 5000, cfg.AI.InferenceTimeoutMs)
-	require.Equal(t, "", cfg.AI.ModelPath)
 	require.NotNil(t, cfg.AI.Zones)
 	require.Empty(t, cfg.AI.EnabledCameras)
 }

@@ -234,16 +234,13 @@ export type {
   TranscodingSettings,
 } from './transcoding';
 
-// AI Detection — localStorage-backed settings + backend AI config API
+// AI Detection — localStorage-backed settings + zone management
 export {
   getAiSettings,
   saveAiSettings,
   detectAiBackend,
-  getAIStatus,
-  getAIDetections,
   getPerCameraAiSettings,
   savePerCameraAiSettings,
-  updateAIConfig,
   getAIZones,
   createAIZone,
   deleteAIZone,
@@ -251,13 +248,6 @@ export {
 
 export type {
   AiDetectionSettings,
-  AIStatus,
-  AICameraStatus,
-  DetectionList,
-  DetectionEvent,
-  DetectionObj,
-  AIConfigUpdate,
-  CameraAIConfig,
   Zone,
   ZoneList,
   CreateZoneRequest,
