@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -12,6 +13,20 @@ import (
 // triggerMessage is the JSON payload of a camera trigger event.
 type triggerMessage struct {
 	Action string `json:"action"`
+}
+
+// aiTriggerMessage is the JSON payload of an AI detection event.
+type aiTriggerMessage struct {
+	CameraID   string          `json:"camera_id"`
+	Event      string          `json:"event"`
+	Timestamp  string          `json:"timestamp"`
+	Detections []aiDetectionObj `json:"detections,omitempty"`
+}
+
+type aiDetectionObj struct {
+	Label      string    `json:"label"`
+	Confidence float64   `json:"confidence"`
+	BBox       [4]float64 `json:"bbox"`
 }
 
 // Client subscribes to MQTT topics for camera trigger events.
@@ -121,4 +136,22 @@ func (c *Client) Publish(topic string, payload any) error {
 		return fmt.Errorf("mqtt publish: %w", token.Error())
 	}
 	return nil
+}
+
+// PublishAIDetection publishes an AI detection event to the AI-specific MQTT topic.
+// The topic is "ai/{cameraID}" (prefixed by the client's topic prefix).
+func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event string, detections []aiDetectionObj) error {
+	if c == nil || c.mqttClient == nil || !c.mqttClient.IsConnected() {
+		return fmt.Errorf("mqtt client not connected")
+	}
+
+	msg := aiTriggerMessage{
+		CameraID:   cameraID,
+		Event:      event,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		Detections: detections,
+	}
+
+	topic := fmt.Sprintf("ai/%s", cameraID)
+	return c.Publish(topic, msg)
 }
