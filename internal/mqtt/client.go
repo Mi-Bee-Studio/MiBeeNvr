@@ -20,10 +20,10 @@ type aiTriggerMessage struct {
 	CameraID   string          `json:"camera_id"`
 	Event      string          `json:"event"`
 	Timestamp  string          `json:"timestamp"`
-	Detections []aiDetectionObj `json:"detections,omitempty"`
+	Detections []AiDetectionObj `json:"detections,omitempty"`
 }
 
-type aiDetectionObj struct {
+type AiDetectionObj struct {
 	Label      string    `json:"label"`
 	Confidence float64   `json:"confidence"`
 	BBox       [4]float64 `json:"bbox"`
@@ -140,7 +140,7 @@ func (c *Client) Publish(topic string, payload any) error {
 
 // PublishAIDetection publishes an AI detection event to the AI-specific MQTT topic.
 // The topic is "ai/{cameraID}" (prefixed by the client's topic prefix).
-func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event string, detections []aiDetectionObj) error {
+func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event string, detections []AiDetectionObj) error {
 	if c == nil || c.mqttClient == nil || !c.mqttClient.IsConnected() {
 		return fmt.Errorf("mqtt client not connected")
 	}

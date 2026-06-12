@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -97,38 +98,84 @@ type Config struct {
 type Manager struct {
 	cfg         Config
 	bus         *event.EventBus
+	mqtt        MQTTPublisher // optional MQTT publisher
 	engines     map[string]*InferenceEngine
+	detectors   map[string]*CameraDetector
 	mu          sync.Mutex
 	cancelFuncs map[string]context.CancelFunc
 }
 
-// NewManager creates a new AI Manager.
 func NewManager(cfg Config, bus *event.EventBus) *Manager {
 	return &Manager{
 		cfg:         cfg,
 		bus:         bus,
 		engines:     make(map[string]*InferenceEngine),
+		detectors:   make(map[string]*CameraDetector),
 		cancelFuncs: make(map[string]context.CancelFunc),
 	}
 }
 
-// StartCamera starts AI inference for a camera. Currently a stub —
-// actual StreamHub subscription and frame processing will be implemented in a later task.
+// SetMQTT sets the optional MQTT publisher for AI detection events.
+// Must be called before StartCamera if MQTT publishing is desired.
+func (m *Manager) SetMQTT(mqtt MQTTPublisher) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mqtt = mqtt
+}
+
+// StartCamera starts AI inference for a camera by creating a CameraDetector
+// that subscribes to the camera's StreamHub and processes frames in a worker pool.
 func (m *Manager) StartCamera(ctx context.Context, cameraID string, hub *model.StreamHub) error {
-	slog.Warn("AI: StartCamera not yet implemented", "camera_id", cameraID)
+	m.mu.Lock()
+	if _, exists := m.detectors[cameraID]; exists {
+		m.mu.Unlock()
+		slog.Warn("AI: camera already running", "camera_id", cameraID)
+		return nil
+	}
+
+	engine, ok := m.engines[cameraID]
+	if !ok || engine == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("AI: no engine for camera %s", cameraID)
+	}
+
+	mqttPub := m.mqtt
+	m.mu.Unlock()
+
+	detector := NewCameraDetector(CameraDetectorConfig{
+		CameraID:      cameraID,
+		Engine:        engine,
+		Hub:           hub,
+		Bus:           m.bus,
+		MQTT:          mqttPub,
+		FrameSkipRate: m.cfg.FrameSkipRate,
+		MaxGoroutines: m.cfg.MaxGoroutines,
+	})
+
+	if err := detector.Start(ctx); err != nil {
+		return fmt.Errorf("AI: start detector: %w", err)
+	}
+
+	m.mu.Lock()
+	m.detectors[cameraID] = detector
+	m.cancelFuncs[cameraID] = func() { detector.Stop() }
+	m.mu.Unlock()
+
+	slog.Info("AI: started camera inference", "camera_id", cameraID)
 	return nil
 }
 
-// StopCamera stops AI inference for a camera by cancelling its context
+// StopCamera stops AI inference for a camera by stopping its detector
 // and cleaning up its state.
 func (m *Manager) StopCamera(cameraID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if cancel, ok := m.cancelFuncs[cameraID]; ok {
-		cancel()
-		delete(m.cancelFuncs, cameraID)
+	if detector, ok := m.detectors[cameraID]; ok {
+		detector.Stop()
+		delete(m.detectors, cameraID)
 	}
+	delete(m.cancelFuncs, cameraID)
 	delete(m.engines, cameraID)
 
 	slog.Info("AI: stopped camera inference", "camera_id", cameraID)
@@ -139,7 +186,7 @@ func (m *Manager) StopCamera(cameraID string) error {
 func (m *Manager) IsRunning(cameraID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.cancelFuncs[cameraID]
+	_, ok := m.detectors[cameraID]
 	return ok
 }
 
@@ -151,7 +198,7 @@ func (m *Manager) Status() map[string]CameraAIStatus {
 
 	statuses := make(map[string]CameraAIStatus, len(m.engines))
 	for id, engine := range m.engines {
-		_, running := m.cancelFuncs[id]
+		_, running := m.detectors[id]
 		statuses[id] = CameraAIStatus{
 			Running: running,
 			Model:   engine.ModelInfo.Name,
