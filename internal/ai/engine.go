@@ -103,6 +103,7 @@ type Manager struct {
 	detectors   map[string]*CameraDetector
 	mu          sync.Mutex
 	cancelFuncs map[string]context.CancelFunc
+	hubs        map[string]*model.StreamHub // stored for restart
 }
 
 func NewManager(cfg Config, bus *event.EventBus) *Manager {
@@ -112,8 +113,9 @@ func NewManager(cfg Config, bus *event.EventBus) *Manager {
 		engines:     make(map[string]*InferenceEngine),
 		detectors:   make(map[string]*CameraDetector),
 		cancelFuncs: make(map[string]context.CancelFunc),
-	}
-}
+		hubs:        make(map[string]*model.StreamHub),
+}	// close &Manager{}
+}	// close func NewManager
 
 // SetMQTT sets the optional MQTT publisher for AI detection events.
 // Must be called before StartCamera if MQTT publishing is desired.
@@ -159,6 +161,7 @@ func (m *Manager) StartCamera(ctx context.Context, cameraID string, hub *model.S
 	m.mu.Lock()
 	m.detectors[cameraID] = detector
 	m.cancelFuncs[cameraID] = func() { detector.Stop() }
+	m.hubs[cameraID] = hub
 	m.mu.Unlock()
 
 	slog.Info("AI: started camera inference", "camera_id", cameraID)
@@ -205,4 +208,85 @@ func (m *Manager) Status() map[string]CameraAIStatus {
 		}
 	}
 	return statuses
+}
+
+// GetConfig returns a copy of the current AI configuration.
+func (m *Manager) GetConfig() Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg
+}
+
+// UpdateConfig replaces the current AI configuration with the given one.
+func (m *Manager) UpdateConfig(cfg Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg = cfg
+}
+
+// RestartCamera stops and re-starts AI inference for a camera.
+// The stored hub and engine from the original StartCamera call are reused.
+func (m *Manager) RestartCamera(ctx context.Context, cameraID string) error {
+	m.mu.Lock()
+	hub, ok := m.hubs[cameraID]
+	engine, engineOK := m.engines[cameraID]
+	m.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("AI: no hub stored for camera %s, cannot restart", cameraID)
+	}
+	if !engineOK || engine == nil {
+		return fmt.Errorf("AI: no engine for camera %s, cannot restart", cameraID)
+	}
+
+	// Stop existing detector but keep engine intact
+	m.mu.Lock()
+	if detector, exists := m.detectors[cameraID]; exists {
+		detector.Stop()
+		delete(m.detectors, cameraID)
+	}
+	delete(m.cancelFuncs, cameraID)
+	m.mu.Unlock()
+
+	// Create and start new detector with same hub and engine
+	mqttPub := m.mqtt
+	m.mu.Lock() // re-read cfg fields after dropping lock
+	frameSkipRate := m.cfg.FrameSkipRate
+	maxGoroutines := m.cfg.MaxGoroutines
+	m.mu.Unlock()
+
+	detector := NewCameraDetector(CameraDetectorConfig{
+		CameraID:      cameraID,
+		Engine:        engine,
+		Hub:           hub,
+		Bus:           m.bus,
+		MQTT:          mqttPub,
+		FrameSkipRate: frameSkipRate,
+		MaxGoroutines: maxGoroutines,
+	})
+
+	if err := detector.Start(ctx); err != nil {
+		return fmt.Errorf("AI: restart detector: %w", err)
+	}
+
+	m.mu.Lock()
+	m.detectors[cameraID] = detector
+	m.cancelFuncs[cameraID] = func() { detector.Stop() }
+	m.mu.Unlock()
+
+	slog.Info("AI: restarted camera inference", "camera_id", cameraID)
+	return nil
+}
+
+// IsNCNNAvailable reports whether any registered inference engine
+// has an available NCNN inferencer.
+func (m *Manager) IsNCNNAvailable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, engine := range m.engines {
+		if engine.Inferencer != nil && engine.Inferencer.IsAvailable() {
+			return true
+		}
+	}
+	return false
 }
