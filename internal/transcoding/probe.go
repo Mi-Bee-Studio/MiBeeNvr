@@ -26,8 +26,7 @@ var (
 	cachedDecoderStderr string
 )
 
-// ResetProbe clears the cached probe result (for testing).
-func ResetProbe() {
+func resetProbe() {
 	probeOnce = sync.Once{}
 	cachedCaps = nil
 	cachedEncoderList = nil

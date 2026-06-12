@@ -36,16 +36,16 @@ func NewListener(cfg config.SRTConfig) *Listener {
 	}
 }
 
-// RegisterHub registers a StreamHub for a camera ID.
+// registerHub registers a StreamHub for a camera ID.
 // This is used to connect SRT streams to existing camera pipelines.
-func (l *Listener) RegisterHub(cameraID string, hub *model.StreamHub) {
+func (l *Listener) registerHub(cameraID string, hub *model.StreamHub) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.hubs[cameraID] = hub
 }
 
-// UnregisterHub removes a StreamHub for a camera ID.
-func (l *Listener) RegisterHubAndStopReceiver(cameraID string) {
+// registerHubAndStopReceiver removes a StreamHub for a camera ID.
+func (l *Listener) registerHubAndStopReceiver(cameraID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.hubs, cameraID)
@@ -55,10 +55,11 @@ func (l *Listener) RegisterHubAndStopReceiver(cameraID string) {
 	}
 }
 
-// Addr returns the listener address, or nil if not listening.
-func (l *Listener) Addr() net.Addr {
+// addr returns the listener address, or nil if not listening.
+func (l *Listener) addr() net.Addr {
 	return &net.UDPAddr{Port: l.cfg.Port}
 }
+
 
 // Start begins listening for SRT connections.
 func (l *Listener) Start() error {
@@ -119,13 +120,6 @@ func (l *Listener) Stop() error {
 	l.running = false
 	logger.Info("SRT listener stopped")
 	return nil
-}
-
-// Running returns whether the listener is active.
-func (l *Listener) Running() bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.running
 }
 
 // receiverCount returns the number of active receivers.

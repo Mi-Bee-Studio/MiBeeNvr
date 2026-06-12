@@ -55,7 +55,7 @@ func TestEncodeDecodeCodecInfo_H264(t *testing.T) {
 		t.Fatalf("EncodeCodecInfo: %v", err)
 	}
 
-	decoded, err := DecodeCodecInfo(encoded)
+	decoded, err := decodeCodecInfo(encoded)
 	if err != nil {
 		t.Fatalf("DecodeCodecInfo: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestEncodeDecodeCodecInfo_H265(t *testing.T) {
 		t.Fatalf("EncodeCodecInfo: %v", err)
 	}
 
-	decoded, err := DecodeCodecInfo(encoded)
+	decoded, err := decodeCodecInfo(encoded)
 	if err != nil {
 		t.Fatalf("DecodeCodecInfo: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestEncodeDecodeCodecInfo_Empty_NALUs(t *testing.T) {
 		t.Fatalf("EncodeCodecInfo: %v", err)
 	}
 
-	decoded, err := DecodeCodecInfo(encoded)
+	decoded, err := decodeCodecInfo(encoded)
 	if err != nil {
 		t.Fatalf("DecodeCodecInfo: %v", err)
 	}
@@ -148,21 +148,21 @@ func TestEncodeDecodeCodecInfo_Empty_NALUs(t *testing.T) {
 }
 
 func TestDecodeCodecInfo_TooShort(t *testing.T) {
-	_, err := DecodeCodecInfo([]byte{0x01, 0x04, 0x00})
+	_, err := decodeCodecInfo([]byte{0x01, 0x04, 0x00})
 	if err == nil {
 		t.Fatal("expected error for too-short data")
 	}
 }
 
 func TestDecodeCodecInfo_WrongType(t *testing.T) {
-	_, err := DecodeCodecInfo([]byte{0x02, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00})
+	_, err := decodeCodecInfo([]byte{0x02, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err == nil {
 		t.Fatal("expected error for wrong message type")
 	}
 }
 
 func TestDecodeCodecInfo_UnknownCodec(t *testing.T) {
-	_, err := DecodeCodecInfo([]byte{0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00})
+	_, err := decodeCodecInfo([]byte{0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err == nil {
 		t.Fatal("expected error for unknown codec byte")
 	}
@@ -192,7 +192,7 @@ func TestEncodeDecodeVideoFrame_Keyframe(t *testing.T) {
 		t.Fatalf("EncodeVideoFrame: %v", err)
 	}
 
-	decoded, err := DecodeVideoFrame(encoded)
+	decoded, err := decodeVideoFrame(encoded)
 	if err != nil {
 		t.Fatalf("DecodeVideoFrame: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestEncodeDecodeVideoFrame_Delta(t *testing.T) {
 		t.Fatalf("EncodeVideoFrame: %v", err)
 	}
 
-	decoded, err := DecodeVideoFrame(encoded)
+	decoded, err := decodeVideoFrame(encoded)
 	if err != nil {
 		t.Fatalf("DecodeVideoFrame: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestEncodeDecodeVideoFrame_ZeroNALUs(t *testing.T) {
 		t.Fatalf("EncodeVideoFrame: %v", err)
 	}
 
-	decoded, err := DecodeVideoFrame(encoded)
+	decoded, err := decodeVideoFrame(encoded)
 	if err != nil {
 		t.Fatalf("DecodeVideoFrame: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestEncodeDecodeVideoFrame_LargePTS(t *testing.T) {
 		t.Fatalf("EncodeVideoFrame: %v", err)
 	}
 
-	decoded, err := DecodeVideoFrame(encoded)
+	decoded, err := decodeVideoFrame(encoded)
 	if err != nil {
 		t.Fatalf("DecodeVideoFrame: %v", err)
 	}
@@ -297,14 +297,14 @@ func TestEncodeDecodeVideoFrame_LargePTS(t *testing.T) {
 }
 
 func TestDecodeVideoFrame_TooShort(t *testing.T) {
-	_, err := DecodeVideoFrame([]byte{0x02, 0x00, 0x00, 0x00})
+	_, err := decodeVideoFrame([]byte{0x02, 0x00, 0x00, 0x00})
 	if err == nil {
 		t.Fatal("expected error for too-short data")
 	}
 }
 
 func TestDecodeVideoFrame_WrongType(t *testing.T) {
-	_, err := DecodeVideoFrame([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	_, err := decodeVideoFrame([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err == nil {
 		t.Fatal("expected error for wrong message type")
 	}
@@ -345,7 +345,7 @@ func TestEncodeCodecInfo_H264_EmptySPS(t *testing.T) {
 		t.Fatalf("EncodeCodecInfo: %v", err)
 	}
 
-	decoded, err := DecodeCodecInfo(encoded)
+	decoded, err := decodeCodecInfo(encoded)
 	if err != nil {
 		t.Fatalf("DecodeCodecInfo: %v", err)
 	}

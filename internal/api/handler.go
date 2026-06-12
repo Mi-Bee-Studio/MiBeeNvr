@@ -389,8 +389,8 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 	return noopHandler(db, store)
 }
 
-// TestHandlerWithAuth creates a Handler with real auth middleware for testing.
-func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
+// testHandlerWithAuth creates a Handler with real auth middleware for testing.
+func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
@@ -453,8 +453,8 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 	h.timelapseMergeMgr = mgr
 }
 
-// SetTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
-func (h *Handler) SetTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
+// setTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
+func (h *Handler) setTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
 	h.timelapseDailyMgr = mgr
 }
 

@@ -46,8 +46,8 @@ func (r *StreamRegistry) Register(h StreamHandler) {
 	r.handlers = append(r.handlers, h)
 }
 
-// HandlersForCodec returns all handlers that can handle the given codec format.
-func (r *StreamRegistry) HandlersForCodec(codec model.Format) []StreamHandler {
+// handlersForCodec returns all handlers that can handle the given codec format.
+func (r *StreamRegistry) handlersForCodec(codec model.Format) []StreamHandler {
 	var result []StreamHandler
 	for _, h := range r.handlers {
 		if h.CanHandle(codec) {
@@ -57,8 +57,8 @@ func (r *StreamRegistry) HandlersForCodec(codec model.Format) []StreamHandler {
 	return result
 }
 
-// ProtocolsForCodec returns the names of all protocols that support the given codec.
-func (r *StreamRegistry) ProtocolsForCodec(codec model.Format) []string {
+// protocolsForCodec returns the names of all protocols that support the given codec.
+func (r *StreamRegistry) protocolsForCodec(codec model.Format) []string {
 	var result []string
 	for _, h := range r.handlers {
 		if h.CanHandle(codec) {

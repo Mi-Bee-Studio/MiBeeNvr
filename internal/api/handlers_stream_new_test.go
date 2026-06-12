@@ -463,14 +463,14 @@ func TestSetFLVManager(t *testing.T) {
 // seedCameraWithEncoding inserts a camera with the given encoding into the DB.
 func seedCameraWithEncoding(t *testing.T, db *storage.DB, id, encoding string) {
 	t.Helper()
-	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", "")
+	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", "", "", "")
 	require.NoError(t, err, "failed to seed camera %s", id)
 }
 
 // seedCameraWithEncodings inserts a camera with separate encoding and stream_encoding.
 func seedCameraWithEncodings(t *testing.T, db *storage.DB, id, encoding, streamEncoding string) {
 	t.Helper()
-	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", streamEncoding)
+	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", "", "", streamEncoding)
 	require.NoError(t, err, "failed to seed camera %s", id)
 }
 

@@ -20,7 +20,7 @@ import (
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	dir := t.TempDir()
-	return NewManager(context.Background(), dir)
+	return newManager(context.Background(), dir)
 }
 
 // newTestStreamEntry creates a streamEntry for testing without starting a real muxer.
@@ -236,7 +236,7 @@ func TestWriteH265_InactiveStream(t *testing.T) {
 // --- NewManager Tests ---
 
 func TestNewManager(t *testing.T) {
-	mgr := NewManager(context.Background(), t.TempDir())
+	mgr := newManager(context.Background(), t.TempDir())
 	require.NotNil(t, mgr)
 	require.NotNil(t, mgr.streams)
 	require.Empty(t, mgr.streams)
@@ -1524,7 +1524,7 @@ func TestHandleWriteError_NilMetrics_NoPanic(t *testing.T) {
 // which causes writeLoop goroutines to exit cleanly.
 func TestStopAll_CancelsManagerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	mgr := NewManager(ctx, t.TempDir())
+	mgr := newManager(ctx, t.TempDir())
 
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
@@ -1550,7 +1550,7 @@ func TestStopAll_CancelsManagerContext(t *testing.T) {
 func TestWriteLoop_ExitsOnManagerContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	mgr := NewManager(ctx, t.TempDir())
+	mgr := newManager(ctx, t.TempDir())
 
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
@@ -1574,7 +1574,7 @@ func TestWriteLoop_ExitsOnManagerContextCancel(t *testing.T) {
 func TestStartStopCycles_NoGoroutineLeak(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	mgr := NewManager(ctx, t.TempDir())
+	mgr := newManager(ctx, t.TempDir())
 
 	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
