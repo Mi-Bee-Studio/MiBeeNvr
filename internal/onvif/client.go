@@ -101,7 +101,7 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 	// with some devices. Fallback to raw SOAP request if URI is empty.
 	if strings.TrimSpace(uri.URI) == "" {
 		logger.Warn("onvif-go returned empty URI, trying raw SOAP fallback", "profile_token", profileToken)
-		rawURI, rawErr := c.getRawStreamURI(ctx, profileToken)
+	rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
 		if rawErr != nil {
 			logger.Warn("raw SOAP fallback failed", "error", rawErr)
 		} else if strings.TrimSpace(rawURI) != "" {
@@ -114,9 +114,27 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 	return mapStreamURI(uri, profileToken), nil
 }
 
+// GetStreamURIWithProtocol requests a stream URI with a specific transport protocol.
+// Valid protocols: "RTSP" (default), "HTTP" (RTSP-over-HTTP tunneling), "UDP".
+// This uses raw SOAP since onvif-go doesn't support protocol selection.
+func (c *Client) GetStreamURIWithProtocol(ctx context.Context, profileToken, protocol string) (*StreamInfo, error) {
+	if !c.ready {
+		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
+	}
+	rawURI, err := c.getRawStreamURI(ctx, profileToken, protocol)
+	if err != nil {
+		return nil, fmt.Errorf("get stream URI with protocol %q: %w", protocol, err)
+	}
+	if strings.TrimSpace(rawURI) == "" {
+		return nil, fmt.Errorf("device returned empty URI for protocol %q", protocol)
+	}
+	logger.Info("GetStreamURIWithProtocol response", "profile_token", profileToken, "protocol", protocol, "uri", rawURI)
+	return &StreamInfo{URI: rawURI, ProfileToken: profileToken}, nil
+}
+
 // getRawStreamURI sends a raw SOAP GetStreamUri request and parses the response.
 // This works around XML namespace parsing issues in onvif-go with some devices.
-func (c *Client) getRawStreamURI(ctx context.Context, profileToken string) (string, error) {
+func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol string) (string, error) {
 	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
  xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
@@ -126,13 +144,13 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken string) (stri
       <trt:StreamSetup>
         <tt:Stream>RTP-Unicast</tt:Stream>
         <tt:Transport>
-          <tt:Protocol>RTSP</tt:Protocol>
+          <tt:Protocol>%s</tt:Protocol>
         </tt:Transport>
       </trt:StreamSetup>
       <trt:ProfileToken>%s</trt:ProfileToken>
     </trt:GetStreamUri>
   </s:Body>
-</s:Envelope>`, profileToken)
+</s:Envelope>`, protocol, profileToken)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, strings.NewReader(soapBody))
 	if err != nil {
