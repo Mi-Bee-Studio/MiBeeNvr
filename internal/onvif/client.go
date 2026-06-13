@@ -23,7 +23,10 @@ type Client struct {
 	client   *onvifgo.Client
 	mu       sync.Mutex
 	ready    bool
-}
+
+	cachedCapabilities *DeviceCapabilitiesDetailed
+	capsMu             sync.Mutex
+	}
 
 // NewClient creates a new ONVIF client for a specific device.
 // Call Connect() before using device operations.
@@ -192,17 +195,47 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 }
 
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
+// Returns cached capabilities if available. On SOAP failure, returns minimal
+// capabilities (all flags false) instead of error, and caches the minimal result
+// to avoid repeated failing calls to limited devices.
 func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
+	// Check cache first
+	c.capsMu.Lock()
+	if c.cachedCapabilities != nil {
+		caps := c.cachedCapabilities
+		c.capsMu.Unlock()
+		return caps, nil
+	}
+	c.capsMu.Unlock()
+
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
 	caps, err := c.client.GetCapabilities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get capabilities: %w", err)
+		logger.Debug("failed to get capabilities from device, returning minimal capabilities", "error", err)
+		minimal := &DeviceCapabilitiesDetailed{}
+		c.capsMu.Lock()
+		c.cachedCapabilities = minimal
+		c.capsMu.Unlock()
+		return minimal, nil
 	}
 
-	return mapCapabilities(caps), nil
+	result := mapCapabilities(caps)
+	c.capsMu.Lock()
+	c.cachedCapabilities = result
+	c.capsMu.Unlock()
+
+	return result, nil
+}
+
+// InvalidateCapabilitiesCache clears the cached capabilities.
+// Call this when the device capabilities may have changed (e.g., after firmware update).
+func (c *Client) InvalidateCapabilitiesCache() {
+	c.capsMu.Lock()
+	c.cachedCapabilities = nil
+	c.capsMu.Unlock()
 }
 
 // mapDeviceInfo converts onvif-go DeviceInformation to project DeviceInfo.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"log/slog"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -66,8 +67,9 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 
 	detailed, err := client.GetCapabilities(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
-		return
+		slog.Debug("failed to get capabilities from device, using default capabilities",
+			"camera_id", cameraID, "error", err)
+		detailed = &onvif.DeviceCapabilitiesDetailed{}
 	}
 
 	// Attach cached device info (lazy — fetched once, cached in camera manager)
