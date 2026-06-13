@@ -6,20 +6,42 @@ import (
 	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/go-chi/chi/v5"
 )
 
 // AIHandler holds dependencies for AI REST API endpoints.
 // Only config management and ROI zone CRUD — no backend inference.
 type AIHandler struct {
-	manager *ai.Manager
-	mu      sync.Mutex
+	manager    *ai.Manager
+	config     *config.Config
+	configPath string
+	mu         sync.Mutex
 }
 
 // NewAIHandler creates a new AIHandler.
-func NewAIHandler(mgr *ai.Manager) *AIHandler {
+func NewAIHandler(mgr *ai.Manager, cfg *config.Config, configPath string) *AIHandler {
 	return &AIHandler{
-		manager: mgr,
+		manager:    mgr,
+		config:     cfg,
+		configPath: configPath,
+	}
+}
+
+// syncAndSaveConfig maps the AI manager's in-memory config back to the shared
+// config.Config and persists it to disk. Matches the pattern used by system handlers.
+func (h *AIHandler) syncAndSaveConfig() {
+	aiCfg := h.manager.GetConfig()
+	h.config.AI = config.AIConfig{
+		Enabled:             aiCfg.Enabled,
+		EnabledCameras:      aiCfg.EnabledCameras,
+		ModelURL:            aiCfg.ModelURL,
+		Zones:               aiCfg.Zones,
+		FrameSkipRate:       aiCfg.FrameSkipRate,
+		ConfidenceThreshold: aiCfg.ConfidenceThreshold,
+	}
+	if err := config.Save(h.configPath, h.config); err != nil {
+		logger.Warn("failed to save AI config", "error", err)
 	}
 }
 
@@ -72,6 +94,7 @@ func (h *AIHandler) handleAIUpdateConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.manager.UpdateConfig(cfg)
+	h.syncAndSaveConfig()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -79,14 +102,14 @@ func (h *AIHandler) handleAIUpdateConfig(w http.ResponseWriter, r *http.Request)
 // --- Zone CRUD endpoints ---
 
 type zoneRequestBody struct {
-	CameraID string         `json:"camera_id"`
-	Zone     zoneBodyZone   `json:"zone"`
-	Enabled  bool           `json:"enabled"`
+	CameraID string       `json:"camera_id"`
+	Zone     zoneBodyZone `json:"zone"`
+	Enabled  bool         `json:"enabled"`
 }
 
 type zoneBodyZone struct {
-	Name   string          `json:"name"`
-	Points [][2]float64    `json:"points"`
+	Name   string        `json:"name"`
+	Points [][2]float64  `json:"points"`
 }
 
 // handleAIZones handles GET /api/ai/zones.
@@ -151,6 +174,7 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 
 	cfg.Zones[body.CameraID] = append(cfg.Zones[body.CameraID], roi)
 	h.manager.UpdateConfig(cfg)
+	h.syncAndSaveConfig()
 
 	created := ai.ROIZone{
 		CameraID: body.CameraID,
@@ -212,6 +236,7 @@ func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.manager.UpdateConfig(cfg)
+	h.syncAndSaveConfig()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -250,6 +275,7 @@ func (h *AIHandler) handleAIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.manager.UpdateConfig(cfg)
+	h.syncAndSaveConfig()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
