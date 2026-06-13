@@ -201,6 +201,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
 				// HTTP-FLV stream
 				r.Get("/stream.flv", h.handleFLVStream)
+				r.Get("/stream.mjpeg", h.handleMjpegStream)
+				r.Get("/latest-frame", h.handleLatestFrame)
 				// Per-camera protocols
 				r.Get("/protocols", h.handleCameraProtocols)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
@@ -489,9 +491,9 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	encoding := cam.Encoding
+	encoding := strings.ToLower(cam.Encoding)
 	if encoding == "" {
-		encoding = cam.StreamEncoding
+		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
 	// If encoding still unknown (e.g. ONVIF auto-detect), probe the running recorder
@@ -523,7 +525,7 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if defaultProto == "" {
-		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls"} {
+		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
 			for _, p := range protocols {
 				if p.Protocol == preferred && p.Available {
 					defaultProto = preferred

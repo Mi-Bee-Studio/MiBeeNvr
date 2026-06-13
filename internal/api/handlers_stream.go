@@ -439,3 +439,25 @@ func (h *WSStreamHandler) StartStream(camID string, rec model.Recorder, opts Str
 func (h *WSStreamHandler) StopStream(camID string) error {
 	return nil // WebSocket streams stop when client disconnects
 }
+
+// --- MJPEGStreamHandler ---
+
+// MJPEGStreamHandler implements StreamHandler for live MJPEG streaming.
+// MJPEG streams are proxied on-demand via GET /stream.mjpeg, so StartStream
+// and StopStream are no-ops. This registration exists purely for protocol
+// discovery (so /api/cameras/{id}/protocols returns the correct list).
+type MJPEGStreamHandler struct{}
+
+func (h *MJPEGStreamHandler) Name() string { return "mjpeg" }
+
+func (h *MJPEGStreamHandler) CanHandle(codec model.Format) bool {
+	return codec == model.FormatMJPEG || codec == model.EncJPEG
+}
+
+func (h *MJPEGStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
+	return nil // MJPEG streams start on-demand via GET /stream.mjpeg
+}
+
+func (h *MJPEGStreamHandler) StopStream(camID string) error {
+	return nil // MJPEG streams stop when client disconnects
+}

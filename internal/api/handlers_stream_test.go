@@ -89,19 +89,20 @@ func TestStreamRegistry_FLVSupportsH264AndH265(t *testing.T) {
 	require.NotContains(t, protocols, "webrtc")
 }
 
-func TestStreamRegistry_MJPEGNoProtocols(t *testing.T) {
+func TestStreamRegistry_MJPEGProtocols(t *testing.T) {
 	t.Parallel()
 	reg := NewStreamRegistry()
 
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{
-		name:    "webrtc",
-		codecs:  []model.Format{model.FormatH264},
+		name:   "webrtc",
+		codecs: []model.Format{model.FormatH264},
 	})
+	reg.Register(&MJPEGStreamHandler{})
 
-	// MJPEG cameras have no streaming protocols
+	// MJPEG cameras should have mjpeg streaming protocol
 	protocols := reg.protocolsForCodec(model.FormatMJPEG)
-	require.Empty(t, protocols)
+	require.Contains(t, protocols, "mjpeg")
 }
 
 func TestStreamRegistry_Empty(t *testing.T) {

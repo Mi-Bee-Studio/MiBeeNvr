@@ -297,6 +297,7 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
+	reg.Register(&MJPEGStreamHandler{})
 
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 	h.SetStreamRegistry(reg)
@@ -308,8 +309,9 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	var resp cameraProtocolsResponse
 	require.NoError(t, parseJSONBody(t, rr, &resp))
 	require.Equal(t, "mjpeg", resp.Encoding)
-	require.Empty(t, resp.Protocols)
-	require.Empty(t, resp.Default)
+	// MJPEG protocol should be available for MJPEG cameras
+	require.True(t, containsProtocol(t, resp.Protocols, "mjpeg"), "mjpeg should be available")
+	require.Equal(t, "mjpeg", resp.Default)
 }
 
 func TestCameraProtocols_NoRegistry(t *testing.T) {
