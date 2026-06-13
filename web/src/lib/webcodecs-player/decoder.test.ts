@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Decoder, prependAnnexB, buildH264CodecString, buildH265CodecString } from './decoder';
 import type { CodecInfo } from './protocol';
 
+// Mock the WASM decoder module — tests only cover WebCodecs path
+// (WASM decoder requires real WASM binary, not available in jsdom)
+vi.mock('./wasm-h265-decoder', () => ({
+  WasmH265Decoder: vi.fn().mockImplementation(() => ({
+    configure: vi.fn().mockRejectedValue(new Error('WASM not available in test')),
+    decode: vi.fn().mockReturnValue(null),
+    reset: vi.fn(),
+    close: vi.fn(),
+  })),
+}));
+
 // ─── Mock helpers ───────────────────────────────────────────────────────────
 
 interface MockDecoderInstance {
