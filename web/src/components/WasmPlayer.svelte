@@ -10,7 +10,9 @@
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
-  import type { Detection } from '$lib/ai-detection/inference';
+  import { AiRuntime } from '$lib/ai-detection/runtime';
+  import { ObjectDetector, type Detection } from '$lib/ai-detection/inference';
+  import { getAiSettings, getAIZones, type AiDetectionSettings, type Zone } from '$lib/api/ai';
 
   let {
     cameraId,
@@ -60,6 +62,37 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let aiOverlayVisible = $derived(detections.length > 0);
   let canvasWidth = $state(0);
   let canvasHeight = $state(0);
+  // AI detection engine
+  let aiRuntime: AiRuntime | null = null;
+  let aiDetector: ObjectDetector | null = null;
+  let aiInitializing = $state(false);
+  let aiError: string | null = $state(null);
+  let aiZones: Zone[] = $state([]);
+
+  // ─── Zone filtering ──────────────────────────────────────────────
+
+  function pointInPolygon(px: number, py: number, polygon: number[][]): boolean {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i][0], yi = polygon[i][1];
+      const xj = polygon[j][0], yj = polygon[j][1];
+      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  function filterDetectionsByZones(detections: Detection[]): Detection[] {
+    if (canvasWidth === 0 || canvasHeight === 0) return detections;
+    const enabledZones = aiZones.filter((z) => z.camera_id === cameraId && z.enabled);
+    if (enabledZones.length === 0) return detections;
+    return detections.filter((d) => {
+      const cx = (d.bbox[0] + d.bbox[2]) / (2 * canvasWidth);
+      const cy = (d.bbox[1] + d.bbox[3]) / (2 * canvasHeight);
+      return enabledZones.some((z) => pointInPolygon(cx, cy, z.points));
+    });
+  }
   // Decode error tracking for mid-stream fallback
   let decodeErrorCount = 0;
   const MAX_DECODE_ERRORS = 10;
@@ -284,6 +317,10 @@ function handleWebGpuLost() {
               canvasHeight = frame.displayHeight;
             }
           }
+          // AI detection — must happen before frame.close()
+          if (aiDetector) {
+            processAiDetection(frame);
+          }
           if (webgpuRenderer) {
             webgpuRenderer.render(frame); // Takes ownership and closes frame
           } else {
@@ -407,6 +444,58 @@ function handleWebGpuLost() {
     initConnection();
   }
 
+  // ─── AI Detection ────────────────────────────────────────────────────────
+
+  async function initAiDetection() {
+    if (aiDetector || aiInitializing) return;
+    aiInitializing = true;
+    aiError = null;
+    try {
+      const settings = getAiSettings();
+      if (!settings.enabled) return;
+
+      aiRuntime = new AiRuntime();
+      await aiRuntime.init(undefined, {
+        inferenceTimeoutMs: 10000, // Higher for edge devices
+      });
+
+      aiDetector = new ObjectDetector(aiRuntime, {
+        confidenceThreshold: settings.confidenceThreshold,
+        frameSkip: settings.frameSkip,
+      });
+    } catch (e) {
+      console.warn('[WasmPlayer] AI init failed:', e);
+      aiError = e instanceof Error ? e.message : 'AI init failed';
+      aiRuntime?.dispose();
+      aiRuntime = null;
+      aiDetector = null;
+    } finally {
+      aiInitializing = false;
+    }
+
+    // Fetch zones for filtering (non-fatal)
+    try {
+      const data = await getAIZones();
+      aiZones = data.zones || [];
+    } catch {
+      // Zones are non-critical
+    }
+  }
+
+  async function processAiDetection(frame: VideoFrame) {
+    if (!aiDetector) return;
+    try {
+      // Clone frame because detect() is async and frame may be closed
+      const cloned = new VideoFrame(frame);
+      const newDetections = await aiDetector.detect(cloned);
+      cloned.close();
+      detections = filterDetectionsByZones(newDetections);
+    } catch (e) {
+      // Non-fatal — keep showing last detections
+      if (import.meta.env.DEV) console.warn('[WasmPlayer] AI detection error:', e);
+    }
+  }
+
 
   // ─── Tier detection ────────────────────────────────────────────────────
 
@@ -488,6 +577,7 @@ function handleWebGpuLost() {
       }
 
       initConnection();
+      initAiDetection();
     }, 50);
 
     return () => {
@@ -533,6 +623,8 @@ onDestroy(() => {
     if (coordinator) coordinator.cancelRequest(cameraId);
     terminateWorker();
     cleanupWebGL2();
+    if (aiDetector) { aiDetector.dispose(); aiDetector = null; }
+    if (aiRuntime) { aiRuntime.dispose(); aiRuntime = null; }
   });
 
   // ─── Derived ───────────────────────────────────────────────────────────
@@ -673,6 +765,19 @@ onDestroy(() => {
     <div class="flex items-center gap-2">
       <span class="text-white text-sm font-medium truncate">{cameraName || cameraId}</span>
       <span class="text-white/50 text-xs">WebCodecs</span>
+      {#if aiInitializing}
+        <span class="text-yellow-400/70 text-xs flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"></span>
+          {t('settings.ai.loading')}
+        </span>
+      {:else if aiError}
+        <span class="text-red-400/70 text-xs" title={aiError}>AI ✗</span>
+      {:else if aiDetector}
+        <span class="text-green-400/70 text-xs flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+          {t('settings.ai.ready')}
+        </span>
+      {/if}
     </div>
   </div>
 
