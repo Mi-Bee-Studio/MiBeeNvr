@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus } from '$lib/api';
+  import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus, getAiStatus, updateAiConfig } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
   import type { Camera, DownloadStatus, Zone, ZoneList, PerCameraAiState } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -14,6 +14,7 @@
   let aiConfidenceThreshold = $state(0.5);
   let aiFrameSkip = $state(3);
   let aiDetectedBackend = $state('');
+  let aiSettingsSaving = $state(false);
 
   // Feature toggles state
   let featureFlags = $state<Record<string, boolean>>({});
@@ -80,21 +81,41 @@
   }
 
   // --- AI Detection ---
-  function loadAiSettings() {
-    const settings = getAiSettings();
-    aiEnabled = settings.enabled;
-    aiConfidenceThreshold = settings.confidenceThreshold;
-    aiFrameSkip = settings.frameSkip;
+  async function loadAiSettings() {
+    try {
+      const status = await getAiStatus();
+      aiEnabled = status.enabled;
+      aiConfidenceThreshold = status.confidence_threshold;
+      aiFrameSkip = status.frame_skip_rate;
+    } catch (e) {
+      console.warn('Failed to load AI status from backend, falling back to localStorage:', e);
+      const settings = getAiSettings();
+      aiEnabled = settings.enabled;
+      aiConfidenceThreshold = settings.confidenceThreshold;
+      aiFrameSkip = settings.frameSkip;
+    }
     aiDetectedBackend = detectAiBackend();
   }
 
-  function saveAiSettingsLocal() {
-    saveAiSettings({
-      enabled: aiEnabled,
-      confidenceThreshold: aiConfidenceThreshold,
-      frameSkip: aiFrameSkip,
-    });
-    showToast(t('settings.ai.saved'), 'success');
+  async function saveAiSettingsLocal() {
+    aiSettingsSaving = true;
+    try {
+      await updateAiConfig({
+        enabled: aiEnabled,
+        confidence_threshold: aiConfidenceThreshold,
+        frame_skip_rate: aiFrameSkip,
+      });
+      saveAiSettings({
+        enabled: aiEnabled,
+        confidenceThreshold: aiConfidenceThreshold,
+        frameSkip: aiFrameSkip,
+      });
+      showToast(t('settings.ai.saved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.ai.saveError'), 'error');
+    } finally {
+      aiSettingsSaving = false;
+    }
   }
 
 // --- Per-Camera AI ---
@@ -307,7 +328,10 @@ async function handleDeleteZone(zoneName: string) {
 
       <!-- Save AI Settings -->
       <div class="flex justify-end">
-        <button type="button" class="btn btn-primary" onclick={saveAiSettingsLocal}>
+        <button type="button" class="btn btn-primary" onclick={saveAiSettingsLocal} disabled={aiSettingsSaving}>
+          {#if aiSettingsSaving}
+            <span class="spinner mr-2"></span>
+          {/if}
           {t('settings.save')}
         </button>
       </div>

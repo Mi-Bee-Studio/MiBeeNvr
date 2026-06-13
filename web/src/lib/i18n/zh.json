@@ -1185,5 +1185,8 @@
   "settings.ai.createZoneFailed": "创建区域失败：{error}",
   "settings.ai.deleteZoneFailed": "删除区域失败",
   "settings.ai.saveFailed": "保存单摄像头设置失败",
-  "ai.source.local": "本地AI"
+  "ai.source.local": "本地AI",
+  "settings.ai.loading": "AI 加载中...",
+  "settings.ai.ready": "AI 就绪",
+  "settings.ai.error": "AI 错误"
 }

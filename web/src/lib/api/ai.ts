@@ -132,6 +132,34 @@ export async function deleteAIZone(id: string): Promise<void> {
     method: 'DELETE',
   });
 }
+// ─── Backend API types ────────────────────────────────────────────────────
+
+export interface AiStatus {
+  enabled: boolean;
+  model_url: string;
+  confidence_threshold: number;
+  frame_skip_rate: number;
+}
+
+export interface AiConfigUpdate {
+  enabled?: boolean;
+  confidence_threshold?: number;
+  frame_skip_rate?: number;
+  model_url?: string;
+}
+
+// ─── Backend API functions ────────────────────────────────────────────────
+
+export async function getAiStatus(): Promise<AiStatus> {
+  return apiRequest<AiStatus>('/ai/status');
+}
+
+export async function updateAiConfig(config: AiConfigUpdate): Promise<void> {
+  return apiRequest<void>('/ai/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
 
 // ─── Per-camera localStorage ──────────────────────────────────────────────────
 

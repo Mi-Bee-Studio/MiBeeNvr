@@ -244,6 +244,16 @@ export {
   getAIZones,
   createAIZone,
   deleteAIZone,
+  getAiStatus,
+  updateAiConfig,
 } from './ai';
 
-export type { AiDetectionSettings, Zone, ZoneList, CreateZoneRequest, PerCameraAiState } from './ai';
+export type {
+  AiDetectionSettings,
+  AiStatus,
+  AiConfigUpdate,
+  Zone,
+  ZoneList,
+  CreateZoneRequest,
+  PerCameraAiState,
+} from './ai';
