@@ -7,6 +7,7 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  import MjpegLivePlayer from '../components/MjpegLivePlayer.svelte';
   // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
@@ -58,6 +59,9 @@
 
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
+  }
+  function canStream(cam: Camera): boolean {
+    return isHlsSupported(cam) || streamingProtocol === 'mjpeg';
   }
 
   function isPtzSupported(cam: Camera): boolean {
@@ -204,7 +208,7 @@
             <SnapshotButton cameraId={camera.id} />
           {/if}
 
-          {#if isHlsSupported(camera)}
+          {#if canStream(camera)}
             <div class="flex-1"></div>
             <!-- Protocol Switcher -->
             <ProtocolSwitcher
@@ -223,7 +227,7 @@
           {/if}
         </div>
 
-        {#if isHlsSupported(camera)}
+        {#if canStream(camera)}
           <!-- Player container -->
           <div
             class="card border th-border overflow-hidden"
@@ -279,6 +283,12 @@
               />
             {:else if streamingProtocol === 'flv'}
               <FlvPlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={true}
+              />
+            {:else if streamingProtocol === 'mjpeg'}
+              <MjpegLivePlayer
                 cameraId={camera.id}
                 cameraName={camera.name || camera.id}
                 expanded={true}

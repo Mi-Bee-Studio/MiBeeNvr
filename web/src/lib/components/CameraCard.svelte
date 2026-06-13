@@ -61,6 +61,15 @@
   let encodingLabel = $derived(
     camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : ''
   );
+  let streamTransport = $derived.by(() => {
+    const proto = camera.protocol;
+    const enc = (camera.encoding || '').toLowerCase();
+    if (proto === 'rtsp' || proto === 'rtsp_h264' || proto === 'rtsp_h265' || proto === 'rtsp_mjpeg') return 'rtsp';
+    if (proto === 'http' || proto === 'http_jpeg') return 'http';
+    if (proto === 'onvif' && (enc === 'h264' || enc === 'h265')) return 'rtsp';
+    if (proto === 'onvif' && (enc === 'jpeg' || enc === 'mjpeg')) return 'http';
+    return null;
+  });
 
   function getHealthColor(status?: string): string {
     if (status === 'healthy') return 'bg-emerald-400';
@@ -188,6 +197,11 @@
       <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
       {#if encodingLabel}
         <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
+      {/if}
+      {#if streamTransport === 'rtsp'}
+        <span class="badge badge-info">{t('cameras.streamTransportRtsp')}</span>
+      {:else if streamTransport === 'http'}
+        <span class="badge badge-success">{t('cameras.streamTransportHttp')}</span>
       {/if}
     </div>
     <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>

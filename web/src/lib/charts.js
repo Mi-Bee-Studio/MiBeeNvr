@@ -118,4 +118,3 @@ export function createTrendChart(Chart, canvas, trends) {
     },
   });
 }
-

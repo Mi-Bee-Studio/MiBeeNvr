@@ -4,7 +4,6 @@ import CameraCard from '$lib/components/CameraCard.svelte';
 import { buildProtocolsMap, DEFAULT_PROTOCOLS } from '$lib/api';
 import type { Camera } from '$lib/api';
 
-
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
   const icons = ['Pencil', 'Play', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive'];
@@ -55,9 +54,6 @@ describe('CameraCard', () => {
     const { getByText } = render(CameraCard, { props: defaultProps(camera) });
     expect(getByText('Recording')).toBeTruthy();
   });
-
-
-
 
   it('recording toggle has correct aria-labels', () => {
     const idle = makeCamera({ status: 'idle' });
