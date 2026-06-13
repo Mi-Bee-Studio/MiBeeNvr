@@ -24,6 +24,7 @@
     "vitest": "^4.1.6"
   },
   "dependencies": {
+    "@yume-chan/libde265": "^1.0.0",
     "chart.js": "^4.5.1",
     "hls.js": "^1.6.16",
     "lucide-svelte": "^0.577.0",
