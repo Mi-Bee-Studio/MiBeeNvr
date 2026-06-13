@@ -550,6 +550,7 @@
   "cameras.archive.size": "总大小: {size}",
   "cameras.archive.summary": "归档摘要",
   "cameras.cameraArchived": "摄像头已成功归档",
+  "cameras.capabilities_unavailable": "ONVIF 功能不可用",
   "cameras.disabledSuccess": "摄像头已停用",
   "cameras.enabledSuccess": "摄像头已启用",
   "cameras.failedArchive": "归档摄像头失败",

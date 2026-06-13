@@ -550,6 +550,7 @@
   "cameras.archive.size": "Total size: {size}",
   "cameras.archive.summary": "Archive Summary",
   "cameras.cameraArchived": "Camera archived successfully",
+  "cameras.capabilities_unavailable": "ONVIF capabilities unavailable",
   "cameras.disabledSuccess": "Camera disabled",
   "cameras.enabledSuccess": "Camera enabled",
   "cameras.failedArchive": "Failed to archive camera",

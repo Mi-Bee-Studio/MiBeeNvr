@@ -204,7 +204,7 @@
           <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
 
           <!-- ONVIF controls shown for all ONVIF cameras -->
-          {#if isOnvifCamera(camera)}
+          {#if isOnvifCamera(camera) && deviceCaps?.snapshot}
             <SnapshotButton cameraId={camera.id} />
           {/if}
 
@@ -320,7 +320,7 @@
         {/if}
         
         <!-- PTZ Control for PTZ-capable cameras -->
-        {#if isPtzSupported(camera)}
+        {#if isPtzSupported(camera) && (deviceCaps?.ptz ?? true)}
           <div class="card">
             <PtzControl {cameraId} enabled={true} />
           </div>
@@ -328,64 +328,70 @@
 
         <!-- ONVIF collapsible panels -->
         {#if isOnvifCamera(camera) && !capsLoading}
-          <!-- Imaging Panel (collapsible) -->
-          {#if deviceCaps?.imaging}
-            <details class="onvif-collapsible" bind:open={showImaging}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showImaging}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Image size={16} />
-                  <span>{t('onvif.imaging.title')}</span>
+          {#if deviceCaps}
+            <!-- Imaging Panel (collapsible) -->
+            {#if deviceCaps?.imaging}
+              <details class="onvif-collapsible" bind:open={showImaging}>
+                <summary class="onvif-collapsible-summary">
+                  <div class="onvif-collapsible-title-row">
+                    {#if showImaging}
+                      <ChevronDown size={16} />
+                    {:else}
+                      <ChevronRight size={16} />
+                    {/if}
+                    <Image size={16} />
+                    <span>{t('onvif.imaging.title')}</span>
+                  </div>
+                </summary>
+                <div class="onvif-collapsible-body">
+                  <ImagingPanel cameraId={camera.id} />
                 </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <ImagingPanel cameraId={camera.id} />
-              </div>
-            </details>
-          {/if}
+              </details>
+            {/if}
 
-          <!-- Preset Manager (collapsible) -->
-          {#if deviceCaps?.ptz}
-            <details class="onvif-collapsible" bind:open={showPresets}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showPresets}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Move size={16} />
-                  <span>{t('onvif.presets.title')}</span>
+            <!-- Preset Manager (collapsible) -->
+            {#if deviceCaps?.ptz}
+              <details class="onvif-collapsible" bind:open={showPresets}>
+                <summary class="onvif-collapsible-summary">
+                  <div class="onvif-collapsible-title-row">
+                    {#if showPresets}
+                      <ChevronDown size={16} />
+                    {:else}
+                      <ChevronRight size={16} />
+                    {/if}
+                    <Move size={16} />
+                    <span>{t('onvif.presets.title')}</span>
+                  </div>
+                </summary>
+                <div class="onvif-collapsible-body">
+                  <PresetManager cameraId={camera.id} />
                 </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <PresetManager cameraId={camera.id} />
-              </div>
-            </details>
-          {/if}
+              </details>
+            {/if}
 
-          <!-- ONVIF Events (collapsible) -->
-          {#if deviceCaps?.events}
-            <details class="onvif-collapsible" bind:open={showEvents}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showEvents}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Activity size={16} />
-                  <span>{t('onvif.events.title')}</span>
+            <!-- ONVIF Events (collapsible) -->
+            {#if deviceCaps?.events}
+              <details class="onvif-collapsible" bind:open={showEvents}>
+                <summary class="onvif-collapsible-summary">
+                  <div class="onvif-collapsible-title-row">
+                    {#if showEvents}
+                      <ChevronDown size={16} />
+                    {:else}
+                      <ChevronRight size={16} />
+                    {/if}
+                    <Activity size={16} />
+                    <span>{t('onvif.events.title')}</span>
+                  </div>
+                </summary>
+                <div class="onvif-collapsible-body">
+                  <ONVIFEvents cameraId={camera.id} maxEvents={50} />
                 </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <ONVIFEvents cameraId={camera.id} maxEvents={50} />
-              </div>
-            </details>
+              </details>
+            {/if}
+          {:else}
+            <div class="text-xs th-text-muted p-3">
+              {t('cameras.capabilities_unavailable')}
+            </div>
           {/if}
         {/if}
       </div>
