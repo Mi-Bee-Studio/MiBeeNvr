@@ -31,6 +31,17 @@ const wsDiscoveryProbe = `<?xml version="1.0" encoding="UTF-8"?>
   </s:Body>
 </s:Envelope>`
 
+// getDeviceInfoProbe is the SOAP envelope for GetDeviceInformation, used as a
+// fallback when WS-Discovery Probe is rejected. Many cameras (e.g. 天视通)
+// reject WS-Discovery Probe over HTTP POST but allow unauthenticated
+// GetDeviceInformation.
+const getDeviceInfoProbe = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <s:Body>
+    <tds:GetDeviceInformation/>
+  </s:Body>
+</s:Envelope>`
+
 // probeMatchEnvelope represents a WS-Discovery ProbeMatches SOAP response.
 // Uses local-name matching (Go XML ignores namespace prefixes by default).
 type probeMatchEnvelope struct {
@@ -52,8 +63,23 @@ type probeMatchEntry struct {
 	MetadataVersion int    `xml:"MetadataVersion"`
 }
 
+// deviceInfoEnvelope parses a GetDeviceInformationResponse.
+type deviceInfoEnvelope struct {
+	Body struct {
+		GetDeviceInformationResponse struct {
+			Manufacturer    string `xml:"Manufacturer"`
+			Model           string `xml:"Model"`
+			FirmwareVersion string `xml:"FirmwareVersion"`
+			SerialNumber    string `xml:"SerialNumber"`
+			HardwareId      string `xml:"HardwareId"`
+		} `xml:"GetDeviceInformationResponse"`
+	} `xml:"Body"`
+}
+
 // Discover performs WS-Discovery to find ONVIF devices on the local network
-// via UDP multicast. Returns a DiscoveryResult with categorized errors.
+// via UDP multicast, then enriches each device with GetDeviceInformation.
+// The enrichment runs in parallel and does not require authentication.
+// Returns a DiscoveryResult with categorized errors.
 // The result always contains a non-nil Devices slice (empty when no devices found).
 func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 	if timeout <= 0 {
@@ -83,14 +109,23 @@ func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 		}
 	}
 
+	// Enrich devices with GetDeviceInformation (no auth, best-effort).
+	// Use a fresh background context with its own timeout so enrichment
+	// is not affected by the expired discovery context.
+	enrichCtx, enrichCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer enrichCancel()
+	enrichDevices(enrichCtx, result)
+
 	logger.Info("ONVIF discovery completed", "device_count", len(result))
 	return &DiscoveryResult{Devices: result}
 }
 
-// ProbeDevice sends a direct WS-Discovery Probe via HTTP POST to a specific
-// host:port. This bypasses UDP multicast and works across subnets.
+// ProbeDevice probes an ONVIF device at a specific host:port. It first tries
+// WS-Discovery Probe via HTTP POST. If that fails (some cameras reject it with
+// auth errors), it falls back to a GetDeviceInformation SOAP request which is
+// widely supported without authentication.
 // Returns nil (not error) if the device is not ONVIF or doesn't respond.
-func ProbeDevice(ctx context.Context, host string, port int, timeout time.Duration) (*DiscoveredDevice, error) {
+func ProbeDevice(ctx context.Context, host string, port int, timeout time.Duration) (device *DiscoveredDevice, err error) {
 	if timeout <= 0 {
 		timeout = defaultDiscoveryTimeout
 	}
@@ -101,6 +136,26 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Catch panics from any strategy to prevent crashing the HTTP handler.
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("ProbeDevice panic recovered", "endpoint", endpoint, "panic", r)
+			device, err = nil, fmt.Errorf("probe panic: %v", r)
+		}
+		}()
+
+	// Strategy 1: WS-Discovery Probe via HTTP POST
+	if d, e := probeViaWSDiscovery(ctx, endpoint); e != nil || d != nil {
+		return d, e
+	}
+
+	// Strategy 2: Fallback — GetDeviceInformation
+	logger.Debug("WS-Discovery probe failed, trying GetDeviceInformation fallback", "endpoint", endpoint)
+	return probeViaGetDeviceInformation(ctx, endpoint)
+}
+
+// probeViaWSDiscovery sends a WS-Discovery Probe SOAP message via HTTP POST.
+func probeViaWSDiscovery(ctx context.Context, endpoint string) (*DiscoveredDevice, error) {
 	messageID := generateProbeUUID()
 	probeMsg := fmt.Sprintf(wsDiscoveryProbe, messageID)
 
@@ -117,7 +172,7 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Debug("device returned non-200 status", "endpoint", endpoint, "status", resp.StatusCode)
+		logger.Debug("WS-Discovery probe returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
 		return nil, nil
 	}
 
@@ -127,6 +182,147 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 	}
 
 	return parseProbeMatchResponse(body, endpoint)
+}
+
+// probeViaGetDeviceInformation sends a GetDeviceInformation SOAP request as
+// a fallback when WS-Discovery Probe is rejected. Many cameras allow
+// unauthenticated GetDeviceInformation even though they require auth for Probe.
+func probeViaGetDeviceInformation(ctx context.Context, endpoint string) (*DiscoveredDevice, error) {
+	info, err := fetchDeviceInformation(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return nil, nil
+	}
+
+	name := info.Manufacturer
+	if name == "" {
+		name = info.Model
+	}
+
+	return &DiscoveredDevice{
+		UUID:         info.SerialNumber,
+		Name:         name,
+		XAddrs:       []string{endpoint},
+		Scopes:       []string{},
+		Hardware:     info.HardwareId,
+		Endpoint:     endpoint,
+		Manufacturer: info.Manufacturer,
+		Model:        info.Model,
+		Firmware:     info.FirmwareVersion,
+	}, nil
+}
+
+// enrichDevices enriches discovered devices with GetDeviceInformation in parallel.
+// Best-effort: failures are logged and silently skipped.
+func enrichDevices(ctx context.Context, devices []DiscoveredDevice) {
+	type enrichResult struct {
+		index int
+		info  *deviceInfoFields
+	}
+
+	ch := make(chan enrichResult, len(devices))
+	for i, d := range devices {
+		endpoint := d.Endpoint
+		if endpoint == "" && len(d.XAddrs) > 0 {
+			endpoint = d.XAddrs[0]
+		}
+		if endpoint == "" {
+			continue
+		}
+		go func(idx int, ep string) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Warn("enrichment goroutine panic recovered", "endpoint", ep, "panic", r)
+					ch <- enrichResult{index: idx, info: nil}
+				}
+			}()
+			info, _ := fetchDeviceInformation(ctx, ep)
+			ch <- enrichResult{index: idx, info: info}
+		}(i, endpoint)
+	}
+
+	for range devices {
+		result := <-ch
+		if result.info == nil {
+			continue
+		}
+		d := &devices[result.index]
+		if d.Name == "" && result.info.Manufacturer != "" {
+			d.Name = result.info.Manufacturer
+		}
+		if d.Manufacturer == "" {
+			d.Manufacturer = result.info.Manufacturer
+		}
+		if d.Model == "" {
+			d.Model = result.info.Model
+		}
+		if d.Firmware == "" {
+			d.Firmware = result.info.FirmwareVersion
+		}
+		if d.Hardware == "" {
+			d.Hardware = result.info.HardwareId
+		}
+	}
+}
+
+// deviceInfoFields holds the parsed fields from GetDeviceInformationResponse.
+type deviceInfoFields struct {
+	Manufacturer    string
+	Model           string
+	FirmwareVersion string
+	SerialNumber    string
+	HardwareId      string
+}
+
+// fetchDeviceInformation sends a GetDeviceInformation SOAP request and returns
+// parsed device info. Returns (nil, nil) if the device doesn't respond or returns
+// empty/invalid data. No authentication required.
+func fetchDeviceInformation(ctx context.Context, endpoint string) (*deviceInfoFields, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(getDeviceInfoProbe))
+	if err != nil {
+		return nil, fmt.Errorf("create GetDeviceInformation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/soap+xml")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GetDeviceInformation request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Debug("GetDeviceInformation returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
+		return nil, nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read GetDeviceInformation response: %w", err)
+	}
+
+	var envelope deviceInfoEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		logger.Debug("failed to parse GetDeviceInformation response", "endpoint", endpoint, "error", err)
+		return nil, nil
+	}
+
+	info := envelope.Body.GetDeviceInformationResponse
+	if info.SerialNumber == "" && info.FirmwareVersion == "" && info.HardwareId == "" {
+		logger.Debug("GetDeviceInformation returned empty device info", "endpoint", endpoint)
+		return nil, nil
+	}
+
+	logger.Info("enriched device info", "endpoint", endpoint, "manufacturer", info.Manufacturer, "model", info.Model, "firmware", info.FirmwareVersion)
+
+	return &deviceInfoFields{
+		Manufacturer:    info.Manufacturer,
+		Model:           info.Model,
+		FirmwareVersion: info.FirmwareVersion,
+		SerialNumber:    info.SerialNumber,
+		HardwareId:      info.HardwareId,
+	}, nil
 }
 
 // parseProbeMatchResponse parses a WS-Discovery ProbeMatches SOAP response

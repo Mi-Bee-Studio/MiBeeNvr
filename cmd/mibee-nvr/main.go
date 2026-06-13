@@ -565,7 +565,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 	a.rollingMergeMgr = timelapse.NewRollingMergeManager(mergeMerger, db, 10, false)
 
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, a.rollingMergeMgr, appLoc)
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, a.rollingMergeMgr, appLoc, a.eventBus)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -770,6 +770,8 @@ func (a *App) buildRouter() http.Handler {
 	}
 	// WebSocket stream handler is always available
 	reg.Register(&api.WSStreamHandler{})
+	// MJPEG stream handler for JPEG/MJPEG cameras (proxy on-demand)
+	reg.Register(&api.MJPEGStreamHandler{})
 	handler.SetStreamRegistry(reg)
 
 	// Wire FFmpeg downloader for transcoding status/download APIs

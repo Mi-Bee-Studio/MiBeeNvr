@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -68,6 +69,7 @@ type CameraManager struct {
 	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
 	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
 	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
+	eventBus         *event.EventBus // event bus for publishing segment events
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -76,6 +78,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	var tm *transcoding.TranscodeManager
 	var tmm *timelapse.RollingMergeManager
 	var appLoc *time.Location
+	var eb *event.EventBus
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
@@ -88,6 +91,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			tmm = v
 		case *time.Location:
 			appLoc = v
+		case *event.EventBus:
+			eb = v
 		}
 	}
 	return &CameraManager{
@@ -107,6 +112,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:  make(map[string]*onvif.DeviceInfo),
+		eventBus:         eb,
 	}
 }
 
@@ -250,6 +256,8 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			SegmentDur:     segDur,
 			DB:             cm.db,
 			AudioEnabled:   cam.AudioEnabled,
+			ONVIFEndpoint:  onvifEndpoint,
+			EventBus:       cm.eventBus,
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d
