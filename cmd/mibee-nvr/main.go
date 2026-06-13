@@ -751,9 +751,8 @@ func (a *App) buildRouter() http.Handler {
 	}
 	// Wire AI handler (config + zones only, no backend inference)
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), a.eventBus)
-	ah := api.NewAIHandler(aiMgr)
+	ah := api.NewAIHandler(aiMgr, a.cfg, a.configPath)
 	handler.SetAIHandler(ah)
-
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: a.hlsMgr})
@@ -1100,6 +1099,8 @@ func main() {
 		case "hash-password":
 			cmdHashPassword()
 		case "encrypt-config":
+	case "download-model":
+		cmdDownloadModel()
 			cmdEncryptConfig()
 		}
 	}
