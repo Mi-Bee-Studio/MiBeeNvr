@@ -1,7 +1,7 @@
 /**
- * Web Worker for WebCodecs video decoding.
+ * Web Worker for video decoding (WebCodecs + WASM H.265 fallback).
  *
- * Runs the VideoDecoder off the main thread to avoid blocking UI.
+ * Runs the decoder off the main thread to avoid blocking UI.
  * Receives codec info and NALUs via postMessage, sends decoded frames back.
  *
  * Message protocol (main → worker):
@@ -11,11 +11,12 @@
  *   { type: 'close' }
  *
  * Message protocol (worker → main):
- *   { type: 'frame', data: VideoFrame }        — transferable frame for rendering
+ *   { type: 'frame', data: VideoFrame }        — frame for rendering (transferable if GPU-backed)
  *   { type: 'error', error: string }            — error notification
  *
- * NOTE: This file uses a plain module pattern (no ES imports in worker context).
- * The build system (Vite) will bundle this as a web worker entry.
+ * NOTE: WASM-decoded frames are CPU-backed (synthetic VideoFrame from RGBA).
+ * These cannot be transferred — postMessage falls back to structured clone.
+ * The worker does NOT close the frame after posting; main thread owns it.
  */
 
 // ─── Inline imports (bundled by Vite) ────────────────────────────────────
@@ -75,17 +76,26 @@ async function handleCodecInfo(data: {
   }
 
   // Set frame output callback — forward to main thread
+  // Tracks whether frames are from WASM (CPU-backed, not transferable)
+  let isWasmMode = false;
+
   decoder.onFrame((frame: any) => {
     try {
-      self.postMessage({ type: 'frame', data: frame }, [frame] as any);
-    } catch {
-      // postMessage failed — frame still owned by worker, must close to prevent GPU leak
-      try {
-        frame.close();
-      } catch {
-        /* already closed */
+      // GPU-backed VideoFrames (WebCodecs) can be transferred — zero-copy.
+      // CPU-backed VideoFrames (WASM/RGBA) cannot be transferred — structured clone.
+      if (isWasmMode) {
+        // WASM frame: post without transfer list (structured clone copy)
+        self.postMessage({ type: 'frame', data: frame });
+        // Worker created the synthetic frame — close our reference after sending copy
+        try { frame.close(); } catch { /* already closed */ }
+      } else {
+        // WebCodecs frame: transfer ownership (zero-copy)
+        self.postMessage({ type: 'frame', data: frame }, [frame] as any);
       }
-      throw new Error('Failed to transfer frame to main thread');
+    } catch {
+      // postMessage failed — frame still owned by worker, must close to prevent leak
+      try { frame.close(); } catch { /* already closed */ }
+      throw new Error('Failed to send frame to main thread');
     }
   });
 
@@ -103,6 +113,7 @@ async function handleCodecInfo(data: {
       pps: data.pps,
       vps: data.vps,
     });
+    isWasmMode = decoder.isWasm;
   } catch (err: any) {
     self.postMessage({ type: 'error', error: err?.message || 'Codec configuration failed' });
   }
