@@ -305,6 +305,10 @@ function handleWebGpuLost() {
             if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
             onFallbackNeeded?.('hls');
           }
+        } else if (msg.type === 'backpressure') {
+          if (cm) {
+            cm.setPaused(msg.paused);
+          }
         }
       };
 
