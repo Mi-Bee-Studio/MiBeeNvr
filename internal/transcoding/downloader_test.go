@@ -108,6 +108,7 @@ func serveTarGz(t *testing.T, archive []byte) *httptest.Server {
 
 // TestGetFFmpegStatus_NotInstalled verifies status when no FFmpeg exists.
 func TestGetFFmpegStatus_NotInstalled(t *testing.T) {
+	t.Setenv("PATH", "") // isolate from system FFmpeg
 	d := newTestDownloader(t)
 
 	status := d.GetFFmpegStatus()
@@ -141,6 +142,7 @@ func TestGetFFmpegStatus_Available(t *testing.T) {
 
 // TestGetFFmpegStatus_Downloading verifies status returns in-progress state.
 func TestGetFFmpegStatus_Downloading(t *testing.T) {
+	t.Setenv("PATH", "") // isolate from system FFmpeg
 	d := newTestDownloader(t)
 
 	d.mu.Lock()
