@@ -132,7 +132,6 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - Atomic configuration with validation
 
 ### 🤖 Smart Features
-- AI detection with ONNX Runtime inference
 - Multi-layer camera health monitoring
 - Auto-remediation for connection issues
 - SSE-based real-time event system
