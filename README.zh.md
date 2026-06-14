@@ -192,7 +192,7 @@ make docker-release
 ```
 cmd/mibee-nvr/       # 程序入口
 internal/            # 核心模块（29 个）
-  ai/               # ONNX Runtime AI 推理
+  ai/               # AI 配置 + ROI 区域存储（推理在浏览器端，见 web/src/lib/ai-detection/）
   api/              # REST API
   camera/           # 摄像头管理
   cleanup/          # 保留策略 + 磁盘清理
