@@ -419,18 +419,20 @@ func TestTestEncoder(t *testing.T) {
 	fakeFFmpeg := createFakeFFmpeg(t, testEncoderOutput, testDecoderOutput)
 
 	tests := []struct {
-		name       string
-		encoder    string
-		hasDevices bool
-		want       bool
+		name           string
+		encoder        string
+		hasDevices     bool // V4L2M2M /dev/video*
+		hasVaapiDevice bool // VAAPI /dev/dri/renderD*
+		want           bool
 	}{
-		{"VAAPI detected", "h264_vaapi", false, true},
-		{"NVENC detected", "h264_nvenc", false, true},
-		{"software detected", "libx264", false, true},
-		{"V4L2M2M no devices", "h264_v4l2m2m", false, false},
-		{"V4L2M2M with devices", "h264_v4l2m2m", true, true},
-		{"encoder not in list", "h264_nonexistent", false, false},
-		{"V4L2M2M not in list", "hevc_v4l2m2m", true, false},
+		{"VAAPI detected", "h264_vaapi", false, true, true},
+		{"VAAPI no device", "h264_vaapi", false, false, false},
+		{"NVENC detected", "h264_nvenc", false, false, true},
+		{"software detected", "libx264", false, false, true},
+		{"V4L2M2M no devices", "h264_v4l2m2m", false, false, false},
+		{"V4L2M2M with devices", "h264_v4l2m2m", true, false, true},
+		{"encoder not in list", "h264_nonexistent", false, false, false},
+		{"V4L2M2M not in list", "hevc_v4l2m2m", true, false, false},
 	}
 
 	for _, tc := range tests {
@@ -441,6 +443,10 @@ func TestTestEncoder(t *testing.T) {
 			orig := videoDeviceExists
 			videoDeviceExists = func() bool { return tc.hasDevices }
 			defer func() { videoDeviceExists = orig }()
+
+			origVaapi := vaapiDeviceExists
+			vaapiDeviceExists = func() bool { return tc.hasVaapiDevice }
+			defer func() { vaapiDeviceExists = origVaapi }()
 
 			got := testEncoder(fakeFFmpeg, tc.encoder)
 			if got != tc.want {
