@@ -246,6 +246,16 @@ var videoDeviceExists = func() bool {
 	return len(matches) > 0
 }
 
+// vaapiDeviceExists checks for DRI render devices (e.g. /dev/dri/renderD128).
+// VAAPI encoders are compiled into many FFmpeg builds but require a GPU
+// device. Without this check, the probe selects VAAPI even in Docker containers
+// that lack GPU passthrough, causing runtime encode failures (exit code 234).
+// Overridden in tests.
+var vaapiDeviceExists = func() bool {
+	matches, _ := filepath.Glob("/dev/dri/renderD*")
+	return len(matches) > 0
+}
+
 // testEncoder checks if an encoder is available via ffmpeg -encoders list parsing.
 // For V4L2M2M encoders, also verifies /dev/video* device existence AND does a smoke test
 // (encoders may be listed but the device may only support decode, not encode).
@@ -268,6 +278,16 @@ func testEncoder(ffmpegPath, encoder string) bool {
 		// Device exists but may only support decode. Smoke test: encode 1 frame.
 		if !smokeTestEncoder(ffmpegPath, encoder) {
 			slog.Debug("V4L2M2M encoder smoke test failed — device likely lacks encode support", "encoder", encoder)
+			return false
+		}
+	}
+
+	// VAAPI encoders are compiled into FFmpeg on most Linux distros but the GPU
+	// device (/dev/dri/renderD128) may not be accessible (e.g. Docker without GPU
+	// passthrough). Verify device existence to avoid runtime failures.
+	if strings.Contains(encoder, "vaapi") {
+		if !vaapiDeviceExists() {
+			slog.Debug("VAAPI encoder listed but no DRI render device — falling back", "encoder", encoder)
 			return false
 		}
 	}
