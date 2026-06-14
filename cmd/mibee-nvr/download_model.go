@@ -59,7 +59,7 @@ func cmdDownloadModel() {
 		os.Exit(1)
 	}
 
-	downloadModelFile(modelDir, "yolov11n.onnx")
+	downloadModelFile(modelDir, "yolo11n.onnx")
 	os.Exit(0)
 }
 

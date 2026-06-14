@@ -1006,6 +1006,9 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.AI.Zones == nil {
 		cfg.AI.Zones = make(map[string][]ai.ROI)
 	}
+	if cfg.AI.ModelURL == "" {
+		cfg.AI.ModelURL = "/models/yolo11n.onnx"
+	}
 
 	// Remote log defaults
 	if cfg.RemoteLog.Format == "" {
