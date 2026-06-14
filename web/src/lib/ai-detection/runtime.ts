@@ -14,7 +14,7 @@
 export const MODEL_CACHE_NAME = 'mibee-nvr-ai-models';
 
 /** Default YOLOv11-nano model path (served from Go HTTP server). */
-export const DEFAULT_MODEL_URL = '/models/yolov11n.onnx';
+export const DEFAULT_MODEL_URL = '/models/yolo11n.onnx';
 
 /** Session options type matching onnxruntime-web. */
 interface SessionOptions {
