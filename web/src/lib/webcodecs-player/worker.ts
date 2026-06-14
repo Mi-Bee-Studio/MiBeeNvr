@@ -94,6 +94,11 @@ async function handleCodecInfo(data: {
     self.postMessage({ type: 'error', error: err.message });
   });
 
+  // Set backpressure callback — forward to main thread so ConnectionManager can skip frames
+  decoder.onBackpressure((paused: boolean) => {
+    self.postMessage({ type: 'backpressure', paused });
+  });
+
   try {
     await decoder.configure({
       codec: data.codec as any,
