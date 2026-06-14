@@ -346,6 +346,7 @@ func TestManager_Queue(t *testing.T) {
 
 func TestManager_UpdateFFmpegStatus(t *testing.T) {
 	t.Helper()
+	t.Setenv("PATH", "")
 
 	tests := []struct {
 		name     string
