@@ -338,11 +338,10 @@ func (r *ONVIFRecorder) guessMJPEGURL() string {
 	if u, err := url.Parse(r.rtspURL); err == nil && u.Path != "" {
 		path = u.Path
 	}
-	// Some devices (e.g. ESP32-S3 MiBeeCam) serve MJPEG preview on a separate
-	// port (81) to avoid blocking the main HTTP server (port 80).
-	// Try the MJPEG preview port first, then fall back to the ONVIF port.
-	host := onvifURL.Hostname()
-	return fmt.Sprintf("http://%s:81%s", host, path)
+	// Fall back to the ONVIF device's own HTTP host:port — the known-reachable
+	// HTTP server. The HTTPJPEGRecorder retries automatically if this guess is
+	// wrong; probeHTTPMJPEG (when it succeeds) already prefers MJPEG preview port 81.
+	return fmt.Sprintf("http://%s%s", onvifURL.Host, path)
 }
 
 // createDelegate creates the appropriate internal recorder based on encoding.
