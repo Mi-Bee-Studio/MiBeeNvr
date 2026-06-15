@@ -222,9 +222,12 @@ func TestImagingController_GetImagingOptions_SOAPError(t *testing.T) {
 
 func TestImagingController_SetCredentials(t *testing.T) {
 	t.Helper()
-	var capturedAuth string
+	// With credentials set, doRawSOAP should prefer WS-Security (UsernameToken in
+	// the SOAP body). A cooperating server (200, no Fault) succeeds on the first try.
+	var capturedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
 		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
 		w.Write([]byte(soapImagingSettingsResponse(0.5, 0.5, 0.5, 0.5)))
 	}))
@@ -236,7 +239,84 @@ func TestImagingController_SetCredentials(t *testing.T) {
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
-	require.Contains(t, capturedAuth, "Basic ")
+	// WS-Security UsernameToken should be present in the SOAP envelope.
+	require.Contains(t, capturedBody, "UsernameToken")
+	require.Contains(t, capturedBody, "admin")
+}
+
+func TestImagingController_AuthFallbackToBasic(t *testing.T) {
+	t.Helper()
+	// When WS-Security is rejected (401), doRawSOAP should fall back to HTTP Basic Auth.
+	var attempt int
+	var lastAuthHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		lastAuthHeader = r.Header.Get("Authorization")
+		// First request (WS-Security): reject with 401.
+		if attempt == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<error>unauthorized</error>`))
+			return
+		}
+		// Second request (Basic Auth): accept.
+		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+		w.Write([]byte(soapImagingSettingsResponse(0.5, 0.5, 0.5, 0.5)))
+	}))
+	defer server.Close()
+
+	ctrl := NewImagingController(nil, "profile1")
+	ctrl.SetImagingEndpoint(server.URL)
+	ctrl.SetCredentials("admin", "secret123")
+
+	_, err := ctrl.GetImagingSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, attempt, "should have tried WS-Security then Basic Auth")
+	require.Contains(t, lastAuthHeader, "Basic ")
+}
+
+func TestImagingController_AuthFallbackToNone(t *testing.T) {
+	t.Helper()
+	// When both WS-Security and Basic Auth are rejected, fall back to no-auth.
+	var attempt int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		if attempt <= 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<error>unauthorized</error>`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+		w.Write([]byte(soapImagingSettingsResponse(0.5, 0.5, 0.5, 0.5)))
+	}))
+	defer server.Close()
+
+	ctrl := NewImagingController(nil, "profile1")
+	ctrl.SetImagingEndpoint(server.URL)
+	ctrl.SetCredentials("admin", "secret123")
+
+	_, err := ctrl.GetImagingSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 3, attempt, "should have tried WS-Security, Basic, then NoAuth")
+}
+
+func TestImagingController_NoCredentialsSkipsAuthStrategies(t *testing.T) {
+	t.Helper()
+	// Without credentials, only the no-auth strategy is attempted.
+	var attempt int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+		w.Write([]byte(soapImagingSettingsResponse(0.5, 0.5, 0.5, 0.5)))
+	}))
+	defer server.Close()
+
+	ctrl := NewImagingController(nil, "profile1")
+	ctrl.SetImagingEndpoint(server.URL)
+	// No SetCredentials call — empty username.
+
+	_, err := ctrl.GetImagingSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, attempt, "should only try no-auth once")
 }
 
 func TestImagingController_ConcurrentOperations(t *testing.T) {

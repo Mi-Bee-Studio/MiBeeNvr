@@ -60,6 +60,10 @@ type TranscodeOptions struct {
 	Framerate     int    `json:"framerate"`      // output framerate
 	ForceSoftware bool   `json:"force_software"` // bypass hardware encoders
 	Preset        string `json:"preset"`         // "ultrafast", "faster", "medium"
+	// CRF (Constant Rate Factor) controls quality for libx264/libx265 software encoders.
+	// Lower = higher quality + larger file. Range 0-51 (libx264 default 23, libx265 28).
+	// 0 means use the encoder's default (no explicit -crf flag override beyond the default).
+	CRF int `json:"crf"`
 }
 
 // TranscodeTask represents a transcoding task stored in the database.

@@ -387,13 +387,15 @@ func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBo
 }
 
 // isAuthError checks if an error indicates WS-Security auth rejection by the camera.
-// This is used to trigger fallback to raw SOAP without auth.
+// This is used to trigger fallback to an alternate auth strategy (Basic → NoAuth, etc.).
 func isAuthError(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := err.Error()
 	return strings.Contains(s, "NotAuthorized") ||
+		strings.Contains(s, "status 401") ||
+		strings.Contains(s, "status 403") ||
 		strings.Contains(s, "status 400") ||
 		strings.Contains(s, "status 500") ||
 		strings.Contains(s, "status 502")

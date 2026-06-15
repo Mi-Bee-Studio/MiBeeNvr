@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -120,13 +121,23 @@ case strings.Contains(encoder, "v4l2m2m"):
 		if preset == "" {
 			preset = "faster"
 		}
-		args = append(args, "-preset", preset, "-crf", "23")
+		// CRF 0 = use encoder default (23); otherwise honor the configured value (0-51).
+		crf := 23
+		if opts.CRF > 0 && opts.CRF <= 51 {
+			crf = opts.CRF
+		}
+		args = append(args, "-preset", preset, "-crf", strconv.Itoa(crf))
 	case encoder == "libx265":
 		preset := opts.Preset
 		if preset == "" {
 			preset = "faster"
 		}
-		args = append(args, "-preset", preset, "-crf", "28")
+		// CRF 0 = use encoder default (28); otherwise honor the configured value (0-51).
+		crf := 28
+		if opts.CRF > 0 && opts.CRF <= 51 {
+			crf = opts.CRF
+		}
+		args = append(args, "-preset", preset, "-crf", strconv.Itoa(crf))
 	}
 
 	// Bitrate override

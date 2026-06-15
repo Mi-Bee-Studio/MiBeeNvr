@@ -131,6 +131,77 @@ func TestBuildCommand_H265ToH264_Software(t *testing.T) {
 	argsContain(t, args, "-c:a", "copy")
 }
 
+func TestBuildCommand_CRFOverride(t *testing.T) {
+	// CRF set in options should override the libx264 default (23).
+	t.Run("libx264 custom CRF", func(t *testing.T) {
+		opts := TranscodeOptions{
+			InputPath:   "/tmp/in.mp4",
+			OutputPath:  "/tmp/out.mp4",
+			InputCodec:  "h265",
+			OutputCodec: "h264",
+			Framerate:   30,
+			CRF:         18,
+		}
+		args, err := BuildFFmpegCommand(opts, softwareCaps())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		argsContain(t, args, "-c:v", "libx264")
+		argsContain(t, args, "-crf", "18")
+	})
+
+	// CRF set for libx265 output should override the default (28).
+	t.Run("libx265 custom CRF", func(t *testing.T) {
+		opts := TranscodeOptions{
+			InputPath:   "/tmp/in.mp4",
+			OutputPath:  "/tmp/out.mp4",
+			InputCodec:  "h264",
+			OutputCodec: "h265",
+			Framerate:   30,
+			CRF:         24,
+		}
+		args, err := BuildFFmpegCommand(opts, softwareCaps())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		argsContain(t, args, "-c:v", "libx265")
+		argsContain(t, args, "-crf", "24")
+	})
+
+	// CRF=0 (zero value) should fall back to the encoder default, not emit "-crf 0".
+	t.Run("CRF zero uses default", func(t *testing.T) {
+		opts := TranscodeOptions{
+			InputPath:   "/tmp/in.mp4",
+			OutputPath:  "/tmp/out.mp4",
+			InputCodec:  "h265",
+			OutputCodec: "h264",
+			Framerate:   30,
+		}
+		args, err := BuildFFmpegCommand(opts, softwareCaps())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		argsContain(t, args, "-crf", "23") // libx264 default
+	})
+
+	// Out-of-range CRF (>51) should clamp to default, not emit an invalid value.
+	t.Run("CRF out of range clamps to default", func(t *testing.T) {
+		opts := TranscodeOptions{
+			InputPath:   "/tmp/in.mp4",
+			OutputPath:  "/tmp/out.mp4",
+			InputCodec:  "h264",
+			OutputCodec: "h265",
+			Framerate:   30,
+			CRF:         99,
+		}
+		args, err := BuildFFmpegCommand(opts, softwareCaps())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		argsContain(t, args, "-crf", "28") // libx265 default
+	})
+}
+
 func TestBuildCommand_H265ToH264_V4L2M2M(t *testing.T) {
 	opts := TranscodeOptions{
 		InputPath:   "/tmp/h265input.mp4",
