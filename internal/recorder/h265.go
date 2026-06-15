@@ -693,6 +693,7 @@ func (r *H265Recorder) closeCurrentSegment() {
 			CameraID:    r.cfg.CameraID,
 			FilePath:    r.curFinalPath,
 			Format:      string(model.FormatH265),
+			Encoding:    string(model.FormatH265),
 			StartedAt:   r.segStart.Format(time.RFC3339Nano),
 			EndedAt:     time.Now().Format(time.RFC3339Nano),
 			FileSize:    fileSize,

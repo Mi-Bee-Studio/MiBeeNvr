@@ -676,6 +676,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("cleanup: %w", err)
 	}
+	a.cleanupMgr.SetEventBus(a.eventBus)
 	if cfg.Health.Enabled {
 		healthRetention, err := time.ParseDuration(cfg.Health.EventsRetention)
 		if err != nil {

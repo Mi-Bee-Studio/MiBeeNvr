@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -34,6 +35,7 @@ type CleanupManager struct {
 	transcodeOrphanFn         func(ctx context.Context) error
 	transcodeHistoryRetention time.Duration // 0 = disabled
 	ffprobePath               string         // empty = skip repair
+	eventBus                  *event.EventBus
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -222,14 +224,32 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 	return nil
 }
 
+// SetEventBus injects the event bus for publishing segment.deleted events.
+func (cm *CleanupManager) SetEventBus(bus *event.EventBus) {
+	if cm == nil {
+		return
+	}
+	cm.eventBus = bus
+}
+
 // deleteRecording deletes the DB record first, then the file from disk.
 // File deletion errors are logged but not returned (orphaned files are acceptable).
+// Publishes a segment.deleted event so MiBeeVision can cancel in-progress processing.
 func (cm *CleanupManager) deleteRecording(ctx context.Context, rec *model.Recording) error {
 	if err := cm.db.DeleteRecording(ctx, rec.ID); err != nil {
 		return err
 	}
 	if err := cm.store.DeleteFile(rec.FilePath); err != nil {
 		logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
+	}
+	// Publish segment.deleted event for MiBeeVision cancellation
+	if cm.eventBus != nil {
+		cm.eventBus.Publish(ctx, event.TopicSegmentDeleted, event.SegmentDeleted{
+			RecordingID: rec.ID,
+			CameraID:    rec.CameraID,
+			FilePath:    rec.FilePath,
+			Reason:      "retention_expired",
+		})
 	}
 	return nil
 }
