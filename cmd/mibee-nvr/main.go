@@ -570,6 +570,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
 		a.camMgr.SetHealthManager(a.healthMgr)
+		// Inject metrics into the stream stats collector so that
+		// nvr_stream_fps / nvr_stream_bitrate_kbps / nvr_stream_idr_interval_seconds
+		// gauges are actually written.
+		a.healthMgr.SetMetrics(a.metrics)
 	}
 	// Wire auto-remediation into health manager
 	if a.healthMgr != nil && a.camMgr != nil {

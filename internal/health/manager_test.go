@@ -106,8 +106,24 @@ func TestManagerCreation(t *testing.T) {
 func TestManagerDisabled(t *testing.T) {
 	t.Helper()
 	m := newTestManager(t, newDisabledConfig())
-	if m != nil {
-		t.Fatal("expected nil manager when health is disabled")
+	// When disabled, NewManager returns a lightweight metrics-only manager
+	// (not nil) so stream stats gauges still get published.
+	if m == nil {
+		t.Fatal("expected non-nil metrics-only manager when health is disabled")
+	}
+	if !m.metricsOnly {
+		t.Fatal("expected metricsOnly=true when health is disabled")
+	}
+	// Metrics-only manager must still have a collector for stream stats.
+	if m.collector == nil {
+		t.Fatal("expected collector to be non-nil in metrics-only mode")
+	}
+	// Alert/freeze components should be nil.
+	if m.pipeline != nil {
+		t.Fatal("expected nil pipeline in metrics-only mode")
+	}
+	if m.freeze != nil {
+		t.Fatal("expected nil freeze detector in metrics-only mode")
 	}
 }
 
@@ -137,6 +153,22 @@ func TestManagerOnCameraAdded(t *testing.T) {
 	m.freeze.mu.Unlock()
 	if !freezeExists {
 		t.Error("expected camera to be tracked in freeze detector")
+	}
+}
+
+func TestManagerMetricsOnly_OnCameraAdded(t *testing.T) {
+	t.Helper()
+	m := newTestManager(t, newDisabledConfig())
+	if !m.metricsOnly {
+		t.Fatal("expected metrics-only manager")
+	}
+	rec := newMockRecorderWithHub()
+
+	m.OnCameraAdded("cam-1", rec, nil)
+
+	// Metrics-only mode: only stats subscriber, no freeze subscriber.
+	if count := rec.hub.ConsumerCount(); count != 1 {
+		t.Errorf("expected 1 hub consumer (stats only), got %d", count)
 	}
 }
 
@@ -341,8 +373,9 @@ func TestManagerGetAllHealth(t *testing.T) {
 func TestManagerGetAllHealthNil(t *testing.T) {
 	t.Helper()
 	var m *Manager
-	if h := m.GetAllHealth(); h != nil {
-		t.Error("expected nil from nil manager")
+	// GetAllHealth on a nil receiver returns an empty (non-nil) map for API safety.
+	if h := m.GetAllHealth(); len(h) != 0 {
+		t.Error("expected empty map from nil manager")
 	}
 }
 

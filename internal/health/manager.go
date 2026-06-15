@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -29,6 +30,11 @@ type Manager struct {
 	qualityTracker      *QualityTracker // 24h rolling window
 	qualityTrackerShort *QualityTracker // 1h rolling window for trend
 
+	// metricsOnly is true when health.Enabled=false. In this mode only the
+	// StreamStatsCollector runs (for Prometheus gauges); alerts/freeze/auto-remediation
+	// are skipped.
+	metricsOnly bool
+
 	statusFn      StatusFunc
 	knownStatuses map[string]string
 
@@ -38,17 +44,45 @@ type Manager struct {
 
 	store HealthStorage
 }
-// NewManager creates a health manager. Returns nil if health monitoring is disabled.
+// NewManager creates a health manager.
+//
+// When cfg.Enabled is false, health monitoring (alerts, auto-remediation, freeze
+// detection) is disabled, but a lightweight manager is still returned so that
+// the StreamStatsCollector can publish stream metrics (nvr_stream_fps,
+// nvr_stream_bitrate_kbps, nvr_stream_idr_interval_seconds). These gauges are
+// basic observability and should always be available regardless of the health
+// alert toggle.
 func NewManager(cfg config.HealthConfig, store HealthStorage) *Manager {
-	if !cfg.Enabled {
-		return nil
-	}
-
 	// Parse durations from config
 	offlineThreshold, _ := time.ParseDuration(cfg.Layer1.OfflineThreshold)
-	cooldown, _ := time.ParseDuration(cfg.Alerts.Cooldown)
 	maxIDRInterval, _ := time.ParseDuration(cfg.Layer2.MaxIDRInterval)
 	freezeTimeout, _ := time.ParseDuration(cfg.Layer2_5.FreezeTimeout)
+
+	// StreamStatsCollector is always created — stream metrics are basic observability.
+	collector := NewStreamStatsCollector(
+		cfg.Layer2.BitrateChangeThreshold,
+		float64(cfg.Layer2.MinFPS),
+		maxIDRInterval,
+		30*time.Second, // check window
+		nil,            // no alert handler when disabled
+	)
+
+	if !cfg.Enabled {
+		// Lightweight manager: only runs the collector loop for metrics.
+		// No alerts, no freeze detection, no auto-remediation.
+		return &Manager{
+			cfg:                cfg,
+			collector:          collector,
+			qualityTracker:     NewQualityTracker(24 * time.Hour),
+			qualityTrackerShort: NewQualityTracker(1 * time.Hour),
+			knownStatuses:      make(map[string]string),
+			done:               make(chan struct{}),
+			store:              store,
+			metricsOnly:        true,
+		}
+	}
+
+	cooldown, _ := time.ParseDuration(cfg.Alerts.Cooldown)
 
 	// Create alert pipeline with storage (MQTT injected later via SetMQTTClient)
 	pipeline := NewAlertPipeline(cooldown, cfg.Alerts.MQTT, store, nil, "mibee-nvr")
@@ -58,15 +92,15 @@ func NewManager(cfg config.HealthConfig, store HealthStorage) *Manager {
 		_ = pipeline.HandleEvent(cameraID, event)
 	}
 
-	// Create sub-components
-	conn := NewConnectionMonitor(offlineThreshold, handler)
-	collector := NewStreamStatsCollector(
+	// Recreate collector with the alert handler (the metrics-only one above had nil handler).
+	collector = NewStreamStatsCollector(
 		cfg.Layer2.BitrateChangeThreshold,
 		float64(cfg.Layer2.MinFPS),
 		maxIDRInterval,
 		30*time.Second, // check window
 		handler,
 	)
+	conn := NewConnectionMonitor(offlineThreshold, handler)
 	freeze := NewFreezeDetector(freezeTimeout, handler)
 
 	// Create auto-remediator if enabled (functions injected later via SetRestarter/SetCameraEnabledFn)
@@ -94,6 +128,15 @@ func NewManager(cfg config.HealthConfig, store HealthStorage) *Manager {
 // Start begins the periodic health check loop.
 func (m *Manager) Start(ctx context.Context) error {
 	if m == nil {
+		return nil
+	}
+
+	// Metrics-only mode: just run the collector loop, no alert cleanup.
+	if m.metricsOnly {
+		childCtx, cancel := context.WithCancel(ctx)
+		m.cancel = cancel
+		go m.run(childCtx)
+		slog.Info("health manager started (metrics-only mode — stream stats active, alerts disabled)")
 		return nil
 	}
 
@@ -127,8 +170,12 @@ func (m *Manager) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.conn.Check()
+			// StreamStatsCollector always runs (metrics gauges).
 			m.collector.CheckAndReset()
+			if m.metricsOnly {
+				continue // skip alerts/freeze/auto-remediation
+			}
+			m.conn.Check()
 			m.freeze.Check()
 			m.pipeline.CleanStaleAnomalies()
 			m.pollStatuses()
@@ -165,6 +212,16 @@ func (m *Manager) SetMQTTClient(client MQTTPublisher) {
 	m.pipeline.mqttClient = client
 }
 
+// SetMetrics injects the Prometheus metrics instance into the stream stats collector.
+// Without this call, nvr_stream_fps / nvr_stream_bitrate_kbps / nvr_stream_idr_interval_seconds
+// gauges are never written (collector.m stays nil and the nil-guard short-circuits).
+func (m *Manager) SetMetrics(metricsInstance *metrics.Metrics) {
+	if m == nil || m.collector == nil {
+		return
+	}
+	m.collector.SetMetrics(metricsInstance)
+}
+
 // SetRestarter injects the function used to restart camera recorders for auto-remediation.
 func (m *Manager) SetRestarter(fn RestartRecorderFunc) {
 	if m == nil || m.autoRemediate == nil {
@@ -192,31 +249,40 @@ func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder, overri
 
 	// Apply per-camera overrides if provided
 	if overrides != nil {
-		offlineThreshold, _ := time.ParseDuration(overrides.OfflineThreshold)
 		maxIDR, _ := time.ParseDuration(overrides.MaxIDRInterval)
-		freezeTimeout, _ := time.ParseDuration(overrides.FreezeTimeout)
-
-		m.conn.SetCameraOverride(cameraID, offlineThreshold)
 		m.collector.SetCameraOverride(cameraID, overrides.BitrateChangeThreshold, float64(overrides.MinFPS), maxIDR)
-		m.freeze.SetCameraOverride(cameraID, freezeTimeout)
+		if !m.metricsOnly {
+			offlineThreshold, _ := time.ParseDuration(overrides.OfflineThreshold)
+			freezeTimeout, _ := time.ParseDuration(overrides.FreezeTimeout)
+			m.conn.SetCameraOverride(cameraID, offlineThreshold)
+			m.freeze.SetCameraOverride(cameraID, freezeTimeout)
+		}
 	}
 
-	// Subscribe to StreamHub for stats and freeze detection
+	// Subscribe to StreamHub for stream stats (always) and freeze detection (full mode only)
 	if hub := getHub(recorder); hub != nil {
 		statsCallback := m.collector.OnFrame(cameraID)
 		_ = hub.Subscribe("health-stats-"+cameraID, statsCallback)
 
-		freezeCallback := m.freeze.OnFrame(cameraID)
-		_ = hub.Subscribe("health-freeze-"+cameraID, freezeCallback)
+		if !m.metricsOnly {
+			freezeCallback := m.freeze.OnFrame(cameraID)
+			_ = hub.Subscribe("health-freeze-"+cameraID, freezeCallback)
+		}
 	}
 
-	// Initialize connection monitoring
-	m.conn.OnStatusChange(cameraID, string(model.StatusRecording))
-	m.freeze.SetRecording(cameraID, true)
-	m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
+	if !m.metricsOnly {
+		// Initialize connection / freeze / pipeline monitoring
+		m.conn.OnStatusChange(cameraID, string(model.StatusRecording))
+		m.freeze.SetRecording(cameraID, true)
+		m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
+	}
 
 	m.knownStatuses[cameraID] = string(model.StatusRecording)
-	slog.Info("health monitoring started for camera", "camera_id", cameraID)
+	if m.metricsOnly {
+		slog.Debug("stream stats collection started for camera", "camera_id", cameraID)
+	} else {
+		slog.Info("health monitoring started for camera", "camera_id", cameraID)
+	}
 }
 
 // OnCameraRemoved stops monitoring a removed camera.
@@ -230,23 +296,41 @@ func (m *Manager) OnCameraRemoved(cameraID string, recorder model.Recorder) {
 	// Unsubscribe from StreamHub
 	if hub := getHub(recorder); hub != nil {
 		hub.Unsubscribe("health-stats-" + cameraID)
-		hub.Unsubscribe("health-freeze-" + cameraID)
+		if !m.metricsOnly {
+			hub.Unsubscribe("health-freeze-" + cameraID)
+		}
 	}
 
-	m.conn.RemoveCamera(cameraID)
 	m.collector.RemoveCamera(cameraID)
-	m.freeze.RemoveCamera(cameraID)
 	m.qualityTracker.RemoveCamera(cameraID)
 	m.qualityTrackerShort.RemoveCamera(cameraID)
-	m.pipeline.SetCameraStatus(cameraID, "")
+	if !m.metricsOnly {
+		m.conn.RemoveCamera(cameraID)
+		m.freeze.RemoveCamera(cameraID)
+		m.pipeline.SetCameraStatus(cameraID, "")
+	}
 	delete(m.knownStatuses, cameraID)
 
-	slog.Info("health monitoring stopped for camera", "camera_id", cameraID)
+	slog.Debug("health monitoring stopped for camera", "camera_id", cameraID)
 }
 
 // OnStatusChange handles recorder status changes.
 func (m *Manager) OnStatusChange(cameraID string, status string) {
 	if m == nil {
+		return
+	}
+	if m.metricsOnly {
+		// Metrics-only mode: just track quality and reset collector.
+		isRecording := status == string(model.StatusRecording)
+		if isRecording {
+			m.qualityTracker.OnOnline(cameraID)
+			m.qualityTrackerShort.OnOnline(cameraID)
+			m.collector.ResetCameraState(cameraID)
+		} else {
+			m.qualityTracker.OnOffline(cameraID)
+			m.qualityTrackerShort.OnOffline(cameraID)
+		}
+		m.knownStatuses[cameraID] = status
 		return
 	}
 	m.conn.OnStatusChange(cameraID, status)
@@ -275,6 +359,14 @@ func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 	if m == nil {
 		return nil
 	}
+	if m.metricsOnly {
+		// Metrics-only mode: no alert pipeline, return minimal info.
+		return &model.CameraHealth{
+			CameraID:     cameraID,
+			LatestStatus: string(model.HealthStatusHealthy),
+			Score:        100.0,
+		}
+	}
 	status := m.pipeline.GetCameraStatus(cameraID)
 	// Map pipeline health status to recorder status for score computation
 	recorderStatus := m.knownRecorderStatus(cameraID)
@@ -292,7 +384,18 @@ func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 // GetAllHealth returns health status for all monitored cameras.
 func (m *Manager) GetAllHealth() map[string]*model.CameraHealth {
 	if m == nil {
-		return nil
+		return map[string]*model.CameraHealth{}
+	}
+	if m.metricsOnly {
+		result := make(map[string]*model.CameraHealth)
+		for camID := range m.knownStatuses {
+			result[camID] = &model.CameraHealth{
+				CameraID:     camID,
+				LatestStatus: string(model.HealthStatusHealthy),
+				Score:        100.0,
+			}
+		}
+		return result
 	}
 	statuses := m.pipeline.GetAllStatuses()
 	result := make(map[string]*model.CameraHealth, len(statuses))
