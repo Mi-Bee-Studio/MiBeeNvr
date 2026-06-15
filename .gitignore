@@ -59,6 +59,7 @@ docs/private/
 
 # Build output
 build/
+dist/
 .build-tmp/
 internal/transcoding/-decoders
 internal/transcoding/-encoders
