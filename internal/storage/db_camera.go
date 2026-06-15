@@ -49,6 +49,8 @@ type CameraRow struct {
 	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 	// Channel injected from YAML at API response time (Xiaomi dual-lens)
 	Channel              string `json:"channel,omitempty"`
+	// AudioEnabled injected from YAML at API response time
+	AudioEnabled         bool `json:"audio_enabled"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {

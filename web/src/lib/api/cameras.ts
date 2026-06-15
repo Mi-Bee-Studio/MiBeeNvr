@@ -35,6 +35,7 @@ export interface Camera {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  audio_enabled?: boolean;
 }
 
 export interface CreateCameraRequest {

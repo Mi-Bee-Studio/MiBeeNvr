@@ -523,6 +523,7 @@
   "cameras.channel": "镜头",
   "cameras.channelMain": "主镜头",
   "cameras.channelSecondary": "副镜头",
+  "cameras.audioEnabled": "录制声音",
   "cameras.notSet": "未设置",
   "cameras.onvifEndpoint": "(ONVIF 端点)",
   "cameras.authManagedExternally": "凭证通过外部认证管理。",

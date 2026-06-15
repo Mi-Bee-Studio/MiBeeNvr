@@ -70,7 +70,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Inject per-camera transcoding config and channel from config (not stored in DB)
+	// Inject per-camera transcoding config, channel, and audio_enabled from config (not stored in DB)
 	if h.config != nil {
 		for i := range cameras {
 			for _, cam := range h.config.Cameras {
@@ -81,6 +81,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					if cam.Channel != "" {
 						cameras[i].Channel = cam.Channel
 					}
+					cameras[i].AudioEnabled = cam.AudioEnabled
 					break
 				}
 			}
@@ -129,6 +130,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Encoding       string `json:"encoding"`
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string `json:"channel"`
+		AudioEnabled   *bool `json:"audio_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -224,6 +226,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding: body.StreamEncoding,
 		Timelapse:      body.Timelapse,
 		Channel:        body.Channel,
+		AudioEnabled:   body.AudioEnabled != nil && *body.AudioEnabled,
 	}
 
 	if h.camMgr == nil {
@@ -292,7 +295,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
-	// Inject per-camera transcoding config and channel from config (not stored in DB)
+	// Inject per-camera transcoding config, channel, and audio_enabled from config (not stored in DB)
 	if h.config != nil {
 		for _, cam := range h.config.Cameras {
 			if cam.ID == id {
@@ -302,6 +305,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				if cam.Channel != "" {
 					row.Channel = cam.Channel
 				}
+				row.AudioEnabled = cam.AudioEnabled
 				break
 			}
 		}
@@ -336,6 +340,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding *string                          `json:"stream_encoding"`
 		Transcoding    *config.CameraTranscodingConfig  `json:"transcoding"`
 		Channel        *string `json:"channel"`
+		AudioEnabled   *bool `json:"audio_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -383,6 +388,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding: body.StreamEncoding,
 		Transcoding:    body.Transcoding,
 		Channel:        body.Channel,
+		AudioEnabled:   body.AudioEnabled,
 	}
 
 	// Validate URL format if URL is being updated

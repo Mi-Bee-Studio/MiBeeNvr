@@ -523,6 +523,7 @@
   "cameras.channel": "Lens",
   "cameras.channelMain": "Main Lens",
   "cameras.channelSecondary": "Secondary Lens",
+  "cameras.audioEnabled": "Record Audio",
   "cameras.notSet": "Not set",
   "cameras.onvifEndpoint": "(ONVIF Endpoint)",
   "cameras.authManagedExternally": "Credentials are managed via external authentication.",

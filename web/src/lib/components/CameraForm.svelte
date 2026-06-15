@@ -72,6 +72,7 @@
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
   let formChannel = $state('');
+  let formAudioEnabled = $state(false);
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -144,6 +145,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingBitrate = '2M';
     validationErrors = {};
     formChannel = '';
+    formAudioEnabled = false;
   }
 
   function populateForm(camera: Camera) {
@@ -172,6 +174,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
     validationErrors = {};
     formChannel = camera.channel || '';
+    formAudioEnabled = camera.audio_enabled ?? false;
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -307,6 +310,7 @@ async function performCameraSave() {
                 bitrate: formTranscodingBitrate,
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
+            audio_enabled: formAudioEnabled,
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -346,6 +350,7 @@ async function performCameraSave() {
                 bitrate: formTranscodingBitrate,
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
+            audio_enabled: formAudioEnabled,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -405,6 +410,21 @@ async function performCameraSave() {
           <option value="">{t('cameras.channelMain')}</option>
           <option value="1">{t('cameras.channelSecondary')}</option>
         </select>
+      </div>
+    {/if}
+
+    <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
+    {#if formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
+      <div class="flex items-center gap-2">
+        <input
+          id="cam-audio"
+          type="checkbox"
+          class="checkbox"
+          bind:checked={formAudioEnabled}
+        />
+        <label for="cam-audio" class="input-label cursor-pointer">
+          {t('cameras.audioEnabled')}
+        </label>
       </div>
     {/if}
 

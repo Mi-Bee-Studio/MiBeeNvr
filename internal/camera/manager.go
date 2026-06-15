@@ -45,6 +45,7 @@ type CameraUpdate struct {
 	StreamEncoding *string
 	Channel        *string
 	Transcoding    *config.CameraTranscodingConfig
+	AudioEnabled   *bool
 }
 
 type CameraManager struct {
@@ -893,6 +894,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 	if updates.Channel != nil {
 		cam.Channel = *updates.Channel
+	}
+	if updates.AudioEnabled != nil {
+		cam.AudioEnabled = *updates.AudioEnabled
 	}
 
 
