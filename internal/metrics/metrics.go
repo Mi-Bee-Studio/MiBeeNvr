@@ -77,6 +77,9 @@ type Metrics struct {
 	AIEventsReceivedTotal *prometheus.CounterVec // labels: camera_id, event_type
 	AIEventsErrorsTotal   prometheus.Counter    // total write/processing errors
 
+	// Timeline metrics — DVR-style recording browsing (0.8.0 M6)
+	TimelineSeeksTotal *prometheus.CounterVec // labels: camera_id, type (segment/intra)
+
 }
 // NewMetrics creates a new Metrics instance with a custom registry,
 // Go runtime collectors (memstats only for RPi 3B), and all custom NVR metrics.
@@ -365,6 +368,12 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Help: "Total errors when receiving or processing AI events.",
 	})
 
+	// Timeline seek metrics — DVR-style recording browsing (0.8.0 M6)
+	timelineSeeksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_timeline_seeks_total",
+		Help: "Total timeline seek operations, partitioned by camera and seek type.",
+	}, []string{"camera_id", "type"})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -424,6 +433,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		authRateLimitedTotal,
 		aiEventsReceivedTotal,
 		aiEventsErrorsTotal,
+		timelineSeeksTotal,
 	)
 
 	return &Metrics{
@@ -486,6 +496,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		AuthRateLimitedTotal:  authRateLimitedTotal,
 		AIEventsReceivedTotal: aiEventsReceivedTotal,
 		AIEventsErrorsTotal:   aiEventsErrorsTotal,
+		TimelineSeeksTotal:    timelineSeeksTotal,
 	}
 
 }

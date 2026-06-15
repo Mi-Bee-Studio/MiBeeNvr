@@ -85,6 +85,32 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTimelineSeekEvent records a timeline seek for observability (0.8.0 M6).
+// Body: {"camera_id":"front-door","type":"segment"}
+// type is "segment" (cross-recording) or "intra" (within same recording).
+func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CameraID string `json:"camera_id"`
+		Type     string `json:"type"` // "segment" | "intra"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	seekType := body.Type
+	if seekType != "segment" && seekType != "intra" {
+		seekType = "segment"
+	}
+	cameraID := body.CameraID
+	if cameraID == "" {
+		cameraID = "unknown"
+	}
+	if apiMetrics != nil {
+		apiMetrics.TimelineSeeksTotal.WithLabelValues(cameraID, seekType).Inc()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
 func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)

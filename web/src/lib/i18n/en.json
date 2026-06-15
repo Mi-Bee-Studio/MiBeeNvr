@@ -1200,5 +1200,14 @@
   "aiEvents.title": "AI Events",
   "aiEvents.subtitle": "AI detection results from MiBeeVision",
   "aiEvents.allCameras": "All Cameras",
-  "aiEvents.noEvents": "No AI events yet"
+  "aiEvents.noEvents": "No AI events yet",
+  "detail.transcodeToH264": "Transcode to H.264",
+  "detail.transcodingForPlayback": "Transcoding for playback…",
+  "detail.transcodeFailed": "Transcode failed",
+  "detail.transcodeReady": "Transcode ready, reloading player",
+  "timeline.title": "Timeline",
+  "timeline.loading": "Loading timeline…",
+  "timeline.segments": "segments",
+  "timeline.noRecordings": "No recording at this time",
+  "timeline.snappedToNearest": "Snapped to nearest recording"
 }

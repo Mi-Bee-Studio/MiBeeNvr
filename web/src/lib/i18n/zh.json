@@ -1200,5 +1200,14 @@
   "aiEvents.title": "AI 事件",
   "aiEvents.subtitle": "MiBeeVision AI 检测结果",
   "aiEvents.allCameras": "所有摄像头",
-  "aiEvents.noEvents": "暂无 AI 事件"
+  "aiEvents.noEvents": "暂无 AI 事件",
+  "detail.transcodeToH264": "转码为 H.264",
+  "detail.transcodingForPlayback": "正在转码以播放…",
+  "detail.transcodeFailed": "转码失败",
+  "detail.transcodeReady": "转码完成，正在重新加载播放器",
+  "timeline.title": "时间轴",
+  "timeline.loading": "正在加载时间轴…",
+  "timeline.segments": "段录像",
+  "timeline.noRecordings": "此时刻无录像",
+  "timeline.snappedToNearest": "已吸附到最近的录像"
 }

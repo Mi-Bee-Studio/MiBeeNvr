@@ -148,6 +148,7 @@ export {
   cancelMerge,
   retryRecordingMerge,
   fetchTimelapsePreview,
+  recordTimelineSeek,
 } from './recordings';
 
 export type {
