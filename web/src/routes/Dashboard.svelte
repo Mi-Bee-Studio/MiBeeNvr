@@ -46,6 +46,26 @@
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
   let healthError = $state('');
 
+  // Compute health summary from health cameras
+  let healthSummary = $derived.by(() => {
+    const entries = Object.values(healthCameras);
+    let online = 0, warning = 0, offline = 0;
+    for (const cam of entries) {
+      const s = cam.latest_status?.toLowerCase() || '';
+      if (s === 'recording' || s === 'active' || s === 'healthy') {
+        online++;
+      } else if (s === 'reconnecting' || s === 'warning' || s === 'degraded') {
+        warning++;
+      } else if (s === 'error' || s === 'failed' || s === 'unhealthy') {
+        offline++;
+      } else {
+        // Any other status: count as offline
+        offline++;
+      }
+    }
+    return { online, warning, offline, total: entries.length };
+  });
+
   // Chart state
   let ChartJs: any = null;
   let trendChart: any = null;
