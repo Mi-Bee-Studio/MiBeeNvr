@@ -338,10 +338,11 @@ func (r *ONVIFRecorder) guessMJPEGURL() string {
 	if u, err := url.Parse(r.rtspURL); err == nil && u.Path != "" {
 		path = u.Path
 	}
-	// Fall back to the ONVIF device's own HTTP host:port — the known-reachable
-	// HTTP server. The HTTPJPEGRecorder retries automatically if this guess is
-	// wrong; probeHTTPMJPEG (when it succeeds) already prefers MJPEG preview port 81.
-	return fmt.Sprintf("http://%s%s", onvifURL.Host, path)
+	// ESP32 MiBeeCam and similar minimal ONVIF devices serve MJPEG on a separate
+	// port (81) from the ONVIF endpoint (80). Falling back to the ONVIF port
+	// causes a 404 death-loop (commit 25f58b6 regressed this).
+	// Use :81 as the fallback — probeHTTPMJPEG already tries the ONVIF port too.
+	return fmt.Sprintf("http://%s:81%s", onvifURL.Hostname(), path)
 }
 
 // createDelegate creates the appropriate internal recorder based on encoding.
