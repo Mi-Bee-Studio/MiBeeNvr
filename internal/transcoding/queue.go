@@ -535,6 +535,8 @@ func (q *TranscodeQueue) taskToOptions(task *storage.TranscodeTask, preset strin
 		}(),
 		Framerate: framerate,
 		Preset:    preset,
+		Bitrate:   task.Bitrate,
+		CRF:       task.CRF,
 	}
 }
 

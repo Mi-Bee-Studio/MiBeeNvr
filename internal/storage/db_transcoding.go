@@ -25,6 +25,8 @@ type TranscodeTask struct {
 	CompletedAt     sql.NullString `json:"completed_at"`
 	OriginalDeleted bool           `json:"original_deleted"`
 	Framerate       int            `json:"framerate"`
+	Bitrate         string         `json:"bitrate"`
+	CRF             int            `json:"crf"`
 }
 
 // MarshalJSON produces clean JSON for nullable fields.
@@ -47,9 +49,9 @@ func (t TranscodeTask) MarshalJSON() ([]byte, error) {
 
 // EnqueueTask inserts a new pending transcoding task.
 func (d *DB) EnqueueTask(ctx context.Context, task *TranscodeTask) error {
-	q := `INSERT INTO transcoding_tasks (camera_id, recording_id, input_path, input_format, output_path, output_format, status, progress, created_at, original_deleted, framerate)
-		VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?);`
-	result, err := d.db.ExecContext(ctx, q, task.CameraID, task.RecordingID, task.InputPath, task.InputFormat, task.OutputPath, task.OutputFormat, task.CreatedAt, task.OriginalDeleted, task.Framerate)
+	q := `INSERT INTO transcoding_tasks (camera_id, recording_id, input_path, input_format, output_path, output_format, status, progress, created_at, original_deleted, framerate, bitrate, crf)
+		VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?);`
+	result, err := d.db.ExecContext(ctx, q, task.CameraID, task.RecordingID, task.InputPath, task.InputFormat, task.OutputPath, task.OutputFormat, task.CreatedAt, task.OriginalDeleted, task.Framerate, task.Bitrate, task.CRF)
 	if err != nil {
 		return err
 	}
@@ -76,14 +78,14 @@ func (d *DB) DequeueTask(ctx context.Context) (*TranscodeTask, error) {
 	q := `UPDATE transcoding_tasks SET status = 'running', started_at = COALESCE(started_at, ?)
 		WHERE id = (SELECT id FROM transcoding_tasks WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1)
 		RETURNING id, camera_id, recording_id, input_path, input_format, output_path, output_format,
-			status, progress, error, created_at, started_at, completed_at, original_deleted, framerate;`
+			status, progress, error, created_at, started_at, completed_at, original_deleted, framerate, bitrate, crf;`
 	row := tx.QueryRowContext(ctx, q, now)
 	task := &TranscodeTask{}
 	err = row.Scan(
 		&task.ID, &task.CameraID, &task.RecordingID,
 		&task.InputPath, &task.InputFormat, &task.OutputPath, &task.OutputFormat,
 		&task.Status, &task.Progress, &task.Error,
-		&task.CreatedAt, &task.StartedAt, &task.CompletedAt, &task.OriginalDeleted, &task.Framerate,
+		&task.CreatedAt, &task.StartedAt, &task.CompletedAt, &task.OriginalDeleted, &task.Framerate, &task.Bitrate, &task.CRF,
 	)
 	if err != nil {
 		return nil, err
@@ -123,7 +125,7 @@ func (d *DB) UpdateTaskStatus(ctx context.Context, id int64, status string, prog
 // GetTasksByStatus returns all tasks with the given status, ordered by created_at ascending.
 func (d *DB) GetTasksByStatus(ctx context.Context, status string) ([]TranscodeTask, error) {
 	q := `SELECT id, camera_id, recording_id, input_path, input_format, output_path, output_format,
-		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate
+		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate, bitrate, crf
 		FROM transcoding_tasks WHERE status = ? ORDER BY created_at ASC, id ASC;`
 	rows, err := d.db.QueryContext(ctx, q, status)
 	if err != nil {
@@ -139,7 +141,7 @@ func (d *DB) GetTasksByStatus(ctx context.Context, status string) ([]TranscodeTa
 			&t.ID, &t.CameraID, &t.RecordingID,
 			&t.InputPath, &t.InputFormat, &t.OutputPath, &t.OutputFormat,
 			&t.Status, &t.Progress, &t.Error,
-			&t.CreatedAt, &startedAt, &completedAt, &t.OriginalDeleted, &t.Framerate,
+			&t.CreatedAt, &startedAt, &completedAt, &t.OriginalDeleted, &t.Framerate, &t.Bitrate, &t.CRF,
 		); err != nil {
 			return nil, err
 		}
@@ -153,7 +155,7 @@ func (d *DB) GetTasksByStatus(ctx context.Context, status string) ([]TranscodeTa
 // GetTaskByID returns a task by its ID, or nil if not found.
 func (d *DB) GetTaskByID(ctx context.Context, id int64) (*TranscodeTask, error) {
 	q := `SELECT id, camera_id, recording_id, input_path, input_format, output_path, output_format,
-		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate
+		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate, bitrate, crf
 		FROM transcoding_tasks WHERE id = ?;`
 	row := d.db.QueryRowContext(ctx, q, id)
 	task := &TranscodeTask{}
@@ -162,7 +164,7 @@ func (d *DB) GetTaskByID(ctx context.Context, id int64) (*TranscodeTask, error) 
 		&task.ID, &task.CameraID, &task.RecordingID,
 		&task.InputPath, &task.InputFormat, &task.OutputPath, &task.OutputFormat,
 		&task.Status, &task.Progress, &task.Error,
-		&task.CreatedAt, &startedAt, &completedAt, &task.OriginalDeleted, &task.Framerate,
+		&task.CreatedAt, &startedAt, &completedAt, &task.OriginalDeleted, &task.Framerate, &task.Bitrate, &task.CRF,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -245,7 +247,7 @@ func (d *DB) ListTranscodeTasks(ctx context.Context, f TranscodeTaskFilter) ([]T
 
 	// Data query
 	dataQ := `SELECT id, camera_id, recording_id, input_path, input_format, output_path, output_format,
-		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate
+		status, progress, error, created_at, started_at, completed_at, original_deleted, framerate, bitrate, crf
 		FROM transcoding_tasks` + whereClause + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 	rows, err := d.db.QueryContext(ctx, dataQ, append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -261,7 +263,7 @@ func (d *DB) ListTranscodeTasks(ctx context.Context, f TranscodeTaskFilter) ([]T
 			&t.ID, &t.CameraID, &t.RecordingID,
 			&t.InputPath, &t.InputFormat, &t.OutputPath, &t.OutputFormat,
 			&t.Status, &t.Progress, &t.Error,
-			&t.CreatedAt, &startedAt, &completedAt, &t.OriginalDeleted, &t.Framerate,
+			&t.CreatedAt, &startedAt, &completedAt, &t.OriginalDeleted, &t.Framerate, &t.Bitrate, &t.CRF,
 		); err != nil {
 			return nil, 0, err
 		}

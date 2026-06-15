@@ -312,6 +312,15 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
 
+	// Migration v18 → v19: add bitrate and crf columns to transcoding_tasks
+	var bitrateColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('transcoding_tasks') WHERE name='bitrate'`).Scan(&bitrateColExists)
+	if bitrateColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN bitrate TEXT DEFAULT ''`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN crf INTEGER DEFAULT 0`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='19' WHERE key='schema_version'")
+
 	return nil
 
 }

@@ -899,6 +899,8 @@
   "transcoding.target_codec": "Target Codec",
   "transcoding.preset": "Preset",
   "transcoding.bitrate": "Bitrate",
+  "transcoding.crf": "CRF (Quality)",
+  "transcoding.crfHint": "0=default, lower=better quality, 1-51",
   "transcoding.max_workers": "Max Workers",
   "transcoding.per_camera_config": "Per-Camera Transcoding Config",
   "transcoding.transcode": "Transcode",

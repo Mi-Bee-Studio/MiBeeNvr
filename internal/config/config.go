@@ -118,6 +118,7 @@ type CameraTranscodingConfig struct {
 	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"` // h264, h265
 	Preset      string `yaml:"preset,omitempty" json:"preset"`             // ultrafast, faster, medium
 	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`           // e.g. "2M"
+	CRF         int    `yaml:"crf,omitempty" json:"crf"`                   // 0=default(23/28), 1-51 quality
 }
 
 // TimeRange defines a start and end time for timelapse scheduling.
@@ -578,6 +579,9 @@ func Validate(cfg *Config) error {
 			if err != nil || !matched {
 				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
 			}
+		}
+		if cam.Transcoding.CRF < 0 || cam.Transcoding.CRF > 51 {
+			return fmt.Errorf("cameras.%s.transcoding.crf must be between 0 and 51 (got %d)", cam.ID, cam.Transcoding.CRF)
 		}
 	}
 

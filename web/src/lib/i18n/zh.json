@@ -899,6 +899,8 @@
   "transcoding.target_codec": "目标编码",
   "transcoding.preset": "预设",
   "transcoding.bitrate": "码率",
+  "transcoding.crf": "CRF (画质)",
+  "transcoding.crfHint": "0=默认, 值越低画质越高, 1-51",
   "transcoding.max_workers": "最大并发数",
   "transcoding.per_camera_config": "单摄像头转码配置",
   "transcoding.transcode": "转码",

@@ -166,8 +166,10 @@ func (cm *CameraManager) EnqueueTranscode(cameraID, recordingID, inputPath, inpu
 	}
 
 	// Non-blocking enqueue — don't block recording pipeline
+	bitrate := tcfg.Bitrate
+	crf := tcfg.CRF
 	go func() {
-		if err := tm.EnqueueRecording(cameraID, recordingID, inputPath, inputFormat, targetCodec); err != nil {
+		if err := tm.EnqueueRecording(cameraID, recordingID, inputPath, inputFormat, targetCodec, bitrate, crf); err != nil {
 			logger.Warn("failed to enqueue transcode task",
 				"camera_id", cameraID,
 				"recording_id", recordingID,

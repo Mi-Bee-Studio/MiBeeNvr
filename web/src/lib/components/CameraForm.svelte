@@ -78,6 +78,7 @@
   let formTranscodingCodec = $state('h264');
   let formTranscodingPreset = $state('ultrafast');
 let formTranscodingBitrate = $state('2M');
+let formTranscodingCRF = $state(0);
 let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -143,6 +144,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingCodec = 'h264';
     formTranscodingPreset = 'ultrafast';
     formTranscodingBitrate = '2M';
+    formTranscodingCRF = 0;
     validationErrors = {};
     formChannel = '';
     formAudioEnabled = false;
@@ -172,6 +174,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
+    formTranscodingCRF = camera.transcoding?.crf || 0;
     validationErrors = {};
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
@@ -308,6 +311,7 @@ async function performCameraSave() {
                 target_codec: formTranscodingCodec,
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
+                crf: formTranscodingCRF || undefined,
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
@@ -348,6 +352,7 @@ async function performCameraSave() {
                 target_codec: formTranscodingCodec,
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
+                crf: formTranscodingCRF || undefined,
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
@@ -643,6 +648,20 @@ async function performCameraSave() {
                   class="input"
                   bind:value={formTranscodingBitrate}
                   placeholder="2M"
+                />
+              </div>
+
+              <!-- CRF (Quality) -->
+              <div>
+                <label for="transcode-crf" class="input-label">{t('transcoding.crf')} <span class="text-xs th-text-muted">({t('transcoding.crfHint')})</span></label>
+                <input
+                  id="transcode-crf"
+                  type="number"
+                  min="0"
+                  max="51"
+                  class="input"
+                  bind:value={formTranscodingCRF}
+                  placeholder="0"
                 />
               </div>
             {/if}
