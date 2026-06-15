@@ -105,36 +105,6 @@ type AuthRequest struct {
 	Region   string `json:"region,omitempty"`
 }
 
-// SignIn authenticates with the Xiaomi cloud and returns a session.
-// Region should be "cn", "sg", "de", etc. Defaults to "cn" if empty.
-func SignIn(username, password, region string) (*CloudSession, error) {
-	if username == "" || password == "" {
-		return nil, errors.New("xiaomi: username and password are required")
-	}
-	if region == "" {
-		region = "cn"
-	}
-
-	c := &Cloud{
-		client: &http.Client{Timeout: 15 * time.Second},
-		sid:    "xiaomiio",
-		region: region,
-	}
-
-	if err := c.Login(username, password); err != nil {
-		return nil, err
-	}
-
-	userID, passToken := c.UserToken()
-	return &CloudSession{
-		UserID:    userID,
-		PassToken: passToken,
-		Region:    region,
-		client:    c.client,
-		ssecurity: c.ssecurity,
-		cookies:   c.cookies,
-	}, nil
-}
 
 // SignInWithCaptcha handles the initial sign-in that may require captcha.
 // Returns (session, captchaSessionID, error). If captchaSessionID != "", captcha/2FA is required.

@@ -77,11 +77,6 @@ func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) 
 	cm.transcodeHistoryRetention = retention
 }
 
-// SetFFprobePath sets the path to the ffprobe binary for zero-duration recording repair.
-// If empty or unset, the repair step is skipped gracefully.
-func (cm *CleanupManager) SetFFprobePath(path string) {
-	cm.ffprobePath = path
-}
 
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {

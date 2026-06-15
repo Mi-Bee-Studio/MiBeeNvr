@@ -24,7 +24,7 @@ func mustWriteFile(t *testing.T, dir, name, content string) string {
 // reset is a test helper that resets the global probe cache.
 func reset(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 }
 
 // --- Tests ---

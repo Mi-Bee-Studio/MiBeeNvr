@@ -114,7 +114,23 @@ deploy-check:
 	@ssh $(RPi_HOST) "sudo systemctl is-active $(RPi_SRV)" && echo "✅ Service active" || echo "❌ Service not active"
 	@curl -sf http://$(RPi_HOST)/api/health && echo "✅ Health check passed" || echo "❌ Health check failed"
 
+# ---- Model Download ----
+
+download-model-local: build
+	@echo "=== Downloading AI model locally ==="
+	$(BUILD_TARGET) download-model -config mibee-nvr.yaml
+
+download-model: cross
+	@echo "=== Downloading AI model on $(RPi_HOST) ===
+	ssh $(RPi_HOST) "sudo systemctl stop $(RPi_SRV) || true"
+	$(MAKE) download-model-local
+	scp $(BUILD_DIR)/mibee-nvr-arm64 $(RPi_HOST):/tmp/mibee-nvr-new
+	ssh $(RPi_HOST) "sudo mkdir -p /mnt/data/nvr/models"
+	ssh $(RPi_HOST) "mv /tmp/mibee-nvr-new $(RPi_BIN) && chmod +x $(RPi_BIN)"
+	ssh $(RPi_HOST) "$(RPi_BIN) download-model -config /mnt/data/nvr/mibee-nvr.yaml"
+	ssh $(RPi_HOST) "sudo systemctl start $(RPi_SRV)"
+
 
 .PHONY: frontend build test test-verbose test-short cross cross-armv7 lint clean install install-service uninstall-service
 .PHONY: docker-build docker-build-arm64 docker-build-all docker-push docker-push-arm64 docker-push-all docker-release
-.PHONY: deploy rollback deploy-check
+.PHONY: download-model download-model-local deploy rollback deploy-check

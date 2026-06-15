@@ -13,6 +13,9 @@ export default defineConfig({
     extensions: ['.js', '.ts', '.svelte', '.svelte.ts'],
     conditions: ['browser'],
   },
+  optimizeDeps: {
+    exclude: ['@yume-chan/libde265'],
+  },
   build: {
     rollupOptions: {
       output: {
@@ -31,6 +34,9 @@ export default defineConfig({
           }
           if (id.includes('node_modules/onnxruntime-web')) {
             return 'vendor-onnx';
+          }
+          if (id.includes('node_modules/@yume-chan/libde265')) {
+            return 'vendor-libde265';
           }
           if (id.includes('node_modules')) {
             return 'vendor';

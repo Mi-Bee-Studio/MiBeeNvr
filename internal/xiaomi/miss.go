@@ -146,8 +146,8 @@ func missLogin(conn MISSConn, clientPublic, sign string) error {
 	return nil
 }
 
-// Version returns a human-readable protocol + model version string.
-func (c *MISSClient) Version() string {
+// version returns a human-readable protocol + model version string.
+func (c *MISSClient) version() string {
 	return fmt.Sprintf("%s (%s)", c.Conn.Version(), c.model)
 }
 

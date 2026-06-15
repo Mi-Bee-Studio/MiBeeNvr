@@ -143,8 +143,8 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingPreset = 'ultrafast';
     formTranscodingBitrate = '2M';
     validationErrors = {};
-  }
     formChannel = '';
+  }
 
   function populateForm(camera: Camera) {
     formName = camera.name;
@@ -403,7 +403,7 @@ async function performCameraSave() {
         <label for="cam-channel" class="input-label">{t('cameras.channel')}</label>
         <select id="cam-channel" class="input" bind:value={formChannel}>
           <option value="">{t('cameras.channelMain')}</option>
-          <option value="sub">{t('cameras.channelSecondary')}</option>
+          <option value="1">{t('cameras.channelSecondary')}</option>
         </select>
       </div>
     {/if}

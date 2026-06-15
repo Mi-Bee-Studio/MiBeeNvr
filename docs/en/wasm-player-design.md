@@ -2,14 +2,13 @@
 
 ## What is the WASM + WebCodecs Unified Player & AI Detection System
 
-The WASM + WebCodecs Unified Player & AI Detection system is a modern, tiered video streaming architecture that replaces traditional browser video players with a WebCodecs-based pipeline. It provides three-tier fallback rendering (WebGPU → WebGL2 → Legacy), supports both frontend and backend AI object detection using YOLOv11-nano models, and maintains compatibility across modern browsers while delivering superior performance for H.264/H.265 content.
+The WASM + WebCodecs Unified Player & AI Detection system is a modern, tiered video streaming architecture that replaces traditional browser video players with a WebCodecs-based pipeline. It provides three-tier fallback rendering (WebGPU → WebGL2 → Legacy), supports **browser-side** AI object detection using a YOLOv11-nano model (ONNX Runtime Web), and maintains compatibility across modern browsers while delivering superior performance for H.264/H.265 content.
 
 **Key Features:**
 - Three-tier fallback rendering with automatic degradation
 - WebSocket binary streaming protocol for low-latency video transport
 - Frontend AI detection with ONNX Runtime WebGPU/WASM execution providers
-- Backend AI detection with ONNX Runtime subprocess (preserves CGO_ENABLED=0)
-- Real-time detection event streaming via Server-Sent Events
+- Backend serves AI config + the ONNX model file only (no server-side inference — preserves the static `CGO_ENABLED=0` binary)
 - Hardware acceleration for both decoding and rendering
 - Support for modern video codecs including H.265 (HEVC)
 
@@ -47,9 +46,7 @@ The system implements a sophisticated three-tier fallback architecture that auto
 Camera → RTSP Recorder → StreamHub → WebSocket → Browser Worker → 
 VideoDecoder → Renderer → Canvas
                                                     ↓
-Frontend AI (ONNX Runtime) → Detection Events → SSE Stream → UI Overlay
-                                                    ↓
-Backend AI (ONNX Runtime subprocess) → Detections → Database → API
+Frontend AI (ONNX Runtime Web) → Detections → UI Overlay (in-browser, no server round-trip)
 ```
 
 ### Tier Detection Algorithm
@@ -388,247 +385,37 @@ interface Detection {
 }
 ```
 
-## AI Detection (Backend)
+## Backend Role in AI Detection
 
-The backend AI detection system uses a subprocess pattern to preserve CGO_ENABLED=0 while providing on-device inference capabilities.
+> **The backend performs NO AI inference.** There is no subprocess, no ONNX runtime, no hardware probe, and no model downloader on the server side. This section documents that decision to prevent regressions.
 
-### Subprocess Architecture
+All object detection runs in the browser (see [AI Detection (Frontend)](#ai-detection-frontend) above and `web/src/lib/ai-detection/`). The Go server's only AI-related duties are:
 
-The system spawns an external ONNX Runtime binary and communicates via JSON over stdin/stdout:
+1. **Config persistence** — AI settings + ROI zones via `/api/ai/*` (see [Backend AI API](#backend-ai-api) below).
+2. **Model file serving** — the public `GET /models/{filename}` route serves `{storage_root}/models/<file>` so the browser can fetch the `.onnx`.
 
-```
-Go Process ↔ ONNX Runtime Binary (stdin/stdout JSON)
-```
+### Why no backend inference
 
-**Communication Protocol:**
+- The NVR ships as a static `CGO_ENABLED=0` binary cross-compiled to ARM64/ARMv7. A Go ONNX binding (`libonnxruntime`) would introduce a C dependency, bloat the binary, and break ARM cross-compilation. FFmpeg is already the heaviest dependency.
+- The lowest supported target (RPi 3B, 1 GB RAM, Cortex-A53, no ML GPU) cannot spare cycles for inference alongside recording/streaming.
+- Detection is per-viewer over an already-decoded live stream, so running it in the browser avoids re-decoding on the server and scales with viewers, not cameras.
 
-```go
-// Request (stdin)
-type detectRequest struct {
-  Frame  string `json:"frame"`  // base64-encoded JPEG
-  Width  int    `json:"width"`  // frame width in pixels
-  Height int    `json:"height"` // frame height in pixels
-}
-
-// Response (stdout)
-type detectResponse struct {
-  Detections []rawDetection `json:"detections"`
-  Error      string         `json:"error,omitempty"`
-}
-```
-
-### AiDetector Integration
-
-The AiDetector integrates with the StreamHub system:
-
-```go
-type AiDetector interface {
-  EnableCamera(camID string, hub *model.StreamHub) error
-  DisableCamera(camID string)
-  IsEnabled(camID string) bool
-  EnabledCameras() []string
-  OnDetection(cb engine.OnDetectionFunc)
-  StopAll()
-}
-```
-
-**Frame Processing:**
-- Subscribes to StreamHub with `"ai-{camID}"` prefix
-- Uses atomic counter for frame skipping (non-blocking)
-- Processes frames via JPEG conversion and base64 encoding
-- Results streamed to SSE clients
-
-### Crash Recovery
-
-The engine implements automatic restart with exponential backoff:
-
-```go
-func backoffDuration(crashes int) time.Duration {
-  if crashes <= 0 {
-    return 0
-  }
-  d := time.Duration(1<<(crashes-1)) * time.Second
-  if d > defaultRestartBackoff { // 30s cap
-    d = defaultRestartBackoff
-  }
-  return d
-}
-```
-
-**Backoff Schedule:**
-- 1st crash: 1 second
-- 2nd crash: 2 seconds
-- 3rd crash: 4 seconds
-- 4th crash: 8 seconds
-- 5+ crashes: 16 seconds (capped at 30s)
-
-### Performance Considerations
-
-- Non-blocking design won't stall recording pipeline
-- Frame limiting prevents excessive CPU usage
-- Atomic counters ensure thread safety
-- Graceful degradation on subprocess failure
-
-## ONNX Runtime Binary Downloader
-
-The system automatically downloads and manages ONNX Runtime binaries for the current platform, ensuring optimal performance across different architectures.
-
-### Download Process
-
-**Atomic Download Pattern:**
-1. Check existing binary with SHA-256 verification
-2. Download to temporary file
-3. Verify integrity with hash check
-4. Rename to final location (atomic operation)
-
-**Download Sources:**
-- GitHub releases: `microsoft/onnxruntime`
-- Platform-specific binaries: `onnxruntime-linux-x64`, `onnxruntime-linux-arm64`
-- Version selection matches backend requirements
-
-**Idempotent Operations:**
-- Skip download if existing binary passes verification
-- Cache binary in `{dataDir}/tools/onnxruntime`
-- Preserve existing binary on download failure
-
-### File Structure
-
-```
-{dataDir}/
-├── tools/
-│   └── onnxruntime          # Platform-specific binary
-└── models/
-    └── yolov11n.onnx        # YOLOv11-nano model
-```
-
-## Hardware Probe
-
-The system performs comprehensive hardware checks to ensure AI capabilities are available before enabling AI detection.
-
-### Probe Criteria
-
-**Platform Requirements:**
-- Architecture: amd64 or arm64 only (no ARMv7)
-- Memory: ≥2GB RAM available
-- CPU: ≥2 cores for acceptable performance
-
-**Binary Existence:**
-- Verify `{dataDir}/tools/onnxruntime` exists
-- Check file is executable and has correct architecture
-
-### Probe Implementation
-
-```go
-type ProbeInfo struct {
-  Available bool   `json:"available"`
-  Reason    string `json:"reason"`
-}
-
-func (p *Probe) Probe() ProbeInfo {
-  if p.platform != "amd64" && p.platform != "arm64" {
-    return ProbeInfo{Available: false, Reason: "unsupported_platform"}
-  }
-  
-  if p.memory < 2*1024*1024*1024 { // 2GB
-    return ProbeInfo{Available: false, Reason: "insufficient_memory"}
-  }
-  
-  if p.cores < 2 {
-    return ProbeInfo{Available: false, Reason: "insufficient_cpu"}
-  }
-  
-  if _, err := os.Stat(p.binaryPath); err != nil {
-    return ProbeInfo{Available: false, Reason: "binary_not_found"}
-  }
-  
-  return ProbeInfo{Available: true, Reason: ""}
-}
-```
-
-### Probe Behavior
-
-**If Probe Fails:**
-- AI detection routes are disabled
-- Warning message logged to system
-- Frontend shows AI as unavailable
-- No impact on core recording functionality
-
-**Success Metrics:**
-- 100% coverage on supported platforms
-- Minimal overhead (<1ms per probe)
-- Thread-safe operation
-- Graceful degradation
+If backend inference is ever reconsidered, it must run as an **out-of-process** sidecar (subprocess + IPC), never linked into the main binary — preserving the `CGO_ENABLED=0` static-build guarantee.
 
 ## Backend AI API
 
-The backend provides a REST API for AI detection management and real-time event streaming.
+> **The backend performs NO AI inference and exposes no inference/event API.** Detection runs entirely in the browser (see `web/src/lib/ai-detection/`). The Go backend's only AI-related duties are (a) persisting config + ROI zones and (b) serving the model file.
 
-### API Endpoints
+The backend API for AI is **config-only**:
 
-**GET /api/ai/status**
-Returns AI engine availability and system status:
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/ai/status` | Read global AI config |
+| `PUT /api/ai/config` | Update config (enabled, thresholds, model URL) |
+| `GET`/`POST`/`PUT`/`DELETE /api/ai/zones[/{id}]` | ROI zone CRUD |
+| `GET /models/{filename}` | Serve the `.onnx` model to the browser (**public**, no auth) |
 
-```json
-{
-  "available": true,
-  "engine_status": "running",
-  "model": "/data/models/yolov11n.onnx",
-  "probe": {
-    "available": true,
-    "reason": ""
-  }
-}
-```
-
-**POST /api/ai/enable**
-Enable AI detection for a specific camera:
-
-```json
-{
-  "camera_id": "front-door-camera"
-}
-```
-
-**POST /api/ai/disable**
-Disable AI detection for a specific camera:
-
-```json
-{
-  "camera_id": "front-door-camera"
-}
-```
-
-**GET /api/ai/events**
-Server-Sent Events stream for real-time detection events.
-
-### SSE Event Stream
-
-**Event Format:**
-```json
-{
-  "camera_id": "front-door-camera",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "detections": [
-    {
-      "label": "person",
-      "confidence": 0.95,
-      "bbox": [100, 200, 300, 400]
-    }
-  ]
-}
-```
-
-**Heartbeat Events:**
-- Every 15 seconds: `: ping\n\n` (keep-alive)
-- Detection events: `data: {...}\n\n`
-- Connection remains open until client disconnect
-
-### Authentication
-
-All AI API endpoints require authentication:
-- Uses existing BasicAuth middleware
-- Camera ID validation against database
-- Permission checks for camera access
+There is **no** `POST /api/ai/enable`, `POST /api/ai/disable`, or `GET /api/ai/events` SSE endpoint. For the full request/response contract, see [AI Detection API](api/ai-detection.md).
 
 ## Configuration
 
@@ -661,96 +448,37 @@ const defaultConfig: AIConfig = {
 
 ### Backend Configuration
 
-**Hardware Requirements:**
-- Minimum: 2GB RAM, 2 CPU cores, amd64/arm64
-- Recommended: 4GB RAM, 4+ CPU cores
+The backend stores AI config in the YAML `ai:` block (`config.AIConfig`) and persists runtime changes from `PUT /api/ai/config` atomically. There is **no backend hardware requirement for AI** — no inference runs server-side.
 
-**Model Configuration:**
-- Default model: `yolov11n.onnx` (4MB, 80 classes)
-- Alternative models: `yolov8s.onnx` (~70MB, higher accuracy)
-- Model path: `{dataDir}/models/{model_name}.onnx`
+- `enabled`, `confidence_threshold`, `frame_skip_rate`, `model_url` — global AI settings
+- `enabled_cameras` — cameras permitted to show AI in the UI
+- `zones` — `map[cameraID][]ROI`, normalized `[0,1]` polygon vertices
 
-**StreamHub Integration:**
-- AI detection subscribes to `"ai-{camera_id}"` events
-- Frame skipping via atomic counter
-- Non-blocking processing to prevent recording stalls
+**Model file:** place `.onnx` models in `{storage_root}/models/` (the `mibee-nvr download-model` CLI does this for the default `yolo11n.onnx`). The browser fetches them via `GET /models/{filename}`.
 
 ### Performance Tuning
 
-**Frontend Settings:**
-- `frameSkip`: Higher values reduce CPU usage but decrease detection frequency
-- `confidenceThreshold`: Higher values reduce false positives but may miss objects
-- `emaAlpha`: Lower values create smoother tracking but slower response
-
-**Backend Settings:**
-- Frame processing rate limited to 30 FPS maximum
-- Batch processing for multiple cameras
-- Graceful degradation on resource constraints
+**Frontend Settings (browser-side inference):**
+- `frameSkip`: higher values reduce client CPU but lower detection frequency
+- `confidenceThreshold`: higher values reduce false positives but may miss objects
+- `emaAlpha`: lower values give smoother tracking but slower response
 
 ## Testing
 
-The system has comprehensive testing coverage across both frontend and backend components, ensuring reliability across different hardware and browser configurations.
+The browser-side inference pipeline is unit-tested directly; the backend zone/config logic is tested in Go. There are **no** backend inference / ONNX / probe / downloader tests — no such code exists.
 
-### Test Statistics
+### Test Inventory
 
-**Go Tests:**
-- Total: 384 tests
-- Engine tests: 28 (subprocess management, health checks)
-- ONNX tests: 27 (model loading, inference)
-- Probe tests: 19 (hardware detection)
-- Downloader tests: 37 (download verification, caching)
-- AI handler tests: 16 (API endpoints, SSE streaming)
+**Go tests (backend — config + zones only):**
+- `internal/ai/zones_test.go` — 43 tests: zone CRUD, `PointInPolygon`, `FilterDetectionsByZone`, `GetEnabledZones`, validation
+- `internal/config/config_ai_test.go` — 15 tests: AI config defaults + validation (threshold range, frame skip, zone points/coordinates)
 
-**Frontend Tests:**
-- Total: 289 tests
-- Renderer tests: 30 (WebGPU/WebGL2 rendering, device loss)
-- Runtime tests: 23 (AI execution provider detection)
-- Inference tests: 35 (YOLO preprocessing/postprocessing)
-- Connection tests: 66 (WebSocket protocol, reconnection)
-- AI detection tests: 52 (frontend AI pipeline)
+**Frontend tests (browser-side inference — vitest):**
+- `web/src/lib/ai-detection/inference.test.ts` — YOLO output parsing, NMS, IoU, sigmoid, EMA smoothing, coordinate mapping
+- `web/src/lib/ai-detection/runtime.test.ts` — WebGPU detection, WASM fallback, model caching, URL whitelist/SSRF validation, init/run/dispose lifecycle (ONNX runtime mocked)
 
-**Combined Total: 673 tests** (all passing)
+### Gaps
 
-### Hardware Test Targets
-
-**RPi 3B (Minimal Resource Validation):**
-- Tests Tier 3 fallback (no WebCodecs/WebGPU)
-- Validates minimal resource constraints
-- Ensures basic functionality on lowest-end hardware
-- 1GB RAM, Cortex-A53 CPU, SD card storage
-
-**Banana Pi M5 (Feature Testing + AI):**
-- Tests full Tier 1 with WebGPU acceleration
-- Validates backend AI inference
-- Hardware transcode testing
-- 4GB RAM, Amlogic S905X3, 1.8TB storage
-
-**Docker VM (Clean-State Testing):**
-- Integration testing with fresh state
-- UI/UX validation across browsers
-- DB migration experiments
-- Ephemeral data for testing
-
-### Test Categories
-
-**Unit Tests:**
-- Individual component isolation
-- Mock dependencies for predictable testing
-- Edge case validation (malformed data, error conditions)
-
-**Integration Tests:**
-- End-to-end pipeline testing
-- Real video stream processing
-- AI inference with actual camera feeds
-
-**Performance Tests:**
-- Frame rate validation (decode/render/ai)
-- Memory usage monitoring
-- CPU utilization tracking
-
-**Browser Compatibility:**
-- Cross-browser rendering pipeline
-- Fallback mechanism validation
-- WebGL2/WebGPU feature detection
-
-The testing strategy follows the priority: Docker VM iterations → Banana Pi M5 validation → RPi 3B gates, ensuring the system runs reliably across the full spectrum of supported hardware configurations.
+- No E2E test drives the full pipeline (load model → decode frame → detect → render overlay). Largest open testing gap.
+- No accuracy/recall benchmarking against labeled frames.
+- Inference is tested with a mocked ONNX runtime; no test runs a real `.onnx` model.

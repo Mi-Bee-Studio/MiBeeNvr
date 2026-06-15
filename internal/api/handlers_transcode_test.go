@@ -77,7 +77,6 @@ func doTranscodeRequest(t *testing.T, h *Handler, method, path string) *httptest
 func TestTranscodeCheck_ReturnsCachedProbeData(t *testing.T) {
 	t.Parallel()
 	// Reset probe cache for clean test
-	transcoding.ResetProbe()
 
 	dl := &mockDownloader{path: "/nonexistent/ffmpeg"}
 	h := newTranscodeHandler(t, dl)
@@ -104,7 +103,6 @@ func TestTranscodeCheck_ReturnsCachedProbeData(t *testing.T) {
 
 func testTranscodeCheckSecondCallInstant(t *testing.T) {
 	t.Helper()
-	transcoding.ResetProbe()
 
 	dl := &mockDownloader{path: "/nonexistent/ffmpeg"}
 	h := newTranscodeHandler(t, dl)
@@ -133,7 +131,6 @@ func TestTranscodeCheck_SecondCallIsCached(t *testing.T) {
 
 func TestTranscodeCheck_NoDownloader(t *testing.T) {
 	t.Parallel()
-	transcoding.ResetProbe()
 
 	// No downloader set
 	h := newTranscodeHandler(t, nil)

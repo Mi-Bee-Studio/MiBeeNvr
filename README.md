@@ -132,6 +132,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - Atomic configuration with validation
 
 ### 🤖 Smart Features
+- Browser-side AI detection (ONNX Runtime Web, WebGPU-accelerated) — no backend inference
 - Multi-layer camera health monitoring
 - Auto-remediation for connection issues
 - SSE-based real-time event system

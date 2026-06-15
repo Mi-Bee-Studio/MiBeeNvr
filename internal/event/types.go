@@ -23,3 +23,20 @@ type SegmentCompleted struct {
 	FileSize    int64
 	RecordingID string
 }
+
+// AIDetectionEvent is published when AI inference detects objects in a camera frame.
+type AIDetectionEvent struct {
+	CameraID    string        `json:"camera_id"`
+	Timestamp   string        `json:"timestamp"`
+	Detections  []AIDetection `json:"detections"`
+	FrameWidth  int           `json:"frame_width"`
+	FrameHeight int           `json:"frame_height"`
+	Model       string        `json:"model"`
+}
+
+type AIDetection struct {
+	BBox        [4]float64 `json:"bbox"`
+	Confidence  float64    `json:"confidence"`
+	ClassID     int        `json:"class_id"`
+	ClassLabel  string     `json:"class_label"`
+}

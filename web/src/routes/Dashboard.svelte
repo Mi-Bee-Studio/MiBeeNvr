@@ -9,6 +9,7 @@
   import Tab from '$lib/components/Tab.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
+  import AiStatusCard from '../components/AiStatusCard.svelte';
 
   let { initialTab = 'storage' }: { initialTab?: string } = $props();
 
@@ -404,6 +405,10 @@
         </div>
       {/if}
     </div>
+
+    <!-- AI Status -->
+    <AiStatusCard />
+
 
     <!-- Tabs -->
     <Tab {tabs} {activeTab} onchange={handleTabChange} />

@@ -56,11 +56,32 @@ type HTTPJPEGRecorder struct {
 	frameCount   int
 	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
 	lastHealthLogAt time.Time // throttled log for storage health failures
+
+	// latestFrame caches the most recent JPEG frame for snapshot polling.
+	// Updated on every frame; safe for concurrent reads via LatestFrame().
+	latestFrameMu sync.RWMutex
+	latestFrame    []byte
 }
 
 // GetHub returns the StreamHub for frame fan-out.
 func (r *HTTPJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// StreamURL returns the MJPEG stream URL.
+func (r *HTTPJPEGRecorder) StreamURL() string { return r.cfg.URL }
+
+// LatestFrame returns a copy of the most recently captured JPEG frame.
+// Returns nil if no frame has been captured yet.
+// Safe for concurrent use.
+func (r *HTTPJPEGRecorder) LatestFrame() []byte {
+	r.latestFrameMu.RLock()
+	defer r.latestFrameMu.RUnlock()
+	if r.latestFrame == nil {
+		return nil
+	}
+	cp := make([]byte, len(r.latestFrame))
+	copy(cp, r.latestFrame)
+	return cp
+}
 // incActive increments the active recordings gauge if metrics is available.
 func (r *HTTPJPEGRecorder) incActive() {
 	if r.metrics != nil {
@@ -308,7 +329,12 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			httpJpegLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
 		}
-		// Check storage health — if failed, skip recording but keep stream alive.
+		// Cache latest frame for snapshot polling (before storage check,
+		// so live preview works even during storage issues).
+		r.latestFrameMu.Lock()
+		r.latestFrame = data
+		r.latestFrameMu.Unlock()
+
 		if isStorageFailed(r.store) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()

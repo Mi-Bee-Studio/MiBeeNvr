@@ -152,7 +152,7 @@ func TestLogin_ValidCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/auth/login", nil, "admin", "secret")
 	if rr.Code != http.StatusOK {
@@ -167,7 +167,7 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/auth/login", nil, "admin", "wrong")
 	if rr.Code != http.StatusUnauthorized {
@@ -532,7 +532,7 @@ func TestProtectedEndpoints_NoAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 
 	// Without auth, protected endpoints should return 401
 	endpoints := []string{
@@ -565,7 +565,7 @@ func TestProtectedEndpoints_WithAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/recordings", nil, "admin", "secret")
 	var resp recordingsResponse
@@ -1214,7 +1214,7 @@ func TestUploadAuth_RequiresAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to hash password: %v", err)
 	}
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 
 	// Settings endpoints are behind auth middleware
 	endpoints := []string{
@@ -2172,9 +2172,8 @@ func TestUpdateCameraMergeConfig_Success(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Seed a camera
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
-	require.NoError(t, err)
 
 	body := strings.NewReader(`{"enabled":true,"batch_limit":20}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2195,9 +2194,8 @@ func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
 
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
-	require.NoError(t, err)
 
 	body := strings.NewReader(`{"check_interval":"bad"}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2228,9 +2226,8 @@ func TestDeleteCameraMergeConfig_Success(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Seed a camera
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
-	require.NoError(t, err)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam1/merge-config", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -2264,9 +2261,8 @@ func TestGetCameraMergeConfig_Success(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Seed a camera
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
-	require.NoError(t, err)
 
 	// Set per-camera merge config
 	mergeEnabled := true
@@ -2302,9 +2298,8 @@ func TestGetCameraMergeConfig_NoConfig(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Seed a camera with NO merge config
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url, enabled) VALUES (?, ?, ?, ?, 1)",
+	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 		"cam2", "No Merge", "rtsp_h264", "rtsp://camera/stream")
-	require.NoError(t, err)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/merge-config", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -2452,7 +2447,7 @@ func TestHandleStopHLSStream_NilHLSManager(t *testing.T) {
 
 func TestHandleStopHLSStream_NotActive(t *testing.T) {
 	t.Parallel()
-	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
+	hlsMgr := hls.NewManagerWithOpts(context.Background(), t.TempDir(), 0, 0, 0)
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
@@ -2467,7 +2462,7 @@ func TestHandleStopHLSStream_NotActive(t *testing.T) {
 
 func TestHandleStopHLSStream_Active(t *testing.T) {
 	t.Parallel()
-	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
+	hlsMgr := hls.NewManagerWithOpts(context.Background(), t.TempDir(), 0, 0, 0)
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}

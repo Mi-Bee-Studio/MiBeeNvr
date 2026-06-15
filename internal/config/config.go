@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -314,10 +315,12 @@ type WebSocketConfig struct {
 }
 
 type AIConfig struct {
-	InferenceTimeoutMs  int     `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
-	FrameSkipRate       int     `yaml:"frame_skip_rate" json:"frameSkipRate"`
-	ConfidenceThreshold float64 `yaml:"confidence_threshold" json:"confidenceThreshold"`
-	ModelPath           string  `yaml:"model_path" json:"modelPath"`
+	Enabled             bool              `yaml:"enabled" json:"enabled"`
+	EnabledCameras      []string          `yaml:"enabled_cameras" json:"enabledCameras"`
+	ModelURL            string            `yaml:"model_url" json:"modelUrl"`
+	Zones               map[string][]ai.ROI `yaml:"zones" json:"zones"`
+	FrameSkipRate       int               `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64           `yaml:"confidence_threshold" json:"confidenceThreshold"`
 }
 
 // IsConfigured returns true if both username and a password (or hash) are set.
@@ -744,6 +747,41 @@ func Validate(cfg *Config) error {
 			}
 		}
 	}
+
+	// AI validation
+	if cfg.AI.Enabled {
+		if cfg.AI.ConfidenceThreshold < 0 || cfg.AI.ConfidenceThreshold > 1 {
+			return fmt.Errorf("ai.confidence_threshold must be between 0 and 1, got %.2f", cfg.AI.ConfidenceThreshold)
+		}
+		if cfg.AI.FrameSkipRate <= 0 {
+			return fmt.Errorf("ai.frame_skip_rate must be > 0, got %d", cfg.AI.FrameSkipRate)
+		}
+		// Validate enabled_cameras
+		for i, camID := range cfg.AI.EnabledCameras {
+			if strings.TrimSpace(camID) == "" {
+				return fmt.Errorf("ai.enabled_cameras[%d] must be non-empty", i)
+			}
+		}
+		// Validate zones
+		for cameraID, zones := range cfg.AI.Zones {
+			if strings.TrimSpace(cameraID) == "" {
+				return fmt.Errorf("ai.zones: camera ID must not be empty")
+			}
+			for j, zone := range zones {
+				if strings.TrimSpace(zone.Name) == "" {
+					return fmt.Errorf("ai.zones[%q][%d].name must not be empty", cameraID, j)
+				}
+				if len(zone.Points) < 3 {
+					return fmt.Errorf("ai.zones[%q][%d] (%q) must have at least 3 points, got %d", cameraID, j, zone.Name, len(zone.Points))
+				}
+				for k, p := range zone.Points {
+					if p[0] < 0 || p[0] > 1 || p[1] < 0 || p[1] > 1 {
+						return fmt.Errorf("ai.zones[%q][%d] (%q) point %d coordinates (%.2f, %.2f) outside [0,1] range", cameraID, j, zone.Name, k, p[0], p[1])
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -956,6 +994,20 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
+	}
+
+	// AI defaults
+	if cfg.AI.ConfidenceThreshold <= 0 {
+		cfg.AI.ConfidenceThreshold = 0.5
+	}
+	if cfg.AI.FrameSkipRate <= 0 {
+		cfg.AI.FrameSkipRate = 10
+	}
+	if cfg.AI.Zones == nil {
+		cfg.AI.Zones = make(map[string][]ai.ROI)
+	}
+	if cfg.AI.ModelURL == "" {
+		cfg.AI.ModelURL = "/models/yolo11n.onnx"
 	}
 
 	// Remote log defaults

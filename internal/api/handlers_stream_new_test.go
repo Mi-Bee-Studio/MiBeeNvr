@@ -297,6 +297,7 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
+	reg.Register(&MJPEGStreamHandler{})
 
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 	h.SetStreamRegistry(reg)
@@ -308,8 +309,9 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	var resp cameraProtocolsResponse
 	require.NoError(t, parseJSONBody(t, rr, &resp))
 	require.Equal(t, "mjpeg", resp.Encoding)
-	require.Empty(t, resp.Protocols)
-	require.Empty(t, resp.Default)
+	// MJPEG protocol should be available for MJPEG cameras
+	require.True(t, containsProtocol(t, resp.Protocols, "mjpeg"), "mjpeg should be available")
+	require.Equal(t, "mjpeg", resp.Default)
 }
 
 func TestCameraProtocols_NoRegistry(t *testing.T) {
@@ -463,14 +465,14 @@ func TestSetFLVManager(t *testing.T) {
 // seedCameraWithEncoding inserts a camera with the given encoding into the DB.
 func seedCameraWithEncoding(t *testing.T, db *storage.DB, id, encoding string) {
 	t.Helper()
-	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", "")
+	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", "", "", "")
 	require.NoError(t, err, "failed to seed camera %s", id)
 }
 
 // seedCameraWithEncodings inserts a camera with separate encoding and stream_encoding.
 func seedCameraWithEncodings(t *testing.T, db *storage.DB, id, encoding, streamEncoding string) {
 	t.Helper()
-	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", true, "", "", streamEncoding)
+	err := db.UpsertCamera(context.Background(), id, "Test Camera", "rtsp", encoding, "rtsp://example.com/stream", "", "", "", "", streamEncoding)
 	require.NoError(t, err, "failed to seed camera %s", id)
 }
 

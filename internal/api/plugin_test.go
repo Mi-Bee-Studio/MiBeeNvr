@@ -43,7 +43,7 @@ func TestProtocolsNoAuth(t *testing.T) {
 	defer db.Close()
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 	rr := doRequest(t, h.Routes(), "GET", "/api/protocols", nil, "", "")
 	require.Equal(t, 401, rr.Code)
 }

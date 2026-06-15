@@ -95,8 +95,8 @@ func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 	return buf, nil
 }
 
-// DecodeCodecInfo decodes binary wire format into a CodecInfo.
-func DecodeCodecInfo(data []byte) (*CodecInfo, error) {
+// decodeCodecInfo decodes binary wire format into a CodecInfo.
+func decodeCodecInfo(data []byte) (*CodecInfo, error) {
 	if len(data) < 5 {
 		return nil, fmt.Errorf("wsstream: codec info too short: %d bytes", len(data))
 	}
@@ -217,8 +217,8 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 	return buf, nil
 }
 
-// DecodeVideoFrame decodes binary wire format into a VideoFrame.
-func DecodeVideoFrame(data []byte) (*VideoFrame, error) {
+// decodeVideoFrame decodes binary wire format into a VideoFrame.
+func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 	if len(data) < 12 {
 		return nil, fmt.Errorf("wsstream: video frame too short: %d bytes", len(data))
 	}

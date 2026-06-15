@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"regexp"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -649,4 +650,17 @@ func atomicRename(src, dst string) error {
 // isMJPEGInputTask returns true if the input format is MJPEG or JPEG.
 func isMJPEGInputTask(format string) bool {
 	return format == "mjpeg" || format == "jpeg"
+}
+
+var progressRegex = regexp.MustCompile(`time=(\d+):(\d+):(\d+\.\d+)`)
+
+// killProcessGroup sends SIGKILL to the entire process group to ensure
+// FFmpeg and any child processes are terminated.
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		queueLogger.Warn("failed to kill ffmpeg process group", "pid", cmd.Process.Pid, "error", err)
+	}
 }

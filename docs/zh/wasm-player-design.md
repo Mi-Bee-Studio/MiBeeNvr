@@ -2,14 +2,13 @@
 
 ## 什么是 WASM + WebCodecs 统一播放器与 AI 检测系统
 
-WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层的视频流架构，它使用基于 WebCodecs 的管线替换传统的浏览器视频播放器。它提供三级回退渲染（WebGPU → WebGL2 → 传统），支持使用 YOLOv11-nano 模型进行前端和后端 AI 对象检测，并在保持现代浏览器兼容性的同时，为 H.264/H.265 内容提供卓越性能。
+WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层的视频流架构，它使用基于 WebCodecs 的管线替换传统的浏览器视频播放器。它提供三级回退渲染（WebGPU → WebGL2 → 传统），支持使用 YOLOv11-nano 模型进行**浏览器端** AI 对象检测（ONNX Runtime Web），并在保持现代浏览器兼容性的同时，为 H.264/H.265 内容提供卓越性能。
 
 **主要功能：**
 - 三级回退渲染，自动降级
 - WebSocket 二进制流协议，实现低延迟视频传输
 - 前端 AI 检测，使用 ONNX Runtime WebGPU/WASM 执行提供商
-- 后端 AI 检测，使用 ONNX Runtime 子进程（保持 CGO_ENABLED=0）
-- 通过服务器发送事件实现实时检测事件流
+- 后端仅提供 AI 配置与 ONNX 模型文件（不做服务端推理——保持静态 `CGO_ENABLED=0` 二进制）
 - 解码和渲染的硬件加速
 - 支持现代视频编解码器，包括 H.265（HEVC）
 
@@ -47,9 +46,7 @@ WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层�
 摄像头 → RTSP 录制器 → StreamHub → WebSocket → 浏览器 Worker →
 视频解码器 → 渲染器 → Canvas
                                                     ↓
-前端 AI（ONNX Runtime）→ 检测事件 → SSE 流 → UI 覆盖层
-                                                    ↓
-后端 AI（ONNX Runtime 子进程）→ 检测结果 → 数据库 → API
+前端 AI（ONNX Runtime Web）→ 检测结果 → UI 覆盖层（浏览器内完成，无服务端往返）
 ```
 
 ### 分级检测算法
@@ -388,247 +385,37 @@ interface Detection {
 }
 ```
 
-## AI 检测（后端）
+## 后端在 AI 检测中的职责
 
-后端 AI 检测系统使用子进程模式来保持 CGO_ENABLED=0，同时提供设备推理能力。
+> **后端不执行任何 AI 推理。** 服务端没有子进程、没有 ONNX 运行时、没有硬件探测、也没有模型下载器。本节用于记录该决策以防止回退。
 
-### 子进程架构
+所有目标检测都在浏览器端运行（见上方 [AI 检测（前端）](#ai-检测前端) 及 `web/src/lib/ai-detection/`）。Go 服务端与 AI 相关的职责仅限于：
 
-系统生成外部 ONNX Runtime 二进制文件，并通过 stdin/stdout 上的 JSON 进行通信：
+1. **配置持久化** —— AI 设置与 ROI 区域，通过 `/api/ai/*`（见下方 [后端 AI API](#后端-ai-api)）。
+2. **提供模型文件** —— 公开路由 `GET /models/{filename}` 提供 `{storage_root}/models/<file>`，供浏览器获取 `.onnx`。
 
-```
-Go 进程 ↔ ONNX Runtime 二进制文件（stdin/stdout JSON）
-```
+### 为什么不在后端做推理
 
-**通信协议：**
+- NVR 以静态 `CGO_ENABLED=0` 二进制形式发布，需交叉编译到 ARM64/ARMv7。在 Go 中引入 ONNX 绑定（`libonnxruntime`）会引入 C 依赖、使二进制膨胀，并破坏 ARM 交叉编译。FFmpeg 已是最重的依赖。
+- 最低支持目标（RPi 3B，1GB RAM，Cortex-A53，无 ML GPU）无法在录制/流媒体之外再承担推理开销。
+- 检测针对已解码的实时流、按观看者进行，因此在浏览器端运行可避免服务器重复解码，并随观看者而非摄像头数量扩展。
 
-```go
-// 请求（stdin）
-type detectRequest struct {
-  Frame  string `json:"frame"`  // base64 编码的 JPEG
-  Width  int    `json:"width"`  // 帧宽度（像素）
-  Height int    `json:"height"` // 帧高度（像素）
-}
-
-// 响应（stdout）
-type detectResponse struct {
-  Detections []rawDetection `json:"detections"`
-  Error      string         `json:"error,omitempty"`
-}
-```
-
-### AiDetector 集成
-
-AiDetector 与 StreamHub 系统集成：
-
-```go
-type AiDetector interface {
-  EnableCamera(camID string, hub *model.StreamHub) error
-  DisableCamera(camID string)
-  IsEnabled(camID string) bool
-  EnabledCameras() []string
-  OnDetection(cb engine.OnDetectionFunc)
-  StopAll()
-}
-```
-
-**帧处理：**
-- 使用 `"ai-{camID}"` 前缀订阅 StreamHub
-- 使用原子计数器进行帧跳过（非阻塞）
-- 通过 JPEG 转换和 base64 编码处理帧
-- 结果流式传输到 SSE 客户端
-
-### 崩溃恢复
-
-引擎实现自动重启和指数退避：
-
-```go
-func backoffDuration(crashes int) time.Duration {
-  if crashes <= 0 {
-    return 0
-  }
-  d := time.Duration(1<<(crashes-1)) * time.Second
-  if d > defaultRestartBackoff { // 30s 限制
-    d = defaultRestartBackoff
-  }
-  return d
-}
-```
-
-**退避时间表：**
-- 第1次崩溃：1 秒
-- 第2次崩溃：2 秒
-- 第3次崩溃：4 秒
-- 第4次崩溃：8 秒
-- 5+ 次崩溃：16 秒（限制在 30 秒）
-
-### 性能考虑
-
-- 非阻塞设计不会阻塞录制管线
-- 帧限制防止过度 CPU 使用
-- 原子计数器确保线程安全
-- 子进程故障时的优雅降级
-
-## ONNX Runtime 二进制文件下载器
-
-系统自动下载并管理当前平台的 ONNX Runtime 二进制文件，确保在不同架构上的最佳性能。
-
-### 下载过程
-
-**原子下载模式：**
-1. 使用 SHA-256 验证检查现有二进制文件
-2. 下载到临时文件
-3. 使用哈希检查验证完整性
-4. 重命名为最终位置（原子操作）
-
-**下载源：**
-- GitHub 发布：`microsoft/onnxruntime`
-- 平台特定二进制文件：`onnxruntime-linux-x64`、`onnxruntime-linux-arm64`
-- 版本选择匹配后端要求
-
-**幂等操作：**
-- 如果现有二进制文件通过验证则跳过下载
-- 将二进制文件缓存在 `{dataDir}/tools/onnxruntime`
-- 下载失败时保留现有二进制文件
-
-### 文件结构
-
-```
-{dataDir}/
-├── tools/
-│   └── onnxruntime          # 平台特定二进制文件
-└── models/
-    └── yolov11n.onnx        # YOLOv11-nano 模型
-```
-
-## 硬件检测
-
-系统进行全面的硬件检查，确保在启用 AI 检测之前 AI 功能可用。
-
-### 检测标准
-
-**平台要求：**
-- 架构：仅 amd64 或 arm64（无 ARMv7）
-- 内存：≥2GB RAM 可用
-- CPU：≥2 核心以获得可接受性能
-
-**二进制文件存在性：**
-- 验证 `{dataDir}/tools/onnxruntime` 存在
-- 检查文件可执行且具有正确架构
-
-### 检测实现
-
-```go
-type ProbeInfo struct {
-  Available bool   `json:"available"`
-  Reason    string `json:"reason"`
-}
-
-func (p *Probe) Probe() ProbeInfo {
-  if p.platform != "amd64" && p.platform != "arm64" {
-    return ProbeInfo{Available: false, Reason: "unsupported_platform"}
-  }
-  
-  if p.memory < 2*1024*1024*1024 { // 2GB
-    return ProbeInfo{Available: false, Reason: "insufficient_memory"}
-  }
-  
-  if p.cores < 2 {
-    return ProbeInfo{Available: false, Reason: "insufficient_cpu"}
-  }
-  
-  if _, err := os.Stat(p.binaryPath); err != nil {
-    return ProbeInfo{Available: false, Reason: "binary_not_found"}
-  }
-  
-  return ProbeInfo{Available: true, Reason: ""}
-}
-```
-
-### 检测行为
-
-**如果检测失败：**
-- AI 检测路由被禁用
-- 警告消息记录到系统
-- 前端显示 AI 不可用
-- 不影响核心录制功能
-
-**成功指标：**
-- 支持平台上 100% 覆盖
-- 最小开销（<1ms 每次检测）
-- 线程安全操作
-- 优雅降级
+如果将来重新考虑后端推理，必须以**进程外** sidecar（子进程 + IPC）方式运行，绝不链接进主二进制——以保持 `CGO_ENABLED=0` 静态构建保证。
 
 ## 后端 AI API
 
-后端提供 AI 检测管理和实时事件流的 REST API。
+> **后端不执行任何 AI 推理，也不提供推理/事件 API。** 检测完全在浏览器端运行（见 `web/src/lib/ai-detection/`）。Go 后端与 AI 相关的职责仅限于 (a) 持久化配置与 ROI 区域，(b) 提供模型文件。
 
-### API 端点
+后端 AI 相关 API **仅为配置**：
 
-**GET /api/ai/status**
-返回 AI 引擎可用性和系统状态：
+| 端点 | 用途 |
+|------|------|
+| `GET /api/ai/status` | 读取全局 AI 配置 |
+| `PUT /api/ai/config` | 更新配置（启用、阈值、模型 URL） |
+| `GET`/`POST`/`PUT`/`DELETE /api/ai/zones[/{id}]` | ROI 区域增删改查 |
+| `GET /models/{filename}` | 向浏览器提供 `.onnx` 模型（**公开**，无需认证） |
 
-```json
-{
-  "available": true,
-  "engine_status": "running",
-  "model": "/data/models/yolov11n.onnx",
-  "probe": {
-    "available": true,
-    "reason": ""
-  }
-}
-```
-
-**POST /api/ai/enable**
-为特定摄像头启用 AI 检测：
-
-```json
-{
-  "camera_id": "front-door-camera"
-}
-```
-
-**POST /api/ai/disable**
-为特定摄像头禁用 AI 检测：
-
-```json
-{
-  "camera_id": "front-door-camera"
-}
-```
-
-**GET /api/ai/events**
-用于实时检测事件的服务器发送事件流。
-
-### SSE 事件流
-
-**事件格式：**
-```json
-{
-  "camera_id": "front-door-camera",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "detections": [
-    {
-      "label": "person",
-      "confidence": 0.95,
-      "bbox": [100, 200, 300, 400]
-    }
-  ]
-}
-```
-
-**心跳事件：**
-- 每 15 秒：`: ping\n\n`（保持连接）
-- 检测事件：`data: {...}\n\n`
-- 连接保持打开，直到客户端断开
-
-### 身份验证
-
-所有 AI API 端点都需要身份验证：
-- 使用现有的 BasicAuth 中间件
-- 摄像头 ID 与数据库的验证
-- 摄像机访问权限检查
+**不存在** `POST /api/ai/enable`、`POST /api/ai/disable` 或 `GET /api/ai/events` SSE 端点。完整的请求/响应契约见 [AI 检测 API](api/ai-detection.md)。
 
 ## 配置
 
@@ -661,96 +448,37 @@ const defaultConfig: AIConfig = {
 
 ### 后端配置
 
-**硬件要求：**
-- 最低：2GB RAM，2 CPU 核心，amd64/arm64
-- 推荐：4GB RAM，4+ CPU 核心
+后端将 AI 配置存储在 YAML 的 `ai:` 块（`config.AIConfig`）中，并通过 `PUT /api/ai/config` 原子地持久化运行时更改。**AI 没有后端硬件要求**——服务端不运行推理。
 
-**模型配置：**
-- 默认模型：`yolov11n.onnx`（4MB，80 个类别）
-- 替代模型：`yolov8s.onnx`（~70MB，更高精度）
-- 模型路径：`{dataDir}/models/{model_name}.onnx`
+- `enabled`、`confidence_threshold`、`frame_skip_rate`、`model_url` —— 全局 AI 设置
+- `enabled_cameras` —— 允许在 UI 中显示 AI 的摄像头
+- `zones` —— `map[cameraID][]ROI`，归一化 `[0,1]` 多边形顶点
 
-**StreamHub 集成：**
-- AI 检测订阅 `"ai-{camera_id}"` 事件
-- 通过原子计数器进行帧跳过
-- 非阻塞处理，防止录制停滞
+**模型文件：** 将 `.onnx` 模型放入 `{storage_root}/models/`（`mibee-nvr download-model` CLI 会为默认的 `yolo11n.onnx` 完成此操作）。浏览器通过 `GET /models/{filename}` 获取。
 
 ### 性能调优
 
-**前端设置：**
-- `frameSkip`：较高值减少 CPU 使用但降低检测频率
+**前端设置（浏览器端推理）：**
+- `frameSkip`：较高值减少客户端 CPU 但降低检测频率
 - `confidenceThreshold`：较高值减少假阳性但可能漏检对象
-- `emaAlpha`：较低值创建更平滑的跟踪但响应更慢
-
-**后端设置：**
-- 帧处理率限制为最大 30 FPS
-- 多摄像头批处理
-- 资源约束时的优雅降级
+- `emaAlpha`：较低值提供更平滑的跟踪但响应更慢
 
 ## 测试
 
-系统在前端和后端组件上具有全面的测试覆盖率，确保在不同硬件和浏览器配置下的可靠性。
+浏览器端推理流水线有直接的单元测试；后端的区域/配置逻辑用 Go 测试。**没有**后端推理 / ONNX / 探测 / 下载器测试——这些代码不存在。
 
-### 测试统计
+### 测试清单
 
-**Go 测试：**
-- 总计：384 个测试
-- 引擎测试：28 个（子进程管理、健康检查）
-- ONNX 测试：27 个（模型加载、推理）
-- 检测测试：19 个（硬件检测）
-- 下载器测试：37 个（下载验证、缓存）
-- AI 处理器测试：16 个（API 端点、SSE 流）
+**Go 测试（后端——仅配置与区域）：**
+- `internal/ai/zones_test.go` —— 43 个测试：区域增删改查、`PointInPolygon`、`FilterDetectionsByZone`、`GetEnabledZones`、校验
+- `internal/config/config_ai_test.go` —— 15 个测试：AI 配置默认值 + 校验（阈值范围、帧跳过、区域点/坐标）
 
-**前端测试：**
-- 总计：289 个测试
-- 渲染器测试：30 个（WebGPU/WebGL2 渲染、设备丢失）
-- 运行时测试：23 个（AI 执行提供商检测）
-- 推理测试：35 个（YOLO 预处理/后处理）
-- 连接测试：66 个（WebSocket 协议、重连）
-- AI 检测测试：52 个（前端 AI 管线）
+**前端测试（浏览器端推理——vitest）：**
+- `web/src/lib/ai-detection/inference.test.ts` —— YOLO 输出解析、NMS、IoU、sigmoid、EMA 平滑、坐标映射
+- `web/src/lib/ai-detection/runtime.test.ts` —— WebGPU 检测、WASM 回退、模型缓存、URL 白名单/SSRF 校验、init/run/dispose 生命周期（ONNX 运行时已 mock）
 
-**总计：673 个测试**（全部通过）
+### 缺口
 
-### 硬件测试目标
-
-**RPi 3B（最低资源验证）：**
-- 测试第3级回退（无 WebCodecs/WebGPU）
-- 验证最低资源限制
-- 确保在最低端硬件上的基本功能
-- 1GB RAM，Cortex-A53 CPU，SD 卡存储
-
-**Banana Pi M5（功能测试 + AI）：**
-- 测试完整的第1级，带 WebGPU 加速
-- 验证后端 AI 推理
-- 硬件转码测试
-- 4GB RAM，Amlogic S905X3，1.8TB 存储
-
-**Docker VM（清洁状态测试）：**
-- 与清洁状态的集成测试
-- 跨浏览器 UI/UX 验证
-- DB 迁移实验
-- 用于测试的临时数据
-
-### 测试类别
-
-**单元测试：**
-- 单个组件隔离
-- 模拟依赖以进行可预测测试
-- 边缘情况验证（畸形数据、错误条件）
-
-**集成测试：**
-- 端到端管线测试
-- 真实视频流处理
-- 使用实际摄像头源的 AI 推理
-
-**性能测试：**
-- 帧率验证（解码/渲染/AI）
-- 内存使用监控
-- CPU 利用率跟踪
-
-**浏览器兼容性：**
-- 跨浏览器渲染管线
-- 回退机制验证
-- WebGL2/WebGPU 功能检测
-
-测试策略遵循优先级：Docker VM 迭代 → Banana Pi M5 验证 → RPi 3B 准入，确保系统在支持的硬件配置全范围内可靠运行。
+- 没有端到端测试驱动完整流水线（加载模型 → 解码帧 → 检测 → 渲染叠加）。这是最大的测试缺口。
+- 没有针对标注帧的准确率/召回率基准测试。
+- 推理用 mock 的 ONNX 运行时测试；没有测试运行真实 `.onnx` 模型。

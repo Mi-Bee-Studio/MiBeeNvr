@@ -169,11 +169,11 @@ func TestStopAll(t *testing.T) {
 
 func TestViewerCount(t *testing.T) {
 	m := NewManager()
-	assert.Equal(t, 0, m.ViewerCount("nonexistent"))
+	assert.Equal(t, 0, m.viewerCount("nonexistent"))
 
 	hub := newTestHub(t)
 	_ = m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub)
-	assert.Equal(t, 0, m.ViewerCount("cam1"))
+	assert.Equal(t, 0, m.viewerCount("cam1"))
 }
 
 func TestServeWS_CodecInfoFirstMessage(t *testing.T) {
@@ -198,7 +198,7 @@ func TestServeWS_CodecInfoFirstMessage(t *testing.T) {
 	require.GreaterOrEqual(t, len(msg), 5)
 	assert.Equal(t, MsgTypeCodecInfo, msg[0])
 
-	ci, err := DecodeCodecInfo(msg)
+	ci, err := decodeCodecInfo(msg)
 	require.NoError(t, err)
 	assert.Equal(t, CodecH264, ci.Codec)
 	assert.Equal(t, sampleSPS, ci.SPS)
@@ -225,7 +225,7 @@ func TestServeWS_CodecInfoH265(t *testing.T) {
 	msg, err := readMessage(t, conn)
 	require.NoError(t, err)
 
-	ci, err := DecodeCodecInfo(msg)
+	ci, err := decodeCodecInfo(msg)
 	require.NoError(t, err)
 	assert.Equal(t, CodecH265, ci.Codec)
 	assert.Equal(t, sampleVPS, ci.VPS)
@@ -262,7 +262,7 @@ func TestServeWS_FrameStreaming(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, MsgTypeVideoFrame, msg[0])
 
-	vf, err := DecodeVideoFrame(msg)
+	vf, err := decodeVideoFrame(msg)
 	require.NoError(t, err)
 	assert.Equal(t, int64(90000), vf.PTS)
 	assert.True(t, vf.IsKeyframe)
@@ -304,7 +304,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 		require.NoError(t, err, "frame %d", i)
 		assert.Equal(t, MsgTypeVideoFrame, msg[0], "frame %d", i)
 
-		vf, err := DecodeVideoFrame(msg)
+		vf, err := decodeVideoFrame(msg)
 		require.NoError(t, err)
 		assert.Equal(t, int64(90000*(i+1)), vf.PTS)
 	}
@@ -377,7 +377,7 @@ func TestServeWS_DisconnectCleanup(t *testing.T) {
 
 	// Poll for cleanup — read pump detects close and calls viewerCancel
 	eventually(t, func() bool {
-		return m.ViewerCount("cam1") == 0
+		return m.viewerCount("cam1") == 0
 	}, 200*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -412,7 +412,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
 
-	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 
 }
 func TestFrameDropCounter(t *testing.T) {
@@ -467,7 +467,7 @@ func TestFrameDropCounter(t *testing.T) {
 	// Close WebSocket first, wait for viewer cleanup, then unregister stream
 	conn.Close()
 	eventually(t, func() bool {
-		return m.ViewerCount("test-cam") == 0
+		return m.viewerCount("test-cam") == 0
 	}, 500*time.Millisecond, 20*time.Millisecond)
 
 	m.UnregisterStream("test-cam")
@@ -509,7 +509,7 @@ func TestIdleTimeout(t *testing.T) {
 
 	// Wait for idle timeout — no frames sent, watchdog triggers
 	eventually(t, func() bool {
-		return m.ViewerCount("cam1") == 0
+		return m.viewerCount("cam1") == 0
 	}, 500*time.Millisecond, 20*time.Millisecond)
 }
 
@@ -537,7 +537,7 @@ func TestServeWS_ContextCancel(t *testing.T) {
 	cancel()
 
 	eventually(t, func() bool {
-		return m.ViewerCount("cam1") == 0
+		return m.viewerCount("cam1") == 0
 	}, 200*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -563,7 +563,7 @@ func TestUnregisterStream_DisconnectsViewers(t *testing.T) {
 
 	m.UnregisterStream("cam1")
 	eventually(t, func() bool {
-		return m.ViewerCount("cam1") == 0
+		return m.viewerCount("cam1") == 0
 	}, 200*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -589,7 +589,7 @@ func TestGoroutineCleanup(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 
 }
 func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
@@ -616,7 +616,7 @@ func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	_, err = readMessage(t, conn) // read CodecInfo
 	require.NoError(t, err)
 	// Wait for server-side handler to register viewer after WebSocket upgrade
-	require.Eventually(t, func() bool { return m.ViewerCount("cam1") == 1 },
+	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 1 },
 		2*time.Second, 50*time.Millisecond)
 
 	// Disconnect viewer
@@ -624,7 +624,7 @@ func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 
 	// Wait for goroutines to settle
 	eventually(t, func() bool {
-		return m.ViewerCount("cam1") == 0
+		return m.viewerCount("cam1") == 0
 	}, 2*time.Second, 50*time.Millisecond)
 
 	m.StopAll()
@@ -662,7 +662,7 @@ func TestMultipleViewers(t *testing.T) {
 		assert.Equal(t, MsgTypeCodecInfo, msg[0])
 	}
 
-	assert.Equal(t, 3, m.ViewerCount("cam1"))
+	assert.Equal(t, 3, m.viewerCount("cam1"))
 
 	nalu := []byte{0x65, 0x01, 0x02, 0x03}
 	hub.Broadcast(90000, [][]byte{nalu}, false)
@@ -717,13 +717,13 @@ func TestServeWS_ConcurrentStreams(t *testing.T) {
 
 	msg1, err := readMessage(t, conn1)
 	require.NoError(t, err)
-	ci1, err := DecodeCodecInfo(msg1)
+	ci1, err := decodeCodecInfo(msg1)
 	require.NoError(t, err)
 	assert.Equal(t, CodecH264, ci1.Codec)
 
 	msg2, err := readMessage(t, conn2)
 	require.NoError(t, err)
-	ci2, err := DecodeCodecInfo(msg2)
+	ci2, err := decodeCodecInfo(msg2)
 	require.NoError(t, err)
 	assert.Equal(t, CodecH265, ci2.Codec)
 
@@ -741,8 +741,8 @@ func TestServeWS_ConcurrentStreams(t *testing.T) {
 
 func TestWriteFrame_NonexistentStream(t *testing.T) {
 	m := NewManager()
-	m.WriteH264("nonexistent", 90000, [][]byte{{0x65}})
-	m.WriteH265("nonexistent", 90000, [][]byte{{0x26}})
+	m.writeH264("nonexistent", 90000, [][]byte{{0x65}})
+	m.writeH265("nonexistent", 90000, [][]byte{{0x26}})
 	time.Sleep(10 * time.Millisecond)
 }
 
@@ -774,7 +774,7 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 	msg, err := readMessage(t, conn)
 	require.NoError(t, err)
 
-	vf, err := DecodeVideoFrame(msg)
+	vf, err := decodeVideoFrame(msg)
 	require.NoError(t, err)
 	assert.True(t, vf.IsKeyframe, "H.265 IDR should be detected as keyframe")
 	assert.Equal(t, int64(90000), vf.PTS)
@@ -786,9 +786,9 @@ func TestManagerInterface(t *testing.T) {
 		RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
 		UnregisterStream(camID string)
 		IsActive(camID string) bool
-		ViewerCount(camID string) int
-		WriteH264(camID string, pts int64, au [][]byte)
-		WriteH265(camID string, pts int64, au [][]byte)
+		viewerCount(camID string) int
+		writeH264(camID string, pts int64, au [][]byte)
+		writeH265(camID string, pts int64, au [][]byte)
 		ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
 		StopAll()
 	} = (*Manager)(nil)
@@ -804,7 +804,7 @@ func BenchmarkWriteFrame(b *testing.B) {
 	nalu := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.WriteH264("cam1", int64(90000*(i+1)), [][]byte{nalu})
+		m.writeH264("cam1", int64(90000*(i+1)), [][]byte{nalu})
 	}
 }
 

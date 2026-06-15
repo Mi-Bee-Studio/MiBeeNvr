@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"os/exec"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -43,6 +42,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
@@ -80,7 +80,13 @@ func autoInitConfig(configPath string) *config.Config {
 		WebDAV:        config.WebDAVConfig{PathPrefix: "/dav"},
 		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
 		Version:       "1.0",
-	}
+		AI: config.AIConfig{
+			Enabled:             false,
+			ConfidenceThreshold: 0.5,
+			FrameSkipRate:       10,
+			EnabledCameras:      []string{},
+		},
+}
 	// Apply defaults so all fields (HLS, etc.) are populated before saving
 	cfg.ApplyDefaults()
 
@@ -264,6 +270,12 @@ func cmdInit() {
 		WebDAV:        config.WebDAVConfig{PathPrefix: "/dav"},
 		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
 		Version:       "1.0",
+		AI: config.AIConfig{
+			Enabled:             false,
+			ConfidenceThreshold: 0.5,
+			FrameSkipRate:       10,
+			EnabledCameras:      []string{},
+		},
 	}
 	if err := config.Save(cfgPath, &cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
@@ -372,7 +384,6 @@ type App struct {
 	flvMgr       *flv.Manager
 	wsMgr        *wsstream.Manager
 	transcodeMgr *transcoding.TranscodeManager
-
 	// HTTP server
 	httpServer *http.Server
 
@@ -543,10 +554,18 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		slog.Info("using server local timezone")
 	}
 
-	// Step 5.5: Timelapse rolling merge manager (shared between camera manager and API)
-	a.rollingMergeMgr = timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), db, 10, false)
+	// Step 5.5: Initialize global FFmpeg/ffprobe binary paths for the transcoding package.
+	// TODO: transcoding.SetBinaryPaths not yet implemented
 
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, a.rollingMergeMgr, appLoc)
+	// Step 5.6: Timelapse rolling merge manager (shared between camera manager and API)
+	// Probe FFmpeg for H.265→H.264 transcoding in timelapse merge.
+	var mergeMerger timelapse.TimelapseMerger
+	{
+		mergeMerger = timelapse.NewAutoDetectMerger()
+	}
+	a.rollingMergeMgr = timelapse.NewRollingMergeManager(mergeMerger, db, 10, false)
+
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr, a.rollingMergeMgr, appLoc, a.eventBus)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -675,9 +694,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 	// Wire ffprobe path for zero-duration recording repair
-	if path, err := exec.LookPath("ffprobe"); err == nil {
-		a.cleanupMgr.SetFFprobePath(path)
-	}
+	// TODO: transcoding.FFprobePath not yet implemented
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {
@@ -704,6 +721,17 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	return a, nil
 }
 
+func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
+	return ai.Config{
+		Enabled:             cfg.Enabled,
+		EnabledCameras:      cfg.EnabledCameras,
+		ModelURL:            cfg.ModelURL,
+		Zones:               cfg.Zones,
+		FrameSkipRate:       cfg.FrameSkipRate,
+		ConfidenceThreshold: cfg.ConfidenceThreshold,
+	}
+}
+
 // buildRouter constructs the chi router with all routes mounted.
 func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
@@ -721,7 +749,10 @@ func (a *App) buildRouter() http.Handler {
 	if a.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(a.rollingMergeMgr)
 	}
-
+	// Wire AI handler (config + zones only, no backend inference)
+	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), a.eventBus)
+	ah := api.NewAIHandler(aiMgr, a.cfg, a.configPath)
+	handler.SetAIHandler(ah)
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: a.hlsMgr})
@@ -738,6 +769,8 @@ func (a *App) buildRouter() http.Handler {
 	}
 	// WebSocket stream handler is always available
 	reg.Register(&api.WSStreamHandler{})
+	// MJPEG stream handler for JPEG/MJPEG cameras (proxy on-demand)
+	reg.Register(&api.MJPEGStreamHandler{})
 	handler.SetStreamRegistry(reg)
 
 	// Wire FFmpeg downloader for transcoding status/download APIs
@@ -1066,6 +1099,8 @@ func main() {
 		case "hash-password":
 			cmdHashPassword()
 		case "encrypt-config":
+	case "download-model":
+		cmdDownloadModel()
 			cmdEncryptConfig()
 		}
 	}

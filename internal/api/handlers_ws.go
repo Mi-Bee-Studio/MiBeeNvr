@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
@@ -51,8 +52,21 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		codec, sps, pps, vps := getCodecParams(rec)
 		slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
 		if sps == nil || pps == nil {
-			writeError(w, http.StatusServiceUnavailable, "waiting for video stream")
-			return
+			// Recorder is active but hasn't received a keyframe yet.
+			// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
+			const wsCodecWait = 5 * time.Second
+			const wsCodecPoll = 200 * time.Millisecond
+			deadline := time.Now().Add(wsCodecWait)
+			for sps == nil || pps == nil {
+				if time.Now().After(deadline) {
+					slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
+					writeError(w, http.StatusServiceUnavailable, "waiting for video stream")
+					return
+				}
+				time.Sleep(wsCodecPoll)
+				codec, sps, pps, vps = getCodecParams(rec)
+			}
+			slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 		}
 
 		hub := getStreamHub(rec)

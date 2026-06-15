@@ -35,6 +35,7 @@
 - **视频转码**：基于 FFmpeg 的硬件转码，H.265→H.264 转换
 - **延时摄影**：定时快照延时录像
 - **WebSocket 流**：实时二进制帧流
+- **AI 检测**：ONNX Runtime 推理，浏览器端目标检测
 - **事件系统**：基于 SSE 的实时事件流
 
 ## 开发路线
@@ -191,7 +192,7 @@ make docker-release
 ```
 cmd/mibee-nvr/       # 程序入口
 internal/            # 核心模块（29 个）
-  ai/               # AI 配置 + ROI 区域（浏览器端推理，无后端推理）
+  ai/               # AI 配置 + ROI 区域存储（推理在浏览器端，见 web/src/lib/ai-detection/）
   api/              # REST API
   camera/           # 摄像头管理
   cleanup/          # 保留策略 + 磁盘清理
