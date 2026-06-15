@@ -320,6 +320,13 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
 		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
 		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
+		// AI event endpoints (MiBeeVision collaboration)
+		// POST /api/ai/events requires API Key auth (checked inside handler)
+		r.Post("/api/ai/events", h.handleCreateAIEvent)
+		// GET endpoints are user-authenticated (behind the group's authMW)
+		r.Get("/api/ai/events", h.handleListAIEvents)
+		r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
+		r.Get("/api/ai/stats", h.handleGetAIEventStats)
 	})
 
 	return r

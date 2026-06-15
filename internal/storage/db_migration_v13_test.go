@@ -115,7 +115,7 @@ func TestMigrationV13_AddMergeStatusColumn(t *testing.T) {
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "19", version)
+	require.Equal(t, "20", version)
 }
 
 func TestMigrationV13_BackfillFromMerged(t *testing.T) {
@@ -296,7 +296,7 @@ func TestMigrationV13_Idempotent(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "19", version)
+	require.Equal(t, "20", version)
 
 	// Data should be intact
 	var count int

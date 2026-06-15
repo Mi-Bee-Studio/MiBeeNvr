@@ -752,6 +752,7 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
 	handler.SetEventBus(a.eventBus)
+	api.SetAPIMetrics(a.metrics)
 	if a.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(a.rollingMergeMgr)
 	}
