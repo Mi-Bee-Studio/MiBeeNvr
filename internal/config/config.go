@@ -38,6 +38,7 @@ type Config struct {
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
+	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
 	Timezone    string              `yaml:"timezone"`        // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
 }
@@ -308,6 +309,12 @@ type MetricsAuthConfig struct {
 	Username     string `yaml:"username"`
 	Password     string `yaml:"password"`
 	PasswordHash string `yaml:"password_hash"`
+}
+// APIKeyConfig represents a single API key for MiBeeVision integration.
+type APIKeyConfig struct {
+	Key   string `yaml:"key" json:"key"`
+	Name  string `yaml:"name" json:"name"`
+	Revoked bool `yaml:"revoked,omitempty" json:"revoked,omitempty"`
 }
 type WebSocketConfig struct {
 	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
