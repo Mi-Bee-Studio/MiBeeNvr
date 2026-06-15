@@ -122,6 +122,10 @@ function parseRoute(hash: string) {
       return { route: 'transcoding-history', params: {} };
     }
 
+    if (segments[0] === 'ai-events') {
+      return { route: 'ai-events', params: {} };
+    }
+
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };

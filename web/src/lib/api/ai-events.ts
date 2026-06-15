@@ -56,13 +56,13 @@ export async function listAIEvents(filter: AIEventFilter = {}): Promise<AIEventL
   if (filter.limit) params.set('limit', String(filter.limit));
   if (filter.offset) params.set('offset', String(filter.offset));
   const qs = params.toString();
-  return apiRequest(`/api/ai/events${qs ? '?' + qs : ''}`);
+  return apiRequest(`/ai/events${qs ? '?' + qs : ''}`);
 }
 
 export async function getAIEvent(id: number): Promise<AIEvent> {
-  return apiRequest(`/api/ai/events/${id}`);
+  return apiRequest(`/ai/events/${id}`);
 }
 
 export async function getAIEventStats(cameraId: string, period: string = '24h'): Promise<AIEventStatsResponse> {
-  return apiRequest(`/api/ai/stats?camera_id=${encodeURIComponent(cameraId)}&period=${period}`);
+  return apiRequest(`/ai/stats?camera_id=${encodeURIComponent(cameraId)}&period=${period}`);
 }
