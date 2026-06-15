@@ -108,8 +108,8 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// Addr returns the listener address. Valid after Start().
-func (s *Server) Addr() net.Addr {
+// addr returns the listener address. Valid after Start().
+func (s *Server) addr() net.Addr {
 	if s.listener == nil {
 		return nil
 	}

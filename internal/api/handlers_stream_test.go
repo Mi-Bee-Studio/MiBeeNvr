@@ -40,11 +40,11 @@ func TestStreamRegistry_RegisterAndQuery(t *testing.T) {
 	hlsHandler := &HLSStreamHandler{}
 	reg.Register(hlsHandler)
 
-	handlers := reg.HandlersForCodec(model.FormatH264)
+	handlers := reg.handlersForCodec(model.FormatH264)
 	require.Len(t, handlers, 1)
 	require.Equal(t, "hls", handlers[0].Name())
 
-	handlers = reg.HandlersForCodec(model.FormatH265)
+	handlers = reg.handlersForCodec(model.FormatH265)
 	require.Len(t, handlers, 1)
 	require.Equal(t, "hls", handlers[0].Name())
 }
@@ -62,12 +62,12 @@ func TestStreamRegistry_H265ExcludesWebRTC(t *testing.T) {
 	})
 
 	// H.264 camera: both HLS and WebRTC available
-	protocols := reg.ProtocolsForCodec(model.FormatH264)
+	protocols := reg.protocolsForCodec(model.FormatH264)
 	require.Contains(t, protocols, "hls")
 	require.Contains(t, protocols, "webrtc")
 
 	// H.265 camera: only HLS available (WebRTC excluded)
-	protocols = reg.ProtocolsForCodec(model.FormatH265)
+	protocols = reg.protocolsForCodec(model.FormatH265)
 	require.Contains(t, protocols, "hls")
 	require.NotContains(t, protocols, "webrtc", "WebRTC should not be available for H.265")
 }
@@ -83,35 +83,36 @@ func TestStreamRegistry_FLVSupportsH264AndH265(t *testing.T) {
 	})
 
 	// H.265: HLS and FLV available, not WebRTC
-	protocols := reg.ProtocolsForCodec(model.FormatH265)
+	protocols := reg.protocolsForCodec(model.FormatH265)
 	require.Contains(t, protocols, "hls")
 	require.Contains(t, protocols, "flv")
 	require.NotContains(t, protocols, "webrtc")
 }
 
-func TestStreamRegistry_MJPEGNoProtocols(t *testing.T) {
+func TestStreamRegistry_MJPEGProtocols(t *testing.T) {
 	t.Parallel()
 	reg := NewStreamRegistry()
 
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{
-		name:    "webrtc",
-		codecs:  []model.Format{model.FormatH264},
+		name:   "webrtc",
+		codecs: []model.Format{model.FormatH264},
 	})
+	reg.Register(&MJPEGStreamHandler{})
 
-	// MJPEG cameras have no streaming protocols
-	protocols := reg.ProtocolsForCodec(model.FormatMJPEG)
-	require.Empty(t, protocols)
+	// MJPEG cameras should have mjpeg streaming protocol
+	protocols := reg.protocolsForCodec(model.FormatMJPEG)
+	require.Contains(t, protocols, "mjpeg")
 }
 
 func TestStreamRegistry_Empty(t *testing.T) {
 	t.Parallel()
 	reg := NewStreamRegistry()
 
-	handlers := reg.HandlersForCodec(model.FormatH264)
+	handlers := reg.handlersForCodec(model.FormatH264)
 	require.Empty(t, handlers)
 
-	protocols := reg.ProtocolsForCodec(model.FormatH264)
+	protocols := reg.protocolsForCodec(model.FormatH264)
 	require.Empty(t, protocols)
 }
 
@@ -120,7 +121,7 @@ func TestStreamRegistry_StreamLimits(t *testing.T) {
 	// Test that the HLS stream limit (max 4) is enforced via LRU eviction.
 	// When capacity is reached, the least recently used stream is evicted
 	// and the new stream is accepted (instead of rejecting with an error).
-	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
+	hlsMgr := hls.NewManagerWithOpts(context.Background(), t.TempDir(), 0, 0, 0)
 	defer hlsMgr.StopAll()
 
 	// Start 4 streams to fill the limit

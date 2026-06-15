@@ -58,7 +58,7 @@ exit 0
 
 func TestManager_NewTranscodeManager_Success(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -86,7 +86,7 @@ func TestManager_NewTranscodeManager_Success(t *testing.T) {
 
 func TestManager_NewTranscodeManager_NoFFmpeg(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	m := metrics.NewMetrics()
@@ -110,7 +110,7 @@ func TestManager_NewTranscodeManager_NoFFmpeg(t *testing.T) {
 
 func TestManager_RunAndStop(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -161,7 +161,7 @@ func TestManager_StopNil(t *testing.T) {
 
 func TestManager_EnqueueRecording(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -211,7 +211,7 @@ func TestManager_EnqueueRecording_NilManager(t *testing.T) {
 
 func TestManager_GetStatus(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -255,7 +255,7 @@ func TestManager_GetStatus_NilWithReason(t *testing.T) {
 
 func TestManager_HardwareInfo(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -286,7 +286,7 @@ func TestManager_HardwareInfo(t *testing.T) {
 
 func TestManager_Downloader(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -316,7 +316,7 @@ func TestManager_Downloader(t *testing.T) {
 
 func TestManager_Queue(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -346,6 +346,7 @@ func TestManager_Queue(t *testing.T) {
 
 func TestManager_UpdateFFmpegStatus(t *testing.T) {
 	t.Helper()
+	t.Setenv("PATH", "")
 
 	tests := []struct {
 		name     string
@@ -386,7 +387,7 @@ func TestManager_UpdateFFmpegStatus(t *testing.T) {
 			expected: 2,
 			setup: func(t *testing.T) *TranscodeManager {
 				t.Helper()
-				ResetProbe()
+				resetProbe()
 				dataDir := t.TempDir()
 				toolsDir := filepath.Join(dataDir, "tools")
 				require.NoError(t, os.MkdirAll(toolsDir, 0755))
@@ -461,7 +462,7 @@ exit 0
 
 func TestManager_AutoEnqueueOnSegmentCompleted(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -525,7 +526,7 @@ func TestManager_AutoEnqueueOnSegmentCompleted(t *testing.T) {
 
 func TestManager_AutoEnqueueSkipsDisabledCamera(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -580,7 +581,7 @@ func TestManager_AutoEnqueueSkipsDisabledCamera(t *testing.T) {
 
 func TestManager_AutoEnqueueSkipsTimelapse(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)
@@ -633,7 +634,7 @@ func TestManager_AutoEnqueueSkipsTimelapse(t *testing.T) {
 
 func TestManager_AutoEnqueueSkipsSameFormat(t *testing.T) {
 	t.Helper()
-	ResetProbe()
+	resetProbe()
 
 	db := newManagerTestDB(t)
 	mockFFmpeg := createMockFFmpeg(t)

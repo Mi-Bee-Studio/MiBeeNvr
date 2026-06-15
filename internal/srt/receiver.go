@@ -115,10 +115,6 @@ func (r *Receiver) Running() bool {
 	return r.running.Load()
 }
 
-// FrameCount returns total frames sent to the hub.
-func (r *Receiver) FrameCount() int64 {
-	return r.frameCount.Load()
-}
 
 // getDropCount returns total frames dropped by the hub.
 func (r *Receiver) getDropCount() int64 {

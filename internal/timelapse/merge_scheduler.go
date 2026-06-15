@@ -99,18 +99,6 @@ func (s *MergeScheduler) Remove(cameraID string) {
 	}
 }
 
-// GetDuration returns the configured merge duration for a camera.
-// Returns false if the camera is not found.
-func (s *MergeScheduler) GetDuration(cameraID string) (time.Duration, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entry, ok := s.entries[cameraID]
-	if !ok {
-		return 0, false
-	}
-	return entry.duration, true
-}
 
 // Start begins the scheduler loop in a background goroutine.
 // Call Stop to terminate the loop.
@@ -128,12 +116,6 @@ func (s *MergeScheduler) Stop() {
 	s.wg.Wait()
 }
 
-// TriggerDue immediately runs merge for all cameras whose nextRun has passed.
-// Returns the number of cameras triggered. Used for testing.
-// Does NOT block on merge completion — merges run in background goroutines.
-func (s *MergeScheduler) TriggerDue(ctx context.Context) int {
-	return s.triggerDueAt(ctx, time.Now().In(s.loc))
-}
 
 func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 	s.mu.Lock()

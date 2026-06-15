@@ -20,7 +20,7 @@ import (
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(WithMaxViewers(3), WithWriteBufSize(10))
+	return NewManager(WithMaxViewers(3), withWriteBufSize(10))
 }
 
 // newTestManagerWithHub creates a Manager and a StreamHub for integration testing.
@@ -28,7 +28,7 @@ func newTestManager(t *testing.T) *Manager {
 	func newTestManagerWithHub(t *testing.T) (*Manager, *model.StreamHub) {
 	t.Helper()
 	hub := model.NewStreamHub()
-	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(10))
+	mgr := NewManager(WithMaxViewers(3), withWriteBufSize(10))
 	return mgr, hub
 }
 
@@ -225,20 +225,20 @@ func TestUnregisterStream(t *testing.T) {
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 	require.True(t, mgr.IsActive("cam1"))
 
-	mgr.UnregisterStream("cam1")
+	mgr.unregisterStream("cam1")
 	require.False(t, mgr.IsActive("cam1"))
 }
 
 func TestUnregisterStream_NotActive(t *testing.T) {
 	mgr := newTestManager(t)
 	// Should not panic
-	mgr.UnregisterStream("nonexistent")
+	mgr.unregisterStream("nonexistent")
 }
 
 // --- Max Viewers Tests ---
 
 func TestMaxViewers_Enforced(t *testing.T) {
-	mgr := NewManager(WithMaxViewers(2), WithWriteBufSize(10))
+	mgr := NewManager(WithMaxViewers(2), withWriteBufSize(10))
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// First 2 viewers should succeed
@@ -260,7 +260,7 @@ func TestMaxViewers_Enforced(t *testing.T) {
 	err := mgr.ServeFLV("cam1", w, r)
 	require.ErrorIs(t, err, ErrMaxViewers)
 
-	mgr.UnregisterStream("cam1")
+	mgr.unregisterStream("cam1")
 }
 
 // --- Client Disconnect Detection ---
@@ -289,14 +289,14 @@ func TestClientDisconnect_Cleanup(t *testing.T) {
 
 	// Viewer should be cleaned up
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 0
+		return mgr.viewerCount("cam1") == 0
 	}, 2*time.Second, 50*time.Millisecond)
 }
 
 // --- Non-Blocking Write ---
 
 func TestNonBlockingWrite_DropsFrames(t *testing.T) {
-	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(2)) // tiny buffer
+	mgr := NewManager(WithMaxViewers(3), withWriteBufSize(2)) // tiny buffer
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Start a viewer that never reads (blocking writer)
@@ -315,7 +315,7 @@ func TestNonBlockingWrite_DropsFrames(t *testing.T) {
 	// Write many frames — should not block, excess frames dropped
 	for i := 0; i < 20; i++ {
 		start := time.Now()
-		mgr.WriteH264("cam1", int64(i*3000), [][]byte{idrNALU})
+		mgr.writeH264("cam1", int64(i*3000), [][]byte{idrNALU})
 		require.WithinDuration(t, start, time.Now(), 100*time.Millisecond,
 			"WriteH264 should not block even with full buffer")
 	}
@@ -327,12 +327,12 @@ func TestNonBlockingWrite_DropsFrames(t *testing.T) {
 func TestWriteH264_InactiveStream(t *testing.T) {
 	mgr := newTestManager(t)
 	// Should not panic/error on inactive stream
-	mgr.WriteH264("nonexistent", 1000, [][]byte{idrNALU})
+	mgr.writeH264("nonexistent", 1000, [][]byte{idrNALU})
 }
 
 func TestWriteH265_InactiveStream(t *testing.T) {
 	mgr := newTestManager(t)
-	mgr.WriteH265("nonexistent", 1000, [][]byte{idrNALU})
+	mgr.writeH265("nonexistent", 1000, [][]byte{idrNALU})
 }
 
 // --- GOP Cache Tests ---
@@ -342,9 +342,9 @@ func TestGOPCache_NewClientGetsCachedKeyframe(t *testing.T) {
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Write IDR (keyframe) + P-frames
-	mgr.WriteH264("cam1", 0, [][]byte{idrNALU})          // IDR - should be cached
-	mgr.WriteH264("cam1", 3000, [][]byte{nonIDRNALU})     // P-frame
-	mgr.WriteH264("cam1", 6000, [][]byte{nonIDRNALU})     // P-frame
+	mgr.writeH264("cam1", 0, [][]byte{idrNALU})          // IDR - should be cached
+	mgr.writeH264("cam1", 3000, [][]byte{nonIDRNALU})     // P-frame
+	mgr.writeH264("cam1", 6000, [][]byte{nonIDRNALU})     // P-frame
 
 	time.Sleep(50 * time.Millisecond) // let GOP cache settle
 
@@ -394,14 +394,14 @@ func TestGOPCache_UpdatedOnNewKeyframe(t *testing.T) {
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Write first keyframe + deltas
-	mgr.WriteH264("cam1", 0, [][]byte{idrNALU})
-	mgr.WriteH264("cam1", 3000, [][]byte{nonIDRNALU})
+	mgr.writeH264("cam1", 0, [][]byte{idrNALU})
+	mgr.writeH264("cam1", 3000, [][]byte{nonIDRNALU})
 
 	time.Sleep(50 * time.Millisecond)
 
 	// Write second keyframe — should replace old GOP
 	newIDR := []byte{0x65, 0xAA, 0xBB, 0xCC}
-	mgr.WriteH264("cam1", 6000, [][]byte{newIDR})
+	mgr.writeH264("cam1", 6000, [][]byte{newIDR})
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -500,7 +500,7 @@ func TestStreamHubIntegration_SubscribeOnFirstViewer(t *testing.T) {
 	<-viewerDone
 
 	// After unregister, consumer should be cleaned up
-	mgr.UnregisterStream("cam1")
+	mgr.unregisterStream("cam1")
 	require.Eventually(t, func() bool {
 		return hub.ConsumerCount() == 0
 	}, 2*time.Second, 50*time.Millisecond)
@@ -512,7 +512,7 @@ func TestViewerCount(t *testing.T) {
 	mgr := newTestManager(t)
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
-	require.Equal(t, 0, mgr.ViewerCount("cam1"))
+	require.Equal(t, 0, mgr.viewerCount("cam1"))
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
@@ -526,20 +526,20 @@ func TestViewerCount(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 1
+		return mgr.viewerCount("cam1") == 1
 	}, 2*time.Second, 50*time.Millisecond)
 
 	cancel1()
 	<-done1
 
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 0
+		return mgr.viewerCount("cam1") == 0
 	}, 2*time.Second, 50*time.Millisecond)
 }
 
 func TestViewerCount_InactiveStream(t *testing.T) {
 	mgr := newTestManager(t)
-	require.Equal(t, 0, mgr.ViewerCount("nonexistent"))
+	require.Equal(t, 0, mgr.viewerCount("nonexistent"))
 }
 
 // --- Concurrent Tests ---
@@ -554,7 +554,7 @@ func TestConcurrentWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
-				mgr.WriteH264("cam1", int64(i*3000), [][]byte{idrNALU})
+				mgr.writeH264("cam1", int64(i*3000), [][]byte{idrNALU})
 			}
 		}()
 	}
@@ -572,7 +572,7 @@ func TestStopAll(t *testing.T) {
 	require.True(t, mgr.IsActive("cam1"))
 	require.True(t, mgr.IsActive("cam2"))
 
-	mgr.StopAll()
+	mgr.stopAll()
 
 	require.False(t, mgr.IsActive("cam1"))
 	require.False(t, mgr.IsActive("cam2"))
@@ -581,7 +581,7 @@ func TestStopAll(t *testing.T) {
 // --- Viewer Cleanup Tests ---
 
 func TestViewerCleanup_FreesSlot(t *testing.T) {
-	mgr := NewManager(WithMaxViewers(1), WithWriteBufSize(10))
+	mgr := NewManager(WithMaxViewers(1), withWriteBufSize(10))
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Connect one viewer — takes the only slot
@@ -597,7 +597,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 1
+		return mgr.viewerCount("cam1") == 1
 	}, 2*time.Second, 50*time.Millisecond)
 
 	// Second viewer should get ErrMaxViewers
@@ -611,7 +611,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 	<-viewerDone1
 
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 0
+		return mgr.viewerCount("cam1") == 0
 	}, 2*time.Second, 50*time.Millisecond)
 
 	// Now a new viewer should be able to connect (slot freed)
@@ -627,7 +627,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		return mgr.ViewerCount("cam1") == 1
+		return mgr.viewerCount("cam1") == 1
 	}, 2*time.Second, 50*time.Millisecond)
 
 	cancel3()
@@ -636,7 +636,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 
 func TestGOPCacheMiss_Metric(t *testing.T) {
 	m := metrics.NewMetrics()
-	mgr := NewManager(WithMaxViewers(3), WithWriteBufSize(10), WithMetrics(m))
+	mgr := NewManager(WithMaxViewers(3), withWriteBufSize(10), WithMetrics(m))
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// Connect a viewer — no frames were written, so GOP cache is empty --> miss

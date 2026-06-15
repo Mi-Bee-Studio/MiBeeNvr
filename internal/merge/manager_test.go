@@ -124,7 +124,7 @@ func TestRunOnce_MergeDisabled(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	env.insertMergeableRecording(t, "rec1", cameraID, now.Add(-2*time.Hour), now.Add(-time.Hour))
@@ -148,7 +148,7 @@ func TestRunOnce_Integration(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert recordings old enough to pass min_age
 	now := time.Now()
@@ -199,7 +199,7 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Only insert 1 recording (below MinSegmentsToMerge=2)
 	now := time.Now()
@@ -274,7 +274,7 @@ func TestStatus_AfterRunOnce(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -305,7 +305,7 @@ func TestPendingCounts(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -332,7 +332,7 @@ func TestPendingCounts_MergeDisabled(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -361,7 +361,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -452,7 +452,7 @@ func TestRunOnce_MJPEGIntegration(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert MJPEG recordings old enough to pass min_age.
 	now := time.Now()
@@ -613,7 +613,7 @@ func TestRunOnce_ParseFailedMarkedAsFailed(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -652,7 +652,7 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -738,7 +738,7 @@ func TestRunOnce_TimelapseSkipped(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert 2 timelapse recordings in the same hour window, old enough to pass min_age.
 	now := time.Now()
@@ -797,7 +797,7 @@ func TestHashGrouping_SPSWithEmbeddedNull(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -849,7 +849,7 @@ func TestMJPEGDeferredDelete_OnDBFailure(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert MJPEG recordings.
 	now := time.Now()
@@ -890,7 +890,7 @@ func TestMergeStatusRace(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	now := time.Now()
 	oldTime := now.Add(-2 * time.Hour)
@@ -936,7 +936,7 @@ func TestRunOnce_BatchLimitTruncation(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert 3 recordings in the same window
 	now := time.Now()
@@ -985,7 +985,7 @@ func TestRunOnce_MJPEGNotEnoughSegments(t *testing.T) {
 
 	cameraID := "cam1"
 	ctx := context.Background()
-	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "mjpeg", "rtsp://localhost/test", "", "", "", "", ""))
 
 	// Insert only 1 MJPEG recording - below MinSegmentsToMerge=2
 	now := time.Now()
@@ -1068,7 +1068,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 
 	t.Run("H264", func(t *testing.T) {
 		cameraID := "cam-h264-int"
-		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H264 Test", "rtsp", "", "rtsp://localhost/h264", "", "", true, "", "", ""))
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H264 Test", "rtsp", "", "rtsp://localhost/h264", "", "", "", "", ""))
 
 		env.insertMergeableRecording(t, "int-h264-1", cameraID, oldTime, oldTime.Add(30*time.Second))
 		env.insertMergeableRecording(t, "int-h264-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
@@ -1126,7 +1126,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 
 	t.Run("H265", func(t *testing.T) {
 		cameraID := "cam-h265-int"
-		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H265 Test", "rtsp", "", "rtsp://localhost/h265", "", "", true, "", "", ""))
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "H265 Test", "rtsp", "", "rtsp://localhost/h265", "", "", "", "", ""))
 
 		env.insertMergeableH265Recording(t, "int-h265-1", cameraID, oldTime, oldTime.Add(30*time.Second))
 		env.insertMergeableH265Recording(t, "int-h265-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))
@@ -1184,7 +1184,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 
 	t.Run("MJPEG", func(t *testing.T) {
 		cameraID := "cam-mjpeg-int"
-		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "MJPEG Test", "rtsp", "mjpeg", "rtsp://localhost/mjpeg", "", "", true, "", "", ""))
+		require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "MJPEG Test", "rtsp", "mjpeg", "rtsp://localhost/mjpeg", "", "", "", "", ""))
 
 		src1 := env.insertMergeableMJPEGRecording(t, "int-mjpeg-1", cameraID, oldTime, oldTime.Add(30*time.Second), 2, 0)
 		src2 := env.insertMergeableMJPEGRecording(t, "int-mjpeg-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), 2, 2)
@@ -1254,7 +1254,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		defer concEnv.close(t)
 
 		cameraID := "cam-concurrent"
-		require.NoError(t, concEnv.db.UpsertCamera(ctx, cameraID, "Concurrent Test", "rtsp", "", "rtsp://localhost/conc", "", "", true, "", "", ""))
+		require.NoError(t, concEnv.db.UpsertCamera(ctx, cameraID, "Concurrent Test", "rtsp", "", "rtsp://localhost/conc", "", "", "", "", ""))
 
 		concEnv.insertMergeableRecording(t, "conc-1", cameraID, oldTime, oldTime.Add(30*time.Second))
 		concEnv.insertMergeableRecording(t, "conc-2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second))

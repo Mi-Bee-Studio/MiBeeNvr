@@ -205,8 +205,8 @@ func (m *Manager) IsActive(camID string) bool {
 	return ok
 }
 
-// ViewerCount returns the number of active viewers for a stream.
-func (m *Manager) ViewerCount(camID string) int {
+// viewerCount returns the number of active viewers for a stream.
+func (m *Manager) viewerCount(camID string) int {
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
 	m.mu.RUnlock()
@@ -218,13 +218,13 @@ func (m *Manager) ViewerCount(camID string) int {
 	return len(entry.viewers)
 }
 
-// WriteH264 queues an H.264 access unit for WebSocket output. Non-blocking.
-func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
+// writeH264 queues an H.264 access unit for WebSocket output. Non-blocking.
+func (m *Manager) writeH264(camID string, pts int64, au [][]byte) {
 	m.writeFrame(camID, pts, au)
 }
 
-// WriteH265 queues an H.265 access unit for WebSocket output. Non-blocking.
-func (m *Manager) WriteH265(camID string, pts int64, au [][]byte) {
+// writeH265 queues an H.265 access unit for WebSocket output. Non-blocking.
+func (m *Manager) writeH265(camID string, pts int64, au [][]byte) {
 	m.writeFrame(camID, pts, au)
 }
 
@@ -474,9 +474,9 @@ var _ interface {
 	RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
 	UnregisterStream(camID string)
 	IsActive(camID string) bool
-	ViewerCount(camID string) int
-	WriteH264(camID string, pts int64, au [][]byte)
-	WriteH265(camID string, pts int64, au [][]byte)
+	viewerCount(camID string) int
+	writeH264(camID string, pts int64, au [][]byte)
+	writeH265(camID string, pts int64, au [][]byte)
 	ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
 	StopAll()
 } = (*Manager)(nil)

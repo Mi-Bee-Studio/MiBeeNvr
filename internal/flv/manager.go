@@ -89,8 +89,8 @@ func WithMaxViewers(n int) Option {
 	}
 }
 
-// WithWriteBufSize sets the per-stream write buffer size.
-func WithWriteBufSize(n int) Option {
+// withWriteBufSize sets the per-stream write buffer size.
+func withWriteBufSize(n int) Option {
 	return func(m *Manager) {
 		if n > 0 {
 			m.writeBufSize = n
@@ -166,8 +166,8 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 	return nil
 }
 
-// UnregisterStream removes a camera stream and disconnects all viewers.
-func (m *Manager) UnregisterStream(camID string) {
+// unregisterStream removes a camera stream and disconnects all viewers.
+func (m *Manager) unregisterStream(camID string) {
 	m.mu.Lock()
 	entry, ok := m.streams[camID]
 	if ok {
@@ -201,8 +201,8 @@ func (m *Manager) IsActive(camID string) bool {
 	return ok
 }
 
-// ViewerCount returns the number of active viewers for a stream.
-func (m *Manager) ViewerCount(camID string) int {
+// viewerCount returns the number of active viewers for a stream.
+func (m *Manager) viewerCount(camID string) int {
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
 	m.mu.RUnlock()
@@ -214,13 +214,13 @@ func (m *Manager) ViewerCount(camID string) int {
 	return len(entry.viewers)
 }
 
-// WriteH264 queues an H.264 access unit for FLV output. Non-blocking.
-func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
+// writeH264 queues an H.264 access unit for FLV output. Non-blocking.
+func (m *Manager) writeH264(camID string, pts int64, au [][]byte) {
 	m.writeFrame(camID, pts, au)
 }
 
-// WriteH265 queues an H.265 access unit for FLV output. Non-blocking.
-func (m *Manager) WriteH265(camID string, pts int64, au [][]byte) {
+// writeH265 queues an H.265 access unit for FLV output. Non-blocking.
+func (m *Manager) writeH265(camID string, pts int64, au [][]byte) {
 	m.writeFrame(camID, pts, au)
 }
 
@@ -444,8 +444,8 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// StopAll stops all active FLV streams.
-func (m *Manager) StopAll() {
+// stopAll stops all active FLV streams.
+func (m *Manager) stopAll() {
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.streams))
 	for id := range m.streams {
@@ -454,15 +454,9 @@ func (m *Manager) StopAll() {
 	m.mu.Unlock()
 
 	for _, id := range ids {
-		m.UnregisterStream(id)
+		m.unregisterStream(id)
 	}
 }
-
-// ensure Manager satisfies model interfaces we may need
-var _ interface {
-	WriteH264(camID string, pts int64, au [][]byte)
-	WriteH265(camID string, pts int64, au [][]byte)
-} = (*Manager)(nil)
 
 // Ensure time package is used
 var _ time.Duration

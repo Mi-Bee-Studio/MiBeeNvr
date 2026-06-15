@@ -33,18 +33,6 @@ func NewGoMerger() *GoMerger {
 	return &GoMerger{jpegQuality: -1}
 }
 
-// NewEnhancedGoMerger creates a GoMerger that re-encodes JPEG frames at the given quality.
-// quality range: 1-100 (1 = smallest files/poor quality, 100 = best quality/large files).
-// Recommended archival quality: 30 (60-70% size reduction vs Q=85, visually acceptable).
-func NewEnhancedGoMerger(quality int) *GoMerger {
-	if quality < 1 {
-		quality = 1
-	}
-	if quality > 100 {
-		quality = 100
-	}
-	return &GoMerger{jpegQuality: quality}
-}
 
 // CanMerge always returns true since this is a pure Go implementation.
 func (m *GoMerger) CanMerge() bool {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
@@ -30,6 +33,8 @@ type ONVIFConfig struct {
 	DB             RecordingDB
 	AudioEnabled   bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
+	ONVIFEndpoint string         // ONVIF device endpoint URL (for HTTP MJPEG probe base)
+	EventBus      *event.EventBus
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -45,10 +50,11 @@ type ONVIFRecorder struct {
 	// Overridable in tests to inject a mock recorder.
 	newRecorder func(rtspURL string) model.Recorder
 
-	mu       sync.Mutex
-	status   model.RecorderStatus
-	delegate model.Recorder
-	rtspURL  string // Cached RTSP URL from ONVIF
+	mu          sync.Mutex
+	status      model.RecorderStatus
+	delegate    model.Recorder
+	rtspURL     string // Cached RTSP URL from ONVIF
+	httpJPEGURL string // Cached MJPEG HTTP URL (protected by mu)
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -188,6 +194,11 @@ func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
 				return "H265"
 			}
 		}
+		for _, p := range profiles {
+			if p.Encoding == "JPEG" {
+				return "JPEG"
+			}
+		}
 	}
 
 	// 3. Probe via RTSP DESCRIBE
@@ -241,39 +252,205 @@ func (r *ONVIFRecorder) probeRTSPEncoding() string {
 	return ""
 }
 
+// probeHTTPMJPEG probes the ONVIF device for an HTTP MJPEG stream by trying
+// candidate URLs and checking for multipart/x-mixed-replace Content-Type.
+func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
+	onvifURL, err := url.Parse(r.cfg.ONVIFEndpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse ONVIF endpoint: %w", err)
+	}
+
+	// Extract path from rtspURL (e.g., /stream from rtsp://host:554/stream)
+	rtspPath := ""
+	if u, err := url.Parse(r.rtspURL); err == nil && u.Path != "" {
+		rtspPath = u.Path
+	}
+
+	// Build candidate list (deduplicated)
+	candidates := make([]string, 0, 4)
+	seen := make(map[string]bool)
+	if rtspPath != "" && !seen[rtspPath] {
+		candidates = append(candidates, rtspPath)
+		seen[rtspPath] = true
+	}
+	for _, path := range []string{"/stream", "/mjpeg", "/video"} {
+		if !seen[path] {
+			candidates = append(candidates, path)
+			seen[path] = true
+		}
+	}
+
+	// Build candidate base URLs: probe the MJPEG preview port (81) first,
+	// then the ONVIF port. Some devices (ESP32-S3 MiBeeCam) separate MJPEG
+	// preview onto port 81 to avoid blocking the main HTTP server on port 80.
+	host := onvifURL.Hostname()
+	baseURLs := []string{
+		fmt.Sprintf("http://%s:81", host),
+		fmt.Sprintf("http://%s", onvifURL.Host),
+	}
+
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+
+	onvifRecLogger.Info("probing HTTP MJPEG", "camera_id", r.cfg.CameraID, "bases", baseURLs, "candidates", candidates)
+
+	for _, base := range baseURLs {
+		for _, path := range candidates {
+			testURL := base + path
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Connection", "close")
+			req.Close = true
+
+			resp, err := client.Do(req)
+			if err != nil {
+				onvifRecLogger.Debug("HTTP MJPEG probe candidate failed", "camera_id", r.cfg.CameraID, "url", testURL, "error", err)
+				continue
+			}
+			ct := resp.Header.Get("Content-Type")
+			resp.Body.Close()
+			onvifRecLogger.Debug("HTTP MJPEG probe response", "camera_id", r.cfg.CameraID, "url", testURL, "content_type", ct)
+			if strings.Contains(ct, "multipart/x-mixed-replace") {
+				onvifRecLogger.Info("HTTP MJPEG stream found", "camera_id", r.cfg.CameraID, "url", testURL)
+				return testURL, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no MJPEG stream found at any candidate URL")
+}
+
+// guessMJPEGURL constructs a best-guess HTTP MJPEG URL from the ONVIF endpoint
+// and RTSP stream path. Used when the probe fails (e.g. ESP32-S3 with limited
+// concurrent HTTP connections — the ONVIF client holds one, blocking the probe).
+// The HTTPJPEGRecorder will retry automatically if the guessed URL is wrong.
+func (r *ONVIFRecorder) guessMJPEGURL() string {
+	onvifURL, err := url.Parse(r.cfg.ONVIFEndpoint)
+	if err != nil {
+		return ""
+	}
+	path := "/stream"
+	if u, err := url.Parse(r.rtspURL); err == nil && u.Path != "" {
+		path = u.Path
+	}
+	// ESP32 MiBeeCam and similar minimal ONVIF devices serve MJPEG on a separate
+	// port (81) from the ONVIF endpoint (80). Falling back to the ONVIF port
+	// causes a 404 death-loop (commit 25f58b6 regressed this).
+	// Use :81 as the fallback — probeHTTPMJPEG already tries the ONVIF port too.
+	return fmt.Sprintf("http://%s:81%s", onvifURL.Hostname(), path)
+}
+
 // createDelegate creates the appropriate internal recorder based on encoding.
 func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	encoding := r.detectEncoding(context.Background())
 	switch encoding {
 	case "H265":
-	cfg := H265Config{
-		CameraID:            r.cfg.CameraID,
-		RTSPURL:             rtspURL,
-		Username:            r.cfg.Username,
-		Password:            r.cfg.Password,
-		SegmentDur:          r.cfg.SegmentDur,
-		RingBufCap:          DefaultRingBufCap,
-		DB:                  r.cfg.DB,
-		AudioEnabled:        r.cfg.AudioEnabled,
-		FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
-	}
-	rec := NewH265Recorder(cfg, r.store, r.metrics)
-	rec.Hub = r.Hub
-	return rec
+		cfg := H265Config{
+			CameraID:            r.cfg.CameraID,
+			RTSPURL:             rtspURL,
+			Username:            r.cfg.Username,
+			Password:            r.cfg.Password,
+			SegmentDur:          r.cfg.SegmentDur,
+			RingBufCap:          DefaultRingBufCap,
+			DB:                  r.cfg.DB,
+			AudioEnabled:        r.cfg.AudioEnabled,
+			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+		}
+		rec := NewH265Recorder(cfg, r.store, r.metrics)
+		rec.Hub = r.Hub
+		return rec
+	case "JPEG":
+		// 1. Try cached HTTP MJPEG URL (caller holds mu, no need to re-lock)
+		if r.httpJPEGURL != "" {
+			return r.newHTTPJPEGRecorder(r.httpJPEGURL)
+		}
+
+		// 2. Try ONVIF GetStreamUri with Protocol=HTTP.
+		//    Per ONVIF spec, HTTP protocol is for RTSP-over-HTTP tunneling, but
+		//    some cameras may return a direct HTTP MJPEG URL.
+		//    Only use if the returned URI starts with http:// (not rtsp://).
+		profileToken := r.resolveProfileToken()
+		if profileToken != "" {
+			onvifCtx, onvifCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer onvifCancel()
+			info, err := r.onvifClient.GetStreamURIWithProtocol(onvifCtx, profileToken, "HTTP")
+			if err != nil {
+				onvifRecLogger.Debug("ONVIF GetStreamURIWithProtocol(HTTP) failed", "camera_id", r.cfg.CameraID, "error", err)
+			} else if info != nil && strings.HasPrefix(info.URI, "http://") {
+				onvifRecLogger.Info("ONVIF returned HTTP stream URI", "camera_id", r.cfg.CameraID, "url", info.URI)
+				r.httpJPEGURL = info.URI
+				return r.newHTTPJPEGRecorder(info.URI)
+			} else if info != nil {
+				onvifRecLogger.Debug("ONVIF HTTP protocol returned non-HTTP URI, ignoring", "camera_id", r.cfg.CameraID, "url", info.URI)
+			}
+		}
+
+		// 3. Probe for HTTP MJPEG stream on the ONVIF device.
+		//    NOTE: ONVIF client may hold an active HTTP connection to the same
+		//    device (ESP32-S3 web servers often support only 1-2 concurrent
+		//    connections). The probe may fail due to connection exhaustion.
+		probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if httpURL, err := r.probeHTTPMJPEG(probeCtx); err == nil {
+			r.httpJPEGURL = httpURL
+			return r.newHTTPJPEGRecorder(httpURL)
+		}
+
+		// 4. Probe failed (likely connection exhaustion on ESP32-S3).
+		//    Construct best-guess HTTP MJPEG URL from ONVIF endpoint + RTSP path.
+		//    HTTPJPEGRecorder will retry automatically on connection failure.
+		guessURL := r.guessMJPEGURL()
+		onvifRecLogger.Info("HTTP MJPEG probe failed, using best-guess URL", "camera_id", r.cfg.CameraID, "url", guessURL)
+		r.httpJPEGURL = guessURL
+		return r.newHTTPJPEGRecorder(guessURL)
 	default: // H264 or unknown
-	cfg := H264Config{
-		CameraID:            r.cfg.CameraID,
-		RTSPURL:             rtspURL,
-		Username:            r.cfg.Username,
-		Password:            r.cfg.Password,
-		SegmentDur:          r.cfg.SegmentDur,
-		RingBufCap:          DefaultRingBufCap,
-		DB:                  r.cfg.DB,
-		AudioEnabled:        r.cfg.AudioEnabled,
-		FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+		cfg := H264Config{
+			CameraID:            r.cfg.CameraID,
+			RTSPURL:             rtspURL,
+			Username:            r.cfg.Username,
+			Password:            r.cfg.Password,
+			SegmentDur:          r.cfg.SegmentDur,
+			RingBufCap:          DefaultRingBufCap,
+			DB:                  r.cfg.DB,
+			AudioEnabled:        r.cfg.AudioEnabled,
+			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+		}
+		rec := NewH264Recorder(cfg, r.store, r.metrics)
+		rec.Hub = r.Hub
+		return rec
 	}
-	rec := NewH264Recorder(cfg, r.store, r.metrics)
+}
+
+// newHTTPJPEGRecorder creates an HTTPJPEGRecorder with the given URL.
+func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
+	cfg := HTTPJPEGConfig{
+		CameraID:   r.cfg.CameraID,
+		URL:        httpURL,
+		SegmentDur: r.cfg.SegmentDur,
+		Username:   r.cfg.Username,
+		Password:   r.cfg.Password,
+		DB:         r.cfg.DB,
+		EventBus:   r.cfg.EventBus,
+	}
+	rec := NewHTTPJPEGRecorder(cfg, r.store, r.metrics)
 	rec.Hub = r.Hub
 	return rec
+}
+
+// resolveProfileToken returns the configured profile token or auto-selects
+// the first available profile from the ONVIF device.
+func (r *ONVIFRecorder) resolveProfileToken() string {
+	if r.cfg.ProfileToken != "" {
+		return r.cfg.ProfileToken
 	}
+	profiles, err := r.onvifClient.GetProfiles(context.Background())
+	if err != nil || len(profiles) == 0 {
+		return ""
+	}
+	return profiles[0].Token
 }

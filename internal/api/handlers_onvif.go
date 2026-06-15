@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -66,8 +68,9 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 
 	detailed, err := client.GetCapabilities(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
-		return
+		slog.Debug("failed to get capabilities from device, using default capabilities",
+			"camera_id", cameraID, "error", err)
+		detailed = &onvif.DeviceCapabilitiesDetailed{}
 	}
 
 	// Attach cached device info (lazy — fetched once, cached in camera manager)
@@ -307,6 +310,14 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 	}
 	presets, err := ptz.GetPresets(r.Context())
 	if err != nil {
+		// Limited ONVIF devices (e.g. ESP32 MiBeeCam) don't implement PTZ.
+		// Return empty list instead of 500.
+		msg := err.Error()
+		if strings.Contains(msg, "not supported") || strings.Contains(msg, "<Fault>") {
+			slog.Debug("PTZ not supported by device, returning empty presets", "camera_id", cameraID, "error", err)
+			writeJSON(w, http.StatusOK, map[string]interface{}{"presets": []onvif.PTZPreset{}})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get PTZ presets failed: %v", err))
 		return
 	}
@@ -430,6 +441,13 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 	}
 	uri, err := provider.GetSnapshotUri(r.Context())
 	if err != nil {
+		// Limited ONVIF devices (e.g. ESP32 MiBeeCam) don't implement GetSnapshotUri.
+		msg := err.Error()
+		if strings.Contains(msg, "not supported") || strings.Contains(msg, "<Fault>") {
+			slog.Debug("snapshot URI not supported by device", "camera_id", cameraID, "error", err)
+			writeError(w, http.StatusNotFound, "snapshot not supported by this camera")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get snapshot URI failed: %v", err))
 		return
 	}

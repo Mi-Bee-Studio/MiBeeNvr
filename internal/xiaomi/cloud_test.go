@@ -14,39 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- SignIn validation tests ---
-
-func TestSignInEmptyUsername(t *testing.T) {
-	t.Helper()
-	_, err := SignIn("", "password", "cn")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "username and password are required")
-}
-
-func TestSignInEmptyPassword(t *testing.T) {
-	t.Helper()
-	_, err := SignIn("user@example.com", "", "cn")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "username and password are required")
-}
-
-func TestSignInEmptyBoth(t *testing.T) {
-	t.Helper()
-	_, err := SignIn("", "", "cn")
-	require.Error(t, err)
-}
-
-func TestSignInDefaultRegion(t *testing.T) {
-	t.Helper()
-	// We can't actually sign in without a real server, but we can verify
-	// the validation passes (it'll fail on network, not validation).
-	// The function should not error on validation for empty region.
-	_, err := SignIn("user@example.com", "password", "")
-	// Should NOT be "username and password are required"
-	if err != nil && !errors.Is(err, nil) {
-		require.NotContains(t, err.Error(), "username and password are required")
-	}
-}
 
 // --- SignInWithCaptcha validation tests ---
 

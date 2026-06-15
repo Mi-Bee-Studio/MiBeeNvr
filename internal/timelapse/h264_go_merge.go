@@ -25,10 +25,6 @@ import (
 // 0x00000001 start codes.
 type H264GoMerger struct{}
 
-// NewH264GoMerger creates a new H264GoMerger.
-func NewH264GoMerger() *H264GoMerger {
-	return &H264GoMerger{}
-}
 
 // CanMerge always returns true since this is a pure Go implementation.
 func (m *H264GoMerger) CanMerge() bool {

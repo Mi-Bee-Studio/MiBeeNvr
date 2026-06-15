@@ -383,11 +383,24 @@
           {#each discoveredDevices as device (device.uuid)}
             <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
               <div class="min-w-0 flex-1 mr-4">
-                <div class="font-medium th-text-primary truncate">{device.name || t('onvif.deviceName')}</div>
+                <div class="font-medium th-text-primary truncate">
+                  {device.name || device.manufacturer || t('onvif.deviceName')}
+                  {#if device.model}
+                    <span class="text-sm font-normal th-text-secondary ml-1">{device.model}</span>
+                  {/if}
+                </div>
                 <div class="text-sm th-text-secondary truncate">{device.endpoint}</div>
-                {#if device.hardware}
-                  <div class="text-xs th-text-muted mt-0.5">{device.hardware}</div>
-                {/if}
+                <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+                  {#if device.manufacturer}
+                    <span class="text-xs th-text-muted">{device.manufacturer}</span>
+                  {/if}
+                  {#if device.hardware}
+                    <span class="text-xs th-text-muted">{device.hardware}</span>
+                  {/if}
+                  {#if device.firmware}
+                    <span class="text-xs px-1.5 py-0.5 rounded th-bg-tertiary">{device.firmware}</span>
+                  {/if}
+                </div>
               </div>
               <button
                 onclick={() => addDiscoveredDevice(device)}
@@ -453,11 +466,24 @@
           {#if probedDevice}
             <div class="mt-3 flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
               <div class="min-w-0 flex-1 mr-4">
-                <div class="font-medium th-text-primary truncate">{probedDevice.name || t('onvif.deviceName')}</div>
+                <div class="font-medium th-text-primary truncate">
+                  {probedDevice.name || probedDevice.manufacturer || t('onvif.deviceName')}
+                  {#if probedDevice.model}
+                    <span class="text-sm font-normal th-text-secondary ml-1">{probedDevice.model}</span>
+                  {/if}
+                </div>
                 <div class="text-sm th-text-secondary truncate">{probedDevice.endpoint}</div>
-                {#if probedDevice.hardware}
-                  <div class="text-xs th-text-muted mt-0.5">{probedDevice.hardware}</div>
-                {/if}
+                <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+                  {#if probedDevice.manufacturer}
+                    <span class="text-xs th-text-muted">{probedDevice.manufacturer}</span>
+                  {/if}
+                  {#if probedDevice.hardware}
+                    <span class="text-xs th-text-muted">{probedDevice.hardware}</span>
+                  {/if}
+                  {#if probedDevice.firmware}
+                    <span class="text-xs px-1.5 py-0.5 rounded th-bg-tertiary">{probedDevice.firmware}</span>
+                  {/if}
+                </div>
               </div>
               <button
                 onclick={() => {

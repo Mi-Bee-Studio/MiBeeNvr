@@ -21,7 +21,7 @@
 | 小米 | [xiaomi.md](xiaomi.md) | 云认证、验证码、设备管理 |
 | 合并与延时配置 | [merge.md](merge.md) | 合并状态、待处理计数、摄像头合并/延时配置 |
 | 转码 | [transcoding.md](transcoding.md) | FFmpeg 管理、转码任务、回填、摄像头配置 |
-| AI 检测 | [ai-detection.md](ai-detection.md) | AI 引擎状态、启用/禁用、检测事件（SSE） |
+| AI 检测 | [ai-detection.md](ai-detection.md) | AI 配置、ROI 区域、模型文件服务（浏览器端推理） |
 | 事件 | [events.md](events.md) | 事件流（SSE）、摄像头事件、遥测 |
 | 延时摄影与协议 | [timelapse-protocols.md](timelapse-protocols.md) | 延时摄影状态、支持的协议、功能标志 |
 | 备份 | [backup.md](backup.md) | 创建/列出数据库备份 |

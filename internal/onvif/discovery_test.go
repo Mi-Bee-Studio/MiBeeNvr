@@ -275,5 +275,58 @@ func TestProbeDevice_SendsSOAPProbe(t *testing.T) {
 	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, device)
-	require.NotEmpty(t, receivedBody, "should have sent a SOAP body")
+require.NotEmpty(t, receivedBody, "should have sent a SOAP body")
+}
+
+// validGetDeviceInfoResponse is a realistic GetDeviceInformationResponse.
+const validGetDeviceInfoResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <SOAP-ENV:Body>
+    <tds:GetDeviceInformationResponse>
+      <tds:Manufacturer>TestManufacturer</tds:Manufacturer>
+      <tds:Model>TestModel</tds:Model>
+      <tds:FirmwareVersion>V1.0</tds:FirmwareVersion>
+      <tds:SerialNumber>SN12345</tds:SerialNumber>
+      <tds:HardwareId>HW001</tds:HardwareId>
+    </tds:GetDeviceInformationResponse>
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>`
+
+func TestProbeDevice_FallbackToGetDeviceInfo(t *testing.T) {
+	t.Helper()
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// First request: WS-Discovery Probe → reject with 400 (like 天视通 cameras)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// Second request: GetDeviceInformation → success
+		w.Header().Set("Content-Type", "application/soap+xml")
+		fmt.Fprint(w, validGetDeviceInfoResponse)
+	}))
+	defer server.Close()
+
+	host, port := testServerAddr(t, server)
+	device, err := ProbeDevice(context.Background(), host, port, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, device, "fallback should detect ONVIF device")
+	require.Equal(t, "SN12345", device.UUID)
+	require.Equal(t, "TestManufacturer", device.Name)
+	require.Equal(t, "HW001", device.Hardware)
+	require.Equal(t, []string{fmt.Sprintf("http://%s:%d/onvif/device_service", host, port)}, device.XAddrs)
+}
+
+func TestProbeDevice_FallbackBothFail_ReturnsNil(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	host, port := testServerAddr(t, server)
+	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
+	require.NoError(t, err)
+	require.Nil(t, device, "both strategies failed should return nil")
 }
