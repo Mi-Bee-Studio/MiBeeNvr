@@ -1195,5 +1195,10 @@
   },
   "cameras.action.disable": "Disable",
   "cameras.action.enable": "Enable",
-  "cameras.status.disabled": "Disabled"
+  "cameras.status.disabled": "Disabled",
+  "nav.aiEvents": "AI Events",
+  "aiEvents.title": "AI Events",
+  "aiEvents.subtitle": "AI detection results from MiBeeVision",
+  "aiEvents.allCameras": "All Cameras",
+  "aiEvents.noEvents": "No AI events yet"
 }

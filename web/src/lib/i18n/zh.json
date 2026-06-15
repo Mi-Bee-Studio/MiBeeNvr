@@ -1195,5 +1195,10 @@
   },
   "cameras.action.disable": "停用",
   "cameras.action.enable": "启用",
-  "cameras.status.disabled": "已停用"
+  "cameras.status.disabled": "已停用",
+  "nav.aiEvents": "AI 事件",
+  "aiEvents.title": "AI 事件",
+  "aiEvents.subtitle": "MiBeeVision AI 检测结果",
+  "aiEvents.allCameras": "所有摄像头",
+  "aiEvents.noEvents": "暂无 AI 事件"
 }

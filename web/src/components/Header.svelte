@@ -60,6 +60,7 @@
     { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
+    { href: '#/ai-events', labelKey: 'nav.aiEvents', route: '/ai-events' },
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ];

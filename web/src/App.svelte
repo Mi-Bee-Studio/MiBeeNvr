@@ -16,6 +16,7 @@
     settings: () => import('./routes/Settings.svelte'),
     dashboard: () => import('./routes/Dashboard.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
+    'ai-events': () => import('./routes/AIEvents.svelte'),
   };
   import Header from './components/Header';
 
