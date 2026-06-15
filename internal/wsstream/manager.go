@@ -3,6 +3,7 @@ package wsstream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -256,15 +257,32 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	}
 
 	// Non-blocking send
+	traceID := "no-trace"
+	if isKeyframe {
+		traceID = fmt.Sprintf("%s-%d", camID, pts)
+	}
 	select {
 	case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", camID,
+			"stage", "ws_recv",
+			"is_idr", isKeyframe,
+		)
 	default:
 		// Buffer full, drop frame
 		cnt := entry.dropCount.Add(1)
+		slog.Debug("frame_trace",
+			"trace_id", traceID,
+			"camera_id", camID,
+			"stage", "ws_drop",
+			"is_idr", isKeyframe,
+			"total_drops", cnt,
+		)
 		if cnt%100 == 0 {
 			wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
-	}
 		}
+	}
 }
 
 // writeLoop drains frames from the channel and distributes to all viewers.
