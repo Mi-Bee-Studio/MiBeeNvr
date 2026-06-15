@@ -123,7 +123,7 @@ func TestNewListener(t *testing.T) {
 	}
 	ln := NewListener(cfg)
 
-	require.False(t, ln.Running())
+	require.False(t, ln.running)
 	require.Equal(t, 0, ln.receiverCount())
 }
 
@@ -133,7 +133,7 @@ func TestListenerRegisterHub(t *testing.T) {
 	ln := NewListener(config.SRTConfig{Port: 9002})
 	hub := model.NewStreamHub()
 
-	ln.RegisterHub("test-cam", hub)
+	ln.registerHub("test-cam", hub)
 
 	ln.mu.RLock()
 	registered, ok := ln.hubs["test-cam"]
@@ -148,8 +148,8 @@ func TestListenerUnregisterHub(t *testing.T) {
 
 	ln := NewListener(config.SRTConfig{Port: 9003})
 	hub := model.NewStreamHub()
-	ln.RegisterHub("test-cam", hub)
-	ln.RegisterHubAndStopReceiver("test-cam")
+	ln.registerHub("test-cam", hub)
+	ln.registerHubAndStopReceiver("test-cam")
 
 	ln.mu.RLock()
 	_, ok := ln.hubs["test-cam"]
@@ -162,7 +162,7 @@ func TestListenerAddr(t *testing.T) {
 	t.Helper()
 
 	ln := NewListener(config.SRTConfig{Port: 9004})
-	addr := ln.Addr()
+	addr := ln.addr()
 	require.NotNil(t, addr)
 	require.Contains(t, addr.String(), "9004")
 }
@@ -246,7 +246,7 @@ func TestReceiverMetrics(t *testing.T) {
 	hub := model.NewStreamHub()
 	rec := NewReceiver(config.SRTStream{CameraID: "metrics-test", Mode: "listener"}, hub)
 
-	require.Equal(t, int64(0), rec.FrameCount())
+	require.Equal(t, int64(0), rec.frameCount.Load())
 	require.Equal(t, int64(0), rec.getDropCount())
 	require.False(t, rec.Running())
 }

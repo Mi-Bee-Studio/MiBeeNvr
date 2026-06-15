@@ -113,7 +113,7 @@ func TestStreamWS_RequiresAuth(t *testing.T) {
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
 
-	h := TestHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 	wsMgr := wsstream.NewManager()
 	h.SetWSManager(wsMgr)
 

@@ -61,6 +61,15 @@
   let encodingLabel = $derived(
     camera.encoding ? (t('cameras.encoding.' + camera.encoding) || camera.encoding) : ''
   );
+  let streamTransport = $derived.by(() => {
+    const proto = camera.protocol;
+    const enc = (camera.encoding || '').toLowerCase();
+    if (proto === 'rtsp' || proto === 'rtsp_h264' || proto === 'rtsp_h265' || proto === 'rtsp_mjpeg') return 'rtsp';
+    if (proto === 'http' || proto === 'http_jpeg') return 'http';
+    if (proto === 'onvif' && (enc === 'h264' || enc === 'h265')) return 'rtsp';
+    if (proto === 'onvif' && (enc === 'jpeg' || enc === 'mjpeg')) return 'http';
+    return null;
+  });
 
   function getHealthColor(status?: string): string {
     if (status === 'healthy') return 'bg-emerald-400';
@@ -74,6 +83,18 @@
    if (status === 'failed') return 'badge-error';
    return 'badge-neutral';
  }
+
+let healthDotClass = $derived.by(() => {
+  if (!health) return 'bg-gray-400';
+  const st = health.status;
+  if (camera.status === 'recording' && st === 'warning') return 'bg-amber-400 animate-pulse';
+  if (camera.status === 'recording' && st === 'error') return 'bg-amber-400';
+  return getHealthColor(st);
+});
+
+let healthShowWarningIcon = $derived(
+  health?.status === 'error' && camera.status === 'recording'
+);
   function closeMenu() {
     menuOpen = false;
   }
@@ -142,7 +163,12 @@
     <div class="shrink-0 flex items-center gap-1.5">
       {#if health}
         <div class="relative group" title={health.last_event?.message || health.status}>
-          <span class="inline-block h-2.5 w-2.5 rounded-full {getHealthColor(health.status)}"></span>
+          <span class="inline-flex items-center gap-0.5">
+            <span class="inline-block h-2.5 w-2.5 rounded-full {healthDotClass}"></span>
+            {#if healthShowWarningIcon}
+              <AlertCircle size={10} class="text-amber-400" />
+            {/if}
+          </span>
           <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
             <div class="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap shadow-lg">
               <div class="font-medium capitalize">{health.status}</div>
@@ -188,6 +214,11 @@
       <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
       {#if encodingLabel}
         <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
+      {/if}
+      {#if streamTransport === 'rtsp'}
+        <span class="badge badge-info">{t('cameras.streamTransportRtsp')}</span>
+      {:else if streamTransport === 'http'}
+        <span class="badge badge-success">{t('cameras.streamTransportHttp')}</span>
       {/if}
     </div>
     <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>

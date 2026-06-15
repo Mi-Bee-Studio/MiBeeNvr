@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/0x524a/onvif-go v1.1.4
+	github.com/Eyevinn/hi264 v0.10.0
 	github.com/abema/go-mp4 v1.5.0
 	github.com/bluenviron/gohlslib/v2 v2.3.1
 	github.com/bluenviron/gortmplib v0.3.2
@@ -19,6 +20,7 @@ require (
 	github.com/pion/rtp v1.10.1
 	github.com/pion/webrtc/v4 v4.2.12
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.50.0
@@ -28,6 +30,7 @@ require (
 )
 
 require (
+	github.com/Eyevinn/mp4ff v0.50.0 // indirect
 	github.com/asticode/go-astikit v0.30.0 // indirect
 	github.com/asticode/go-astits v1.15.0 // indirect
 	github.com/benburkert/openpgp v0.0.0-20160410205803-c2471f86866c // indirect
@@ -53,7 +56,6 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v5 v5.0.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

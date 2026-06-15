@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -133,6 +134,7 @@ type Handler struct {
 	timelapseDailyMgr *timelapse.DailyMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
+	aiHandler         *AIHandler
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
@@ -162,6 +164,9 @@ func (h *Handler) Routes() http.Handler {
 	// Public routes
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
+	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording) // Public for timelapse video playback
+	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
+	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -176,7 +181,6 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
-				r.Get("/merged", h.handleMergedRecording)
 				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
 			})
 		})
@@ -197,6 +201,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
 				// HTTP-FLV stream
 				r.Get("/stream.flv", h.handleFLVStream)
+				r.Get("/stream.mjpeg", h.handleMjpegStream)
+				r.Get("/latest-frame", h.handleLatestFrame)
 				// Per-camera protocols
 				r.Get("/protocols", h.handleCameraProtocols)
 				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
@@ -307,6 +313,13 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
+		// AI endpoints
+		r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
+		r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
+		r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
+		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
+		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
+		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
 	})
 
 	return r
@@ -378,8 +391,8 @@ func TestHandler(db *storage.DB, store *storage.Manager) *Handler {
 	return noopHandler(db, store)
 }
 
-// TestHandlerWithAuth creates a Handler with real auth middleware for testing.
-func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
+// testHandlerWithAuth creates a Handler with real auth middleware for testing.
+func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passwordHash string) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
@@ -442,10 +455,16 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 	h.timelapseMergeMgr = mgr
 }
 
-// SetTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
-func (h *Handler) SetTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
+// setTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
+func (h *Handler) setTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
 	h.timelapseDailyMgr = mgr
 }
+
+// SetAIHandler sets the AI handler on the Handler.
+func (h *Handler) SetAIHandler(ah *AIHandler) {
+	h.aiHandler = ah
+}
+
 
 // --- Per-camera streaming protocols endpoint ---
 
@@ -472,9 +491,9 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	encoding := cam.Encoding
+	encoding := strings.ToLower(cam.Encoding)
 	if encoding == "" {
-		encoding = cam.StreamEncoding
+		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
 	// If encoding still unknown (e.g. ONVIF auto-detect), probe the running recorder
@@ -506,7 +525,7 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if defaultProto == "" {
-		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls"} {
+		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
 			for _, p := range protocols {
 				if p.Protocol == preferred && p.Available {
 					defaultProto = preferred
@@ -556,4 +575,17 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleServeModel serves AI model files from the storage root directory.
+// This is a public endpoint (no auth) so the browser can load ONNX models.
+func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
+	filename := chi.URLParam(r, "filename")
+	if filename == "" {
+		writeError(w, http.StatusBadRequest, "filename required")
+		return
+	}
+	// Serve from {storage_root}/models/ directory
+	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
+	http.ServeFile(w, r, filepath.Join(modelDir, filename))
 }

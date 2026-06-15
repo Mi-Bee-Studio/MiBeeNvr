@@ -11,7 +11,7 @@ import (
 
 // CameraRow represents a camera record from the SQLite database.
 // Shared fields with config.CameraConfig: ID, Name, Protocol, Encoding, URL, Username,
-// ONVIFEndpoint, ProfileToken, StreamEncoding, Enabled.
+// ONVIFEndpoint, ProfileToken, StreamEncoding.
 // CameraRow adds DB-only fields: Description, Location, Brand, Model, SerialNumber,
 // RetentionDays, Status, LastSeen, HasPassword, merge config, archive fields.
 type CameraRow struct {
@@ -20,7 +20,6 @@ type CameraRow struct {
 	Protocol     string               `json:"protocol"`
 	Encoding     string               `json:"encoding"`
 	URL          string               `json:"url"`
-	Enabled      bool                 `json:"enabled"`
 	Description  string               `json:"description"`
 	Location     string               `json:"location"`
 	Brand        string               `json:"brand"`
@@ -53,7 +52,7 @@ type CameraRow struct {
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
@@ -69,7 +68,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr sql.NullString
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays); err != nil {
@@ -92,7 +91,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 
 // ListArchivedCameras returns only cameras marked as archived.
 func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
@@ -108,7 +107,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr sql.NullString
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays); err != nil {
@@ -130,13 +129,13 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 }
 
 // UpsertCamera inserts or updates a camera record in the database
-func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, enabled bool, onvifEndpoint, profileToken, streamEncoding string) error {
+func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding string) error {
 
-    q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, enabled, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?)
 
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, enabled=excluded.enabled, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
 
-    _, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, enabled, onvifEndpoint, profileToken, streamEncoding)
+	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, onvifEndpoint, profileToken, streamEncoding)
 
 	return err
 }
@@ -147,12 +146,12 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	var archivedAtStr sql.NullString
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, enabled, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
 		FROM cameras WHERE id = ?`, cameraID).Scan(
-		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Enabled, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays)

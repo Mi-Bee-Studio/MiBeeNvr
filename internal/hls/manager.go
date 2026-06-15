@@ -81,9 +81,9 @@ type Manager struct {
 	partMinDuration time.Duration // LL-HLS partial segment duration (default 200ms)
 }
 
-// NewManager creates a new HLS Manager with default settings.
+// newManager creates a new HLS Manager with default settings.
 // Use NewManagerWithOpts for custom buffer/segment sizes.
-func NewManager(ctx context.Context, dataDir string) *Manager {
+func newManager(ctx context.Context, dataDir string) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
 		ctx:            ctx,

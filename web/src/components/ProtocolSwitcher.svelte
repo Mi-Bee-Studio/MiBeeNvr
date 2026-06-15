@@ -5,7 +5,7 @@
   import { showToast } from '$lib/toast';
   import { detectWebCodecs, getWebCodecsUnavailableReason } from '$lib/webcodecs-player/capabilities';
 
-  export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv';
+  export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg';
 
   interface ProtocolOption {
     id: StreamingProtocol;
@@ -50,16 +50,17 @@
   let browserSupportsWasm = $state(false);
   let wasmUnavailableReason: string | null = $state(null);
 
-  const protocolOptions: ProtocolOption[] = [
-    { id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
-    { id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
-    { id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
-    { id: 'hls', label: 'HLS', latency: t('live.protocol.latency.hls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
-    { id: 'll-hls', label: 'LL-HLS', latency: t('live.protocol.latency.llHls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
+  let protocolOptions = [
+	{ id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
+	{ id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
+	{ id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
+	{ id: 'mjpeg', label: 'MJPEG', latency: t('live.protocol.latency.mjpeg'), viewers: t('live.protocol.viewers.mjpeg'), resource: t('live.protocol.resource.mjpeg') },
+	{ id: 'hls', label: 'HLS', latency: t('live.protocol.latency.hls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
+	{ id: 'll-hls', label: 'LL-HLS', latency: t('live.protocol.latency.llHls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
   ];
 
   let currentOption = $derived(
-    protocolOptions.find(p => p.id === selected) || protocolOptions[2],
+    protocolOptions.find(p => p.id === selected) || protocolOptions.find(p => p.id === 'hls') || protocolOptions[0],
   );
 
   // Always show all options — wasm is marked unavailable with tooltip instead of hidden

@@ -1,3 +1,5 @@
+import { apiRequest } from './client';
+
 /**
  * AI Detection Settings — localStorage-backed persistence
  *
@@ -92,4 +94,99 @@ export function detectAiBackend(): string {
     // navigator not available
   }
   return 'WASM SIMD';
+}
+
+// ─── Zone management (server-side) ────────────────────────────────────────────
+
+export interface Zone {
+  camera_id: string;
+  name: string;
+  points: number[][];
+  enabled: boolean;
+}
+
+export interface ZoneList {
+  zones: Zone[];
+}
+
+export interface CreateZoneRequest {
+  camera_id: string;
+  name: string;
+  points: number[][];
+  enabled: boolean;
+}
+
+export async function getAIZones(): Promise<ZoneList> {
+  return apiRequest<ZoneList>('/ai/zones');
+}
+
+export async function createAIZone(zone: CreateZoneRequest): Promise<Zone> {
+  return apiRequest<Zone>('/ai/zones', {
+    method: 'POST',
+    body: JSON.stringify(zone),
+  });
+}
+
+export async function deleteAIZone(id: string): Promise<void> {
+  return apiRequest<void>(`/ai/zones/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+// ─── Backend API types ────────────────────────────────────────────────────
+
+export interface AiStatus {
+  enabled: boolean;
+  model_url: string;
+  confidence_threshold: number;
+  frame_skip_rate: number;
+}
+
+export interface AiConfigUpdate {
+  enabled?: boolean;
+  confidence_threshold?: number;
+  frame_skip_rate?: number;
+  model_url?: string;
+}
+
+// ─── Backend API functions ────────────────────────────────────────────────
+
+export async function getAiStatus(): Promise<AiStatus> {
+  return apiRequest<AiStatus>('/ai/status');
+}
+
+export async function updateAiConfig(config: AiConfigUpdate): Promise<void> {
+  return apiRequest<void>('/ai/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+// ─── Per-camera localStorage ──────────────────────────────────────────────────
+
+const PER_CAMERA_STORAGE_KEY = 'mibee_nvr_per_camera_ai';
+
+export interface PerCameraAiState {
+  [cameraId: string]: {
+    enabled: boolean;
+    confidenceThreshold: number;
+    frameSkip: number;
+  };
+}
+
+export function getPerCameraAiSettings(): PerCameraAiState {
+  try {
+    const raw = localStorage.getItem(PER_CAMERA_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+export function savePerCameraAiSettings(settings: PerCameraAiState): void {
+  try {
+    localStorage.setItem(PER_CAMERA_STORAGE_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.error('Failed to save per-camera AI settings:', e);
+  }
 }

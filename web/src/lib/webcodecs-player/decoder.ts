@@ -1,7 +1,10 @@
 /**
- * WebCodecs VideoDecoder lifecycle management.
+ * Video Decoder with WebCodecs + WASM H.265 fallback.
  *
- * Wraps the WebCodecs VideoDecoder API for H.264/H.265 decoding.
+ * Primary: WebCodecs VideoDecoder (H.264, H.265 on supported browsers).
+ * Fallback: libde265 WASM decoder (H.265 on Chromium where WebCodecs
+ * doesn't support HEVC).
+ *
  * Handles codec configuration, NALU processing, error recovery,
  * and ensures VideoFrame.close() is always called to prevent GPU memory leaks.
  *
@@ -9,6 +12,7 @@
  */
 
 import type { CodecInfo } from './protocol';
+import { WasmH265Decoder } from './wasm-h265-decoder';
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
@@ -128,6 +132,8 @@ function buildDescription(ci: CodecInfo): Uint8Array {
 
 export class Decoder {
   private _decoder: VideoDecoder | null = null;
+  private _wasmDecoder: WasmH265Decoder | null = null;
+  private _mode: 'webcodecs' | 'wasm' | null = null;
   private _closed = false;
   private _configured = false;
   private _lastCodecInfo: CodecInfo | null = null;
@@ -143,138 +149,105 @@ export class Decoder {
   private _decoderEpoch = 0;
 
   /**
-   * Configure the VideoDecoder with codec info.
+   * Configure the decoder with codec info.
    *
-   * @throws Error if codec is not supported or WebCodecs is unavailable.
+   * Strategy:
+   *   - H.264 → WebCodecs always (widely supported)
+   *   - H.265 → Try WebCodecs first, fall back to WASM libde265 if unsupported
+   *
+   * @throws Error if all decode methods fail.
    */
   async configure(ci: CodecInfo): Promise<void> {
     if (this._closed) return;
 
-    const codec = this.buildCodecString(ci);
-
-    // Check if codec is supported
-    if (typeof VideoDecoder !== 'undefined' && VideoDecoder.isConfigSupported) {
-      const config: VideoDecoderConfig = {
-        codec,
-        codedWidth: DEFAULT_WIDTH,
-        codedHeight: DEFAULT_HEIGHT,
-        description: buildDescription(ci),
-      };
-      const support = await VideoDecoder.isConfigSupported(config);
-      if (!support.supported) {
-        throw new Error(`Unsupported codec: ${codec}`);
-      }
+    // For H.264: always use WebCodecs
+    if (ci.codec === 'h264') {
+      return this._configureWebCodecs(ci);
     }
 
-    // Create and configure decoder with epoch tracking for stale-frame detection
-    // Create and configure decoder with epoch tracking for stale-frame detection
-    this._decoderEpoch++;
-    const epoch = this._decoderEpoch;
-    this._decoder = new VideoDecoder({
-      output: (frame: VideoFrame) => this.handleOutput(frame, epoch),
-      error: this.handleError.bind(this),
-    });
-    await this._decoder.configure({
-      codec,
-      codedWidth: DEFAULT_WIDTH,
-      codedHeight: DEFAULT_HEIGHT,
-      description: buildDescription(ci),
-    });
-
-    this._configured = true;
-    this._lastCodecInfo = ci;
-    this._errorCount = 0;
+    // For H.265: try WebCodecs first, fall back to WASM
+    try {
+      await this._configureWebCodecs(ci);
+      this._mode = 'webcodecs';
+    } catch {
+      // WebCodecs doesn't support H.265 (Chromium) — try WASM fallback
+      try {
+        await this._configureWasm(ci);
+        this._mode = 'wasm';
+      } catch (wasmErr: any) {
+        throw new Error(`H.265 decode failed: WebCodecs unsupported, WASM fallback failed: ${wasmErr?.message || wasmErr}`);
+      }
+    }
   }
 
   /**
    * Decode NALUs into a video frame.
    *
-   * Prepends Annex B start codes and creates an EncodedVideoChunk.
+   * Routes to WebCodecs or WASM decoder based on active mode.
    */
   decode(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
-    if (this._closed || !this._decoder || !this._configured) return;
+    if (this._closed || !this._configured) return;
 
-    // Backpressure: skip frame if decode queue is full
-    if (this._pendingDecodeCount >= BACKPRESSURE_THRESHOLD) {
-      this._frameDropCount++;
-      if (!this._backpressured) {
-        this._backpressured = true;
-        if (this._backpressureCallback) {
-          try {
-            this._backpressureCallback(true);
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-      return;
+    if (this._mode === 'wasm') {
+      return this._decodeWasm(nalus, pts, isKeyframe);
     }
-
-    const data = prependAnnexB(nalus);
-    const chunk = new EncodedVideoChunk({
-      type: isKeyframe ? 'key' : 'delta',
-      timestamp: pts,
-      data,
-    });
-
-    this._pendingDecodeCount++;
-    this._decoder.decode(chunk);
+    return this._decodeWebCodecs(nalus, pts, isKeyframe);
   }
 
   /**
    * Reset the decoder (discard pending frames, keep configuration capability).
    */
   reset(): void {
-    if (this._closed || !this._decoder) return;
-    try {
-      this._decoder.reset();
-      this._configured = false;
-    } catch {
-      // reset() throws if decoder state is 'closed'
-      try {
-        this._decoder.close();
-      } catch {
-        /* ignore */
-      }
-      this._decoder = null;
-      this._configured = false;
+    if (this._closed) return;
+
+    // Reset WASM decoder
+    if (this._wasmDecoder) {
+      this._wasmDecoder.reset();
     }
-    // Reset backpressure state — all queued decodes are flushed
+
+    // Reset WebCodecs decoder
+    if (this._decoder) {
+      try {
+        this._decoder.reset();
+        this._configured = false;
+      } catch {
+        try { this._decoder.close(); } catch { /* ignore */ }
+        this._decoder = null;
+        this._configured = false;
+      }
+    }
+
+    // Reset backpressure state
     this._pendingDecodeCount = 0;
     if (this._backpressured) {
       this._backpressured = false;
       if (this._backpressureCallback) {
-        try {
-          this._backpressureCallback(false);
-        } catch {
-          /* ignore */
-        }
+        try { this._backpressureCallback(false); } catch { /* ignore */ }
       }
     }
   }
 
   /**
-   * Full cleanup — close the decoder and prevent further operations.
+   * Full cleanup — close both decoders and prevent further operations.
    */
   close(): void {
     if (this._closed) return;
     this._closed = true;
     this._configured = false;
+    this._mode = null;
+
     if (this._decoder) {
-      try {
-        this._decoder.close();
-      } catch {
-        // Already closed
-      }
+      try { this._decoder.close(); } catch { /* already closed */ }
       this._decoder = null;
     }
-    // Clean up any remaining pending frames to prevent GPU memory leaks
+    if (this._wasmDecoder) {
+      this._wasmDecoder.close();
+      this._wasmDecoder = null;
+    }
+
+    // Clean up pending frames
     for (const f of this._pendingFrames) {
-      try {
-        f.close();
-      } catch {
-        /* already closed */
-      }
+      try { f.close(); } catch { /* already closed */ }
     }
     this._pendingFrames.clear();
     this._pendingDecodeCount = 0;
@@ -316,7 +289,109 @@ export class Decoder {
     return this._frameDropCount;
   }
 
+  /** Whether the decoder is running in WASM mode (vs WebCodecs). */
+  get isWasm(): boolean {
+    return this._mode === 'wasm';
+  }
+
+
   // ─── Internal ──────────────────────────────────────────────────────────
+
+  /** Configure WebCodecs VideoDecoder. */
+  private async _configureWebCodecs(ci: CodecInfo): Promise<void> {
+    const codec = this.buildCodecString(ci);
+
+    // Check if codec is supported
+    if (typeof VideoDecoder !== 'undefined' && VideoDecoder.isConfigSupported) {
+      const config: VideoDecoderConfig = {
+        codec,
+        codedWidth: DEFAULT_WIDTH,
+        codedHeight: DEFAULT_HEIGHT,
+        description: buildDescription(ci),
+      };
+      const support = await VideoDecoder.isConfigSupported(config);
+      if (!support.supported) {
+        throw new Error(`Unsupported codec: ${codec}`);
+      }
+    }
+
+    this._decoderEpoch++;
+    const epoch = this._decoderEpoch;
+    this._decoder = new VideoDecoder({
+      output: (frame: VideoFrame) => this.handleOutput(frame, epoch),
+      error: this.handleError.bind(this),
+    });
+    await this._decoder.configure({
+      codec,
+      codedWidth: DEFAULT_WIDTH,
+      codedHeight: DEFAULT_HEIGHT,
+      description: buildDescription(ci),
+    });
+
+    this._configured = true;
+    this._lastCodecInfo = ci;
+    this._errorCount = 0;
+  }
+
+  /** Configure WASM H.265 fallback decoder. */
+  private async _configureWasm(ci: CodecInfo): Promise<void> {
+    this._wasmDecoder = new WasmH265Decoder();
+    await this._wasmDecoder.configure(ci);
+    this._configured = true;
+    this._lastCodecInfo = ci;
+    this._errorCount = 0;
+  }
+
+  /** Decode via WebCodecs. */
+  private _decodeWebCodecs(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
+    if (!this._decoder || !this._configured) return;
+
+    // Backpressure
+    if (this._pendingDecodeCount >= BACKPRESSURE_THRESHOLD) {
+      this._frameDropCount++;
+      if (!this._backpressured) {
+        this._backpressured = true;
+        if (this._backpressureCallback) {
+          try { this._backpressureCallback(true); } catch { /* ignore */ }
+        }
+      }
+      return;
+    }
+
+    const data = prependAnnexB(nalus);
+    const chunk = new EncodedVideoChunk({
+      type: isKeyframe ? 'key' : 'delta',
+      timestamp: pts,
+      data,
+    });
+
+    this._pendingDecodeCount++;
+    this._decoder.decode(chunk);
+  }
+
+  /** Decode via WASM — synchronous, outputs VideoFrame immediately. */
+  private _decodeWasm(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
+    if (!this._wasmDecoder) return;
+
+    // Backpressure (same threshold for consistency)
+    if (this._pendingDecodeCount >= BACKPRESSURE_THRESHOLD) {
+      this._frameDropCount++;
+      if (!this._backpressured) {
+        this._backpressured = true;
+        if (this._backpressureCallback) {
+          try { this._backpressureCallback(true); } catch { /* ignore */ }
+        }
+      }
+      return;
+    }
+
+    const frame = this._wasmDecoder.decode(nalus, pts, isKeyframe);
+    if (frame) {
+      this._pendingDecodeCount++;
+      // Fire frame callback — WASM decoder produces frame synchronously
+      this.handleOutput(frame, this._decoderEpoch);
+    }
+  }
 
   private buildCodecString(ci: CodecInfo): string {
     if (ci.codec === 'h265') {

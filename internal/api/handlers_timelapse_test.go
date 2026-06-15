@@ -862,7 +862,7 @@ func TestTimelapseMerge_Accepted(t *testing.T) {
 	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
 
 	h := TestHandler(db, store)
-	h.SetTimelapseDailyMgr(dailyMgr)
+	h.setTimelapseDailyMgr(dailyMgr)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?date=2026-06-06", nil, "", "")
 	if rr.Code != http.StatusAccepted {
@@ -885,7 +885,7 @@ func TestTimelapseMerge_DefaultDate(t *testing.T) {
 	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
 
 	h := TestHandler(db, store)
-	h.SetTimelapseDailyMgr(dailyMgr)
+	h.setTimelapseDailyMgr(dailyMgr)
 
 	// No date param — should default to yesterday
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge", nil, "", "")

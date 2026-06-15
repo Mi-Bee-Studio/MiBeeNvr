@@ -3,6 +3,8 @@ package recorder
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -293,7 +295,7 @@ func TestONVIFRecorder_DetectEncoding_Default(t *testing.T) {
 		require.Equal(t, "H264", encoding)
 	})
 
-	t.Run("unknown encoding", func(t *testing.T) {
+	t.Run("JPEG encoding", func(t *testing.T) {
 		client := &onvif.MockDeviceClient{
 			Profiles: []onvif.DeviceProfile{
 				{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
@@ -301,7 +303,18 @@ func TestONVIFRecorder_DetectEncoding_Default(t *testing.T) {
 		}
 		r := newTestONVIFRecorder(t, client)
 		encoding := r.detectEncoding(context.Background())
-		// Unknown encoding not in {H264, H265} -> falls back to H264
+		// JPEG encoding detected from ONVIF profile metadata
+		require.Equal(t, "JPEG", encoding)
+	})
+	t.Run("unknown encoding", func(t *testing.T) {
+		client := &onvif.MockDeviceClient{
+			Profiles: []onvif.DeviceProfile{
+				{Token: "p1", Encoding: "MPEG4", Width: 640, Height: 480},
+			},
+		}
+		r := newTestONVIFRecorder(t, client)
+		encoding := r.detectEncoding(context.Background())
+		// Unknown encoding not in {H264, H265, JPEG} -> falls back to H264
 		require.Equal(t, "H264", encoding)
 	})
 }
@@ -359,4 +372,142 @@ func TestONVIFRecorder_Start_DelegateStartFails(t *testing.T) {
 	err := r.Start(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "RTSP connection failed")
+}
+
+func TestONVIFRecorder_DetectEncoding_JPEG(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	encoding := r.detectEncoding(context.Background())
+	require.Equal(t, "JPEG", encoding)
+}
+
+func TestONVIFRecorder_ProbeHTTPMJPEG_Success(t *testing.T) {
+	// Start an HTTP server that returns multipart/x-mixed-replace
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &onvif.MockDeviceClient{}
+	r := newTestONVIFRecorder(t, client)
+	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	url, err := r.probeHTTPMJPEG(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/stream", url)
+}
+
+func TestONVIFRecorder_ProbeHTTPMJPEG_FallbackPaths(t *testing.T) {
+	// Server only returns multipart at /mjpeg
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mjpeg" {
+			w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := &onvif.MockDeviceClient{}
+	r := newTestONVIFRecorder(t, client)
+	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	url, err := r.probeHTTPMJPEG(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/mjpeg", url)
+}
+
+func TestONVIFRecorder_ProbeHTTPMJPEG_NoStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &onvif.MockDeviceClient{}
+	r := newTestONVIFRecorder(t, client)
+	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	_, err := r.probeHTTPMJPEG(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no MJPEG stream found")
+}
+
+func TestONVIFRecorder_CreateDelegate_JPEG_HTTPProbeSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	// Restore the default createDelegate (newRecorder was set by newTestONVIFRecorder)
+	r.newRecorder = r.createDelegate
+	rec := r.createDelegate(r.rtspURL)
+	require.NotNil(t, rec)
+	// Should create an HTTPJPEGRecorder
+	_, ok := rec.(*HTTPJPEGRecorder)
+	require.True(t, ok, "expected HTTPJPEGRecorder for JPEG with successful HTTP probe")
+
+	// Verify cached URL
+	r.mu.Lock()
+	cached := r.httpJPEGURL
+	r.mu.Unlock()
+	require.Equal(t, server.URL+"/stream", cached)
+}
+
+func TestONVIFRecorder_CreateDelegate_JPEG_HTTPProbeFallback(t *testing.T) {
+	// No server -> probe will fail, but we still use HTTPJPEGRecorder with guessed URL
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	r.cfg.ONVIFEndpoint = "http://192.168.1.999:80/onvif/device_service"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	// Restore the default createDelegate
+	r.newRecorder = r.createDelegate
+	rec := r.createDelegate(r.rtspURL)
+	require.NotNil(t, rec)
+	// Should use HTTPJPEGRecorder with guessed URL when probe fails
+	_, ok := rec.(*HTTPJPEGRecorder)
+	require.True(t, ok, "expected HTTPJPEGRecorder with guessed URL for JPEG when HTTP probe fails")
+	require.Equal(t, "http://192.168.1.999:80/stream", r.httpJPEGURL, "guessed URL should be cached")
+}
+
+func TestONVIFRecorder_CreateDelegate_JPEG_CachedURL(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	r.httpJPEGURL = "http://192.168.1.100:80/stream"
+	r.rtspURL = "rtsp://192.168.1.100/stream"
+
+	r.newRecorder = r.createDelegate
+	rec := r.createDelegate(r.rtspURL)
+	require.NotNil(t, rec)
+	// Should use cached URL and create HTTPJPEGRecorder without probing
+	_, ok := rec.(*HTTPJPEGRecorder)
+	require.True(t, ok, "expected HTTPJPEGRecorder when cached URL is set")
 }

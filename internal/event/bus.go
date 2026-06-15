@@ -11,6 +11,10 @@ import (
 const (
 	TopicSegmentCompleted     = "segment.completed"
 	TopicStorageHealthChanged = "storage.health.changed"
+	TopicAIDetection         = "ai.detection"
+	TopicAIPerson            = "ai.detection.person"
+	TopicAIVehicle           = "ai.detection.vehicle"
+	TopicAIAnimal            = "ai.detection.animal"
 )
 
 var (

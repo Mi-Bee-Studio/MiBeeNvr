@@ -323,6 +323,9 @@ func getHub(recorder model.Recorder) *model.StreamHub {
 }
 
 // pollStatuses checks camera statuses and forwards transitions to connection monitor.
+// Also proactively recovers pipeline status for cameras that are recording
+// but whose pipeline status is stale (e.g., brief reconnect resolved between polls
+// on limited-ONVIF cameras).
 func (m *Manager) pollStatuses() {
 	if m.statusFn == nil {
 		return
@@ -331,6 +334,15 @@ func (m *Manager) pollStatuses() {
 	for cameraID, status := range statuses {
 		if prev, ok := m.knownStatuses[cameraID]; ok && prev != status {
 			m.OnStatusChange(cameraID, status)
+		} else if status == string(model.StatusRecording) {
+			// Proactively recover: if camera is recording but pipeline shows
+			// non-healthy, reset to healthy. This handles cases where brief
+			// reconnects complete between 10s poll ticks on limited devices.
+			if pipelineStatus := m.pipeline.GetCameraStatus(cameraID); pipelineStatus != string(model.HealthStatusHealthy) {
+				m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
+				m.conn.OnStatusChange(cameraID, status)
+				m.collector.ResetCameraState(cameraID)
+			}
 		}
 		m.knownStatuses[cameraID] = status
 	}

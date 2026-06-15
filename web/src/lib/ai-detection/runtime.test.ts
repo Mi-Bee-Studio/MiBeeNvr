@@ -140,7 +140,7 @@ afterEach(() => {
 describe('AiRuntime', () => {
   describe('constants', () => {
     it('has correct default model URL', () => {
-      expect(DEFAULT_MODEL_URL).toBe('/models/yolov11n.onnx');
+      expect(DEFAULT_MODEL_URL).toBe('/models/yolo11n.onnx');
     });
 
     it('has correct cache name', () => {

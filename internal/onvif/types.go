@@ -5,12 +5,15 @@ import "time"
 
 // DiscoveredDevice represents an ONVIF device found via WS-Discovery.
 type DiscoveredDevice struct {
-	UUID     string   `json:"uuid"`
-	Name     string   `json:"name"`
-	XAddrs   []string `json:"xaddrs"`
-	Scopes   []string `json:"scopes"`
-	Hardware string   `json:"hardware"`
-	Endpoint string   `json:"endpoint"`
+	UUID        string   `json:"uuid"`
+	Name        string   `json:"name"`
+	XAddrs      []string `json:"xaddrs"`
+	Scopes      []string `json:"scopes"`
+	Hardware    string   `json:"hardware"`
+	Endpoint    string   `json:"endpoint"`
+	Manufacturer string  `json:"manufacturer,omitempty"` // Enriched via GetDeviceInformation
+	Model        string  `json:"model,omitempty"`        // Enriched via GetDeviceInformation
+	Firmware     string  `json:"firmware,omitempty"`     // Enriched via GetDeviceInformation
 }
 
 // DiscoveryError represents a categorized error from ONVIF device discovery.

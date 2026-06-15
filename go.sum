@@ -1,5 +1,9 @@
 github.com/0x524a/onvif-go v1.1.4 h1:oAyQO++9pGOfmHsxRs8MV/4scwsWATi2+gJoFck84D8=
 github.com/0x524a/onvif-go v1.1.4/go.mod h1:QRsmatmBZXM5zOHHI4SBaV6X2NdkSU+DXLDDRzM+xS4=
+github.com/Eyevinn/hi264 v0.10.0 h1:4CgeRcBT8Y03BuHHr9u7ErMN5Iiw1mGbvKNU9s4QFPg=
+github.com/Eyevinn/hi264 v0.10.0/go.mod h1:ag1j/wxUs7EvZu6qEZBRyLJ0bJW4OUjO8ip8c2TfLTQ=
+github.com/Eyevinn/mp4ff v0.50.0 h1:vFlsvpQh5Jfz++cuaeTI90vbID5dAabebvvN/l9lom0=
+github.com/Eyevinn/mp4ff v0.50.0/go.mod h1:hJNUUqOBryLAzUW9wpCJyw2HaI+TCd2rUPhafoS5lgg=
 github.com/abema/go-mp4 v1.5.0 h1:aJnu723gFuNswIiM08h4kO28pUZr0QXNAJGoZWT96AU=
 github.com/abema/go-mp4 v1.5.0/go.mod h1:vPl9t5ZK7K0x68jh12/+ECWBCXoWuIDtNgPtU2f04ws=
 github.com/asticode/go-astikit v0.30.0 h1:DkBkRQRIxYcknlaU7W7ksNfn4gMFsB0tqMJflxkRsZA=
@@ -34,6 +38,8 @@ github.com/fclairamb/ftpserverlib v0.30.0 h1:caB9sDn1Au//q0j2ev/icPn388qPuk4k1aj
 github.com/fclairamb/ftpserverlib v0.30.0/go.mod h1:QmogtltTOgkihyKza0GNo37Mu4AEzbJ+sH6W9Y0MBIQ=
 github.com/go-chi/chi/v5 v5.2.2 h1:CMwsvRVTbXVytCk1Wd72Zy1LAsAh9GxMmSNWLHCG618=
 github.com/go-chi/chi/v5 v5.2.2/go.mod h1:L2yAIGWB3H+phAw1NxKwWM+7eUH/lU8pOMm5hHcoops=
+github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
+github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e h1:ijClszYn+mADRFY17kjQEVQ1XRhq2/JR1M3sGqeJoxs=

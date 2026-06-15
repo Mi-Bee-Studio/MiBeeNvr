@@ -150,7 +150,7 @@ func TestStreamKeyResolution(t *testing.T) {
 	}
 
 	// Verify server is running
-	require.NotNil(t, srv.Addr())
+	require.NotNil(t, srv.addr())
 	_ = srv
 }
 
@@ -169,7 +169,7 @@ func TestRTMPHandshake(t *testing.T) {
 	defer conn.Close()
 
 	// Verify server is listening
-	require.NotNil(t, srv.Addr())
+	require.NotNil(t, srv.addr())
 }
 
 // TestH264FrameExtraction tests that H.264 frames received via RTMP are
@@ -352,7 +352,7 @@ func TestServerStartStop(t *testing.T) {
 		return model.NewStreamHub()
 	}, nil, nil)
 
-	require.NotNil(t, srv.Addr())
+	require.NotNil(t, srv.addr())
 	require.Equal(t, 0, srv.activePublishers())
 }
 

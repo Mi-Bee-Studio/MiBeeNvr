@@ -153,7 +153,7 @@ func TestMISSLoginFailure(t *testing.T) {
 func TestMISSClientVersion(t *testing.T) {
 	t.Helper()
 	client, _ := newTestMISSClient()
-	ver := client.Version()
+	ver := client.version()
 	require.Contains(t, ver, "CS2")
 	require.Contains(t, ver, ModelC200)
 }

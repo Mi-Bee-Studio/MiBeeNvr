@@ -206,7 +206,6 @@ export async function getCameraRecordingStats(id: string, signal?: AbortSignal):
   return apiRequest<CameraRecordingStats>(`/cameras/${id}/stats`, { signal });
 }
 
-
 export async function startCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${id}/start`, {
     method: 'POST',

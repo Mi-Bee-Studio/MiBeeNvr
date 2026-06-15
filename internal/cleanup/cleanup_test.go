@@ -36,7 +36,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	require.NoError(t, err)
 
 	// Insert default test camera so per-camera cleanup can find it
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Test Camera", "rtsp", "", "rtsp://localhost/test", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Test Camera", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
 
 	return &testEnv{db: db, store: store, dir: dir}
 }

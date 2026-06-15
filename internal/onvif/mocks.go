@@ -47,6 +47,10 @@ type MockDeviceClient struct {
 	GetProfilesCalls          int
 	GetStreamURICalls         int
 	GetCapabilitiesCalls      int
+
+	GetStreamURIWithProtocolCalls int
+	StreamURIWithProtocol        *StreamInfo
+	StreamURIWithProtocolError   error
 }
 
 func (m *MockDeviceClient) Connect(ctx context.Context) error {
@@ -74,6 +78,20 @@ func (m *MockDeviceClient) GetStreamURI(ctx context.Context, profileToken string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.GetStreamURICalls++
+	return m.StreamURI, nil
+}
+
+func (m *MockDeviceClient) GetStreamURIWithProtocol(ctx context.Context, profileToken, protocol string) (*StreamInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetStreamURIWithProtocolCalls++
+	if m.StreamURIWithProtocolError != nil {
+		return nil, m.StreamURIWithProtocolError
+	}
+	if m.StreamURIWithProtocol != nil {
+		return m.StreamURIWithProtocol, nil
+	}
+	// Default: return same as StreamURI
 	return m.StreamURI, nil
 }
 
