@@ -813,6 +813,24 @@ func (a *App) buildRouter() http.Handler {
 	r.Use(authmw.SecurityHeaders)
 	r.Use(authmw.COOPHeaders)
 
+	// API Key middleware — validates Bearer mbv_* tokens for MiBeeVision.
+	// Runs before authMW: if the request has an API Key Bearer token, it's
+	// authenticated here; otherwise it falls through to BasicAuth.
+	if len(cfg.APIKeys) > 0 {
+		validKeys := make(map[string]string)
+		for _, k := range cfg.APIKeys {
+			if !k.Revoked && k.Key != "" {
+				validKeys[k.Key] = k.Name
+			}
+		}
+		if len(validKeys) > 0 {
+			r.Use(func(next http.Handler) http.Handler {
+				return authmw.APIKeyAuthMiddleware(validKeys, next)
+			})
+			slog.Info("API Key authentication enabled", "keys", len(validKeys))
+		}
+	}
+
 
 	// Prometheus metrics — independent auth when configured, public otherwise
 	if cfg.MetricsAuth.IsConfigured() {

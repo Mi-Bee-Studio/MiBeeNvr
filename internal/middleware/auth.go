@@ -59,6 +59,12 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If already authenticated via API Key middleware, skip BasicAuth.
+			if IsAPIKeyAuthenticated(r.Context()) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			ip := extractIP(r.RemoteAddr)
 
 			// Auth failure rate limiting (optional — enabled via config).
