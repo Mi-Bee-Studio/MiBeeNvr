@@ -177,6 +177,8 @@ func (h *Handler) Routes() http.Handler {
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
+				// MiBeeVision AI status update (API Key required inside handler)
+				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
 
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)

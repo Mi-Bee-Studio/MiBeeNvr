@@ -236,3 +236,52 @@ func getDefaultStatsSince(period string) (t time.Time) {
 		return now.Add(-24 * time.Hour)
 	}
 }
+
+// handleUpdateRecordingAIStatus updates the AI processing status of a recording
+// (PATCH /api/recordings/{id}/ai-status). Used by MiBeeVision to report
+// processing progress and prevent duplicate processing.
+func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	// API Key required
+	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+		writeError(w, http.StatusUnauthorized, "API key required")
+		return
+	}
+
+	recID := chi.URLParam(r, "id")
+	if recID == "" {
+		writeError(w, http.StatusBadRequest, "recording id is required")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	validStatuses := map[string]bool{
+		"pending": true, "processing": true, "done": true, "failed": true, "skipped": true,
+	}
+	if !validStatuses[body.Status] {
+		writeError(w, http.StatusBadRequest, "status must be one of: pending, processing, done, failed, skipped")
+		return
+	}
+
+	if err := h.db.UpdateRecordingAIStatus(r.Context(), recID, body.Status, body.Error); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update AI status: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"recording_id": recID,
+		"ai_status":    body.Status,
+	})
+}

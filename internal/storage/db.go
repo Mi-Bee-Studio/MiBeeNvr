@@ -342,6 +342,16 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_ai_events_recording ON ai_events(recording_id)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='20' WHERE key='schema_version'")
 
+	// Migration v20 → v21: add ai_status columns to recordings (MiBeeVision processing state)
+	var aiStatusColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='ai_status'`).Scan(&aiStatusColExists)
+	if aiStatusColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
+
 	return nil
 
 }
