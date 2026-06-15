@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   detectWebCodecs,
   detectHEVC,
+  detectMSEH265,
   detectWebGPU,
   detectWebGL2,
   detectOffscreenCanvas,
@@ -73,6 +74,44 @@ describe('detectHEVC', () => {
       isConfigSupported: vi.fn().mockRejectedValue(new Error('unsupported')),
     });
     expect(await detectHEVC()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectMSEH265
+// ---------------------------------------------------------------------------
+describe('detectMSEH265', () => {
+  it('should return true when MediaSource.isTypeSupported returns true', () => {
+    vi.stubGlobal('MediaSource', {
+      isTypeSupported: vi.fn().mockReturnValue(true),
+    });
+    expect(detectMSEH265()).toBe(true);
+  });
+
+  it('should return false when MediaSource.isTypeSupported returns false', () => {
+    vi.stubGlobal('MediaSource', {
+      isTypeSupported: vi.fn().mockReturnValue(false),
+    });
+    expect(detectMSEH265()).toBe(false);
+  });
+
+  it('should return false when MediaSource is undefined', () => {
+    vi.stubGlobal('MediaSource', undefined);
+    expect(detectMSEH265()).toBe(false);
+  });
+
+  it('should return false when MediaSource is null', () => {
+    vi.stubGlobal('MediaSource', null);
+    expect(detectMSEH265()).toBe(false);
+  });
+
+  it('should return false when isTypeSupported throws', () => {
+    vi.stubGlobal('MediaSource', {
+      isTypeSupported: vi.fn().mockImplementation(() => {
+        throw new Error('not supported');
+      }),
+    });
+    expect(detectMSEH265()).toBe(false);
   });
 });
 

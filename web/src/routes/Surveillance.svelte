@@ -14,6 +14,7 @@
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { detectMSEH265 } from '$lib/webcodecs-player/capabilities';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -57,6 +58,13 @@
 
   // Default streaming protocol from settings
   let defaultProtocol = $state<string>('flv');
+
+  // H.265/HEVC MSE support — detected once on mount. When the browser's
+  // MediaSource cannot decode H.265 (common on Linux desktop, or Windows
+  // without the HEVC Video Extensions pack), FLV players connect but render
+  // a black screen. We use this to auto-degrade H.265 cameras to HLS, which
+  // has broader native H.265 support on modern browsers.
+  let browserSupportsH265MSE = $state(true);
 
   // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
   let WasmPlayerComponent = $state<any>(null);
@@ -164,6 +172,12 @@
     }
     if (defaultProtocol === 'wasm') return 'wasm';
     if (defaultProtocol === 'webrtc') return 'webrtc';
+    // H.265 cameras cannot play via FLV when the browser's MSE lacks an H.265
+    // decoder — mpegts.js connects but the video element stays black. Auto-degrade
+    // to HLS, which modern browsers (Chrome/Edge/Firefox/Safari) play natively
+    // via fMP4. See issue #28.
+    const isH265 = (camera.encoding || '').toLowerCase() === 'h265';
+    if (defaultProtocol === 'flv' && isH265 && !browserSupportsH265MSE) return 'hls';
     if (defaultProtocol === 'flv') return 'flv';
     // hls, ll-hls, or default
     return 'hls';
@@ -215,6 +229,9 @@
   // --- Lifecycle ---
 
   onMount(async () => {
+    // Detect H.265 MSE support once — used by getCameraMode to auto-degrade
+    // H.265 cameras from FLV to HLS when the browser can't decode H.265 via MSE.
+    browserSupportsH265MSE = detectMSEH265();
     try {
       const fetched = await getDashboardCameras();
       const activeFetched = fetched;

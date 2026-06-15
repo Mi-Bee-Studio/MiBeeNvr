@@ -49,6 +49,27 @@ export async function detectHEVC(): Promise<boolean> {
   }
 }
 
+/**
+ * Check if the browser's MediaSource Extensions (MSE) can decode H.265/HEVC.
+ *
+ * This is distinct from detectHEVC() (which checks WebCodecs VideoDecoder):
+ * MSE is used by mpegts.js (FLV) and hls.js (HLS fMP4) for playback. When MSE
+ * lacks an H.265 decoder — common on Linux desktop, or Windows without the
+ * "HEVC Video Extensions" pack — FLV/HLS players connect but render a black
+ * screen. Detecting this lets the caller auto-degrade to a working protocol.
+ *
+ * Synchronous and side-effect free. Returns false when MediaSource is absent.
+ */
+export function detectMSEH265(): boolean {
+  if (typeof MediaSource === 'undefined' || MediaSource === null) return false;
+  try {
+    // hvc1.1.6.L93.B0 = HEVC Main profile, level 3.1 — a widely testable codec string.
+    return MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"');
+  } catch {
+    return false;
+  }
+}
+
 /** Check if WebGPU API is available. */
 export function detectWebGPU(): boolean {
   return typeof navigator !== 'undefined' && (navigator as Record<string, unknown>).gpu !== undefined;
