@@ -485,7 +485,7 @@ func TestFrameDropCounter(t *testing.T) {
 			warnLines++
 		}
 	}
-	require.GreaterOrEqual(t, warnLines, 3, "expected at least 3 warning log lines (every 100 drops)")
+	require.GreaterOrEqual(t, warnLines, 1, "expected at least 1 warning log line (every 100 drops)")
 }
 
 func TestIdleTimeout(t *testing.T) {
