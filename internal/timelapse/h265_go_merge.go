@@ -31,6 +31,10 @@ func init() {
 // 0x00000001 start codes.
 type H265GoMerger struct{}
 
+// NewH265GoMerger creates a new H265GoMerger.
+func NewH265GoMerger() *H265GoMerger {
+	return &H265GoMerger{}
+}
 
 // CanMerge always returns true since this is a pure Go implementation.
 func (m *H265GoMerger) CanMerge() bool {

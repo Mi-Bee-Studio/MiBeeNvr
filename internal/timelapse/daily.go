@@ -34,7 +34,6 @@ func NewDailyMergeManager(store RecordingLister, updater MergeStatusUpdater, mer
 	}
 }
 
-
 // Run executes the daily merge pipeline for the given camera on the given date.
 // date format: "2006-01-02" (interpreted in the configured timezone)
 func (m *DailyMergeManager) Run(ctx context.Context, cameraID string, date string) error {

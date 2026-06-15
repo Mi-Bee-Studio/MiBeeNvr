@@ -61,6 +61,10 @@ func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, 
 	}
 }
 
+// Duration returns the configured merge duration.
+func (m *PeriodicMergeManager) Duration() time.Duration {
+	return m.duration
+}
 
 // Run executes the merge pipeline for the given camera for the merge window
 // containing the reference time t.
@@ -271,6 +275,11 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 	listFile.Close()
 
 	ffmpegPath := "ffmpeg"
+	if m.merger != nil {
+		if fm, ok := m.merger.(*FFmpegMerger); ok && fm.caps != nil && fm.caps.FFmpegPath != "" {
+			ffmpegPath = fm.caps.FFmpegPath
+		}
+	}
 
 	args := []string{
 		"-f", "concat",
@@ -337,7 +346,8 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 
 	if waitErr := cmd.Wait(); waitErr != nil {
 		if ctx.Err() != nil {
-			cmd.Process.Kill()
+			killMergeProcess(cmd)
+			os.Remove(outputPath)
 			return ctx.Err()
 		}
 		errMsg := fmt.Sprintf("ffmpeg concat failed: %v", waitErr)

@@ -88,3 +88,59 @@ func deriveSnapshotFromRTSP(rtspURL string) string {
 	return endpoints[0]
 }
 
+// SnapshotCandidates returns all possible HTTP snapshot URLs derived from an RTSP URL,
+// ordered by likelihood. Returns nil if no candidates can be derived.
+func SnapshotCandidates(streamURL, protocol string) []string {
+	if streamURL == "" || protocol == "" {
+		return nil
+	}
+
+	switch protocol {
+	case "rtsp", "rtsp_h264", "rtsp_h265", "rtsp_mjpeg":
+		return snapshotCandidatesFromRTSP(streamURL)
+	case "http", "http_jpeg":
+		return []string{streamURL}
+	default:
+		return nil
+	}
+}
+
+// snapshotCandidatesFromRTSP generates all possible HTTP snapshot candidates
+// from an RTSP URL.
+func snapshotCandidatesFromRTSP(rtspURL string) []string {
+	u, err := url.Parse(rtspURL)
+	if err != nil {
+		return nil
+	}
+	if u.Hostname() == "" {
+		return nil
+	}
+
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		host = host + ":80"
+	}
+
+	var candidates []string
+
+	// Common snapshot endpoints
+	candidates = append(candidates,
+		"http://"+host+"/cgi-bin/snapshot.cgi",
+		"http://"+host+"/cgi-bin/snapshot",
+		"http://"+host+"/snapshot.jpg",
+		"http://"+host+"/snapshot",
+		"http://"+host+"/?snap=1",
+	)
+
+	// Path-relative candidates
+	p := path.Clean(u.Path)
+	if p != "" && p != "/" && p != "." {
+		dir := path.Dir(p)
+		candidates = append(candidates,
+			"http://"+host+dir+"/snapshot.jpg",
+			"http://"+host+dir+"/snapshot",
+		)
+	}
+
+	return candidates
+}

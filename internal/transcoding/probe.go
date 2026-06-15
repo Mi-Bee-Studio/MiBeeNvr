@@ -35,6 +35,11 @@ func resetProbe() {
 	cachedDecoderStderr = ""
 }
 
+// ResetProbe clears the cached probe result (for testing).
+// Exported because cross-package tests (e.g. internal/timelapse) need to reset
+// the cache between subtests.
+func ResetProbe() { resetProbe() }
+
 // ProbeHardwareCapabilities probes the system for transcoding capabilities.
 // Uses sync.Once for idempotent caching — zero overhead after first call.
 func ProbeHardwareCapabilities(ffmpegPath string) *HardwareCapabilities {
