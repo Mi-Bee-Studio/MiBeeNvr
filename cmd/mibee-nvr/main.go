@@ -483,6 +483,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Step 4: Auth middleware
+	authmw.SetAuthMetrics(a.metrics)
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },

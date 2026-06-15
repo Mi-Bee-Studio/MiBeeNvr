@@ -69,6 +69,14 @@ type Metrics struct {
 	MergeSizeBytes        prometheus.Histogram
 	MergePendingSegments  *prometheus.GaugeVec   // labels: camera_id
 
+	// Auth metrics — track login attempts for security monitoring
+	AuthAttemptsTotal  *prometheus.CounterVec // labels: result (success/failure/no_password)
+	AuthRateLimitedTotal prometheus.Counter   // total requests blocked by rate limiter
+
+	// AI event metrics — MiBeeVision collaboration (0.8.0)
+	AIEventsReceivedTotal *prometheus.CounterVec // labels: camera_id, event_type
+	AIEventsErrorsTotal   prometheus.Counter    // total write/processing errors
+
 }
 // NewMetrics creates a new Metrics instance with a custom registry,
 // Go runtime collectors (memstats only for RPi 3B), and all custom NVR metrics.
@@ -337,6 +345,26 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Help: "Number of segments pending merge, partitioned by camera.",
 	}, []string{"camera_id"})
 
+	// Auth metrics — track login attempts for security monitoring
+	authAttemptsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_auth_attempts_total",
+		Help: "Total authentication attempts, partitioned by result.",
+	}, []string{"result"})
+	authRateLimitedTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_auth_rate_limited_total",
+		Help: "Total requests blocked by auth rate limiter.",
+	})
+
+	// AI event metrics — MiBeeVision collaboration (0.8.0)
+	aiEventsReceivedTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_ai_events_received_total",
+		Help: "Total AI events received from MiBeeVision, partitioned by camera and event type.",
+	}, []string{"camera_id", "event_type"})
+	aiEventsErrorsTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_ai_events_errors_total",
+		Help: "Total errors when receiving or processing AI events.",
+	})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -392,6 +420,10 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		mergeDurationSeconds,
 		mergeSizeBytes,
 		mergePendingSegments,
+		authAttemptsTotal,
+		authRateLimitedTotal,
+		aiEventsReceivedTotal,
+		aiEventsErrorsTotal,
 	)
 
 	return &Metrics{
@@ -450,6 +482,10 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		MergeDurationSeconds:  mergeDurationSeconds,
 		MergeSizeBytes:        mergeSizeBytes,
 		MergePendingSegments:  mergePendingSegments,
+		AuthAttemptsTotal:     authAttemptsTotal,
+		AuthRateLimitedTotal:  authRateLimitedTotal,
+		AIEventsReceivedTotal: aiEventsReceivedTotal,
+		AIEventsErrorsTotal:   aiEventsErrorsTotal,
 	}
 
 }
