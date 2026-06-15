@@ -90,6 +90,14 @@ export interface DiscoveryError {
   message: string;
 }
 
+export interface DeviceInfo {
+  manufacturer: string;
+  model: string;
+  firmware: string;
+  serial_number: string;
+  hardware_id: string;
+}
+
 export interface DiscoveryResult {
   devices: DiscoveredDevice[];
   error: DiscoveryError | null;
@@ -326,6 +334,13 @@ export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSi
     devices: result.devices || [],
     error: result.error || null,
   };
+}
+
+export async function getONVIFDeviceDetail(
+  ip: string,
+  signal?: AbortSignal
+): Promise<ONVIFDeviceDetail> {
+  return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
 export async function probeONVIFDevice(

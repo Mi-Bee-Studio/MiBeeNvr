@@ -91,22 +91,52 @@ export function getEffectiveTheme(): 'dark' | 'light' {
 // Utility functions
 export function parseRefreshInterval(str: string): number {
   const clean = str.toLowerCase().trim();
-
+  
   if (clean === 'off') return 0;
-
+  
   const match = clean.match(/^(\d+)s$/);
   if (match) {
     const seconds = parseInt(match[1], 10);
     return seconds * 1000; // Convert to milliseconds
   }
-
+  
   console.warn(`Invalid refresh interval format: ${str}`);
   return 0;
 }
 
+export function formatRefreshInterval(ms: number): string {
+  if (ms === 0) return 'off';
+  
+  const seconds = Math.round(ms / 1000);
+  if (seconds >= 10 && seconds <= 60 && seconds % 10 === 0) {
+    return `${seconds}s`;
+  }
+  
+  console.warn(`Cannot format ${ms}ms to standard interval`);
+  return `${ms}ms`;
+}
+
+// Reset all preferences to defaults
+export function resetPreferences(): void {
+  Object.entries(DEFAULT_PREFERENCES).forEach(([key, value]) => {
+    setPreference(key, value);
+  });
+}
+
+// Protocol preference (separate key for easy access from setup & live view)
+const PROTOCOL_KEY = 'mibee_nvr_protocol_pref';
+
+export function getProtocolPreference(): string {
+  try {
+    return localStorage.getItem(PROTOCOL_KEY) || 'hls';
+  } catch {
+    return 'hls';
+  }
+}
+
 export function setProtocolPreference(protocol: string): void {
   try {
-    localStorage.setItem('mibee_nvr_protocol_pref', protocol);
+    localStorage.setItem(PROTOCOL_KEY, protocol);
   } catch (error) {
     console.error('Failed to set protocol preference:', error);
   }
