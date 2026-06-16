@@ -1209,5 +1209,22 @@
   "timeline.loading": "Loading timeline…",
   "timeline.segments": "segments",
   "timeline.noRecordings": "No recording at this time",
-  "timeline.snappedToNearest": "Snapped to nearest recording"
+  "timeline.snappedToNearest": "Snapped to nearest recording",
+  "settings.mibeevision.title": "MiBeeVision Integration",
+  "settings.mibeevision.description": "Connect with MiBeeVision AI backend for server-side detection",
+  "settings.mibeevision.connected": "Connected",
+  "settings.mibeevision.notConnected": "Not Connected",
+  "settings.mibeevision.setupGuide": "Generate an API key and provide it to your MiBeeVision instance. Once connected, AI detection events will appear in the AI Events page.",
+  "settings.mibeevision.keyName": "Key Name",
+  "settings.mibeevision.generate": "Generate Key",
+  "settings.mibeevision.keyGenerated": "API key generated successfully",
+  "settings.mibeevision.keyGenFailed": "Failed to generate API key",
+  "settings.mibeevision.copyWarning": "Copy this key now — it will not be shown again.",
+  "settings.mibeevision.revoke": "Revoke",
+  "settings.mibeevision.confirmRevoke": "Revoke API key \"{name}\"? MiBeeVision will lose access immediately.",
+  "settings.mibeevision.keyRevoked": "API key revoked",
+  "settings.mibeevision.keyRevokeFailed": "Failed to revoke API key",
+  "aiEvents.notConnectedTitle": "MiBeeVision Not Connected",
+  "aiEvents.notConnectedDesc": "Configure MiBeeVision integration in Settings to start receiving AI detection events.",
+  "aiEvents.goToSettings": "Go to Settings"
 }

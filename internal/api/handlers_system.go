@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -366,6 +369,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"username":        h.config.Auth.Username,
 			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
 		},
+		"mibeevision": map[string]any{
+			"api_keys": buildAPIKeyInfo(h.config.APIKeys),
+		},
 		"timezone":         h.config.Timezone,
 		"timezone_display": tzDisplay,
 	})
@@ -383,6 +389,22 @@ func formatOffset(seconds int) string {
 		return fmt.Sprintf("%s%d", sign, hours)
 	}
 	return fmt.Sprintf("%s%d:%02d", sign, hours, mins)
+}
+
+// buildAPIKeyInfo returns a safe summary of configured API keys (never the key itself).
+func buildAPIKeyInfo(keys []config.APIKeyConfig) []map[string]any {
+	result := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		if k.Revoked {
+			continue
+		}
+		result = append(result, map[string]any{
+			"name":    k.Name,
+			"prefix":  k.Key[:min(8, len(k.Key))] + "…", // e.g. "mbv_ab12…"
+			"revoked": k.Revoked,
+		})
+	}
+	return result
 }
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
@@ -468,6 +490,80 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// handleGenerateAPIKey creates a new API key for MiBeeVision integration.
+// POST /api/settings/api-keys  body: {"name": "mibeevision-prod"}
+// Returns the full key ONCE (never exposed again).
+func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = "mibeevision"
+	}
+
+	key := middleware.GenerateAPIKey()
+	h.config.APIKeys = append(h.config.APIKeys, config.APIKeyConfig{
+		Key:  key,
+		Name: name,
+	})
+
+	if err := config.Save(h.configPath, h.config); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+
+	logger.Info("API key generated for MiBeeVision integration", "name", name)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"name":   name,
+		"key":    key,
+		"prefix": key[:min(8, len(key))] + "…",
+	})
+}
+
+// handleRevokeAPIKey marks an API key as revoked by name.
+// DELETE /api/settings/api-keys/{name}
+func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	found := false
+	for i := range h.config.APIKeys {
+		if h.config.APIKeys[i].Name == name {
+			h.config.APIKeys[i].Revoked = true
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "API key not found")
+		return
+	}
+
+	if err := config.Save(h.configPath, h.config); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+
+	logger.Info("API key revoked", "name", name)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
 func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {

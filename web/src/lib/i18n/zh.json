@@ -1209,5 +1209,22 @@
   "timeline.loading": "正在加载时间轴…",
   "timeline.segments": "段录像",
   "timeline.noRecordings": "此时刻无录像",
-  "timeline.snappedToNearest": "已吸附到最近的录像"
+  "timeline.snappedToNearest": "已吸附到最近的录像",
+  "settings.mibeevision.title": "MiBeeVision 集成",
+  "settings.mibeevision.description": "连接 MiBeeVision AI 后端进行服务端检测",
+  "settings.mibeevision.connected": "已连接",
+  "settings.mibeevision.notConnected": "未连接",
+  "settings.mibeevision.setupGuide": "生成 API Key 并提供给 MiBeeVision 实例。连接后,AI 检测事件将显示在 AI 事件页面。",
+  "settings.mibeevision.keyName": "Key 名称",
+  "settings.mibeevision.generate": "生成 Key",
+  "settings.mibeevision.keyGenerated": "API Key 生成成功",
+  "settings.mibeevision.keyGenFailed": "生成 API Key 失败",
+  "settings.mibeevision.copyWarning": "请立即复制此 Key — 它不会再次显示。",
+  "settings.mibeevision.revoke": "吊销",
+  "settings.mibeevision.confirmRevoke": "吊销 API Key \"{name}\"? MiBeeVision 将立即失去访问权限。",
+  "settings.mibeevision.keyRevoked": "API Key 已吊销",
+  "settings.mibeevision.keyRevokeFailed": "吊销 API Key 失败",
+  "aiEvents.notConnectedTitle": "MiBeeVision 未连接",
+  "aiEvents.notConnectedDesc": "在设置页配置 MiBeeVision 集成,即可开始接收 AI 检测事件。",
+  "aiEvents.goToSettings": "前往设置"
 }

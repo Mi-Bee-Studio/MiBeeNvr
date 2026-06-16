@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
-  import { logout } from '$lib/api';
+  import { logout, getSettings } from '$lib/api';
+  import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
   import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
@@ -19,6 +20,8 @@
     backLabel?: string;
   } = $props();
 
+  // MiBeeVision connection status (shared reactive store)
+  let miBeeVisionConnected = $derived(getMiBeeVisionConnected());
 
   // Mobile menu state
   let mobileMenuOpen = $state(false);
@@ -49,21 +52,24 @@
     // Sync active route from current hash
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
+
+    // Check MiBeeVision API key status
+    void refreshMiBeeVisionStatus();
   });
 
   onDestroy(() => {
     window.removeEventListener('hashchange', handleHashChange);
   });
 
-  // Navigation items
-  const navItems = [
+  // Navigation items — AI Events only shown when MiBeeVision is configured
+  let navItems = $derived([
     { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
-    { href: '#/ai-events', labelKey: 'nav.aiEvents', route: '/ai-events' },
+    ...(miBeeVisionConnected ? [{ href: '#/ai-events', labelKey: 'nav.aiEvents', route: '/ai-events' }] : []),
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
-  ];
+  ]);
 
   function isActive(route: string): boolean {
     return activeRoute === route || activeRoute.startsWith(route + '/');

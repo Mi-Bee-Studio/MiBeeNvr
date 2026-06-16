@@ -4,9 +4,10 @@
   import type { AIEvent, AIEventStats } from '$lib/api/ai-events';
   import { listCameras } from '$lib/api';
   import type { Camera } from '$lib/api';
+  import { getMiBeeVisionConnected, getMiBeeVisionLoaded, refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
-  import { AlertCircle, Brain, ChevronDown } from 'lucide-svelte';
+  import { AlertCircle, Brain, ChevronDown, Settings } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
 
   let events = $state<AIEvent[]>([]);
@@ -88,7 +89,12 @@
     loadStats();
   }
 
+  const miBeeVisionConnected = $derived(getMiBeeVisionConnected());
+  const miBeeVisionLoaded = $derived(getMiBeeVisionLoaded());
+
   onMount(async () => {
+    await refreshMiBeeVisionStatus();
+    if (!getMiBeeVisionConnected()) return;
     try {
       cameras = await listCameras();
     } catch { /* ignore */ }
@@ -97,6 +103,23 @@
 </script>
 
 <div class="p-4 md:p-6 max-w-6xl mx-auto">
+  <!-- Not connected guard -->
+  {#if miBeeVisionLoaded && !miBeeVisionConnected}
+    <div class="flex flex-col items-center justify-center py-20 text-center">
+      <Brain size={48} class="text-gray-400 mb-4 opacity-50" />
+      <h2 class="text-lg font-semibold th-text-primary mb-2">{t('aiEvents.notConnectedTitle')}</h2>
+      <p class="text-sm th-text-muted mb-6 max-w-md">{t('aiEvents.notConnectedDesc')}</p>
+      <a href="#/settings" class="btn btn-primary flex items-center gap-2">
+        <Settings size={16} />
+        {t('aiEvents.goToSettings')}
+      </a>
+    </div>
+  {:else if !miBeeVisionLoaded}
+    <!-- Loading -->
+    <div class="flex items-center justify-center py-20">
+      <span class="spinner"></span>
+    </div>
+  {:else}
   <!-- Header -->
   <div class="flex items-center gap-3 mb-6">
     <Brain size={28} class="text-purple-400" />
@@ -230,5 +253,6 @@
         />
       </div>
     {/if}
-  {/if}
+  {/if} <!-- /loading -->
+  {/if} <!-- /miBeeVision guard -->
 </div>

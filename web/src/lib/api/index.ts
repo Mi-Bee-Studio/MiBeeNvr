@@ -176,12 +176,15 @@ export {
   updateFeatures,
   getStreamingSettings,
   updateStreamingSettings,
+  generateAPIKey,
+  revokeAPIKey,
 } from './settings';
 
 export type {
   CleanupConfig,
   WebDAVConfig,
   SettingsConfig,
+  MiBeeVisionConfig,
   MergeStatus,
   MergePending,
   FeatureFlags,
