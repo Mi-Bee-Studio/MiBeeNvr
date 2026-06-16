@@ -932,4 +932,66 @@
 #YJ>- **Audio**: RTMP/SRT push currently record video only (no audio track wiring on the ingest path yet).
 #YJ>- **Legacy global config** (`srt.streams[]`, `rtmp.stream_keys`) still works and is merged with per-camera fields; per-camera fields take precedence.
 #YJ>
+#YJ>## Push-Out (Relay) — Forward a Camera to Remote Destinations
+#YJ>
+#YJ>Push-out (relay) is the reverse of push-in: the NVR forwards a camera's live stream OUT to remote destinations — another NVR's RTMP/SRT ingest, a live streaming platform, or a backup server. **It is pure Go, no FFmpeg required** — the relay uses the existing `gortsplib`/`gortmplib` libraries in-process.
+#YJ>
+#YJ>This is ideal for: sending a camera's feed to a remote NVR across the internet, mirroring to a backup site, or publishing to a live platform — all without an external process.
+#YJ>
+#YJ>### How it works
+#YJ>
+#YJ>Each push-out target subscribes to the camera's existing `StreamHub` (the same frame bus used by recording and live view). Frames are remuxed (not re-encoded) and written to the target over a dedicated RTMP or RTSP connection. Each target runs in its own goroutine with independent reconnect and bitrate accounting.
+#YJ>
+#YJ>- **Zero-copy source**: no re-pull, no decode — adding a relay target adds one goroutine + one outbound socket (~5-10 MB on RPi 3B).
+#YJ>- **H.264 remux only**: RTMP targets require an H.264 source (RTMP doesn't carry H.265). RTSP targets are also H.264 currently. Transcoding is NOT supported in the relay (use the transcoding feature for H.265→H.264 if needed, then relay the transcoded stream).
+#YJ>- **Multiple targets per camera**: one camera can push to several destinations simultaneously.
+#YJ>
+#YJ>### Configure push-out targets
+#YJ>
+#YJ>Add `push_targets` to ANY camera (RTSP, ONVIF, Xiaomi, even push-in cameras):
+#YJ>
+#YJ>```yaml
+#YJ>cameras:
+#YJ>  - id: "front-door"
+#YJ>    protocol: "rtsp"
+#YJ>    url: "rtsp://admin:pass@192.168.1.50/stream"
+#YJ>    push_targets:
+#YJ>      - id: "backup-nvr"
+#YJ>        name: "Backup NVR"
+#YJ>        protocol: "rtmp"
+#YJ>        url: "rtmp://backup.example.com:1935/live/front-door"
+#YJ>        enabled: true
+#YJ>      - id: "live-platform"
+#YJ>        name: "Live Platform"
+#YJ>        protocol: "rtsp"
+#YJ>        url: "rtsp://live.example.com:8554/front-door"
+#YJ>        enabled: false
+#YJ>    enabled: true
+#YJ>```
+#YJ>
+#YJ>Or configure via the Web UI: edit a camera → expand the "Push-Out (Relay)" section → add targets (name, protocol, URL, enable toggle).
+#YJ>
+#YJ>### Monitoring relay status
+#YJ>
+#YJ>The camera card shows a badge with active/total targets (e.g. `↑ 2/2`). In the edit form, each target shows a live status pill (streaming + kbps / connecting / reconnecting / error). The API endpoint `GET /api/cameras/{id}/push-status` returns per-target runtime status.
+#YJ>
+#YJ>### Cross-network NVR-to-NVR example
+#YJ>
+#YJ>The most common use case — sending a camera from one NVR to another across the internet, with NO FFmpeg:
+#YJ>
+#YJ>```
+#YJ>[Camera] ──RTSP──▶ [NVR-A] ──push-out relay (RTMP)──▶ [NVR-B (push-in ingest)] ──▶ records + live
+#YJ>```
+#YJ>
+#YJ>1. On **NVR-B** (the receiver): enable RTMP ingest, add a push-in camera with a stream key (e.g. `front-door-relay`).
+#YJ>2. On **NVR-A** (the sender): add a `push_target` to the source camera pointing to `rtmp://NVR-B-IP:1935/live/front-door-relay`.
+#YJ>3. NVR-A's relay engine connects to NVR-B and forwards frames. NVR-B records and serves the stream like a local camera.
+#YJ>
+#YJ>### Notes & limitations
+#YJ>
+#YJ>- **H.264 source required** for RTMP targets. H.265 sources are rejected (the relay is remux-only; no transcode).
+#YJ>- **Video only** (no audio track relay yet).
+#YJ>- **Target must be reachable**: the relay dials OUT to the target, so the target's RTMP/RTSP port must be accessible (port-forward if behind NAT).
+#YJ>- **Resilient reconnect**: if the source camera or target connection drops, the relay retries with exponential backoff and resumes automatically.
+#YJ>
 #YJ>Through comprehensive camera brand compatibility information, this guide helps you successfully integrate various IP cameras with MiBee NVR, ensuring optimal recording performance and reliability for your surveillance system.

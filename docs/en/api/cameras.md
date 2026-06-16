@@ -50,7 +50,7 @@ Add a new camera configuration.
 {
   "name": "Front Door",
   "protocol": "rtsp",
-  "encoding": "h264", 
+  "encoding": "h264",
   "url": "rtsp://192.168.1.100:554/stream",
   "username": "admin",
   "password": "secret",
@@ -59,7 +59,16 @@ Add a new camera configuration.
   "sub_stream_url": "rtsp://192.168.1.100:554/sub_stream",
   "snapshot_url": "http://192.168.1.100:8080/snapshot",
   "sample_interval": 1,
-  "hls_max_fps": 30
+  "hls_max_fps": 30,
+  "push_targets": [
+    {
+      "id": "backup-nvr",
+      "name": "Backup NVR",
+      "protocol": "rtmp",
+      "url": "rtmp://backup.example.com:1935/live/front-door",
+      "enabled": true
+    }
+  ]
 }
 ```
 
@@ -279,3 +288,38 @@ curl -u username:password \
 ```
 
 **Response:** JPEG image with `Content-Type: image/jpeg` and `Cache-Control: max-age=5`
+
+## Camera Push-Out Status
+
+**Endpoint:** `GET /api/cameras/{id}/push-status`
+
+Get the live runtime status of a camera's push-out relay targets (RTMP/RTSP). Returns per-target connection state, outbound bitrate, uptime, and errors.
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/front-door/push-status"
+```
+
+**Response:**
+```json
+{
+  "camera_id": "front-door",
+  "targets": [
+    {
+      "id": "backup-nvr",
+      "name": "Backup NVR",
+      "protocol": "rtmp",
+      "url": "rtmp://backup.example.com:1935/live/front-door",
+      "status": "streaming",
+      "kbps": 270.8,
+      "enabled": true,
+      "uptime": "1m16s",
+      "error": "",
+      "updated_at": "2026-06-17T06:15:37+08:00"
+    }
+  ]
+}
+```
+
+**Target `status` values:** `idle` (disabled), `connecting`, `streaming`, `reconnecting`, `error`.

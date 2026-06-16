@@ -875,4 +875,140 @@ nmap -p 80,8080 --open 192.168.1.0/24 | grep -v "Nmap scan"
 sudo nmap -sV -p 554,80,8080 --open 192.168.1.0/24
 ```
 
+## 推流接入 (SRT / RTMP 收推) — 跨网络接入
+
+与上面的拉流协议（RTSP/ONVIF/HTTP，NVR 主动拨出连接摄像头）不同，**推流接入**是反过来的：远端发布者（ffmpeg、OBS、手机、另一台 NVR）把流**推入** NVR。这让你能录制**不同网络**（另一个局域网、跨互联网、NAT 后）的摄像头，无需 VPN —— 只要发布者能连到 NVR 的公网 IP（或做了端口转发的端口）。
+
+这是连接 NVR 无法直接拨出的摄像头的推荐方式。
+
+详细架构设计请参见[架构文档](./architecture.md)。
+
+### 前置条件
+
+- NVR 的 SRT（UDP `9000`）和/或 RTMP（TCP `1935`）端口必须可从发布者网络访问。如果 NVR 在 NAT/路由器后，需做**端口转发**。
+- 发布者需要 ffmpeg、OBS、GStreamer 或任何能推 RTMP/SRT 的工具。
+
+### 启用接入服务
+
+在 `mibee-nvr.yaml`（或通过设置页面）：
+
+```yaml
+srt:
+  enabled: true
+  port: 9000
+
+rtmp:
+  enabled: true
+  port: 1935
+```
+
+### 添加 RTMP 推流摄像头
+
+```yaml
+cameras:
+  - id: "remote-shop"
+    name: "远程店铺摄像头"
+    protocol: "rtmp"
+    encoding: "h264"
+    stream_key: "remote-shop"   # 推流地址的最后一段
+    push_retention_days: 7      # nil=跟随全局, 0=仅直播, N=保留N天
+    enabled: true
+```
+
+从远端推流（ffmpeg 示例，替换 `NVR_IP`）：
+
+```bash
+ffmpeg -rtsp_transport tcp -i "rtsp://admin:pass@192.168.1.50:554/stream" \
+  -c copy -f flv "rtmp://NVR_IP:1935/live/remote-shop"
+```
+
+### 添加 SRT 推流摄像头
+
+```yaml
+cameras:
+  - id: "garage-cam"
+    name: "车库摄像头"
+    protocol: "srt"
+    encoding: "h264"
+    srt_stream_id: "garage-cam"
+    srt_passphrase: "my-secret"   # 可选 AES 加密
+    enabled: true
+```
+
+```bash
+ffmpeg -rtsp_transport tcp -i "rtsp://admin:pass@192.168.1.60:554/stream" \
+  -c copy -f mpegts "srt://NVR_IP:9000?streamid=garage-cam&passphrase=my-secret"
+```
+
+SRT 使用 UDP，部分家宽运营商会封锁或难以转发。如果 SRT 连不上，改用 RTMP（TCP），它穿透家宽 NAT/防火墙更可靠。
+
+### 限制说明
+
+- **SRT/RTMP 当前仅支持 H.264**。SRT 的 MPEG-TS 解复用器和经典 RTMP 都只承载 H.264。
+- **发布者连接前摄像头显示离线** —— 推流摄像头的预期行为。
+- **需要端口转发/公网 IP**。推流接入本身不穿透 NAT。如两端都不可达，用 overlay 网络（Tailscale/WireGuard）或 MediaMTX 做中转。
+- **音频**：RTMP/SRT 推流当前仅录制视频。
+
+## 推流转发 (Push-Out Relay) — 把摄像头转发到远端
+
+推流转发（relay）是推流接入的反向：NVR 把某个摄像头的实时流**转发出去**到远端目标 —— 另一台 NVR 的 RTMP/SRT 接入、直播平台、备份服务器。**纯 Go 实现，无需 FFmpeg** —— 转发使用现有的 `gortsplib`/`gortmplib` 库进程内完成。
+
+适用于：把摄像头画面送到跨互联网的远端 NVR、镜像到备份站点、发布到直播平台 —— 全部不需要外部进程。
+
+### 工作原理
+
+每个转发目标订阅摄像头已有的 `StreamHub`（录像和直播共用的同一帧总线）。帧被重新封装（不解码、不重编码）并通过专用的 RTMP 或 RTSP 连接写入目标。每个目标在独立 goroutine 中运行，有独立重连和码率统计。
+
+- **零拷贝源**：不重新拉流、不解码 —— 添加一个转发目标只增加一个 goroutine + 一个出站连接（RPi 3B 上约 5-10MB）。
+- **仅 H.264 重封装**：RTMP 目标要求 H.264 源（RTMP 不承载 H.265）。当前 RTSP 目标也仅 H.264。转发不支持转码（如需 H.265→H.264，先用转码功能，再转发转码后的流）。
+- **每摄像头多目标**：一个摄像头可同时推到多个目标。
+
+### 配置转发目标
+
+给**任意摄像头**（RTSP、ONVIF、小米、甚至推流接入的摄像头）添加 `push_targets`：
+
+```yaml
+cameras:
+  - id: "front-door"
+    protocol: "rtsp"
+    url: "rtsp://admin:pass@192.168.1.50/stream"
+    push_targets:
+      - id: "backup-nvr"
+        name: "备份 NVR"
+        protocol: "rtmp"
+        url: "rtmp://backup.example.com:1935/live/front-door"
+        enabled: true
+      - id: "live-platform"
+        name: "直播平台"
+        protocol: "rtsp"
+        url: "rtsp://live.example.com:8554/front-door"
+        enabled: false
+    enabled: true
+```
+
+或通过 Web UI：编辑摄像头 → 展开「转推输出」区域 → 添加目标（名称、协议、URL、启用开关）。
+
+### 监控转发状态
+
+摄像头卡片显示活跃/总数目标徽标（如 `↑ 2/2`）。编辑表单中每个目标显示实时状态药丸（推流中 + kbps / 连接中 / 重连中 / 错误）。API 端点 `GET /api/cameras/{id}/push-status` 返回每个目标的运行时状态。
+
+### 跨网络 NVR 互传示例
+
+最常见的场景 —— 把摄像头从一台 NVR 送到另一台，跨互联网，**无 FFmpeg**：
+
+```
+[摄像头] ──RTSP──▶ [NVR-A] ──转推 (RTMP)──▶ [NVR-B (推流接入)] ──▶ 录像 + 直播
+```
+
+1. 在 **NVR-B**（接收方）：启用 RTMP 接入，添加一个推流摄像头，设好 stream key（如 `front-door-relay`）。
+2. 在 **NVR-A**（发送方）：给源摄像头添加 `push_target`，指向 `rtmp://NVR-B-IP:1935/live/front-door-relay`。
+3. NVR-A 的转发引擎连接到 NVR-B 并转发帧。NVR-B 像本地摄像头一样录像和提供直播。
+
+### 限制说明
+
+- **RTMP 目标要求 H.264 源**。H.265 源会被拒绝（转发仅重封装，不转码）。
+- **仅视频**（暂无音频轨转发）。
+- **目标必须可达**：转发是拨出连接，目标的 RTMP/RTSP 端口必须可访问（NAT 后需端口转发）。
+- **弹性重连**：源摄像头或目标连接断开时，转发以指数退避自动重试并恢复。
+
 通过这份全面的摄像头品牌兼容性指南，您可以成功地将各种 IP 摄像头与 MiBee NVR 集成，确保监控系统获得最佳的录制性能和可靠性。
