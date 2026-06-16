@@ -244,11 +244,18 @@ function parseRoute(hash: string) {
   {/await}
 {:else}
   <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
+  <!-- Compute route props OUTSIDE the {#await} block so they update reactively
+       when params change (even if currentRoute name stays the same, e.g.
+       navigating from recording A to recording B). Inside {#await}, expressions
+       only re-evaluate when the awaited promise re-resolves. -->
+  {@const routeProps = getRouteProps(currentRoute)}
+  {#key currentRoute + '|' + (params.id || '')}
   {#await routeLoaders[currentRoute]()}
     <div class="skeleton skeleton--page"></div>
   {:then module}
-    <module.default {...getRouteProps(currentRoute)} />
+    <module.default {...routeProps} />
   {/await}
+  {/key}
 {/if}
 
 <style>

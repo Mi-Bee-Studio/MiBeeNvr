@@ -1,20 +1,21 @@
 <script lang="ts">
   /**
-   * TimelineBar — DVR-style 24h timeline for browsing a camera's recordings.
+   * TimelineBar — DVR-style timeline for browsing a camera's recordings.
    *
-   * Renders a horizontal 24-hour timeline for a given camera + date. Each
-   * recording segment is drawn as a colored block proportional to its
+   * Auto-scales to the actual span of recordings (not fixed 24h) so that
+   * segments are always wide enough to see and click. If recordings span
+   * only 5 minutes, the timeline shows those 5 minutes; if they span the
+   * whole day, it shows 24h.
+   *
+   * Each recording segment is drawn as a colored block proportional to its
    * duration. Clicking/dragging seeks to that wall-clock moment:
    *   - Hit a segment → onSeek(recordingId, offsetSecondsWithinSegment)
    *   - Hit a gap (no recording) → snap to nearest segment edge + warn
-   *
-   * Granularity: per-segment (not per-keyframe). Intra-segment seek uses
-   * the native <video> currentTime (handled by the parent).
    */
   import { listRecordings, type Recording } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
-  import { findSegmentAt, parseDayStart as parseDayStartUtil, formatLength as formatLengthUtil, type TimelineSegment } from '$lib/timeline-utils';
+  import { findSegmentAt, formatLength as formatLengthUtil, type TimelineSegment } from '$lib/timeline-utils';
 
   let {
     cameraId,
@@ -44,12 +45,14 @@
     timelapse: '#10b981', // emerald
   };
 
-  // Day boundaries in seconds-from-midnight
-  const dayStart = $derived(parseDayStart(date));
+  // --- Dynamic time window (auto-scale to actual recordings) ---
 
-  function parseDayStart(dateStr: string): number {
-    return parseDayStartUtil(dateStr);
-  }
+  /** Start of the visible window in epoch-ms */
+  let windowStartMs = $state(0);
+  /** End of the visible window in epoch-ms */
+  let windowEndMs = $state(0);
+  /** Span of the visible window in seconds */
+  const windowSpanSec = $derived(Math.max(1, (windowEndMs - windowStartMs) / 1000));
 
   // Current playback position in epoch-ms
   const currentEpochMs = $derived.by(() => {
@@ -59,12 +62,12 @@
     return startedMs + currentVideoTime * 1000;
   });
 
-  // Cursor position as percentage of 24h (0-100)
+  // Cursor position as percentage of visible window (0-100), or null if outside
   const cursorPct = $derived.by(() => {
-    if (currentEpochMs == null) return null;
-    const elapsed = (currentEpochMs - dayStart) / 1000;
-    if (elapsed < 0 || elapsed > 86400) return null;
-    return (elapsed / 86400) * 100;
+    if (currentEpochMs == null || windowSpanSec <= 0) return null;
+    const offsetSec = (currentEpochMs - windowStartMs) / 1000;
+    if (offsetSec < 0 || offsetSec > windowSpanSec) return null;
+    return (offsetSec / windowSpanSec) * 100;
   });
 
   // Load segments for the camera + date
@@ -91,6 +94,9 @@
         order: 'asc',
         limit: 500,
       });
+
+      const dayStartMs = Date.UTC(y, m - 1, dd, 0, 0, 0);
+
       segments = resp.recordings
         .map((rec) => {
           const sMs = Date.parse(rec.started_at);
@@ -98,12 +104,28 @@
           if (isNaN(sMs) || isNaN(eMs)) return null;
           return {
             rec,
-            startSec: (sMs - dayStart) / 1000,
-            endSec: (eMs - dayStart) / 1000,
+            // Store as epoch-ms for dynamic windowing
+            startSec: sMs,
+            endSec: eMs,
           };
         })
-        .filter((x): x is { rec: Recording; startSec: number; endSec: number } => x !== null)
-        .filter((x) => x.endSec > 0 && x.startSec < 86400); // clamp to visible day
+        .filter((x): x is { rec: Recording; startSec: number; endSec: number } => x !== null);
+
+      // --- Auto-compute visible window ---
+      if (segments.length > 0) {
+        const earliest = segments[0].startSec;
+        const latest = segments[segments.length - 1].endSec;
+        const span = latest - earliest;
+        // Add 10% padding on each side (min 30s, max 1h)
+        const padMs = Math.max(30_000, Math.min(3_600_000, span * 0.1));
+        windowStartMs = earliest - padMs;
+        windowEndMs = latest + padMs;
+      } else {
+        // No recordings — show 1h window around current recording
+        const center = currentRecording ? Date.parse(currentRecording.started_at) : dayStartMs;
+        windowStartMs = center - 1800_000;
+        windowEndMs = center + 1800_000;
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load timeline';
       segments = [];
@@ -112,24 +134,45 @@
     }
   }
 
-  // Total recorded duration today
+  // Total recorded duration
   const totalRecordedSec = $derived(
-    segments.reduce((sum, s) => sum + (s.endSec - s.startSec), 0),
+    segments.reduce((sum, s) => sum + (s.endSec - s.startSec) / 1000, 0),
   );
 
-  // Convert loaded segments to TimelineSegment shape for findSegmentAt
-  function findSegment(targetSec: number): { seg: TimelineSegment | null; offset: number; snapped: boolean } {
-    const tls: TimelineSegment[] = segments.map((s) => ({ id: s.rec.id, startSec: s.startSec, endSec: s.endSec }));
+  // Find segment containing targetMs (epoch-ms), or nearest
+  function findSegment(targetMs: number): { seg: TimelineSegment | null; offset: number; snapped: boolean } {
+    if (segments.length === 0) return { seg: null, offset: 0, snapped: false };
+
+    const tls: TimelineSegment[] = segments.map((s) => ({
+      id: s.rec.id,
+      startSec: s.startSec / 1000, // convert to seconds for findSegmentAt
+      endSec: s.endSec / 1000,
+    }));
+    const targetSec = targetMs / 1000;
     return findSegmentAt(tls, targetSec);
   }
 
-  function handleClick(e: MouseEvent) {
-    const target = (e.currentTarget as HTMLElement);
-    const rect = target.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    const targetSec = pct * 86400;
+  // Convert a click X position to epoch-ms
+  function clickXtoMs(clientX: number, rect: DOMRect): number {
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return windowStartMs + pct * (windowEndMs - windowStartMs);
+  }
 
-    const { seg, offset, snapped } = findSegment(targetSec);
+  // Format epoch-ms as HH:MM:SS for the current display
+  function msToLabel(ms: number): string {
+    const d = new Date(ms);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function handleClick(e: MouseEvent) {
+    const target = e.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const targetMs = clickXtoMs(e.clientX, rect);
+
+    const { seg, offset, snapped } = findSegment(targetMs);
     if (!seg) {
       snapNotice = t('timeline.noRecordings');
       return;
@@ -143,15 +186,10 @@
   }
 
   function handleMouseMove(e: MouseEvent) {
-    const target = (e.currentTarget as HTMLElement);
+    const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    const targetSec = pct * 86400;
-    const hh = Math.floor(targetSec / 3600);
-    const mm = Math.floor((targetSec % 3600) / 60);
-    const ss = Math.floor(targetSec % 60);
-    const label = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-    hoverInfo = { x: e.clientX - rect.left, label };
+    const targetMs = clickXtoMs(e.clientX, rect);
+    hoverInfo = { x: e.clientX - rect.left, label: msToLabel(targetMs) };
   }
 
   function handleMouseLeave() {
@@ -169,9 +207,8 @@
     const bar = document.getElementById('timeline-bar-track');
     if (!bar) return;
     const rect = bar.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const targetSec = pct * 86400;
-    const { seg, offset } = findSegment(targetSec);
+    const targetMs = clickXtoMs(e.clientX, rect);
+    const { seg, offset } = findSegment(targetMs);
     if (seg) {
       onseek(seg.id, offset);
       snapNotice = '';
@@ -191,16 +228,46 @@
     };
   });
 
-  // Hour ticks
-  const hours = Array.from({ length: 25 }, (_, i) => i);
+  // Generate tick marks — adaptive based on window span
+  const ticks = $derived.by(() => {
+    const spanMin = windowSpanSec / 60;
+    let intervalMin: number;
+    let count: number;
+    if (spanMin <= 10) { intervalMin = 1; }
+    else if (spanMin <= 30) { intervalMin = 5; }
+    else if (spanMin <= 120) { intervalMin = 15; }
+    else if (spanMin <= 480) { intervalMin = 60; }
+    else { intervalMin = 180; }
 
-  function secToPct(sec: number): number {
-    return (sec / 86400) * 100;
+    const result: { pct: number; label: string }[] = [];
+    const intervalMs = intervalMin * 60 * 1000;
+    // Align to interval boundary
+    const startAligned = Math.ceil(windowStartMs / intervalMs) * intervalMs;
+    for (let ms = startAligned; ms <= windowEndMs; ms += intervalMs) {
+      const pct = ((ms - windowStartMs) / (windowEndMs - windowStartMs)) * 100;
+      if (pct >= 0 && pct <= 100) {
+        result.push({ pct, label: msToLabel(ms) });
+      }
+    }
+    return result;
+  });
+
+  function msToPct(ms: number): number {
+    return ((ms - windowStartMs) / (windowEndMs - windowStartMs)) * 100;
   }
 
   function formatLength(sec: number): string {
     return formatLengthUtil(sec);
   }
+
+  // Window label (human-readable span)
+  const windowLabel = $derived.by(() => {
+    const start = msToLabel(windowStartMs);
+    const end = msToLabel(windowEndMs);
+    const span = windowSpanSec;
+    if (span < 3600) return `${start} – ${end} (${formatLength(span)})`;
+    return `${start} – ${end}`;
+  });
 </script>
 
 <div class="timeline-container">
@@ -212,21 +279,19 @@
       {:else if error}
         <span class="th-color-danger">{error}</span>
       {:else}
-        {formatDate(date)} · {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)}
+        {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)} · {windowLabel}
       {/if}
     </span>
   </div>
 
   {#if !loading && !error}
     <div class="timeline-track-wrapper">
-      <!-- Hour labels -->
+      <!-- Hour/time labels -->
       <div class="hour-labels">
-        {#each hours as h}
-          {#if h % 3 === 0}
-            <span class="hour-label" style="left: {secToPct(h * 3600)}%">
-              {String(h).padStart(2, '0')}:00
-            </span>
-          {/if}
+        {#each ticks as tick}
+          <span class="hour-label" style="left: {tick.pct}%">
+            {tick.label}
+          </span>
         {/each}
       </div>
 
@@ -236,8 +301,6 @@
         class="timeline-track"
         role="slider"
         aria-label={t('timeline.title')}
-        aria-valuemin="0"
-        aria-valuemax="86400"
         tabindex="0"
         onmousedown={handleMouseDown}
         onmousemove={handleMouseMove}
@@ -247,8 +310,8 @@
         {#each segments as seg (seg.rec.id)}
           <div
             class="timeline-segment"
-            style="left: {secToPct(Math.max(0, seg.startSec))}%; width: {secToPct(Math.min(86400, seg.endSec) - Math.max(0, seg.startSec))}%; background: {formatColor[seg.rec.format] || '#6b7280'};"
-            title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength(seg.endSec - seg.startSec)}"
+            style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor[seg.rec.format] || '#6b7280'};"
+            title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}"
           ></div>
         {/each}
 
@@ -266,13 +329,6 @@
             <div class="timeline-hover-label">{hoverInfo.label}</div>
           </div>
         {/if}
-      </div>
-
-      <!-- Grid lines -->
-      <div class="hour-grid">
-        {#each hours.filter((h) => h % 3 === 0 && h > 0 && h < 24) as h}
-          <div class="hour-grid-line" style="left: {secToPct(h * 3600)}%"></div>
-        {/each}
       </div>
     </div>
 
@@ -305,6 +361,8 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+    gap: 0.25rem;
   }
   .timeline-title {
     font-size: 0.8rem;
@@ -314,8 +372,9 @@
     letter-spacing: 0.03em;
   }
   .timeline-summary {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted, #9ca3af);
+    font-variant-numeric: tabular-nums;
   }
   .timeline-track-wrapper {
     position: relative;
@@ -332,6 +391,7 @@
     font-size: 0.65rem;
     color: var(--text-muted, #9ca3af);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   .timeline-track {
     position: relative;
@@ -346,7 +406,7 @@
     top: 2px;
     bottom: 2px;
     border-radius: 2px;
-    min-width: 1px;
+    min-width: 3px;
     opacity: 0.85;
     transition: opacity 0.15s;
   }
@@ -399,20 +459,6 @@
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .hour-grid {
-    position: relative;
-    height: 0;
-    margin-top: 0;
-  }
-  .hour-grid-line {
-    position: absolute;
-    top: -2.5rem;
-    height: 2.5rem;
-    width: 1px;
-    background: var(--border, #d1d5db);
-    opacity: 0.4;
-    pointer-events: none;
-  }
   .timeline-notice {
     margin-top: 0.4rem;
     font-size: 0.7rem;
@@ -436,14 +482,5 @@
     width: 8px;
     height: 8px;
     border-radius: 2px;
-  }
-
-  @media (max-width: 640px) {
-    .timeline-track-wrapper {
-      overflow-x: auto;
-    }
-    .timeline-track {
-      min-width: 600px;
-    }
   }
 </style>

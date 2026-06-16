@@ -360,12 +360,12 @@ function startMergeSse(cameraId: string, recordingId: string) {
     void recordTimelineSeek(recording.camera_id, isSegmentSwitch ? 'segment' : 'intra');
 
     if (isSegmentSwitch) {
-      // Switch to target recording, then seek once metadata loads
+      // Switch to target recording by updating the hash route.
+      // The {#key} block in App.svelte recreates this component with the new
+      // recordingId prop, which triggers $effect → loadRecording().
       pendingTimelineSeekOffset = offsetSeconds;
       isTransitioning = true;
-      currentId = recordingId;
-      await loadRecording();
-      isTransitioning = false;
+      window.location.hash = `#/recordings/${recordingId}`;
     } else {
       // Same segment — native seek
       if (videoEl) videoEl.currentTime = offsetSeconds;
@@ -441,6 +441,16 @@ function initVideoPlayer() {
   videoRetryCount = 0;
   videoStalled = false;
   if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+
+  // When switching recordings (src already set on an existing <video> element),
+  // Svelte updates the DOM src attribute but the browser does NOT auto-reload.
+  // We must explicitly call load() after Svelte flushes the DOM update.
+  // See: https://html.spec.whatwg.org/#loading-the-media-resource
+  void tick().then(() => {
+    if (videoEl) {
+      videoEl.load();
+    }
+  });
 }
 
 function setVideoSpeed(speed: number) {
@@ -1066,7 +1076,8 @@ $effect(() => {
   }
 });
 
-  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings)
+  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings
+  // AND timeline cross-segment seeks which update window.location.hash)
   $effect(() => {
     const id = recordingId;
     if (!id) return;
@@ -1074,7 +1085,9 @@ $effect(() => {
     currentId = id;
     loading = true;
     error = '';
-    loadRecording();
+    loadRecording().finally(() => {
+      isTransitioning = false;
+    });
   });
 
   onMount(() => {
