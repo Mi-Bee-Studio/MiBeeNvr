@@ -73,6 +73,10 @@
   let formStreamEncoding = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
+  // Push/ingest fields (SRT/RTMP)
+  let formStreamKey = $state('');
+  let formSRTPassphrase = $state('');
+  let formSRTStreamID = $state('');
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -148,6 +152,9 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     formChannel = '';
     formAudioEnabled = false;
+    formStreamKey = '';
+    formSRTPassphrase = '';
+    formSRTStreamID = '';
   }
 
   function populateForm(camera: Camera) {
@@ -178,6 +185,9 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formStreamKey = camera.stream_key || '';
+    formSRTPassphrase = camera.srt_passphrase || '';
+    formSRTStreamID = camera.srt_stream_id || '';
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -315,6 +325,9 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
+            srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
+            srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -356,6 +369,9 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
+            srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
+            srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -418,6 +434,36 @@ async function performCameraSave() {
       </div>
     {/if}
 
+    {#if formProtocol === 'rtmp'}
+      <!-- RTMP push: publisher connects to NVR; show the ingest address -->
+      <div>
+        <label for="cam-stream-key" class="input-label">{t('cameras.streamKey')}</label>
+        <input id="cam-stream-key" type="text" class="input" bind:value={formStreamKey}
+          placeholder="front-door" />
+        <p class="text-xs th-text-muted mt-1">
+          {t('cameras.rtmpPushAddress')}: rtmp://{'<'}NVR-IP{'>'}:1935/live/{formStreamKey || '<key>'}
+        </p>
+      </div>
+    {/if}
+
+    {#if formProtocol === 'srt'}
+      <!-- SRT push: publisher connects to NVR -->
+      <div>
+        <label for="cam-srt-stream-id" class="input-label">{t('cameras.srtStreamID')}</label>
+        <input id="cam-srt-stream-id" type="text" class="input" bind:value={formSRTStreamID}
+          placeholder="live/front-door" />
+        <p class="text-xs th-text-muted mt-1">
+          {t('cameras.srtPushAddress')}: srt://{'<'}NVR-IP{'>'}:9000?streamid={formSRTStreamID || editingCamera?.id || '<id>'}
+        </p>
+      </div>
+      <div>
+        <label for="cam-srt-passphrase" class="input-label">{t('cameras.srtPassphrase')}</label>
+        <input id="cam-srt-passphrase" type="text" class="input" bind:value={formSRTPassphrase}
+          placeholder="(optional AES passphrase)" />
+        <p class="text-xs th-text-muted mt-1">{t('cameras.srtPassphraseHint')}</p>
+      </div>
+    {/if}
+
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
     {#if formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
       <div class="flex items-center gap-2">
@@ -433,7 +479,8 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    <!-- URL -->
+    <!-- URL (hidden for push/ingest protocols — publisher connects to us) -->
+    {#if formProtocol !== 'srt' && formProtocol !== 'rtmp'}
     <div class="md:col-span-2">
       <label for="cam-url" class="input-label">
         {t('cameras.url')}
@@ -473,6 +520,13 @@ async function performCameraSave() {
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
       {/if}
     </div>
+    {/if}
+
+    {#if formProtocol === 'srt' || formProtocol === 'rtmp'}
+      <div class="md:col-span-2 p-3 rounded-md th-bg-hover border th-border text-sm">
+        <p class="th-text-secondary">{t('cameras.pushHint')}</p>
+      </div>
+    {/if}
 
     {#if formProtocol === 'xiaomi'}
       {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}

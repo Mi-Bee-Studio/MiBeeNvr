@@ -34,6 +34,11 @@ type OnPublisherConnect func(cameraID string, hub *model.StreamHub)
 // The implementation should clean up the virtual camera and hub.
 type OnPublisherDisconnect func(cameraID string)
 
+// NALUCallback forwards an assembled H.264 access unit to the IngestRecorder
+// for MP4 recording. ptsTicks is a 90 kHz clock value. main.go obtains one per
+// camera from the camera manager's IngestRecorder.
+type NALUCallback func(au [][]byte, ptsTicks int64, isIDR bool)
+
 // Config holds RTMP server configuration.
 type Config struct {
 	// Addr is the listen address (default ":1935").
@@ -48,6 +53,10 @@ type Server struct {
 	hubFn  CameraHubProvider
 	onConn OnPublisherConnect
 	onDisc OnPublisherDisconnect
+	// NALUProvider returns the recording callback for a camera (or nil). When
+	// set, each received access unit is forwarded to the IngestRecorder in
+	// addition to the hub broadcast, so RTMP pushes produce recordings.
+	NALUProvider func(cameraID string) NALUCallback
 
 	mu        sync.Mutex
 	listener  net.Listener
@@ -248,15 +257,35 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 		return
 	}
 
+	// Set up the IngestRecorder callback (used below for both the initial
+	// SPS/PPS feed and the per-frame VCL forwarding).
+	var recordCB NALUCallback
+	if s.NALUProvider != nil {
+		recordCB = s.NALUProvider(entry.cameraID)
+	}
+
+	// Extract SPS/PPS from the RTMP AVCDecoderConfigurationRecord (carried
+	// out-of-band, NOT in VCL access units). Feed them to the IngestRecorder so
+	// it can (a) initialize MP4 segments and (b) prepend SPS/PPS to IDR frames
+	// for downstream consumers (HLS DTS extractor, WebRTC) that expect them
+	// in-band — matching the RTSP path.
+	if h264Codec, ok := h264Track.Codec.(*codecs.H264); ok && h264Codec.SPS != nil && recordCB != nil {
+		recordCB([][]byte{h264Codec.SPS, h264Codec.PPS}, 0, true)
+	}
+
 	// Clear deadline for continuous reading
 	conn.SetReadDeadline(time.Time{})
 
-	// Set up H.264 data callback — non-blocking broadcast to StreamHub
+	// Set up H.264 data callback — non-blocking broadcast to StreamHub.
 	r.OnDataH264(h264Track, func(pts time.Duration, dts time.Duration, au [][]byte) {
 		// pts is time.Duration from stream start, convert to 90kHz clock ticks
 		// for compatibility with StreamHub's existing consumers (HLS, WebRTC, FLV).
 		ptsTicks := pts.Nanoseconds() * 90 / 1e6 // ns → 90kHz ticks
-		entry.hub.Broadcast(ptsTicks, au, nalutil.IsIDR(au, false))
+		isIDR := nalutil.IsIDR(au, false)
+		entry.hub.Broadcast(ptsTicks, au, isIDR)
+		if recordCB != nil {
+			recordCB(au, ptsTicks, isIDR)
+		}
 	})
 
 	// Read loop — runs until disconnect or context cancellation

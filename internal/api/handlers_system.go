@@ -794,6 +794,20 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
 		},
+		{
+			ID:           "srt",
+			Label:        "SRT (push)",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
+			ID:           "rtmp",
+			Label:        "RTMP (push)",
+			Encodings:    []string{"h264"},
+			BuiltIn:      true,
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

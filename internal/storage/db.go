@@ -352,6 +352,20 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
 
+	// Migration v21 → v22: add push/ingest fields to cameras (SRT/RTMP cameras).
+	// RTMP uses stream_key; SRT uses srt_passphrase (AES) and srt_stream_id.
+	var streamKeyColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stream_key'`).Scan(&streamKeyColExists)
+	if streamKeyColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN stream_key TEXT DEFAULT ''")
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_passphrase TEXT DEFAULT ''")
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT ''")
+	}
+	// Register the new protocols as feature flags so the Settings UI can gate them.
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.srt', 1)`)
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.rtmp', 1)`)
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+
 	return nil
 
 }

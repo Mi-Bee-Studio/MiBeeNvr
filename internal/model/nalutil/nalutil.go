@@ -30,3 +30,37 @@ func IsIDR(au [][]byte, isH265 bool) bool {
 	}
 	return false
 }
+
+// ExtractParamSetsH264 scans an H.264 access unit and returns the most recently
+// observed SPS (NAL type 7) and PPS (NAL type 8), without the start-code prefix.
+// Returns nil for either if not present. This is the single source of truth for
+// SPS/PPS extraction (previously duplicated inline across h264/h265/xiaomi
+// recorders and the timelapse keyframe extractor).
+func ExtractParamSetsH264(au [][]byte) (sps, pps []byte) {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch nalu[0] & 0x1F {
+		case 7: // SPS
+			sps = nalu
+		case 8: // PPS
+			pps = nalu
+		}
+	}
+	return sps, pps
+}
+
+// EqualParamSets reports whether two SPS/PPS NAL units are byte-identical.
+// nil comparisons are treated as equal-to-nil only (nil != non-nil).
+func EqualParamSets(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -78,6 +78,14 @@ type CameraConfig struct {
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+
+	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
+	// For these cameras the publisher connects TO the NVR; the URL field is
+	// not used. RTMP uses StreamKey (the last path segment of rtmp://host/live/{key}).
+	// SRT uses SRTPassphrase (AES encryption) and SRTStreamID (the streamid query).
+	StreamKey     string `yaml:"stream_key,omitempty" json:"stream_key,omitempty"`
+	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
+	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -427,7 +435,8 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("camera[%d] and camera[%d] have duplicate id %q", j, i, c.ID)
 		}
 		seen[c.ID] = i
-		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" {
+		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" &&
+			c.Protocol != string(model.ProtoSRT) && c.Protocol != string(model.ProtoRTMP) {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
 		// Validate URL format if set
@@ -1045,6 +1054,11 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Encoding = "jpeg"
 			case "onvif":
 				cam.Encoding = "" // ONVIF auto-detects
+			case string(model.ProtoSRT), string(model.ProtoRTMP):
+				// Push cameras: encoding is derived from the published stream.
+				// Default to h264 (the only codec RTMP supports; SRT's current
+				// MPEG-TS demux is also H.264-only).
+				cam.Encoding = "h264"
 			}
 		}
 		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)

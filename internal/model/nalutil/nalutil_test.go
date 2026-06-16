@@ -157,6 +157,63 @@ func TestIsIDR_EmptyAU(t *testing.T) {
 	require.False(t, IsIDR([][]byte{}, true))
 }
 
+// --- ExtractParamSetsH264 ---
+
+func TestExtractParamSetsH264_BothPresent(t *testing.T) {
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x84, 0x00}
+	au := [][]byte{sps, pps, idr}
+	gotSPS, gotPPS := ExtractParamSetsH264(au)
+	require.Equal(t, sps, gotSPS)
+	require.Equal(t, pps, gotPPS)
+}
+
+func TestExtractParamSetsH264_OnlySPS(t *testing.T) {
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a}
+	au := [][]byte{sps, {0x65, 0x88}}
+	gotSPS, gotPPS := ExtractParamSetsH264(au)
+	require.Equal(t, sps, gotSPS)
+	require.Nil(t, gotPPS)
+}
+
+func TestExtractParamSetsH264_NonePresent(t *testing.T) {
+	au := [][]byte{{0x65, 0x88}, {0x41, 0x9a}}
+	gotSPS, gotPPS := ExtractParamSetsH264(au)
+	require.Nil(t, gotSPS)
+	require.Nil(t, gotPPS)
+}
+
+func TestExtractParamSetsH264_LastWins(t *testing.T) {
+	// When SPS/PPS appear multiple times, the last one wins (matches the
+	// recorder pattern of keeping the most recent param set).
+	sps1 := []byte{0x67, 0x01}
+	sps2 := []byte{0x67, 0x02}
+	au := [][]byte{sps1, sps2}
+	gotSPS, _ := ExtractParamSetsH264(au)
+	require.Equal(t, sps2, gotSPS)
+}
+
+func TestExtractParamSetsH264_EmptyAndNilNALUs(t *testing.T) {
+	sps := []byte{0x67, 0x42, 0xc0}
+	au := [][]byte{{}, nil, sps}
+	gotSPS, gotPPS := ExtractParamSetsH264(au)
+	require.Equal(t, sps, gotSPS)
+	require.Nil(t, gotPPS)
+}
+
+// --- EqualParamSets ---
+
+func TestEqualParamSets(t *testing.T) {
+	require.True(t, EqualParamSets(nil, nil))
+	require.True(t, EqualParamSets([]byte{}, []byte{}))
+	require.True(t, EqualParamSets([]byte{1, 2, 3}, []byte{1, 2, 3}))
+	require.False(t, EqualParamSets(nil, []byte{1}))
+	require.False(t, EqualParamSets([]byte{1}, nil))
+	require.False(t, EqualParamSets([]byte{1, 2}, []byte{1, 3}))
+	require.False(t, EqualParamSets([]byte{1, 2}, []byte{1, 2, 3}))
+}
+
 // --- Cross-codec correctness (the FLV H.265 bug) ---
 //
 // These tests verify that H.265 IDR frames are NOT detected as keyframes

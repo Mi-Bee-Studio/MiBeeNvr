@@ -51,6 +51,11 @@ type CameraRow struct {
 	Channel              string `json:"channel,omitempty"`
 	// AudioEnabled injected from YAML at API response time
 	AudioEnabled         bool `json:"audio_enabled"`
+	// Push/ingest fields injected from YAML at API response time (SRT/RTMP).
+	// Persisted via UpsertCameraIngest (separate from UpsertCamera).
+	StreamKey     string `json:"stream_key,omitempty"`
+	SRTPassphrase string `json:"srt_passphrase,omitempty"`
+	SRTStreamID   string `json:"srt_stream_id,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
@@ -139,6 +144,16 @@ func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url
 
 	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, onvifEndpoint, profileToken, streamEncoding)
 
+	return err
+}
+
+// UpsertCameraIngest writes the push/ingest columns (stream_key, srt_passphrase,
+// srt_stream_id) for a camera. Kept separate from UpsertCamera (which ~60 call
+// sites use) to avoid a sweeping signature change — mirrors the
+// UpsertCameraMerge pattern. Only relevant for srt/rtmp protocol cameras.
+func (d *DB) UpsertCameraIngest(ctx context.Context, cameraID, streamKey, srtPassphrase, srtStreamID string) error {
+	q := `UPDATE cameras SET stream_key=?, srt_passphrase=?, srt_stream_id=? WHERE id=?;`
+	_, err := d.db.ExecContext(ctx, q, streamKey, srtPassphrase, srtStreamID, cameraID)
 	return err
 }
 

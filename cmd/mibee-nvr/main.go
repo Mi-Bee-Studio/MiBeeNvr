@@ -31,6 +31,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
@@ -659,14 +660,80 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
 		a.rtmpServer = rtmp.NewServer(
 			rtmp.Config{Addr: fmt.Sprintf(":%d", cfg.RTMP.Port)},
-			nil, nil, nil, nil, // resolv, hubFn, onConn, onDisc — can be wired later
+			// StreamKeyResolver: LIVE lookup (reflects cameras added at runtime,
+			// not just those present at startup).
+			a.camMgr.ResolveStreamKey,
+			// CameraHubProvider: hand the publisher the SAME hub the recorder owns.
+			a.camMgr.GetOrCreateHub,
+			// OnPublisherConnect: mark the IngestRecorder as streaming.
+			func(cameraID string, _ *model.StreamHub) {
+				if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.WriteConnected()
+				}
+			},
+			// OnPublisherDisconnect: close in-flight segment, return to Idle.
+			func(cameraID string) {
+				if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.OnDisconnect()
+				}
+			},
 		)
+		// NALUProvider: forward each access unit to the IngestRecorder for MP4 recording.
+		a.rtmpServer.NALUProvider = func(cameraID string) rtmp.NALUCallback {
+			ir := a.camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(au [][]byte, ptsTicks int64, isIDR bool) {
+				ir.WriteNALU(au, ptsTicks, isIDR)
+			}
+		}
 		slog.Info("RTMP server configured", "port", cfg.RTMP.Port)
 	}
 
 	// Step 7.8: SRT listener (optional)
 	if cfg.SRT.Enabled != nil && *cfg.SRT.Enabled {
+		// Merge per-camera SRT push params into cfg.SRT.Streams so the listener's
+		// passphrase/streamid lookup covers both configuration styles.
+		for _, sc := range a.camMgr.SRTStreamConfigs() {
+			found := false
+			for i := range cfg.SRT.Streams {
+				if cfg.SRT.Streams[i].CameraID == sc.CameraID {
+					if sc.Passphrase != "" {
+						cfg.SRT.Streams[i].Passphrase = sc.Passphrase
+					}
+					if sc.StreamID != "" {
+						cfg.SRT.Streams[i].StreamID = sc.StreamID
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				cfg.SRT.Streams = append(cfg.SRT.Streams, sc)
+			}
+		}
 		a.srtListener = srt.NewListener(cfg.SRT)
+		a.srtListener.HubProvider = a.camMgr.GetOrCreateHub
+		a.srtListener.OnConnect = func(cameraID string, _ *model.StreamHub) {
+			if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.WriteConnected()
+			}
+		}
+		a.srtListener.OnDisconnect = func(cameraID string) {
+			if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.OnDisconnect()
+			}
+		}
+		a.srtListener.NALUProvider = func(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool) {
+			ir := a.camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(au [][]byte, ptsTicks int64, isIDR bool) {
+				ir.WriteNALU(au, ptsTicks, isIDR)
+			}
+		}
 		slog.Info("SRT listener configured", "port", cfg.SRT.Port)
 	}
 

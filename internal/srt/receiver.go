@@ -30,6 +30,11 @@ type Receiver struct {
 	done       chan struct{}
 	running    atomic.Bool
 
+	// NALUCallback, if set, is invoked for each assembled access unit in addition
+	// to the hub broadcast. main.go wires it to the camera's IngestRecorder so
+	// pushed frames are also written to rolling MP4 segments (recordings).
+	NALUCallback func(au [][]byte, ptsTicks int64, isIDR bool)
+
 	// Metrics
 	frameCount atomic.Int64
 	dropCount  atomic.Int64
@@ -161,11 +166,12 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 				if len(au) == 0 {
 					continue
 				}
-
-				// Determine PTS from the first NALU in the access unit
 				pts := nalus[0].PTS
-
-				r.hub.Broadcast(pts, au, nalutil.IsIDR(au, false))
+				isIDR := nalutil.IsIDR(au, false)
+				r.hub.Broadcast(pts, au, isIDR)
+				if r.NALUCallback != nil {
+					r.NALUCallback(au, pts, isIDR)
+				}
 				r.frameCount.Add(1)
 			}
 		}
@@ -180,7 +186,11 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 				continue
 			}
 			pts := nalus[0].PTS
-			r.hub.Broadcast(pts, au, nalutil.IsIDR(au, false))
+			isIDR := nalutil.IsIDR(au, false)
+			r.hub.Broadcast(pts, au, isIDR)
+			if r.NALUCallback != nil {
+				r.NALUCallback(au, pts, isIDR)
+			}
 			r.frameCount.Add(1)
 		}
 	}

@@ -36,6 +36,10 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  // Push/ingest fields (SRT/RTMP cameras)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
 }
 
 export interface CreateCameraRequest {
@@ -55,6 +59,10 @@ export interface CreateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Push/ingest fields (SRT/RTMP)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
 }
 
 export interface UpdateCameraRequest {
@@ -75,6 +83,10 @@ export interface UpdateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Push/ingest fields (SRT/RTMP)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
 }
 
 export interface DiscoveredDevice {

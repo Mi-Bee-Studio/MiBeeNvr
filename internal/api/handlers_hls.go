@@ -273,6 +273,11 @@ func getRecorderHub(rec model.Recorder) *model.StreamHub {
 		return r.Hub
 	case *xiaomi.XiaomiRecorder:
 		return r.Hub
+	case *recorder.IngestRecorder:
+		// Push cameras (srt/rtmp): the hub is set by camera.initStreamHub,
+		// same as every other recorder. Without this case, HLS would subscribe
+		// to a nil hub and never receive the published frames.
+		return r.Hub
 	default:
 		return nil
 	}
