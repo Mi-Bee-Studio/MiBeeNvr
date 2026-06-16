@@ -9,6 +9,7 @@
         normalizeProtocol,
         testConnection,
         getDeviceCapabilities,
+        getPushStatus,
     } from '$lib/api';
     import type {
         Camera,
@@ -20,8 +21,11 @@
         XiaomiDevice,
         TestConnectionResult,
         DeviceCapabilitiesInfo,
+        PushTargetConfig,
+        PushTargetStatus,
     } from '$lib/api';
-    import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
+    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight } from 'lucide-svelte';
+    import { onDestroy } from 'svelte';
     import { showToast } from '$lib/toast';
     import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
     import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
@@ -77,6 +81,13 @@
   let formStreamKey = $state('');
   let formSRTPassphrase = $state('');
   let formSRTStreamID = $state('');
+  // Push-in retention (SRT/RTMP): null=follow global, 0=live-only, N=keep N days
+  let formPushRetentionDays = $state<number | null>(null);
+  // Push-out relay targets
+  let formPushTargets = $state<PushTargetConfig[]>([]);
+  // Push-out live status (fetched when editing)
+  let pushStatus = $state<PushTargetStatus[]>([]);
+  let pushStatusTimer: ReturnType<typeof setInterval> | null = null;
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -155,6 +166,9 @@ let validationErrors = $state<Record<string, string>>({});
     formStreamKey = '';
     formSRTPassphrase = '';
     formSRTStreamID = '';
+    formPushRetentionDays = null;
+    formPushTargets = [];
+    pushStatus = [];
   }
 
   function populateForm(camera: Camera) {
@@ -188,6 +202,48 @@ let validationErrors = $state<Record<string, string>>({});
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
     formSRTStreamID = camera.srt_stream_id || '';
+    formPushRetentionDays = camera.push_retention_days ?? null;
+    formPushTargets = (camera.push_targets ?? []).map((p) => ({ ...p }));
+    // Start polling push-out status while editing (only if there are targets).
+    startPushStatusPolling(camera.id);
+  }
+
+  // --- Push-out (relay) helpers ---
+  onDestroy(() => stopPushStatusPolling());
+  function startPushStatusPolling(cameraId: string) {
+    stopPushStatusPolling();
+    const poll = async () => {
+      try {
+        const res = await getPushStatus(cameraId);
+        pushStatus = res.targets ?? [];
+      } catch {
+        // ignore — camera may not be saved yet
+      }
+    };
+    poll();
+    pushStatusTimer = setInterval(poll, 3000);
+  }
+  function stopPushStatusPolling() {
+    if (pushStatusTimer) {
+      clearInterval(pushStatusTimer);
+      pushStatusTimer = null;
+    }
+  }
+  function addPushTarget() {
+    const id = 'tgt-' + Math.random().toString(36).slice(2, 8);
+    formPushTargets = [
+      ...formPushTargets,
+      { id, name: '', protocol: 'rtmp', url: '', enabled: true },
+    ];
+  }
+  function removePushTarget(id: string) {
+    formPushTargets = formPushTargets.filter((t) => t.id !== id);
+  }
+  function updatePushTarget(id: string, patch: Partial<PushTargetConfig>) {
+    formPushTargets = formPushTargets.map((t) => (t.id === id ? { ...t, ...patch } : t));
+  }
+  function pushStatusFor(id: string): PushTargetStatus | undefined {
+    return pushStatus.find((s) => s.id === id);
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -328,6 +384,8 @@ async function performCameraSave() {
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
+            push_targets: formPushTargets.length > 0 ? formPushTargets : [],
+            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -372,6 +430,8 @@ async function performCameraSave() {
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
+            push_targets: formPushTargets.length > 0 ? formPushTargets : undefined,
+            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -464,6 +524,24 @@ async function performCameraSave() {
       </div>
     {/if}
 
+    {#if formProtocol === 'srt' || formProtocol === 'rtmp'}
+      <!-- Push-in save policy: follow global / live-only / custom retention -->
+      <div>
+        <label for="cam-push-retention" class="input-label">{t('cameras.pushRetention')}</label>
+        <select id="cam-push-retention" class="input" onchange={(e) => {
+          const v = (e.target as HTMLSelectElement).value;
+          formPushRetentionDays = v === '' ? null : v === 'live' ? 0 : parseInt(v, 10);
+        }}>
+          <option value="">{t('cameras.pushRetentionGlobal')}</option>
+          <option value="live" selected={formPushRetentionDays === 0}>{t('cameras.pushRetentionLiveOnly')}</option>
+          {#each [1, 3, 7, 14, 30, 90] as d}
+            <option value={d} selected={formPushRetentionDays === d}>{d} {t('cameras.days')}</option>
+          {/each}
+        </select>
+        <p class="text-xs th-text-muted mt-1">{t('cameras.pushRetentionHint')}</p>
+      </div>
+    {/if}
+
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
     {#if formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
       <div class="flex items-center gap-2">
@@ -527,6 +605,60 @@ async function performCameraSave() {
         <p class="th-text-secondary">{t('cameras.pushHint')}</p>
       </div>
     {/if}
+
+    <!-- Push-out (relay) targets: forward this camera's stream to remote destinations -->
+    <div class="md:col-span-2">
+      <details class="rounded-md border th-border">
+        <summary class="cursor-pointer p-3 flex items-center gap-2 th-bg-hover">
+          <ArrowUpRight size={16} class="th-text-secondary" />
+          <span class="font-medium th-text-primary">{t('cameras.pushOutTitle')}</span>
+          {#if formPushTargets.length > 0}
+            <span class="text-xs px-2 py-0.5 rounded-full th-bg-muted th-text-secondary">{formPushTargets.length}</span>
+          {/if}
+        </summary>
+        <div class="p-3 border-t th-border space-y-2">
+          <p class="text-xs th-text-muted mb-2">{t('cameras.pushOutHint')}</p>
+
+          {#if formPushTargets.length === 0}
+            <p class="text-sm th-text-muted py-2">{t('cameras.pushOutEmpty')}</p>
+          {:else}
+            {#each formPushTargets as tgt (tgt.id)}
+              {@const st = pushStatusFor(tgt.id)}
+              <div class="flex flex-wrap items-center gap-2 p-2 rounded-md th-bg-muted">
+                <input type="text" class="input flex-1 min-w-[100px]" placeholder={t('cameras.pushOutName')}
+                  value={tgt.name} oninput={(e) => updatePushTarget(tgt.id, { name: (e.target as HTMLInputElement).value })} />
+                <select class="input w-auto" value={tgt.protocol}
+                  onchange={(e) => updatePushTarget(tgt.id, { protocol: (e.target as HTMLSelectElement).value as 'rtmp' | 'rtsp' })}>
+                  <option value="rtmp">RTMP</option>
+                  <option value="rtsp">RTSP</option>
+                </select>
+                <input type="text" class="input flex-[2] min-w-[160px]" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/key'}
+                  value={tgt.url} oninput={(e) => updatePushTarget(tgt.id, { url: (e.target as HTMLInputElement).value })} />
+                <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap">
+                  <input type="checkbox" class="checkbox" checked={tgt.enabled}
+                    onchange={(e) => updatePushTarget(tgt.id, { enabled: (e.target as HTMLInputElement).checked })} />
+                  {t('cameras.pushOutEnabled')}
+                </label>
+                {#if st}
+                  <span class="text-xs px-2 py-0.5 rounded-full {st.status === 'streaming' ? 'th-bg-success-light th-color-success' : st.status === 'error' ? 'th-bg-danger-light th-color-danger' : 'th-bg-muted th-text-secondary'}"
+                    title={st.error || ''}>
+                    {st.status === 'streaming' ? `● ${Math.round(st.kbps)} kbps` : t('cameras.pushStatus.' + st.status)}
+                  </span>
+                {/if}
+                <button type="button" class="btn-ghost p-1 th-color-danger" title={t('cameras.pushOutRemove')}
+                  onclick={() => removePushTarget(tgt.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            {/each}
+          {/if}
+
+          <button type="button" class="btn btn-ghost btn-sm mt-2 flex items-center gap-1" onclick={addPushTarget}>
+            <Plus size={14} /> {t('cameras.pushOutAdd')}
+          </button>
+        </div>
+      </details>
+    </div>
 
     {#if formProtocol === 'xiaomi'}
       {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}

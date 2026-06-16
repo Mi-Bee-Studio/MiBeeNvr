@@ -86,6 +86,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					cameras[i].StreamKey = cam.StreamKey
 					cameras[i].SRTPassphrase = cam.SRTPassphrase
 					cameras[i].SRTStreamID = cam.SRTStreamID
+					cameras[i].PushTargets = cam.PushTargets
+					cameras[i].PushRetentionDays = cam.PushRetentionDays
 					break
 				}
 			}
@@ -142,6 +144,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
 		SRTStreamID   string `json:"srt_stream_id"`
+		// Push-out relay targets + retention
+		PushTargets       []config.PushTargetConfig `json:"push_targets"`
+		PushRetentionDays *int                      `json:"push_retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -246,6 +251,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamKey:      body.StreamKey,
 		SRTPassphrase:  body.SRTPassphrase,
 		SRTStreamID:    body.SRTStreamID,
+		PushTargets:      body.PushTargets,
+		PushRetentionDays: body.PushRetentionDays,
 	}
 
 	if h.camMgr == nil {
@@ -331,16 +338,36 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				if cam.Channel != "" {
 					row.Channel = cam.Channel
 				}
-				row.AudioEnabled = cam.AudioEnabled
-				row.StreamKey = cam.StreamKey
-				row.SRTPassphrase = cam.SRTPassphrase
-				row.SRTStreamID = cam.SRTStreamID
-				break
+			row.AudioEnabled = cam.AudioEnabled
+			row.StreamKey = cam.StreamKey
+			row.SRTPassphrase = cam.SRTPassphrase
+			row.SRTStreamID = cam.SRTStreamID
+			row.PushTargets = cam.PushTargets
+			row.PushRetentionDays = cam.PushRetentionDays
+			break
 			}
 		}
 	}
 	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
+}
+
+// handleCameraPushStatus returns the runtime status of a camera's push-out relay
+// targets (RTMP/RTSP). Used by the camera card/form to show live relay state.
+func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	status := h.camMgr.RelayStatus(id)
+	if status == nil {
+		status = []interface{}{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"camera_id": id,
+		"targets":   status,
+	})
 }
 
 func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +401,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamKey     *string `json:"stream_key"`
 		SRTPassphrase *string `json:"srt_passphrase"`
 		SRTStreamID   *string `json:"srt_stream_id"`
+		// Push-out relay targets (replace whole list) + retention
+		PushTargets       *[]config.PushTargetConfig `json:"push_targets"`
+		PushRetentionDays *int                       `json:"push_retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -425,6 +455,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamKey:      body.StreamKey,
 		SRTPassphrase:  body.SRTPassphrase,
 		SRTStreamID:    body.SRTStreamID,
+		PushTargets:       body.PushTargets,
+		PushRetentionDays: body.PushRetentionDays,
 	}
 
 	// Validate URL format if URL is being updated (skip for ONVIF and push cameras).

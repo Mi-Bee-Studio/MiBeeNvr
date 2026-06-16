@@ -35,6 +35,7 @@ import (
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -379,6 +380,7 @@ type App struct {
 	ftpServer   *ftp.Server
 	rtmpServer  *rtmp.Server
 	srtListener *srt.Listener
+	relayMgr    *relay.Manager
 
 	// Streaming managers
 	webrtcMgr    *webrtc.Manager
@@ -655,6 +657,13 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		wsstream.WithIdleTimeout(cfg.WebSocket.IdleTimeout),
 	)
 	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
+
+	// Step 7.6b: Relay (push-out) manager. Always constructed when cameras may
+	// have push_targets — it's nil-safe and only runs goroutines for cameras
+	// that actually have enabled targets. Wired to the camera manager so Add/
+	// Update/Remove reconcile targets automatically.
+	a.relayMgr = relay.NewManager(a.camMgr.GetHub, a.camMgr.GetSPS)
+	a.camMgr.SetRelayManager(a.relayMgr)
 
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
@@ -951,6 +960,12 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 
+	// Start relay (push-out) manager root context BEFORE cameras start, so the
+	// SetCameraTargets calls issued during camMgr.Start() find a ready manager.
+	if a.relayMgr != nil {
+		a.relayMgr.Start(ctx)
+	}
+
 	// Start camera manager
 	go func() {
 		if err := a.camMgr.Start(ctx); err != nil {
@@ -1111,6 +1126,13 @@ func (a *App) Stop() error {
 	if a.srtListener != nil {
 		log.Info("stopping SRT listener")
 		_ = a.srtListener.Stop()
+	}
+
+	// 5b. Relay (push-out) manager — stop before camera manager so targets
+	// unsubscribe cleanly while their source hubs still exist.
+	if a.relayMgr != nil {
+		log.Info("stopping relay manager")
+		a.relayMgr.Stop()
 	}
 
 	// 6. MQTT client

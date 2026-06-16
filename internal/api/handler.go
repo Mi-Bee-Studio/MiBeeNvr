@@ -305,6 +305,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/stability", h.handleGetStability)
 		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
+		// Push-out relay status (per-camera)
+		r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
 		// Transcoding endpoints
 		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
 		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)

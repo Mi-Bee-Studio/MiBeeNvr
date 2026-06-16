@@ -37,6 +37,7 @@ export {
   getCamera,
   updateCamera,
   deleteCamera,
+  getPushStatus,
   getCameraRecordingStats,
   startCamera,
   stopCamera,
@@ -98,6 +99,9 @@ export type {
   TestConnectionRequest,
   TestConnectionResult,
   VendorCheckResult,
+  PushTargetConfig,
+  PushTargetStatus,
+  PushStatusResponse,
   // Imaging
   ImagingSettings,
   ImagingOptionRange,

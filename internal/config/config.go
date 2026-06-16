@@ -86,6 +86,24 @@ type CameraConfig struct {
 	StreamKey     string `yaml:"stream_key,omitempty" json:"stream_key,omitempty"`
 	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
 	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
+
+	// Push-out targets (relay): forward this camera's live stream to remote
+	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
+	// Applies to ANY camera protocol — the engine subscribes to the camera's
+	// StreamHub, so no re-pull happens. Each entry is one independent target.
+	PushTargets []PushTargetConfig `yaml:"push_targets,omitempty" json:"push_targets,omitempty"`
+	// Per-camera push-in retention override. nil = follow global retention,
+	// 0 = live-only (no recording), N = keep N days. Only meaningful for srt/rtmp.
+	PushRetentionDays *int `yaml:"push_retention_days,omitempty" json:"push_retention_days,omitempty"`
+}
+
+// PushTargetConfig defines one push-out (relay) destination for a camera.
+type PushTargetConfig struct {
+	ID       string `yaml:"id" json:"id"`             // stable id within the camera (kebab/uuid)
+	Name     string `yaml:"name,omitempty" json:"name,omitempty"`
+	Protocol string `yaml:"protocol" json:"protocol"` // "rtmp" or "rtsp"
+	URL      string `yaml:"url" json:"url"`           // rtmp://host[:port]/app/key | rtsp://host[:port]/path
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -474,6 +492,32 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+		}
+
+		// Validate push-out targets (relay).
+		seenTargetIDs := make(map[string]bool, len(c.PushTargets))
+		for j, pt := range c.PushTargets {
+			if strings.TrimSpace(pt.ID) == "" {
+				return fmt.Errorf("camera[%d].push_targets[%d].id is required", i, j)
+			}
+			if seenTargetIDs[pt.ID] {
+				return fmt.Errorf("camera[%d].push_targets[%d] duplicate id %q", i, j, pt.ID)
+			}
+			seenTargetIDs[pt.ID] = true
+			if pt.Protocol != "rtmp" && pt.Protocol != "rtsp" {
+				return fmt.Errorf("camera[%d].push_targets[%d].protocol must be rtmp or rtsp", i, j)
+			}
+			pu, perr := url.Parse(pt.URL)
+			if perr != nil || pu.Host == "" {
+				return fmt.Errorf("camera[%d].push_targets[%d].url has invalid format: %s", i, j, pt.URL)
+			}
+			wantScheme := "rtmp"
+			if pt.Protocol == "rtsp" {
+				wantScheme = "rtsp"
+			}
+			if pu.Scheme != wantScheme && pu.Scheme != wantScheme+"s" {
+				return fmt.Errorf("camera[%d].push_targets[%d].url scheme must be %s://, got %s", i, j, wantScheme, pu.Scheme)
+			}
 		}
 
 		// Validate per-camera health overrides

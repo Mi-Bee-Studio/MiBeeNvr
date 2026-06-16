@@ -56,6 +56,9 @@ type CameraRow struct {
 	StreamKey     string `json:"stream_key,omitempty"`
 	SRTPassphrase string `json:"srt_passphrase,omitempty"`
 	SRTStreamID   string `json:"srt_stream_id,omitempty"`
+	// Push-out relay targets + retention, injected from YAML at API response time.
+	PushTargets       []config.PushTargetConfig `json:"push_targets,omitempty"`
+	PushRetentionDays *int                      `json:"push_retention_days,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {

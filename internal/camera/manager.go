@@ -50,6 +50,9 @@ type CameraUpdate struct {
 	StreamKey     *string
 	SRTPassphrase *string
 	SRTStreamID   *string
+	// Push-out relay targets (replace the whole list when set). nil = unchanged.
+	PushTargets       *[]config.PushTargetConfig
+	PushRetentionDays *int
 }
 
 type CameraManager struct {
@@ -81,6 +84,18 @@ type CameraManager struct {
 	// a given camera. The SRT/RTMP servers consult GetOrCreateHub(); the
 	// recorder's own .Hub field points at the same instance after initStreamHub.
 	hubRegistry map[string]*model.StreamHub
+	// relayMgr (optional) is notified when a camera's push-out targets change so
+	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
+	// import cycle.
+	relayMgr RelayManager
+}
+
+// RelayManager is the subset of *relay.Manager the camera manager calls. Kept
+// here as an interface (taking config.PushTargetConfig) so internal/camera
+// doesn't import internal/relay.
+type RelayManager interface {
+	SetCameraTargets(cameraID string, cfgs []config.PushTargetConfig)
+	RemoveCamera(cameraID string)
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -679,6 +694,57 @@ func (cm *CameraManager) GetHub(cameraID string) *model.StreamHub {
 	return cm.hubRegistry[cameraID]
 }
 
+// SetRelayManager wires the relay engine (optional). When set, the camera
+// manager reconciles a camera's push-out targets on Add/Update/Remove.
+func (cm *CameraManager) SetRelayManager(rm RelayManager) {
+	cm.relayMgr = rm
+}
+
+// RelayStatus returns the runtime status of a camera's push-out targets, for the
+// push-status API and the camera card UI. Empty when no relay manager is wired.
+// RelayStatusProvider is the minimal shape the API handler needs.
+func (cm *CameraManager) RelayStatus(cameraID string) []interface{} {
+	if rm, ok := cm.relayMgr.(relayStatusProvider); ok {
+		return rm.CameraStatusJSON(cameraID)
+	}
+	return nil
+}
+
+// relayStatusProvider is implemented by *relay.Manager to return JSON-serializable
+// status without internal/camera importing internal/relay.
+type relayStatusProvider interface {
+	CameraStatusJSON(cameraID string) []interface{}
+}
+
+// GetSPS returns the source camera's current H.264 SPS/PPS (raw NALUs, no start
+// code) and whether the source is H.264. Used by the relay engine to initialize
+// RTMP/RTSP target tracks. Returns nil when the camera is not yet streaming or
+// is not H.264.
+func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return nil, nil, false
+	}
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		return r.SPS(), r.PPS(), true
+	case *recorder.IngestRecorder:
+		_, s, p, _ := r.CodecParams()
+		if s == nil || p == nil {
+			return nil, nil, true
+		}
+		return s, p, true
+	case *recorder.ONVIFRecorder:
+		// Delegate may be nil momentarily; unwrap via CodecParams if available.
+		if d := r.Delegate(); d != nil {
+			if h264, ok := d.(*recorder.H264Recorder); ok {
+				return h264.SPS(), h264.PPS(), true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
 // GetOrCreateHub returns the existing StreamHub for the camera ID, or creates a
 // new one (with metrics callbacks wired) if none exists. This is the entry point
 // used by the SRT listener and RTMP server: when a publisher pushes a stream,
@@ -876,6 +942,11 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
+	// Reconcile push-out relay targets for the new camera.
+	if cm.relayMgr != nil {
+		cm.relayMgr.SetCameraTargets(cam.ID, cam.PushTargets)
+	}
+
 	return cam.ID, nil
 }
 
@@ -910,6 +981,10 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
 		}
+	}
+	// Stop all relay targets for this camera.
+	if cm.relayMgr != nil {
+		cm.relayMgr.RemoveCamera(cameraID)
 	}
 
 	// Stop keyframe extractor if running
@@ -1106,6 +1181,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.SRTStreamID != nil {
 		cam.SRTStreamID = *updates.SRTStreamID
 	}
+	if updates.PushTargets != nil {
+		cam.PushTargets = *updates.PushTargets
+	}
+	if updates.PushRetentionDays != nil {
+		cam.PushRetentionDays = updates.PushRetentionDays
+	}
 
 
 	// Persist to database
@@ -1175,6 +1256,11 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
 	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" {
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
+	}
+
+	// Reconcile push-out relay targets (start new / stop removed / restart changed).
+	if cm.relayMgr != nil {
+		cm.relayMgr.SetCameraTargets(cam.ID, cam.PushTargets)
 	}
 
 	return cam, nil
