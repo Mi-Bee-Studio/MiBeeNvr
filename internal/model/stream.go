@@ -98,6 +98,11 @@ type StreamHub struct {
 	// OnBroadcast is an optional callback invoked for every frame broadcast.
 	// Used for observability (e.g., Prometheus counters, structured logging).
 	OnBroadcast func(cameraID string, isIDR bool)
+	// OnBroadcastAudio is an optional callback invoked for every audio frame broadcast.
+	// Used for Prometheus audio frame counters.
+	OnBroadcastAudio func(cameraID string, codec string)
+	// OnAudioDrop is an optional callback invoked when an audio frame is dropped.
+	OnAudioDrop func(cameraID string)
 	cameraID    string // set by SetCameraID after construction
 
 	// Jitter buffer state — only activated when out-of-order frames are detected.
@@ -543,6 +548,11 @@ func (h *StreamHub) UnsubscribeAudio(id string) {
 //
 // BroadcastAudio does NOT wait for any consumer to process the frame.
 func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
+	// Observability: fire audio broadcast callback
+	if h.OnBroadcastAudio != nil {
+		h.OnBroadcastAudio(h.cameraID, string(codec))
+	}
+
 	h.mu.Lock()
 	type entryWithID struct {
 		id    string
@@ -564,6 +574,9 @@ func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
 		case e.entry.ch <- audioFrameMsg{pts: pts, codec: codec, data: data}:
 		default:
 			e.entry.drops.Add(1)
+			if h.OnAudioDrop != nil {
+				h.OnAudioDrop(h.cameraID)
+			}
 			if h.OnDrop != nil {
 				h.OnDrop(e.id)
 			}

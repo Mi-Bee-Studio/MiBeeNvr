@@ -38,9 +38,9 @@ type Metrics struct {
 	FLVGOPCacheMisses       *prometheus.CounterVec // labels: camera_id
 	XiaomiDisconnects       *prometheus.CounterVec // labels: camera_id, reason
 	XiaomiReconnects        *prometheus.CounterVec // labels: camera_id
-	TranscodingJobsTotal       *prometheus.CounterVec   // labels: codec_from, codec_to, status
+	TranscodingJobsTotal       *prometheus.CounterVec   // labels: codec_from, codec_to, encoder, crf, status
 	TranscodingActiveJobs      prometheus.Gauge
-	TranscodingDurationSeconds *prometheus.HistogramVec // labels: codec_from, codec_to
+	TranscodingDurationSeconds *prometheus.HistogramVec // labels: codec_from, codec_to, encoder
 	TranscodingBytesProcessed  prometheus.Counter
 	TranscodingFFmpegStatus    prometheus.Gauge
 	RemoteLogSentTotal     prometheus.Counter
@@ -49,6 +49,8 @@ type Metrics struct {
 	StreamHubFramesDropped  *prometheus.CounterVec  // labels: camera_id, consumer, is_idr
 	StreamHubBufferDepth     *prometheus.GaugeVec    // labels: camera_id, consumer
 	StreamHubFramesInTotal      *prometheus.CounterVec    // labels: camera_id
+	AudioFramesTotal            *prometheus.CounterVec    // labels: camera_id, codec
+	AudioFramesDroppedTotal     *prometheus.CounterVec    // labels: camera_id
 	FrameProcessingDurationSeconds *prometheus.HistogramVec // labels: camera_id, protocol
 	JitterBufferDepth          *prometheus.GaugeVec    // labels: camera_id
 	JitterBufferReordersTotal  *prometheus.CounterVec   // labels: camera_id
@@ -220,8 +222,8 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 
 	transcodingJobsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_transcoding_jobs_total",
-		Help: "Total number of transcoding jobs by codec conversion and status",
-	}, []string{"codec_from", "codec_to", "status"})
+		Help: "Total number of transcoding jobs by codec conversion, encoder, crf and status",
+	}, []string{"codec_from", "codec_to", "encoder", "crf", "status"})
 
 	transcodingActiveJobs := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "nvr_transcoding_active_jobs",
@@ -232,7 +234,7 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name:    "nvr_transcoding_duration_seconds",
 		Help:    "Duration of transcoding jobs in seconds",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"codec_from", "codec_to"})
+	}, []string{"codec_from", "codec_to", "encoder"})
 
 	transcodingBytesProcessed := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "nvr_transcoding_bytes_processed",
@@ -271,6 +273,16 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 	streamHubFramesInTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_streamhub_frames_in_total",
 		Help: "Total frames broadcast into StreamHub, partitioned by camera.",
+	}, []string{"camera_id"})
+
+	audioFramesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_audio_frames_total",
+		Help: "Total audio frames broadcast into StreamHub, partitioned by camera and codec.",
+	}, []string{"camera_id", "codec"})
+
+	audioFramesDroppedTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_audio_frames_dropped_total",
+		Help: "Total audio frames dropped due to buffer overflow, partitioned by camera.",
 	}, []string{"camera_id"})
 
 	frameProcessingDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -413,6 +425,8 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		streamHubFramesDropped,
 		streamHubBufferDepth,
 		streamHubFramesInTotal,
+		audioFramesTotal,
+		audioFramesDroppedTotal,
 		frameProcessingDurationSeconds,
 		jitterBufferDepth,
 		jitterBufferReordersTotal,
@@ -476,6 +490,8 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		StreamHubFramesDropped: streamHubFramesDropped,
 		StreamHubBufferDepth:    streamHubBufferDepth,
 		StreamHubFramesInTotal:      streamHubFramesInTotal,
+		AudioFramesTotal:            audioFramesTotal,
+		AudioFramesDroppedTotal:     audioFramesDroppedTotal,
 		FrameProcessingDurationSeconds: frameProcessingDurationSeconds,
 		JitterBufferDepth:          jitterBufferDepth,
 		JitterBufferReordersTotal:  jitterBufferReordersTotal,

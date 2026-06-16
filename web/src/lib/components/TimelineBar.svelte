@@ -37,6 +37,11 @@
   let hoverInfo = $state<{ x: number; label: string } | null>(null);
   let snapNotice = $state('');
 
+  // Split segments into regular recordings vs timelapse for dual-track display
+  const regularSegments = $derived(segments.filter((s) => s.rec.format !== 'timelapse'));
+  const timelapseSegments = $derived(segments.filter((s) => s.rec.format === 'timelapse'));
+  const hasTimelapse = $derived(timelapseSegments.length > 0);
+
   // Format → color class
   const formatColor: Record<string, string> = {
     h264: '#3b82f6', // blue
@@ -204,7 +209,7 @@
   }
   function handleWindowMouseMove(e: MouseEvent) {
     if (!dragging) return;
-    const bar = document.getElementById('timeline-bar-track');
+    const bar = document.getElementById('timeline-bar-track') || document.getElementById('timeline-bar-track-tl');
     if (!bar) return;
     const rect = bar.getBoundingClientRect();
     const targetMs = clickXtoMs(e.clientX, rect);
@@ -295,41 +300,78 @@
         {/each}
       </div>
 
-      <!-- Track -->
-      <div
-        id="timeline-bar-track"
-        class="timeline-track"
-        role="slider"
-        aria-label={t('timeline.title')}
-        tabindex="0"
-        onmousedown={handleMouseDown}
-        onmousemove={handleMouseMove}
-        onmouseleave={handleMouseLeave}
-      >
-        <!-- Recording segments -->
-        {#each segments as seg (seg.rec.id)}
-          <div
-            class="timeline-segment"
-            style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor[seg.rec.format] || '#6b7280'};"
-            title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}"
-          ></div>
-        {/each}
-
-        <!-- Current playback cursor -->
-        {#if cursorPct != null}
-          <div class="timeline-cursor" style="left: {cursorPct}%;">
-            <div class="timeline-cursor-line"></div>
-            <div class="timeline-cursor-head"></div>
-          </div>
+      <!-- Regular recordings track -->
+      {#if regularSegments.length > 0 || !hasTimelapse}
+        {#if hasTimelapse}
+          <div class="track-label">{t('timeline.recordings')}</div>
         {/if}
+        <div
+          id="timeline-bar-track"
+          class="timeline-track"
+          role="slider"
+          aria-label={t('timeline.title')}
+          tabindex="0"
+          onmousedown={handleMouseDown}
+          onmousemove={handleMouseMove}
+          onmouseleave={handleMouseLeave}
+        >
+          <!-- Recording segments -->
+          {#each regularSegments as seg (seg.rec.id)}
+            <div
+              class="timeline-segment"
+              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor[seg.rec.format] || '#6b7280'};"
+              title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}"
+            ></div>
+          {/each}
 
-        <!-- Hover indicator -->
-        {#if hoverInfo}
-          <div class="timeline-hover" style="left: {hoverInfo.x}px;">
-            <div class="timeline-hover-label">{hoverInfo.label}</div>
-          </div>
-        {/if}
-      </div>
+          <!-- Current playback cursor (only on this track if not timelapse) -->
+          {#if cursorPct != null && (!currentRecording || currentRecording.format !== 'timelapse')}
+            <div class="timeline-cursor" style="left: {cursorPct}%;">
+              <div class="timeline-cursor-line"></div>
+              <div class="timeline-cursor-head"></div>
+            </div>
+          {/if}
+
+          <!-- Hover indicator -->
+          {#if hoverInfo}
+            <div class="timeline-hover" style="left: {hoverInfo.x}px;">
+              <div class="timeline-hover-label">{hoverInfo.label}</div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Timelapse track (parallel) -->
+      {#if hasTimelapse}
+        <div class="track-label">{t('timeline.timelapse')}</div>
+        <div
+          id="timeline-bar-track-tl"
+          class="timeline-track timeline-track-tl"
+          role="slider"
+          aria-label={t('timeline.timelapse')}
+          tabindex="0"
+          onmousedown={handleMouseDown}
+          onmousemove={handleMouseMove}
+          onmouseleave={handleMouseLeave}
+        >
+          <!-- Timelapse segments -->
+          {#each timelapseSegments as seg (seg.rec.id)}
+            <div
+              class="timeline-segment"
+              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor.timelapse};"
+              title="{formatDate(seg.rec.started_at)} · timelapse · {formatLength((seg.endSec - seg.startSec) / 1000)}"
+            ></div>
+          {/each}
+
+          <!-- Current playback cursor (only on this track if timelapse) -->
+          {#if cursorPct != null && currentRecording?.format === 'timelapse'}
+            <div class="timeline-cursor" style="left: {cursorPct}%;">
+              <div class="timeline-cursor-line"></div>
+              <div class="timeline-cursor-head"></div>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if snapNotice}
@@ -380,6 +422,15 @@
     position: relative;
     padding-top: 1.25rem;
   }
+  .track-label {
+    font-size: 0.6rem;
+    color: var(--text-muted, #9ca3af);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+    margin-bottom: 0.15rem;
+    padding-left: 0.25rem;
+  }
   .hour-labels {
     position: relative;
     height: 1rem;
@@ -400,6 +451,7 @@
     border-radius: 0.375rem;
     cursor: pointer;
     overflow: visible;
+    margin-bottom: 0.25rem;
   }
   .timeline-segment {
     position: absolute;

@@ -1226,5 +1226,7 @@
   "settings.mibeevision.keyRevokeFailed": "Failed to revoke API key",
   "aiEvents.notConnectedTitle": "MiBeeVision Not Connected",
   "aiEvents.notConnectedDesc": "Configure MiBeeVision integration in Settings to start receiving AI detection events.",
-  "aiEvents.goToSettings": "Go to Settings"
+  "aiEvents.goToSettings": "Go to Settings",
+  "timeline.recordings": "Recordings",
+  "timeline.timelapse": "Timelapse"
 }

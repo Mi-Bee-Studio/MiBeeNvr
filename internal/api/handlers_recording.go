@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -88,6 +89,128 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 // handleTimelineSeekEvent records a timeline seek for observability (0.8.0 M6).
 // Body: {"camera_id":"front-door","type":"segment"}
 // type is "segment" (cross-recording) or "intra" (within same recording).
+// handleCreateRecording allows MiBeeVision (or other authenticated clients) to register
+// a recording in the NVR database. Requires API Key authentication.
+// POST /api/recordings  body: {camera_id, file_path, format, started_at, ...}
+func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) {
+	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+		writeError(w, http.StatusUnauthorized, "API key required")
+		return
+	}
+	var body struct {
+		ID         string  `json:"id"`
+		CameraID   string  `json:"camera_id"`
+		FilePath   string  `json:"file_path"`
+		Format     string  `json:"format"`
+		StartedAt  string  `json:"started_at"`
+		EndedAt    string  `json:"ended_at"`
+		Duration   float64 `json:"duration"`
+		FileSize   int64   `json:"file_size"`
+		FrameCount int     `json:"frame_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.CameraID == "" || body.FilePath == "" || body.Format == "" {
+		writeError(w, http.StatusBadRequest, "camera_id, file_path, and format are required")
+		return
+	}
+
+	rec := &model.Recording{
+		ID:         body.ID,
+		CameraID:   body.CameraID,
+		FilePath:   body.FilePath,
+		Format:     model.Format(body.Format),
+		Duration:   body.Duration,
+		FileSize:   body.FileSize,
+		FrameCount: body.FrameCount,
+		MergeStatus: "pending",
+	}
+	if rec.ID == "" {
+		rec.ID = strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	if body.StartedAt != "" {
+		rec.StartedAt, _ = time.Parse(time.RFC3339, body.StartedAt)
+	} else {
+		rec.StartedAt = time.Now().UTC()
+	}
+	if body.EndedAt != "" {
+		rec.EndedAt, _ = time.Parse(time.RFC3339, body.EndedAt)
+	}
+
+	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create recording")
+		return
+	}
+
+	logger.Info("recording created via API", "id", rec.ID, "camera_id", rec.CameraID, "source", middleware.APIKeyNameFromContext(r.Context()))
+	writeJSON(w, http.StatusCreated, map[string]string{"id": rec.ID, "status": "created"})
+}
+
+// handleUpdateRecording allows MiBeeVision to update recording metadata.
+// Requires API Key authentication.
+// PATCH /api/recordings/{id}  body: {file_path?, format?, duration?, ...}
+func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) {
+	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+		writeError(w, http.StatusUnauthorized, "API key required")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	// Fetch existing recording
+	existing, err := h.db.GetRecording(r.Context(), id)
+	if err != nil || existing == nil {
+		writeError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+
+	var body struct {
+		FilePath   *string  `json:"file_path"`
+		Format     *string  `json:"format"`
+		EndedAt    *string  `json:"ended_at"`
+		Duration   *float64 `json:"duration"`
+		FileSize   *int64   `json:"file_size"`
+		FrameCount *int     `json:"frame_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Apply partial updates
+	if body.FilePath != nil {
+		existing.FilePath = *body.FilePath
+	}
+	if body.Format != nil {
+		existing.Format = model.Format(*body.Format)
+	}
+	if body.EndedAt != nil {
+		existing.EndedAt, _ = time.Parse(time.RFC3339, *body.EndedAt)
+	}
+	if body.Duration != nil {
+		existing.Duration = *body.Duration
+	}
+	if body.FileSize != nil {
+		existing.FileSize = *body.FileSize
+	}
+	if body.FrameCount != nil {
+		existing.FrameCount = *body.FrameCount
+	}
+
+	if err := h.db.UpdateRecording(r.Context(), existing); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update recording")
+		return
+	}
+
+	logger.Info("recording updated via API", "id", id, "source", middleware.APIKeyNameFromContext(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "updated"})
+}
+
 func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CameraID string `json:"camera_id"`

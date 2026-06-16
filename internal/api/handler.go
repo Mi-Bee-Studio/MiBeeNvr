@@ -173,11 +173,13 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
+			r.Post("/", h.handleCreateRecording)
 			r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
 			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
+				r.Patch("/", h.handleUpdateRecording)
 				// MiBeeVision AI status update (API Key required inside handler)
 				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
 

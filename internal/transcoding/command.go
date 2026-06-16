@@ -67,32 +67,58 @@ func validateCodecCombination(input, output string) error {
 	return nil
 }
 
+// resolveEncoder returns the FFmpeg encoder name that will be used for the given options.
+// Used for both command building and metric labeling.
+func resolveEncoder(opts TranscodeOptions, caps HardwareCapabilities) string {
+	useSoftware := opts.ForceSoftware || isMJPEGInput(opts.InputCodec)
+	switch opts.OutputCodec {
+	case "h264":
+		if !useSoftware && caps.H264EncoderType != EncoderSoftware && caps.H264Encoder != "" {
+			return caps.H264Encoder
+		}
+		return "libx264"
+	case "h265":
+		if !useSoftware && caps.H265EncoderType != EncoderSoftware && caps.H265Encoder != "" {
+			return caps.H265Encoder
+		}
+		return "libx265"
+	default:
+		return "unknown"
+	}
+}
+
+// resolveEffectiveCRF returns the effective CRF value (after defaults) or -1 for hardware encoders.
+func resolveEffectiveCRF(opts TranscodeOptions, caps HardwareCapabilities) int {
+	encoder := resolveEncoder(opts, caps)
+	if !isSoftwareEncoder(encoder) {
+		return -1 // hardware encoders don't use CRF
+	}
+	switch opts.OutputCodec {
+	case "h264":
+		if opts.CRF > 0 && opts.CRF <= 51 {
+			return opts.CRF
+		}
+		return 23
+	case "h265":
+		if opts.CRF > 0 && opts.CRF <= 51 {
+			return opts.CRF
+		}
+		return 28
+	default:
+		return 23
+	}
+}
+
 // buildVideoEncoderArgs selects the encoder and returns its FFmpeg flags.
 func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]string, error) {
 	var args []string
 
-	encoder := ""
+	encoder := resolveEncoder(opts, caps)
 	forceSoftware := opts.ForceSoftware
 
 	// MJPEG input forces software encoder — v4l2m2m hangs on MJPEG input.
 	useSoftware := forceSoftware || isMJPEGInput(opts.InputCodec)
-
-	switch opts.OutputCodec {
-	case "h264":
-		if !useSoftware && caps.H264EncoderType != EncoderSoftware && caps.H264Encoder != "" {
-			encoder = caps.H264Encoder
-		} else {
-			encoder = "libx264"
-		}
-	case "h265":
-		if !useSoftware && caps.H265EncoderType != EncoderSoftware && caps.H265Encoder != "" {
-			encoder = caps.H265Encoder
-		} else {
-			encoder = "libx265"
-		}
-	default:
-		return nil, fmt.Errorf("unsupported output codec: %s", opts.OutputCodec)
-	}
+	_ = useSoftware // already used in resolveEncoder
 
 	// Log a warning when using software encoding on ARM — it's slow but may be
 	// the only option when v4l2m2m is listed but the device lacks encoding capability

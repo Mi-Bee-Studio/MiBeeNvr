@@ -376,6 +376,12 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 			hub.OnDrop = func(consumerID string) {
 				m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
 			}
+			hub.OnBroadcastAudio = func(cid string, codec string) {
+				m.AudioFramesTotal.WithLabelValues(cid, codec).Inc()
+			}
+			hub.OnAudioDrop = func(cid string) {
+				m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
+			}
 			hub.OnBufferDepth = func(cid, consumerID string, depth int) {
 				m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
 			}

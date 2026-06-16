@@ -3,7 +3,7 @@
 // API: Network First (fresh data, fallback to cache when offline)
 // Media streams (HLS/FLV/WebRTC): Never cached (always network)
 
-const CACHE_VERSION = 'mibee-nvr-v1';
+const CACHE_VERSION = 'mibee-nvr-v2';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -62,7 +62,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets (JS/CSS/HTML): Cache First, fallback to network
+  // HTML documents (index.html, routes): Network First to get latest version,
+  // fallback to cache when offline. This ensures app updates are picked up.
+  if (req.headers.get('accept')?.includes('text/html') || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(
+      fetch(req)
+        .then((resp) => {
+          if (resp.ok) {
+            const clone = resp.clone();
+            caches.open(CACHE_VERSION).then((cache) => cache.put(req, clone));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(req).then((cached) => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Static assets (JS/CSS with hash filenames): Cache First, fallback to network
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;

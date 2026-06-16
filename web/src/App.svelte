@@ -41,6 +41,18 @@
     onlineBannerTimer = setTimeout(() => { showOnlineBanner = false; }, 3000);
   }
 
+  // SW 503 detection — when the Service Worker returns offline responses
+  function handleApiOffline() {
+    if (navigator.onLine) {
+      // Browser thinks we're online but API is unreachable — show banner briefly
+      showOfflineBanner = true;
+      if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
+      onlineBannerTimer = setTimeout(() => { showOfflineBanner = false; }, 5000);
+    } else {
+      handleOffline();
+    }
+  }
+
   async function checkSetupRequired() {
     if (isAuthenticated()) return;
     try {
@@ -202,10 +214,13 @@ function parseRoute(hash: string) {
     if (isOffline) showOfflineBanner = true;
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('nvr-api-offline', handleApiOffline);
 
     return () => {
       window.removeEventListener('hashchange', updateRoute);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('nvr-api-offline', handleApiOffline);
       window.removeEventListener('online', handleOnline);
       if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     };

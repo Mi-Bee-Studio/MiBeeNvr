@@ -1226,5 +1226,7 @@
   "settings.mibeevision.keyRevokeFailed": "吊销 API Key 失败",
   "aiEvents.notConnectedTitle": "MiBeeVision 未连接",
   "aiEvents.notConnectedDesc": "在设置页配置 MiBeeVision 集成,即可开始接收 AI 检测事件。",
-  "aiEvents.goToSettings": "前往设置"
+  "aiEvents.goToSettings": "前往设置",
+  "timeline.recordings": "录像",
+  "timeline.timelapse": "延时摄影"
 }
