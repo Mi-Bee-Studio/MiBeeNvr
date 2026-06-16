@@ -942,9 +942,14 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
-	// Reconcile push-out relay targets for the new camera.
+	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
+	// under cm.mu — SetCameraTargets calls back into GetHub which re-locks cm.mu
+	// (RLock), and re-entering under a held Lock would self-deadlock (Go's
+	// RWMutex is not reentrant).
 	if cm.relayMgr != nil {
-		cm.relayMgr.SetCameraTargets(cam.ID, cam.PushTargets)
+		cameraID := cam.ID
+		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+		go cm.relayMgr.SetCameraTargets(cameraID, targets)
 	}
 
 	return cam.ID, nil
@@ -1258,9 +1263,13 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
-	// Reconcile push-out relay targets (start new / stop removed / restart changed).
+	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
+	// under cm.mu — SetCameraTargets calls back into GetHub which re-locks cm.mu,
+	// which would self-deadlock under the held Lock (see AddCamera for rationale).
 	if cm.relayMgr != nil {
-		cm.relayMgr.SetCameraTargets(cam.ID, cam.PushTargets)
+		cameraID := cam.ID
+		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+		go cm.relayMgr.SetCameraTargets(cameraID, targets)
 	}
 
 	return cam, nil
