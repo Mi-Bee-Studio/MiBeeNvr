@@ -31,9 +31,11 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -378,6 +380,7 @@ type App struct {
 	ftpServer   *ftp.Server
 	rtmpServer  *rtmp.Server
 	srtListener *srt.Listener
+	relayMgr    *relay.Manager
 
 	// Streaming managers
 	webrtcMgr    *webrtc.Manager
@@ -483,6 +486,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Step 4: Auth middleware
+	authmw.SetAuthMetrics(a.metrics)
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
@@ -654,18 +658,91 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	)
 	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
 
+	// Step 7.6b: Relay (push-out) manager. Always constructed when cameras may
+	// have push_targets — it's nil-safe and only runs goroutines for cameras
+	// that actually have enabled targets. Wired to the camera manager so Add/
+	// Update/Remove reconcile targets automatically.
+	a.relayMgr = relay.NewManager(a.camMgr.GetHub, a.camMgr.GetSPS)
+	a.camMgr.SetRelayManager(a.relayMgr)
+
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
 		a.rtmpServer = rtmp.NewServer(
 			rtmp.Config{Addr: fmt.Sprintf(":%d", cfg.RTMP.Port)},
-			nil, nil, nil, nil, // resolv, hubFn, onConn, onDisc — can be wired later
+			// StreamKeyResolver: LIVE lookup (reflects cameras added at runtime,
+			// not just those present at startup).
+			a.camMgr.ResolveStreamKey,
+			// CameraHubProvider: hand the publisher the SAME hub the recorder owns.
+			a.camMgr.GetOrCreateHub,
+			// OnPublisherConnect: mark the IngestRecorder as streaming.
+			func(cameraID string, _ *model.StreamHub) {
+				if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.WriteConnected()
+				}
+			},
+			// OnPublisherDisconnect: close in-flight segment, return to Idle.
+			func(cameraID string) {
+				if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.OnDisconnect()
+				}
+			},
 		)
+		// NALUProvider: forward each access unit to the IngestRecorder for MP4 recording.
+		a.rtmpServer.NALUProvider = func(cameraID string) rtmp.NALUCallback {
+			ir := a.camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(au [][]byte, ptsTicks int64, isIDR bool) {
+				ir.WriteNALU(au, ptsTicks, isIDR)
+			}
+		}
 		slog.Info("RTMP server configured", "port", cfg.RTMP.Port)
 	}
 
 	// Step 7.8: SRT listener (optional)
 	if cfg.SRT.Enabled != nil && *cfg.SRT.Enabled {
+		// Merge per-camera SRT push params into cfg.SRT.Streams so the listener's
+		// passphrase/streamid lookup covers both configuration styles.
+		for _, sc := range a.camMgr.SRTStreamConfigs() {
+			found := false
+			for i := range cfg.SRT.Streams {
+				if cfg.SRT.Streams[i].CameraID == sc.CameraID {
+					if sc.Passphrase != "" {
+						cfg.SRT.Streams[i].Passphrase = sc.Passphrase
+					}
+					if sc.StreamID != "" {
+						cfg.SRT.Streams[i].StreamID = sc.StreamID
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				cfg.SRT.Streams = append(cfg.SRT.Streams, sc)
+			}
+		}
 		a.srtListener = srt.NewListener(cfg.SRT)
+		a.srtListener.HubProvider = a.camMgr.GetOrCreateHub
+		a.srtListener.OnConnect = func(cameraID string, _ *model.StreamHub) {
+			if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.WriteConnected()
+			}
+		}
+		a.srtListener.OnDisconnect = func(cameraID string) {
+			if ir := a.camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.OnDisconnect()
+			}
+		}
+		a.srtListener.NALUProvider = func(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool) {
+			ir := a.camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(au [][]byte, ptsTicks int64, isIDR bool) {
+				ir.WriteNALU(au, ptsTicks, isIDR)
+			}
+		}
 		slog.Info("SRT listener configured", "port", cfg.SRT.Port)
 	}
 
@@ -675,6 +752,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("cleanup: %w", err)
 	}
+	a.cleanupMgr.SetEventBus(a.eventBus)
 	if cfg.Health.Enabled {
 		healthRetention, err := time.ParseDuration(cfg.Health.EventsRetention)
 		if err != nil {
@@ -750,6 +828,7 @@ func (a *App) buildRouter() http.Handler {
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
 	handler.SetEventBus(a.eventBus)
+	api.SetAPIMetrics(a.metrics)
 	if a.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(a.rollingMergeMgr)
 	}
@@ -810,6 +889,24 @@ func (a *App) buildRouter() http.Handler {
 	r.Use(authmw.SecurityHeaders)
 	r.Use(authmw.COOPHeaders)
 
+	// API Key middleware — validates Bearer mbv_* tokens for MiBeeVision.
+	// Runs before authMW: if the request has an API Key Bearer token, it's
+	// authenticated here; otherwise it falls through to BasicAuth.
+	if len(cfg.APIKeys) > 0 {
+		validKeys := make(map[string]string)
+		for _, k := range cfg.APIKeys {
+			if !k.Revoked && k.Key != "" {
+				validKeys[k.Key] = k.Name
+			}
+		}
+		if len(validKeys) > 0 {
+			r.Use(func(next http.Handler) http.Handler {
+				return authmw.APIKeyAuthMiddleware(validKeys, next)
+			})
+			slog.Info("API Key authentication enabled", "keys", len(validKeys))
+		}
+	}
+
 
 	// Prometheus metrics — independent auth when configured, public otherwise
 	if cfg.MetricsAuth.IsConfigured() {
@@ -862,6 +959,12 @@ r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 func (a *App) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
+
+	// Start relay (push-out) manager root context BEFORE cameras start, so the
+	// SetCameraTargets calls issued during camMgr.Start() find a ready manager.
+	if a.relayMgr != nil {
+		a.relayMgr.Start(ctx)
+	}
 
 	// Start camera manager
 	go func() {
@@ -1023,6 +1126,13 @@ func (a *App) Stop() error {
 	if a.srtListener != nil {
 		log.Info("stopping SRT listener")
 		_ = a.srtListener.Stop()
+	}
+
+	// 5b. Relay (push-out) manager — stop before camera manager so targets
+	// unsubscribe cleanly while their source hubs still exist.
+	if a.relayMgr != nil {
+		log.Info("stopping relay manager")
+		a.relayMgr.Stop()
 	}
 
 	// 6. MQTT client

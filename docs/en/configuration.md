@@ -243,7 +243,8 @@ cameras:
 - **Type**: string
 - **Required**: Yes
 - **Description**: Camera transport protocol
-- **Options**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`
+- **Options**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`, `"srt"`, `"rtmp"`
+- **Push protocols**: `"srt"` and `"rtmp"` are push/ingest protocols — a remote publisher pushes a stream INTO the NVR. The `url` field is not used; instead configure `stream_key` (RTMP) or `srt_stream_id` / `srt_passphrase` (SRT). See [Push Cameras](./camera-guide.md#push-cameras-srt--rtmp--cross-network-ingest).
 - **Legacy Format**: Also supports `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` (automatically parsed to new format)
 - **Note**: Legacy format is automatically parsed to the new protocol+encoding format for backward compatibility
 - **Compatibility**: Both formats are supported
@@ -258,6 +259,8 @@ cameras:
   - `protocol: "http"` → `encoding: "jpeg"`
   - `protocol: "onvif"` → `encoding: "h264"` or `"h265"` (auto-detect if not specified)
   - `protocol: "xiaomi"` → `encoding: "h264"` or `"h265"` (auto-detect)
+  - `protocol: "srt"` → `encoding: "h264"` or `"h265"` (H.264 only in current SRT demux)
+  - `protocol: "rtmp"` → `encoding: "h264"` (RTMP carries H.264 only)
 
 ### `cameras[].url`
 - **Type**: string
@@ -430,6 +433,39 @@ cameras:
 - **Default**: `"30s"`
 - **Description**: Timeout before declaring a camera unhealthy when no frames are received. Per-camera override of the frame watchdog.
 - **Example**: `"30s"`, `"60s"`, `"120s"`
+
+### `cameras[].stream_key`
+- **Type**: string
+- **Optional**: Yes (push-in only)
+- **Description**: RTMP stream key for push-in cameras (`protocol: "rtmp"`). Maps the incoming `rtmp://host:1935/live/{key}` to this camera. The publisher pushes TO this address.
+
+### `cameras[].srt_passphrase`
+- **Type**: string
+- **Optional**: Yes (push-in only)
+- **Description**: AES passphrase for encrypted SRT push-in cameras (`protocol: "srt"`).
+
+### `cameras[].srt_stream_id`
+- **Type**: string
+- **Optional**: Yes (push-in only)
+- **Description**: SRT stream ID for push-in cameras (`protocol: "srt"`). Maps the incoming SRT `streamid` to this camera.
+
+### `cameras[].push_retention_days`
+- **Type**: integer (nullable)
+- **Optional**: Yes (push-in only: `protocol: "srt"` or `"rtmp"`)
+- **Default**: `null` (follow global cleanup retention)
+- **Description**: Recording retention override for push-in cameras. `null` = follow global `cleanup.retention_days`, `0` = live-only (no recording), `N` = keep N days.
+
+### `cameras[].push_targets`
+- **Type**: array of objects
+- **Optional**: Yes (any camera protocol)
+- **Description**: Push-out relay targets — forward this camera's live stream to remote destinations (another NVR's ingest, a live platform, a backup). Pure Go, no FFmpeg. Each target is an independent connection. See [Push-Out Relay](./camera-guide.md#push-out-relay--forward-a-camera-to-remote-destinations).
+- **Fields per target**:
+  - `id` (string, required) — stable identifier within the camera
+  - `name` (string, optional) — display name
+  - `protocol` (string, required) — `"rtmp"` or `"rtsp"`
+  - `url` (string, required) — target URL (`rtmp://host:1935/app/key` or `rtsp://host:8554/path`)
+  - `enabled` (boolean, required) — whether the target is active
+- **Note**: H.264 source required for RTMP targets (remux only, no transcode). The relay subscribes to the camera's StreamHub (zero-copy).
 
 ## Cleanup Configuration
 

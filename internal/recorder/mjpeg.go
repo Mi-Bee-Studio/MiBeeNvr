@@ -373,6 +373,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 			CameraID:    r.cfg.CameraID,
 			FilePath:    r.curFinalPath,
 			Format:      string(model.FormatMJPEG),
+			Encoding:    string(model.FormatMJPEG),
 			StartedAt:   r.segStart.Format(time.RFC3339Nano),
 			EndedAt:     time.Now().Format(time.RFC3339Nano),
 			FileSize:    totalSize,

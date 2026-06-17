@@ -517,6 +517,7 @@
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
+                hasAudio={camera.audio_enabled ?? false}
               />
             {:else if mode === 'wasm'}
               {#if WasmPlayerComponent}

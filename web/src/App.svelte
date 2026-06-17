@@ -16,6 +16,7 @@
     settings: () => import('./routes/Settings.svelte'),
     dashboard: () => import('./routes/Dashboard.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
+    'ai-events': () => import('./routes/AIEvents.svelte'),
   };
   import Header from './components/Header';
 
@@ -38,6 +39,18 @@
     showOnlineBanner = true;
     if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     onlineBannerTimer = setTimeout(() => { showOnlineBanner = false; }, 3000);
+  }
+
+  // SW 503 detection — when the Service Worker returns offline responses
+  function handleApiOffline() {
+    if (navigator.onLine) {
+      // Browser thinks we're online but API is unreachable — show banner briefly
+      showOfflineBanner = true;
+      if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
+      onlineBannerTimer = setTimeout(() => { showOfflineBanner = false; }, 5000);
+    } else {
+      handleOffline();
+    }
   }
 
   async function checkSetupRequired() {
@@ -121,6 +134,10 @@ function parseRoute(hash: string) {
       return { route: 'transcoding-history', params: {} };
     }
 
+    if (segments[0] === 'ai-events') {
+      return { route: 'ai-events', params: {} };
+    }
+
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };
@@ -197,10 +214,13 @@ function parseRoute(hash: string) {
     if (isOffline) showOfflineBanner = true;
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('nvr-api-offline', handleApiOffline);
 
     return () => {
       window.removeEventListener('hashchange', updateRoute);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('nvr-api-offline', handleApiOffline);
       window.removeEventListener('online', handleOnline);
       if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     };
@@ -239,11 +259,18 @@ function parseRoute(hash: string) {
   {/await}
 {:else}
   <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
+  <!-- Compute route props OUTSIDE the {#await} block so they update reactively
+       when params change (even if currentRoute name stays the same, e.g.
+       navigating from recording A to recording B). Inside {#await}, expressions
+       only re-evaluate when the awaited promise re-resolves. -->
+  {@const routeProps = getRouteProps(currentRoute)}
+  {#key currentRoute + '|' + (params.id || '')}
   {#await routeLoaders[currentRoute]()}
     <div class="skeleton skeleton--page"></div>
   {:then module}
-    <module.default {...getRouteProps(currentRoute)} />
+    <module.default {...routeProps} />
   {/await}
+  {/key}
 {/if}
 
 <style>

@@ -1,0 +1,202 @@
+package relay
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+)
+
+var managerLogger = slog.Default().With("component", "relay-manager")
+
+// CameraHubProvider returns the StreamHub for a camera id (or nil). Backed by
+// CameraManager.GetHub in production.
+type CameraHubProvider func(cameraID string) *model.StreamHub
+
+// SPSCameraProvider returns the source camera's current SPS/PPS + H.264 flag,
+// looked up by camera id. The Manager adapts this per-target into the
+// zero-arg SPSProvider that PushTarget expects.
+type SPSCameraProvider func(cameraID string) (sps, pps []byte, isH264 bool)
+
+// Manager owns the lifecycle of all push-out targets across all cameras.
+// Each (cameraID, targetID) pair maps to at most one running *PushTarget.
+// Manager is nil-safe at the call sites: when no relays are configured, main.go
+// passes a no-op manager so camera Add/Update/Remove don't need nil checks.
+type Manager struct {
+	hubProvider CameraHubProvider
+	spsProvider SPSCameraProvider
+
+	mu      sync.Mutex
+	targets map[string]*runningTarget // key = cameraID + "/" + targetID
+	ctx     context.Context
+}
+
+type runningTarget struct {
+	target *PushTarget
+	cancel context.CancelFunc
+}
+
+// NewManager constructs a Manager. hubProvider and spsProvider are required.
+// NewManager constructs a Manager. hubProvider and spsProvider are required.
+func NewManager(hubProvider CameraHubProvider, spsProvider SPSCameraProvider) *Manager {
+	return &Manager{
+		hubProvider: hubProvider,
+		spsProvider: spsProvider,
+		targets:     make(map[string]*runningTarget),
+	}
+}
+
+// Start sets the root context used for all target goroutines.
+func (m *Manager) Start(ctx context.Context) {
+	m.mu.Lock()
+	m.ctx = ctx
+	m.mu.Unlock()
+}
+
+// Stop cancels every running target and waits for them to exit.
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	for _, rt := range m.targets {
+		rt.cancel()
+	}
+	wg := sync.WaitGroup{}
+	for _, rt := range m.targets {
+		wg.Add(1)
+		go func(rt *runningTarget) {
+			defer wg.Done()
+			<-rt.target.done
+		}(rt)
+	}
+	m.targets = make(map[string]*runningTarget)
+	m.mu.Unlock()
+	wg.Wait()
+}
+
+// SetCameraTargets reconciles the running targets for one camera against the
+// given config list: stops removed/changed targets, starts new/changed ones.
+// Idempotent — safe to call with the same config on every camera update.
+// Accepts config.PushTargetConfig (the persisted type) and adapts internally.
+func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConfig) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Adapt config types to the engine's local type.
+	local := make([]PushTargetConfig, len(cfgs))
+	for i, c := range cfgs {
+		local[i] = PushTargetConfig{ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled}
+	}
+
+	// Index desired targets by their ID.
+	desired := make(map[string]PushTargetConfig, len(local))
+	for _, c := range local {
+		desired[c.ID] = c
+	}
+
+	// Stop + remove targets that are gone or whose config changed.
+	for key, rt := range m.targets {
+		if rt.target.CameraID != cameraID {
+			continue
+		}
+		want, ok := desired[rt.target.Config.ID]
+		if !ok || !targetConfigEqual(want, rt.target.Config) {
+			rt.cancel()
+			delete(m.targets, key)
+			managerLogger.Info("relay target stopped",
+				"camera_id", cameraID, "target_id", rt.target.Config.ID, "reason", ternary(ok, "config changed", "removed"))
+		}
+	}
+
+	if m.ctx == nil {
+		// Manager not started yet (e.g. config load before Start). Targets will
+		// be started when Start runs and SetCameraTargets is replayed.
+		return
+	}
+
+	// Start new targets.
+	for _, c := range local {
+		if !c.Enabled {
+			continue
+		}
+		key := cameraID + "/" + c.ID
+		if _, exists := m.targets[key]; exists {
+			continue
+		}
+		hub := m.hubProvider(cameraID)
+		sps := func() ([]byte, []byte, bool) { return m.spsProvider(cameraID) }
+		t := NewPushTarget(cameraID, c, hub, sps)
+		ctx, cancel := context.WithCancel(m.ctx)
+		t.done = make(chan struct{})
+		rt := &runningTarget{target: t, cancel: cancel}
+		m.targets[key] = rt
+		go func() {
+			defer close(t.done)
+			t.Run(ctx)
+		}()
+		managerLogger.Info("relay target started",
+			"camera_id", cameraID, "target_id", c.ID, "protocol", c.Protocol, "url", c.URL)
+	}
+}
+
+// CameraStatus returns the runtime status of every target for a camera.
+func (m *Manager) CameraStatus(cameraID string) []TargetStatus {
+	if m == nil {
+		return []TargetStatus{}
+	}
+	m.mu.Lock()
+	var out []TargetStatus
+	for _, rt := range m.targets {
+		if rt.target.CameraID == cameraID {
+			out = append(out, rt.target.Status())
+		}
+	}
+	m.mu.Unlock()
+	if out == nil {
+		return []TargetStatus{}
+	}
+	return out
+}
+
+// CameraStatusJSON returns the camera's target statuses as []interface{} so the
+// camera manager (which can't import relay) can pass them to the JSON API.
+func (m *Manager) CameraStatusJSON(cameraID string) []interface{} {
+	statuses := m.CameraStatus(cameraID)
+	out := make([]interface{}, len(statuses))
+	for i, s := range statuses {
+		out[i] = s
+	}
+	return out
+}
+
+// RemoveCamera stops all targets for a camera (called on camera delete).
+func (m *Manager) RemoveCamera(cameraID string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	for key, rt := range m.targets {
+		if rt.target.CameraID == cameraID {
+			rt.cancel()
+			delete(m.targets, key)
+		}
+	}
+	m.mu.Unlock()
+}
+
+// targetConfigEqual reports whether two configs are equivalent (a change in any
+// field warrants a reconnect).
+func targetConfigEqual(a, b PushTargetConfig) bool {
+	return a.ID == b.ID && a.Name == b.Name && a.Protocol == b.Protocol &&
+		a.URL == b.URL && a.Enabled == b.Enabled
+}
+
+func ternary(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
+}

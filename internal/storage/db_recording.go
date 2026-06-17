@@ -536,3 +536,20 @@ func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration fl
 	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
 	return err
 }
+
+// UpdateRecordingAIStatus sets the AI processing status for a recording.
+// status: "pending", "processing", "done", "failed", "skipped"
+// errMsg: optional error description (for "failed" status)
+func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg string) error {
+	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET ai_status=?, ai_error=?, ai_processed_at=CASE WHEN ? IN ('done','failed','skipped') THEN ? ELSE ai_processed_at END WHERE id=?;`,
+		status, errMsg, status, now, id)
+	return err
+}
+
+// GetRecordingAIStatus returns the AI processing status of a recording.
+func (d *DB) GetRecordingAIStatus(ctx context.Context, id string) (status string, err error) {
+	err = d.db.QueryRowContext(ctx, `SELECT COALESCE(ai_status, '') FROM recordings WHERE id=?`, id).Scan(&status)
+	return
+}

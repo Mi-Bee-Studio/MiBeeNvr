@@ -24,7 +24,7 @@ func TestProtocolsEndpoint(t *testing.T) {
 		} `json:"protocols"`
 	}
 	parseJSON(t, rr, &resp)
-	require.Len(t, resp.Protocols, 4)
+	require.Len(t, resp.Protocols, 6)
 	require.Equal(t, "rtsp", resp.Protocols[0].ID)
 	require.True(t, resp.Protocols[0].BuiltIn)
 	require.Contains(t, resp.Protocols[0].Encodings, "h264")

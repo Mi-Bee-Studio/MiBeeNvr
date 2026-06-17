@@ -168,6 +168,11 @@ const (
 const (
 	ProtoRTSP Protocol = "rtsp"
 	ProtoHTTP Protocol = "http"
+	// Push/ingest protocols: a remote publisher pushes the stream TO the NVR
+	// (SRT listener, RTMP server). Unlike the pull protocols above, the NVR does
+	// not dial out; frames arrive via the ingest server callbacks.
+	ProtoSRT  Protocol = "srt"
+	ProtoRTMP Protocol = "rtmp"
 )
 
 // Encoding constants
@@ -214,11 +219,16 @@ type AudioFrame struct {
 
 // ValidEncodingsForProtocol maps transport protocol to supported encodings
 var ValidEncodingsForProtocol = map[string][]string{
-	string(ProtoRTSP):   {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
-	string(ProtoHTTP):   {string(EncJPEG)},
-	string(ProtoONVIF):  {string(FormatH264), string(FormatH265)},
-	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
+	string(ProtoRTSP):      {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
+	string(ProtoHTTP):      {string(EncJPEG)},
+	string(ProtoONVIF):     {string(FormatH264), string(FormatH265)},
+	string(ProtoXiaomi):    {string(FormatH264), string(FormatH265)},
 	string(ProtoTimelapse): {""}, // empty string for auto-detect
+	// Push/ingest protocols. SRT config-layer accepts h264/h265, but the current
+	// SRT MPEG-TS demuxer only emits H.264 NALUs (H.265 over SRT is a follow-up).
+	// RTMP is H.264 only (the classic RTMP spec; Enhanced-RTMP H.265 is rare).
+	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
+	string(ProtoRTMP): {string(FormatH264)},
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
@@ -242,14 +252,16 @@ default:
 }
 
 // ValidateProtocolEncoding checks if the protocol+encoding combination is valid.
-// Empty encoding is allowed for ONVIF (auto-detect).
+// Empty encoding is allowed for ONVIF/Timelapse (auto-detect) and the push
+// protocols srt/rtmp (encoding is derived from the published stream).
 func ValidateProtocolEncoding(protocol, encoding string) error {
 	encodings, ok := ValidEncodingsForProtocol[protocol]
 	if !ok {
 		return fmt.Errorf("unknown protocol: %s", protocol)
 	}
-	// ONVIF and Timelapse allow empty encoding (auto-detect / no encoding needed)
-	if (protocol == string(ProtoONVIF) || protocol == string(ProtoTimelapse)) && encoding == "" {
+	// ONVIF, Timelapse, and push protocols allow empty encoding (auto-detect / derived from stream)
+	if (protocol == string(ProtoONVIF) || protocol == string(ProtoTimelapse) ||
+		protocol == string(ProtoSRT) || protocol == string(ProtoRTMP)) && encoding == "" {
 		return nil
 	}
 	for _, e := range encodings {

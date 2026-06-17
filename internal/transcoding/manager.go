@@ -208,7 +208,8 @@ func (m *TranscodeManager) Stop() {
 // EnqueueRecording creates a transcode task for a completed recording segment.
 // The call is non-blocking — the task is inserted into the database queue
 // and will be picked up by a worker goroutine.
-func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, inputFormat string, targetCodec string) error {
+// bitrate and crf come from the per-camera transcoding config (0/empty = use defaults).
+func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, inputFormat string, targetCodec, bitrate string, crf int) error {
 	if m == nil {
 		return nil
 	}
@@ -226,6 +227,8 @@ func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, in
 		OutputPath:   outputPath,
 		OutputFormat: targetCodec,
 		CreatedAt:    now,
+		Bitrate:      bitrate,
+		CRF:          crf,
 	}
 
 	if err := m.queue.Enqueue(context.Background(), task); err != nil {
@@ -237,6 +240,8 @@ func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, in
 		"recording_id", recordingID,
 		"input_format", inputFormat,
 		"output_format", targetCodec,
+		"bitrate", bitrate,
+		"crf", crf,
 	)
 	return nil
 }

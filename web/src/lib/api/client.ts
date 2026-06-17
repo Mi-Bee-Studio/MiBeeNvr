@@ -122,6 +122,11 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
     headers,
   });
 
+  // Detect Service Worker offline response (SW returns 503 when network fails)
+  if (response.status === 503) {
+    window.dispatchEvent(new CustomEvent('nvr-api-offline'));
+  }
+
   if (!response.ok) {
     // 401 → session expired or invalid credentials → force re-login
     if (response.status === 401) {

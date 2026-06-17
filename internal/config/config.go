@@ -38,6 +38,7 @@ type Config struct {
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
+	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
 	Timezone    string              `yaml:"timezone"`        // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
 }
@@ -77,6 +78,32 @@ type CameraConfig struct {
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
 	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+
+	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
+	// For these cameras the publisher connects TO the NVR; the URL field is
+	// not used. RTMP uses StreamKey (the last path segment of rtmp://host/live/{key}).
+	// SRT uses SRTPassphrase (AES encryption) and SRTStreamID (the streamid query).
+	StreamKey     string `yaml:"stream_key,omitempty" json:"stream_key,omitempty"`
+	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
+	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
+
+	// Push-out targets (relay): forward this camera's live stream to remote
+	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
+	// Applies to ANY camera protocol — the engine subscribes to the camera's
+	// StreamHub, so no re-pull happens. Each entry is one independent target.
+	PushTargets []PushTargetConfig `yaml:"push_targets,omitempty" json:"push_targets,omitempty"`
+	// Per-camera push-in retention override. nil = follow global retention,
+	// 0 = live-only (no recording), N = keep N days. Only meaningful for srt/rtmp.
+	PushRetentionDays *int `yaml:"push_retention_days,omitempty" json:"push_retention_days,omitempty"`
+}
+
+// PushTargetConfig defines one push-out (relay) destination for a camera.
+type PushTargetConfig struct {
+	ID       string `yaml:"id" json:"id"`             // stable id within the camera (kebab/uuid)
+	Name     string `yaml:"name,omitempty" json:"name,omitempty"`
+	Protocol string `yaml:"protocol" json:"protocol"` // "rtmp" or "rtsp"
+	URL      string `yaml:"url" json:"url"`           // rtmp://host[:port]/app/key | rtsp://host[:port]/path
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -118,6 +145,7 @@ type CameraTranscodingConfig struct {
 	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"` // h264, h265
 	Preset      string `yaml:"preset,omitempty" json:"preset"`             // ultrafast, faster, medium
 	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`           // e.g. "2M"
+	CRF         int    `yaml:"crf,omitempty" json:"crf"`                   // 0=default(23/28), 1-51 quality
 }
 
 // TimeRange defines a start and end time for timelapse scheduling.
@@ -308,6 +336,12 @@ type MetricsAuthConfig struct {
 	Password     string `yaml:"password"`
 	PasswordHash string `yaml:"password_hash"`
 }
+// APIKeyConfig represents a single API key for MiBeeVision integration.
+type APIKeyConfig struct {
+	Key   string `yaml:"key" json:"key"`
+	Name  string `yaml:"name" json:"name"`
+	Revoked bool `yaml:"revoked,omitempty" json:"revoked,omitempty"`
+}
 type WebSocketConfig struct {
 	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
 	WriteBufSize int           `yaml:"write_buf_size" json:"writeBufSize"`
@@ -419,7 +453,8 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("camera[%d] and camera[%d] have duplicate id %q", j, i, c.ID)
 		}
 		seen[c.ID] = i
-		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" {
+		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" &&
+			c.Protocol != string(model.ProtoSRT) && c.Protocol != string(model.ProtoRTMP) {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
 		// Validate URL format if set
@@ -457,6 +492,32 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+		}
+
+		// Validate push-out targets (relay).
+		seenTargetIDs := make(map[string]bool, len(c.PushTargets))
+		for j, pt := range c.PushTargets {
+			if strings.TrimSpace(pt.ID) == "" {
+				return fmt.Errorf("camera[%d].push_targets[%d].id is required", i, j)
+			}
+			if seenTargetIDs[pt.ID] {
+				return fmt.Errorf("camera[%d].push_targets[%d] duplicate id %q", i, j, pt.ID)
+			}
+			seenTargetIDs[pt.ID] = true
+			if pt.Protocol != "rtmp" && pt.Protocol != "rtsp" {
+				return fmt.Errorf("camera[%d].push_targets[%d].protocol must be rtmp or rtsp", i, j)
+			}
+			pu, perr := url.Parse(pt.URL)
+			if perr != nil || pu.Host == "" {
+				return fmt.Errorf("camera[%d].push_targets[%d].url has invalid format: %s", i, j, pt.URL)
+			}
+			wantScheme := "rtmp"
+			if pt.Protocol == "rtsp" {
+				wantScheme = "rtsp"
+			}
+			if pu.Scheme != wantScheme && pu.Scheme != wantScheme+"s" {
+				return fmt.Errorf("camera[%d].push_targets[%d].url scheme must be %s://, got %s", i, j, wantScheme, pu.Scheme)
+			}
 		}
 
 		// Validate per-camera health overrides
@@ -578,6 +639,9 @@ func Validate(cfg *Config) error {
 			if err != nil || !matched {
 				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
 			}
+		}
+		if cam.Transcoding.CRF < 0 || cam.Transcoding.CRF > 51 {
+			return fmt.Errorf("cameras.%s.transcoding.crf must be between 0 and 51 (got %d)", cam.ID, cam.Transcoding.CRF)
 		}
 	}
 
@@ -1034,6 +1098,11 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Encoding = "jpeg"
 			case "onvif":
 				cam.Encoding = "" // ONVIF auto-detects
+			case string(model.ProtoSRT), string(model.ProtoRTMP):
+				// Push cameras: encoding is derived from the published stream.
+				// Default to h264 (the only codec RTMP supports; SRT's current
+				// MPEG-TS demux is also H.264-only).
+				cam.Encoding = "h264"
 			}
 		}
 		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)

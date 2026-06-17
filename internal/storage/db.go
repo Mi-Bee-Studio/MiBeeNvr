@@ -312,6 +312,60 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
 
+	// Migration v18 → v19: add bitrate and crf columns to transcoding_tasks
+	var bitrateColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('transcoding_tasks') WHERE name='bitrate'`).Scan(&bitrateColExists)
+	if bitrateColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN bitrate TEXT DEFAULT ''`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN crf INTEGER DEFAULT 0`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='19' WHERE key='schema_version'")
+
+	// Migration v19 → v20: ai_events table (MiBeeVision collaboration)
+	_, _ = d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ai_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		camera_id TEXT NOT NULL,
+		recording_id TEXT,
+		event_type TEXT NOT NULL,
+		severity TEXT NOT NULL DEFAULT 'info',
+		zone_name TEXT,
+		class_name TEXT,
+		confidence REAL,
+		frame_idx INTEGER,
+		frame_timestamp TEXT,
+		bbox TEXT,
+		snapshot_path TEXT,
+		metadata TEXT,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_ai_events_camera_time ON ai_events(camera_id, created_at DESC)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_ai_events_recording ON ai_events(recording_id)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='20' WHERE key='schema_version'")
+
+	// Migration v20 → v21: add ai_status columns to recordings (MiBeeVision processing state)
+	var aiStatusColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='ai_status'`).Scan(&aiStatusColExists)
+	if aiStatusColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL`)
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
+
+	// Migration v21 → v22: add push/ingest fields to cameras (SRT/RTMP cameras).
+	// RTMP uses stream_key; SRT uses srt_passphrase (AES) and srt_stream_id.
+	var streamKeyColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stream_key'`).Scan(&streamKeyColExists)
+	if streamKeyColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN stream_key TEXT DEFAULT ''")
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_passphrase TEXT DEFAULT ''")
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT ''")
+	}
+	// Register the new protocols as feature flags so the Settings UI can gate them.
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.srt', 1)`)
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.rtmp', 1)`)
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+
 	return nil
 
 }

@@ -35,6 +35,42 @@ export interface Camera {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  audio_enabled?: boolean;
+  // Push/ingest fields (SRT/RTMP cameras)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
+  // Push-out relay (forward this camera's stream to remote targets)
+  push_targets?: PushTargetConfig[];
+  push_retention_days?: number | null;
+}
+
+/** One push-out relay destination (RTMP/RTSP) for a camera. */
+export interface PushTargetConfig {
+  id: string;
+  name?: string;
+  protocol: 'rtmp' | 'rtsp';
+  url: string;
+  enabled: boolean;
+}
+
+/** Live runtime status of one push-out target (from GET push-status). */
+export interface PushTargetStatus {
+  id: string;
+  name: string;
+  protocol: string;
+  url: string;
+  status: 'idle' | 'connecting' | 'streaming' | 'reconnecting' | 'error';
+  kbps: number;
+  enabled: boolean;
+  uptime: string;
+  error?: string;
+  updated_at: string;
+}
+
+export interface PushStatusResponse {
+  camera_id: string;
+  targets: PushTargetStatus[];
 }
 
 export interface CreateCameraRequest {
@@ -54,6 +90,13 @@ export interface CreateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Push/ingest fields (SRT/RTMP)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
+  // Push-out relay
+  push_targets?: PushTargetConfig[];
+  push_retention_days?: number | null;
 }
 
 export interface UpdateCameraRequest {
@@ -74,6 +117,13 @@ export interface UpdateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Push/ingest fields (SRT/RTMP)
+  stream_key?: string;
+  srt_passphrase?: string;
+  srt_stream_id?: string;
+  // Push-out relay (replace whole list when set)
+  push_targets?: PushTargetConfig[];
+  push_retention_days?: number | null;
 }
 
 export interface DiscoveredDevice {
@@ -196,6 +246,11 @@ export async function updateCamera(id: string, data: UpdateCameraRequest, signal
     body: JSON.stringify(data),
     signal,
   });
+}
+
+/** Fetch live push-out relay status for a camera (per-target state + bitrate). */
+export async function getPushStatus(id: string, signal?: AbortSignal): Promise<PushStatusResponse> {
+  return apiRequest<PushStatusResponse>(`/cameras/${id}/push-status`, { signal });
 }
 
 export async function deleteCamera(id: string, signal?: AbortSignal): Promise<void> {

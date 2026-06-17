@@ -14,9 +14,11 @@
     subscribeTimelapseMergeProgress,
     cancelMerge,
     fetchTimelapsePreview,
+    recordTimelineSeek,
     ApiRequestError
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
+  import { enqueueTranscodeTask, getTranscodingTasks } from '$lib/api/transcoding';
   import type { Recording, TimelapseFrame, TimelapsePreviewFrame } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
@@ -25,6 +27,7 @@
   import { showToast } from '$lib/toast';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import TimelineBar from '$lib/components/TimelineBar.svelte';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
@@ -347,6 +350,82 @@ function startMergeSse(cameraId: string, recordingId: string) {
     if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
   }
 
+  // --- Timeline seek (M6 DVR-style browsing) ---
+  let pendingTimelineSeekOffset = $state<number | null>(null);
+
+  async function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
+    if (!recording) return;
+    const isSegmentSwitch = recordingId !== currentId;
+    // Record observability (fire-and-forget)
+    void recordTimelineSeek(recording.camera_id, isSegmentSwitch ? 'segment' : 'intra');
+
+    if (isSegmentSwitch) {
+      // Switch to target recording by updating the hash route.
+      // The {#key} block in App.svelte recreates this component with the new
+      // recordingId prop, which triggers $effect → loadRecording().
+      pendingTimelineSeekOffset = offsetSeconds;
+      isTransitioning = true;
+      window.location.hash = `#/recordings/${recordingId}`;
+    } else {
+      // Same segment — native seek
+      if (videoEl) videoEl.currentTime = offsetSeconds;
+    }
+  }
+
+  // --- H.265 → H.264 transcode-for-playback ---
+  let transcodeForPlayback = $state(false);
+  let transcodeForPlaybackError = $state('');
+  let transcodePollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+
+  function timelineDate(): string {
+    if (!recording || !recording.started_at) return new Date().toISOString().slice(0, 10);
+    return recording.started_at.slice(0, 10);
+  }
+
+  async function startTranscodeForPlayback() {
+    if (!recording) return;
+    transcodeForPlayback = true;
+    transcodeForPlaybackError = '';
+    try {
+      const task = await enqueueTranscodeTask({
+        camera_id: recording.camera_id,
+        recording_id: currentId,
+        target_codec: 'h264',
+      });
+      // Poll until completed
+      transcodePollTimer = setInterval(async () => {
+        try {
+          const resp = await getTranscodingTasks({ camera_id: recording.camera_id, limit: 10 });
+          const t = resp.tasks.find((x) => x.id === task.id);
+          if (!t) return;
+          if (t.status === 'completed') {
+            stopTranscodePoll();
+            transcodeForPlayback = false;
+            showToast(t_('detail.transcodeReady'), 'success');
+            // Reload player — file replaced with H.264 version
+            initVideoPlayer();
+          } else if (t.status === 'failed') {
+            stopTranscodePoll();
+            transcodeForPlayback = false;
+            transcodeForPlaybackError = t.error || t_('detail.transcodeFailed');
+            showToast(transcodeForPlaybackError, 'error');
+          }
+        } catch { /* retry next tick */ }
+      }, 3000);
+    } catch (e) {
+      transcodeForPlayback = false;
+      transcodeForPlaybackError = e instanceof Error ? e.message : t_('detail.transcodeFailed');
+      showToast(transcodeForPlaybackError, 'error');
+    }
+  }
+
+  function stopTranscodePoll() {
+    if (transcodePollTimer) { clearInterval(transcodePollTimer); transcodePollTimer = null; }
+  }
+
+  // Alias for i18n calls inside nested functions (avoids shadowing the imported `t`)
+  const t_ = t;
+
 function initVideoPlayer() {
   videoSpeed = 1;
   videoLoading = true;
@@ -362,6 +441,16 @@ function initVideoPlayer() {
   videoRetryCount = 0;
   videoStalled = false;
   if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+
+  // When switching recordings (src already set on an existing <video> element),
+  // Svelte updates the DOM src attribute but the browser does NOT auto-reload.
+  // We must explicitly call load() after Svelte flushes the DOM update.
+  // See: https://html.spec.whatwg.org/#loading-the-media-resource
+  void tick().then(() => {
+    if (videoEl) {
+      videoEl.load();
+    }
+  });
 }
 
 function setVideoSpeed(speed: number) {
@@ -374,6 +463,11 @@ function setVideoSpeed(speed: number) {
 function handleVideoLoadedMetadata(e: Event) {
   const video = e.target as HTMLVideoElement;
   videoDuration = video.duration || 0;
+  // Apply pending timeline seek after cross-segment switch
+  if (pendingTimelineSeekOffset != null && video) {
+    video.currentTime = Math.min(pendingTimelineSeekOffset, video.duration || pendingTimelineSeekOffset);
+    pendingTimelineSeekOffset = null;
+  }
 }
 
 function handleVideoLoadedData() {
@@ -982,7 +1076,8 @@ $effect(() => {
   }
 });
 
-  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings)
+  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings
+  // AND timeline cross-segment seeks which update window.location.hash)
   $effect(() => {
     const id = recordingId;
     if (!id) return;
@@ -990,7 +1085,9 @@ $effect(() => {
     currentId = id;
     loading = true;
     error = '';
-    loadRecording();
+    loadRecording().finally(() => {
+      isTransitioning = false;
+    });
   });
 
   onMount(() => {
@@ -1000,6 +1097,7 @@ $effect(() => {
       window.removeEventListener('keydown', handleKeydown);
       stopTranscodingPoll();
       stopMergePolling();
+      stopTranscodePoll();
     };
   });
 </script>
@@ -1056,6 +1154,25 @@ $effect(() => {
                 <div class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 p-6">
                   <AlertTriangle size={48} class="th-color-danger mb-3" />
                   <p class="text-white text-center text-sm mb-4">{videoErrorMsg}</p>
+                  {#if videoError === 'src_not_supported' && recording.format === 'h265'}
+                    {#if transcodeForPlayback}
+                      <div class="flex items-center gap-2 text-white/80 mb-3">
+                        <Loader2 size={16} class="animate-spin" />
+                        <span class="text-sm">{t('detail.transcodingForPlayback')}</span>
+                      </div>
+                    {:else if transcodeForPlaybackError}
+                      <p class="text-red-400 text-xs mb-3">{transcodeForPlaybackError}</p>
+                      <button onclick={startTranscodeForPlayback} class="btn btn-primary btn-sm flex items-center gap-1 mb-3">
+                        <RefreshCw size={14} />
+                        {t('detail.transcodeToH264')}
+                      </button>
+                    {:else}
+                      <button onclick={startTranscodeForPlayback} class="btn btn-primary btn-sm flex items-center gap-1 mb-3">
+                        <RefreshCw size={14} />
+                        {t('detail.transcodeToH264')}
+                      </button>
+                    {/if}
+                  {/if}
                   {#if videoRetryCount < MAX_VIDEO_RETRIES}
                     <button onclick={handleVideoRetry} class="btn btn-primary btn-sm flex items-center gap-1">
                       <RefreshCw size={14} />
@@ -1101,6 +1218,15 @@ $effect(() => {
               onarrowleft={() => { if (videoEl) videoEl.currentTime = Math.max(0, videoEl.currentTime - 5); }}
               onarrowright={() => { if (videoEl) videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 5); }}
             />
+            {#if recording.camera_id}
+              <TimelineBar
+                cameraId={recording.camera_id}
+                date={timelineDate()}
+                currentRecording={recording}
+                currentVideoTime={videoCurrentTime}
+                onseek={handleTimelineSeek}
+              />
+            {/if}
             <div class="flex items-center justify-between px-4 py-2 th-bg-secondary border-t th-border">
               <span class="text-sm th-text-muted">{t('detail.playing')} <span class="font-mono th-text-primary">{recording.camera_id}</span></span>
               <button onclick={navigateToNext} class="btn btn-ghost btn-sm flex items-center gap-1">

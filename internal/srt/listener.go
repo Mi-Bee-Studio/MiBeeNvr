@@ -25,6 +25,23 @@ type Listener struct {
 	// OnConnect is called when a new connection is established.
 	// If nil, the listener auto-creates a StreamHub for unknown cameras.
 	OnConnect func(cameraID string, hub *model.StreamHub)
+
+	// HubProvider returns the shared StreamHub for a camera ID. When set, the
+	// listener uses the hub from the central registry (CameraManager) instead of
+	// a locally-created orphan hub, so pushed frames reach the live consumers
+	// (HLS/WebRTC/FLV/WS) and the IngestRecorder. If nil, the listener falls
+	// back to its internal hubs map (legacy behavior).
+	HubProvider func(cameraID string) *model.StreamHub
+
+	// OnDisconnect is called when a publisher disconnects. Used to notify the
+	// IngestRecorder to close its in-flight segment and return to Idle.
+	OnDisconnect func(cameraID string)
+
+	// NALUProvider returns a callback that forwards NALUs to the camera's
+	// IngestRecorder for MP4 recording. Returns nil if the camera has no
+	// IngestRecorder (e.g. a non-push camera). main.go sets this from the
+	// camera manager.
+	NALUProvider func(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool)
 }
 
 // NewListener creates a new SRT listener with the given configuration.
@@ -58,6 +75,19 @@ func (l *Listener) registerHubAndStopReceiver(cameraID string) {
 // addr returns the listener address, or nil if not listening.
 func (l *Listener) addr() net.Addr {
 	return &net.UDPAddr{Port: l.cfg.Port}
+}
+
+// getHubLocked resolves the StreamHub for a camera ID. It prefers the external
+// HubProvider (the CameraManager's central registry) so pushed frames reach the
+// recorder + live consumers; otherwise it falls back to the local hubs map.
+// Returns nil if neither has a hub. Caller must hold l.mu.
+func (l *Listener) getHubLocked(cameraID string) *model.StreamHub {
+	if l.HubProvider != nil {
+		if hub := l.HubProvider(cameraID); hub != nil {
+			return hub
+		}
+	}
+	return l.hubs[cameraID]
 }
 
 
@@ -141,8 +171,8 @@ func (l *Listener) StartCallers() error {
 			continue
 		}
 
-		hub, ok := l.hubs[stream.CameraID]
-		if !ok {
+		hub := l.getHubLocked(stream.CameraID)
+		if hub == nil {
 			logger.Warn("SRT caller: no hub registered for camera, creating new one",
 				"camera_id", stream.CameraID)
 			hub = model.NewStreamHub()
@@ -184,8 +214,8 @@ func (l *Listener) handleConnect(req srt.ConnRequest) srt.ConnType {
 	}
 
 	// Find or create hub
-	hub, ok := l.hubs[cameraID]
-	if !ok {
+	hub := l.getHubLocked(cameraID)
+	if hub == nil {
 		hub = model.NewStreamHub()
 		l.hubs[cameraID] = hub
 	}
@@ -224,8 +254,8 @@ func (l *Listener) handlePublish(conn srt.Conn) {
 	cameraID := ParseStreamID(streamID)
 
 	l.mu.Lock()
-	hub, ok := l.hubs[cameraID]
-	if !ok {
+	hub := l.getHubLocked(cameraID)
+	if hub == nil {
 		hub = model.NewStreamHub()
 		l.hubs[cameraID] = hub
 	}
@@ -243,6 +273,11 @@ func (l *Listener) handlePublish(conn srt.Conn) {
 	}
 
 	rec := NewReceiver(streamCfg, hub)
+	// Forward NALUs to the IngestRecorder for recording, if a NALU provider is
+	// wired (main.go sets NALUProvider from the camera manager).
+	if l.NALUProvider != nil {
+		rec.NALUCallback = l.NALUProvider(cameraID)
+	}
 	l.receivers[cameraID] = rec
 	l.mu.Unlock()
 
@@ -271,6 +306,12 @@ func (l *Listener) handlePublish(conn srt.Conn) {
 	l.mu.Lock()
 	delete(l.receivers, cameraID)
 	l.mu.Unlock()
+
+	// Notify disconnect so the IngestRecorder closes its in-flight segment and
+	// returns to Idle (ready for the next publisher).
+	if l.OnDisconnect != nil {
+		l.OnDisconnect(cameraID)
+	}
 
 	logger.Info("SRT publisher disconnected", "camera_id", cameraID)
 }

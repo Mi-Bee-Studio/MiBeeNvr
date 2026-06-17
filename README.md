@@ -107,6 +107,8 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - HTTP JPEG snapshot streaming
 - ONVIF discovery & management with PTZ control
 - Xiaomi CS2 P2P protocol support
+- SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
+- Native Go push-out relay (forward any camera to remote RTMP/RTSP targets — no FFmpeg)
 
 ### 📺 Streaming & Live View
 - HLS on-demand streaming with LL-HLS support
@@ -154,8 +156,10 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 | HLS | NVR → Browser | ✅ Done | On-demand streaming |
 | WebRTC | NVR → Browser | ✅ Done | WHEP sub-second latency |
 | HTTP-FLV | NVR → Browser | ✅ Done | Browser-friendly streaming |
-| RTMP | Camera → NVR | ✅ Done | Push/pull support |
-| SRT | Camera → NVR | ✅ Done | Low-latency transport |
+| RTMP (ingest) | Camera → NVR | ✅ Done | Push-in: receive streams from remote publishers |
+| SRT (ingest) | Camera → NVR | ✅ Done | Push-in: low-latency transport |
+| RTMP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
+| RTSP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
 | ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI |
 | Xiaomi CS2 | Camera → NVR | ✅ Done | P2P protocol, cloud auth |
 

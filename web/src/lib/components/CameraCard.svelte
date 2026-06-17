@@ -3,7 +3,7 @@
   import { normalizeProtocol } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -194,6 +194,12 @@ let healthShowWarningIcon = $derived(
      <span class="badge badge-error flex items-center gap-1" title={mergeError || 'Merge failed'} >
        <AlertCircle size={10} />
        Failed
+     </span>
+   {/if}
+   {#if camera.push_targets && camera.push_targets.length > 0}
+     <span class="badge badge-info flex items-center gap-1" title={t('cameras.pushOutTitle')}>
+       <ArrowUpRight size={10} />
+       {camera.push_targets.filter(pt => pt.enabled).length}/{camera.push_targets.length}
      </span>
    {/if}
    {#if camera.status === 'recording'}

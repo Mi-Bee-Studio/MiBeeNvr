@@ -15,13 +15,24 @@ type StorageHealthChanged struct {
 
 // SegmentCompleted is published when a recording segment finishes writing.
 type SegmentCompleted struct {
-	CameraID    string
-	FilePath    string
-	Format      string
-	StartedAt   string // RFC3339Nano or DB timestamp format
-	EndedAt     string
-	FileSize    int64
-	RecordingID string
+	CameraID    string `json:"camera_id"`
+	FilePath    string `json:"file_path"`      // relative to storage root for cross-server compatibility
+	Format      string `json:"format"`
+	Encoding    string `json:"encoding"`       // h264, h265, mjpeg — enables MiBeeVision to choose decoder
+	StartedAt   string `json:"started_at"`     // RFC3339Nano or DB timestamp format
+	EndedAt     string `json:"ended_at"`
+	FileSize    int64  `json:"file_size"`
+	RecordingID string `json:"recording_id"`
+}
+
+// SegmentDeleted is published when a recording segment is deleted (retention
+// expiry or manual deletion). MiBeeVision subscribes to cancel in-progress
+// processing tasks and orphan associated AI event snapshots.
+type SegmentDeleted struct {
+	RecordingID string `json:"recording_id"`
+	CameraID    string `json:"camera_id"`
+	FilePath    string `json:"file_path"`
+	Reason      string `json:"reason"` // "retention_expired", "manual", "disk_threshold"
 }
 
 // AIDetectionEvent is published when AI inference detects objects in a camera frame.

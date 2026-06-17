@@ -187,7 +187,7 @@ func TestManager_EnqueueRecording(t *testing.T) {
 	err = os.WriteFile(inputPath, []byte("fake mp4 data"), 0644)
 	require.NoError(t, err)
 
-	err = mgr.EnqueueRecording("cam-front-door", "rec-123", inputPath, "h265", "h264")
+	err = mgr.EnqueueRecording("cam-front-door", "rec-123", inputPath, "h265", "h264", "", 0)
 	require.NoError(t, err)
 
 	// Verify the task was inserted into the DB
@@ -205,7 +205,7 @@ func TestManager_EnqueueRecording_NilManager(t *testing.T) {
 	t.Helper()
 	// Nil-safe EnqueueRecording should not panic
 	var mgr *TranscodeManager
-	err := mgr.EnqueueRecording("cam-1", "rec-1", "/tmp/test.mp4", "h264", "h265")
+	err := mgr.EnqueueRecording("cam-1", "rec-1", "/tmp/test.mp4", "h264", "h265", "", 0)
 	require.NoError(t, err)
 }
 

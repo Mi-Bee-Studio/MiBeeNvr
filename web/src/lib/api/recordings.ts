@@ -441,3 +441,16 @@ export interface TimelapsePreviewFrame {
 export async function fetchTimelapsePreview(id: string, sample: number = 6): Promise<TimelapsePreviewFrame[]> {
   return apiRequest<TimelapsePreviewFrame[]>(`/timelapse/${id}/preview?sample=${sample}`);
 }
+
+// --- Timeline seek event (observability, fire-and-forget) ---
+
+export async function recordTimelineSeek(cameraId: string, type: 'segment' | 'intra'): Promise<void> {
+  try {
+    await apiRequest<void>('/recordings/timeline/seek-event', {
+      method: 'POST',
+      body: JSON.stringify({ camera_id: cameraId, type }),
+    });
+  } catch {
+    // Non-fatal — observability only
+  }
+}

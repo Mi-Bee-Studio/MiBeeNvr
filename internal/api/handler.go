@@ -173,10 +173,15 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
+			r.Post("/", h.handleCreateRecording)
+			r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
 			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
+				r.Patch("/", h.handleUpdateRecording)
+				// MiBeeVision AI status update (API Key required inside handler)
+				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
 
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
@@ -243,9 +248,11 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
-		r.Get("/api/settings", h.handleGetSettings)
-		r.Put("/api/settings", h.handleUpdateSettings)
-		r.Get("/api/settings/merge", h.handleGetMergeSettings)
+	r.Get("/api/settings", h.handleGetSettings)
+	r.Put("/api/settings", h.handleUpdateSettings)
+	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
+	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+	r.Get("/api/settings/merge", h.handleGetMergeSettings)
 		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
@@ -298,6 +305,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/stability", h.handleGetStability)
 		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
+		// Push-out relay status (per-camera)
+		r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
 		// Transcoding endpoints
 		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
 		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
@@ -320,6 +329,13 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
 		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
 		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
+		// AI event endpoints (MiBeeVision collaboration)
+		// POST /api/ai/events requires API Key auth (checked inside handler)
+		r.Post("/api/ai/events", h.handleCreateAIEvent)
+		// GET endpoints are user-authenticated (behind the group's authMW)
+		r.Get("/api/ai/events", h.handleListAIEvents)
+		r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
+		r.Get("/api/ai/stats", h.handleGetAIEventStats)
 	})
 
 	return r

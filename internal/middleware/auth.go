@@ -59,6 +59,12 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If already authenticated via API Key middleware, skip BasicAuth.
+			if IsAPIKeyAuthenticated(r.Context()) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			ip := extractIP(r.RemoteAddr)
 
 			// Auth failure rate limiting (optional — enabled via config).
@@ -77,6 +83,7 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 						authFailures.Delete(ip)
 					} else if entry.count >= maxFailures {
 						logger.Info("rate limited request", "ip", ip, "failures", entry.count)
+						recordAuthRateLimited()
 						w.WriteHeader(http.StatusTooManyRequests)
 						return
 					}
@@ -95,6 +102,7 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 
 			if strings.TrimSpace(currentHash) == "" {
 				// No password configured — reject all requests with setup guidance
+				recordAuthAttempt("no_password")
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -119,6 +127,7 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 				}
 			}
 			if !ok || user != currentUsername || !CheckPassword(pass, currentHash) {
+				recordAuthAttempt("failure")
 				// Track auth failure only when rate limiting is enabled.
 				if rateLimit.Enabled {
 					windowMin := rateLimit.WindowMinutes
@@ -145,6 +154,7 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 			if rateLimit.Enabled {
 				authFailures.Delete(ip)
 			}
+			recordAuthAttempt("success")
 			next.ServeHTTP(w, r)
 		})
 	}, effectiveHash

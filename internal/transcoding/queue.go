@@ -413,8 +413,9 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 	if q.m != nil {
 		codecFrom := task.InputFormat
 		codecTo := task.OutputFormat
-		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, "completed").Inc()
-		q.m.TranscodingDurationSeconds.WithLabelValues(codecFrom, codecTo).Observe(duration.Seconds())
+		encoderName, crfLabel := q.resolveMetricLabels(task)
+		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, encoderName, crfLabel, "completed").Inc()
+		q.m.TranscodingDurationSeconds.WithLabelValues(codecFrom, codecTo, encoderName).Observe(duration.Seconds())
 
 		// Track bytes processed (input file size)
 		if info, err := os.Stat(task.InputPath); err == nil {
@@ -441,12 +442,35 @@ func (q *TranscodeQueue) finishTask(ctx context.Context, task *storage.Transcode
 	if q.m != nil && status == "failed" {
 		codecFrom := task.InputFormat
 		codecTo := task.OutputFormat
-		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, "failed").Inc()
+		encoderName, crfLabel := q.resolveMetricLabels(task)
+		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, encoderName, crfLabel, "failed").Inc()
 	} else if q.m != nil && status == "cancelled" {
 		codecFrom := task.InputFormat
 		codecTo := task.OutputFormat
-		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, "cancelled").Inc()
+		encoderName, crfLabel := q.resolveMetricLabels(task)
+		q.m.TranscodingJobsTotal.WithLabelValues(codecFrom, codecTo, encoderName, crfLabel, "cancelled").Inc()
 	}
+}
+
+// resolveMetricLabels returns the encoder name and CRF label for Prometheus metrics.
+func (q *TranscodeQueue) resolveMetricLabels(task *storage.TranscodeTask) (encoder string, crf string) {
+	var caps HardwareCapabilities
+	if q.caps != nil {
+		caps = *q.caps
+	}
+	opts := TranscodeOptions{
+		InputCodec:  task.InputFormat,
+		OutputCodec: task.OutputFormat,
+		CRF:         task.CRF,
+	}
+	encoder = resolveEncoder(opts, caps)
+	crfVal := resolveEffectiveCRF(opts, caps)
+	if crfVal < 0 {
+		crf = "hw"
+	} else {
+		crf = strconv.Itoa(crfVal)
+	}
+	return encoder, crf
 }
 
 // removeOutput removes a partial FFmpeg output file when a task fails or is cancelled.
@@ -535,6 +559,8 @@ func (q *TranscodeQueue) taskToOptions(task *storage.TranscodeTask, preset strin
 		}(),
 		Framerate: framerate,
 		Preset:    preset,
+		Bitrate:   task.Bitrate,
+		CRF:       task.CRF,
 	}
 }
 

@@ -14,11 +14,13 @@
     cameraName,
     expanded = false,
     tabVisible = true,
+    hasAudio = false,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    hasAudio?: boolean;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -260,7 +262,7 @@ let videoEventAc: AbortController | null = null;
         type: 'flv',
         isLive: true,
         url,
-        hasAudio: false,
+        hasAudio,
         hasVideo: true,
         cors: false,
       }, {

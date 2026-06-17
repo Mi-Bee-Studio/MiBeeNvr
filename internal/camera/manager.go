@@ -45,6 +45,14 @@ type CameraUpdate struct {
 	StreamEncoding *string
 	Channel        *string
 	Transcoding    *config.CameraTranscodingConfig
+	AudioEnabled   *bool
+	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.
+	StreamKey     *string
+	SRTPassphrase *string
+	SRTStreamID   *string
+	// Push-out relay targets (replace the whole list when set). nil = unchanged.
+	PushTargets       *[]config.PushTargetConfig
+	PushRetentionDays *int
 }
 
 type CameraManager struct {
@@ -70,6 +78,24 @@ type CameraManager struct {
 	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
 	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
 	eventBus         *event.EventBus // event bus for publishing segment events
+	// hubRegistry is the central map of camera_id → StreamHub. It is the single
+	// source of truth for hubs so that pull recorders (RTSP/ONVIF/...) and push
+	// ingest servers (SRT listener / RTMP server) share the SAME hub object for
+	// a given camera. The SRT/RTMP servers consult GetOrCreateHub(); the
+	// recorder's own .Hub field points at the same instance after initStreamHub.
+	hubRegistry map[string]*model.StreamHub
+	// relayMgr (optional) is notified when a camera's push-out targets change so
+	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
+	// import cycle.
+	relayMgr RelayManager
+}
+
+// RelayManager is the subset of *relay.Manager the camera manager calls. Kept
+// here as an interface (taking config.PushTargetConfig) so internal/camera
+// doesn't import internal/relay.
+type RelayManager interface {
+	SetCameraTargets(cameraID string, cfgs []config.PushTargetConfig)
+	RemoveCamera(cameraID string)
 }
 
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
@@ -113,6 +139,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:  make(map[string]*onvif.DeviceInfo),
 		eventBus:         eb,
+		hubRegistry:      make(map[string]*model.StreamHub),
 	}
 }
 
@@ -165,8 +192,10 @@ func (cm *CameraManager) EnqueueTranscode(cameraID, recordingID, inputPath, inpu
 	}
 
 	// Non-blocking enqueue — don't block recording pipeline
+	bitrate := tcfg.Bitrate
+	crf := tcfg.CRF
 	go func() {
-		if err := tm.EnqueueRecording(cameraID, recordingID, inputPath, inputFormat, targetCodec); err != nil {
+		if err := tm.EnqueueRecording(cameraID, recordingID, inputPath, inputFormat, targetCodec, bitrate, crf); err != nil {
 			logger.Warn("failed to enqueue transcode task",
 				"camera_id", cameraID,
 				"recording_id", recordingID,
@@ -316,12 +345,40 @@ case "timelapse":
 			logger.Warn("unknown timelapse frame source", "camera_id", cam.ID, "frame_source", frameSource)
 			return nil
 		}
+	case string(model.ProtoSRT), string(model.ProtoRTMP):
+		// Push/ingest protocols: the NVR does NOT dial out. A remote publisher
+		// (ffmpeg, OBS, another NVR) pushes a stream into the SRT listener or
+		// RTMP server; frames arrive via IngestRecorder.WriteNALU. RTMP is
+		// H.264 only; SRT config-layer accepts h265 but the current MPEG-TS
+		// demux emits H.264, so we force h264 here.
+		enc := cam.Encoding
+		if enc == "" {
+			enc = string(model.FormatH264)
+		}
+		rec = recorder.NewIngestRecorder(recorder.IngestConfig{
+			CameraID:   cam.ID,
+			Encoding:   enc,
+			SegmentDur: segDur,
+			Store:      cm.store,
+			DB:         cm.db,
+			Metrics:    cm.metrics,
+			EventBus:   cm.eventBus,
+		})
 	default:
 		return nil
 	}
 
 	// Initialize StreamHub for frame fan-out on all recorders
 	initStreamHub(rec, cam.ID, cam.Protocol, &cm.frameSampleCounter, cm.metrics)
+	// Register the recorder's hub in the central registry so that push ingest
+	// servers (SRT listener / RTMP server) share the SAME hub object and their
+	// frames reach the live consumers (HLS/WebRTC/FLV/WS) attached on demand.
+	// NOTE: createRecorder is always called under cm.mu (from startRecorder /
+	// Start), so the registry write is lock-free here — re-locking would
+	// self-deadlock (Go mutexes are not reentrant).
+	if hub := getRecorderHub(rec); hub != nil {
+		cm.hubRegistry[cam.ID] = hub
+	}
 	return rec
 }
 
@@ -354,6 +411,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 	case *recorder.StubRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+	case *recorder.IngestRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
 	}
 	if hub != nil {
 		hub.SetCameraID(cameraID)
@@ -372,6 +432,12 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 			}
 			hub.OnDrop = func(consumerID string) {
 				m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
+			}
+			hub.OnBroadcastAudio = func(cid string, codec string) {
+				m.AudioFramesTotal.WithLabelValues(cid, codec).Inc()
+			}
+			hub.OnAudioDrop = func(cid string) {
+				m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
 			}
 			hub.OnBufferDepth = func(cid, consumerID string, depth int) {
 				m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
@@ -511,6 +577,16 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			} else {
 				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
 			}
+		case string(model.ProtoSRT), string(model.ProtoRTMP):
+			// Push/ingest cameras: the recorder waits for an incoming publisher
+			// (it does not dial out). Its hub is registered in hubRegistry so the
+			// SRT listener / RTMP server can find it.
+			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+				logger.Error("failed to start ingest recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
+			} else {
+				logger.Info("started ingest recorder, awaiting publisher",
+					"camera_id", cam.ID, "protocol", cam.Protocol)
+			}
 		default:
 			// Try plugin-registered protocols (e.g. xiaomi)
 			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
@@ -608,6 +684,193 @@ func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
 	return cm.recorders[cameraID]
 }
 
+// GetHub returns the StreamHub registered for the given camera ID, or nil if
+// none exists. This is the read-only lookup consumed by HLS/WebRTC/FLV/WS
+// handlers (they fall back to getRecorderHub, but push-only cameras — srt/rtmp —
+// expose their hub through this registry).
+func (cm *CameraManager) GetHub(cameraID string) *model.StreamHub {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.hubRegistry[cameraID]
+}
+
+// SetRelayManager wires the relay engine (optional). When set, the camera
+// manager reconciles a camera's push-out targets on Add/Update/Remove.
+func (cm *CameraManager) SetRelayManager(rm RelayManager) {
+	cm.relayMgr = rm
+}
+
+// RelayStatus returns the runtime status of a camera's push-out targets, for the
+// push-status API and the camera card UI. Empty when no relay manager is wired.
+// RelayStatusProvider is the minimal shape the API handler needs.
+func (cm *CameraManager) RelayStatus(cameraID string) []interface{} {
+	if rm, ok := cm.relayMgr.(relayStatusProvider); ok {
+		return rm.CameraStatusJSON(cameraID)
+	}
+	return nil
+}
+
+// relayStatusProvider is implemented by *relay.Manager to return JSON-serializable
+// status without internal/camera importing internal/relay.
+type relayStatusProvider interface {
+	CameraStatusJSON(cameraID string) []interface{}
+}
+
+// GetSPS returns the source camera's current H.264 SPS/PPS (raw NALUs, no start
+// code) and whether the source is H.264. Used by the relay engine to initialize
+// RTMP/RTSP target tracks. Returns nil when the camera is not yet streaming or
+// is not H.264.
+func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return nil, nil, false
+	}
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		return r.SPS(), r.PPS(), true
+	case *recorder.IngestRecorder:
+		_, s, p, _ := r.CodecParams()
+		if s == nil || p == nil {
+			return nil, nil, true
+		}
+		return s, p, true
+	case *recorder.ONVIFRecorder:
+		// Delegate may be nil momentarily; unwrap via CodecParams if available.
+		if d := r.Delegate(); d != nil {
+			if h264, ok := d.(*recorder.H264Recorder); ok {
+				return h264.SPS(), h264.PPS(), true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+// GetOrCreateHub returns the existing StreamHub for the camera ID, or creates a
+// new one (with metrics callbacks wired) if none exists. This is the entry point
+// used by the SRT listener and RTMP server: when a publisher pushes a stream,
+// they obtain the SAME hub the recorder owns, so frames reach the live
+// consumers (HLS/WebRTC/FLV/WS) that subscribe on demand. If a pull recorder
+// already created the hub via initStreamHub, that instance is returned.
+func (cm *CameraManager) GetOrCreateHub(cameraID string) *model.StreamHub {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if hub, ok := cm.hubRegistry[cameraID]; ok {
+		return hub
+	}
+	hub := model.NewStreamHub()
+	hub.SetCameraID(cameraID)
+	// Wire the same observability callbacks as initStreamHub so push hubs are
+	// instrumented identically to pull hubs.
+	cm.wireHubMetricsLocked(hub, cameraID, string(model.ProtoSRT))
+	cm.hubRegistry[cameraID] = hub
+	return hub
+}
+
+// wireHubMetricsLocked attaches the standard StreamHub observability callbacks
+// (frame counters, drop counters, buffer-depth gauges). Caller must hold cm.mu.
+func (cm *CameraManager) wireHubMetricsLocked(hub *model.StreamHub, cameraID, protocol string) {
+	m := cm.metrics
+	if m == nil {
+		return
+	}
+	sampleCounter := &cm.frameSampleCounter
+	hub.OnBroadcast = func(cid string, isIDR bool) {
+		m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
+		if sampleCounter != nil {
+			count := atomic.AddUint64(sampleCounter, 1)
+			if count%100 == 0 {
+				start := time.Now()
+				m.FrameProcessingDurationSeconds.WithLabelValues(cid, protocol).Observe(time.Since(start).Seconds())
+			}
+		}
+	}
+	hub.OnDrop = func(consumerID string) {
+		m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
+	}
+	hub.OnBroadcastAudio = func(cid string, codec string) {
+		m.AudioFramesTotal.WithLabelValues(cid, codec).Inc()
+	}
+	hub.OnAudioDrop = func(cid string) {
+		m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
+	}
+	hub.OnBufferDepth = func(cid, consumerID string, depth int) {
+		m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
+	}
+	hub.OnJitterBufferDepth = func(cid string, depth int) {
+		m.JitterBufferDepth.WithLabelValues(cid).Set(float64(depth))
+	}
+	hub.OnJitterReorder = func(cid string) {
+		m.JitterBufferReordersTotal.WithLabelValues(cid).Inc()
+	}
+}
+
+// GetIngestRecorder returns the IngestRecorder for a camera if it is one, else
+// nil. Convenience for the SRT/RTMP servers that need to call WriteNALU /
+// OnDisconnect on push cameras.
+func (cm *CameraManager) GetIngestRecorder(cameraID string) *recorder.IngestRecorder {
+	rec, ok := cm.GetRecorder(cameraID).(*recorder.IngestRecorder)
+	if !ok {
+		return nil
+	}
+	return rec
+}
+
+// RTMPKeyMap returns a copy of camera_id → stream_key for all RTMP cameras.
+// Used by main.go to build the RTMP server's StreamKeyResolver (reverse lookup).
+func (cm *CameraManager) RTMPKeyMap() map[string]string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	out := make(map[string]string, len(cm.cfg.Cameras))
+	for _, cam := range cm.cfg.Cameras {
+		if cam.Protocol == string(model.ProtoRTMP) && cam.StreamKey != "" {
+			out[cam.ID] = cam.StreamKey
+		}
+	}
+	return out
+}
+
+// ResolveStreamKey maps an incoming RTMP stream key to its camera ID (with the
+// legacy global rtmp.stream_keys map as a fallback). This is the LIVE resolver
+// used by the RTMP server on every publisher connect — it reflects cameras added
+// at runtime, unlike a snapshot built once at startup.
+func (cm *CameraManager) ResolveStreamKey(streamKey string) (cameraID string, ok bool) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	// Per-camera stream_key fields take precedence.
+	for _, cam := range cm.cfg.Cameras {
+		if cam.Protocol == string(model.ProtoRTMP) && cam.StreamKey == streamKey {
+			return cam.ID, true
+		}
+	}
+	// Legacy global rtmp.stream_keys map (camera_id → stream_key).
+	for camID, key := range cm.cfg.RTMP.StreamKeys {
+		if key == streamKey {
+			return camID, true
+		}
+	}
+	return "", false
+}
+
+// SRTStreamConfigs returns a copy of the SRT push parameters (passphrase,
+// stream_id) for all SRT cameras. Used by main.go to keep the SRT listener's
+// per-stream encryption map in sync with per-camera config.
+func (cm *CameraManager) SRTStreamConfigs() []config.SRTStream {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	out := make([]config.SRTStream, 0, len(cm.cfg.Cameras))
+	for _, cam := range cm.cfg.Cameras {
+		if cam.Protocol == string(model.ProtoSRT) {
+			out = append(out, config.SRTStream{
+				CameraID:   cam.ID,
+				Mode:       "listener",
+				Passphrase: cam.SRTPassphrase,
+				StreamID:   cam.SRTStreamID,
+			})
+		}
+	}
+	return out
+}
+
 // GetTimelapseMergeMgr returns the timelapse rolling merge manager, or nil if not set.
 func (cm *CameraManager) GetTimelapseMergeMgr() *timelapse.RollingMergeManager {
 	return cm.timelapseMergeMgr
@@ -679,6 +942,16 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
 	}
 
+	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
+	// under cm.mu — SetCameraTargets calls back into GetHub which re-locks cm.mu
+	// (RLock), and re-entering under a held Lock would self-deadlock (Go's
+	// RWMutex is not reentrant).
+	if cm.relayMgr != nil {
+		cameraID := cam.ID
+		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+		go cm.relayMgr.SetCameraTargets(cameraID, targets)
+	}
+
 	return cam.ID, nil
 }
 
@@ -709,9 +982,14 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		// Notify health manager of camera removal
 		cm.healthMgr.OnCameraRemoved(cameraID, rec)
 		delete(cm.recorders, cameraID)
+		delete(cm.hubRegistry, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
 		}
+	}
+	// Stop all relay targets for this camera.
+	if cm.relayMgr != nil {
+		cm.relayMgr.RemoveCamera(cameraID)
 	}
 
 	// Stop keyframe extractor if running
@@ -764,6 +1042,7 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		// Notify health manager of camera removal
 		cm.healthMgr.OnCameraRemoved(cameraID, rec)
 		delete(cm.recorders, cameraID)
+		delete(cm.hubRegistry, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
 		}
@@ -894,6 +1173,25 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.Channel != nil {
 		cam.Channel = *updates.Channel
 	}
+	if updates.AudioEnabled != nil {
+		cam.AudioEnabled = *updates.AudioEnabled
+	}
+	// Push/ingest fields (SRT/RTMP)
+	if updates.StreamKey != nil {
+		cam.StreamKey = *updates.StreamKey
+	}
+	if updates.SRTPassphrase != nil {
+		cam.SRTPassphrase = *updates.SRTPassphrase
+	}
+	if updates.SRTStreamID != nil {
+		cam.SRTStreamID = *updates.SRTStreamID
+	}
+	if updates.PushTargets != nil {
+		cam.PushTargets = *updates.PushTargets
+	}
+	if updates.PushRetentionDays != nil {
+		cam.PushRetentionDays = updates.PushRetentionDays
+	}
 
 
 	// Persist to database
@@ -963,6 +1261,15 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
 	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" {
 		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
+	}
+
+	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
+	// under cm.mu — SetCameraTargets calls back into GetHub which re-locks cm.mu,
+	// which would self-deadlock under the held Lock (see AddCamera for rationale).
+	if cm.relayMgr != nil {
+		cameraID := cam.ID
+		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+		go cm.relayMgr.SetCameraTargets(cameraID, targets)
 	}
 
 	return cam, nil
@@ -1060,6 +1367,7 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 		logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 	}
 	delete(cm.recorders, cameraID)
+	delete(cm.hubRegistry, cameraID)
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Dec()
 	}

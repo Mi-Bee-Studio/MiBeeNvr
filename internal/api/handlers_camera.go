@@ -70,7 +70,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Inject per-camera transcoding config and channel from config (not stored in DB)
+	// Inject per-camera transcoding config, channel, audio_enabled, and push
+	// fields from config (not all stored in DB columns read by ListCameras).
 	if h.config != nil {
 		for i := range cameras {
 			for _, cam := range h.config.Cameras {
@@ -81,6 +82,12 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					if cam.Channel != "" {
 						cameras[i].Channel = cam.Channel
 					}
+					cameras[i].AudioEnabled = cam.AudioEnabled
+					cameras[i].StreamKey = cam.StreamKey
+					cameras[i].SRTPassphrase = cam.SRTPassphrase
+					cameras[i].SRTStreamID = cam.SRTStreamID
+					cameras[i].PushTargets = cam.PushTargets
+					cameras[i].PushRetentionDays = cam.PushRetentionDays
 					break
 				}
 			}
@@ -100,6 +107,9 @@ var validProtocols = map[string]bool{
 	"rtsp":  true,
 	"http":  true,
 	"onvif": true,
+	// Push/ingest protocols (publisher pushes to NVR)
+	"srt":  true,
+	"rtmp": true,
 	// Plugin protocols
 	"xiaomi": true,
 	"timelapse": true,
@@ -129,6 +139,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Encoding       string `json:"encoding"`
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string `json:"channel"`
+		AudioEnabled   *bool `json:"audio_enabled"`
+		// Push/ingest fields (SRT/RTMP)
+		StreamKey     string `json:"stream_key"`
+		SRTPassphrase string `json:"srt_passphrase"`
+		SRTStreamID   string `json:"srt_stream_id"`
+		// Push-out relay targets + retention
+		PushTargets       []config.PushTargetConfig `json:"push_targets"`
+		PushRetentionDays *int                      `json:"push_retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -143,9 +161,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, xiaomi, timelapse", body.Protocol))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse", body.Protocol))
 		return
 	}
+	// Push/ingest cameras (srt/rtmp): no URL — the publisher connects to us.
+	isPush := body.Protocol == "srt" || body.Protocol == "rtmp"
 	// ONVIF cameras: accept url OR onvif_endpoint
 	if body.Protocol == "onvif" {
 		endpoint := body.ONVIFEndpoint
@@ -168,12 +188,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	} else if body.URL == "" {
+	} else if !isPush && body.URL == "" {
 		writeError(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	// Validate URL format for non-ONVIF cameras
-	if body.Protocol != "onvif" && !validateURL(body.URL) {
+	// Validate URL format for cameras that have one (not ONVIF, not push)
+	if body.Protocol != "onvif" && !isPush && body.URL != "" && !validateURL(body.URL) {
 		writeError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
@@ -198,6 +218,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			enc = "h264"
 		case "http":
 			enc = "jpeg"
+		case "srt", "rtmp":
+			// Push cameras: encoding derived from the published stream (H.264 default).
+			enc = "h264"
 		case "onvif":
 			// Auto-detect encoding from ONVIF device profiles
 			if body.StreamEncoding == "" {
@@ -224,6 +247,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding: body.StreamEncoding,
 		Timelapse:      body.Timelapse,
 		Channel:        body.Channel,
+		AudioEnabled:   body.AudioEnabled != nil && *body.AudioEnabled,
+		StreamKey:      body.StreamKey,
+		SRTPassphrase:  body.SRTPassphrase,
+		SRTStreamID:    body.SRTStreamID,
+		PushTargets:      body.PushTargets,
+		PushRetentionDays: body.PushRetentionDays,
 	}
 
 	if h.camMgr == nil {
@@ -251,6 +280,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
 			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
+		}
+	}
+	// Persist push/ingest fields for srt/rtmp cameras.
+	if isPush {
+		if err := h.db.UpsertCameraIngest(r.Context(), id, body.StreamKey, body.SRTPassphrase, body.SRTStreamID); err != nil {
+			logger.Warn("failed to set camera ingest fields", "camera_id", id, "error", err)
 		}
 	}
 	// Return CameraRow with status
@@ -292,7 +327,8 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
-	// Inject per-camera transcoding config and channel from config (not stored in DB)
+	// Inject per-camera transcoding config, channel, audio_enabled, and push
+	// fields from config (not all stored in DB columns read by GetCamera).
 	if h.config != nil {
 		for _, cam := range h.config.Cameras {
 			if cam.ID == id {
@@ -302,12 +338,36 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				if cam.Channel != "" {
 					row.Channel = cam.Channel
 				}
-				break
+			row.AudioEnabled = cam.AudioEnabled
+			row.StreamKey = cam.StreamKey
+			row.SRTPassphrase = cam.SRTPassphrase
+			row.SRTStreamID = cam.SRTStreamID
+			row.PushTargets = cam.PushTargets
+			row.PushRetentionDays = cam.PushRetentionDays
+			break
 			}
 		}
 	}
 	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
+}
+
+// handleCameraPushStatus returns the runtime status of a camera's push-out relay
+// targets (RTMP/RTSP). Used by the camera card/form to show live relay state.
+func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	status := h.camMgr.RelayStatus(id)
+	if status == nil {
+		status = []interface{}{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"camera_id": id,
+		"targets":   status,
+	})
 }
 
 func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +396,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding *string                          `json:"stream_encoding"`
 		Transcoding    *config.CameraTranscodingConfig  `json:"transcoding"`
 		Channel        *string `json:"channel"`
+		AudioEnabled   *bool `json:"audio_enabled"`
+		// Push/ingest fields (SRT/RTMP)
+		StreamKey     *string `json:"stream_key"`
+		SRTPassphrase *string `json:"srt_passphrase"`
+		SRTStreamID   *string `json:"srt_stream_id"`
+		// Push-out relay targets (replace whole list) + retention
+		PushTargets       *[]config.PushTargetConfig `json:"push_targets"`
+		PushRetentionDays *int                       `json:"push_retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -383,11 +451,21 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		StreamEncoding: body.StreamEncoding,
 		Transcoding:    body.Transcoding,
 		Channel:        body.Channel,
+		AudioEnabled:   body.AudioEnabled,
+		StreamKey:      body.StreamKey,
+		SRTPassphrase:  body.SRTPassphrase,
+		SRTStreamID:    body.SRTStreamID,
+		PushTargets:       body.PushTargets,
+		PushRetentionDays: body.PushRetentionDays,
 	}
 
-	// Validate URL format if URL is being updated
+	// Validate URL format if URL is being updated (skip for ONVIF and push cameras).
 	if body.URL != nil && *body.URL != "" {
-		if body.Protocol == nil || *body.Protocol != "onvif" {
+		proto := ""
+		if body.Protocol != nil {
+			proto = *body.Protocol
+		}
+		if proto != "onvif" && proto != "srt" && proto != "rtmp" {
 			if !validateURL(*body.URL) {
 				writeError(w, http.StatusBadRequest, "invalid URL format")
 				return
@@ -415,6 +493,16 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
 		return
+	}
+	// Persist push/ingest fields if any were provided in the update.
+	if body.StreamKey != nil || body.SRTPassphrase != nil || body.SRTStreamID != nil {
+		// Read current values to merge with partial updates.
+		updated := h.camMgr.GetCameraConfig(id)
+		if updated != nil {
+			if err := h.db.UpsertCameraIngest(r.Context(), id, updated.StreamKey, updated.SRTPassphrase, updated.SRTStreamID); err != nil {
+				logger.Warn("failed to update camera ingest fields", "camera_id", id, "error", err)
+			}
+		}
 	}
 	// Return updated CameraRow with status
 	row, err := h.db.GetCamera(r.Context(), id)

@@ -10,11 +10,13 @@ import (
 // Topic constants for event types.
 const (
 	TopicSegmentCompleted     = "segment.completed"
+	TopicSegmentDeleted       = "segment.deleted"
 	TopicStorageHealthChanged = "storage.health.changed"
 	TopicAIDetection         = "ai.detection"
 	TopicAIPerson            = "ai.detection.person"
 	TopicAIVehicle           = "ai.detection.vehicle"
 	TopicAIAnimal            = "ai.detection.animal"
+	TopicAIEventCreated      = "ai.event.created"
 )
 
 var (

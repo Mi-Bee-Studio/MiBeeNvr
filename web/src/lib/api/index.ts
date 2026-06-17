@@ -37,6 +37,7 @@ export {
   getCamera,
   updateCamera,
   deleteCamera,
+  getPushStatus,
   getCameraRecordingStats,
   startCamera,
   stopCamera,
@@ -98,6 +99,9 @@ export type {
   TestConnectionRequest,
   TestConnectionResult,
   VendorCheckResult,
+  PushTargetConfig,
+  PushTargetStatus,
+  PushStatusResponse,
   // Imaging
   ImagingSettings,
   ImagingOptionRange,
@@ -148,6 +152,7 @@ export {
   cancelMerge,
   retryRecordingMerge,
   fetchTimelapsePreview,
+  recordTimelineSeek,
 } from './recordings';
 
 export type {
@@ -175,12 +180,15 @@ export {
   updateFeatures,
   getStreamingSettings,
   updateStreamingSettings,
+  generateAPIKey,
+  revokeAPIKey,
 } from './settings';
 
 export type {
   CleanupConfig,
   WebDAVConfig,
   SettingsConfig,
+  MiBeeVisionConfig,
   MergeStatus,
   MergePending,
   FeatureFlags,

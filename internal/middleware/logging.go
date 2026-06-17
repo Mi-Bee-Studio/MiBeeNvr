@@ -25,7 +25,9 @@ func normalizePath(path string) string {
 }
 
 // RequestLogger returns a middleware that logs each request using slog.LogAttrs.
-// Paths in skipPaths are not logged.
+// Paths in skipPaths are not logged. Each request gets a trace_id that is
+// injected into the context and the X-Request-Id response header, so downstream
+// handlers can correlate their logs via LoggerFromContext(ctx).
 func RequestLogger(logger *slog.Logger, skipPaths ...string) func(next http.Handler) http.Handler {
 	skip := make(map[string]bool, len(skipPaths))
 	for _, p := range skipPaths {
@@ -37,10 +39,19 @@ func RequestLogger(logger *slog.Logger, skipPaths ...string) func(next http.Hand
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Generate or reuse trace ID for this request.
+			tid := r.Header.Get(RequestIDHeader)
+			if tid == "" {
+				tid = GenerateTraceID()
+			}
+			w.Header().Set(RequestIDHeader, tid)
+			ctx := ContextWithTraceID(r.Context(), tid)
+
 			start := time.Now()
 			ww := &StatusRecorder{ResponseWriter: w, Status: http.StatusOK}
-			next.ServeHTTP(ww, r)
-			logger.LogAttrs(r.Context(), slog.LevelInfo, "request",
+			next.ServeHTTP(ww, r.WithContext(ctx))
+			logger.LogAttrs(ctx, slog.LevelInfo, "request",
+				slog.String("trace_id", tid),
 				slog.String("method", r.Method),
 				slog.String("path", normalizePath(r.URL.Path)),
 				slog.Int("status", ww.Status),

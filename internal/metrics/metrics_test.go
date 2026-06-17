@@ -229,9 +229,9 @@ func TestTranscodingMetrics_CounterIncrement(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 	m := NewMetrics()
-	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Inc()
-	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "completed").Add(4)
-	m.TranscodingJobsTotal.WithLabelValues("hevc", "h264", "failed").Inc()
+	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "libx265", "28", "completed").Inc()
+	m.TranscodingJobsTotal.WithLabelValues("h264", "hevc", "libx265", "28", "completed").Add(4)
+	m.TranscodingJobsTotal.WithLabelValues("hevc", "h264", "libx264", "23", "failed").Inc()
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestTranscodingMetrics_HistogramObserve(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 	m := NewMetrics()
-	m.TranscodingDurationSeconds.WithLabelValues("h264", "hevc").Observe(42.5)
+	m.TranscodingDurationSeconds.WithLabelValues("h264", "hevc", "libx265").Observe(42.5)
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
