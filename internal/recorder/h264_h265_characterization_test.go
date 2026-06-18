@@ -54,9 +54,10 @@ func (s *mp4BoxScanner) hasBoxes(boxNames ...string) bool {
 // panicStore wraps a real SegmentStore but panics on the first CreateSegment call.
 type panicStore struct {
 	SegmentStore
-	mu     sync.Mutex
-	count  int
+	mu    sync.Mutex
+	count int
 }
+
 // countFilesSafe returns the number of finalized files for a camera.
 // Returns 0 if the camera directory does not exist yet (no segments created).
 func countFilesSafe(t *testing.T, m *storage.Manager, cameraID string) int {

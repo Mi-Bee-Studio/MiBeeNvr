@@ -14,7 +14,6 @@ import (
 // frames are dropped silently to protect the recording pipeline.
 type FrameCallback func(pts int64, au [][]byte)
 
-
 // AudioCallback is called for each decoded audio frame.
 // Implementations MUST be non-blocking — if the internal buffer is full,
 // frames are dropped silently to protect the recording/streaming pipeline.
@@ -307,7 +306,7 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 		frames := h.flushJitterBufferLocked()
 		h.jitterBufferMu.Unlock()
 		for _, f := range frames {
-		if f.AU != nil {
+			if f.AU != nil {
 				h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
 			}
 		}
@@ -355,7 +354,7 @@ func (h *StreamHub) resetJitterBufferTimer() {
 			frames := h.flushJitterBufferLocked()
 			h.jitterBufferMu.Unlock()
 			for _, f := range frames {
-			if f.AU != nil {
+				if f.AU != nil {
 					h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
 				}
 			}

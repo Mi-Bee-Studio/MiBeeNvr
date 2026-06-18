@@ -52,7 +52,6 @@ type streamEntry struct {
 	hubSubID  string
 }
 
-
 // viewerConn represents a connected FLV client.
 type viewerConn struct {
 	id      int64
