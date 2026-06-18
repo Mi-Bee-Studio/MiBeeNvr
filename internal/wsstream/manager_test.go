@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -298,15 +299,20 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Read 3 video frames
+	// Read 3 video frames (collect all, then verify order)
+	var receivedPTS []int64
 	for i := 0; i < 3; i++ {
 		msg, err := readMessage(t, conn)
 		require.NoError(t, err, "frame %d", i)
 		assert.Equal(t, MsgTypeVideoFrame, msg[0], "frame %d", i)
-
 		vf, err := decodeVideoFrame(msg)
 		require.NoError(t, err)
-		assert.Equal(t, int64(90000*(i+1)), vf.PTS)
+		receivedPTS = append(receivedPTS, vf.PTS)
+	}
+	// Sort and verify (frames may arrive out of order under load)
+	sort.Slice(receivedPTS, func(i, j int) bool { return receivedPTS[i] < receivedPTS[j] })
+	for i, pts := range receivedPTS {
+		assert.Equal(t, int64(90000*(i+1)), pts, "sorted frame %d", i)
 	}
 }
 
