@@ -7,12 +7,16 @@ ONVIF device client. WS-Discovery, media profile enumeration, RTSP stream URI re
 ## Structure
 
 ```
-client.go       # Client struct — Connect, GetProfiles, GetStreamUri, GetDeviceInformation
+client.go       # Client struct — Connect, GetProfiles, GetStreamUri, GetDeviceInformation, GetCapabilities (cached)
 discovery.go    # WS-Discovery — multicast probe, parse responses, timeout handling
 onvifgo.go      # onvif-go wrapper — raw SOAP calls for advanced operations
 ptz.go          # PTZController — absolute/relative move, zoom, continuous move, presets
+imaging.go      # Imaging — GetSnapshotUri, GetImagingSettings (minimal devices return 404)
+events.go       # Event subscription — WS-Notification polling (minimal devices unsupported)
+device_mgmt.go  # Device management — GetUsers, system reboot, network config
+snapshot.go     # Snapshot helper — URI resolution wrapper
 types.go        # Data types — DiscoveredDevice, DeviceProfile, DeviceInfo
-interfaces.go   # PTZController interface — enables mock testing
+interfaces.go   # PTZController + Client interfaces — enables mock testing
 mocks.go        # Test mocks — MockClient, MockPTZController
 *_test.go       # Per-component tests with mocks
 ```
@@ -28,6 +32,10 @@ mocks.go        # Test mocks — MockClient, MockPTZController
 | Fix PTZ control | `ptz.go` `NewPTZController()` | Wraps onvif-go PTZ service, supports absolute/relative/continuous |
 | Add ONVIF operation | `onvifgo.go` | Raw SOAP call wrapper using onvif-go library |
 | Change device types | `types.go` | DiscoveredDevice, DeviceProfile, DeviceInfo structs |
+| Fix imaging/snapshot | `imaging.go` / `snapshot.go` | GetSnapshotUri, GetImagingSettings — minimal devices (ESP32) return 404 |
+| Fix event subscription | `events.go` | WS-Notification polling — unsupported on minimal ONVIF devices |
+| Fix device management | `device_mgmt.go` | GetUsers, system reboot — WS-Security auth issues on some devices |
+| Capabilities caching | `client.go` `GetCapabilities()` | Cached after first call; minimal devices get all-false caps (not error) |
 
 ## Conventions
 
@@ -37,6 +45,8 @@ mocks.go        # Test mocks — MockClient, MockPTZController
 - **PTZ interface**: `PTZController` interface in `interfaces.go` enables mock testing without real device
 - **Discovery dedup**: Deduplicates by UUID, sorts by hardware name
 - **Error wrapping**: All errors wrapped with context (`fmt.Errorf("onvif: ...")`)
+
+- **Capabilities caching**: `GetCapabilities()` result is cached after first call; minimal ONVIF devices (ESP32 MiBeeCam) get all-false caps instead of an error. Gate advanced calls (PTZ, snapshot, events) on caps
 
 ## Anti-Patterns
 

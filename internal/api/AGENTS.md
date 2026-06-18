@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Chi-based REST API. All endpoints, JSON responses, HLS proxy, ONVIF proxy, file download, snapshot caching. Test handlers exported for integration tests.
+Chi-based REST API. All endpoints, JSON responses, HLS proxy, ONVIF proxy, file download, snapshot caching. Dual auth: public routes → API Key (Bearer `mbv_`) → BasicAuth → setup gate.
 
 ## STRUCTURE
 
@@ -25,6 +25,13 @@ handlers_webrtc.go        # WebRTC WHEP session management
 handlers_ws.go            # WebSocket streaming
 handlers_setup.go         # First-time setup
 events_handler.go         # SSE event streaming endpoint
+handlers_ai.go            # AI event CRUD for MiBeeVision integration (requires API Key)
+ai_handler.go             # AI config + ROI zone management (browser-side ONNX zones)
+handlers_mjpeg.go         # MJPEG stream URL + latest-frame cache endpoint
+handlers_relay.go         # Relay platform preset endpoints
+telemetry.go              # Playback telemetry logging (rate-limited)
+cloud_auth.go             # Cloud auth proxy interface (Xiaomi)
+xiaomi_local.go           # Local Xiaomi auth implementation
 *_test.go                 # Per-handler tests
 
 ## WHERE TO LOOK
@@ -49,14 +56,16 @@ events_handler.go         # SSE event streaming endpoint
 | WebSocket | `handlers_ws.go` | WebSocket streaming endpoint |
 | First-time setup | `handlers_setup.go` | Initial setup wizard |
 | Event streaming | `events_handler.go` | SSE event streaming |
-| Auth middleware | `Routes()` | `authMW` wraps authenticated routes |
+| Auth middleware | `Routes()` | Dual auth: public → API Key (Bearer mbv_) → BasicAuth. Use `middleware.IsAPIKeyAuthenticated(r)` to distinguish |
 | File download | `serveRecording()` | Uses `http.ServeFile()` for range support |
 | Snapshot cache | `handleSnapshot()` | In-memory cache per camera, TTL 5s |
+| AI events (MiBeeVision) | `handlers_ai.go` | Event CRUD + recording ai_status update — API Key required |
+| Relay presets | `handlers_relay.go` | Platform preset list for push-out targets |
 | Test helpers | `TestHandler()` | Exported, used by integration tests |
 
 ## CONVENTIONS
 
-- **Chi router**: `chi.NewRouter()` with middleware chain. Public routes: `/api/health`, `/api/metrics`
+- **Chi router**: `chi.NewRouter()` with middleware chain. Public routes: `/api/health`, `/api/metrics`, `/models/{filename}`, `/api/recordings/{id}/download` + `/merged`
 - **JSON responses**: `writeJSON(w, status, data)` helper. Errors: `writeError(w, status, message)`
 - **Camera protocol**: Frontend sends `protocol` + `encoding` separately. Backend combines to `rtsp_h264`, `rtsp_h265`, etc. in `camera/manager.go`
 - **Pagination**: Recordings use `offset/limit` query params. Response includes `total` count

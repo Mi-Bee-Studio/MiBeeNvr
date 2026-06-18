@@ -2,18 +2,22 @@
 
 ## OVERVIEW
 
-Six recorder implementations of `model.Recorder` interface. Each manages RTSP/HTTP connection, frame processing, and MP4/MJPEG segment lifecycle with auto-reconnect.
+Seven recorder implementations of `model.Recorder` interface. Each manages RTSP/HTTP/P2P connection, frame processing, and MP4/MJPEG segment lifecycle with auto-reconnect. Shared logic extracted to `baseRecorder` + `codecDriver` interface.
 
 ## STRUCTURE
 
 ```
-h264.go          # H264Recorder — RTSP→RTP→ring buffer→MP4, SPS change detection
-h265.go          # H265Recorder — RTSP HEVC, VPS/SPS/PPS tracking, IRAP sync
+base.go           # baseRecorder + codecDriver interface — shared segment lifecycle, reconnect loop, metrics, frame dispatch. H264/H265 migrated to this pattern.
+h264.go          # H264Recorder — RTSP→RTP→ring buffer→MP4, SPS change detection (uses baseRecorder)
+h265.go          # H265Recorder — RTSP HEVC, VPS/SPS/PPS tracking, IRAP sync (uses baseRecorder)
 mjpeg.go         # MJPEGRecorder — RTSP MJPEG→JPEG frames to directory segments
-http_jpeg.go     # HTTPJPEGRecorder — HTTP multipart MJPEG stream→JPEG frames
-onvif.go         # ONVIFRecorder — delegate recorder via ONVIF GetStreamUri
+http_jpeg.go     # HTTPJPEGRecorder — HTTP multipart MJPEG stream→JPEG frames, LatestFrame() cache
+onvif.go         # ONVIFRecorder — delegate recorder via ONVIF GetStreamUri, MJPEG probe, port 81 fallback
 timelapse.go     # TimelapseRecorder — periodic JPEG capture, configurable interval
+ingest.go        # IngestRecorder — SRT/RTMP push-in: passive recorder, hub created on publisher connect
+stub.go          # StubRecorder — minimal no-op for testing/placeholder
 pts_check.go     # Shared PTS monotonicity check (warn only, never drop)
+storage_health.go # Storage health check helper
 backoff.go       # Shared exponential backoff with jitter
 *_test.go        # Per-recorder tests with in-process RTSP/HTTP test servers
 ```
@@ -30,6 +34,8 @@ backoff.go       # Shared exponential backoff with jitter
 | MJPEG frame sampling | `mjpeg.go` `writeFrames()` | `SampleInterval` controls frame skip (1=every frame) |
 | ONVIF stream setup | `onvif.go` | Calls ONVIF GetStreamUri, creates delegate recorder |
 | HLS frame callback | `OnHLSFrame` field on H264/H265 | Non-blocking, sends to HLS manager channel |
+| Fix ingest recorder | `ingest.go` | Passive recorder — NVR does NOT dial out, waits for SRT/RTMP publisher |
+| Fix baseRecorder pattern | `base.go` | Shared segment lifecycle, codecDriver interface — H264/H265 use this |
 
 ## CONVENTIONS
 
