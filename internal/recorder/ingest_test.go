@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"sync"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -153,3 +154,43 @@ func TestIngestRecorder_IgnoresNonIDRBeforeKeyframe(t *testing.T) {
 
 // testPFrame is a minimal H.264 non-IDR slice NAL (type 1).
 var testPFrame = []byte{0x41, 0x9a, 0x10, 0x00}
+
+// TestIngestRecorder_ConcurrentLockNarrowing verifies that WriteNALU, Status,
+// and Stop can be called concurrently without data races.
+// WriteNALU holds r.mu only for shared state access, not for muxer writes
+// or hub broadcasts.
+func TestIngestRecorder_ConcurrentLockNarrowing(t *testing.T) {
+	rec, _, db := newIngestRecorder(t, 10*time.Minute)
+
+	var wg sync.WaitGroup
+
+	// Writer goroutine — feeds frames continuously.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, int64(i)*90, true)
+			rec.WriteNALU([][]byte{testPFrame}, int64(i)*90+45, false)
+			time.Sleep(time.Microsecond)
+		}
+	}()
+
+	// Reader goroutines — call Status(), SPS(), PPS() concurrently.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = rec.Status()
+				_ = rec.SPS()
+				_ = rec.PPS()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Stop — verifies no race with the last writes.
+	require.NoError(t, rec.Stop())
+	_ = db
+}

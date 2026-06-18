@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -97,7 +96,8 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 		if apiMetrics != nil {
 			apiMetrics.AIEventsErrorsTotal.Inc()
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to store AI event: %v", err))
+		logger.Error("failed to store AI event", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to store AI event")
 		return
 	}
 
@@ -146,7 +146,8 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 
 	events, total, err := h.db.ListAIEvents(r.Context(), f)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list AI events: %v", err))
+		logger.Error("failed to list AI events", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to list AI events")
 		return
 	}
 	if events == nil {
@@ -177,7 +178,8 @@ func (h *Handler) handleGetAIEvent(w http.ResponseWriter, r *http.Request) {
 
 	evt, err := h.db.GetAIEvent(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get AI event: %v", err))
+		logger.Error("failed to get AI event", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to get AI event")
 		return
 	}
 	if evt == nil {
@@ -206,7 +208,8 @@ func (h *Handler) handleGetAIEventStats(w http.ResponseWriter, r *http.Request) 
 
 	stats, err := h.db.GetAIEventStats(r.Context(), cameraID, since)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get AI stats: %v", err))
+		logger.Error("failed to get AI stats", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to get AI stats")
 		return
 	}
 	if stats == nil {
@@ -276,7 +279,8 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 	}
 
 	if err := h.db.UpdateRecordingAIStatus(r.Context(), recID, body.Status, body.Error); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update AI status: %v", err))
+		logger.Error("failed to update AI status", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to update AI status")
 		return
 	}
 
