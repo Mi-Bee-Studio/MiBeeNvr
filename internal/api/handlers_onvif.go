@@ -35,7 +35,8 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 
 	profiles, err := client.GetProfiles(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get profiles: %v", err))
+		logger.Error("failed to get profiles", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to get profiles")
 		return
 	}
 
@@ -239,7 +240,8 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 		err = ptz.RelativeMove(r.Context(), vec)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ command failed: %v", err))
+		logger.Error("PTZ command failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "PTZ command failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -260,7 +262,8 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := ptz.Stop(r.Context(), true, true); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ stop failed: %v", err))
+		logger.Error("PTZ stop failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "PTZ stop failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
@@ -282,7 +285,8 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	pos, moving, err := ptz.GetStatus(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get PTZ status failed: %v", err))
+		logger.Error("get PTZ status failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "get PTZ status failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -319,7 +323,8 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"presets": []onvif.PTZPreset{}})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get PTZ presets failed: %v", err))
+		logger.Error("get PTZ presets failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "get PTZ presets failed")
 		return
 	}
 	if presets == nil {
@@ -357,7 +362,8 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 	}
 	token, err := ptz.SetPreset(r.Context(), req.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create PTZ preset failed: %v", err))
+		logger.Error("create PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "create PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
@@ -379,7 +385,8 @@ func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := ptz.GoToPreset(r.Context(), token); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("go to PTZ preset failed: %v", err))
+		logger.Error("go to PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "go to PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -401,7 +408,8 @@ func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := ptz.RemovePreset(r.Context(), token); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("delete PTZ preset failed: %v", err))
+		logger.Error("delete PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "delete PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -419,7 +427,8 @@ func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 	case errors.As(err, new(*model.ONVIFNoProfilesError)):
 		writeAPIError(w, http.StatusNotFound, err)
 	default:
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ operation failed for camera %q: %v", cameraID, err))
+		logger.Error("PTZ operation failed", "camera_id", cameraID, "error", err)
+		writeError(w, http.StatusInternalServerError, "PTZ operation failed")
 	}
 }
 
@@ -449,7 +458,8 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "snapshot not supported by this camera")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get snapshot URI failed: %v", err))
+		logger.Error("get snapshot URI failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "get snapshot URI failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"uri": uri})
@@ -542,7 +552,8 @@ func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) 
 	case errors.As(err, new(*model.ONVIFNoProfilesError)):
 		writeAPIError(w, http.StatusNotFound, err)
 	default:
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("imaging operation failed for camera %q: %v", cameraID, err))
+		logger.Error("imaging operation failed", "camera_id", cameraID, "error", err)
+		writeError(w, http.StatusInternalServerError, "imaging operation failed")
 	}
 }
 
@@ -751,6 +762,7 @@ func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err erro
 	case errors.As(err, new(*model.ONVIFConnectionError)):
 		writeAPIError(w, http.StatusBadGateway, err)
 	default:
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("device management operation failed for camera %q: %v", cameraID, err))
+		logger.Error("device management operation failed", "camera_id", cameraID, "error", err)
+		writeError(w, http.StatusInternalServerError, "device management operation failed")
 	}
 }

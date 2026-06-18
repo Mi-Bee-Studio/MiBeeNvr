@@ -264,7 +264,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &cae) {
 			writeAPIError(w, http.StatusConflict, err)
 		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add camera: %v", err))
+			logger.Error("failed to add camera", "camera_id", id, "error", err, "path", r.URL.Path)
+			writeError(w, http.StatusInternalServerError, "failed to add camera")
 		}
 		return
 	}
@@ -490,7 +491,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, err)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update camera: %v", err))
+		logger.Error("failed to update camera", "camera_id", id, "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to update camera")
 		return
 	}
 	// Persist push/ingest fields if any were provided in the update.
@@ -623,7 +625,8 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, new(*model.CameraAlreadyRunningError)):
 			writeAPIError(w, http.StatusConflict, err)
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			logger.Error("failed to start camera", "camera_id", id, "error", err, "path", r.URL.Path)
+			writeError(w, http.StatusInternalServerError, "failed to start camera")
 		}
 		return
 	}
@@ -641,7 +644,8 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &cnf) {
 			writeAPIError(w, http.StatusNotFound, err)
 		} else {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			logger.Error("failed to stop camera", "camera_id", id, "error", err, "path", r.URL.Path)
+			writeError(w, http.StatusInternalServerError, "failed to stop camera")
 		}
 		return
 	}

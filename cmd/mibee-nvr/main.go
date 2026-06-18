@@ -1227,22 +1227,35 @@ func (a *App) Stop() error {
 // main
 // ---------------------------------------------------------------------------
 
+// Function variables for testability. Tests override these to avoid os.Exit().
+var (
+	cmdEncryptConfigFn = cmdEncryptConfig
+	cmdDownloadModelFn = cmdDownloadModel
+)
+
+// dispatchSubcommand handles CLI subcommand dispatch.
+// It routes os.Args to the appropriate handler function.
+func dispatchSubcommand(args []string) {
+	if len(args) <= 1 {
+		return
+	}
+	switch args[1] {
+	case "health":
+		cmdHealth()
+	case "init":
+		cmdInit()
+	case "hash-password":
+		cmdHashPassword()
+	case "encrypt-config":
+		cmdEncryptConfigFn()
+	case "download-model":
+		cmdDownloadModelFn()
+	}
+}
+
 func main() {
 	// Dispatch CLI subcommands before flag parsing
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "health":
-			cmdHealth()
-		case "init":
-			cmdInit()
-		case "hash-password":
-			cmdHashPassword()
-		case "encrypt-config":
-		case "download-model":
-			cmdDownloadModel()
-			cmdEncryptConfig()
-		}
-	}
+	dispatchSubcommand(os.Args)
 
 	// Setup initial logger before config load
 	logger := authmw.SetupLogger("info", "text")

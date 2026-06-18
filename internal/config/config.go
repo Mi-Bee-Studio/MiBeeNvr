@@ -600,11 +600,12 @@ func Validate(cfg *Config) error {
 	if cfg.FTP.Port < 1 || cfg.FTP.Port > 65535 {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
 	}
-	// Validate segment_duration
+	// Validate segment_duration — clamp to 30s with warning (RPi constraint)
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("storage.segment_duration invalid: %w", err)
 	} else if dur > 30*time.Second {
-		return fmt.Errorf("storage.segment_duration must be <= 30s on RPi 3B, got %s", cfg.Storage.SegmentDuration)
+		slog.Warn("storage.segment_duration exceeds 30s on RPi 3B, clamping to 30s", "got", cfg.Storage.SegmentDuration)
+		cfg.Storage.SegmentDuration = "30s"
 	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {

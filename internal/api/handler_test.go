@@ -1823,6 +1823,91 @@ func TestReadyzWithNilDB(t *testing.T) {
 	require.Equal(t, "not ready", body["status"])
 }
 
+// --- ServeModel tests ---
+
+func TestServeModel_ValidFile(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	// Create a temp models directory with a test file
+	rootDir := t.TempDir()
+	modelsDir := filepath.Join(rootDir, "models")
+	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+	testFile := filepath.Join(modelsDir, "test.onnx")
+	require.NoError(t, os.WriteFile(testFile, []byte("model data"), 0644))
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: rootDir},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/models/test.onnx", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "model data", rr.Body.String())
+}
+
+func TestServeModel_EmptyFilename(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	rootDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: rootDir},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Chi returns 404 for empty filename since {filename} must match a non-empty segment.
+	// The handler's own empty check is defense-in-depth for non-chi routers.
+	rr := doRequest(t, h.Routes(), "GET", "/models/", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestServeModel_PathTraversal_SingleSegment(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	rootDir := t.TempDir()
+	modelsDir := filepath.Join(rootDir, "models")
+	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+	// Create a file OUTSIDE the models dir to confirm it's NOT served
+	outsideFile := filepath.Join(rootDir, "secret.txt")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0644))
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: rootDir},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Single-segment ".." traverses to parent directory
+	rr := doRequest(t, h.Routes(), "GET", "/models/..", nil, "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code, "single segment .. should be rejected")
+
+	var body map[string]string
+	parseJSON(t, rr, &body)
+	require.Equal(t, "invalid filename", body["error"])
+}
+
+func TestServeModel_NonExistentFile(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	rootDir := t.TempDir()
+	modelsDir := filepath.Join(rootDir, "models")
+	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: rootDir},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/models/nonexistent.onnx", nil, "", "")
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
 // --- Snapshot endpoint tests ---
 
 // newSnapshotTestHandler creates a Handler with a config that has a snapshot-enabled camera.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -149,11 +150,11 @@ func (h *Handler) Routes() http.Handler {
 
 	// Public routes with rate limiting on health/readyz
 	r.Group(func(r chi.Router) {
-		rl := middleware.NewRateLimiter(middleware.RateLimiterConfig{
+		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
 			MaxRequests: 60,
 			Window:      time.Minute,
 		})
-		r.Use(rl)
+		r.Use(rl.Handler)
 		r.Get("/api/health", h.handleHealth)
 		r.Get("/api/health/cameras", h.handleHealthCameras)
 		r.Get("/api/readyz", h.handleReadyz)
@@ -611,5 +612,14 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Serve from {storage_root}/models/ directory
 	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
-	http.ServeFile(w, r, filepath.Join(modelDir, filename))
+	
+	// Sanitize: prevent path traversal
+	cleanPath := filepath.Clean(filepath.Join(modelDir, filename))
+	modelDirWithSep := modelDir + string(filepath.Separator)
+	if cleanPath != modelDir && !strings.HasPrefix(cleanPath, modelDirWithSep) {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+	
+	http.ServeFile(w, r, cleanPath)
 }

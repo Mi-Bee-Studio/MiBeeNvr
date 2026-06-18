@@ -452,8 +452,8 @@ func TestSegmentDurationExceeds30s(t *testing.T) {
 	cfg := &Config{Storage: StorageConfig{SegmentDuration: "60s"}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "must be <= 30s")
+	require.NoError(t, err)
+	require.Equal(t, "30s", cfg.Storage.SegmentDuration, "should be clamped to 30s")
 }
 
 func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {

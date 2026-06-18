@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -49,8 +50,9 @@ func (h *Handler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 // telemetryRateLimiter returns a 10 req/s per-IP rate limiter.
 func telemetryRateLimiter() func(http.Handler) http.Handler {
-	return middleware.NewRateLimiter(middleware.RateLimiterConfig{
+	rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
 		MaxRequests: 10,
 		Window:      time.Second,
 	})
+	return rl.Handler
 }

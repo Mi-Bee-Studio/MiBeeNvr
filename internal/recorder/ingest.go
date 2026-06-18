@@ -201,18 +201,14 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		}
 	}()
 
+	// ---- Lock scope 1: status transition, SPS/PPS update, segment rotation ----
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Transition Idle → Recording on first frame.
 	if r.status != model.StatusRecording {
 		r.status = model.StatusRecording
 		r.incActive()
 		ingestLogger.Info("ingest publisher streaming", "camera_id", r.cfg.CameraID)
 	}
 
-	// Capture SPS/PPS; roll the segment if they changed (avcC must be
-	// self-consistent within a segment — same rule as H264Recorder).
 	sps, pps := nalutil.ExtractParamSetsH264(au)
 	if sps != nil {
 		if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) {
@@ -229,24 +225,30 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		r.pps = append([]byte(nil), pps...)
 	}
 
-	// 1. Live fan-out to the StreamHub (non-blocking; hub drops on full buffer).
+	// Copy shared state to locals while holding lock.
+	hub := r.Hub
+	localSPS := r.sps
+	localPPS := r.pps
+	r.mu.Unlock()
+
+	// ---- Hub broadcast (outside lock, non-blocking by design) ----
 	// RTMP/SRT publishers send SPS/PPS out-of-band (RTMP sequence header), so a
 	// keyframe AU typically does NOT contain the param sets that downstream
 	// consumers need — notably gohlslib's DTS extractor scans the AU for an SPS
 	// NAL and fails with "SPS not received yet" otherwise. Match the RTSP path
 	// (which inlines SPS/PPS in every IDR AU) by ALWAYS prepending the cached
 	// param sets to IDR frames (idempotent if the AU already has them).
-	if r.Hub != nil {
+	if hub != nil {
 		broadcastAU := au
-		if isIDR && r.sps != nil && r.pps != nil {
+		if isIDR && localSPS != nil && localPPS != nil {
 			broadcastAU = make([][]byte, 0, len(au)+2)
-			broadcastAU = append(broadcastAU, r.sps, r.pps)
+			broadcastAU = append(broadcastAU, localSPS, localPPS)
 			broadcastAU = append(broadcastAU, au...)
 		}
-		r.Hub.Broadcast(ptsTicks, broadcastAU, isIDR)
+		hub.Broadcast(ptsTicks, broadcastAU, isIDR)
 	}
 
-	// 3. Find the VCL NALU (type 1 non-IDR or type 5 IDR) to write to disk.
+	// ---- Find VCL NALU (type 1 non-IDR or type 5 IDR) to write to disk ----
 	var vclNALU []byte
 	for _, nalu := range au {
 		if len(nalu) == 0 {
@@ -262,68 +264,93 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		return
 	}
 
-	// Skip recording when storage is unhealthy (keep the live stream alive).
+	// ---- Storage health check (lock only for muxer cleanup) ----
 	if isStorageFailed(r.cfg.Store) {
+		r.mu.Lock()
 		if r.muxer != nil {
 			r.muxer.Close()
-			os.Remove(r.curTemp)
+			if r.curTemp != "" {
+				os.Remove(r.curTemp)
+			}
 			r.muxer = nil
 			r.curTemp = ""
 			r.curFinal = ""
 			r.frameCount = 0
 		}
+		r.mu.Unlock()
 		return
 	}
 
-	if r.sps == nil || r.pps == nil {
-		return
-	}
-	// Wait for an IDR before opening a new segment (prevents P-frame-first
-	// segments that render as black until the next keyframe).
-	if r.muxer == nil && !isIDR {
+	if localSPS == nil || localPPS == nil {
 		return
 	}
 
-	// Open a new segment on the first (IDR) frame.
-	if r.muxer == nil {
+	// ---- Ensure segment muxer is open ----
+	r.mu.Lock()
+	curMux := r.muxer
+	if curMux == nil && !isIDR {
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+
+	if curMux == nil {
 		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
 		if err != nil {
 			ingestLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 			return
 		}
-		m := muxer.NewMP4Muxer(tempPath)
-		trackID, err := m.AddH264Track(r.sps, r.pps)
+		newMux := muxer.NewMP4Muxer(tempPath)
+		newTrackID, err := newMux.AddH264Track(localSPS, localPPS)
 		if err != nil {
 			ingestLogger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
 			os.Remove(tempPath)
 			return
 		}
-		r.muxer = m
-		r.trackID = trackID
-		r.segStart = time.Now()
+		now := time.Now()
+		r.mu.Lock()
+		r.muxer = newMux
+		r.trackID = newTrackID
+		r.segStart = now
 		r.curTemp = tempPath
 		r.curFinal = finalPath
-		r.lastFrame = r.segStart
+		r.lastFrame = now
 		r.frameCount = 0
+		curMux = newMux
+		r.mu.Unlock()
 	}
 
+	// ---- Read write parameters under lock ----
+	r.mu.Lock()
+	segStart := r.segStart
+	lastFrame := r.lastFrame
+	trackID := r.trackID
+	r.mu.Unlock()
+
+	// ---- Write sample (muxer has its own mutex) ----
 	now := time.Now()
-	pts := now.Sub(r.segStart)
-	dur := now.Sub(r.lastFrame)
+	pts := now.Sub(segStart)
+	dur := now.Sub(lastFrame)
 	if dur < time.Millisecond {
 		dur = time.Millisecond
 	}
+
+	r.mu.Lock()
 	r.lastFrame = now
-	if err := r.muxer.WriteSample(r.trackID, vclNALU, pts, dur); err != nil {
+	r.mu.Unlock()
+
+	if err := curMux.WriteSample(trackID, vclNALU, pts, dur); err != nil {
 		ingestLogger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
 		return
 	}
-	r.frameCount++
 
+	r.mu.Lock()
+	r.frameCount++
 	// Duration-based segment rollover.
 	if time.Since(r.segStart) >= r.cfg.SegmentDur {
 		r.closeCurrentSegmentLocked()
 	}
+	r.mu.Unlock()
 }
 
 // OnDisconnect is called by the ingest server when the publisher disconnects.

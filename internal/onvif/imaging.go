@@ -231,7 +231,7 @@ func (c *ImagingControllerImpl) sendSOAP(ctx context.Context, endpoint, soapBody
 		req.SetBasicAuth(c.username, c.password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}

@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -50,7 +49,8 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// Hash password with bcrypt
 	hash, err := middleware.HashPassword(req.Password)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to hash password: %v", err))
+		logger.Error("failed to hash password", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
@@ -86,7 +86,8 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 	// Atomic save
 	if err := config.Save(h.configPath, &cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
+		logger.Error("failed to save config", "error", err, "path", r.URL.Path)
+		writeError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 

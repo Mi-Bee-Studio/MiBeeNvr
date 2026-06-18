@@ -78,21 +78,13 @@ func (r *Receiver) Start(conn srt.Conn) error {
 
 	r.conn = conn
 	r.running.Store(true)
-	close(r.done) // signal initial setup complete
-
 	go r.readLoop(conn)
-
-	// Reset done channel for stop signaling
-	r.done = make(chan struct{})
-
 	return nil
 }
 
-// StartListener handles a connection from the SRT listener.
 func (r *Receiver) StartListener(conn srt.Conn) {
 	r.conn = conn
 	r.running.Store(true)
-	r.done = make(chan struct{})
 	go r.readLoop(conn)
 }
 
