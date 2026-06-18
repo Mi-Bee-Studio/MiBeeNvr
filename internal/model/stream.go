@@ -14,12 +14,6 @@ import (
 // frames are dropped silently to protect the recording pipeline.
 type FrameCallback func(pts int64, au [][]byte)
 
-// frameMsg is an internal frame representation passed through consumer channels.
-type frameMsg struct {
-	pts   int64
-	au    [][]byte
-	isIDR bool
-}
 
 // AudioCallback is called for each decoded audio frame.
 // Implementations MUST be non-blocking — if the internal buffer is full,
@@ -56,7 +50,7 @@ func (c *audioConsumer) drain() {
 // drain goroutine, and per-consumer drop counter.
 type consumerEntry struct {
 	cb     FrameCallback
-	ch     chan frameMsg
+	ch     chan FrameMsg
 	done   chan struct{} // closed when drain goroutine exits
 	drops  atomic.Int64
 	sends  atomic.Int64 // tracks successful sends for drop rate calculation
@@ -69,7 +63,7 @@ type consumerEntry struct {
 func (e *consumerEntry) drain() {
 	defer close(e.done)
 	for msg := range e.ch {
-		e.cb(msg.pts, msg.au)
+		e.cb(msg.PTS, msg.AU)
 	}
 }
 
@@ -109,7 +103,7 @@ type StreamHub struct {
 	jitterBufferEnabled  atomic.Bool
 	jitterBufferSize     int           // max frames to buffer before flush (default: 5)
 	jitterBufferTimeout  time.Duration // max wait before flushing partial buffer (default: 500ms)
-	jitterBuffer         []frameMsg    // buffered frames awaiting reordering
+	jitterBuffer         []FrameMsg    // buffered frames awaiting reordering
 	jitterBufferMu       sync.Mutex    // protects jitter buffer state
 	jitterBufferTimer    *time.Timer   // timeout flush timer
 	jitterBufferLastPTS  int64         // last PTS seen, for disorder detection
@@ -158,7 +152,7 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 
 	entry := &consumerEntry{
 		cb:   cb,
-		ch:   make(chan frameMsg, h.consumerBufferSize),
+		ch:   make(chan FrameMsg, h.consumerBufferSize),
 		done: make(chan struct{}),
 	}
 	h.consumers[id] = entry
@@ -245,7 +239,7 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 			e.entry.sendMu.RUnlock()
 			continue
 		}
-		msg := frameMsg{pts: pts, au: au, isIDR: isIDR}
+		msg := FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR}
 		select {
 		case e.entry.ch <- msg:
 			e.entry.sends.Add(1)
@@ -303,7 +297,7 @@ func (h *StreamHub) detectDisorder(pts int64) bool {
 // bufferAndMaybeFlush adds a frame to the jitter buffer and flushes if full.
 func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 	h.jitterBufferMu.Lock()
-	h.jitterBuffer = append(h.jitterBuffer, frameMsg{pts: pts, au: au, isIDR: isIDR})
+	h.jitterBuffer = append(h.jitterBuffer, FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR})
 	h.jitterBufferActive.Store(true)
 	if h.OnJitterBufferDepth != nil {
 		h.OnJitterBufferDepth(h.cameraID, len(h.jitterBuffer))
@@ -313,8 +307,8 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 		frames := h.flushJitterBufferLocked()
 		h.jitterBufferMu.Unlock()
 		for _, f := range frames {
-			if f.au != nil {
-				h.distributeFrame(f.pts, f.au, f.isIDR)
+		if f.AU != nil {
+				h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
 			}
 		}
 		return
@@ -325,12 +319,12 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 
 // flushJitterBufferLocked sorts the jitter buffer by PTS and returns the sorted frames.
 // Must be called with jitterBufferMu held.
-func (h *StreamHub) flushJitterBufferLocked() []frameMsg {
+func (h *StreamHub) flushJitterBufferLocked() []FrameMsg {
 	if len(h.jitterBuffer) == 0 {
 		return nil
 	}
 	sort.Slice(h.jitterBuffer, func(i, j int) bool {
-		return h.jitterBuffer[i].pts < h.jitterBuffer[j].pts
+		return h.jitterBuffer[i].PTS < h.jitterBuffer[j].PTS
 	})
 	frames := h.jitterBuffer
 	h.jitterBuffer = nil
@@ -361,8 +355,8 @@ func (h *StreamHub) resetJitterBufferTimer() {
 			frames := h.flushJitterBufferLocked()
 			h.jitterBufferMu.Unlock()
 			for _, f := range frames {
-				if f.au != nil {
-					h.distributeFrame(f.pts, f.au, f.isIDR)
+			if f.AU != nil {
+					h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
 				}
 			}
 		})
@@ -373,7 +367,7 @@ func (h *StreamHub) resetJitterBufferTimer() {
 // trySendIDR attempts to deliver an IDR frame by draining the oldest non-IDR
 // frame from the channel and retrying. It uses a 50ms timeout to avoid blocking
 // the caller for too long. Falls back to dropping if space cannot be made.
-func (h *StreamHub) trySendIDR(ch chan frameMsg, msg frameMsg) {
+func (h *StreamHub) trySendIDR(ch chan FrameMsg, msg FrameMsg) {
 	// Drain one oldest frame (non-blocking). If it was an IDR, put it back
 	// and try to drain the next one. We want to preserve IDRs.
 	// Limit scan to channel capacity to avoid infinite loop when buffer is all IDRs.
@@ -381,7 +375,7 @@ func (h *StreamHub) trySendIDR(ch chan frameMsg, msg frameMsg) {
 	for i := 0; i < bufCap; i++ {
 		select {
 		case old := <-ch:
-			if old.isIDR {
+			if old.IsKeyframe {
 				// Don't evict IDR frames; try non-blocking re-enqueue.
 				select {
 				case ch <- old:

@@ -31,12 +31,6 @@ const (
 	lowDropRateThreshold  = 0.05 // 5% — restore full frame rate
 )
 
-// frameMsg is an async write request for the WebRTC track.
-type frameMsg struct {
-	pts        int64
-	au         [][]byte
-	isKeyframe bool
-}
 
 // peerEntry holds a single WHEP peer connection and its metadata.
 type peerEntry struct {
@@ -48,7 +42,7 @@ type peerEntry struct {
 	camID      string
 	sessionID  string
 	lastUsed   time.Time
-	frameCh    chan frameMsg
+	frameCh    chan model.FrameMsg
 	drops      uint64             // atomic: total frames dropped due to buffer full
 	congestion *congestionTracker // tracks drop rate for bitrate adaptation
 	lastPTS    int64
@@ -333,7 +327,7 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 
 		// Non-blocking send — drop frame if buffer full
 		select {
-		case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+		case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
 			slog.Debug("frame_trace",
 				"trace_id", traceID,
 				"camera_id", camID,
@@ -488,7 +482,7 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		camID:      camID,
 		sessionID:  sid,
 		lastUsed:   time.Now(),
-		frameCh:    make(chan frameMsg, m.frameBufSize),
+		frameCh:    make(chan model.FrameMsg, m.frameBufSize),
 		congestion: newCongestionTracker(m.frameBufSize),
 	}
 
@@ -619,16 +613,16 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			return
 		case frame := <-entry.frameCh:
 			// Convert access unit to Annex B byte stream
-			data := annexBEncode(frame.au)
+			data := annexBEncode(frame.AU)
 			if len(data) == 0 {
 				continue
 			}
 
 			// Congestion detection: skip non-IDR frames if drop rate is high
-			if entry.congestion.shouldSkipFrame(frame.isKeyframe) {
+			if entry.congestion.shouldSkipFrame(frame.IsKeyframe) {
 				slog.Debug("webrtc_congestion_skip",
 					"session_id", entry.sessionID,
-					"is_idr", frame.isKeyframe,
+					"is_idr", frame.IsKeyframe,
 					"drop_rate", entry.congestion.dropRate())
 				continue
 			}
@@ -640,7 +634,7 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			if entry.lastPTS == 0 {
 				dur = time.Second / defaultFPS
 			} else {
-				delta := frame.pts - entry.lastPTS
+				delta := frame.PTS - entry.lastPTS
 				if delta > 0 {
 					dur = time.Duration(delta) * time.Second / h264ClockRate
 					// Cap at 1 second to prevent huge durations from PTS anomalies
@@ -651,7 +645,7 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 					dur = time.Second / defaultFPS
 				}
 			}
-			entry.lastPTS = frame.pts
+			entry.lastPTS = frame.PTS
 			entry.mu.Unlock()
 
 			if dur < time.Millisecond {

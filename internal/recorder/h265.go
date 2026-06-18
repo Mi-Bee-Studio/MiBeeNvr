@@ -6,10 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
-	"runtime"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5"
@@ -21,7 +17,6 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
 	"github.com/pion/rtp"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -30,55 +25,123 @@ import (
 
 var h265Logger = slog.Default().With("component", "h265-recorder")
 
-// H265Config holds configuration for the H265 recorder.
-type H265Config struct {
-	CameraID             string
-	RTSPURL              string
-	Username             string
-	Password             string
-	SegmentDur           time.Duration
-	RingBufCap           int
-	DB                   RecordingDB
-	AudioEnabled         bool
-	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
-	EventBus             *event.EventBus
+// H265Config is a type alias for BaseConfig.
+// This allows flat struct literals (e.g., H265Config{CameraID: "..."}) while
+// sharing the common configuration fields across all RTSP recorder types.
+	type H265Config = BaseConfig
+
+
+// H265NALDriver implements codecDriver for H.265/HEVC video.
+type H265NALDriver struct{}
+
+func (d H265NALDriver) codecLabel() string                               { return "h265" }
+func (d H265NALDriver) segmentFormat() model.Format                       { return model.FormatH265 }
+func (d H265NALDriver) rtpFormat() format.Format                         { return &format.H265{} }
+func (d H265NALDriver) minNALUDataLen() int                              { return 6 }
+func (d H265NALDriver) naluType(firstByte byte) int                      { return int((firstByte >> 1) & 0x3F) }
+func (d H265NALDriver) isIDR(typ int) bool                               { return typ == 19 || typ == 20 }
+func (d H265NALDriver) isParameterSet(typ int) bool                      { return typ == 32 || typ == 33 || typ == 34 }
+func (d H265NALDriver) isVCL(typ int) bool                               { return typ < 32 }
+func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool              { return b.vps != nil && b.sps != nil && b.pps != nil }
+
+func (d H265NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
+	switch typ {
+	case 32: // VPS
+		if b.vps != nil && !bytes.Equal(b.vps, nalu) {
+			b.log.Info("VPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+			b.vps = append([]byte(nil), nalu...)
+			return true
+		}
+		b.vps = append([]byte(nil), nalu...)
+	case 33: // SPS
+		if b.sps != nil && !bytes.Equal(b.sps, nalu) {
+			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+			b.sps = append([]byte(nil), nalu...)
+			return true
+		}
+		b.sps = append([]byte(nil), nalu...)
+	case 34: // PPS
+		if b.pps != nil && !bytes.Equal(b.pps, nalu) {
+			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+			b.pps = append([]byte(nil), nalu...)
+			return true
+		}
+		b.pps = append([]byte(nil), nalu...)
+	}
+	return false
+}
+
+func (d H265NALDriver) extractParamSets(b *baseRecorder, au [][]byte) {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		typ := d.naluType(nalu[0])
+		if d.isParameterSet(typ) {
+			d.handleParamSet(b, nalu, typ)
+		}
+	}
+}
+
+func (d H265NALDriver) addTrack(m *muxer.MP4Muxer, b *baseRecorder) (int, error) {
+	return m.AddH265Track(b.vps, b.sps, b.pps)
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
 type H265Recorder struct {
-	cfg     H265Config
-	store   SegmentStore
-	metrics *metrics.Metrics
+	*baseRecorder
+}
 
-	mu     sync.Mutex
-	status model.RecorderStatus
-	cancel context.CancelFunc
-	done   chan struct{}
+// Interface compliance checks.
+var (
+	_ model.Recorder  = (*H265Recorder)(nil)
+	_ rtspConnector   = (*H265Recorder)(nil)
+)
 
-	muxer            *muxer.MP4Muxer
-	trackID          int
-	audioTrackID     int
-	audioMuxerConfig []byte // AudioSpecificConfig for AAC muxer track
-	audioCodec       string // "aac" or "g711"
-	g711MULaw        bool   // true=μ-law, false=A-law
-	g711SampleRate   int    // typically 8000
-	audioSampleRate  int    // unified sample rate (Hz), set for both AAC and G.711
-	audioChannels    int    // number of audio channels, 0 when no audio
-	curFinalPath     string
-	curTempPath      string
-	segStart         time.Time
-	frameCount       int
-	lastFrameTime    time.Time
+// NewH265Recorder creates a new H265Recorder.
+func NewH265Recorder(cfg H265Config, store SegmentStore, opts ...*metrics.Metrics) *H265Recorder {
+	if cfg.SegmentDur == 0 {
+		cfg.SegmentDur = DefaultSegmentDur
+	}
+	if cfg.RingBufCap == 0 {
+		cfg.RingBufCap = DefaultRingBufCap
+	}
+	if cfg.FrameWatchdogTimeout == 0 {
+		cfg.FrameWatchdogTimeout = defaultFrameWatchdogTimeout
+	}
 
-	vps []byte
-	sps []byte
-	pps []byte
-	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	var m *metrics.Metrics
+	if len(opts) > 0 {
+		m = opts[0]
+	}
 
-	frameCh         chan []byte
-	dropped         atomic.Int64
-	lastPTS         atomic.Int64 // tracks last RTP PTS for monotonicity check
-	lastHealthLogAt time.Time    // throttled log for storage health failures
+	rec := &H265Recorder{}
+	b := &baseRecorder{
+		driver: H265NALDriver{},
+		cfg:    cfg,
+		store:  store,
+		mtrics: m,
+		status: model.StatusStopped,
+		log:    h265Logger,
+	}
+	rec.baseRecorder = b
+	b.self = rec
+	return rec
+}
+
+// Start implements model.Recorder.
+func (r *H265Recorder) Start(ctx context.Context) error {
+	return r.start(ctx)
+}
+
+// Stop implements model.Recorder.
+func (r *H265Recorder) Stop() error {
+	return r.stop()
+}
+
+// Status implements model.Recorder.
+func (r *H265Recorder) Status() model.RecorderStatus {
+	return r.getStatus()
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -97,8 +160,6 @@ func (r *H265Recorder) PPS() []byte { return r.pps }
 func (r *H265Recorder) AudioCodec() string { return r.audioCodec }
 
 // AudioConfig returns the audio codec configuration bytes.
-// For AAC: AudioSpecificConfig from marshal'd MPEG4Audio config.
-// For G.711: 5 bytes [muLawFlag, rate>>24, rate>>16, rate>>8, rate].
 func (r *H265Recorder) AudioConfig() []byte { return r.audioMuxerConfig }
 
 // AudioSampleRate returns the audio sample rate in Hz, or 0 if no audio.
@@ -107,143 +168,9 @@ func (r *H265Recorder) AudioSampleRate() int { return r.audioSampleRate }
 // AudioChannels returns the number of audio channels, or 0 if no audio.
 func (r *H265Recorder) AudioChannels() int { return r.audioChannels }
 
-// incActive increments the active recordings gauge if metrics is available.
-func (r *H265Recorder) incActive() {
-	if r.metrics != nil {
-		r.metrics.ActiveRecordings.Inc()
-	}
-}
-
-// decActive decrements the active recordings gauge if metrics is available.
-func (r *H265Recorder) decActive() {
-	if r.metrics != nil {
-		r.metrics.ActiveRecordings.Dec()
-	}
-}
-
-// recordSegmentCreated increments the segments created counter if metrics is available.
-func (r *H265Recorder) recordSegmentCreated() {
-	if r.metrics != nil {
-		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "h265").Inc()
-	}
-}
-
-// recordBytes adds to the recording bytes counter if metrics is available.
-func (r *H265Recorder) recordBytes(bytes int64) {
-	if r.metrics != nil {
-		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "h265").Add(float64(bytes))
-	}
-}
-
-// recordError increments the camera errors counter if metrics is available.
-func (r *H265Recorder) recordError(errorType string) {
-	if r.metrics != nil {
-		r.metrics.CameraErrors.WithLabelValues(r.cfg.CameraID, errorType).Inc()
-	}
-}
-
-var _ model.Recorder = (*H265Recorder)(nil)
-
-func NewH265Recorder(cfg H265Config, store SegmentStore, opts ...*metrics.Metrics) *H265Recorder {
-	var m *metrics.Metrics
-	if len(opts) > 0 {
-		m = opts[0]
-	}
-	if cfg.SegmentDur == 0 {
-		cfg.SegmentDur = DefaultSegmentDur
-	}
-	if cfg.RingBufCap == 0 {
-		cfg.RingBufCap = DefaultRingBufCap
-	}
-	if cfg.FrameWatchdogTimeout == 0 {
-		cfg.FrameWatchdogTimeout = defaultFrameWatchdogTimeout
-	}
-	return &H265Recorder{
-		cfg:     cfg,
-		store:   store,
-		metrics: m,
-		status:  model.StatusStopped,
-	}
-}
-
-func (r *H265Recorder) Start(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
-		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	r.cancel = cancel
-	r.done = make(chan struct{})
-	r.status = model.StatusRecording
-	r.incActive()
-	go r.run(ctx)
-	return nil
-}
-
-func (r *H265Recorder) Stop() error {
-	r.mu.Lock()
-	if r.cancel != nil {
-		r.cancel()
-	}
-	r.mu.Unlock()
-	if r.done != nil {
-		<-r.done
-	}
-	r.decActive()
-	return nil
-}
-
-func (r *H265Recorder) Status() model.RecorderStatus {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.status
-}
-
-func (r *H265Recorder) setStatus(s model.RecorderStatus) {
-	r.mu.Lock()
-	r.status = s
-	r.mu.Unlock()
-}
-
-func (r *H265Recorder) run(ctx context.Context) {
-	defer func() {
-		if panicErr := recover(); panicErr != nil {
-			buf := make([]byte, 4096)
-			buf = buf[:runtime.Stack(buf, false)]
-			h265Logger.Error("PANIC recovered in run", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
-		}
-	}()
-	defer close(r.done)
-	defer r.setStatus(model.StatusStopped)
-	var retryCount int
-	for {
-		err, connected := r.connectAndRecord(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if connected {
-			retryCount = 0
-			if r.metrics != nil {
-				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
-			}
-		}
-		retryCount++
-		backoff := TieredBackoffWithJitter(retryCount)
-		if r.metrics != nil {
-			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
-		}
-		h265Logger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
-		r.recordError("connection")
-		r.setStatus(model.StatusReconnecting)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-	}
-}
-
+// connectAndRecord implements rtspConnector. It connects to the RTSP server,
+// sets up the H.265 video stream (with optional audio), registers RTP
+// callbacks, and blocks until error or context cancellation.
 func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	u, err := base.ParseURL(r.cfg.RTSPURL)
 	if err != nil {
@@ -283,6 +210,17 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return fmt.Errorf("SETUP: %w", err), false
 	}
 
+	// Store initial parameter sets from SDP.
+	if forma.VPS != nil {
+		r.vps = append([]byte(nil), forma.VPS...)
+	}
+	if forma.SPS != nil {
+		r.sps = append([]byte(nil), forma.SPS...)
+	}
+	if forma.PPS != nil {
+		r.pps = append([]byte(nil), forma.PPS...)
+	}
+
 	// Audio setup: find AAC or G.711 format if AudioEnabled.
 	var audioDec *rtpmpeg4audio.Decoder
 	var audioForma *format.MPEG4Audio
@@ -309,7 +247,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					}
 					r.audioCodec = "aac"
 					r.audioSampleRate = audioForma.Config.SampleRate
-					// ChannelConfig 0 means PCE-defined; fall back to 1 as minimal default.
 					aCh := int(audioForma.Config.ChannelConfig)
 					if aCh == 0 {
 						aCh = 1
@@ -336,9 +273,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 						r.g711MULaw = g711Forma.MULaw
 						r.g711SampleRate = g711Forma.SampleRate
 						r.audioSampleRate = g711Forma.SampleRate
-						// G.711 decoder hardcodes ChannelCount:1 during init.
 						r.audioChannels = 1
-						// Build config for muxer: 1 byte muLaw flag + 4 bytes sample rate
 						muLawByte := byte(0)
 						if g711Forma.MULaw {
 							muLawByte = 1
@@ -353,17 +288,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		if audioDec == nil && g711Dec == nil {
 			h265Logger.Debug("no supported audio format found in stream", "camera_id", r.cfg.CameraID)
 		}
-	}
-
-	// Store initial parameter sets from SDP
-	if forma.VPS != nil {
-		r.vps = append([]byte(nil), forma.VPS...)
-	}
-	if forma.SPS != nil {
-		r.sps = append([]byte(nil), forma.SPS...)
-	}
-	if forma.PPS != nil {
-		r.pps = append([]byte(nil), forma.PPS...)
 	}
 
 	frameAlive := make(chan struct{}, 1)
@@ -404,8 +328,8 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			case r.frameCh <- data:
 			default:
 				d := r.dropped.Add(1)
-				if r.metrics != nil {
-					r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+				if r.mtrics != nil {
+					r.mtrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
 				}
 				if d%100 == 1 {
 					h265Logger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
@@ -416,7 +340,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 
 	// Audio RTP handler.
 	if audioDec != nil {
-		// AAC handler
 		client.OnPacketRTP(audioMedi, audioForma, func(pkt *rtp.Packet) {
 			aus, err := audioDec.Decode(pkt)
 			if err != nil {
@@ -446,7 +369,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			}
 		})
 	} else if g711Dec != nil {
-		// G.711 handler — raw PCM, no complex decoding needed
 		client.OnPacketRTP(audioMedi, g711Forma, func(pkt *rtp.Packet) {
 			data, err := g711Dec.Decode(pkt)
 			if err != nil {
@@ -463,7 +385,6 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			r.mu.Unlock()
 			if m != nil && aid > 0 {
 				pts := time.Since(start)
-				// G.711: 8kHz, 8-bit, mono. Duration = len(data) / 8000 seconds.
 				dur := time.Duration(len(data)) * time.Second / time.Duration(r.g711SampleRate)
 				if dur < time.Millisecond {
 					dur = time.Millisecond
@@ -483,14 +404,10 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		<-writerDone
 		return fmt.Errorf("PLAY: %w", err), false
 	}
-
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Wait() }()
 
 	// Frame watchdog: detect "RTSP alive but no data" state.
-	// When gortsplib receives RTSP keep-alives (GET_PARAMETER), it resets the
-	// ReadTimeout, so client.Wait() can block indefinitely even with no frames.
-	// The watchdog closes the connection if no frame arrives within the timeout.
 	stopWatchdog := make(chan struct{})
 	watchdogDone := make(chan struct{})
 	go func() {
@@ -534,211 +451,4 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		r.closeCurrentSegment()
 		return ctx.Err(), true
 	}
-}
-func (r *H265Recorder) writeFrames(done chan struct{}) {
-	defer func() {
-		if panicErr := recover(); panicErr != nil {
-			buf := make([]byte, 4096)
-			buf = buf[:runtime.Stack(buf, false)]
-			h265Logger.Error("PANIC recovered in writeFrames", "camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
-		}
-	}()
-
-	defer close(done)
-	for data := range r.frameCh {
-		if len(data) < 6 {
-			continue
-		}
-		nalu := data[4:]
-		// HEVC NALU type: 2-byte header, type is in bits 1-6 of first byte
-		// forbidden_zero_bit(1) | nal_unit_type(6) | nuh_layer_id(6) | nuh_temporal_id_plus1(3)
-		naluType := (nalu[0] >> 1) & 0x3F
-		switch naluType {
-		case 32: // VPS
-			if r.vps != nil && !bytes.Equal(r.vps, nalu) {
-				h265Logger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegment()
-			}
-			r.vps = append([]byte(nil), nalu...)
-		case 33: // SPS
-			if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-				h265Logger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegment()
-			}
-			r.sps = append([]byte(nil), nalu...)
-		case 34: // PPS
-			if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-				h265Logger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegment()
-			}
-			r.pps = append([]byte(nil), nalu...)
-		}
-		// Only write VCL NALUs (slice segments). HEVC VCL types are 0-31, non-VCL are 32+.
-		// Skip parameter sets (VPS=32, SPS=33, PPS=34) and other non-VCL types.
-		if naluType >= 32 {
-			continue
-		}
-
-		// Check storage health — if failed, skip recording but keep stream alive.
-		if isStorageFailed(r.store) {
-			// Close any existing segment cleanly without storage I/O.
-			if r.muxer != nil {
-				r.muxer.Close()
-				os.Remove(r.curTempPath)
-				r.muxer = nil
-				r.curTempPath = ""
-				r.curFinalPath = ""
-				r.audioTrackID = 0
-				r.frameCount = 0
-			}
-			if logNow, ok := shouldLogHealth(r.lastHealthLogAt); ok {
-				r.lastHealthLogAt = logNow
-				h265Logger.Warn("storage health failed, skipping recording (stream kept alive)",
-					"camera_id", r.cfg.CameraID)
-			}
-			continue
-		}
-
-		if r.vps == nil || r.sps == nil || r.pps == nil {
-			continue
-		}
-		// Wait for an IDR frame before starting a new segment.
-		// Without this, segments may start with P-frames that have no reference,
-		// causing black/gray output until the first IDR appears.
-		// HEVC IDR types: 19 (IDR_W_RADL), 20 (IDR_N_LP).
-		if r.muxer == nil && naluType != 19 && naluType != 20 {
-			continue
-		}
-		if r.muxer == nil {
-			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH265))
-			if err != nil {
-				h265Logger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
-				continue
-			}
-			m := muxer.NewMP4Muxer(tempPath)
-			trackID, err := m.AddH265Track(r.vps, r.sps, r.pps)
-			if err != nil {
-				h265Logger.Error("failed to add H265 track", "camera_id", r.cfg.CameraID, "error", err)
-				// Clean up empty temp file on muxer init failure
-				os.Remove(tempPath)
-				continue
-			}
-			r.trackID = trackID
-			// Add audio track if audio config is available.
-			if len(r.audioMuxerConfig) > 0 && r.audioCodec != "" {
-				aID, err := m.AddAudioTrack(r.audioCodec, r.audioMuxerConfig)
-				if err != nil {
-					h265Logger.Error("failed to add audio track", "camera_id", r.cfg.CameraID, "codec", r.audioCodec, "error", err)
-				} else {
-					r.audioTrackID = aID
-				}
-			}
-			r.mu.Lock()
-			r.muxer = m
-			r.segStart = time.Now()
-			r.mu.Unlock()
-			r.curTempPath = tempPath
-			r.curFinalPath = finalPath
-			r.lastFrameTime = r.segStart
-			r.frameCount = 0
-		}
-		now := time.Now()
-		pts := now.Sub(r.segStart)
-		duration := now.Sub(r.lastFrameTime)
-		if duration < time.Millisecond {
-			duration = time.Millisecond
-		}
-		r.lastFrameTime = now
-		if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
-			h265Logger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
-			continue
-		}
-		r.frameCount++
-		if time.Since(r.segStart) >= r.cfg.SegmentDur {
-			r.closeCurrentSegment()
-		}
-	}
-}
-
-func (r *H265Recorder) closeCurrentSegment() {
-	if r.muxer == nil {
-		return
-	}
-	if err := r.muxer.Close(); err != nil {
-		h265Logger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
-		if r.curTempPath != "" {
-			os.Remove(r.curTempPath)
-		}
-		r.mu.Lock()
-		r.muxer = nil
-		r.audioTrackID = 0
-		r.mu.Unlock()
-		r.curTempPath = ""
-		r.curFinalPath = ""
-		r.frameCount = 0
-		return
-	}
-
-	// Atomic rename: temp → final
-	if r.curTempPath != "" && r.curFinalPath != "" {
-		if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
-			h265Logger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Insert recording entry into database
-	var fileSize int64
-	var recordingID string
-	if r.cfg.DB != nil && r.curFinalPath != "" {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinalPath,
-			Format:     model.FormatH265,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-		}
-		recordingID = rec.ID
-		if info, err := os.Stat(r.curFinalPath); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
-			h265Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Publish SegmentCompleted event.
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinalPath,
-			Format:      string(model.FormatH265),
-			Encoding:    string(model.FormatH265),
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	}
-
-	// Update metrics for completed segment
-	if r.frameCount > 0 && r.curFinalPath != "" {
-		r.recordSegmentCreated()
-		if fileSize > 0 {
-			r.recordBytes(fileSize)
-		}
-	}
-
-	r.mu.Lock()
-	r.muxer = nil
-	r.audioTrackID = 0
-	r.mu.Unlock()
-	r.curTempPath = ""
-	r.curFinalPath = ""
-	r.frameCount = 0
 }

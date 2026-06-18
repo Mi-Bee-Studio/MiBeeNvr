@@ -51,10 +51,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 )
 
-// baseConfig holds the shared configuration fields used by all RTSP video
-// recorders. H264Config and H265Config currently duplicate these fields; in T14
-// they will embed baseConfig to eliminate the duplication.
-type baseConfig struct {
+// BaseConfig holds the shared configuration fields used by all RTSP video
+// recorders. H264Config and H265Config embed BaseConfig to eliminate the
+// duplication of these fields across the H.264 and H.265 recorder configs.
+type BaseConfig struct {
 	CameraID             string
 	RTSPURL              string
 	Username             string
@@ -198,7 +198,7 @@ type baseRecorder struct {
 	self rtspConnector
 
 	// Dependencies (set once in constructor).
-	cfg    baseConfig
+	cfg    BaseConfig
 	store  SegmentStore
 	mtrics *metrics.Metrics // "mtrics" avoids collision with package name "metrics"
 	log    *slog.Logger

@@ -676,28 +676,28 @@ func TestFrameMsgKeyframeDetection(t *testing.T) {
 		{0x68, 0xee, 0x3c, 0x80},       // PPS
 		{0x65, 0x88, 0x84, 0x00, 0x40}, // IDR slice
 	}
-	idrMsg := frameMsg{pts: 9000, au: idrAU, isKeyframe: nalutil.IsIDR(idrAU, false)}
-	require.True(t, idrMsg.isKeyframe, "IDR AU should have isKeyframe=true")
+	idrMsg := model.FrameMsg{PTS: 9000, AU: idrAU, IsKeyframe: nalutil.IsIDR(idrAU, false)}
+	require.True(t, idrMsg.IsKeyframe, "IDR AU should have IsKeyframe=true")
 
 	// P-frame: non-IDR (type 1)
 	pFrameAU := [][]byte{{0x41, 0x88, 0x84, 0x00}}
-	pMsg := frameMsg{pts: 12000, au: pFrameAU, isKeyframe: nalutil.IsIDR(pFrameAU, false)}
-	require.False(t, pMsg.isKeyframe, "P-frame AU should have isKeyframe=false")
+	pMsg := model.FrameMsg{PTS: 12000, AU: pFrameAU, IsKeyframe: nalutil.IsIDR(pFrameAU, false)}
+	require.False(t, pMsg.IsKeyframe, "P-frame AU should have IsKeyframe=false")
 
 	// SEI NALU only (type 6) — not a keyframe
 	seiAU := [][]byte{{0x06, 0x01}}
-	seiMsg := frameMsg{pts: 15000, au: seiAU, isKeyframe: nalutil.IsIDR(seiAU, false)}
-	require.False(t, seiMsg.isKeyframe, "SEI AU should have isKeyframe=false")
+	seiMsg := model.FrameMsg{PTS: 15000, AU: seiAU, IsKeyframe: nalutil.IsIDR(seiAU, false)}
+	require.False(t, seiMsg.IsKeyframe, "SEI AU should have IsKeyframe=false")
 
 	// Empty AU — not a keyframe
 	emptyAU := [][]byte{}
-	emptyMsg := frameMsg{pts: 18000, au: emptyAU, isKeyframe: nalutil.IsIDR(emptyAU, false)}
-	require.False(t, emptyMsg.isKeyframe, "empty AU should have isKeyframe=false")
+	emptyMsg := model.FrameMsg{PTS: 18000, AU: emptyAU, IsKeyframe: nalutil.IsIDR(emptyAU, false)}
+	require.False(t, emptyMsg.IsKeyframe, "empty AU should have IsKeyframe=false")
 
 	// IDR without SPS/PPS — still a keyframe
 	idrOnlyAU := [][]byte{{0x65, 0x88}}
-	idrOnlyMsg := frameMsg{pts: 21000, au: idrOnlyAU, isKeyframe: nalutil.IsIDR(idrOnlyAU, false)}
-	require.True(t, idrOnlyMsg.isKeyframe, "IDR-only AU should have isKeyframe=true")
+	idrOnlyMsg := model.FrameMsg{PTS: 21000, AU: idrOnlyAU, IsKeyframe: nalutil.IsIDR(idrOnlyAU, false)}
+	require.True(t, idrOnlyMsg.IsKeyframe, "IDR-only AU should have IsKeyframe=true")
 }
 
 // TestRTCPDrainWaitGroup verifies that the drainWg WaitGroup correctly
