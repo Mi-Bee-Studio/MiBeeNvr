@@ -406,7 +406,7 @@ func TestValidEncodingsForProtocol_Snapshot(t *testing.T) {
 	expected := map[string][]string{
 		"rtsp":   {"h264", "h265", "mjpeg"},
 		"http":   {"jpeg"},
-		"onvif":  {"h264", "h265"},
+		"onvif":  {"h264", "h265", "jpeg"},
 		"xiaomi": {"h264", "h265"},
 	}
 
