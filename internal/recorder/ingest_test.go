@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"testing"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"

@@ -319,26 +319,31 @@ func TestDisconnectCleanup(t *testing.T) {
 
 	hub.Unsubscribe("test-consumer")
 }
+
 // mockSRTConn implements srt.Conn for testing purposes.
 type mockSRTConn struct{}
 
-func (m *mockSRTConn) Read(p []byte) (int, error)   { return 0, io.EOF }
-func (m *mockSRTConn) Write(p []byte) (int, error)  { return len(p), nil }
-func (m *mockSRTConn) Close() error                  { return nil }
+func (m *mockSRTConn) Read(p []byte) (int, error)         { return 0, io.EOF }
+func (m *mockSRTConn) Write(p []byte) (int, error)        { return len(p), nil }
+func (m *mockSRTConn) Close() error                       { return nil }
 func (m *mockSRTConn) ReadPacket() (packet.Packet, error) { return nil, io.EOF }
 func (m *mockSRTConn) WritePacket(p packet.Packet) error  { return nil }
-func (m *mockSRTConn) LocalAddr() net.Addr          { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234} }
-func (m *mockSRTConn) RemoteAddr() net.Addr         { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678} }
-func (m *mockSRTConn) SetDeadline(t time.Time) error    { return nil }
-func (m *mockSRTConn) SetReadDeadline(t time.Time) error { return nil }
-func (m *mockSRTConn) SetWriteDeadline(t time.Time) error { return nil }
-func (m *mockSRTConn) SocketId() uint32             { return 0 }
-func (m *mockSRTConn) PeerSocketId() uint32         { return 0 }
-func (m *mockSRTConn) SetTTL(ttl uint32)             {}
+func (m *mockSRTConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}
+}
+func (m *mockSRTConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
+}
+func (m *mockSRTConn) SetDeadline(t time.Time) error          { return nil }
+func (m *mockSRTConn) SetReadDeadline(t time.Time) error      { return nil }
+func (m *mockSRTConn) SetWriteDeadline(t time.Time) error     { return nil }
+func (m *mockSRTConn) SocketId() uint32                       { return 0 }
+func (m *mockSRTConn) PeerSocketId() uint32                   { return 0 }
+func (m *mockSRTConn) SetTTL(ttl uint32)                      {}
 func (m *mockSRTConn) SetLatency(latency time.Duration) error { return nil }
-func (m *mockSRTConn) Stats(s *gosrt.Statistics)     {}
-func (m *mockSRTConn) StreamId() string             { return "" }
-func (m *mockSRTConn) Version() uint32              { return 4 }
+func (m *mockSRTConn) Stats(s *gosrt.Statistics)              {}
+func (m *mockSRTConn) StreamId() string                       { return "" }
+func (m *mockSRTConn) Version() uint32                        { return 4 }
 
 // TestReceiverStartStopRace verifies there is no data race when Start() and Stop()
 // are called concurrently. Before the fix, Start() closed r.done and then immediately
@@ -374,4 +379,3 @@ func TestReceiverStartStopRace(t *testing.T) {
 		wg.Wait()
 	}
 }
-
