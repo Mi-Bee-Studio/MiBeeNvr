@@ -21,11 +21,11 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var h264Logger = slog.Default().With("component", "h264-recorder")
@@ -82,6 +82,8 @@ type H264Recorder struct {
 	audioCodec       string // "aac" or "g711"
 	g711MULaw        bool   // true=μ-law, false=A-law
 	g711SampleRate   int    // typically 8000
+	audioSampleRate  int    // unified sample rate (Hz), set for both AAC and G.711
+	audioChannels    int    // number of audio channels, 0 when no audio
 
 	curFinalPath  string
 	curTempPath   string
@@ -96,8 +98,8 @@ type H264Recorder struct {
 	dropped atomic.Int64
 	lastPTS atomic.Int64 // tracks last RTP PTS for monotonicity check
 
-	Hub *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
-	lastHealthLogAt time.Time // throttled log for storage health failures
+	Hub             *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	lastHealthLogAt time.Time        // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -108,6 +110,20 @@ func (r *H264Recorder) SPS() []byte { return r.sps }
 
 // PPS returns the current H264 Picture Parameter Set NAL unit (without start bytes).
 func (r *H264Recorder) PPS() []byte { return r.pps }
+
+// AudioCodec returns the audio codec name ("aac", "g711", or "" for no audio).
+func (r *H264Recorder) AudioCodec() string { return r.audioCodec }
+
+// AudioConfig returns the audio codec configuration bytes.
+// For AAC: AudioSpecificConfig from marshal'd MPEG4Audio config.
+// For G.711: 5 bytes [muLawFlag, rate>>24, rate>>16, rate>>8, rate].
+func (r *H264Recorder) AudioConfig() []byte { return r.audioMuxerConfig }
+
+// AudioSampleRate returns the audio sample rate in Hz, or 0 if no audio.
+func (r *H264Recorder) AudioSampleRate() int { return r.audioSampleRate }
+
+// AudioChannels returns the number of audio channels, or 0 if no audio.
+func (r *H264Recorder) AudioChannels() int { return r.audioChannels }
 
 // incActive increments the active recordings gauge if metrics is available.
 func (r *H264Recorder) incActive() {
@@ -320,6 +336,13 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 						}
 					}
 					r.audioCodec = "aac"
+					r.audioSampleRate = audioForma.Config.SampleRate
+					// ChannelConfig 0 means PCE-defined; fall back to 1 as minimal default.
+					aCh := int(audioForma.Config.ChannelConfig)
+					if aCh == 0 {
+						aCh = 1
+					}
+					r.audioChannels = aCh
 					h264Logger.Info("AAC audio track detected", "camera_id", r.cfg.CameraID)
 				}
 			}
@@ -340,6 +363,9 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 						r.audioCodec = "g711"
 						r.g711MULaw = g711Forma.MULaw
 						r.g711SampleRate = g711Forma.SampleRate
+						r.audioSampleRate = g711Forma.SampleRate
+						// G.711 decoder hardcodes ChannelCount:1 during init.
+						r.audioChannels = 1
 						muLawByte := byte(0)
 						if g711Forma.MULaw {
 							muLawByte = 1
@@ -638,7 +664,6 @@ func (r *H264Recorder) writeFrames(done chan struct{}) {
 		}
 	}
 }
-
 
 func (r *H264Recorder) closeCurrentSegment() {
 	if r.muxer == nil {

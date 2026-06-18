@@ -37,17 +37,17 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		CameraID       string  `json:"camera_id"`
-		RecordingID    string  `json:"recording_id"`
-		EventType      string  `json:"event_type"`
-		Severity       string  `json:"severity"`
-		ZoneName       string  `json:"zone_name"`
-		ClassName      string  `json:"class_name"`
-		Confidence     float64 `json:"confidence"`
-		FrameIdx       int     `json:"frame_idx"`
-		FrameTimestamp string  `json:"frame_timestamp"`
-		BBox           []float64 `json:"bbox"`
-		SnapshotPath   string  `json:"snapshot_path"`
+		CameraID       string          `json:"camera_id"`
+		RecordingID    string          `json:"recording_id"`
+		EventType      string          `json:"event_type"`
+		Severity       string          `json:"severity"`
+		ZoneName       string          `json:"zone_name"`
+		ClassName      string          `json:"class_name"`
+		Confidence     float64         `json:"confidence"`
+		FrameIdx       int             `json:"frame_idx"`
+		FrameTimestamp string          `json:"frame_timestamp"`
+		BBox           []float64       `json:"bbox"`
+		SnapshotPath   string          `json:"snapshot_path"`
 		Metadata       json.RawMessage `json:"metadata"`
 	}
 
@@ -109,8 +109,8 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	// Publish ai.event.created event for SSE subscribers
 	if h.eventBus != nil {
 		h.eventBus.Publish(r.Context(), event.TopicAIEventCreated, map[string]interface{}{
-			"event_id":  id,
-			"camera_id": body.CameraID,
+			"event_id":   id,
+			"camera_id":  body.CameraID,
 			"event_type": body.EventType,
 			"severity":   severity,
 		})

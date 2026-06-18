@@ -27,6 +27,7 @@ func deriveProtocolForSnapshot(cam config.CameraConfig) string {
 	}
 	return cam.Protocol
 }
+
 // effectiveDualModeFrameSource resolves the effective frame source for dual-mode
 // timelapse (regular recording camera with timelapse enabled alongside).
 // "auto" is resolved to "rtsp_keyframe" for RTSP/ONVIF cameras with h264/h265 encoding.
@@ -62,8 +63,6 @@ func (cm *CameraManager) resolveTimelapseMergeMgr(interval time.Duration) *timel
 	}
 	return timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, false)
 }
-
-
 
 // createTimelapseSnapshotRecorder creates a SnapshotCapturer for snapshot frame source.
 func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {

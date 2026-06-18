@@ -24,8 +24,8 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Unlock()
 	return nil
 }
-func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
-func (h *captureHandler) WithGroup(string) slog.Handler             { return h }
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
 
 func (h *captureHandler) all() []slog.Record {
 	h.mu.Lock()
@@ -83,7 +83,7 @@ func TestStreamHub_BroadcastLogsFrameTrace(t *testing.T) {
 	var received atomic.Int32
 	err := hub.Subscribe("sub", func(pts int64, au [][]byte) {
 		received.Add(1)
-			<-blockCh
+		<-blockCh
 	})
 	require.NoError(t, err)
 

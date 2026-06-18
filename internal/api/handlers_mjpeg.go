@@ -64,7 +64,7 @@ func (h *Handler) resolveMjpegURL(cameraID string) string {
 func getMjpegURLFromRecorder(rec interface{}) string {
 	// Unwrap delegate layers (ONVIF → inner recorder)
 	for {
-		type delegater interface { Delegate() model.Recorder }
+		type delegater interface{ Delegate() model.Recorder }
 		if u, ok := rec.(delegater); ok {
 			if d := u.Delegate(); d != nil {
 				rec = d
@@ -124,7 +124,7 @@ func (h *Handler) getLatestFrameFromRecorder(cameraID string) []byte {
 
 	// Unwrap delegate layers (ONVIF → inner recorder)
 	for {
-		type delegater interface { Delegate() model.Recorder }
+		type delegater interface{ Delegate() model.Recorder }
 		if u, ok := rec.(delegater); ok {
 			if d := u.Delegate(); d != nil {
 				rec = d
@@ -134,7 +134,7 @@ func (h *Handler) getLatestFrameFromRecorder(cameraID string) []byte {
 		break
 	}
 
-	type latestFramer interface { LatestFrame() []byte }
+	type latestFramer interface{ LatestFrame() []byte }
 	if lr, ok := rec.(latestFramer); ok {
 		return lr.LatestFrame()
 	}

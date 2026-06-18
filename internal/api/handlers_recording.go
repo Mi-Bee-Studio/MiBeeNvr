@@ -1,6 +1,5 @@
 package api
 
-
 import (
 	"bytes"
 	"encoding/binary"
@@ -118,13 +117,13 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 	}
 
 	rec := &model.Recording{
-		ID:         body.ID,
-		CameraID:   body.CameraID,
-		FilePath:   body.FilePath,
-		Format:     model.Format(body.Format),
-		Duration:   body.Duration,
-		FileSize:   body.FileSize,
-		FrameCount: body.FrameCount,
+		ID:          body.ID,
+		CameraID:    body.CameraID,
+		FilePath:    body.FilePath,
+		Format:      model.Format(body.Format),
+		Duration:    body.Duration,
+		FileSize:    body.FileSize,
+		FrameCount:  body.FrameCount,
 		MergeStatus: "pending",
 	}
 	if rec.ID == "" {

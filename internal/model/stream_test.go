@@ -661,16 +661,16 @@ func TestStreamHub_IDRProtectionPreservesIDRInBuffer(t *testing.T) {
 	// Buffer should be full. Send new IDR frame.
 	hub.Broadcast(999, [][]byte{{0xFF}}, true)
 
-close(blockCh)
-// Wait for all frames to be processed.
-// drain took 1 initially. trySendIDR evicted 1 non-IDR for IDR frame,
-// then 1 more non-IDR for pts=999 IDR. 1 non-IDR dropped (overflow).
-// Remaining in buffer: 5 frames. Total received: 1 + 5 = 6.
-require.Eventually(t, func() bool {
-	receivedMu.Lock()
-	defer receivedMu.Unlock()
-	return len(received) >= 6
-}, 5*time.Second, 10*time.Millisecond, "should receive remaining buffered frames")
+	close(blockCh)
+	// Wait for all frames to be processed.
+	// drain took 1 initially. trySendIDR evicted 1 non-IDR for IDR frame,
+	// then 1 more non-IDR for pts=999 IDR. 1 non-IDR dropped (overflow).
+	// Remaining in buffer: 5 frames. Total received: 1 + 5 = 6.
+	require.Eventually(t, func() bool {
+		receivedMu.Lock()
+		defer receivedMu.Unlock()
+		return len(received) >= 6
+	}, 5*time.Second, 10*time.Millisecond, "should receive remaining buffered frames")
 
 	receivedMu.Lock()
 	defer receivedMu.Unlock()
@@ -977,7 +977,7 @@ func helperJitterBufferReorder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send frames in-order first to establish baseline
-	hub.Broadcast(100, [][]byte{{0x01}}, true) // PTS=100
+	hub.Broadcast(100, [][]byte{{0x01}}, true)  // PTS=100
 	hub.Broadcast(200, [][]byte{{0x02}}, false) // PTS=200
 
 	require.Eventually(t, func() bool {

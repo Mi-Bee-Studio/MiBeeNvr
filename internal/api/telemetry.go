@@ -11,10 +11,10 @@ import (
 
 // telemetryRequest is the JSON payload for POST /api/telemetry.
 type telemetryRequest struct {
-	Event     string `json:"event"`
-	CameraID  string `json:"camera_id"`
-	DurationMs int   `json:"duration_ms"`
-	Details   any    `json:"details,omitempty"`
+	Event      string `json:"event"`
+	CameraID   string `json:"camera_id"`
+	DurationMs int    `json:"duration_ms"`
+	Details    any    `json:"details,omitempty"`
 }
 
 // HandleTelemetry receives playback telemetry events and logs them via slog.

@@ -62,7 +62,6 @@ func hasKey() bool {
 	return GetEncryptionKey() != nil
 }
 
-
 // Encrypt encrypts plaintext using AES-256-GCM and returns a string
 // in the format "ENC:base64(nonce+ciphertext+tag)".
 // The key must be exactly 32 bytes.
@@ -267,21 +266,21 @@ func SensitiveFieldPaths(cfg *Config) []string {
 // snapshotSensitive captures the current plaintext values of sensitive fields
 // so they can be restored after an encrypted save.
 type sensitiveSnapshot struct {
-	AuthPassword    string
-	MQTTPassword    string
-	XiaomiUserID    string
-	XiaomiToken     string
-	CameraPasswords    []string
+	AuthPassword        string
+	MQTTPassword        string
+	XiaomiUserID        string
+	XiaomiToken         string
+	CameraPasswords     []string
 	MetricsAuthPassword string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 	s := sensitiveSnapshot{
-		AuthPassword:    cfg.Auth.Password,
-		MQTTPassword:    cfg.MQTT.Password,
-		XiaomiUserID:    cfg.Xiaomi.UserID,
-		XiaomiToken:     cfg.Xiaomi.Token,
-		CameraPasswords:    make([]string, len(cfg.Cameras)),
+		AuthPassword:        cfg.Auth.Password,
+		MQTTPassword:        cfg.MQTT.Password,
+		XiaomiUserID:        cfg.Xiaomi.UserID,
+		XiaomiToken:         cfg.Xiaomi.Token,
+		CameraPasswords:     make([]string, len(cfg.Cameras)),
 		MetricsAuthPassword: cfg.MetricsAuth.Password,
 	}
 	for i := range cfg.Cameras {
@@ -299,6 +298,6 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		if i < len(s.CameraPasswords) {
 			cfg.Cameras[i].Password = s.CameraPasswords[i]
 		}
-	cfg.MetricsAuth.Password = s.MetricsAuthPassword
+		cfg.MetricsAuth.Password = s.MetricsAuthPassword
 	}
 }

@@ -47,10 +47,10 @@ func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error
 // CS2Conn wraps a CS2 P2P connection (UDP or TCP) to a Xiaomi device.
 type CS2Conn struct {
 	net.Conn
-	isTCP bool
+	isTCP       bool
 	idleTimeout time.Duration
 
-	mu   sync.Mutex
+	mu     sync.Mutex
 	err    error
 	seqCh0 uint16
 	seqCh3 uint16
@@ -83,7 +83,6 @@ const cs2HdrSize = 32
 // cs2ReadTimeout is the timeout for Pop() calls in ReadPacket and ReadCommand.
 // If no data arrives within this period, the call returns a timeout error.
 const cs2ReadTimeout = 15 * time.Second
-
 
 func cs2Handshake(host, transport string) (net.Conn, error) {
 	conn, err := cs2NewUDPConn(host, 32108)

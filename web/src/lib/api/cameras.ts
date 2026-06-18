@@ -52,6 +52,19 @@ export interface PushTargetConfig {
   protocol: 'rtmp' | 'rtsp';
   url: string;
   enabled: boolean;
+  platform?: string;
+  transcode_policy?: 'auto' | 'force_sw' | 'off';
+  video_preset_override?: VideoPresetOverrides;
+}
+
+/** Per-target encoding overrides for a push relay destination. */
+export interface VideoPresetOverrides {
+  resolution?: string;
+  framerate?: number;
+  video_bitrate_kbps?: number;
+  gop_seconds?: number;
+  profile?: 'baseline' | 'main' | 'high';
+  bframes?: number;
 }
 
 /** Live runtime status of one push-out target (from GET push-status). */
@@ -66,6 +79,13 @@ export interface PushTargetStatus {
   uptime: string;
   error?: string;
   updated_at: string;
+  // T17 enhanced fields (may be missing from older backend)
+  transcode_status?: string;
+  transcode_resolution?: string;
+  audio_codec?: string;
+  temperature_c?: number;
+  restart_count?: number;
+  av_drift_ms?: number;
 }
 
 export interface PushStatusResponse {

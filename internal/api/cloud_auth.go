@@ -14,10 +14,10 @@ type CloudAuthResult struct {
 // CloudVerificationRequired is returned when authentication requires user
 // interaction (captcha or two-factor verification).
 type CloudVerificationRequired struct {
-	Captcha           []byte `json:"captcha,omitempty"`
-	VerifyPhone       string `json:"verify_phone,omitempty"`
-	VerifyEmail       string `json:"verify_email,omitempty"`
-	CaptchaSessionID  string `json:"session_id,omitempty"`
+	Captcha          []byte `json:"captcha,omitempty"`
+	VerifyPhone      string `json:"verify_phone,omitempty"`
+	VerifyEmail      string `json:"verify_email,omitempty"`
+	CaptchaSessionID string `json:"session_id,omitempty"`
 }
 
 // CloudDeviceInfo represents a discovered cloud device (e.g. camera).
@@ -52,7 +52,7 @@ type CloudAuthProxy interface {
 	// ListDevices returns the list of cloud devices for the authenticated user.
 	ListDevices(ctx context.Context) ([]CloudDeviceInfo, error)
 
-// CheckVendor determines the vendor protocol for a Xiaomi device by DID.
-// Returns vendor name ("cs2", "tutk", etc.) or error if unable to determine.
-CheckVendor(ctx context.Context, did string) (string, error)
+	// CheckVendor determines the vendor protocol for a Xiaomi device by DID.
+	// Returns vendor name ("cs2", "tutk", etc.) or error if unable to determine.
+	CheckVendor(ctx context.Context, did string) (string, error)
 }

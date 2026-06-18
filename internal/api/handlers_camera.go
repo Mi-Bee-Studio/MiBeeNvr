@@ -1,6 +1,5 @@
 package api
 
-
 import (
 	"context"
 	"encoding/json"
@@ -111,7 +110,7 @@ var validProtocols = map[string]bool{
 	"srt":  true,
 	"rtmp": true,
 	// Plugin protocols
-	"xiaomi": true,
+	"xiaomi":    true,
 	"timelapse": true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
@@ -122,24 +121,24 @@ var validProtocols = map[string]bool{
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name           string `json:"name"`
-		Protocol       string `json:"protocol"`
-		URL            string `json:"url"`
-		Username       string `json:"username"`
-		Password       string `json:"password"`
-		Enabled        *bool  `json:"enabled"`
-		Description    string `json:"description"`
-		Location       string `json:"location"`
-		Brand          string `json:"brand"`
-		Model          string `json:"model"`
-		SerialNumber   string `json:"serial_number"`
-		ONVIFEndpoint  string `json:"onvif_endpoint"`
-		ProfileToken   string `json:"profile_token"`
-		StreamEncoding string `json:"stream_encoding"`
-		Encoding       string `json:"encoding"`
+		Name           string                        `json:"name"`
+		Protocol       string                        `json:"protocol"`
+		URL            string                        `json:"url"`
+		Username       string                        `json:"username"`
+		Password       string                        `json:"password"`
+		Enabled        *bool                         `json:"enabled"`
+		Description    string                        `json:"description"`
+		Location       string                        `json:"location"`
+		Brand          string                        `json:"brand"`
+		Model          string                        `json:"model"`
+		SerialNumber   string                        `json:"serial_number"`
+		ONVIFEndpoint  string                        `json:"onvif_endpoint"`
+		ProfileToken   string                        `json:"profile_token"`
+		StreamEncoding string                        `json:"stream_encoding"`
+		Encoding       string                        `json:"encoding"`
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
-		Channel        string `json:"channel"`
-		AudioEnabled   *bool `json:"audio_enabled"`
+		Channel        string                        `json:"channel"`
+		AudioEnabled   *bool                         `json:"audio_enabled"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -236,22 +235,22 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cam := config.CameraConfig{
-		Name:           body.Name,
-		Protocol:       proto,
-		Encoding:       enc,
-		URL:            body.URL,
-		Username:       body.Username,
-		Password:       body.Password,
-		ONVIFEndpoint:  body.ONVIFEndpoint,
-		ProfileToken:   body.ProfileToken,
-		StreamEncoding: body.StreamEncoding,
-		Timelapse:      body.Timelapse,
-		Channel:        body.Channel,
-		AudioEnabled:   body.AudioEnabled != nil && *body.AudioEnabled,
-		StreamKey:      body.StreamKey,
-		SRTPassphrase:  body.SRTPassphrase,
-		SRTStreamID:    body.SRTStreamID,
-		PushTargets:      body.PushTargets,
+		Name:              body.Name,
+		Protocol:          proto,
+		Encoding:          enc,
+		URL:               body.URL,
+		Username:          body.Username,
+		Password:          body.Password,
+		ONVIFEndpoint:     body.ONVIFEndpoint,
+		ProfileToken:      body.ProfileToken,
+		StreamEncoding:    body.StreamEncoding,
+		Timelapse:         body.Timelapse,
+		Channel:           body.Channel,
+		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
+		StreamKey:         body.StreamKey,
+		SRTPassphrase:     body.SRTPassphrase,
+		SRTStreamID:       body.SRTStreamID,
+		PushTargets:       body.PushTargets,
 		PushRetentionDays: body.PushRetentionDays,
 	}
 
@@ -338,13 +337,13 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				if cam.Channel != "" {
 					row.Channel = cam.Channel
 				}
-			row.AudioEnabled = cam.AudioEnabled
-			row.StreamKey = cam.StreamKey
-			row.SRTPassphrase = cam.SRTPassphrase
-			row.SRTStreamID = cam.SRTStreamID
-			row.PushTargets = cam.PushTargets
-			row.PushRetentionDays = cam.PushRetentionDays
-			break
+				row.AudioEnabled = cam.AudioEnabled
+				row.StreamKey = cam.StreamKey
+				row.SRTPassphrase = cam.SRTPassphrase
+				row.SRTStreamID = cam.SRTStreamID
+				row.PushTargets = cam.PushTargets
+				row.PushRetentionDays = cam.PushRetentionDays
+				break
 			}
 		}
 	}
@@ -378,25 +377,25 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body struct {
-		Name           *string `json:"name"`
-		URL            *string `json:"url"`
-		Protocol       *string `json:"protocol"`
-		Encoding       *string `json:"encoding"`
-		Username       *string `json:"username"`
-		Password       *string `json:"password"`
-		Enabled        *bool   `json:"enabled"`
-		Description    *string `json:"description"`
-		Location       *string `json:"location"`
-		Brand          *string `json:"brand"`
-		Model          *string `json:"model"`
-		SerialNumber   *string `json:"serial_number"`
-		RetentionDays  *int    `json:"retention_days"`
-		ONVIFEndpoint  *string `json:"onvif_endpoint"`
-		ProfileToken   *string `json:"profile_token"`
-		StreamEncoding *string                          `json:"stream_encoding"`
-		Transcoding    *config.CameraTranscodingConfig  `json:"transcoding"`
-		Channel        *string `json:"channel"`
-		AudioEnabled   *bool `json:"audio_enabled"`
+		Name           *string                         `json:"name"`
+		URL            *string                         `json:"url"`
+		Protocol       *string                         `json:"protocol"`
+		Encoding       *string                         `json:"encoding"`
+		Username       *string                         `json:"username"`
+		Password       *string                         `json:"password"`
+		Enabled        *bool                           `json:"enabled"`
+		Description    *string                         `json:"description"`
+		Location       *string                         `json:"location"`
+		Brand          *string                         `json:"brand"`
+		Model          *string                         `json:"model"`
+		SerialNumber   *string                         `json:"serial_number"`
+		RetentionDays  *int                            `json:"retention_days"`
+		ONVIFEndpoint  *string                         `json:"onvif_endpoint"`
+		ProfileToken   *string                         `json:"profile_token"`
+		StreamEncoding *string                         `json:"stream_encoding"`
+		Transcoding    *config.CameraTranscodingConfig `json:"transcoding"`
+		Channel        *string                         `json:"channel"`
+		AudioEnabled   *bool                           `json:"audio_enabled"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     *string `json:"stream_key"`
 		SRTPassphrase *string `json:"srt_passphrase"`
@@ -434,27 +433,27 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := camera.CameraUpdate{
-		Name:           body.Name,
-		URL:            body.URL,
-		Protocol:       body.Protocol,
-		Encoding:       body.Encoding,
-		Username:       username,
-		Password:       password,
-		Description:    body.Description,
-		Location:       body.Location,
-		Brand:          body.Brand,
-		Model:          body.Model,
-		SerialNumber:   body.SerialNumber,
-		RetentionDays:  body.RetentionDays,
-		ONVIFEndpoint:  body.ONVIFEndpoint,
-		ProfileToken:   body.ProfileToken,
-		StreamEncoding: body.StreamEncoding,
-		Transcoding:    body.Transcoding,
-		Channel:        body.Channel,
-		AudioEnabled:   body.AudioEnabled,
-		StreamKey:      body.StreamKey,
-		SRTPassphrase:  body.SRTPassphrase,
-		SRTStreamID:    body.SRTStreamID,
+		Name:              body.Name,
+		URL:               body.URL,
+		Protocol:          body.Protocol,
+		Encoding:          body.Encoding,
+		Username:          username,
+		Password:          password,
+		Description:       body.Description,
+		Location:          body.Location,
+		Brand:             body.Brand,
+		Model:             body.Model,
+		SerialNumber:      body.SerialNumber,
+		RetentionDays:     body.RetentionDays,
+		ONVIFEndpoint:     body.ONVIFEndpoint,
+		ProfileToken:      body.ProfileToken,
+		StreamEncoding:    body.StreamEncoding,
+		Transcoding:       body.Transcoding,
+		Channel:           body.Channel,
+		AudioEnabled:      body.AudioEnabled,
+		StreamKey:         body.StreamKey,
+		SRTPassphrase:     body.SRTPassphrase,
+		SRTStreamID:       body.SRTStreamID,
 		PushTargets:       body.PushTargets,
 		PushRetentionDays: body.PushRetentionDays,
 	}
@@ -652,85 +651,85 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 // handleTestConnection attempts to connect to a camera URL with a short timeout.
 // Returns success/failure, a human-readable message, and the latency in milliseconds.
 func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
-  var body struct {
-    Protocol      string `json:"protocol"`
-    URL           string `json:"url"`
-    Username      string `json:"username"`
-    Password      string `json:"password"`
-    Encoding      string `json:"encoding"`
-    ONVIFEndpoint string `json:"onvif_endpoint"`
-  }
-  if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-    writeError(w, http.StatusBadRequest, "invalid request body")
-    return
-  }
-  if body.URL == "" {
-    writeError(w, http.StatusBadRequest, "url is required")
-    return
-  }
+	var body struct {
+		Protocol      string `json:"protocol"`
+		URL           string `json:"url"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		Encoding      string `json:"encoding"`
+		ONVIFEndpoint string `json:"onvif_endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.URL == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
 
-  target := body.URL
-  if body.Protocol == "onvif" && body.ONVIFEndpoint != "" {
-    target = body.ONVIFEndpoint
-  }
+	target := body.URL
+	if body.Protocol == "onvif" && body.ONVIFEndpoint != "" {
+		target = body.ONVIFEndpoint
+	}
 
-  startTime := time.Now()
+	startTime := time.Now()
 
-  switch {
-  case strings.HasPrefix(target, "rtsp://"):
-    // RTSP: try TCP connection to the host:port
-    conn, err := net.DialTimeout("tcp", stripScheme(target), 3*time.Second)
-    if err != nil {
-      writeJSON(w, http.StatusOK, map[string]any{
-        "success":     false,
-        "message":     fmt.Sprintf("connection refused: %v", err),
-        "latency_ms":  time.Since(startTime).Milliseconds(),
-      })
-      return
-    }
-    conn.Close()
+	switch {
+	case strings.HasPrefix(target, "rtsp://"):
+		// RTSP: try TCP connection to the host:port
+		conn, err := net.DialTimeout("tcp", stripScheme(target), 3*time.Second)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":    false,
+				"message":    fmt.Sprintf("connection refused: %v", err),
+				"latency_ms": time.Since(startTime).Milliseconds(),
+			})
+			return
+		}
+		conn.Close()
 
-  default:
-    // HTTP/ONVIF: try HEAD/GET request with timeout
-    client := &http.Client{Timeout: 3 * time.Second}
-    // For URLs with credentials, inject them
-    req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
-    if err != nil {
-      writeJSON(w, http.StatusOK, map[string]any{
-        "success":     false,
-        "message":     fmt.Sprintf("invalid URL: %v", err),
-        "latency_ms":  time.Since(startTime).Milliseconds(),
-      })
-      return
-    }
-    if body.Username != "" {
-      req.SetBasicAuth(body.Username, body.Password)
-    } else {
-      // Extract credentials from URL if present (e.g., http://admin:pass@host)
-      if parsed, err := url.Parse(target); err == nil && parsed.User != nil {
-        if u := parsed.User.Username(); u != "" {
-          p, _ := parsed.User.Password()
-          req.SetBasicAuth(u, p)
-        }
-      }
-    }
-    resp, err := client.Do(req)
-    if err != nil {
-      writeJSON(w, http.StatusOK, map[string]any{
-        "success":     false,
-        "message":     fmt.Sprintf("connection failed: %v", err),
-        "latency_ms":  time.Since(startTime).Milliseconds(),
-      })
-      return
-    }
-    resp.Body.Close()
-  }
+	default:
+		// HTTP/ONVIF: try HEAD/GET request with timeout
+		client := &http.Client{Timeout: 3 * time.Second}
+		// For URLs with credentials, inject them
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":    false,
+				"message":    fmt.Sprintf("invalid URL: %v", err),
+				"latency_ms": time.Since(startTime).Milliseconds(),
+			})
+			return
+		}
+		if body.Username != "" {
+			req.SetBasicAuth(body.Username, body.Password)
+		} else {
+			// Extract credentials from URL if present (e.g., http://admin:pass@host)
+			if parsed, err := url.Parse(target); err == nil && parsed.User != nil {
+				if u := parsed.User.Username(); u != "" {
+					p, _ := parsed.User.Password()
+					req.SetBasicAuth(u, p)
+				}
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":    false,
+				"message":    fmt.Sprintf("connection failed: %v", err),
+				"latency_ms": time.Since(startTime).Milliseconds(),
+			})
+			return
+		}
+		resp.Body.Close()
+	}
 
-  writeJSON(w, http.StatusOK, map[string]any{
-    "success":     true,
-    "message":     "connection successful",
-    "latency_ms":  time.Since(startTime).Milliseconds(),
-  })
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"message":    "connection successful",
+		"latency_ms": time.Since(startTime).Milliseconds(),
+	})
 }
 
 // stripScheme extracts host:port from a URL string for TCP dialing.

@@ -30,7 +30,6 @@ func TestNewXiaomiRecorderDefaultSegmentDur(t *testing.T) {
 	require.Equal(t, defaultSegmentDur, r.cfg.SegmentDur)
 }
 
-
 func TestNewXiaomiRecorderCustomSegmentDur(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
@@ -198,7 +197,7 @@ func TestCaptchaSessionErrorMessage(t *testing.T) {
 	t.Helper()
 	inner := &LoginError{Captcha: []byte("data")}
 	e := &CaptchaSessionError{
-		LoginError:        inner,
+		LoginError:       inner,
 		CaptchaSessionID: "sess-123",
 	}
 	require.Contains(t, e.Error(), "captcha required")
@@ -269,8 +268,8 @@ func TestXiaomiRecorderWithDB(t *testing.T) {
 func TestXiaomiRecorderContextCancelRace(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:    "test-cam",
-		DID:         "dev1",
+		CameraID: "test-cam",
+		DID:      "dev1",
 	}, &noopSegmentStore{})
 
 	// Start and immediately cancel — tests race-free shutdown
@@ -344,7 +343,7 @@ func TestCaptchaSessionErrorAsLoginError(t *testing.T) {
 	t.Helper()
 	inner := &LoginError{VerifyPhone: "+1234"}
 	e := &CaptchaSessionError{
-		LoginError:        inner,
+		LoginError:       inner,
 		CaptchaSessionID: "session-id",
 	}
 

@@ -11,10 +11,10 @@ import (
 func TestParseLegacyProtocol(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		input       string
-		wantProto   string
-		wantEnc     string
-		wantErr     bool
+		input     string
+		wantProto string
+		wantEnc   string
+		wantErr   bool
 	}{
 		{"rtsp_h264", "rtsp", "h264", false},
 		{"rtsp_h265", "rtsp", "h265", false},
@@ -47,6 +47,7 @@ func TestValidateProtocolEncoding(t *testing.T) {
 		{"http", "jpeg"},
 		{"onvif", "h264"},
 		{"onvif", "h265"},
+		{"onvif", "jpeg"},
 	}
 	for _, c := range validCombos {
 		t.Run("valid_"+c.proto+"_"+c.enc, func(t *testing.T) {
@@ -57,7 +58,6 @@ func TestValidateProtocolEncoding(t *testing.T) {
 	invalidCombos := []struct{ proto, enc string }{
 		{"http", "h264"},
 		{"rtsp", "jpeg"},
-		{"onvif", "jpeg"},
 		{"http", "h265"},
 		{"", ""},
 		{"foo", "bar"},

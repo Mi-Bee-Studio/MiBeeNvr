@@ -1,6 +1,5 @@
 package api
 
-
 import (
 	"context"
 	"encoding/base64"

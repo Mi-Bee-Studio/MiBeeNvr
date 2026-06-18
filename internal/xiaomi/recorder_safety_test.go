@@ -364,10 +364,10 @@ func TestCloseCurrentSegmentWithSegment(t *testing.T) {
 	t.Helper()
 	store := newRecordingSegmentStore(t)
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "test-cam",
-		DID:      "test-device",
+		CameraID:   "test-cam",
+		DID:        "test-device",
 		SegmentDur: 10 * time.Minute,
-		DB:       &noopDB{},
+		DB:         &noopDB{},
 	}, store)
 
 	r.codec = model.FormatH264
@@ -618,8 +618,8 @@ func TestRecorderStartStopIdempotent(t *testing.T) {
 func TestRecorderCancelContextDuringRun(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:    "test-cam",
-		DID:         "dev1",
+		CameraID: "test-cam",
+		DID:      "dev1",
 	}, &noopSegmentStore{})
 
 	ctx, cancel := context.WithCancel(context.Background())

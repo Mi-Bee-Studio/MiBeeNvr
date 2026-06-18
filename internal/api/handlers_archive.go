@@ -139,7 +139,6 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		logger.Warn("failed to remove camera directory", "camera_id", cameraID, "error", err)
 	}
 
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

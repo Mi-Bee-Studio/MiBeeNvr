@@ -1,0 +1,111 @@
+# =============================================================================
+# MiBee NVR — Live Platform Relay Presets
+# =============================================================================
+# This file is OPTIONAL.  If it is absent, unreadable, or contains no valid
+# presets the application falls back to the 5 built-in defaults compiled into
+# the binary (see internal/relay/presets.go:builtinPresets).
+#
+# Each entry under "presets:" is a map key (the preset name) whose value must
+# match the Preset struct fields exactly.  Unknown fields are rejected.
+#
+# WARNING: Do NOT put stream keys, credentials, or any secrets in this file.
+# URL hints are public ingest endpoints only — append the stream key at relay
+# configuration time (or inject via environment variable in the URL string).
+#
+# Reference: Preset struct in internal/relay/presets.go
+# =============================================================================
+
+presets:
+
+  # ---------------------------------------------------------------------------
+  # Bilibili — bilibili live streaming
+  # Source: builtinPresets["bilibili"] in internal/relay/presets.go
+  # Ingest: rtmp://live-push.bilivideo.com/live-bvc/
+  # ---------------------------------------------------------------------------
+  bilibili:
+    name: bilibili
+    description: Bilibili live streaming
+    url_hint: rtmp://live-push.bilivideo.com/live-bvc/
+    gop_seconds: 2
+    video_bitrate_kbps: 4000
+    audio_bitrate_kbps: 128
+    resolution: 1920x1080
+    framerate: 30
+    profile: main
+    bframes: 2
+    audio_codec_required: aac
+
+  # ---------------------------------------------------------------------------
+  # Douyin — Douyin/TikTok live (vertical video)
+  # Source: builtinPresets["douyin"] in internal/relay/presets.go
+  # Ingest: rtmp://live-push.douyin.com/
+  # Note: Resolution is 1080x1920 (portrait) — NOT 1920x1080
+  # ---------------------------------------------------------------------------
+  douyin:
+    name: douyin
+    description: Douyin/TikTok live
+    url_hint: rtmp://live-push.douyin.com/
+    gop_seconds: 2
+    video_bitrate_kbps: 3500
+    audio_bitrate_kbps: 128
+    resolution: 1080x1920
+    framerate: 30
+    profile: main
+    bframes: 0
+    audio_codec_required: aac
+
+  # ---------------------------------------------------------------------------
+  # YouTube — YouTube Live
+  # Source: builtinPresets["youtube"] in internal/relay/presets.go
+  # Ingest: rtmp://a.youtube.com/live2/
+  # ---------------------------------------------------------------------------
+  youtube:
+    name: youtube
+    description: YouTube Live
+    url_hint: rtmp://a.youtube.com/live2/
+    gop_seconds: 2
+    video_bitrate_kbps: 4500
+    audio_bitrate_kbps: 128
+    resolution: 1920x1080
+    framerate: 30
+    profile: high
+    bframes: 2
+    audio_codec_required: aac
+
+  # ---------------------------------------------------------------------------
+  # Kuaishou — Kuaishou live
+  # Source: builtinPresets["kuaishou"] in internal/relay/presets.go
+  # Ingest: rtmp://txyun-push.voip.yximgs.com/gifshow/
+  # ---------------------------------------------------------------------------
+  kuaishou:
+    name: kuaishou
+    description: Kuaishou live
+    url_hint: rtmp://txyun-push.voip.yximgs.com/gifshow/
+    gop_seconds: 2
+    video_bitrate_kbps: 4000
+    audio_bitrate_kbps: 128
+    resolution: 1920x1080
+    framerate: 30
+    profile: main
+    bframes: 2
+    audio_codec_required: aac
+
+  # ---------------------------------------------------------------------------
+  # Generic — generic RTMP target (fallback for unknown/unnamed platforms)
+  # Source: builtinPresets["generic"] in internal/relay/presets.go
+  # Note: audio_codec_required "any" accepts both AAC and G.711.
+  #       bframes=0 means no B-frames (lowest latency).
+  #       url_hint is intentionally empty — user must provide the URL.
+  # ---------------------------------------------------------------------------
+  generic:
+    name: generic
+    description: Generic RTMP target
+    url_hint: ""
+    gop_seconds: 2
+    video_bitrate_kbps: 3000
+    audio_bitrate_kbps: 128
+    resolution: 1920x1080
+    framerate: 30
+    profile: main
+    bframes: 0
+    audio_codec_required: any

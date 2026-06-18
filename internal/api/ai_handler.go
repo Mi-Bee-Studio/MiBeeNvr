@@ -108,8 +108,8 @@ type zoneRequestBody struct {
 }
 
 type zoneBodyZone struct {
-	Name   string        `json:"name"`
-	Points [][2]float64  `json:"points"`
+	Name   string       `json:"name"`
+	Points [][2]float64 `json:"points"`
 }
 
 // handleAIZones handles GET /api/ai/zones.

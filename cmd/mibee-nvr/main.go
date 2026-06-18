@@ -20,6 +20,7 @@ import (
 	_ "net/http/pprof"
 	_ "time/tzdata" // embed timezone database for minimal containers (scratch/alpine)
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
@@ -27,27 +28,26 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	ui "github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
 var (
@@ -88,7 +88,7 @@ func autoInitConfig(configPath string) *config.Config {
 			FrameSkipRate:       10,
 			EnabledCameras:      []string{},
 		},
-}
+	}
 	// Apply defaults so all fields (HLS, etc.) are populated before saving
 	cfg.ApplyDefaults()
 
@@ -341,21 +341,21 @@ func cmdEncryptConfig() {
 //
 // Initialization order (dependency chain):
 //
-//	1. Config — loaded/validated before App creation
-//	2. Storage (DB) — SQLite, schema migrations
-//	3. Metrics — Prometheus registry
-//	4. Storage Manager — file operations, temp cleanup, orphan reconciliation
-//	5. Auth middleware — bcrypt, auto-hash persistence
-//	6. Merge manager — depends on DB, Storage, Config
-//	7. Camera manager — depends on Config, Storage, DB, Metrics, Merge
-//	8. HLS manager — depends on Config, Metrics
-//	9. API handler — depends on DB, Storage, Auth, Config, Camera, HLS, Merge
-//	10. WebDAV server — depends on Storage, Auth, DB, Config
-//	11. Upload handler — depends on Storage, DB
-//	12. Cleanup manager — depends on DB, Storage, Config, Metrics
-//	13. MQTT client — depends on Config
-//	14. FTP server — depends on Config, Storage, DB
-//	15. HTTP server — depends on Router (which depends on all above)
+//  1. Config — loaded/validated before App creation
+//  2. Storage (DB) — SQLite, schema migrations
+//  3. Metrics — Prometheus registry
+//  4. Storage Manager — file operations, temp cleanup, orphan reconciliation
+//  5. Auth middleware — bcrypt, auto-hash persistence
+//  6. Merge manager — depends on DB, Storage, Config
+//  7. Camera manager — depends on Config, Storage, DB, Metrics, Merge
+//  8. HLS manager — depends on Config, Metrics
+//  9. API handler — depends on DB, Storage, Auth, Config, Camera, HLS, Merge
+//  10. WebDAV server — depends on Storage, Auth, DB, Config
+//  11. Upload handler — depends on Storage, DB
+//  12. Cleanup manager — depends on DB, Storage, Config, Metrics
+//  13. MQTT client — depends on Config
+//  14. FTP server — depends on Config, Storage, DB
+//  15. HTTP server — depends on Router (which depends on all above)
 type App struct {
 	cfg        *config.Config
 	configPath string
@@ -367,12 +367,12 @@ type App struct {
 	authMW  func(http.Handler) http.Handler
 
 	// Managers
-	mergeMgr   *merge.MergeManager
-	camMgr     *camera.CameraManager
-	hlsMgr     *hls.Manager
-	cleanupMgr *cleanup.CleanupManager
-	healthMgr  *health.Manager
-	mergeScheduler *timelapse.MergeScheduler
+	mergeMgr        *merge.MergeManager
+	camMgr          *camera.CameraManager
+	hlsMgr          *hls.Manager
+	cleanupMgr      *cleanup.CleanupManager
+	healthMgr       *health.Manager
+	mergeScheduler  *timelapse.MergeScheduler
 	rollingMergeMgr *timelapse.RollingMergeManager
 
 	// Optional network services (nil when disabled)
@@ -665,6 +665,33 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	a.relayMgr = relay.NewManager(a.camMgr.GetHub, a.camMgr.GetSPS)
 	a.camMgr.SetRelayManager(a.relayMgr)
 
+	// Wire transcoding dependencies for relay targets (H.265→H.264 transcode).
+	// These must be set before Start so targets can resolve presets and hardware caps.
+	relayFFmpegPath := cfg.Transcoding.FFmpegPath
+	relayHwCap := transcoding.ProbeHardwareCapabilities(relayFFmpegPath)
+	slog.Info("relay: hardware capabilities",
+		"arch", relayHwCap.Arch,
+		"h264_encoder", relayHwCap.H264EncoderType,
+		"ffmpeg_available", relayHwCap.FFmpegAvailable,
+	)
+
+	// Warn about software-only encoding on ARM (H.265→H.264 transcode will be slow).
+	if (relayHwCap.Arch == "arm" || relayHwCap.Arch == "arm64") &&
+		relayHwCap.H264EncoderType == transcoding.EncoderSoftware {
+		slog.Warn("relay: ARM architecture with software-only H.264 encoder — H.265→H.264 transcode will be very slow",
+			"arch", relayHwCap.Arch)
+	}
+	a.relayMgr.SetFFmpegPath(relayFFmpegPath)
+	a.relayMgr.SetHardwareCap(relayHwCap)
+
+	// Load optional relay preset overrides from deploy/relay-presets.yaml.
+	// Falls back to built-in defaults on any error (missing file, invalid YAML).
+	relayPresets := relay.NewPresetRegistry()
+	if err := relayPresets.Load("deploy/relay-presets.yaml"); err != nil {
+		slog.Warn("relay: cannot load preset overrides, using built-in defaults", "error", err)
+	}
+	a.relayMgr.SetPresetRegistry(relayPresets)
+
 	// Step 7.7: RTMP server (optional)
 	if cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled {
 		a.rtmpServer = rtmp.NewServer(
@@ -836,6 +863,7 @@ func (a *App) buildRouter() http.Handler {
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), a.eventBus)
 	ah := api.NewAIHandler(aiMgr, a.cfg, a.configPath)
 	handler.SetAIHandler(ah)
+	handler.SetRelayManager(a.relayMgr)
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: a.hlsMgr})
@@ -907,7 +935,6 @@ func (a *App) buildRouter() http.Handler {
 		}
 	}
 
-
 	// Prometheus metrics — independent auth when configured, public otherwise
 	if cfg.MetricsAuth.IsConfigured() {
 		metricsAuthMW, _ := authmw.NewAuthMiddleware(authmw.AuthProvider{
@@ -938,18 +965,18 @@ func (a *App) buildRouter() http.Handler {
 		slog.Error("static fs", "error", err)
 		os.Exit(1)
 	}
-fileServer := http.FileServer(http.FS(staticContent))
-// Static files served without auth — SPA handles login flow client-side.
-// All sensitive data is protected via API endpoints in handler.Routes().
-// Cache: index.html must not be cached (always fresh after deploy).
-// Assets have content-hash filenames — safe to cache long-term.
-r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if path == "/" || path == "/index.html" {
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	}
-	fileServer.ServeHTTP(w, r)
-}))
+	fileServer := http.FileServer(http.FS(staticContent))
+	// Static files served without auth — SPA handles login flow client-side.
+	// All sensitive data is protected via API endpoints in handler.Routes().
+	// Cache: index.html must not be cached (always fresh after deploy).
+	// Assets have content-hash filenames — safe to cache long-term.
+	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" || path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 
 	return r
 }
@@ -1059,19 +1086,18 @@ func (a *App) Start() error {
 	return a.Stop()
 }
 
-
 // Stop gracefully shuts down all components in reverse dependency order
 // with a 30-second timeout. Shutdown order:
 //
-	//	1. HTTP server — stop accepting new requests
-//	2. FTP server — close listener
-//	3. MQTT client — disconnect from broker
-//	4. WebDAV — handled via HTTP server shutdown
-//	5. Cleanup manager — stopped via context cancellation
-//	6. Merge manager — stopped via context cancellation
-//	7. HLS manager — stop all active streams
-//	8. Camera manager — stop all recorders
-//	9. Storage (DB) — close connection
+//  1. HTTP server — stop accepting new requests
+//  2. FTP server — close listener
+//  3. MQTT client — disconnect from broker
+//  4. WebDAV — handled via HTTP server shutdown
+//  5. Cleanup manager — stopped via context cancellation
+//  6. Merge manager — stopped via context cancellation
+//  7. HLS manager — stop all active streams
+//  8. Camera manager — stop all recorders
+//  9. Storage (DB) — close connection
 func (a *App) Stop() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -1102,40 +1128,40 @@ func (a *App) Stop() error {
 		if a.ftpServer != nil {
 			log.Info("stopping FTP server")
 			a.ftpServer.Close()
-	}
+		}
 
-	// 3. WebRTC manager
-	if a.webrtcMgr != nil {
-		log.Info("stopping WebRTC manager")
-		a.webrtcMgr.StopAll()
-	}
+		// 3. WebRTC manager
+		if a.webrtcMgr != nil {
+			log.Info("stopping WebRTC manager")
+			a.webrtcMgr.StopAll()
+		}
 
-	// 4. WebSocket stream manager
-	if a.wsMgr != nil {
-		log.Info("stopping WebSocket stream manager")
-		a.wsMgr.StopAll()
-	}
+		// 4. WebSocket stream manager
+		if a.wsMgr != nil {
+			log.Info("stopping WebSocket stream manager")
+			a.wsMgr.StopAll()
+		}
 
-	// 4. RTMP server
-	if a.rtmpServer != nil {
-		log.Info("stopping RTMP server")
-		_ = a.rtmpServer.Stop()
-	}
+		// 4. RTMP server
+		if a.rtmpServer != nil {
+			log.Info("stopping RTMP server")
+			_ = a.rtmpServer.Stop()
+		}
 
-	// 5. SRT listener
-	if a.srtListener != nil {
-		log.Info("stopping SRT listener")
-		_ = a.srtListener.Stop()
-	}
+		// 5. SRT listener
+		if a.srtListener != nil {
+			log.Info("stopping SRT listener")
+			_ = a.srtListener.Stop()
+		}
 
-	// 5b. Relay (push-out) manager — stop before camera manager so targets
-	// unsubscribe cleanly while their source hubs still exist.
-	if a.relayMgr != nil {
-		log.Info("stopping relay manager")
-		a.relayMgr.Stop()
-	}
+		// 5b. Relay (push-out) manager — stop before camera manager so targets
+		// unsubscribe cleanly while their source hubs still exist.
+		if a.relayMgr != nil {
+			log.Info("stopping relay manager")
+			a.relayMgr.Stop()
+		}
 
-	// 6. MQTT client
+		// 6. MQTT client
 		if a.mqttClient != nil {
 			log.Info("stopping MQTT client")
 			if err := a.mqttClient.Stop(); err != nil {
@@ -1173,7 +1199,6 @@ func (a *App) Stop() error {
 			log.Info("stopping transcode manager")
 			a.transcodeMgr.Stop()
 		}
-
 
 		log.Info("stopping camera manager")
 		if err := a.camMgr.Stop(); err != nil {
@@ -1213,8 +1238,8 @@ func main() {
 		case "hash-password":
 			cmdHashPassword()
 		case "encrypt-config":
-	case "download-model":
-		cmdDownloadModel()
+		case "download-model":
+			cmdDownloadModel()
 			cmdEncryptConfig()
 		}
 	}

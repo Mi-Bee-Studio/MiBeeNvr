@@ -19,8 +19,8 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
 var (
@@ -343,10 +343,10 @@ func TestH264Recorder_Reconnect(t *testing.T) {
 
 	mgr := newTestManager(t)
 	rec := NewH264Recorder(H264Config{
-		CameraID:    "cam-reconn",
-		RTSPURL:     rtspURL,
-		SegmentDur:  5 * time.Minute,
-		RingBufCap:  100,
+		CameraID:   "cam-reconn",
+		RTSPURL:    rtspURL,
+		SegmentDur: 5 * time.Minute,
+		RingBufCap: 100,
 	}, mgr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -508,9 +508,9 @@ func (h *reconnHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (
 // testRTSPServerWithAudio wraps testRTSPServer with an additional AAC audio media.
 type testRTSPServerWithAudio struct {
 	*testRTSPServer
-	audioMedia  *description.Media
-	audioForma  *format.MPEG4Audio
-	audioEnc    *rtpmpeg4audio.Encoder
+	audioMedia *description.Media
+	audioForma *format.MPEG4Audio
+	audioEnc   *rtpmpeg4audio.Encoder
 }
 
 func newTestRTSPServerWithAudio(t *testing.T) *testRTSPServerWithAudio {

@@ -16,9 +16,9 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
@@ -30,7 +30,7 @@ type MJPEGConfig struct {
 	SegmentDur     time.Duration
 	SampleInterval int // if >1, only save every Nth frame
 	DB             RecordingDB
-	EventBus             *event.EventBus
+	EventBus       *event.EventBus
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -50,10 +50,10 @@ type MJPEGRecorder struct {
 	frameCount   int
 	frameSeq     int64 // monotonic counter for frame sampling
 
-	frameCh chan []byte
-	dropped atomic.Int64
-	Hub     *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
-	lastHealthLogAt time.Time // throttled log for storage health failures
+	frameCh         chan []byte
+	dropped         atomic.Int64
+	Hub             *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time        // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -79,7 +79,6 @@ func (r *MJPEGRecorder) recordSegmentCreated() {
 		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "mjpeg").Inc()
 	}
 }
-
 
 // recordError increments the camera errors counter if metrics is available.
 func (r *MJPEGRecorder) recordError(errorType string) {

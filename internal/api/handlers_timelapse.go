@@ -49,11 +49,11 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	// Return timelapse config (nil means disabled/no config)
 	if tl == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"enabled":         false,
-			"interval":        "30s",
-			"frame_source":    "auto",
-			"paused":          false,
-			"delete_original": false,
+			"enabled":          false,
+			"interval":         "30s",
+			"frame_source":     "auto",
+			"paused":           false,
+			"delete_original":  false,
 			"merge_output_fps": 30,
 			"merge_mode":       "auto",
 			"daily_merge":      true,
@@ -1050,7 +1050,7 @@ func (h *Handler) handleRetryTimelapseMerge(w http.ResponseWriter, r *http.Reque
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":       "merge_initiated",
-		"recording_id":  recordingID,
+		"recording_id": recordingID,
 		"camera_id":    rec.CameraID,
 		"frame_dir":    frameDir,
 	})

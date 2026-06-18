@@ -30,7 +30,6 @@ func TestCameraAlreadyRunningError(t *testing.T) {
 	}
 }
 
-
 func TestRecordingNotFoundError(t *testing.T) {
 	t.Helper()
 	t.Parallel()

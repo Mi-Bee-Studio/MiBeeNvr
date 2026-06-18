@@ -192,6 +192,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Troubleshooting](docs/en/troubleshooting.md) | Common issues and solutions |
 | [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
 | [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
+| [Relay Guide](docs/en/relay-guide.md) | RTMP live platform relay configuration and troubleshooting |
+| [转发指南](docs/zh/relay-guide.md) | RTMP 直播平台转发配置和故障排除 |
 
 ## Build & Deploy
 

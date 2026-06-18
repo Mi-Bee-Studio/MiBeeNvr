@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
 var timelapseLogger = slog.Default().With("component", "timelapse-recorder")
@@ -28,29 +28,29 @@ var timelapseLogger = slog.Default().With("component", "timelapse-recorder")
 type TimelapseRecorderConfig struct {
 	CameraID   string
 	Interval   time.Duration // frame capture interval (e.g., 5s)
-	SegmentDur time.Duration  // segment duration
-	URL        string         // HTTP MJPEG stream URL
-	Username   string         // for basic auth (optional)
-	Password   string         // for basic auth (optional)
-	DataDir    string         // base data directory
+	SegmentDur time.Duration // segment duration
+	URL        string        // HTTP MJPEG stream URL
+	Username   string        // for basic auth (optional)
+	Password   string        // for basic auth (optional)
+	DataDir    string        // base data directory
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
-	MergeMgr *timelapse.RollingMergeManager // optional rolling merge manager
+	MergeMgr   *timelapse.RollingMergeManager // optional rolling merge manager
 }
 
 // TimelapseRecorder captures JPEG frames at a configurable interval from an
 // HTTP MJPEG stream and stores them as zero-padded JPEG sequences in
 // timestamped segment directories. Implements model.Recorder.
 type TimelapseRecorder struct {
-	cfg     TimelapseRecorderConfig
-	store   SegmentStore
-	metrics *metrics.Metrics
+	cfg      TimelapseRecorderConfig
+	store    SegmentStore
+	metrics  *metrics.Metrics
 	mergeMgr *timelapse.RollingMergeManager
-	client  *http.Client
+	client   *http.Client
 
-	mu     sync.Mutex
-	status model.RecorderStatus
-	cancel context.CancelFunc
+	mu           sync.Mutex
+	status       model.RecorderStatus
+	cancel       context.CancelFunc
 	cancelStream context.CancelFunc
 	done         chan struct{}
 	watchdogDone chan struct{}
@@ -63,7 +63,7 @@ type TimelapseRecorder struct {
 	segStart     time.Time
 	frameCount   int
 
-	Hub *model.StreamHub
+	Hub             *model.StreamHub
 	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
@@ -120,9 +120,9 @@ func NewTimelapseRecorder(cfg TimelapseRecorderConfig, store SegmentStore, opts 
 		cfg.SegmentDur = DefaultSegmentDur
 	}
 	return &TimelapseRecorder{
-		cfg:     cfg,
-		store:   store,
-		metrics: m,
+		cfg:      cfg,
+		store:    store,
+		metrics:  m,
 		mergeMgr: cfg.MergeMgr,
 		client: &http.Client{
 			Timeout: 0, // no timeout — stream is long-lived

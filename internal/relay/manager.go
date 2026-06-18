@@ -3,10 +3,12 @@ package relay
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
 var managerLogger = slog.Default().With("component", "relay-manager")
@@ -20,17 +22,29 @@ type CameraHubProvider func(cameraID string) *model.StreamHub
 // zero-arg SPSProvider that PushTarget expects.
 type SPSCameraProvider func(cameraID string) (sps, pps []byte, isH264 bool)
 
+// CodecInfoProvider returns the source camera's current codec parameters
+// (video SPS/PPS/VPS + audio codec info). The Manager adapts this per-target
+// into the zero-arg codecInfoProvider that PushTarget expects.
+// Backed by CameraManager.GetCodecInfo in production.
+type CodecInfoProvider func(cameraID string) model.CodecInfo
+
 // Manager owns the lifecycle of all push-out targets across all cameras.
 // Each (cameraID, targetID) pair maps to at most one running *PushTarget.
 // Manager is nil-safe at the call sites: when no relays are configured, main.go
 // passes a no-op manager so camera Add/Update/Remove don't need nil checks.
 type Manager struct {
-	hubProvider CameraHubProvider
-	spsProvider SPSCameraProvider
+	hubProvider       CameraHubProvider
+	spsProvider       SPSCameraProvider
+	codecInfoProvider CodecInfoProvider // optional, for audio-aware targets
 
 	mu      sync.Mutex
 	targets map[string]*runningTarget // key = cameraID + "/" + targetID
 	ctx     context.Context
+
+	// Transcode dependencies (optional, wired via setters).
+	presetRegistry *PresetRegistry
+	hardwareCap    *transcoding.HardwareCapabilities
+	ffmpegPath     string
 }
 
 type runningTarget struct {
@@ -46,6 +60,38 @@ func NewManager(hubProvider CameraHubProvider, spsProvider SPSCameraProvider) *M
 		spsProvider: spsProvider,
 		targets:     make(map[string]*runningTarget),
 	}
+}
+
+// SetCodecInfoProvider wires an optional CodecInfoProvider for use by
+// audio-aware push targets. Should be set before Start.
+func (m *Manager) SetCodecInfoProvider(p CodecInfoProvider) {
+	m.mu.Lock()
+	m.codecInfoProvider = p
+	m.mu.Unlock()
+}
+
+// SetPresetRegistry wires an optional PresetRegistry for transcode resolution.
+// Should be set before Start (targets created after this call will use it).
+func (m *Manager) SetPresetRegistry(r *PresetRegistry) {
+	m.mu.Lock()
+	m.presetRegistry = r
+	m.mu.Unlock()
+}
+
+// SetHardwareCap wires HardwareCapabilities for transcoder encoder selection.
+// Should be set before Start.
+func (m *Manager) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
+	m.mu.Lock()
+	m.hardwareCap = cap
+	m.mu.Unlock()
+}
+
+// SetFFmpegPath sets an explicit FFmpeg binary path for the transcoder.
+// If empty, the PushTarget will probe via exec.LookPath at runtime.
+func (m *Manager) SetFFmpegPath(path string) {
+	m.mu.Lock()
+	m.ffmpegPath = path
+	m.mu.Unlock()
 }
 
 // Start sets the root context used for all target goroutines.
@@ -88,7 +134,22 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 	// Adapt config types to the engine's local type.
 	local := make([]PushTargetConfig, len(cfgs))
 	for i, c := range cfgs {
-		local[i] = PushTargetConfig{ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled}
+		var vpo *VideoPresetOverrides
+		if c.VideoPresetOverride != nil {
+			vpo = &VideoPresetOverrides{
+				Resolution:       c.VideoPresetOverride.Resolution,
+				Framerate:        c.VideoPresetOverride.Framerate,
+				VideoBitrateKbps: c.VideoPresetOverride.VideoBitrateKbps,
+				GopSeconds:       c.VideoPresetOverride.GopSeconds,
+				Profile:          c.VideoPresetOverride.Profile,
+				Bframes:          c.VideoPresetOverride.Bframes,
+			}
+		}
+		local[i] = PushTargetConfig{
+			ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled,
+			Platform: c.Platform, TranscodePolicy: c.TranscodePolicy,
+			VideoPresetOverride: vpo,
+		}
 	}
 
 	// Index desired targets by their ID.
@@ -129,6 +190,18 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 		hub := m.hubProvider(cameraID)
 		sps := func() ([]byte, []byte, bool) { return m.spsProvider(cameraID) }
 		t := NewPushTarget(cameraID, c, hub, sps)
+		if m.codecInfoProvider != nil {
+			t.SetCodecInfoProvider(func() model.CodecInfo { return m.codecInfoProvider(cameraID) })
+		}
+		if m.presetRegistry != nil {
+			t.SetPresetRegistry(m.presetRegistry)
+		}
+		if m.hardwareCap != nil {
+			t.SetHardwareCap(m.hardwareCap)
+		}
+		if m.ffmpegPath != "" {
+			t.SetFFmpegPath(m.ffmpegPath)
+		}
 		ctx, cancel := context.WithCancel(m.ctx)
 		t.done = make(chan struct{})
 		rt := &runningTarget{target: t, cancel: cancel}
@@ -187,11 +260,53 @@ func (m *Manager) RemoveCamera(cameraID string) {
 	m.mu.Unlock()
 }
 
+// ListAllPresets returns all registered presets sorted by name.
+// Returns nil when no preset registry is configured.
+func (m *Manager) ListAllPresets() []Preset {
+	if m == nil || m.presetRegistry == nil {
+		return nil
+	}
+	names := m.presetRegistry.List()
+	sort.Strings(names)
+	presets := make([]Preset, 0, len(names))
+	for _, name := range names {
+		if p, ok := m.presetRegistry.Get(name); ok {
+			presets = append(presets, p)
+		}
+	}
+	return presets
+}
+
+// GetPreset returns a single preset by name.
+// Returns false when the name is not found or no registry is configured.
+func (m *Manager) GetPreset(name string) (Preset, bool) {
+	if m == nil || m.presetRegistry == nil {
+		return Preset{}, false
+	}
+	return m.presetRegistry.Get(name)
+}
+
 // targetConfigEqual reports whether two configs are equivalent (a change in any
 // field warrants a reconnect).
 func targetConfigEqual(a, b PushTargetConfig) bool {
-	return a.ID == b.ID && a.Name == b.Name && a.Protocol == b.Protocol &&
-		a.URL == b.URL && a.Enabled == b.Enabled
+	if a.ID != b.ID || a.Name != b.Name || a.Protocol != b.Protocol ||
+		a.URL != b.URL || a.Enabled != b.Enabled ||
+		a.Platform != b.Platform || a.TranscodePolicy != b.TranscodePolicy {
+		return false
+	}
+	return videoPresetOverrideEqual(a.VideoPresetOverride, b.VideoPresetOverride)
+}
+
+func videoPresetOverrideEqual(a, b *VideoPresetOverrides) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Resolution == b.Resolution && a.Framerate == b.Framerate &&
+		a.VideoBitrateKbps == b.VideoBitrateKbps && a.GopSeconds == b.GopSeconds &&
+		a.Profile == b.Profile && a.Bframes == b.Bframes
 }
 
 func ternary(cond bool, a, b string) string {

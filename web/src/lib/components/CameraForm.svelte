@@ -10,6 +10,7 @@
         testConnection,
         getDeviceCapabilities,
         getPushStatus,
+        apiRequest,
     } from '$lib/api';
     import type {
         Camera,
@@ -22,7 +23,8 @@
         TestConnectionResult,
         DeviceCapabilitiesInfo,
         PushTargetConfig,
-        PushTargetStatus,
+        PushTargetStatus as PushTargetStatusType,
+        VideoPresetOverrides,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
@@ -35,6 +37,7 @@
     import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
     import DeviceManagement from '$lib/components/DeviceManagement.svelte';
     import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
+    import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   interface Props {
     editingCamera: Camera | null;
     protocols: ProtocolInfo[];
@@ -86,8 +89,11 @@
   // Push-out relay targets
   let formPushTargets = $state<PushTargetConfig[]>([]);
   // Push-out live status (fetched when editing)
-  let pushStatus = $state<PushTargetStatus[]>([]);
+  let pushStatus = $state<PushTargetStatusType[]>([]);
   let pushStatusTimer: ReturnType<typeof setInterval> | null = null;
+  // Relay presets for platform selector (fetched on mount)
+  let relayPresets = $state<{ name: string; description?: string }[]>([]);
+  let relayPresetsLoading = $state(true);
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -138,6 +144,24 @@ let validationErrors = $state<Record<string, string>>({});
       mergeConfigLoading = false;
       deviceCaps = null;
     }
+  });
+
+  // Fetch relay presets on mount for platform selector
+  $effect(() => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const data: any = await apiRequest('/relay-presets', { signal: ctrl.signal });
+        relayPresets = Array.isArray(data) ? data : [];
+      } catch (e: any) {
+        if (ctrl.signal.aborted) return;
+        console.warn('Failed to load relay presets:', e);
+        relayPresets = [];
+      } finally {
+        relayPresetsLoading = false;
+      }
+    })();
+    return () => ctrl.abort();
   });
 
   function resetFormFields() {
@@ -233,7 +257,7 @@ let validationErrors = $state<Record<string, string>>({});
     const id = 'tgt-' + Math.random().toString(36).slice(2, 8);
     formPushTargets = [
       ...formPushTargets,
-      { id, name: '', protocol: 'rtmp', url: '', enabled: true },
+      { id, name: '', protocol: 'rtmp', url: '', enabled: true, platform: '', transcode_policy: 'auto' },
     ];
   }
   function removePushTarget(id: string) {
@@ -242,8 +266,61 @@ let validationErrors = $state<Record<string, string>>({});
   function updatePushTarget(id: string, patch: Partial<PushTargetConfig>) {
     formPushTargets = formPushTargets.map((t) => (t.id === id ? { ...t, ...patch } : t));
   }
-  function pushStatusFor(id: string): PushTargetStatus | undefined {
+  function updatePushTargetOverride(id: string, patch: Partial<VideoPresetOverrides>) {
+    formPushTargets = formPushTargets.map((t) => {
+      if (t.id !== id) return t;
+      const current = t.video_preset_override || {};
+      return { ...t, video_preset_override: { ...current, ...patch } };
+    });
+  }
+  function resetPushTargetOverride(id: string) {
+    formPushTargets = formPushTargets.map((t) => {
+      if (t.id !== id) return t;
+      const { video_preset_override: _, ...rest } = t;
+      return rest;
+    });
+  }
+  function pushStatusFor(id: string): PushTargetStatusType | undefined {
     return pushStatus.find((s) => s.id === id);
+  }
+
+  // Stop push target state
+  let showStopConfirm = $state(false);
+  let stopTargetId = $state<string | null>(null);
+  let stoppingTargets = $state<Set<string>>(new Set());
+
+  function confirmStopTarget(id: string) {
+    stopTargetId = id;
+    showStopConfirm = true;
+  }
+
+  async function handleStopTarget() {
+    if (!stopTargetId || !editingCamera) return;
+    const id = stopTargetId;
+    stoppingTargets = new Set([...stoppingTargets, id]);
+    showStopConfirm = false;
+    stopTargetId = null;
+    // Disable the target in form state
+    formPushTargets = formPushTargets.map((t) =>
+      t.id === id ? { ...t, enabled: false } : t
+    );
+    try {
+      await updateCamera(editingCamera.id, {
+        push_targets: formPushTargets,
+      });
+      showToast(t('cameras.pushOutTargetStopped'), 'success');
+    } catch (e) {
+      console.warn('Failed to stop push target:', e);
+      showToast(t('cameras.failedUpdate'), 'error');
+      // Revert
+      formPushTargets = formPushTargets.map((t) =>
+        t.id === id ? { ...t, enabled: true } : t
+      );
+    } finally {
+      const next = new Set(stoppingTargets);
+      next.delete(id);
+      stoppingTargets = next;
+    }
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -624,31 +701,142 @@ async function performCameraSave() {
           {:else}
             {#each formPushTargets as tgt (tgt.id)}
               {@const st = pushStatusFor(tgt.id)}
-              <div class="flex flex-wrap items-center gap-2 p-2 rounded-md th-bg-muted">
-                <input type="text" class="input flex-1 min-w-[100px]" placeholder={t('cameras.pushOutName')}
-                  value={tgt.name} oninput={(e) => updatePushTarget(tgt.id, { name: (e.target as HTMLInputElement).value })} />
-                <select class="input w-auto" value={tgt.protocol}
-                  onchange={(e) => updatePushTarget(tgt.id, { protocol: (e.target as HTMLSelectElement).value as 'rtmp' | 'rtsp' })}>
-                  <option value="rtmp">RTMP</option>
-                  <option value="rtsp">RTSP</option>
-                </select>
-                <input type="text" class="input flex-[2] min-w-[160px]" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/key'}
-                  value={tgt.url} oninput={(e) => updatePushTarget(tgt.id, { url: (e.target as HTMLInputElement).value })} />
-                <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap">
-                  <input type="checkbox" class="checkbox" checked={tgt.enabled}
-                    onchange={(e) => updatePushTarget(tgt.id, { enabled: (e.target as HTMLInputElement).checked })} />
-                  {t('cameras.pushOutEnabled')}
-                </label>
-                {#if st}
-                  <span class="text-xs px-2 py-0.5 rounded-full {st.status === 'streaming' ? 'th-bg-success-light th-color-success' : st.status === 'error' ? 'th-bg-danger-light th-color-danger' : 'th-bg-muted th-text-secondary'}"
-                    title={st.error || ''}>
-                    {st.status === 'streaming' ? `● ${Math.round(st.kbps)} kbps` : t('cameras.pushStatus.' + st.status)}
-                  </span>
-                {/if}
-                <button type="button" class="btn-ghost p-1 th-color-danger" title={t('cameras.pushOutRemove')}
-                  onclick={() => removePushTarget(tgt.id)}>
-                  <Trash2 size={14} />
-                </button>
+              <div class="p-2 rounded-md th-bg-muted space-y-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <input type="text" class="input flex-1 min-w-[100px]" placeholder={t('cameras.pushOutName')}
+                    value={tgt.name} oninput={(e) => updatePushTarget(tgt.id, { name: (e.target as HTMLInputElement).value })} />
+                  <select class="input w-auto" value={tgt.protocol}
+                    onchange={(e) => updatePushTarget(tgt.id, { protocol: (e.target as HTMLSelectElement).value as 'rtmp' | 'rtsp' })}>
+                    <option value="rtmp">RTMP</option>
+                    <option value="rtsp">RTSP</option>
+                  </select>
+
+                  <!-- Platform selector -->
+                  <select class="input w-auto" value={tgt.platform || ''}
+                    onchange={(e) => updatePushTarget(tgt.id, { platform: (e.target as HTMLSelectElement).value })}>
+                    {#if relayPresetsLoading}
+                      <option value="">Loading...</option>
+                    {:else}
+                      <option value="">Generic</option>
+                      {#each relayPresets as preset (preset.name)}
+                        <option value={preset.name}>{preset.name}{preset.description ? ` — ${preset.description}` : ''}</option>
+                      {/each}
+                    {/if}
+                  </select>
+
+                  <!-- Transcode policy (hidden for H.264 source) -->
+                  {#if formEncoding === 'h264'}
+                    <span class="text-xs th-text-muted whitespace-nowrap">n/a — H.264 source</span>
+                  {:else}
+                    <select class="input w-auto" value={tgt.transcode_policy || 'auto'}
+                      onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' })}>
+                      <option value="auto">Auto-detect hardware</option>
+                      <option value="force_sw">Force software encode</option>
+                      <option value="off">Reject H.265 sources</option>
+                    </select>
+                  {/if}
+
+                  <input type="text" class="input flex-[2] min-w-[160px]" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/key'}
+                    value={tgt.url} oninput={(e) => updatePushTarget(tgt.id, { url: (e.target as HTMLInputElement).value })} />
+                  <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap">
+                    <input type="checkbox" class="checkbox" checked={tgt.enabled}
+                      onchange={(e) => updatePushTarget(tgt.id, { enabled: (e.target as HTMLInputElement).checked })} />
+                    {t('cameras.pushOutEnabled')}
+                  </label>
+                  {#if st}
+                    <PushTargetStatus status={st} />
+                  {/if}
+                  <button type="button" class="btn-ghost p-1 th-color-danger" title={t('cameras.pushOutRemove')}
+                    onclick={() => removePushTarget(tgt.id)}>
+                    <Trash2 size={14} />
+                  </button>
+                  {#if st && tgt.enabled && st.status !== 'idle'}
+                    <button
+                      type="button"
+                      class="btn-ghost p-1 th-color-danger text-xs flex items-center gap-1"
+                      disabled={stoppingTargets.has(tgt.id)}
+                      onclick={() => confirmStopTarget(tgt.id)}
+                    >
+                      {#if stoppingTargets.has(tgt.id)}
+                        <span class="spinner w-3 h-3"></span>
+                        {t('cameras.pushOutStopping')}
+                      {:else}
+                        {t('cameras.pushOutStop')}
+                      {/if}
+                    </button>
+                  {/if}
+                </div>
+
+                <!-- Preset override panel (collapsed) -->
+                <details class="text-xs">
+                  <summary class="cursor-pointer th-text-secondary hover:th-text-primary transition-colors select-none">
+                    Preset Overrides
+                    {#if tgt.video_preset_override}
+                      <span class="ml-1 text-[var(--color-accent)]">(custom)</span>
+                    {/if}
+                  </summary>
+                  <div class="grid grid-cols-3 gap-x-3 gap-y-2 pt-2 pb-1">
+                    <div>
+                      <label for={tgt.id + '-resolution'} class="input-label">Resolution</label>
+                      <input id={tgt.id + '-resolution'} type="text" class="input w-full" placeholder="1920x1080"
+                        value={tgt.video_preset_override?.resolution || ''}
+                        oninput={(e) => updatePushTargetOverride(tgt.id, { resolution: (e.target as HTMLInputElement).value || undefined })} />
+                    </div>
+                    <div>
+                      <label for={tgt.id + '-framerate'} class="input-label">Framerate</label>
+                      <input id={tgt.id + '-framerate'} type="number" class="input w-full" placeholder="30" min="1" max="120"
+                        value={tgt.video_preset_override?.framerate ?? ''}
+                        oninput={(e) => {
+                          const v = parseInt((e.target as HTMLInputElement).value);
+                          updatePushTargetOverride(tgt.id, { framerate: isNaN(v) ? undefined : v });
+                        }} />
+                    </div>
+                    <div>
+                      <label for={tgt.id + '-bitrate'} class="input-label">Bitrate (kbps)</label>
+                      <input id={tgt.id + '-bitrate'} type="number" class="input w-full" placeholder="3000" min="100" max="50000"
+                        value={tgt.video_preset_override?.video_bitrate_kbps ?? ''}
+                        oninput={(e) => {
+                          const v = parseInt((e.target as HTMLInputElement).value);
+                          updatePushTargetOverride(tgt.id, { video_bitrate_kbps: isNaN(v) ? undefined : v });
+                        }} />
+                    </div>
+                    <div>
+                      <label for={tgt.id + '-gop'} class="input-label">GOP (s)</label>
+                      <input id={tgt.id + '-gop'} type="number" class="input w-full" placeholder="2" min="1" max="10"
+                        value={tgt.video_preset_override?.gop_seconds ?? ''}
+                        oninput={(e) => {
+                          const v = parseInt((e.target as HTMLInputElement).value);
+                          updatePushTargetOverride(tgt.id, { gop_seconds: isNaN(v) ? undefined : v });
+                        }} />
+                    </div>
+                    <div>
+                      <label for={tgt.id + '-profile'} class="input-label">Profile</label>
+                      <select id={tgt.id + '-profile'} class="input w-full" value={tgt.video_preset_override?.profile || ''}
+                        onchange={(e) => {
+                          const v = (e.target as HTMLSelectElement).value;
+                          updatePushTargetOverride(tgt.id, { profile: (v as 'baseline' | 'main' | 'high') || undefined });
+                        }}>
+                        <option value="">Preset default</option>
+                        <option value="baseline">baseline</option>
+                        <option value="main">main</option>
+                        <option value="high">high</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label for={tgt.id + '-bframes'} class="input-label">B-frames</label>
+                      <input id={tgt.id + '-bframes'} type="number" class="input w-full" placeholder="0" min="0" max="2"
+                        value={tgt.video_preset_override?.bframes ?? ''}
+                        oninput={(e) => {
+                          const v = parseInt((e.target as HTMLInputElement).value);
+                          updatePushTargetOverride(tgt.id, { bframes: isNaN(v) ? undefined : v });
+                        }} />
+                    </div>
+                  </div>
+                  <button type="button" class="btn-ghost text-xs th-text-muted mt-1"
+                    onclick={() => resetPushTargetOverride(tgt.id)}>
+                    Reset to preset defaults
+                  </button>
+                </details>
               </div>
             {/each}
           {/if}
@@ -922,6 +1110,19 @@ async function performCameraSave() {
       </details>
     </div>
   {/if}
+
+  <!-- Stop push target confirm dialog -->
+{#if showStopConfirm}
+  <ConfirmDialog
+    title={t('cameras.pushOutStopConfirm')}
+    message={t('cameras.pushOutStopConfirmDesc')}
+    variant="danger"
+    onconfirm={handleStopTarget}
+    oncancel={() => { showStopConfirm = false; stopTargetId = null; }}
+    confirmText={t('cameras.pushOutStop')}
+    loading={stoppingTargets.has(stopTargetId || '')}
+  />
+{/if}
 
   <div class="flex items-center gap-3 mt-6">
     <button onclick={handleSubmit} class="btn btn-primary" disabled={saving}>

@@ -16,10 +16,10 @@ func TestProtocolsEndpoint(t *testing.T) {
 	require.Equal(t, 200, rr.Code)
 	var resp struct {
 		Protocols []struct {
-			ID           string         `json:"id"`
-			Label        string         `json:"label"`
-			Encodings    []string       `json:"encodings"`
-			BuiltIn      bool           `json:"built_in"`
+			ID           string          `json:"id"`
+			Label        string          `json:"label"`
+			Encodings    []string        `json:"encodings"`
+			BuiltIn      bool            `json:"built_in"`
 			Capabilities map[string]bool `json:"capabilities"`
 		} `json:"protocols"`
 	}

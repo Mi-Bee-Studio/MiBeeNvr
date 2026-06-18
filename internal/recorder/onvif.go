@@ -24,17 +24,17 @@ var onvifRecLogger = slog.Default().With("component", "onvif-recorder")
 
 // ONVIFConfig holds configuration for the ONVIF recorder.
 type ONVIFConfig struct {
-	CameraID       string
-	ProfileToken   string
-	StreamEncoding string // "H264" or "H265". Empty = auto-detect via ONVIF profile or RTSP DESCRIBE.
-	Username       string // RTSP credentials (may differ from ONVIF credentials)
-	Password       string
-	SegmentDur     time.Duration
-	DB             RecordingDB
-	AudioEnabled   bool
+	CameraID             string
+	ProfileToken         string
+	StreamEncoding       string // "H264" or "H265". Empty = auto-detect via ONVIF profile or RTSP DESCRIBE.
+	Username             string // RTSP credentials (may differ from ONVIF credentials)
+	Password             string
+	SegmentDur           time.Duration
+	DB                   RecordingDB
+	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
-	ONVIFEndpoint string         // ONVIF device endpoint URL (for HTTP MJPEG probe base)
-	EventBus      *event.EventBus
+	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
+	EventBus             *event.EventBus
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -225,10 +225,10 @@ func (r *ONVIFRecorder) probeRTSPEncoding() string {
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
-		Scheme:      u.Scheme,
-		Host:        u.Host,
-		Protocol:    &tcp,
-		ReadTimeout: 10 * time.Second,
+		Scheme:       u.Scheme,
+		Host:         u.Host,
+		Protocol:     &tcp,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 	if err := client.Start(); err != nil {
@@ -351,14 +351,14 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	switch encoding {
 	case "H265":
 		cfg := H265Config{
-			CameraID:            r.cfg.CameraID,
-			RTSPURL:             rtspURL,
-			Username:            r.cfg.Username,
-			Password:            r.cfg.Password,
-			SegmentDur:          r.cfg.SegmentDur,
-			RingBufCap:          DefaultRingBufCap,
-			DB:                  r.cfg.DB,
-			AudioEnabled:        r.cfg.AudioEnabled,
+			CameraID:             r.cfg.CameraID,
+			RTSPURL:              rtspURL,
+			Username:             r.cfg.Username,
+			Password:             r.cfg.Password,
+			SegmentDur:           r.cfg.SegmentDur,
+			RingBufCap:           DefaultRingBufCap,
+			DB:                   r.cfg.DB,
+			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
@@ -410,14 +410,14 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		return r.newHTTPJPEGRecorder(guessURL)
 	default: // H264 or unknown
 		cfg := H264Config{
-			CameraID:            r.cfg.CameraID,
-			RTSPURL:             rtspURL,
-			Username:            r.cfg.Username,
-			Password:            r.cfg.Password,
-			SegmentDur:          r.cfg.SegmentDur,
-			RingBufCap:          DefaultRingBufCap,
-			DB:                  r.cfg.DB,
-			AudioEnabled:        r.cfg.AudioEnabled,
+			CameraID:             r.cfg.CameraID,
+			RTSPURL:              rtspURL,
+			Username:             r.cfg.Username,
+			Password:             r.cfg.Password,
+			SegmentDur:           r.cfg.SegmentDur,
+			RingBufCap:           DefaultRingBufCap,
+			DB:                   r.cfg.DB,
+			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)

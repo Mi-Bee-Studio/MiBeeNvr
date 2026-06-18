@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 	"sync/atomic"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -56,28 +56,28 @@ type CameraUpdate struct {
 }
 
 type CameraManager struct {
-	cfg              *config.Config
-	store            *storage.Manager
-	db               *storage.DB
-	configPath       string
-	recorders        map[string]model.Recorder // camera_id → Recorder
-	metrics          *metrics.Metrics
-	mergeMgr         *merge.MergeManager           // segment merge manager (nil = no merge)
-	timelapseMergeMgr *timelapse.RollingMergeManager // timelapse rolling merge (nil = no merge)
-	transcodeMgr     *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
-	healthMgr        *health.Manager               // health monitoring (nil when disabled)
-	scheduler        *timelapse.Scheduler           // timelapse schedule evaluator
-	scheduleMonitors map[string]context.CancelFunc  // camera_id -> cancel func for schedule monitor
+	cfg                *config.Config
+	store              *storage.Manager
+	db                 *storage.DB
+	configPath         string
+	recorders          map[string]model.Recorder // camera_id → Recorder
+	metrics            *metrics.Metrics
+	mergeMgr           *merge.MergeManager                     // segment merge manager (nil = no merge)
+	timelapseMergeMgr  *timelapse.RollingMergeManager          // timelapse rolling merge (nil = no merge)
+	transcodeMgr       *transcoding.TranscodeManager           // transcoding manager (nil = no transcoding)
+	healthMgr          *health.Manager                         // health monitoring (nil when disabled)
+	scheduler          *timelapse.Scheduler                    // timelapse schedule evaluator
+	scheduleMonitors   map[string]context.CancelFunc           // camera_id -> cancel func for schedule monitor
 	keyframeExtractors map[string]*timelapse.KeyframeExtractor // camera_id -> keyframe extractor
-	mu               sync.RWMutex
-	onvifClients     map[string]*onvif.Client            // camera_id → cached ONVIF client
-	onvifMu          sync.Mutex                          // protects onvifClients
-	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
-	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
-	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
-	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
+	mu                 sync.RWMutex
+	onvifClients       map[string]*onvif.Client            // camera_id → cached ONVIF client
+	onvifMu            sync.Mutex                          // protects onvifClients
+	errorDetails       map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
+	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
 	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
-	eventBus         *event.EventBus // event bus for publishing segment events
+	eventBus           *event.EventBus                     // event bus for publishing segment events
 	// hubRegistry is the central map of camera_id → StreamHub. It is the single
 	// source of truth for hubs so that pull recorders (RTSP/ONVIF/...) and push
 	// ingest servers (SRT listener / RTMP server) share the SAME hub object for
@@ -122,24 +122,24 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		}
 	}
 	return &CameraManager{
-		cfg:              cfg,
-		store:            store,
-		db:               db,
-		configPath:       configPath,
-		recorders:        make(map[string]model.Recorder),
-		metrics:          m,
-		mergeMgr:         mm,
-		transcodeMgr:     tm,
-		timelapseMergeMgr: tmm,
-		scheduler:        timelapse.NewScheduler(appLoc),
-		scheduleMonitors: make(map[string]context.CancelFunc),
+		cfg:                cfg,
+		store:              store,
+		db:                 db,
+		configPath:         configPath,
+		recorders:          make(map[string]model.Recorder),
+		metrics:            m,
+		mergeMgr:           mm,
+		transcodeMgr:       tm,
+		timelapseMergeMgr:  tmm,
+		scheduler:          timelapse.NewScheduler(appLoc),
+		scheduleMonitors:   make(map[string]context.CancelFunc),
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
-		errorDetails:     make(map[string]*model.CameraErrorDetail),
-		onvifClients:     make(map[string]*onvif.Client),
-		eventSubscribers: make(map[string]onvif.EventSubscriber),
-		deviceInfoCache:  make(map[string]*onvif.DeviceInfo),
-		eventBus:         eb,
-		hubRegistry:      make(map[string]*model.StreamHub),
+		errorDetails:       make(map[string]*model.CameraErrorDetail),
+		onvifClients:       make(map[string]*onvif.Client),
+		eventSubscribers:   make(map[string]onvif.EventSubscriber),
+		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
+		eventBus:           eb,
+		hubRegistry:        make(map[string]*model.StreamHub),
 	}
 }
 
@@ -292,7 +292,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			onvifCfg.FrameWatchdogTimeout = d
 		}
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
-case "timelapse":
+	case "timelapse":
 		frameSource := "auto"
 		if cam.Timelapse != nil && cam.Timelapse.FrameSource != "" {
 			frameSource = cam.Timelapse.FrameSource
@@ -539,7 +539,6 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
 		}
 
-
 		switch cam.Protocol {
 		case string(model.ProtoRTSP), string(model.ProtoHTTP):
 			rec := cm.createRecorder(cam, segDur)
@@ -564,7 +563,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
 					if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
 						if hub := getRecorderHub(rec); hub != nil {
-						if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
+							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
 								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
 							}
 						}
@@ -743,6 +742,131 @@ func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) 
 		}
 	}
 	return nil, nil, false
+}
+
+// GetCodecInfo returns the source camera's current video and audio codec
+// parameters as a single CodecInfo struct. Used by the relay engine to
+// initialize target tracks with complete codec information.
+// Returns a zero-value CodecInfo when the camera is not found or not streaming.
+func (cm *CameraManager) GetCodecInfo(cameraID string) model.CodecInfo {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return model.CodecInfo{}
+	}
+
+	// Helper to build CodecInfo from audio-getter interface.
+	type audioInfo interface {
+		AudioCodec() string
+		AudioConfig() []byte
+		AudioSampleRate() int
+		AudioChannels() int
+	}
+
+	// Try to extract SPS/PPS and audio info from the concrete recorder.
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		ci := model.CodecInfo{
+			SPS:    r.SPS(),
+			PPS:    r.PPS(),
+			IsH264: true,
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+
+	case *recorder.H265Recorder:
+		ci := model.CodecInfo{
+			VPS: r.VPS(),
+			SPS: r.SPS(),
+			PPS: r.PPS(),
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+
+	case *recorder.IngestRecorder:
+		_, s, p, v := r.CodecParams()
+		ci := model.CodecInfo{
+			SPS:    s,
+			PPS:    p,
+			VPS:    v,
+			IsH264: true,
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+
+	case *recorder.ONVIFRecorder:
+		// Delegate may be nil momentarily; recurse via GetCodecInfo if available.
+		if d := r.Delegate(); d != nil {
+			// Recursively get codec info from delegate via its CameraManager.
+			// NOTE: This recurse only handles one level of ONVIF delegation.
+			// The delegate's cameraID is the same — the ONVIF recorder doesn't
+			// have its own camera entry. We re-dispatch on the delegate type.
+			switch delegate := d.(type) {
+			case *recorder.H264Recorder:
+				ci := model.CodecInfo{
+					SPS:    delegate.SPS(),
+					PPS:    delegate.PPS(),
+					IsH264: true,
+				}
+				ci.AudioCodec = delegate.AudioCodec()
+				ci.AudioConfig = delegate.AudioConfig()
+				ci.AudioSampleRate = delegate.AudioSampleRate()
+				ci.AudioChannels = delegate.AudioChannels()
+				return ci
+			case *recorder.H265Recorder:
+				ci := model.CodecInfo{
+					VPS: delegate.VPS(),
+					SPS: delegate.SPS(),
+					PPS: delegate.PPS(),
+				}
+				ci.AudioCodec = delegate.AudioCodec()
+				ci.AudioConfig = delegate.AudioConfig()
+				ci.AudioSampleRate = delegate.AudioSampleRate()
+				ci.AudioChannels = delegate.AudioChannels()
+				return ci
+			}
+		}
+
+	case *xiaomi.XiaomiRecorder:
+		xc, _, _, _ := r.CodecParams()
+		ci := model.CodecInfo{
+			SPS:    r.SPS(),
+			PPS:    r.PPS(),
+			VPS:    r.VPS(),
+			IsH264: xc != model.FormatH265,
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+	}
+
+	// Fallback: try audioInfo interface on any unknown recorder type.
+	ci := model.CodecInfo{IsH264: true}
+	if ai, ok := rec.(audioInfo); ok {
+		ci.AudioCodec = ai.AudioCodec()
+		ci.AudioConfig = ai.AudioConfig()
+		ci.AudioSampleRate = ai.AudioSampleRate()
+		ci.AudioChannels = ai.AudioChannels()
+	}
+	return ci
 }
 
 // GetOrCreateHub returns the existing StreamHub for the camera ID, or creates a
@@ -1192,7 +1316,6 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.PushRetentionDays != nil {
 		cam.PushRetentionDays = updates.PushRetentionDays
 	}
-
 
 	// Persist to database
 	if cm.db != nil {

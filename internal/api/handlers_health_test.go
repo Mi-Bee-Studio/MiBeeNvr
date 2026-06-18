@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 )
 
 // --- mock HealthManager ---
@@ -462,7 +462,7 @@ func TestHealthCameras_PublicEndpoint(t *testing.T) {
 // --- mock StabilityProvider ---
 
 type mockStabilityProvider struct {
-	allStability   map[string]*health.StabilityData
+	allStability    map[string]*health.StabilityData
 	cameraStability map[string]*health.StabilityData
 }
 

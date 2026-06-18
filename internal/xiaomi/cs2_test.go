@@ -19,7 +19,7 @@ import (
 )
 
 func TestCS2MarshalCmd(t *testing.T) {
-payload := []byte{0xAA, 0xBB, 0xCC}
+	payload := []byte{0xAA, 0xBB, 0xCC}
 	cmd := uint32(0x12345678)
 	seq := uint16(0x00AB)
 	channel := byte(0)
@@ -51,7 +51,7 @@ payload := []byte{0xAA, 0xBB, 0xCC}
 }
 
 func TestCS2MarshalCmdEmptyPayload(t *testing.T) {
-result := cs2MarshalCmd(0, 1, 0x99, nil)
+	result := cs2MarshalCmd(0, 1, 0x99, nil)
 
 	// Total: 4 + 4 + 4 + 4 + 0 = 16
 	require.Len(t, result, 16)
@@ -62,7 +62,7 @@ result := cs2MarshalCmd(0, 1, 0x99, nil)
 }
 
 func TestCS2DataChannelPushPop(t *testing.T) {
-ch := newCS2DataChannel(0, 10)
+	ch := newCS2DataChannel(0, 10)
 
 	// Push data with 4-byte big-endian size prefix
 	data := []byte("hello")
@@ -78,7 +78,7 @@ ch := newCS2DataChannel(0, 10)
 }
 
 func TestCS2DataChannelPushMultipleInOnePacket(t *testing.T) {
-ch := newCS2DataChannel(0, 10)
+	ch := newCS2DataChannel(0, 10)
 
 	// Two messages in one push: "abc" and "defgh"
 	msg1 := []byte("abc")
@@ -108,7 +108,7 @@ ch := newCS2DataChannel(0, 10)
 }
 
 func TestCS2DataChannelPushSeqInOrder(t *testing.T) {
-ch := newCS2DataChannel(10, 100)
+	ch := newCS2DataChannel(10, 100)
 
 	data1 := makeDataWithSize("first")
 	data2 := makeDataWithSize("second")
@@ -133,7 +133,7 @@ ch := newCS2DataChannel(10, 100)
 }
 
 func TestCS2DataChannelPushSeqOutOfOrder(t *testing.T) {
-ch := newCS2DataChannel(10, 100)
+	ch := newCS2DataChannel(10, 100)
 
 	data0 := makeDataWithSize("zero")
 	data1 := makeDataWithSize("one")
@@ -158,7 +158,7 @@ ch := newCS2DataChannel(10, 100)
 }
 
 func TestCS2DataChannelPushSeqDuplicate(t *testing.T) {
-ch := newCS2DataChannel(10, 100)
+	ch := newCS2DataChannel(10, 100)
 
 	data := makeDataWithSize("hello")
 
@@ -174,7 +174,7 @@ ch := newCS2DataChannel(10, 100)
 }
 
 func TestCS2DataChannelPushSeqBufferFull(t *testing.T) {
-ch := newCS2DataChannel(2, 100) // small push buffer
+	ch := newCS2DataChannel(2, 100) // small push buffer
 
 	// Push future seq 1
 	pushed, err := ch.PushSeq(1, []byte("a"))
@@ -193,7 +193,7 @@ ch := newCS2DataChannel(2, 100) // small push buffer
 }
 
 func TestCS2DataChannelPushSeqNoBuffer(t *testing.T) {
-ch := newCS2DataChannel(0, 100) // pushSize=0, no reorder buffer
+	ch := newCS2DataChannel(0, 100) // pushSize=0, no reorder buffer
 
 	// Future seq can't be saved
 	pushed, err := ch.PushSeq(5, []byte("future"))
@@ -202,7 +202,7 @@ ch := newCS2DataChannel(0, 100) // pushSize=0, no reorder buffer
 }
 
 func TestCS2DataChannelClose(t *testing.T) {
-ch := newCS2DataChannel(0, 10)
+	ch := newCS2DataChannel(0, 10)
 	ch.Close()
 
 	_, ok := ch.Pop(5 * time.Second)
@@ -229,7 +229,7 @@ func TestCS2DataChannelPopBufferFull(t *testing.T) {
 }
 
 func TestCS2ConnStructFields(t *testing.T) {
-// Verify struct can be initialized (no actual network connection needed)
+	// Verify struct can be initialized (no actual network connection needed)
 	c := &CS2Conn{
 		channels: [4]*cs2DataChannel{
 			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
@@ -247,7 +247,7 @@ func TestCS2ConnStructFields(t *testing.T) {
 }
 
 func TestCS2MarshalCmdChannelByte(t *testing.T) {
-// Test with different channel values
+	// Test with different channel values
 	for _, ch := range []byte{0, 1, 2, 3} {
 		result := cs2MarshalCmd(ch, 0, 0x01, nil)
 		require.Equal(t, ch, result[5])
@@ -255,7 +255,7 @@ func TestCS2MarshalCmdChannelByte(t *testing.T) {
 }
 
 func TestCS2MarshalCmdSeqIncrement(t *testing.T) {
-result0 := cs2MarshalCmd(0, 0, 0x01, nil)
+	result0 := cs2MarshalCmd(0, 0, 0x01, nil)
 	result1 := cs2MarshalCmd(0, 1, 0x01, nil)
 
 	require.Equal(t, uint16(0), binary.BigEndian.Uint16(result0[6:]))
@@ -408,11 +408,11 @@ type mockAddr struct{}
 func (mockAddr) Network() string { return "mock" }
 func (mockAddr) String() string  { return "mock" }
 
-func (m *mockCS2Conn) LocalAddr() net.Addr  { return mockAddr{} }
-func (m *mockCS2Conn) RemoteAddr() net.Addr { return mockAddr{} }
+func (m *mockCS2Conn) LocalAddr() net.Addr                { return mockAddr{} }
+func (m *mockCS2Conn) RemoteAddr() net.Addr               { return mockAddr{} }
 func (m *mockCS2Conn) SetDeadline(t time.Time) error      { return nil }
-func (m *mockCS2Conn) SetReadDeadline(t time.Time) error   { return nil }
-func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error  { return nil }
+func (m *mockCS2Conn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error { return nil }
 
 func TestCS2WorkerNoPongOnPing(t *testing.T) {
 	t.Parallel()

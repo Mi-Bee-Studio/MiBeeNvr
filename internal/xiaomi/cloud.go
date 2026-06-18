@@ -105,7 +105,6 @@ type AuthRequest struct {
 	Region   string `json:"region,omitempty"`
 }
 
-
 // SignInWithCaptcha handles the initial sign-in that may require captcha.
 // Returns (session, captchaSessionID, error). If captchaSessionID != "", captcha/2FA is required.
 func SignInWithCaptcha(username, password, region string) (session *CloudSession, captchaSessionID string, err error) {
@@ -199,7 +198,7 @@ func LoginWithCaptcha(cloudID, captchaCode string) (*CloudSession, error) {
 		if errors.As(err, &loginErr) {
 			newID := storePendingCloud(c)
 			return nil, &CaptchaSessionError{
-				LoginError:        loginErr,
+				LoginError:       loginErr,
 				CaptchaSessionID: newID,
 			}
 		}
@@ -230,7 +229,7 @@ func LoginWithVerify(cloudID, ticket string) (*CloudSession, error) {
 		if errors.As(err, &loginErr) {
 			newID := storePendingCloud(c)
 			return nil, &CaptchaSessionError{
-				LoginError:        loginErr,
+				LoginError:       loginErr,
 				CaptchaSessionID: newID,
 			}
 		}

@@ -27,7 +27,7 @@ type mockMISSConn struct {
 		cmd  uint32
 		data []byte
 	}
-	readCmdResp  struct {
+	readCmdResp struct {
 		cmd  uint32
 		data []byte
 	}
@@ -284,9 +284,9 @@ func TestMISSClientStopMedia(t *testing.T) {
 func TestMISSPacketSampleRate(t *testing.T) {
 	t.Helper()
 	tests := []struct {
-		name      string
-		flags     uint32
-		wantRate  uint32
+		name     string
+		flags    uint32
+		wantRate uint32
 	}{
 		{
 			name:     "flags with sample rate bits set → 16000",
@@ -382,10 +382,10 @@ func TestMISSReadPacketDecrypts(t *testing.T) {
 
 	// Build a fake header (32 bytes)
 	hdr := make([]byte, missHdrSize)
-	binary.LittleEndian.PutUint32(hdr[4:], missCodecH264)    // CodecID
-	binary.LittleEndian.PutUint32(hdr[8:], 42)               // Sequence
-	binary.LittleEndian.PutUint32(hdr[12:], 0)               // Flags
-	binary.LittleEndian.PutUint64(hdr[16:], 12345678)        // Timestamp (msec)
+	binary.LittleEndian.PutUint32(hdr[4:], missCodecH264) // CodecID
+	binary.LittleEndian.PutUint32(hdr[8:], 42)            // Sequence
+	binary.LittleEndian.PutUint32(hdr[12:], 0)            // Flags
+	binary.LittleEndian.PutUint64(hdr[16:], 12345678)     // Timestamp (msec)
 
 	mock := &mockMISSConnReadPacket{hdr: hdr, payload: encPayload}
 	client := &MISSClient{
@@ -476,15 +476,15 @@ type mockMISSConnReadPacket struct {
 	err     error
 }
 
-func (m *mockMISSConnReadPacket) Protocol() string                                    { return "cs2+udp" }
-func (m *mockMISSConnReadPacket) Version() string                                     { return "CS2" }
-func (m *mockMISSConnReadPacket) ReadCommand() (uint32, []byte, error)               { return 0, nil, nil }
-func (m *mockMISSConnReadPacket) WriteCommand(uint32, []byte) error                   { return nil }
-func (m *mockMISSConnReadPacket) ReadPacket() ([]byte, []byte, error)                { return m.hdr, m.payload, m.err }
-func (m *mockMISSConnReadPacket) WritePacket([]byte, []byte) error                    { return nil }
-func (m *mockMISSConnReadPacket) RemoteAddr() net.Addr                                { return nil }
-func (m *mockMISSConnReadPacket) SetDeadline(time.Time) error                         { return nil }
-func (m *mockMISSConnReadPacket) Close() error                                        { return nil }
+func (m *mockMISSConnReadPacket) Protocol() string                     { return "cs2+udp" }
+func (m *mockMISSConnReadPacket) Version() string                      { return "CS2" }
+func (m *mockMISSConnReadPacket) ReadCommand() (uint32, []byte, error) { return 0, nil, nil }
+func (m *mockMISSConnReadPacket) WriteCommand(uint32, []byte) error    { return nil }
+func (m *mockMISSConnReadPacket) ReadPacket() ([]byte, []byte, error)  { return m.hdr, m.payload, m.err }
+func (m *mockMISSConnReadPacket) WritePacket([]byte, []byte) error     { return nil }
+func (m *mockMISSConnReadPacket) RemoteAddr() net.Addr                 { return nil }
+func (m *mockMISSConnReadPacket) SetDeadline(time.Time) error          { return nil }
+func (m *mockMISSConnReadPacket) Close() error                         { return nil }
 
 func TestMISSLoginJSONFormat(t *testing.T) {
 	t.Helper()

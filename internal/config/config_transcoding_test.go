@@ -79,8 +79,8 @@ func TestTranscodingConfig_ValidConfig(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		Transcoding: TranscodingConfig{
-			Enabled:         true,
-			MaxWorkers:      2,
+			Enabled:    true,
+			MaxWorkers: 2,
 		},
 		Cameras: []CameraConfig{{
 			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",

@@ -91,7 +91,7 @@ func TestCheckPTSMonotonicity_WrapAround_SmallWrap(t *testing.T) {
 func TestCheckPTSMonotonicity_WrapAround_NoWrapWhenNotNearBoundary(t *testing.T) {
 	t.Helper()
 	// lastPTS in the middle of range, curPTS slightly less — should be backward jump
-	mid := int64(1<<31) // half of uint32 range
+	mid := int64(1 << 31) // half of uint32 range
 	result := checkPTSMonotonicity(mid, mid-100000)
 	require.Equal(t, ptsAnomalyBackwardJump, result.Anomaly, "not near boundary should be backward jump")
 }
@@ -101,7 +101,7 @@ func TestCheckPTSMonotonicity_WrapAround_UnreasonablyLargeWrap(t *testing.T) {
 	// lastPTS near max, curPTS near max/2 — wrapped delta would be huge (>10s)
 	// This should still be detected as wrap-around since lastPTS > 2^31
 	maxTS := int64(1<<32) - 100
-	curPTS := int64(1<<31) // wrapped delta = 1<<31 + 100 > ptsMaxForwardJump
+	curPTS := int64(1 << 31) // wrapped delta = 1<<31 + 100 > ptsMaxForwardJump
 	result := checkPTSMonotonicity(maxTS, curPTS)
 	// Wrapped delta exceeds 10s, so it's NOT a valid wrap-around → should be backward jump
 	require.Equal(t, ptsAnomalyBackwardJump, result.Anomaly, "unreasonably large wrap should be backward jump")

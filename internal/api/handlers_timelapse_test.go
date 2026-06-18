@@ -29,10 +29,10 @@ func createTestJPEG(t *testing.T, width, height int) []byte {
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			idx := y*img.Stride + x*4
-			img.Pix[idx] = byte(x * 255 / width)                               // R
-			img.Pix[idx+1] = byte(y * 255 / height)                             // G
-			img.Pix[idx+2] = byte((x + y) * 255 / (width + height))            // B
-			img.Pix[idx+3] = 255                                                // A
+			img.Pix[idx] = byte(x * 255 / width)                    // R
+			img.Pix[idx+1] = byte(y * 255 / height)                 // G
+			img.Pix[idx+2] = byte((x + y) * 255 / (width + height)) // B
+			img.Pix[idx+3] = 255                                    // A
 		}
 	}
 	var buf bytes.Buffer
@@ -475,8 +475,8 @@ type testSlowMerger struct {
 	fail  bool
 }
 
-func (m *testSlowMerger) CanMerge() bool                          { return true }
-func (m *testSlowMerger) Tier() timelapse.MergeTier               { return timelapse.TierGo }
+func (m *testSlowMerger) CanMerge() bool            { return true }
+func (m *testSlowMerger) Tier() timelapse.MergeTier { return timelapse.TierGo }
 func (m *testSlowMerger) Merge(ctx context.Context, _, _ string, _ int) (*timelapse.MergeResult, error) {
 	select {
 	case <-time.After(m.delay):
@@ -1012,7 +1012,6 @@ func TestTimelapseMerge_DurationAccepted(t *testing.T) {
 	}
 }
 
-
 // --- Timelapse Pause/Resume tests ---
 
 func TestTimelapsePause_Success(t *testing.T) {
@@ -1127,8 +1126,8 @@ func TestTimelapseGet_Found(t *testing.T) {
 	}
 	rec := &model.Recording{
 		ID: "rec-tl-get", CameraID: "cam-1",
-		FilePath: segDir,
-		Format:   model.Format("timelapse"),
+		FilePath:   segDir,
+		Format:     model.Format("timelapse"),
 		StartedAt:  now,
 		EndedAt:    now.Add(30 * time.Second),
 		Duration:   30.0,
@@ -1201,14 +1200,14 @@ func TestTimelapseDelete_Success(t *testing.T) {
 
 	rec := &model.Recording{
 		ID: "rec-tl-del", CameraID: "cam-1",
-		FilePath:    segDir,
-		Format:      model.Format("timelapse"),
-		StartedAt:   now,
-		EndedAt:     now.Add(30 * time.Second),
-		Duration:    30.0,
-		FileSize:    1000,
-		FrameCount:  3,
-		Merged:      true,
+		FilePath:   segDir,
+		Format:     model.Format("timelapse"),
+		StartedAt:  now,
+		EndedAt:    now.Add(30 * time.Second),
+		Duration:   30.0,
+		FileSize:   1000,
+		FrameCount: 3,
+		Merged:     true,
 	}
 	seedRecording(t, db, rec)
 	// Set merge result to populate merge_path and merge_status
@@ -1290,14 +1289,14 @@ func TestTimelapseDownload_Merged(t *testing.T) {
 
 	rec := &model.Recording{
 		ID: "rec-tl-dl", CameraID: "cam-1",
-		FilePath:    segDir,
-		Format:      model.Format("timelapse"),
-		StartedAt:   now,
-		EndedAt:     now.Add(30 * time.Second),
-		Duration:    30.0,
-		FileSize:    int64(len(mergeData)),
-		FrameCount:  3,
-		Merged:      true,
+		FilePath:   segDir,
+		Format:     model.Format("timelapse"),
+		StartedAt:  now,
+		EndedAt:    now.Add(30 * time.Second),
+		Duration:   30.0,
+		FileSize:   int64(len(mergeData)),
+		FrameCount: 3,
+		Merged:     true,
 	}
 	seedRecording(t, db, rec)
 	// Set merge result to populate merge_path and merge_status

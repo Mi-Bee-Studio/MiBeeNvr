@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
@@ -45,7 +45,7 @@ type ErrorReporter interface {
 }
 
 const (
-	defaultSegmentDur  = 10 * time.Minute
+	defaultSegmentDur = 10 * time.Minute
 )
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
@@ -66,7 +66,7 @@ type XiaomiRecorderConfig struct {
 	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
-	Channel      string            // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 	EventBus     *event.EventBus
 }
 
@@ -81,9 +81,9 @@ type XiaomiRecorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	muxer       *muxer.MP4Muxer
-	trackID     int
-	audioTrackID int
+	muxer         *muxer.MP4Muxer
+	trackID       int
+	audioTrackID  int
 	curFinalPath  string
 	curTempPath   string
 	segStart      time.Time
@@ -106,6 +106,43 @@ type XiaomiRecorder struct {
 
 // GetHub returns the StreamHub for frame fan-out.
 func (r *XiaomiRecorder) GetHub() *model.StreamHub { return r.Hub }
+
+// SPS returns the current H.264/H.265 SPS NAL unit (without start bytes).
+func (r *XiaomiRecorder) SPS() []byte { return r.sps }
+
+// PPS returns the current H.264/H.265 PPS NAL unit (without start bytes).
+func (r *XiaomiRecorder) PPS() []byte { return r.pps }
+
+// VPS returns the current H.265 VPS NAL unit (without start bytes), or nil for H.264.
+func (r *XiaomiRecorder) VPS() []byte { return r.vps }
+
+// AudioCodec returns the audio codec name ("g711" or "" for no audio).
+func (r *XiaomiRecorder) AudioCodec() string {
+	c, ok := missCodecToAudio(r.audioCodecID)
+	if !ok {
+		return ""
+	}
+	return string(c)
+}
+
+// AudioConfig returns the audio codec config. G.711 returns nil (no ASC).
+func (r *XiaomiRecorder) AudioConfig() []byte { return nil }
+
+// AudioSampleRate returns the audio sample rate. G.711 defaults to 8 kHz.
+func (r *XiaomiRecorder) AudioSampleRate() int {
+	if _, ok := missCodecToAudio(r.audioCodecID); ok {
+		return 8000
+	}
+	return 0
+}
+
+// AudioChannels returns the number of audio channels. G.711 is mono.
+func (r *XiaomiRecorder) AudioChannels() int {
+	if _, ok := missCodecToAudio(r.audioCodecID); ok {
+		return 1
+	}
+	return 0
+}
 
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 var _ model.HLSProvider = (*XiaomiRecorder)(nil)
@@ -184,7 +221,6 @@ func (r *XiaomiRecorder) setStatus(s model.RecorderStatus) {
 func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
 	return r.codec, r.sps, r.pps, r.vps
 }
-
 
 // incActive increments the active recordings gauge if metrics is available.
 func (r *XiaomiRecorder) incActive() {
@@ -287,7 +323,6 @@ func extractQuotedValue(s string) string {
 	}
 	return s[start+1 : start+1+end]
 }
-
 
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {

@@ -41,11 +41,11 @@ func (k ptsAnomalyKind) String() string {
 
 // ptsCheckResult holds the result of a PTS monotonicity check.
 type ptsCheckResult struct {
-	Anomaly  ptsAnomalyKind
-	LastPTS  int64
-	CurPTS   int64
-	Delta    int64
-	IsFirst  bool
+	Anomaly ptsAnomalyKind
+	LastPTS int64
+	CurPTS  int64
+	Delta   int64
+	IsFirst bool
 }
 
 // checkPTSMonotonicity checks if the current PTS is monotonic relative to the last PTS.
@@ -69,7 +69,7 @@ func checkPTSMonotonicity(lastPTS, curPTS int64) ptsCheckResult {
 	if delta < 0 {
 		// Check for wrap-around: lastPTS is high, curPTS is low,
 		// and the "wrapped" forward delta is reasonable.
-		wrappedDelta := curPTS + (1<<32) - lastPTS
+		wrappedDelta := curPTS + (1 << 32) - lastPTS
 		if wrappedDelta > 0 && wrappedDelta < ptsMaxForwardJump && lastPTS > (1<<32)/2 {
 			return ptsCheckResult{
 				Anomaly: ptsAnomalyWrapAround,

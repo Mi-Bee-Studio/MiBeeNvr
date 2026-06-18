@@ -20,7 +20,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-
 func testConfig() *config.Config {
 	return &config.Config{
 		Storage: config.StorageConfig{
@@ -123,7 +122,6 @@ func TestStart_EnabledCameras(t *testing.T) {
 	_, hasJPEG := statuses["cam-jpeg"]
 	assert.True(t, hasJPEG, "should have http_jpeg recorder")
 }
-
 
 func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -424,7 +422,7 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 		ID:       "cam-new-h264",
 		Name:     "New H264 Camera",
 		Protocol: "rtsp",
-			Encoding: "h264",
+		Encoding: "h264",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "cam-new-h264", id)
@@ -438,7 +436,6 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 	assert.Len(t, mgr.cfg.Cameras, 5) // 4 original + 1 new
 }
 
-
 func TestAddCamera_HTTPJPEG(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -447,8 +444,8 @@ func TestAddCamera_HTTPJPEG(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-new-jpeg",
 		Name:     "JPEG Camera",
-			Protocol: "http",
-				Encoding: "jpeg",
+		Protocol: "http",
+		Encoding: "jpeg",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "cam-new-jpeg", id)
@@ -468,7 +465,7 @@ func TestAddCamera_DuplicateID(t *testing.T) {
 		ID:       "cam-h264", // duplicate
 		Name:     "Dup Camera",
 		Protocol: "rtsp",
-				Encoding: "h264",
+		Encoding: "h264",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
@@ -482,8 +479,8 @@ func TestAddCamera_AutoID(t *testing.T) {
 	id, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "", // empty → auto-generate
 		Name:     "Auto ID Camera",
-			Protocol: "rtsp",
-				Encoding: "h264",
+		Protocol: "rtsp",
+		Encoding: "h264",
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, id)
@@ -498,8 +495,8 @@ func TestAddCamera_Persists(t *testing.T) {
 	_, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:       "cam-persist",
 		Name:     "Persist Camera",
-			Protocol: "rtsp",
-				Encoding: "h264",
+		Protocol: "rtsp",
+		Encoding: "h264",
 	})
 	require.NoError(t, err)
 
@@ -599,7 +596,6 @@ func TestUpdateCamera_URL(t *testing.T) {
 	assert.Equal(t, 4, mgr.RecorderCount())
 }
 
-
 func TestUpdateCamera_NotFound(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -630,7 +626,6 @@ func TestRestartRecorder(t *testing.T) {
 	_, ok := mgr.recorders["cam-h264"]
 	assert.True(t, ok)
 }
-
 
 func TestCreateRecorder_ONVIF(t *testing.T) {
 	t.Helper()
@@ -735,7 +730,7 @@ func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
 			ID:       "cam-h264",
 			Name:     "H264 Camera",
 			Protocol: "rtsp",
-				Encoding: "h264",
+			Encoding: "h264",
 		}},
 	}
 	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
@@ -751,7 +746,6 @@ func TestGetONVIFPTZController_NotONVIF(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not an ONVIF device")
 }
-
 
 func TestCreateRecorder_FallbackToBuiltIn(t *testing.T) {
 	t.Helper()
@@ -784,7 +778,6 @@ func TestCreateRecorder_FallbackToBuiltIn(t *testing.T) {
 	rec := mgr.createRecorder(cam, segDur)
 	require.NotNil(t, rec, "built-in rtsp+h264 should still create a recorder")
 }
-
 
 func TestNewCameraManager_WithMetrics(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1023,13 +1016,13 @@ func TestAddCamera_ONVIF_PreservesExistingSnapshotURL(t *testing.T) {
 	mgr, _, db, configPath := newTestManager(t)
 
 	cam := config.CameraConfig{
-		ID:           "new-onvif-cam",
-		Name:         "New ONVIF Camera",
-		Protocol:     "onvif",
-		URL:          "http://192.168.1.100/onvif/device_service",
-		Username:     "admin",
-		Password:     "pass",
-		SnapshotURL:  "http://custom-snapshot.jpg",
+		ID:          "new-onvif-cam",
+		Name:        "New ONVIF Camera",
+		Protocol:    "onvif",
+		URL:         "http://192.168.1.100/onvif/device_service",
+		Username:    "admin",
+		Password:    "pass",
+		SnapshotURL: "http://custom-snapshot.jpg",
 	}
 
 	ctx := context.Background()
@@ -1643,4 +1636,47 @@ func TestDualMode_ONVIFTimelapse_AutoFrameSource_CreatesKeyframeExtractor(t *tes
 
 	// Cleanup
 	mgr.stopTimelapseKeyframeExtractor(cam.ID)
+}
+
+func TestGetCodecInfo_NonExistentCamera(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	ci := mgr.GetCodecInfo("nonexistent")
+	assert.Nil(t, ci.SPS, "SPS should be nil for nonexistent camera")
+	assert.Nil(t, ci.PPS, "PPS should be nil for nonexistent camera")
+	assert.Nil(t, ci.VPS, "VPS should be nil for nonexistent camera")
+	assert.Empty(t, ci.AudioCodec, "audio codec should be empty")
+	assert.Equal(t, 0, ci.AudioSampleRate, "sample rate should be 0")
+	assert.Equal(t, 0, ci.AudioChannels, "channels should be 0")
+}
+
+func TestGetCodecInfo_KnownCameraBeforeStreaming(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mgr.Start(ctx))
+
+	// H264 camera: recorder exists but not yet streaming → empty codec info
+	ci := mgr.GetCodecInfo("cam-h264")
+	assert.NotNil(t, ci, "should return non-nil CodecInfo")
+	assert.Nil(t, ci.SPS, "SPS should be nil before stream starts")
+	assert.Nil(t, ci.PPS, "PPS should be nil before stream starts")
+	assert.True(t, ci.IsH264, "H264 recorder should report IsH264=true")
+	assert.Empty(t, ci.AudioCodec, "no audio before stream starts")
+
+	// MJPEG camera: should return through fallback path
+	mjpegCI := mgr.GetCodecInfo("cam-mjpeg")
+	assert.NotNil(t, mjpegCI, "should return non-nil CodecInfo for MJPEG")
+	assert.Nil(t, mjpegCI.SPS, "SPS should be nil for MJPEG fallback")
+	assert.Empty(t, mjpegCI.AudioCodec, "no audio for MJPEG")
+}
+
+func TestGetCodecInfo_NilRecorder(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	// Don't Start the manager — no recorders registered yet.
+
+	ci := mgr.GetCodecInfo("cam-h264")
+	assert.Nil(t, ci.SPS, "SPS should be nil when no recorders")
+	assert.False(t, ci.IsH264, "IsH264 should be false when no recorders")
 }

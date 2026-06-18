@@ -194,9 +194,9 @@ type sseRecorder struct {
 func newSSERecorder() *sseRecorder {
 	return &sseRecorder{headers: make(http.Header)}
 }
-func (r *sseRecorder) header() http.Header      { return r.headers }
-func (r *sseRecorder) Header() http.Header        { return r.headers }
-func (r *sseRecorder) Flush()                    { r.flushed = true }
+func (r *sseRecorder) header() http.Header { return r.headers }
+func (r *sseRecorder) Header() http.Header { return r.headers }
+func (r *sseRecorder) Flush()              { r.flushed = true }
 
 func (r *sseRecorder) WriteHeader(code int) {
 	r.mu.Lock()

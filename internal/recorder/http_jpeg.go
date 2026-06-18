@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
 var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
@@ -32,7 +32,7 @@ type HTTPJPEGConfig struct {
 	Username   string // for basic auth (optional)
 	Password   string // for basic auth (optional)
 	DB         RecordingDB
-	EventBus    *event.EventBus
+	EventBus   *event.EventBus
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -42,25 +42,25 @@ type HTTPJPEGRecorder struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
-	mu     sync.Mutex
-	status model.RecorderStatus
-	cancel context.CancelFunc
+	mu           sync.Mutex
+	status       model.RecorderStatus
+	cancel       context.CancelFunc
 	cancelStream context.CancelFunc
 	done         chan struct{}
 	watchdogDone chan struct{}
 
-	lastFrameTime atomic.Int64 // Unix timestamp of last received frame
-	curTempPath  string
-	curFinalPath string
-	segStart     time.Time
-	frameCount   int
-	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
-	lastHealthLogAt time.Time // throttled log for storage health failures
+	lastFrameTime   atomic.Int64 // Unix timestamp of last received frame
+	curTempPath     string
+	curFinalPath    string
+	segStart        time.Time
+	frameCount      int
+	Hub             *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time        // throttled log for storage health failures
 
 	// latestFrame caches the most recent JPEG frame for snapshot polling.
 	// Updated on every frame; safe for concurrent reads via LatestFrame().
 	latestFrameMu sync.RWMutex
-	latestFrame    []byte
+	latestFrame   []byte
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -82,6 +82,7 @@ func (r *HTTPJPEGRecorder) LatestFrame() []byte {
 	copy(cp, r.latestFrame)
 	return cp
 }
+
 // incActive increments the active recordings gauge if metrics is available.
 func (r *HTTPJPEGRecorder) incActive() {
 	if r.metrics != nil {
@@ -371,11 +372,9 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		// Check if segment duration elapsed
 		if time.Since(r.segStart) >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
-	}
+		}
 	}
 }
-
-
 
 func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	if r.curTempPath == "" {

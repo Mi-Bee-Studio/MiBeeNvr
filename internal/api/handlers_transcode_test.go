@@ -300,14 +300,14 @@ func TestFFmpegDownloadRetry_Returns200IfAvailable(t *testing.T) {
 // --- Mock transcode manager ---
 
 type mockTranscodeManager struct {
-	status   transcoding.ManagerStatus
-	queue    transcoding.QueueAPI
+	status transcoding.ManagerStatus
+	queue  transcoding.QueueAPI
 }
 
 type mockTranscodeQueue struct {
-	enqueued []*storage.TranscodeTask
-	db       *storage.DB
-	cancelID int64
+	enqueued  []*storage.TranscodeTask
+	db        *storage.DB
+	cancelID  int64
 	cancelErr error
 }
 
@@ -439,20 +439,20 @@ func TestTranscodingTaskCreate_Success(t *testing.T) {
 	q := &mockTranscodeQueue{db: db}
 	h.transcodeMgr = &mockTranscodeManager{
 		status: transcoding.ManagerStatus{Enabled: true},
-		queue: q,
+		queue:  q,
 	}
 	h.config = &config.Config{
 		Transcoding: config.TranscodingConfig{Enabled: true},
 		Cameras: []config.CameraConfig{{
-			ID: "cam-001",
+			ID:          "cam-001",
 			Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 		}},
 	}
 
 	body := map[string]any{
-		"camera_id":       "cam-001",
-		"recording_id":    "rec-001",
-		"target_codec":    "h264",
+		"camera_id":        "cam-001",
+		"recording_id":     "rec-001",
+		"target_codec":     "h264",
 		"replace_original": false,
 	}
 	rr := doTranscodeBodyRequest(t, h, http.MethodPost, "/api/transcoding/tasks", body)
@@ -484,7 +484,7 @@ func TestTranscodingTaskCreate_DisabledCamera(t *testing.T) {
 	q := &mockTranscodeQueue{db: db}
 	h.transcodeMgr = &mockTranscodeManager{
 		status: transcoding.ManagerStatus{Enabled: true},
-		queue: q,
+		queue:  q,
 	}
 	h.config = &config.Config{
 		Transcoding: config.TranscodingConfig{Enabled: false},
@@ -642,7 +642,7 @@ func TestTranscodingBackfill_Success(t *testing.T) {
 	h.config = &config.Config{
 		Transcoding: config.TranscodingConfig{Enabled: true},
 		Cameras: []config.CameraConfig{{
-			ID: "cam-bf",
+			ID:          "cam-bf",
 			Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 		}},
 	}
@@ -669,7 +669,7 @@ func TestTranscodingBackfill_DisabledCamera(t *testing.T) {
 	h.config = &config.Config{
 		Transcoding: config.TranscodingConfig{Enabled: true},
 		Cameras: []config.CameraConfig{{
-			ID: "cam-no-transcode",
+			ID:          "cam-no-transcode",
 			Transcoding: &config.CameraTranscodingConfig{Enabled: false},
 		}},
 	}
@@ -787,16 +787,16 @@ func TestTranscodingTaskCreate_IgnoresReplaceOriginal(t *testing.T) {
 	h.config = &config.Config{
 		Transcoding: config.TranscodingConfig{Enabled: true},
 		Cameras: []config.CameraConfig{{
-			ID: "cam-rep",
+			ID:          "cam-rep",
 			Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 		}},
 	}
 
 	// Send replace_original: false — handler should ignore it
 	body := map[string]any{
-		"camera_id":       "cam-rep",
-		"recording_id":    "rec-rep-001",
-		"target_codec":    "h264",
+		"camera_id":        "cam-rep",
+		"recording_id":     "rec-rep-001",
+		"target_codec":     "h264",
 		"replace_original": false,
 	}
 	rr := doTranscodeBodyRequest(t, h, http.MethodPost, "/api/transcoding/tasks", body)

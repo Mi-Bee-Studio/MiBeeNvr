@@ -10,47 +10,47 @@ import (
 )
 
 func TestLoadValidConfig(t *testing.T) {
-    path := filepath.Join("..", "..", "config.example.yaml")
-    cfg, err := Load(path)
-    // it's okay if example has minimal; just ensure no error
-    require.NoError(t, err)
-    require.NotNil(t, cfg)
+	path := filepath.Join("..", "..", "config.example.yaml")
+	cfg, err := Load(path)
+	// it's okay if example has minimal; just ensure no error
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
 }
 
 func TestValidateMissingCameraID(t *testing.T) {
-    cfg := &Config{Cameras: []CameraConfig{{ID: "", URL: "rtsp://x"}}}
-    cfg.ApplyDefaults()
-    err := Validate(cfg)
-    require.Error(t, err)
+	cfg := &Config{Cameras: []CameraConfig{{ID: "", URL: "rtsp://x"}}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
 }
 
 func TestValidateInvalidProtocol(t *testing.T) {
-    cfg := &Config{Cameras: []CameraConfig{{ID: "c1", URL: "rtsp://a", Protocol: "invalid"}}}
-    cfg.ApplyDefaults()
-    err := Validate(cfg)
-    require.Error(t, err)
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", URL: "rtsp://a", Protocol: "invalid"}}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
 }
 
 func TestPortRangeValidation(t *testing.T) {
-    cfg := &Config{FTP: FTPConfig{Port: 70000}}
-    cfg.ApplyDefaults()
-    err := Validate(cfg)
-    require.Error(t, err)
+	cfg := &Config{FTP: FTPConfig{Port: 70000}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err)
 }
 
 func TestDefaultsApplied(t *testing.T) {
-    cfg := &Config{}
-    cfg.ApplyDefaults()
-    require.Equal(t, ":9090", cfg.Server.Listen)
-    require.Equal(t, "/var/lib/mibee-nvr", cfg.Storage.RootDir)
-    require.Equal(t, "30s", cfg.Storage.SegmentDuration)
-    require.Equal(t, 30, cfg.Cleanup.RetentionDays)
-    require.Equal(t, "1h", cfg.Cleanup.CheckInterval)
-    require.Equal(t, 95, cfg.Cleanup.DiskThresholdPercent)
-    require.Equal(t, 2121, cfg.FTP.Port)
-    require.Equal(t, true, *cfg.FTP.Enabled)
-    require.Equal(t, true, *cfg.WebDAV.Enabled)
-    require.Equal(t, "/dav", cfg.WebDAV.PathPrefix)
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	require.Equal(t, ":9090", cfg.Server.Listen)
+	require.Equal(t, "/var/lib/mibee-nvr", cfg.Storage.RootDir)
+	require.Equal(t, "30s", cfg.Storage.SegmentDuration)
+	require.Equal(t, 30, cfg.Cleanup.RetentionDays)
+	require.Equal(t, "1h", cfg.Cleanup.CheckInterval)
+	require.Equal(t, 95, cfg.Cleanup.DiskThresholdPercent)
+	require.Equal(t, 2121, cfg.FTP.Port)
+	require.Equal(t, true, *cfg.FTP.Enabled)
+	require.Equal(t, true, *cfg.WebDAV.Enabled)
+	require.Equal(t, "/dav", cfg.WebDAV.PathPrefix)
 	require.Equal(t, "Local", cfg.Timezone)
 }
 
@@ -71,139 +71,139 @@ func TestFrameWatchdogTimeoutCustomValue(t *testing.T) {
 }
 
 func TestLoadNonExistentFile(t *testing.T) {
-    _, err := Load("no_such_file.yaml")
-    require.Error(t, err)
+	_, err := Load("no_such_file.yaml")
+	require.Error(t, err)
 }
 
 func TestFTPExplicitlyDisabled(t *testing.T) {
-    cfg := &Config{FTP: FTPConfig{Enabled: new(bool)}}
-    *cfg.FTP.Enabled = false // explicitly set to false
-    cfg.ApplyDefaults()
-    require.NotNil(t, cfg.FTP.Enabled)
-    require.Equal(t, false, *cfg.FTP.Enabled) // should remain false
+	cfg := &Config{FTP: FTPConfig{Enabled: new(bool)}}
+	*cfg.FTP.Enabled = false // explicitly set to false
+	cfg.ApplyDefaults()
+	require.NotNil(t, cfg.FTP.Enabled)
+	require.Equal(t, false, *cfg.FTP.Enabled) // should remain false
 }
 
 func TestWebDAVExplicitlyDisabled(t *testing.T) {
-    cfg := &Config{WebDAV: WebDAVConfig{Enabled: new(bool)}}
-    *cfg.WebDAV.Enabled = false // explicitly set to false
-    cfg.ApplyDefaults()
-    require.NotNil(t, cfg.WebDAV.Enabled)
-    require.Equal(t, false, *cfg.WebDAV.Enabled) // should remain false
+	cfg := &Config{WebDAV: WebDAVConfig{Enabled: new(bool)}}
+	*cfg.WebDAV.Enabled = false // explicitly set to false
+	cfg.ApplyDefaults()
+	require.NotNil(t, cfg.WebDAV.Enabled)
+	require.Equal(t, false, *cfg.WebDAV.Enabled) // should remain false
 }
 
 func TestFTPNotConfigured(t *testing.T) {
-    cfg := &Config{}
-    cfg.ApplyDefaults()
-    require.NotNil(t, cfg.FTP.Enabled)
-    require.Equal(t, true, *cfg.FTP.Enabled) // should default to true
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	require.NotNil(t, cfg.FTP.Enabled)
+	require.Equal(t, true, *cfg.FTP.Enabled) // should default to true
 }
 
 func TestWebDAVNotConfigured(t *testing.T) {
-    cfg := &Config{}
-    cfg.ApplyDefaults()
-    require.NotNil(t, cfg.WebDAV.Enabled)
-    require.Equal(t, true, *cfg.WebDAV.Enabled) // should default to true
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	require.NotNil(t, cfg.WebDAV.Enabled)
+	require.Equal(t, true, *cfg.WebDAV.Enabled) // should default to true
 }
 
 func TestSave(t *testing.T) {
-    dir := t.TempDir()
-    path := filepath.Join(dir, "mibee-nvr.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mibee-nvr.yaml")
 
-    ftpEnabled := true
-    webdavEnabled := false
-    original := &Config{
-        Server:  ServerConfig{Listen: ":8080"},
-        Storage: StorageConfig{RootDir: "/data/rec", SegmentDuration: "5m"},
-        Cameras: []CameraConfig{{
-            ID: "cam1", Name: "Front", Protocol: "rtsp", Encoding: "h264",
+	ftpEnabled := true
+	webdavEnabled := false
+	original := &Config{
+		Server:  ServerConfig{Listen: ":8080"},
+		Storage: StorageConfig{RootDir: "/data/rec", SegmentDuration: "5m"},
+		Cameras: []CameraConfig{{
+			ID: "cam1", Name: "Front", Protocol: "rtsp", Encoding: "h264",
 			URL: "rtsp://192.168.1.10/stream", Username: "admin", Password: "secret",
-        }},
-        Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
-        Auth:    AuthConfig{Username: "admin", PasswordHash: "$2a$10$xxx"},
-        FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121, PassivePortRange: "3000-3010"},
-	        MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee", Username: "mqttuser", Password: "mqttpass"},
-        WebDAV:  WebDAVConfig{Enabled: &webdavEnabled, PathPrefix: "/files"},
-    }
-    original.ApplyDefaults()
+		}},
+		Cleanup: CleanupConfig{RetentionDays: 7, CheckInterval: "30m", DiskThresholdPercent: 80},
+		Auth:    AuthConfig{Username: "admin", PasswordHash: "$2a$10$xxx"},
+		FTP:     FTPConfig{Enabled: &ftpEnabled, Port: 2121, PassivePortRange: "3000-3010"},
+		MQTT:    MQTTConfig{Enabled: true, Broker: "tcp://mqtt.local:1883", Topic: "nvr/trigger", ClientID: "mibee", Username: "mqttuser", Password: "mqttpass"},
+		WebDAV:  WebDAVConfig{Enabled: &webdavEnabled, PathPrefix: "/files"},
+	}
+	original.ApplyDefaults()
 
-    err := Save(path, original)
-    require.NoError(t, err)
+	err := Save(path, original)
+	require.NoError(t, err)
 
-    loaded, err := Load(path)
-    require.NoError(t, err)
-    require.Equal(t, ":8080", loaded.Server.Listen)
-    require.Equal(t, "/data/rec", loaded.Storage.RootDir)
-    require.Equal(t, "5m", loaded.Storage.SegmentDuration)
-    require.Len(t, loaded.Cameras, 1)
-    require.Equal(t, "cam1", loaded.Cameras[0].ID)
-    require.Equal(t, "Front", loaded.Cameras[0].Name)
-    require.Equal(t, "rtsp", loaded.Cameras[0].Protocol)
-    require.Equal(t, "rtsp://192.168.1.10/stream", loaded.Cameras[0].URL)
-    require.Equal(t, "admin", loaded.Cameras[0].Username)
-    require.Equal(t, "secret", loaded.Cameras[0].Password)
-    require.Equal(t, 7, loaded.Cleanup.RetentionDays)
-    require.Equal(t, "30m", loaded.Cleanup.CheckInterval)
-    require.Equal(t, 80, loaded.Cleanup.DiskThresholdPercent)
-    require.Equal(t, "admin", loaded.Auth.Username)
-    require.Equal(t, "$2a$10$xxx", loaded.Auth.PasswordHash)
-    require.Equal(t, 2121, loaded.FTP.Port)
-    require.Equal(t, "3000-3010", loaded.FTP.PassivePortRange)
-    require.True(t, *loaded.FTP.Enabled)
-    require.True(t, loaded.MQTT.Enabled)
-    require.Equal(t, "tcp://mqtt.local:1883", loaded.MQTT.Broker)
-    require.Equal(t, "nvr/trigger", loaded.MQTT.Topic)
-    require.Equal(t, "mibee", loaded.MQTT.ClientID)
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, ":8080", loaded.Server.Listen)
+	require.Equal(t, "/data/rec", loaded.Storage.RootDir)
+	require.Equal(t, "5m", loaded.Storage.SegmentDuration)
+	require.Len(t, loaded.Cameras, 1)
+	require.Equal(t, "cam1", loaded.Cameras[0].ID)
+	require.Equal(t, "Front", loaded.Cameras[0].Name)
+	require.Equal(t, "rtsp", loaded.Cameras[0].Protocol)
+	require.Equal(t, "rtsp://192.168.1.10/stream", loaded.Cameras[0].URL)
+	require.Equal(t, "admin", loaded.Cameras[0].Username)
+	require.Equal(t, "secret", loaded.Cameras[0].Password)
+	require.Equal(t, 7, loaded.Cleanup.RetentionDays)
+	require.Equal(t, "30m", loaded.Cleanup.CheckInterval)
+	require.Equal(t, 80, loaded.Cleanup.DiskThresholdPercent)
+	require.Equal(t, "admin", loaded.Auth.Username)
+	require.Equal(t, "$2a$10$xxx", loaded.Auth.PasswordHash)
+	require.Equal(t, 2121, loaded.FTP.Port)
+	require.Equal(t, "3000-3010", loaded.FTP.PassivePortRange)
+	require.True(t, *loaded.FTP.Enabled)
+	require.True(t, loaded.MQTT.Enabled)
+	require.Equal(t, "tcp://mqtt.local:1883", loaded.MQTT.Broker)
+	require.Equal(t, "nvr/trigger", loaded.MQTT.Topic)
+	require.Equal(t, "mibee", loaded.MQTT.ClientID)
 	require.Equal(t, "mqttuser", loaded.MQTT.Username)
 	require.Equal(t, "mqttpass", loaded.MQTT.Password)
-    require.NotNil(t, loaded.WebDAV.Enabled)
-    require.False(t, *loaded.WebDAV.Enabled)
-    require.Equal(t, "/files", loaded.WebDAV.PathPrefix)
+	require.NotNil(t, loaded.WebDAV.Enabled)
+	require.False(t, *loaded.WebDAV.Enabled)
+	require.Equal(t, "/files", loaded.WebDAV.PathPrefix)
 }
 
 func TestSaveAtomic(t *testing.T) {
-    dir := t.TempDir()
-    path := filepath.Join(dir, "subdir", "mibee-nvr.yaml")
-    require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "mibee-nvr.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
-    cfg := &Config{Server: ServerConfig{Listen: ":9090"}}
-    cfg.ApplyDefaults()
+	cfg := &Config{Server: ServerConfig{Listen: ":9090"}}
+	cfg.ApplyDefaults()
 
-    err := Save(path, cfg)
-    require.NoError(t, err)
+	err := Save(path, cfg)
+	require.NoError(t, err)
 
-    // Make directory read-only so a second Save should fail
-    require.NoError(t, os.Chmod(filepath.Dir(path), 0o555))
-    defer os.Chmod(filepath.Dir(path), 0o755) // restore for cleanup
+	// Make directory read-only so a second Save should fail
+	require.NoError(t, os.Chmod(filepath.Dir(path), 0o555))
+	defer os.Chmod(filepath.Dir(path), 0o755) // restore for cleanup
 
-    // Read the original content before failed write attempt
-    original, err := os.ReadFile(path)
-    require.NoError(t, err)
+	// Read the original content before failed write attempt
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
 
-    err = Save(path, &Config{Server: ServerConfig{Listen: ":0000"}})
-    require.Error(t, err)
+	err = Save(path, &Config{Server: ServerConfig{Listen: ":0000"}})
+	require.Error(t, err)
 
-    // Verify original file is untouched
-    after, err := os.ReadFile(path)
-    require.NoError(t, err)
-    require.Equal(t, string(original), string(after))
+	// Verify original file is untouched
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(original), string(after))
 }
 
 func TestSaveOverwrite(t *testing.T) {
-    dir := t.TempDir()
-    path := filepath.Join(dir, "mibee-nvr.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mibee-nvr.yaml")
 
-    first := &Config{Server: ServerConfig{Listen: ":7070"}, Storage: StorageConfig{RootDir: "/old"}}
-    first.ApplyDefaults()
-    require.NoError(t, Save(path, first))
+	first := &Config{Server: ServerConfig{Listen: ":7070"}, Storage: StorageConfig{RootDir: "/old"}}
+	first.ApplyDefaults()
+	require.NoError(t, Save(path, first))
 
-    second := &Config{Server: ServerConfig{Listen: ":3333"}, Storage: StorageConfig{RootDir: "/new"}}
-    second.ApplyDefaults()
-    require.NoError(t, Save(path, second))
+	second := &Config{Server: ServerConfig{Listen: ":3333"}, Storage: StorageConfig{RootDir: "/new"}}
+	second.ApplyDefaults()
+	require.NoError(t, Save(path, second))
 
-    loaded, err := Load(path)
-    require.NoError(t, err)
-    require.Equal(t, ":3333", loaded.Server.Listen)
-    require.Equal(t, "/new", loaded.Storage.RootDir)
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, ":3333", loaded.Server.Listen)
+	require.Equal(t, "/new", loaded.Storage.RootDir)
 }
 func TestValidateOnvifProtocol(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", ONVIFEndpoint: "http://192.168.1.100/onvif/device_service", Protocol: "onvif"}}}
@@ -235,8 +235,8 @@ func TestResolveMergeConfig_OverridesNonZeroFields(t *testing.T) {
 		MinSegmentsToMerge: 3,
 	}
 	perCamera := &MergeConfig{
-		CheckInterval:      "30m",
-		BatchLimit:         50,
+		CheckInterval: "30m",
+		BatchLimit:    50,
 	}
 	result := ResolveMergeConfig(global, perCamera)
 	// Enabled stays true (global)
@@ -428,7 +428,7 @@ func TestCameraURLValidFormat(t *testing.T) {
 				require.NoError(t, Validate(cfg))
 			}
 		})
-}
+	}
 }
 
 func TestONVIFEndpointInvalidFormat(t *testing.T) {
@@ -873,7 +873,7 @@ func TestHealthDefaults(t *testing.T) {
 func TestHealthValidConfig(t *testing.T) {
 	cfg := &Config{
 		Health: HealthConfig{
-			Enabled: true,
+			Enabled:         true,
 			EventsRetention: "360h",
 			Alerts: HealthAlertsConfig{
 				Cooldown: "10m",
@@ -1312,4 +1312,174 @@ func TestValidate_Timezone_Invalid(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "timezone")
+}
+
+func TestPushTarget_ValidFullConfig(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Name: "YouTube", Protocol: "rtmp", URL: "rtmp://a.live/youtube/key", Enabled: true,
+				Platform: "youtube", TranscodePolicy: "auto",
+				VideoPresetOverride: &VideoPresetOverrides{
+					Resolution: "1920x1080", Framerate: 30, VideoBitrateKbps: 4500,
+					GopSeconds: 2, Profile: "high", Bframes: 1,
+				},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestPushTarget_EmptyPlatform(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Name: "Generic", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				Platform: "", TranscodePolicy: "",
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
+func TestPushTarget_InvalidPlatform(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				Platform: "bad platform!",
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "platform")
+}
+
+func TestPushTarget_InvalidTranscodePolicy(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				TranscodePolicy: "invalid",
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "transcode_policy")
+}
+
+func TestPushTarget_InvalidResolution(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{Resolution: "bad"},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "resolution")
+}
+
+func TestPushTarget_InvalidBitrateLow(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{VideoBitrateKbps: 50},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "bitrate")
+}
+
+func TestPushTarget_InvalidBitrateHigh(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{VideoBitrateKbps: 99999},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "bitrate")
+}
+
+func TestPushTarget_InvalidGop(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{GopSeconds: 999},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "gop_seconds")
+}
+
+func TestPushTarget_InvalidProfile(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{Profile: "badprofile"},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "profile")
+}
+
+func TestPushTarget_InvalidBframes(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				VideoPresetOverride: &VideoPresetOverrides{Bframes: 999},
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.ErrorContains(t, err, "bframes")
+}
+
+func TestPushTarget_NilVideoPresetOverride(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "cam1", URL: "rtsp://example/stream", Protocol: "rtsp", Encoding: "h264",
+			PushTargets: []PushTargetConfig{{
+				ID: "t1", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+				Platform: "bilibili", TranscodePolicy: "force_sw",
+				// VideoPresetOverride is nil — should pass
+			}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
 }

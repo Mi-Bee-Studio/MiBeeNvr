@@ -38,23 +38,23 @@ type Camera struct {
 }
 
 type Recording struct {
-	ID         string    `json:"id"`
-	CameraID   string    `json:"camera_id"`
-	FilePath   string    `json:"file_path"`
-	Format     Format    `json:"format"`
-	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at"`
-	Duration   float64   `json:"duration"`
-	FileSize   int64     `json:"file_size"`
-	FrameCount int       `json:"frame_count"`
-	Merged     bool      `json:"merged"`
-	MergeStatus string   `json:"merge_status"`
-	MergePath   string    `json:"merge_path"`
-	MergeTier   string    `json:"merge_tier"`
-	MergeProgress int     `json:"merge_progress"`
-	MergeError  string    `json:"merge_error"`
-	RetryCount  int       `json:"retry_count"`
-	Archived   bool      `json:"archived"`
+	ID            string    `json:"id"`
+	CameraID      string    `json:"camera_id"`
+	FilePath      string    `json:"file_path"`
+	Format        Format    `json:"format"`
+	StartedAt     time.Time `json:"started_at"`
+	EndedAt       time.Time `json:"ended_at"`
+	Duration      float64   `json:"duration"`
+	FileSize      int64     `json:"file_size"`
+	FrameCount    int       `json:"frame_count"`
+	Merged        bool      `json:"merged"`
+	MergeStatus   string    `json:"merge_status"`
+	MergePath     string    `json:"merge_path"`
+	MergeTier     string    `json:"merge_tier"`
+	MergeProgress int       `json:"merge_progress"`
+	MergeError    string    `json:"merge_error"`
+	RetryCount    int       `json:"retry_count"`
+	Archived      bool      `json:"archived"`
 }
 
 type Segment struct {
@@ -217,11 +217,25 @@ type AudioFrame struct {
 	Data  []byte     // Encoded audio data (AAC frames, G.711 samples, etc.)
 }
 
+// CodecInfo holds the complete codec parameters for a camera stream,
+// including video SPS/PPS/VPS and audio codec details. Used by the relay
+// engine and streaming subsystems to initialize target tracks.
+type CodecInfo struct {
+	SPS             []byte // H.264/H.265 SPS NAL unit (without start code)
+	PPS             []byte // H.264/H.265 PPS NAL unit (without start code)
+	VPS             []byte // H.265 VPS NAL unit (without start code), nil for H.264
+	IsH264          bool   // true when video codec is H.264
+	AudioCodec      string // "aac", "g711", or "" for no audio
+	AudioConfig     []byte // AudioSpecificConfig for AAC, or codec flag bytes for G.711
+	AudioSampleRate int    // Sample rate in Hz (e.g. 8000, 44100, 48000), 0 when no audio
+	AudioChannels   int    // Number of audio channels (1=mono, 2=stereo), 0 when no audio
+}
+
 // ValidEncodingsForProtocol maps transport protocol to supported encodings
 var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoRTSP):      {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
 	string(ProtoHTTP):      {string(EncJPEG)},
-	string(ProtoONVIF):     {string(FormatH264), string(FormatH265)},
+	string(ProtoONVIF):     {string(FormatH264), string(FormatH265), string(EncJPEG)},
 	string(ProtoXiaomi):    {string(FormatH264), string(FormatH265)},
 	string(ProtoTimelapse): {""}, // empty string for auto-detect
 	// Push/ingest protocols. SRT config-layer accepts h264/h265, but the current
@@ -246,7 +260,7 @@ func ParseLegacyProtocol(old string) (protocol, encoding string, err error) {
 		return "onvif", "", nil
 	case "timelapse":
 		return "timelapse", "", nil
-default:
+	default:
 		return "", "", fmt.Errorf("unknown legacy protocol: %s", old)
 	}
 }

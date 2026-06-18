@@ -133,10 +133,10 @@ func TestIsIDR_H264_NoIDR(t *testing.T) {
 
 func TestIsIDR_H265_SingleIDR(t *testing.T) {
 	au := [][]byte{
-		{0x40, 0x01},          // VPS (type 32)
-		{0x42, 0x01},          // SPS (type 33)
-		{0x44, 0x01},          // PPS (type 34)
-		{0x26, 0x01, 0x02},    // IDR_W_RADL (type 19)
+		{0x40, 0x01},       // VPS (type 32)
+		{0x42, 0x01},       // SPS (type 33)
+		{0x44, 0x01},       // PPS (type 34)
+		{0x26, 0x01, 0x02}, // IDR_W_RADL (type 19)
 	}
 	require.True(t, IsIDR(au, true))
 }
@@ -226,8 +226,8 @@ func TestCrossCodec_H265_IDR_NotDetectedAsH264(t *testing.T) {
 	}{
 		{"IDR_W_RADL low bit", []byte{0x26, 0x01}},       // type 19, nalu[0]&0x1F = 6
 		{"IDR_W_RADL high bit", []byte{0xA6, 0x01}},      // type 19 with forbidden bit
-		{"IDR_N_LP low bit", []byte{0x28, 0x01}},          // type 20, nalu[0]&0x1F = 8
-		{"IDR_N_LP high bit", []byte{0xA8, 0x01}},         // type 20 with forbidden bit
+		{"IDR_N_LP low bit", []byte{0x28, 0x01}},         // type 20, nalu[0]&0x1F = 8
+		{"IDR_N_LP high bit", []byte{0xA8, 0x01}},        // type 20 with forbidden bit
 		{"IDR_W_RADL typical", []byte{0x26, 0x01, 0x02}}, // H.265 IDR
 	}
 	for _, tt := range tests {

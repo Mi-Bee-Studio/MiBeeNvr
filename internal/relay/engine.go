@@ -2,21 +2,29 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/livetranscode"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 
 	"github.com/bluenviron/gortmplib"
 	"github.com/bluenviron/gortmplib/pkg/codecs"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
+	"github.com/pion/rtp"
 )
 
 var engineLogger = slog.Default().With("component", "relay-engine")
@@ -25,11 +33,25 @@ var engineLogger = slog.Default().With("component", "relay-engine")
 // Mirrors config.PushTargetConfig but kept local to avoid a config<->relay
 // import cycle (the manager maps between them).
 type PushTargetConfig struct {
-	ID       string // stable id within the camera
-	Name     string
-	Protocol string // "rtmp" or "rtsp"
-	URL      string // rtmp://host[:port]/app/key  |  rtsp://host[:port]/path
-	Enabled  bool
+	ID                  string // stable id within the camera
+	Name                string
+	Protocol            string // "rtmp" or "rtsp"
+	URL                 string // rtmp://host[:port]/app/key  |  rtsp://host[:port]/path
+	Enabled             bool
+	Platform            string                // preset: bilibili/douyin/youtube/kuaishou/generic/empty
+	TranscodePolicy     string                // auto/force_sw/off
+	VideoPresetOverride *VideoPresetOverrides // optional override
+}
+
+// VideoPresetOverrides mirrors config.VideoPresetOverrides to avoid an
+// import cycle between config and relay.
+type VideoPresetOverrides struct {
+	Resolution       string
+	Framerate        int
+	VideoBitrateKbps int
+	GopSeconds       int
+	Profile          string
+	Bframes          int
 }
 
 // SPSProvider returns the source camera's current SPS/PPS (raw NALUs, no start
@@ -44,21 +66,35 @@ type PushTarget struct {
 	CameraID string
 	Config   PushTargetConfig
 
-	hub         *model.StreamHub
-	spsProvider SPSProvider
+	hub               *model.StreamHub
+	spsProvider       SPSProvider
+	codecInfoProvider func() model.CodecInfo
 
-	mu        sync.RWMutex
-	status    RelayStatus
-	errMsg    string
-	since     time.Time // status-effective time (connect/stream start)
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu     sync.RWMutex
+	status RelayStatus
+	errMsg string
+	since  time.Time // status-effective time (connect/stream start)
+	cancel context.CancelFunc
+	done   chan struct{}
 
 	// bitrate accounting (atomic, sampled by status())
 	bytesSent   atomic.Int64
 	lastSample  time.Time
 	sampleBytes int64
 	sampleKbps  atomic.Int64
+
+	// Transcode dependencies (optional, nil when transcode path not needed).
+	presetRegistry *PresetRegistry
+	hardwareCap    *transcoding.HardwareCapabilities
+	ffmpegPath     string
+
+	// Runtime monitoring state (set during connect, cleared on disconnect).
+	// Thread-safe via atomic.Pointer and atomic.Int64 so Status() can read
+	// them concurrently from any goroutine without holding mu.
+	activeTranscoder   atomic.Pointer[livetranscode.LiveTranscoder]
+	activeDriftMonitor atomic.Pointer[DriftMonitor]
+	latestTemperatureC atomic.Int64
+	restartCount       atomic.Int64
 }
 
 // NewPushTarget constructs an idle target. It does not connect until Run.
@@ -70,6 +106,30 @@ func NewPushTarget(cameraID string, cfg PushTargetConfig, hub *model.StreamHub, 
 		spsProvider: sps,
 		status:      StatusIdle,
 	}
+}
+
+// SetCodecInfoProvider wires an optional codec info provider for audio-aware
+// targets. Should be set before Run.
+func (t *PushTarget) SetCodecInfoProvider(p func() model.CodecInfo) {
+	t.codecInfoProvider = p
+}
+
+// SetPresetRegistry wires the preset registry for transcode path resolution.
+// Should be set before Run if transcode may be used.
+func (t *PushTarget) SetPresetRegistry(r *PresetRegistry) {
+	t.presetRegistry = r
+}
+
+// SetHardwareCap wires hardware capabilities for transcoder encoder selection.
+// Should be set before Run if transcode may be used.
+func (t *PushTarget) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
+	t.hardwareCap = cap
+}
+
+// SetFFmpegPath sets an explicit FFmpeg binary path for the transcoder.
+// When empty, the transcoder auto-detects from HardwareCap or PATH.
+func (t *PushTarget) SetFFmpegPath(path string) {
+	t.ffmpegPath = path
 }
 
 // Status returns a snapshot of the target's runtime status for the API/UI.
@@ -102,6 +162,49 @@ func (t *PushTarget) Status() TargetStatus {
 	if (st == StatusStreaming || st == StatusReconnecting) && !since.IsZero() {
 		uptime = time.Since(since).Round(time.Second).String()
 	}
+
+	// --- Extended runtime fields ---
+
+	platform := t.Config.Platform
+	transcodePolicy := t.Config.TranscodePolicy
+
+	// Transcode status from active transcoder (if transcoding).
+	transcodeStatus := "idle"
+	transcodeResolution := ""
+	if lt := t.activeTranscoder.Load(); lt != nil {
+		en := lt.EncoderName()
+		switch {
+		case strings.Contains(en, "v4l2m2m"), strings.Contains(en, "omx"):
+			transcodeStatus = "active_hw"
+		case en != "":
+			transcodeStatus = "active_sw"
+		}
+		transcodeResolution = lt.PresetResolution()
+	}
+
+	// Audio codec from codecInfoProvider (best-effort, may be silent when not streaming).
+	audioCodec := "silent"
+	if t.codecInfoProvider != nil {
+		ci := t.codecInfoProvider()
+		switch ci.AudioCodec {
+		case "aac":
+			audioCodec = "aac"
+		case "g711":
+			if len(ci.AudioConfig) > 0 && ci.AudioConfig[0] != 0 {
+				audioCodec = "g711_mu"
+			} else {
+				audioCodec = "g711_a"
+			}
+		}
+	}
+
+	tempC := int(t.latestTemperatureC.Load())
+	restartCount := int(t.restartCount.Load())
+
+	var avDriftMs float64
+	if dm := t.activeDriftMonitor.Load(); dm != nil {
+		avDriftMs = dm.DriftMs()
+	}
 	return TargetStatus{
 		ID:        t.Config.ID,
 		Name:      t.Config.Name,
@@ -113,6 +216,15 @@ func (t *PushTarget) Status() TargetStatus {
 		Uptime:    uptime,
 		Error:     errMsg,
 		UpdatedAt: now,
+		// Extended runtime fields
+		Platform:            platform,
+		TranscodePolicy:     transcodePolicy,
+		TranscodeStatus:     transcodeStatus,
+		TranscodeResolution: transcodeResolution,
+		AudioCodec:          audioCodec,
+		TemperatureC:        tempC,
+		RestartCount:        restartCount,
+		AVDriftMs:           avDriftMs,
 	}
 }
 
@@ -171,10 +283,21 @@ func (t *PushTarget) connectAndStream(ctx context.Context) error {
 // --- RTMP target ---
 
 func (t *PushTarget) connectRTMP(ctx context.Context) error {
-	// RTMP only carries H.264. Reject H.265 / unknown sources up front.
 	sps, pps, isH264 := t.spsProvider()
-	if !isH264 || sps == nil || pps == nil {
-		t.setStatus(StatusError, "source is not H.264 (RTMP target requires H.264)")
+	if !isH264 {
+		// H.265 source — transcode if policy allows.
+		if t.Config.TranscodePolicy == "off" {
+			t.setStatus(StatusError, "source is not H.264 (RTMP target requires H.264)")
+			return errPermanent
+		}
+		if t.presetRegistry == nil {
+			t.setStatus(StatusError, "transcode requested but preset registry not configured")
+			return errPermanent
+		}
+		return t.connectRTMPWithTranscode(ctx)
+	}
+	if sps == nil || pps == nil {
+		t.setStatus(StatusError, "source stream not ready (no SPS/PPS yet)")
 		return errPermanent
 	}
 
@@ -185,17 +308,77 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 		return errPermanent
 	}
 
+	// Build tracks list: video track + optional audio track.
+	videoTrack := &gortmplib.Track{Codec: &codecs.H264{
+		SPS: append([]byte(nil), sps...),
+		PPS: append([]byte(nil), pps...),
+	}}
+
+	// Create cancellable context for silent AAC fallback (cancelled on exit).
+	silentCtx, silentCancel := context.WithCancel(ctx)
+	defer silentCancel()
+
+	var (
+		audioTrack *gortmplib.Track
+		audioSubID string // non-empty for AAC passthrough
+		g711Track  *gortmplib.Track
+		g711SubID  string        // non-empty for G.711 passthrough
+		silentCh   <-chan []byte // non-nil for silent fallback
+	)
+
+	if t.codecInfoProvider != nil {
+		ci := t.codecInfoProvider()
+		switch ci.AudioCodec {
+		case "aac":
+			asc := parseASC(ci.AudioConfig)
+			if asc != nil {
+				audioTrack = &gortmplib.Track{Codec: &codecs.MPEG4Audio{Config: asc}}
+				audioSubID = "relay-rtmp-" + t.Config.ID + "-audio"
+				engineLogger.Info("relay target adding AAC audio track",
+					"camera_id", t.CameraID, "target_id", t.Config.ID,
+					"sample_rate", asc.SampleRate, "channels", asc.ChannelCount)
+			}
+
+		case "g711":
+			isMULaw, _ := parseG711Config(ci.AudioConfig)
+			ch := ci.AudioChannels
+			if ch <= 0 {
+				ch = 1
+			}
+			g711Track = &gortmplib.Track{Codec: &codecs.G711{MULaw: isMULaw, ChannelCount: ch}}
+			g711SubID = "relay-rtmp-" + t.Config.ID + "-g711"
+			engineLogger.Info("relay target adding G.711 audio track",
+				"camera_id", t.CameraID, "target_id", t.Config.ID,
+				"mu_law", isMULaw)
+		default:
+			// No audio source — silent AAC fallback.
+			gen := NewSilenceAACGenerator()
+			emitter := NewBufferAwareSilenceEmitter(gen)
+			asc := parseASC(emitter.AudioConfig())
+			if asc != nil {
+				audioTrack = &gortmplib.Track{Codec: &codecs.MPEG4Audio{Config: asc}}
+				silentCh = emitter.Start(silentCtx)
+				engineLogger.Info("relay target adding silent AAC track (no source audio)",
+					"camera_id", t.CameraID, "target_id", t.Config.ID)
+			}
+		}
+	}
+
+	tracks := []*gortmplib.Track{videoTrack}
+	if audioTrack != nil {
+		tracks = append(tracks, audioTrack)
+	}
+	if g711Track != nil {
+		tracks = append(tracks, g711Track)
+	}
+
 	client := &gortmplib.Client{URL: u, Publish: true}
 	if err := client.Initialize(ctx); err != nil {
 		return err
 	}
 	defer client.Close()
 
-	track := &gortmplib.Track{Codec: &codecs.H264{
-		SPS: append([]byte(nil), sps...),
-		PPS: append([]byte(nil), pps...),
-	}}
-	writer := &gortmplib.Writer{Conn: client, Tracks: []*gortmplib.Track{track}}
+	writer := &gortmplib.Writer{Conn: client, Tracks: tracks}
 	if err := writer.Initialize(); err != nil {
 		return err
 	}
@@ -205,6 +388,13 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 	start := time.Now()
 	consumerID := "relay-rtmp-" + t.Config.ID
 	cbErr := make(chan error, 1)
+
+	monitor := NewDriftMonitor()
+	monitor.StartLogging(ctx)
+	t.activeDriftMonitor.Store(monitor)
+	defer t.activeDriftMonitor.Store(nil)
+
+	// Video subscription (unchanged).
 	if err := t.hub.Subscribe(consumerID, func(pts int64, au [][]byte) {
 		// Use wall-clock relative PTS (avoids 90kHz wraparound; matches the
 		// gortmplib publish example). dts == pts (assume no B-frame reorder).
@@ -212,7 +402,7 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 		if d < 0 {
 			d = 0
 		}
-		if werr := writer.WriteH264(track, d, d, au); werr != nil {
+		if werr := writer.WriteH264(videoTrack, d, d, au); werr != nil {
 			select {
 			case cbErr <- werr:
 			default:
@@ -225,10 +415,93 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 			}
 			t.bytesSent.Add(n)
 		}
+		monitor.RecordVideo(pts)
+		if monitor.ShouldReconnect() {
+			select {
+			case cbErr <- DriftReconnectError:
+			default:
+			}
+		}
 	}); err != nil {
 		return err
 	}
 	defer t.hub.Unsubscribe(consumerID)
+
+	// AAC passthrough: subscribe to audio bus.
+	if audioSubID != "" {
+		if err := t.hub.SubscribeAudio(audioSubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			if codec != model.AudioAAC {
+				return
+			}
+			d := durationFromPTS(pts)
+			if d < 0 {
+				d = 0
+			}
+			if werr := writer.WriteMPEG4Audio(audioTrack, d, data); werr != nil {
+				select {
+				case cbErr <- werr:
+				default:
+				}
+			} else {
+				t.bytesSent.Add(int64(len(data)))
+			}
+			monitor.RecordAudio(pts)
+			if monitor.ShouldReconnect() {
+				select {
+				case cbErr <- DriftReconnectError:
+				default:
+				}
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(audioSubID)
+	}
+
+	// G.711 passthrough: subscribe to audio bus.
+	if g711SubID != "" {
+		if err := t.hub.SubscribeAudio(g711SubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			if codec != model.AudioG711 {
+				return
+			}
+			d := durationFromPTS(pts)
+			if d < 0 {
+				d = 0
+			}
+			if werr := writer.WriteG711(g711Track, d, data); werr != nil {
+				select {
+				case cbErr <- werr:
+				default:
+				}
+			} else {
+				t.bytesSent.Add(int64(len(data)))
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(g711SubID)
+	}
+
+	// Silent AAC fallback goroutine.
+	// Silent AAC fallback goroutine.
+	if silentCh != nil {
+		go func() {
+			for frame := range silentCh {
+				d := time.Since(start)
+				if d < 0 {
+					d = 0
+				}
+				if werr := writer.WriteMPEG4Audio(audioTrack, d, frame); werr != nil {
+					select {
+					case cbErr <- werr:
+					default:
+					}
+				} else {
+					t.bytesSent.Add(int64(len(frame)))
+				}
+			}
+		}()
+	}
 
 	t.setStatus(StatusStreaming, "")
 	engineLogger.Info("relay target streaming",
@@ -246,9 +519,19 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 
 func (t *PushTarget) connectRTSP(ctx context.Context) error {
 	sps, pps, isH264 := t.spsProvider()
-	// RTSP can carry H.265 in principle, but this relay path is H.264-only for
-	// now (the hub delivers H.264 NALUs from the recorders). Reject H.265.
-	if !isH264 || sps == nil || pps == nil {
+	if !isH264 {
+		// H.265 source — transcode if policy allows.
+		if t.Config.TranscodePolicy == "off" {
+			t.setStatus(StatusError, "source is not H.264 (RTSP target currently requires H.264)")
+			return errPermanent
+		}
+		if t.presetRegistry == nil {
+			t.setStatus(StatusError, "transcode requested but preset registry not configured")
+			return errPermanent
+		}
+		return t.connectRTSPWithTranscode(ctx)
+	}
+	if sps == nil || pps == nil {
 		t.setStatus(StatusError, "source stream not ready (no SPS/PPS yet)")
 		return errPermanent
 	}
@@ -257,33 +540,119 @@ func (t *PushTarget) connectRTSP(ctx context.Context) error {
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{Protocol: &tcp, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 
-	forma := &format.H264{
+	videoForma := &format.H264{
 		PayloadTyp:        96,
 		SPS:               append([]byte(nil), sps...),
 		PPS:               append([]byte(nil), pps...),
 		PacketizationMode: 1,
 	}
-	desc := &description.Session{Medias: []*description.Media{{
+
+	// Build media list starting with video.
+	medias := []*description.Media{{
 		Type:    description.MediaTypeVideo,
-		Formats: []format.Format{forma},
-	}}}
+		Formats: []format.Format{videoForma},
+	}}
+
+	// Check for audio support via codecInfoProvider.
+	var audioForma format.Format
+	var audioMediaIdx int
+	audioCodecName := ""
+	if t.codecInfoProvider != nil {
+		ci := t.codecInfoProvider()
+		audioCodecName = ci.AudioCodec
+		switch ci.AudioCodec {
+		case "aac":
+			asc := parseASC(ci.AudioConfig)
+			if asc != nil {
+				aacForma := &format.MPEG4Audio{
+					PayloadTyp:       96,
+					Config:           asc,
+					SizeLength:       13,
+					IndexLength:      3,
+					IndexDeltaLength: 3,
+				}
+				audioForma = aacForma
+			}
+		case "g711":
+			isMULaw, sampleRate := parseG711Config(ci.AudioConfig)
+			ch := ci.AudioChannels
+			if ch <= 0 {
+				ch = 1
+			}
+			g711Forma := &format.G711{
+				PayloadTyp:   0,
+				MULaw:        isMULaw,
+				SampleRate:   sampleRate,
+				ChannelCount: ch,
+			}
+			audioForma = g711Forma
+		}
+	}
+
+	if audioForma != nil {
+		audioMediaIdx = len(medias)
+		medias = append(medias, &description.Media{
+			Type:    description.MediaTypeAudio,
+			Formats: []format.Format{audioForma},
+		})
+		engineLogger.Info("RTSP relay includes audio",
+			"camera_id", t.CameraID, "target_id", t.Config.ID,
+			"audio_codec", audioCodecName)
+	}
+
+	desc := &description.Session{Medias: medias}
 	if err := client.StartRecording(t.Config.URL, desc); err != nil {
 		return err
 	}
 	defer client.Close()
 
-	rtpEnc, err := forma.CreateEncoder()
+	// --- Video encoder ---
+	videoRtpEnc, err := videoForma.CreateEncoder()
 	if err != nil {
 		return err
 	}
-	targetMedia := desc.Medias[0]
+	videoMedia := desc.Medias[0]
+
+	// --- Audio encoder (if configured) ---
+	var audioRtpEnc interface{}
+	var audioMedia *description.Media
+	if audioForma != nil {
+		switch af := audioForma.(type) {
+		case *format.MPEG4Audio:
+			enc, aerr := af.CreateEncoder()
+			if aerr != nil {
+				engineLogger.Warn("failed to create AAC RTP encoder, continuing video-only",
+					"camera_id", t.CameraID, "target_id", t.Config.ID, "error", aerr)
+			} else {
+				audioRtpEnc = enc
+			}
+		case *format.G711:
+			enc, aerr := af.CreateEncoder()
+			if aerr != nil {
+				engineLogger.Warn("failed to create G.711 RTP encoder, continuing video-only",
+					"camera_id", t.CameraID, "target_id", t.Config.ID, "error", aerr)
+			} else {
+				audioRtpEnc = enc
+			}
+		}
+		if audioRtpEnc != nil {
+			audioMedia = desc.Medias[audioMediaIdx]
+		}
+	}
 
 	consumerID := "relay-rtsp-" + t.Config.ID
 	cbErr := make(chan error, 1)
+
+	monitor := NewDriftMonitor()
+	monitor.StartLogging(ctx)
+	t.activeDriftMonitor.Store(monitor)
+	defer t.activeDriftMonitor.Store(nil)
+
+	// Subscribe to video.
 	if err := t.hub.Subscribe(consumerID, func(pts int64, au [][]byte) {
 		// Re-encode the access unit into RTP packets, preserving the source
 		// 90kHz PTS as the packet timestamp (relay is transparent remux).
-		pkts, eerr := rtpEnc.Encode(au)
+		pkts, eerr := videoRtpEnc.Encode(au)
 		if eerr != nil {
 			return
 		}
@@ -294,7 +663,7 @@ func (t *PushTarget) connectRTSP(ctx context.Context) error {
 			} else {
 				pkt.Timestamp = base + pkt.Timestamp
 			}
-			if werr := client.WritePacketRTP(targetMedia, pkt); werr != nil {
+			if werr := client.WritePacketRTP(videoMedia, pkt); werr != nil {
 				select {
 				case cbErr <- werr:
 				default:
@@ -303,10 +672,61 @@ func (t *PushTarget) connectRTSP(ctx context.Context) error {
 			}
 			t.bytesSent.Add(int64(pkt.MarshalSize()))
 		}
+		monitor.RecordVideo(pts)
+		if monitor.ShouldReconnect() {
+			select {
+			case cbErr <- DriftReconnectError:
+			default:
+			}
+		}
 	}); err != nil {
 		return err
 	}
 	defer t.hub.Unsubscribe(consumerID)
+
+	// Subscribe to audio (if configured).
+	if audioMedia != nil && audioRtpEnc != nil {
+		audioConsumerID := consumerID + "-audio"
+		if err := t.hub.SubscribeAudio(audioConsumerID, func(pts int64, _ model.AudioCodec, data []byte) {
+			var pkts []*rtp.Packet
+			var eerr error
+			switch enc := audioRtpEnc.(type) {
+			case *rtpmpeg4audio.Encoder:
+				pkts, eerr = enc.Encode([][]byte{data})
+			case *rtplpcm.Encoder:
+				pkts, eerr = enc.Encode(data)
+			}
+			if eerr != nil {
+				return
+			}
+			base := uint32(pts)
+			for i, pkt := range pkts {
+				if i == 0 {
+					pkt.Timestamp = base
+				} else {
+					pkt.Timestamp = base + pkt.Timestamp
+				}
+				if werr := client.WritePacketRTP(audioMedia, pkt); werr != nil {
+					select {
+					case cbErr <- werr:
+					default:
+					}
+					return
+				}
+				t.bytesSent.Add(int64(pkt.MarshalSize()))
+			}
+			monitor.RecordAudio(pts)
+			if monitor.ShouldReconnect() {
+				select {
+				case cbErr <- DriftReconnectError:
+				default:
+				}
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(audioConsumerID)
+	}
 
 	t.setStatus(StatusStreaming, "")
 	engineLogger.Info("relay target streaming",
@@ -333,6 +753,597 @@ func (t *PushTarget) setStatus(st RelayStatus, errMsg string) {
 		t.since = time.Now()
 	}
 	t.mu.Unlock()
+}
+
+// --- Transcode relay path ---
+
+// connectRTMPWithTranscode transcodes H.265→H.264 via FFmpeg and pushes to
+// the RTMP target. Audio is passed through unchanged (same as normal path).
+func (t *PushTarget) connectRTMPWithTranscode(ctx context.Context) error {
+	// 1. Resolve encoding preset from platform config.
+	resolved := t.presetRegistry.Resolve(t.Config)
+
+	// 2. Map TranscodePolicy to EncoderType.
+	encoderType := livetranscode.EncoderAuto
+	if t.Config.TranscodePolicy == "force_sw" {
+		encoderType = livetranscode.EncoderSW
+	}
+
+	// 3. Create and start the transcoder.
+	lt := livetranscode.NewLiveTranscoder(livetranscode.TranscoderConfig{
+		InputCodec:  livetranscode.CodecH265,
+		EncoderType: encoderType,
+		FFmpegPath:  t.ffmpegPath,
+		Preset:      relayPresetToLT(resolved),
+		HardwareCap: t.hardwareCap,
+	})
+	t.activeTranscoder.Store(lt)
+	defer t.activeTranscoder.Store(nil)
+
+	t.setStatus(StatusConnecting, "starting transcoder")
+	if err := lt.Start(ctx); err != nil {
+		return fmt.Errorf("transcoder start: %w", err)
+	}
+	defer lt.Stop()
+
+	// 4. Subscribe to source hub — feed H.265 frames to transcoder NOW so FFmpeg
+	//    has input data before we wait for SPS/PPS output.
+	consumerID := "relay-rtmp-tc-" + t.Config.ID
+	cbErr := make(chan error, 1)
+	if err := t.hub.Subscribe(consumerID, func(pts int64, au [][]byte) {
+		if err := lt.WriteInput(au); err != nil {
+			select {
+			case cbErr <- fmt.Errorf("transcoder write input: %w", err):
+			default:
+			}
+		}
+	}); err != nil {
+		return err
+	}
+	defer t.hub.Unsubscribe(consumerID)
+
+	// Start thermal monitoring for temperature reporting.
+	thermalMonitor := livetranscode.NewThermalMonitor(85)
+	thermalCh := thermalMonitor.Start(ctx)
+	defer thermalMonitor.Stop()
+	go func() {
+		for evt := range thermalCh {
+			t.latestTemperatureC.Store(int64(evt.Temperature))
+		}
+	}()
+
+	// 5. Wait for first output AU — we need the transcoder's SPS/PPS for the H.264
+	//    track init. The hub subscription above is already feeding H.265 frames,
+	//    so FFmpeg will produce H.264 output including SPS/PPS.
+	ps, err := waitForTranscoderParams(ctx, lt, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("transcoder param sets: %w", err)
+	}
+
+	engineLogger.Info("transcoder ready, engaging RTMP relay (transcoded)",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"encoder", lt.EncoderName(), "preset", resolved.Name)
+
+	// 5. Parse target URL.
+	t.setStatus(StatusConnecting, "connecting to RTMP target")
+	u, err := url.Parse(t.Config.URL)
+	if err != nil || (u.Scheme != "rtmp" && u.Scheme != "rtmps") {
+		t.setStatus(StatusError, "invalid RTMP url")
+		return errPermanent
+	}
+
+	// 6. Build H.264 video track using transcoder's SPS/PPS (not source).
+	videoTrack := &gortmplib.Track{Codec: &codecs.H264{
+		SPS: append([]byte(nil), ps.SPS...),
+		PPS: append([]byte(nil), ps.PPS...),
+	}}
+
+	// 7. Audio setup — identical to normal RTMP path.
+	silentCtx, silentCancel := context.WithCancel(ctx)
+	defer silentCancel()
+
+	var (
+		audioTrack *gortmplib.Track
+		audioSubID string
+		g711Track  *gortmplib.Track
+		g711SubID  string
+		silentCh   <-chan []byte
+	)
+
+	if t.codecInfoProvider != nil {
+		ci := t.codecInfoProvider()
+		switch ci.AudioCodec {
+		case "aac":
+			asc := parseASC(ci.AudioConfig)
+			if asc != nil {
+				audioTrack = &gortmplib.Track{Codec: &codecs.MPEG4Audio{Config: asc}}
+				audioSubID = "relay-rtmp-tc-" + t.Config.ID + "-audio"
+				engineLogger.Info("relay target adding AAC audio track (transcode)",
+					"camera_id", t.CameraID, "target_id", t.Config.ID,
+					"sample_rate", asc.SampleRate, "channels", asc.ChannelCount)
+			}
+
+		case "g711":
+			isMULaw, _ := parseG711Config(ci.AudioConfig)
+			ch := ci.AudioChannels
+			if ch <= 0 {
+				ch = 1
+			}
+			g711Track = &gortmplib.Track{Codec: &codecs.G711{MULaw: isMULaw, ChannelCount: ch}}
+			g711SubID = "relay-rtmp-tc-" + t.Config.ID + "-g711"
+			engineLogger.Info("relay target adding G.711 audio track (transcode)",
+				"camera_id", t.CameraID, "target_id", t.Config.ID, "mu_law", isMULaw)
+
+		default:
+			gen := NewSilenceAACGenerator()
+			emitter := NewBufferAwareSilenceEmitter(gen)
+			asc := parseASC(emitter.AudioConfig())
+			if asc != nil {
+				audioTrack = &gortmplib.Track{Codec: &codecs.MPEG4Audio{Config: asc}}
+				silentCh = emitter.Start(silentCtx)
+				engineLogger.Info("relay target adding silent AAC track (no source audio, transcode)",
+					"camera_id", t.CameraID, "target_id", t.Config.ID)
+			}
+		}
+	}
+
+	tracks := []*gortmplib.Track{videoTrack}
+	if audioTrack != nil {
+		tracks = append(tracks, audioTrack)
+	}
+	if g711Track != nil {
+		tracks = append(tracks, g711Track)
+	}
+
+	// 8. Connect RTMP and initialize writer.
+	client := &gortmplib.Client{URL: u, Publish: true}
+	if err := client.Initialize(ctx); err != nil {
+		return err
+	}
+	defer client.Close()
+
+	writer := &gortmplib.Writer{Conn: client, Tracks: tracks}
+	if err := writer.Initialize(); err != nil {
+		return err
+	}
+
+	// 9. Prepare streaming loop state.
+	start := time.Now()
+
+	// 10. Audio subscriptions — AAC passthrough.
+	if audioSubID != "" {
+		if err := t.hub.SubscribeAudio(audioSubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			if codec != model.AudioAAC {
+				return
+			}
+			d := durationFromPTS(pts)
+			if d < 0 {
+				d = 0
+			}
+			if werr := writer.WriteMPEG4Audio(audioTrack, d, data); werr != nil {
+				select {
+				case cbErr <- werr:
+				default:
+				}
+			} else {
+				t.bytesSent.Add(int64(len(data)))
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(audioSubID)
+	}
+
+	// G.711 passthrough.
+	if g711SubID != "" {
+		if err := t.hub.SubscribeAudio(g711SubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			if codec != model.AudioG711 {
+				return
+			}
+			d := durationFromPTS(pts)
+			if d < 0 {
+				d = 0
+			}
+			if werr := writer.WriteG711(g711Track, d, data); werr != nil {
+				select {
+				case cbErr <- werr:
+				default:
+				}
+			} else {
+				t.bytesSent.Add(int64(len(data)))
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(g711SubID)
+	}
+
+	// Silent AAC fallback goroutine.
+	if silentCh != nil {
+		go func() {
+			for frame := range silentCh {
+				d := time.Since(start)
+				if d < 0 {
+					d = 0
+				}
+				if werr := writer.WriteMPEG4Audio(audioTrack, d, frame); werr != nil {
+					select {
+					case cbErr <- werr:
+					default:
+					}
+				} else {
+					t.bytesSent.Add(int64(len(frame)))
+				}
+			}
+		}()
+	}
+
+	// 11. Main streaming loop: transcoder output → RTMP writer.
+	t.setStatus(StatusStreaming, "")
+	engineLogger.Info("relay target streaming (transcoded)",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"protocol", "rtmp", "url", t.Config.URL, "encoder", lt.EncoderName())
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case au, ok := <-lt.Output():
+			if !ok {
+				return fmt.Errorf("transcoder output channel closed")
+			}
+			d := time.Since(start)
+			if d < 0 {
+				d = 0
+			}
+			if werr := writer.WriteH264(videoTrack, d, d, au); werr != nil {
+				return werr
+			}
+			var n int64
+			for _, nalu := range au {
+				n += int64(len(nalu))
+			}
+			t.bytesSent.Add(n)
+		case err := <-cbErr:
+			return err
+		}
+	}
+}
+
+// connectRTSPWithTranscode transcodes H.265→H.264 via FFmpeg and pushes to
+// the RTSP target. Audio is passed through unchanged (same as normal path).
+func (t *PushTarget) connectRTSPWithTranscode(ctx context.Context) error {
+	// 1. Resolve encoding preset from platform config.
+	resolved := t.presetRegistry.Resolve(t.Config)
+
+	// 2. Map TranscodePolicy to EncoderType.
+	encoderType := livetranscode.EncoderAuto
+	if t.Config.TranscodePolicy == "force_sw" {
+		encoderType = livetranscode.EncoderSW
+	}
+
+	// 3. Create and start the transcoder.
+	lt := livetranscode.NewLiveTranscoder(livetranscode.TranscoderConfig{
+		InputCodec:  livetranscode.CodecH265,
+		EncoderType: encoderType,
+		FFmpegPath:  t.ffmpegPath,
+		Preset:      relayPresetToLT(resolved),
+		HardwareCap: t.hardwareCap,
+	})
+	t.activeTranscoder.Store(lt)
+	defer t.activeTranscoder.Store(nil)
+
+	t.setStatus(StatusConnecting, "starting transcoder")
+	if err := lt.Start(ctx); err != nil {
+		return fmt.Errorf("transcoder start: %w", err)
+	}
+	defer lt.Stop()
+
+	// 4. Subscribe to source hub — feed H.265 frames to transcoder NOW so FFmpeg
+	//    has input data before we wait for SPS/PPS output.
+	consumerID := "relay-rtsp-tc-" + t.Config.ID
+	cbErr := make(chan error, 1)
+	if err := t.hub.Subscribe(consumerID, func(pts int64, au [][]byte) {
+		if err := lt.WriteInput(au); err != nil {
+			select {
+			case cbErr <- fmt.Errorf("transcoder write input: %w", err):
+			default:
+			}
+		}
+	}); err != nil {
+		return err
+	}
+	defer t.hub.Unsubscribe(consumerID)
+
+	// Start thermal monitoring for temperature reporting.
+	thermalMonitor := livetranscode.NewThermalMonitor(85)
+	thermalCh := thermalMonitor.Start(ctx)
+	defer thermalMonitor.Stop()
+	go func() {
+		for evt := range thermalCh {
+			t.latestTemperatureC.Store(int64(evt.Temperature))
+		}
+	}()
+
+	// 5. Wait for first output AU to extract SPS/PPS from transcoder. The hub
+	//    subscription above is already feeding H.265 frames, so FFmpeg will
+	//    produce H.264 output including SPS/PPS.
+	ps, err := waitForTranscoderParams(ctx, lt, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("transcoder param sets: %w", err)
+	}
+
+	engineLogger.Info("transcoder ready, engaging RTSP relay (transcoded)",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"encoder", lt.EncoderName(), "preset", resolved.Name)
+
+	// 5. Parse URL and connect RTSP.
+	t.setStatus(StatusConnecting, "connecting to RTSP target")
+	tcpProt := gortsplib.ProtocolTCP
+	client := &gortsplib.Client{Protocol: &tcpProt, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+
+	// 6. Build H.264 video format using transcoder's SPS/PPS.
+	videoForma := &format.H264{
+		PayloadTyp:        96,
+		SPS:               append([]byte(nil), ps.SPS...),
+		PPS:               append([]byte(nil), ps.PPS...),
+		PacketizationMode: 1,
+	}
+
+	// 7. Audio media setup — identical to normal RTSP path.
+	medias := []*description.Media{{
+		Type:    description.MediaTypeVideo,
+		Formats: []format.Format{videoForma},
+	}}
+
+	var audioForma format.Format
+	var audioMediaIdx int
+	audioCodecName := ""
+	if t.codecInfoProvider != nil {
+		ci := t.codecInfoProvider()
+		audioCodecName = ci.AudioCodec
+		switch ci.AudioCodec {
+		case "aac":
+			asc := parseASC(ci.AudioConfig)
+			if asc != nil {
+				audioForma = &format.MPEG4Audio{
+					PayloadTyp:       96,
+					Config:           asc,
+					SizeLength:       13,
+					IndexLength:      3,
+					IndexDeltaLength: 3,
+				}
+			}
+		case "g711":
+			isMULaw, sampleRate := parseG711Config(ci.AudioConfig)
+			ch := ci.AudioChannels
+			if ch <= 0 {
+				ch = 1
+			}
+			audioForma = &format.G711{
+				PayloadTyp:   0,
+				MULaw:        isMULaw,
+				SampleRate:   sampleRate,
+				ChannelCount: ch,
+			}
+		}
+	}
+
+	if audioForma != nil {
+		audioMediaIdx = len(medias)
+		medias = append(medias, &description.Media{
+			Type:    description.MediaTypeAudio,
+			Formats: []format.Format{audioForma},
+		})
+		engineLogger.Info("RTSP relay includes audio (transcode)",
+			"camera_id", t.CameraID, "target_id", t.Config.ID,
+			"audio_codec", audioCodecName)
+	}
+
+	desc := &description.Session{Medias: medias}
+	if err := client.StartRecording(t.Config.URL, desc); err != nil {
+		return err
+	}
+	defer client.Close()
+
+	// 8. Create video RTP encoder.
+	videoRtpEnc, err := videoForma.CreateEncoder()
+	if err != nil {
+		return err
+	}
+	videoMedia := desc.Medias[0]
+
+	// 9. Create audio RTP encoder (if configured).
+	var audioRtpEnc interface{}
+	var audioMedia *description.Media
+	if audioForma != nil {
+		switch af := audioForma.(type) {
+		case *format.MPEG4Audio:
+			enc, aerr := af.CreateEncoder()
+			if aerr != nil {
+				engineLogger.Warn("failed to create AAC RTP encoder, continuing video-only (transcode)",
+					"camera_id", t.CameraID, "target_id", t.Config.ID, "error", aerr)
+			} else {
+				audioRtpEnc = enc
+			}
+		case *format.G711:
+			enc, aerr := af.CreateEncoder()
+			if aerr != nil {
+				engineLogger.Warn("failed to create G.711 RTP encoder, continuing video-only (transcode)",
+					"camera_id", t.CameraID, "target_id", t.Config.ID, "error", aerr)
+			} else {
+				audioRtpEnc = enc
+			}
+		}
+		if audioRtpEnc != nil {
+			audioMedia = desc.Medias[audioMediaIdx]
+		}
+	}
+
+
+	// 11. Audio subscription (if configured).
+	if audioMedia != nil && audioRtpEnc != nil {
+		audioConsumerID := consumerID + "-audio"
+		if err := t.hub.SubscribeAudio(audioConsumerID, func(pts int64, _ model.AudioCodec, data []byte) {
+			var pkts []*rtp.Packet
+			var eerr error
+			switch enc := audioRtpEnc.(type) {
+			case *rtpmpeg4audio.Encoder:
+				pkts, eerr = enc.Encode([][]byte{data})
+			case *rtplpcm.Encoder:
+				pkts, eerr = enc.Encode(data)
+			}
+			if eerr != nil {
+				return
+			}
+			base := uint32(pts)
+			for i, pkt := range pkts {
+				if i == 0 {
+					pkt.Timestamp = base
+				} else {
+					pkt.Timestamp = base + pkt.Timestamp
+				}
+				if werr := client.WritePacketRTP(audioMedia, pkt); werr != nil {
+					select {
+					case cbErr <- werr:
+					default:
+					}
+					return
+				}
+				t.bytesSent.Add(int64(pkt.MarshalSize()))
+			}
+		}); err != nil {
+			return err
+		}
+		defer t.hub.UnsubscribeAudio(audioConsumerID)
+	}
+
+	// 12. Main streaming loop: transcoder output → RTSP RTP packets.
+	start := time.Now()
+	t.setStatus(StatusStreaming, "")
+	engineLogger.Info("relay target streaming (transcoded)",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"protocol", "rtsp", "url", t.Config.URL, "encoder", lt.EncoderName())
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- client.Wait() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case au, ok := <-lt.Output():
+			if !ok {
+				return fmt.Errorf("transcoder output channel closed")
+			}
+			// Use wall-clock time for PTS (transcoder doesn't preserve source timing).
+			pts := uint32(time.Since(start) / (time.Second / 90000))
+			pkts, eerr := videoRtpEnc.Encode(au)
+			if eerr != nil {
+				continue
+			}
+			for i, pkt := range pkts {
+				if i == 0 {
+					pkt.Timestamp = pts
+				} else {
+					pkt.Timestamp = pts + pkt.Timestamp
+				}
+				if werr := client.WritePacketRTP(videoMedia, pkt); werr != nil {
+					return werr
+				}
+				t.bytesSent.Add(int64(pkt.MarshalSize()))
+			}
+		case err := <-cbErr:
+			return err
+		case err := <-waitErr:
+			return err
+		}
+	}
+}
+
+// waitForTranscoderParams drains the transcoder output until valid SPS/PPS are
+// observed, or the timeout expires. These parameter sets are used to initialise
+// the target connection (the transcoder's H.264 output, not the source H.265).
+func waitForTranscoderParams(ctx context.Context, lt *livetranscode.LiveTranscoder, timeout time.Duration) (livetranscode.ParamSets, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return livetranscode.ParamSets{}, ctx.Err()
+		case <-timer.C:
+			// Check once more before declaring timeout.
+			ps := lt.ParamSets()
+			if len(ps.SPS) > 0 && len(ps.PPS) > 0 {
+				return ps, nil
+			}
+			return livetranscode.ParamSets{}, fmt.Errorf("timed out after %v waiting for transcoder SPS/PPS", timeout)
+		case au, ok := <-lt.Output():
+			if !ok {
+				return livetranscode.ParamSets{}, fmt.Errorf("transcoder output channel closed while waiting for params")
+			}
+			_ = au // drain — param sets are extracted by the parser internally
+			ps := lt.ParamSets()
+			if len(ps.SPS) > 0 && len(ps.PPS) > 0 {
+				return ps, nil
+			}
+		}
+	}
+}
+
+// relayPresetToLT converts a relay.ResolvedPreset to livetranscode.ResolvedPreset.
+// The structs are identical but in separate packages to avoid an import cycle.
+func relayPresetToLT(p ResolvedPreset) livetranscode.ResolvedPreset {
+	return livetranscode.ResolvedPreset{
+		Name:             p.Name,
+		GopSeconds:       p.GopSeconds,
+		VideoBitrateKbps: p.VideoBitrateKbps,
+		AudioBitrateKbps: p.AudioBitrateKbps,
+		Resolution:       p.Resolution,
+		Framerate:        p.Framerate,
+		Profile:          p.Profile,
+		Bframes:          p.Bframes,
+	}
+}
+
+// --- Audio helpers ---
+
+// parseASC unmarshals an AudioSpecificConfig from raw bytes.
+// Returns nil if config is empty or unparsable.
+func parseASC(config []byte) *mpeg4audio.AudioSpecificConfig {
+	if len(config) == 0 {
+		return nil
+	}
+	asc := &mpeg4audio.AudioSpecificConfig{}
+	if err := asc.Unmarshal(config); err != nil {
+		engineLogger.Warn("failed to unmarshal AudioSpecificConfig", "error", err)
+		return nil
+	}
+	return asc
+}
+
+// parseG711Config parses the G.711 audio config bytes stored by the recorder.
+// Format: [muLawFlag (1 byte), sampleRate (4 bytes big-endian)].
+func parseG711Config(config []byte) (isMULaw bool, sampleRate int) {
+	if len(config) < 5 {
+		return false, 8000
+	}
+	isMULaw = config[0] != 0
+	sampleRate = int(config[1])<<24 | int(config[2])<<16 | int(config[3])<<8 | int(config[4])
+	if sampleRate <= 0 {
+		sampleRate = 8000
+	}
+	return
+}
+
+// durationFromPTS converts a 90kHz PTS value to a time.Duration.
+// Example: pts=45000 -> 500ms (45000/90000 = 0.5s).
+func durationFromPTS(pts int64) time.Duration {
+	if pts < 0 {
+		return 0
+	}
+	return time.Duration(pts) * time.Second / 90000
 }
 
 // Sentinel errors.

@@ -18,11 +18,11 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +54,6 @@ func seedRecording(t *testing.T, db *storage.DB, r *model.Recording) {
 	}
 }
 
-
 func doRequest(t *testing.T, handler http.Handler, method, path string, body io.Reader, username, password string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)
@@ -76,22 +75,21 @@ func parseJSON(t *testing.T, rr *httptest.ResponseRecorder, v interface{}) {
 // recordingsResponse wraps the paginated recordings list.
 type recordingsResponse struct {
 	Recordings []model.Recording `json:"recordings"`
-	Total      int                `json:"total"`
+	Total      int               `json:"total"`
 }
-
 
 func makeRecording(id, cameraID, format string, startedAt time.Time, merged bool) *model.Recording {
 	return &model.Recording{
-		ID:        id,
-		CameraID:  cameraID,
-		FilePath:  "/tmp/" + id + ".mp4",
-		Format:    model.Format(format),
-		StartedAt: startedAt,
-		EndedAt:   startedAt.Add(5 * time.Minute),
-		Duration:  300.0,
-		FileSize:  1024,
+		ID:         id,
+		CameraID:   cameraID,
+		FilePath:   "/tmp/" + id + ".mp4",
+		Format:     model.Format(format),
+		StartedAt:  startedAt,
+		EndedAt:    startedAt.Add(5 * time.Minute),
+		Duration:   300.0,
+		FileSize:   1024,
 		FrameCount: 150,
-		Merged:    merged,
+		Merged:     merged,
 	}
 }
 
@@ -572,7 +570,7 @@ func TestProtectedEndpoints_WithAuth(t *testing.T) {
 	parseJSON(t, rr, &resp)
 	if len(resp.Recordings) != 0 {
 		t.Fatalf("expected 0 recordings, got %d", len(resp.Recordings))
-}
+	}
 }
 
 // --- Helper to parse method/path ---
@@ -651,8 +649,8 @@ func TestGetSettings_WithConfig(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{
-			RetentionDays:       14,
-			CheckInterval:       "30m",
+			RetentionDays:        14,
+			CheckInterval:        "30m",
 			DiskThresholdPercent: 80,
 		},
 		Cameras: []config.CameraConfig{
@@ -684,7 +682,6 @@ func TestGetSettings_WithConfig(t *testing.T) {
 	}
 
 }
-
 
 func TestUpdateSettings_NoConfig(t *testing.T) {
 	t.Parallel()
@@ -773,7 +770,6 @@ func TestUpdateSettings_InvalidCheckInterval(t *testing.T) {
 	}
 }
 
-
 func TestUpdateSettings_Success(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
@@ -806,7 +802,6 @@ func TestUpdateSettings_Success(t *testing.T) {
 		t.Fatalf("expected disk_threshold_percent=80, got %d", cfg.Cleanup.DiskThresholdPercent)
 	}
 }
-
 
 func TestUpdateSettings_EmptyBody(t *testing.T) {
 	t.Parallel()
@@ -1349,7 +1344,6 @@ func TestDeleteRecording_InvalidID(t *testing.T) {
 		t.Fatalf("expected 404, got %d", rr.Code)
 	}
 }
-
 
 func TestDownloadRecording_MissingFile(t *testing.T) {
 	t.Parallel()
@@ -2137,7 +2131,7 @@ func TestUpdateMergeSettings_Success(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{
-		Merge: config.MergeConfig{Enabled: false, CheckInterval: "1h"},
+		Merge:   config.MergeConfig{Enabled: false, CheckInterval: "1h"},
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{},
 	}
@@ -2173,7 +2167,7 @@ func TestUpdateCameraMergeConfig_Success(t *testing.T) {
 
 	// Seed a camera
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
 
 	body := strings.NewReader(`{"enabled":true,"batch_limit":20}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2195,7 +2189,7 @@ func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
 
 	body := strings.NewReader(`{"check_interval":"bad"}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2227,7 +2221,7 @@ func TestDeleteCameraMergeConfig_Success(t *testing.T) {
 
 	// Seed a camera
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-			"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam1/merge-config", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -2377,7 +2371,7 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
-)
+	)
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
@@ -2405,7 +2399,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 		func(cameraID string) *config.MergeConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
-)
+	)
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")
@@ -2687,9 +2681,9 @@ func TestHandleCreateCamera_ValidURLs(t *testing.T) {
 func TestParseFrameFilename(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		filename  string
-		want      string // expected timestamp in RFC3339, empty if should fail
+		name     string
+		filename string
+		want     string // expected timestamp in RFC3339, empty if should fail
 	}{
 		{name: "timestamp in name", filename: "frame_20240101_120000.jpg", want: "2024-01-01T12:00:00Z"},
 		{name: "timestamp with suffix", filename: "frame_20240101_120000_001.jpg", want: "2024-01-01T12:00:00Z"},
@@ -2825,7 +2819,7 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 
 	// Build EXIF APP1 data in TIFF Little-Endian (II) format
 	// Layout: TIFF header + IFD0 (with ExifIFD pointer) + EXIF IFD (with DateTimeOriginal)
-	
+
 	// EXIF IFD entries: just DateTimeOriginal (tag 0x9003)
 	// TIFF header (8 bytes): II, 0x002A, offset to IFD0 = 8
 	// IFD0 (minimal): 0 entries + 4 byte next-IFD pointer (0) + ExifIFD sub-IFD
@@ -2836,9 +2830,9 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 
 	// TIFF header (8 bytes)
 	tiff := &bytes.Buffer{}
-	tiff.Write([]byte("II"))              // byte order: Little-Endian
+	tiff.Write([]byte("II"))                                // byte order: Little-Endian
 	binary.Write(tiff, binary.LittleEndian, uint16(0x002A)) // TIFF magic
-	binary.Write(tiff, binary.LittleEndian, uint32(8)) // offset to IFD0 = 8
+	binary.Write(tiff, binary.LittleEndian, uint32(8))      // offset to IFD0 = 8
 
 	// IFD0: 1 entry (DateTime) + 4-byte next-IFD pointer = 2+12+4 = 18 bytes
 	// String value needs space — values >4 bytes go at end of IFD
@@ -2857,10 +2851,10 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 	if len(dateTimeBytes) > 256 {
 		t.Fatal("dateTime string too long")
 	}
-	
+
 	// Write DateTime entry
-	binary.Write(tiff, binary.LittleEndian, uint16(0x0132)) // DateTime tag
-	binary.Write(tiff, binary.LittleEndian, uint16(2))     // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint16(0x0132))             // DateTime tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))                  // Type: ASCII
 	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeBytes))) // Count
 	// For strings > 4 bytes, store offset
 	valueOffset := 8 + 2 + 2*12 + 4 // offset to string data = after IFD0
@@ -2869,9 +2863,9 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 	// Entry 2: ExifIFD pointer (tag 0x8769), type 4 (long), count 1
 	// EXIF IFD goes after IFD0 data
 	exifIFDOffset := valueOffset + len(dateTimeBytes)
-	binary.Write(tiff, binary.LittleEndian, uint16(0x8769)) // ExifIFD tag
-	binary.Write(tiff, binary.LittleEndian, uint16(4))     // Type: LONG
-	binary.Write(tiff, binary.LittleEndian, uint32(1))     // Count
+	binary.Write(tiff, binary.LittleEndian, uint16(0x8769))        // ExifIFD tag
+	binary.Write(tiff, binary.LittleEndian, uint16(4))             // Type: LONG
+	binary.Write(tiff, binary.LittleEndian, uint32(1))             // Count
 	binary.Write(tiff, binary.LittleEndian, uint32(exifIFDOffset)) // Offset to EXIF IFD
 
 	// Next IFD pointer (0 = no more IFDs)
@@ -2896,13 +2890,13 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 
 	// DateTimeOriginal string
 	dateTimeOrigBytes := []byte(dateTimeStr + "\x00")
-	
+
 	// Entry: DateTimeOriginal (tag 0x9003), type 2 (ASCII)
 	origValueOffset := exifIFDOffset + 2 + 1*12 + 4
-	binary.Write(tiff, binary.LittleEndian, uint16(0x9003)) // DateTimeOriginal tag
-	binary.Write(tiff, binary.LittleEndian, uint16(2))      // Type: ASCII
+	binary.Write(tiff, binary.LittleEndian, uint16(0x9003))                 // DateTimeOriginal tag
+	binary.Write(tiff, binary.LittleEndian, uint16(2))                      // Type: ASCII
 	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeOrigBytes))) // Count
-	binary.Write(tiff, binary.LittleEndian, uint32(origValueOffset)) // Offset to value
+	binary.Write(tiff, binary.LittleEndian, uint32(origValueOffset))        // Offset to value
 
 	// Next IFD pointer (0)
 	binary.Write(tiff, binary.LittleEndian, uint32(0))
@@ -2918,7 +2912,7 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 	// Build APP1 segment: marker + length + "Exif\0\0" + TIFF data
 	app1 := &bytes.Buffer{}
 	segLen := 2 + 6 + len(tiffData) // 2 for length field, 6 for Exif\0\0 header
-	app1.Write([]byte{0xFF, 0xE1}) // APP1 marker
+	app1.Write([]byte{0xFF, 0xE1})  // APP1 marker
 	binary.Write(app1, binary.BigEndian, uint16(segLen))
 	app1.Write([]byte("Exif\x00\x00"))
 	app1.Write(tiffData)

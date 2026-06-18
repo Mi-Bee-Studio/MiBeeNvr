@@ -1,6 +1,5 @@
 package api
 
-
 import (
 	"errors"
 	"io"
@@ -186,11 +185,11 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
 				if err != nil {
 					if errors.Is(err, hls.ErrMaxStreamsReached) {
-					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-				} else {
-					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-				}
+						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+					} else {
+						logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
+						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					}
 					return
 				}
 				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, false)
@@ -202,11 +201,11 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
 				if err != nil {
 					if errors.Is(err, hls.ErrMaxStreamsReached) {
-					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-				} else {
-					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
-					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
-				}
+						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+					} else {
+						logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
+						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					}
 					return
 				}
 				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, true)

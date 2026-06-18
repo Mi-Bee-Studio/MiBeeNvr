@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/stretchr/testify/require"
 )
 
 // --- handleGetSettings tests ---
@@ -233,7 +233,7 @@ func TestFormatUptime_Zero(t *testing.T) {
 
 func TestFormatUptime_ExactHour(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "1h 0m 0s", formatUptime(1 * time.Hour))
+	require.Equal(t, "1h 0m 0s", formatUptime(1*time.Hour))
 }
 
 func TestFormatUptime_LargeDuration(t *testing.T) {

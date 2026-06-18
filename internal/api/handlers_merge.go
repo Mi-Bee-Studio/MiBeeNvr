@@ -197,11 +197,11 @@ func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Requ
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":               cam.MergeEnabled,
-		"check_interval":         cam.MergeCheckInterval,
-		"window_size":            cam.MergeWindowSize,
-		"batch_limit":            cam.MergeBatchLimit,
-		"min_segment_age":        cam.MergeMinSegmentAge,
-		"min_segments_to_merge":  cam.MergeMinSegmentsToMerge,
+		"check_interval":        cam.MergeCheckInterval,
+		"window_size":           cam.MergeWindowSize,
+		"batch_limit":           cam.MergeBatchLimit,
+		"min_segment_age":       cam.MergeMinSegmentAge,
+		"min_segments_to_merge": cam.MergeMinSegmentsToMerge,
 	})
 }
 

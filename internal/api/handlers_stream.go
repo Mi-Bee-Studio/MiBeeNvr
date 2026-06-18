@@ -26,7 +26,7 @@ type StreamHandler interface {
 
 // StreamStartOptions holds optional parameters for starting a stream.
 type StreamStartOptions struct {
-	MaxFPS      int
+	MaxFPS       int
 	SubStreamURL string
 }
 
@@ -98,7 +98,6 @@ func (r *StreamRegistry) ProtocolsDetailForCodec(codec model.Format) []ProtocolD
 	}
 	return result
 }
-
 
 // --- HLSStreamHandler ---
 
@@ -327,8 +326,6 @@ func getStreamHub(rec model.Recorder) *model.StreamHub {
 
 // --- HTTP handler for /api/cameras/{id}/stream/* (HLS proxy) ---
 
-
-
 // SetStreamRegistry sets the stream registry on the handler for protocol queries.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
 	h.streamRegistry = reg
@@ -418,6 +415,7 @@ func (h *LLHLSStreamHandler) SupportedCodec(codec model.Format) bool {
 func (h *LLHLSStreamHandler) UnavailabilityReason(_ model.Format) string {
 	return "Enable low-latency HLS in Settings"
 }
+
 // --- WSStreamHandler ---
 
 // WSStreamHandler implements StreamHandler for WebSocket streaming.

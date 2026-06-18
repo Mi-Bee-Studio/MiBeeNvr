@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // --- SignInWithCaptcha validation tests ---
 
 func TestSignInWithCaptchaEmptyUsername(t *testing.T) {
@@ -127,7 +126,7 @@ func TestCaptchaSessionErrorUnwrap(t *testing.T) {
 	t.Helper()
 	inner := &LoginError{VerifyPhone: "+1234"}
 	e := &CaptchaSessionError{
-		LoginError:        inner,
+		LoginError:       inner,
 		CaptchaSessionID: "session-abc",
 	}
 	require.Equal(t, inner.Error(), e.Error())

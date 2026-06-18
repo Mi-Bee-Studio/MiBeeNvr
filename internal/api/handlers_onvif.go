@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -79,6 +79,7 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 
 	writeJSON(w, http.StatusOK, detailed)
 }
+
 // --- ONVIF discovery endpoints ---
 
 // handleONVIFProbe probes a single ONVIF device by sending a WS-Discovery

@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
@@ -135,6 +136,7 @@ type Handler struct {
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
+	relayMgr          *relay.Manager
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
@@ -162,11 +164,11 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
 	// Public routes
-	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording) // Public for video playback
+	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)  // Public for video playback
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
-	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording) // Public for timelapse video playback
-	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
-	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
+	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)      // Public for timelapse video playback
+	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording)     // HEAD for browser <video> probe
+	r.Get("/models/{filename}", h.handleServeModel)                    // Public for browser-side AI model loading
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -248,11 +250,11 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
-	r.Get("/api/settings", h.handleGetSettings)
-	r.Put("/api/settings", h.handleUpdateSettings)
-	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
-	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
-	r.Get("/api/settings/merge", h.handleGetMergeSettings)
+		r.Get("/api/settings", h.handleGetSettings)
+		r.Put("/api/settings", h.handleUpdateSettings)
+		r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
+		r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+		r.Get("/api/settings/merge", h.handleGetMergeSettings)
 		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
@@ -307,6 +309,9 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
 		// Push-out relay status (per-camera)
 		r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
+		// Relay platform presets
+		r.Get("/api/relay-presets", h.handleListRelayPresets)
+		r.Get("/api/relay-presets/{name}", h.handleGetRelayPreset)
 		// Transcoding endpoints
 		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
 		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
@@ -465,7 +470,6 @@ func (h *Handler) SetEventBus(bus *event.EventBus) {
 	h.eventBus = bus
 }
 
-
 // SetTimelapseMergeMgr sets the timelapse rolling merge manager on the handler.
 func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 	h.timelapseMergeMgr = mgr
@@ -481,6 +485,10 @@ func (h *Handler) SetAIHandler(ah *AIHandler) {
 	h.aiHandler = ah
 }
 
+// SetRelayManager wires the relay manager for the relay-presets endpoints.
+func (h *Handler) SetRelayManager(mgr *relay.Manager) {
+	h.relayMgr = mgr
+}
 
 // --- Per-camera streaming protocols endpoint ---
 

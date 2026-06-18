@@ -100,6 +100,7 @@ export type {
   TestConnectionResult,
   VendorCheckResult,
   PushTargetConfig,
+  VideoPresetOverrides,
   PushTargetStatus,
   PushStatusResponse,
   // Imaging

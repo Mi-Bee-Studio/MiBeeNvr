@@ -57,8 +57,8 @@ func TestStreamRegistry_H265ExcludesWebRTC(t *testing.T) {
 	reg.Register(&HLSStreamHandler{})
 	// Register stub WebRTC handler (supports H.264 only)
 	reg.Register(&stubStreamHandler{
-		name:    "webrtc",
-		codecs:  []model.Format{model.FormatH264},
+		name:   "webrtc",
+		codecs: []model.Format{model.FormatH264},
 	})
 
 	// H.264 camera: both HLS and WebRTC available
@@ -78,8 +78,8 @@ func TestStreamRegistry_FLVSupportsH264AndH265(t *testing.T) {
 
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{
-		name:    "flv",
-		codecs:  []model.Format{model.FormatH264, model.FormatH265},
+		name:   "flv",
+		codecs: []model.Format{model.FormatH264, model.FormatH265},
 	})
 
 	// H.265: HLS and FLV available, not WebRTC
@@ -160,16 +160,16 @@ func TestProtocolsEndpoint_RegistryIntegration(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{
-		name:    "webrtc",
-		codecs:  []model.Format{model.FormatH264},
+		name:   "webrtc",
+		codecs: []model.Format{model.FormatH264},
 	})
 	reg.Register(&stubStreamHandler{
-		name:    "flv",
-		codecs:  []model.Format{model.FormatH264, model.FormatH265},
+		name:   "flv",
+		codecs: []model.Format{model.FormatH264, model.FormatH265},
 	})
 	reg.Register(&stubStreamHandler{
-		name:    "ll-hls",
-		codecs:  []model.Format{model.FormatH264, model.FormatH265},
+		name:   "ll-hls",
+		codecs: []model.Format{model.FormatH264, model.FormatH265},
 	})
 
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
@@ -200,7 +200,7 @@ type stubStreamHandler struct {
 	codecs []model.Format
 }
 
-func (s *stubStreamHandler) Name() string                                 { return s.name }
+func (s *stubStreamHandler) Name() string { return s.name }
 func (s *stubStreamHandler) CanHandle(codec model.Format) bool {
 	for _, c := range s.codecs {
 		if c == codec {

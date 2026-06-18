@@ -676,8 +676,8 @@ func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":          h.config.Transcoding.Enabled,
-		"max_workers":       h.config.Transcoding.MaxWorkers,
+		"enabled":     h.config.Transcoding.Enabled,
+		"max_workers": h.config.Transcoding.MaxWorkers,
 	})
 }
 
@@ -688,8 +688,8 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 	}
 
 	var body struct {
-		Enabled         *bool `json:"enabled"`
-		MaxWorkers      *int  `json:"max_workers"`
+		Enabled    *bool `json:"enabled"`
+		MaxWorkers *int  `json:"max_workers"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

@@ -33,8 +33,8 @@ type IngestConfig struct {
 	Store SegmentStore // satisfies *storage.Manager
 	DB    RecordingDB
 	// Metrics, EventBus optional (nil-safe)
-	Metrics    *metrics.Metrics
-	EventBus   *event.EventBus
+	Metrics  *metrics.Metrics
+	EventBus *event.EventBus
 }
 
 // IngestRecorder records H.264 video pushed into the NVR via SRT/RTMP ingest.
@@ -117,6 +117,19 @@ func (r *IngestRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte
 	defer r.mu.Unlock()
 	return model.FormatH264, r.sps, r.pps, nil
 }
+
+// AudioCodec returns the audio codec name. IngestRecorder does not currently
+// support audio; returns empty string.
+func (r *IngestRecorder) AudioCodec() string { return "" }
+
+// AudioConfig returns audio config bytes. Always nil for ingest (no audio).
+func (r *IngestRecorder) AudioConfig() []byte { return nil }
+
+// AudioSampleRate returns the audio sample rate. Always 0 for ingest (no audio).
+func (r *IngestRecorder) AudioSampleRate() int { return 0 }
+
+// AudioChannels returns the number of audio channels. Always 0 for ingest (no audio).
+func (r *IngestRecorder) AudioChannels() int { return 0 }
 
 // Start initializes the recorder into the Idle state (awaiting a publisher).
 // It does NOT dial any source — unlike the pull recorders, there is nothing to

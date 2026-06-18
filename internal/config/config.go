@@ -40,7 +40,7 @@ type Config struct {
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
-	Timezone    string              `yaml:"timezone"`        // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
+	Timezone      string              `yaml:"timezone"` // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
 }
 
 type ServerConfig struct {
@@ -75,8 +75,8 @@ type CameraConfig struct {
 	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
-	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
-	Vendor string `yaml:"vendor,omitempty"` // Transport vendor: "cs2" (default)
+	DID     string `yaml:"did,omitempty"`     // Xiaomi Device ID
+	Vendor  string `yaml:"vendor,omitempty"`  // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 
 	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
@@ -99,11 +99,25 @@ type CameraConfig struct {
 
 // PushTargetConfig defines one push-out (relay) destination for a camera.
 type PushTargetConfig struct {
-	ID       string `yaml:"id" json:"id"`             // stable id within the camera (kebab/uuid)
-	Name     string `yaml:"name,omitempty" json:"name,omitempty"`
-	Protocol string `yaml:"protocol" json:"protocol"` // "rtmp" or "rtsp"
-	URL      string `yaml:"url" json:"url"`           // rtmp://host[:port]/app/key | rtsp://host[:port]/path
-	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	ID                  string                `yaml:"id" json:"id"` // stable id within the camera (kebab/uuid)
+	Name                string                `yaml:"name,omitempty" json:"name,omitempty"`
+	Protocol            string                `yaml:"protocol" json:"protocol"` // "rtmp" or "rtsp"
+	URL                 string                `yaml:"url" json:"url"`           // rtmp://host[:port]/app/key | rtsp://host[:port]/path
+	Enabled             bool                  `yaml:"enabled" json:"enabled"`
+	Platform            string                `yaml:"platform,omitempty" json:"platform,omitempty"`                 // preset name (bilibili/douyin/youtube/kuaishou/generic/empty)
+	TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"` // auto/force_sw/off
+	VideoPresetOverride *VideoPresetOverrides `yaml:"video_preset_override,omitempty" json:"video_preset_override,omitempty"`
+}
+
+// VideoPresetOverrides allows overriding individual encoding parameters
+// for a push target. Only non-zero/non-empty fields are applied.
+type VideoPresetOverrides struct {
+	Resolution       string `yaml:"resolution,omitempty" json:"resolution,omitempty"`
+	Framerate        int    `yaml:"framerate,omitempty" json:"framerate,omitempty"`
+	VideoBitrateKbps int    `yaml:"video_bitrate_kbps,omitempty" json:"video_bitrate_kbps,omitempty"`
+	GopSeconds       int    `yaml:"gop_seconds,omitempty" json:"gop_seconds,omitempty"`
+	Profile          string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	Bframes          int    `yaml:"bframes,omitempty" json:"bframes,omitempty"`
 }
 
 // HealthOverrides allows per-camera health monitoring threshold overrides.
@@ -165,33 +179,33 @@ type ScheduleConfig struct {
 }
 
 type CameraTimelapseConfig struct {
-	Enabled        bool            `yaml:"enabled" json:"enabled"`                                                       // default false
-	Interval       string          `yaml:"interval,omitempty" json:"interval,omitempty"`                                 // snapshot interval, default "30s", min 1s
-	FrameSource    string          `yaml:"frame_source,omitempty" json:"frame_source,omitempty"`                         // auto, snapshot, rtsp_keyframe, mjpeg — default auto
-	SnapshotURL    string          `yaml:"snapshot_url,omitempty" json:"snapshot_url,omitempty"`                       // URL for snapshot source (required when frame_source=snapshot)
-	Schedule       *ScheduleConfig `yaml:"schedule,omitempty" json:"schedule,omitempty"`                               // nil = 24/7 recording
-	Paused         bool            `yaml:"paused" json:"paused"`                                                           // pause timelapse recording, default false
-	DeleteOriginal bool            `yaml:"delete_original,omitempty" json:"delete_original,omitempty"`                   // remove original segments after timelapse, default false
-	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`                       // auto-detect (nil=auto)
-	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`                             // auto, mp4, jpeg — default auto
-	DailyMerge     *bool  `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`                           // default true
-	MergeDuration  string `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
-	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"`                 // default 30, range 1-60
+	Enabled        bool            `yaml:"enabled" json:"enabled"`                                     // default false
+	Interval       string          `yaml:"interval,omitempty" json:"interval,omitempty"`               // snapshot interval, default "30s", min 1s
+	FrameSource    string          `yaml:"frame_source,omitempty" json:"frame_source,omitempty"`       // auto, snapshot, rtsp_keyframe, mjpeg — default auto
+	SnapshotURL    string          `yaml:"snapshot_url,omitempty" json:"snapshot_url,omitempty"`       // URL for snapshot source (required when frame_source=snapshot)
+	Schedule       *ScheduleConfig `yaml:"schedule,omitempty" json:"schedule,omitempty"`               // nil = 24/7 recording
+	Paused         bool            `yaml:"paused" json:"paused"`                                       // pause timelapse recording, default false
+	DeleteOriginal bool            `yaml:"delete_original,omitempty" json:"delete_original,omitempty"` // remove original segments after timelapse, default false
+	MergeEnabled   *bool           `yaml:"merge_enabled,omitempty" json:"merge_enabled,omitempty"`     // auto-detect (nil=auto)
+	MergeMode      string          `yaml:"merge_mode,omitempty" json:"merge_mode,omitempty"`           // auto, mp4, jpeg — default auto
+	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`         // default true
+	MergeDuration  string          `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
+	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"` // default 30, range 1-60
 }
 
 type AuthConfig struct {
-	Username     string         `yaml:"username"`
-	PasswordHash string         `yaml:"password_hash"`
-	Password     string         `yaml:"password"`
+	Username     string          `yaml:"username"`
+	PasswordHash string          `yaml:"password_hash"`
+	Password     string          `yaml:"password"`
 	RateLimit    RateLimitConfig `yaml:"rate_limit"`
 }
 
 // RateLimitConfig controls auth failure rate limiting.
 // When Enabled is false (default), no rate limiting is applied.
 type RateLimitConfig struct {
-	Enabled       *bool  `yaml:"enabled"`        // default false
-	MaxFailures   int    `yaml:"max_failures"`   // default 20
-	WindowMinutes int    `yaml:"window_minutes"` // default 1
+	Enabled       *bool `yaml:"enabled"`        // default false
+	MaxFailures   int   `yaml:"max_failures"`   // default 20
+	WindowMinutes int   `yaml:"window_minutes"` // default 1
 }
 
 type FTPConfig struct {
@@ -336,11 +350,12 @@ type MetricsAuthConfig struct {
 	Password     string `yaml:"password"`
 	PasswordHash string `yaml:"password_hash"`
 }
+
 // APIKeyConfig represents a single API key for MiBeeVision integration.
 type APIKeyConfig struct {
-	Key   string `yaml:"key" json:"key"`
-	Name  string `yaml:"name" json:"name"`
-	Revoked bool `yaml:"revoked,omitempty" json:"revoked,omitempty"`
+	Key     string `yaml:"key" json:"key"`
+	Name    string `yaml:"name" json:"name"`
+	Revoked bool   `yaml:"revoked,omitempty" json:"revoked,omitempty"`
 }
 type WebSocketConfig struct {
 	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
@@ -349,12 +364,12 @@ type WebSocketConfig struct {
 }
 
 type AIConfig struct {
-	Enabled             bool              `yaml:"enabled" json:"enabled"`
-	EnabledCameras      []string          `yaml:"enabled_cameras" json:"enabledCameras"`
-	ModelURL            string            `yaml:"model_url" json:"modelUrl"`
+	Enabled             bool                `yaml:"enabled" json:"enabled"`
+	EnabledCameras      []string            `yaml:"enabled_cameras" json:"enabledCameras"`
+	ModelURL            string              `yaml:"model_url" json:"modelUrl"`
 	Zones               map[string][]ai.ROI `yaml:"zones" json:"zones"`
-	FrameSkipRate       int               `yaml:"frame_skip_rate" json:"frameSkipRate"`
-	ConfidenceThreshold float64           `yaml:"confidence_threshold" json:"confidenceThreshold"`
+	FrameSkipRate       int                 `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64             `yaml:"confidence_threshold" json:"confidenceThreshold"`
 }
 
 // IsConfigured returns true if both username and a password (or hash) are set.
@@ -517,6 +532,43 @@ func Validate(cfg *Config) error {
 			}
 			if pu.Scheme != wantScheme && pu.Scheme != wantScheme+"s" {
 				return fmt.Errorf("camera[%d].push_targets[%d].url scheme must be %s://, got %s", i, j, wantScheme, pu.Scheme)
+			}
+			// Validate platform preset name.
+			if pt.Platform != "" {
+				if matched, _ := regexp.MatchString(`^[a-zA-Z0-9_]+$`, pt.Platform); !matched {
+					return fmt.Errorf("camera[%d].push_targets[%d].platform must be alphanumeric (underscores allowed)", i, j)
+				}
+			}
+			// Validate transcode policy.
+			switch pt.TranscodePolicy {
+			case "", "auto", "force_sw", "off":
+				// valid
+			default:
+				return fmt.Errorf("camera[%d].push_targets[%d].transcode_policy must be one of \"auto\", \"force_sw\", \"off\" (got %q)", i, j, pt.TranscodePolicy)
+			}
+			// Validate video preset overrides.
+			if pt.VideoPresetOverride != nil {
+				v := pt.VideoPresetOverride
+				if v.Resolution != "" {
+					if matched, _ := regexp.MatchString(`^\d+x\d+$`, v.Resolution); !matched {
+						return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.resolution must be in format WxH (e.g. 1920x1080)", i, j)
+					}
+				}
+				if v.Framerate > 0 && (v.Framerate < 1 || v.Framerate > 120) {
+					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.framerate must be between 1 and 120", i, j)
+				}
+				if v.VideoBitrateKbps > 0 && (v.VideoBitrateKbps < 100 || v.VideoBitrateKbps > 50000) {
+					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.video_bitrate_kbps must be between 100 and 50000", i, j)
+				}
+				if v.GopSeconds > 0 && (v.GopSeconds < 1 || v.GopSeconds > 10) {
+					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.gop_seconds must be between 1 and 10", i, j)
+				}
+				if v.Profile != "" && v.Profile != "baseline" && v.Profile != "main" && v.Profile != "high" {
+					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.profile must be one of \"baseline\", \"main\", \"high\" (got %q)", i, j, v.Profile)
+				}
+				if v.Bframes < 0 || v.Bframes > 2 {
+					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.bframes must be between 0 and 2", i, j)
+				}
 			}
 		}
 
