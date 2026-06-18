@@ -34,12 +34,6 @@ var (
 	ErrMaxViewers     = errors.New("wsstream: max viewers reached")
 )
 
-// frameMsg is an internal frame representation passed through the per-stream channel.
-type frameMsg struct {
-	pts        int64
-	au         [][]byte
-	isKeyframe bool
-}
 
 // viewerConn represents a connected WebSocket client.
 type viewerConn struct {
@@ -58,7 +52,7 @@ type streamEntry struct {
 	viewers    map[int64]*viewerConn
 	viewerSeq  atomic.Int64
 	viewerMu   sync.Mutex
-	frameCh    chan frameMsg
+	frameCh    chan model.FrameMsg
 	cancel     context.CancelFunc
 	hub        *model.StreamHub
 	hubSubID   string
@@ -145,7 +139,7 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		pps:       pps,
 		vps:       vps,
 		viewers:   make(map[int64]*viewerConn),
-		frameCh:   make(chan frameMsg, m.writeBufSize),
+		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
 		cancel:    cancel,
 		hub:       hub,
 	}
@@ -262,7 +256,7 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		traceID = fmt.Sprintf("%s-%d", camID, pts)
 	}
 	select {
-	case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
 		slog.Debug("frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
@@ -299,9 +293,9 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 			return
 		case msg := <-entry.frameCh:
 			encoded, err := EncodeVideoFrame(&VideoFrame{
-				PTS:        msg.pts,
-				IsKeyframe: msg.isKeyframe,
-				NALUs:      msg.au,
+				PTS:        msg.PTS,
+				IsKeyframe: msg.IsKeyframe,
+				NALUs:      msg.AU,
 			})
 			if err != nil {
 				wsLogger.Load().Warn("WebSocket encode frame error", "camera_id", camID, "error", err)

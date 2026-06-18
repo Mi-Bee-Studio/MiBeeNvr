@@ -46,16 +46,10 @@ type streamEntry struct {
 	viewers   map[int64]*viewerConn
 	viewerSeq atomic.Int64
 	viewerMu  sync.Mutex
-	frameCh   chan frameMsg
+	frameCh   chan model.FrameMsg
 	cancel    context.CancelFunc
 	hub       *model.StreamHub
 	hubSubID  string
-}
-
-type frameMsg struct {
-	pts        int64
-	au         [][]byte
-	isKeyframe bool
 }
 
 // viewerConn represents a connected FLV client.
@@ -145,7 +139,7 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		seqHeader: seqHeader,
 		gopCache:  &gopCache{},
 		viewers:   make(map[int64]*viewerConn),
-		frameCh:   make(chan frameMsg, m.writeBufSize),
+		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
 		cancel:    cancel,
 		hub:       hub,
 	}
@@ -246,7 +240,7 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 
 	// Non-blocking send
 	select {
-	case entry.frameCh <- frameMsg{pts: pts, au: au, isKeyframe: isKeyframe}:
+	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
 		slog.Debug("frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
@@ -276,17 +270,17 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 		case <-ctx.Done():
 			return
 		case msg := <-entry.frameCh:
-			tag := videoFrameTag(entry.codec, msg.au, msg.pts, msg.isKeyframe)
+			tag := videoFrameTag(entry.codec, msg.AU, msg.PTS, msg.IsKeyframe)
 
 			// Update GOP cache on keyframe
-			if msg.isKeyframe {
+			if msg.IsKeyframe {
 				entry.gopMu.Lock()
 				entry.gopCache.frames = entry.gopCache.frames[:0]
 				entry.gopCache.seqHeader = entry.seqHeader
 				entry.gopCache.frames = append(entry.gopCache.frames, cachedFrame{
 					tag:        tag,
 					isKeyframe: true,
-					pts:        msg.pts,
+					pts:        msg.PTS,
 				})
 				entry.gopMu.Unlock()
 			} else {
@@ -295,7 +289,7 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 					entry.gopCache.frames = append(entry.gopCache.frames, cachedFrame{
 						tag:        tag,
 						isKeyframe: false,
-						pts:        msg.pts,
+						pts:        msg.PTS,
 					})
 				}
 				entry.gopMu.Unlock()
