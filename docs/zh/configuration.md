@@ -354,6 +354,38 @@ cameras:
 - **描述**: 每个摄像头的帧超时阈值。如果在此时间内未收到新帧，将触发看门狗重启
 - **示例**: `"30s"`, `"60s"`, `"2m"`
 
+### `cameras[].push_targets`
+- **类型**: array of objects
+- **可选**: 是（任何摄像头协议均可）
+- **描述**: 推流转发目标 — 将此摄像头的直播流转发到远程目的地（另一个 NVR 的推流接收、直播平台、备份）。纯 Go 实现，无需 FFmpeg。每个目标是一个独立连接。参见[推流转发指南](./relay-guide.md)。
+- **每个目标的字段**:
+  - `id` (string, required) — 摄像头内稳定标识符
+  - `name` (string, optional) — 显示名称
+  - `protocol` (string, required) — `"rtmp"` 或 `"rtsp"`
+  - `url` (string, required) — 目标 URL（`rtmp://host:1935/app/key` 或 `rtsp://host:8554/path`）
+  - `enabled` (boolean, required) — 目标是否启用
+  - `platform` (string, optional) — 平台预设：`"bilibili"`、`"douyin"`、`"youtube"`、`"kuaishou"`、`"generic"`，或留空表示自定义
+  - `transcode_policy` (string, optional, 默认: `"off"`) — `"auto"`（探测硬件，回退软件转码）、`"force_sw"`（始终使用 libx264）、`"off"`（拒绝 H.265 源）
+  - `video_preset_override` (object, optional) — 覆盖预设参数：`{ resolution, framerate, video_bitrate_kbps, gop_seconds, profile, bframes }`
+- **注意**: H.264 源零拷贝直接转发。H.265 源在设置 `transcode_policy` 时会实时转码为 H.264（需要 FFmpeg）。热监控保护 ARM 单板计算机在转码期间免受过热影响。参见[推流转发指南](./relay-guide.md)了解详情。
+
+## API Keys 配置
+
+### `api_keys`
+- **类型**: array of objects
+- **可选**: 是
+- **描述**: MiBeeVision API 密钥，用于外部 AI 处理集成。密钥使用 `mbv_` 前缀，通过 Bearer token 进行身份验证（在 BasicAuth 之前检查）。参见[身份验证](./api/authentication.md)了解详情。
+- **每个密钥的字段**:
+  - `name` (string, required) — 密钥的显示名称
+  - `key` (string, required) — API 密钥值（必须以 `mbv_` 开头）
+- **示例**:
+  ```yaml
+  api_keys:
+    - name: "MiBeeVision Production"
+      key: "mbv_a1b2c3d4e5f6..."
+  ```
+- **注意**: 如果设置了 `NVR_ENCRYPTION_KEY`，密钥会在保存时自动加密。通过 `POST /api/settings/api-keys` 生成新密钥。
+
 ## 清理配置
 
 ### `cleanup.retention_days`

@@ -183,6 +183,127 @@ curl -u username:password \
 }
 ```
 
+## Create Recording
+
+**Endpoint:** `POST /api/recordings`
+
+Register a new recording in the database. Used by MiBeeVision to create recording entries for externally-processed footage.
+
+**Auth:** API Key (Bearer token with `mbv_` prefix) or BasicAuth
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | No | Recording ID (auto-generated if omitted) |
+| `camera_id` | string | Yes | Camera identifier |
+| `file_path` | string | Yes | Path to the recording file |
+| `format` | string | Yes | Recording format (`h264`, `h265`, `mjpeg`, etc.) |
+| `started_at` | string | No | Start time (RFC3339 format, defaults to now) |
+| `ended_at` | string | No | End time (RFC3339 format) |
+| `duration` | number | No | Duration in seconds |
+| `file_size` | integer | No | File size in bytes |
+| `frame_count` | integer | No | Number of frames |
+
+**Request:**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "camera_id": "front-door",
+    "file_path": "/data/recordings/h264/front-door_1704123456789012345.mp4",
+    "format": "h264",
+    "started_at": "2024-01-01T12:34:56.789Z",
+    "ended_at": "2024-01-01T12:35:06.789Z",
+    "duration": 10.0,
+    "file_size": 1048576,
+    "frame_count": 300
+  }' \
+  "http://localhost:9090/api/recordings"
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "1704123456789012345",
+  "status": "created"
+}
+```
+
+## Update Recording
+
+**Endpoint:** `PATCH /api/recordings/{id}`
+
+Update recording metadata fields. Used by MiBeeVision to update recording details after processing.
+
+**Auth:** API Key (Bearer token with `mbv_` prefix) or BasicAuth
+
+**Request Body:** All fields are optional — only provided fields will be updated.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file_path` | string | Updated file path |
+| `format` | string | Updated format |
+| `ended_at` | string | Updated end time (RFC3339 format) |
+| `duration` | number | Updated duration in seconds |
+| `file_size` | integer | Updated file size in bytes |
+| `frame_count` | integer | Updated frame count |
+
+**Request:**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{
+    "duration": 15.5,
+    "file_size": 2097152
+  }' \
+  "http://localhost:9090/api/recordings/1704123456789012345"
+```
+
+**Response:** `200 OK`
+```json
+{
+  "id": "1704123456789012345",
+  "status": "updated"
+}
+```
+
+## Update Recording AI Status
+
+**Endpoint:** `PATCH /api/recordings/{id}/ai-status`
+
+Update the AI processing status of a recording. Used by MiBeeVision to report processing progress and prevent duplicate processing.
+
+**Auth:** API Key (Bearer token with `mbv_` prefix)
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `status` | string | Yes | AI status: `pending`, `processing`, `done`, `failed`, or `skipped` |
+| `error` | string | No | Error message if status is `failed` |
+
+**Request:**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "done"
+  }' \
+  "http://localhost:9090/api/recordings/1704123456789012345/ai-status"
+```
+
+**Response:** `200 OK`
+```json
+{
+  "recording_id": "1704123456789012345",
+  "ai_status": "done"
+}
+```
+
 ## Download Merged Recording
 
 **Endpoint:** `GET /api/recordings/{id}/merged`

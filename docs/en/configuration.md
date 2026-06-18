@@ -465,7 +465,27 @@ cameras:
   - `protocol` (string, required) — `"rtmp"` or `"rtsp"`
   - `url` (string, required) — target URL (`rtmp://host:1935/app/key` or `rtsp://host:8554/path`)
   - `enabled` (boolean, required) — whether the target is active
-- **Note**: H.264 source required for RTMP targets (remux only, no transcode). The relay subscribes to the camera's StreamHub (zero-copy).
+  - `platform` (string, optional) — platform preset: `"bilibili"`, `"douyin"`, `"youtube"`, `"kuaishou"`, `"generic"`, or empty for custom
+  - `transcode_policy` (string, optional, default: `"off"`) — `"auto"` (probe hardware, fallback software), `"force_sw"` (always libx264), `"off"` (reject H.265 sources)
+  - `video_preset_override` (object, optional) — override preset params: `{ resolution, framerate, video_bitrate_kbps, gop_seconds, profile, bframes }`
+- **Note**: H.264 sources are remuxed zero-copy. H.265 sources are live-transcoded to H.264 when `transcode_policy` is set (requires FFmpeg). Thermal monitoring protects ARM SBCs from overheating during transcode. See [Relay Guide](./relay-guide.md) for details.
+
+## API Keys Configuration
+
+### `api_keys`
+- **Type**: array of objects
+- **Optional**: Yes
+- **Description**: MiBeeVision API keys for external AI processing integration. Keys use the `mbv_` prefix and are authenticated via Bearer token (checked before BasicAuth). See [Authentication](./api/authentication.md) for details.
+- **Fields per key**:
+  - `name` (string, required) — display name for the key
+  - `key` (string, required) — the API key value (must start with `mbv_`)
+- **Example**:
+  ```yaml
+  api_keys:
+    - name: "MiBeeVision Production"
+      key: "mbv_a1b2c3d4e5f6..."
+  ```
+- **Note**: Keys are auto-encrypted on save if `NVR_ENCRYPTION_KEY` is set. Generate new keys via `POST /api/settings/api-keys`.
 
 ## Cleanup Configuration
 

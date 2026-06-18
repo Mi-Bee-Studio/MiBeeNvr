@@ -183,6 +183,127 @@ curl -u username:password \
 }
 ```
 
+## 创建录制
+
+**端点：** `POST /api/recordings`
+
+在数据库中注册一个新的录制记录。用于 MiBeeVision 创建外部处理视频的录制条目。
+
+**认证：** API 密钥（带有 `mbv_` 前缀的 Bearer token）或 BasicAuth
+
+**请求体：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|-------|------|----------|-------------|
+| `id` | string | 否 | 录制 ID（省略时自动生成） |
+| `camera_id` | string | 是 | 摄像头标识 |
+| `file_path` | string | 是 | 录制文件路径 |
+| `format` | string | 是 | 录制格式（`h264`、`h265`、`mjpeg` 等） |
+| `started_at` | string | 否 | 开始时间（RFC3339 格式，默认为当前时间） |
+| `ended_at` | string | 否 | 结束时间（RFC3339 格式） |
+| `duration` | number | 否 | 时长（秒） |
+| `file_size` | integer | 否 | 文件大小（字节） |
+| `frame_count` | integer | 否 | 帧数 |
+
+**请求：**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "camera_id": "front-door",
+    "file_path": "/data/recordings/h264/front-door_1704123456789012345.mp4",
+    "format": "h264",
+    "started_at": "2024-01-01T12:34:56.789Z",
+    "ended_at": "2024-01-01T12:35:06.789Z",
+    "duration": 10.0,
+    "file_size": 1048576,
+    "frame_count": 300
+  }' \
+  "http://localhost:9090/api/recordings"
+```
+
+**响应：** `201 Created`
+```json
+{
+  "id": "1704123456789012345",
+  "status": "created"
+}
+```
+
+## 更新录制
+
+**端点：** `PATCH /api/recordings/{id}`
+
+更新录制元数据字段。用于 MiBeeVision 在处理后更新录制详情。
+
+**认证：** API 密钥（带有 `mbv_` 前缀的 Bearer token）或 BasicAuth
+
+**请求体：** 所有字段均为可选 — 仅更新提供的字段。
+
+| 字段 | 类型 | 说明 |
+|-------|------|-------------|
+| `file_path` | string | 更新后的文件路径 |
+| `format` | string | 更新后的格式 |
+| `ended_at` | string | 更新后的结束时间（RFC3339 格式） |
+| `duration` | number | 更新后的时长（秒） |
+| `file_size` | integer | 更新后的文件大小（字节） |
+| `frame_count` | integer | 更新后的帧数 |
+
+**请求：**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{
+    "duration": 15.5,
+    "file_size": 2097152
+  }' \
+  "http://localhost:9090/api/recordings/1704123456789012345"
+```
+
+**响应：** `200 OK`
+```json
+{
+  "id": "1704123456789012345",
+  "status": "updated"
+}
+```
+
+## 更新录制 AI 状态
+
+**端点：** `PATCH /api/recordings/{id}/ai-status`
+
+更新录制的 AI 处理状态。用于 MiBeeVision 报告处理进度并防止重复处理。
+
+**认证：** API 密钥（带有 `mbv_` 前缀的 Bearer token）
+
+**请求体：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|-------|------|----------|-------------|
+| `status` | string | 是 | AI 状态：`pending`、`processing`、`done`、`failed` 或 `skipped` |
+| `error` | string | 否 | `failed` 状态时的错误信息 |
+
+**请求：**
+```bash
+curl -H "Authorization: Bearer mbv_your_api_key_here" \
+  -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "done"
+  }' \
+  "http://localhost:9090/api/recordings/1704123456789012345/ai-status"
+```
+
+**响应：** `200 OK`
+```json
+{
+  "recording_id": "1704123456789012345",
+  "ai_status": "done"
+}
+```
+
 ## 下载合并录制
 
 **端点：** `GET /api/recordings/{id}/merged`

@@ -21,7 +21,8 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | Xiaomi | [xiaomi.md](xiaomi.md) | Cloud auth, captcha, device management |
 | Merge & Timelapse Config | [merge.md](merge.md) | Merge status, pending counts, camera merge/timelapse config |
 | Transcoding | [transcoding.md](transcoding.md) | FFmpeg management, transcode tasks, backfill, camera configs |
-| AI Detection | [ai-detection.md](ai-detection.md) | AI config, ROI zones, model serving (browser-side inference) |
+| Relay | [relay-guide.md](../relay-guide.md) | Push-out relay presets, camera relay status |
+| AI Detection | [ai-detection.md](ai-detection.md) | AI config, ROI zones, model serving, AI event API (browser-side inference) |
 | Events | [events.md](events.md) | Event stream (SSE), camera events, telemetry |
 | Timelapse & Protocols | [timelapse-protocols.md](timelapse-protocols.md) | Timelapse status, supported protocols, feature flags |
 | Backup | [backup.md](backup.md) | Create/list database backups |
