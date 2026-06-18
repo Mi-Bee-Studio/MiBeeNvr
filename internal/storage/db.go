@@ -362,8 +362,8 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT ''")
 	}
 	// Register the new protocols as feature flags so the Settings UI can gate them.
-	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.srt', 1)`)
-	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(name, enabled) VALUES('protocol.rtmp', 1)`)
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.srt', 1)`)
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.rtmp', 1)`)
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
 
 	return nil

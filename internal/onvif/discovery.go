@@ -165,7 +165,7 @@ func probeViaWSDiscovery(ctx context.Context, endpoint string) (*DiscoveredDevic
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %w", err)
 	}
@@ -286,7 +286,7 @@ func fetchDeviceInformation(ctx context.Context, endpoint string) (*deviceInfoFi
 	}
 	req.Header.Set("Content-Type", "application/soap+xml")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GetDeviceInformation request failed: %w", err)
 	}

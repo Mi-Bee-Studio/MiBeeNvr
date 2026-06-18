@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -170,8 +172,10 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 }
 
 func TestRateLimiterAllowsUnderLimit(t *testing.T) {
-	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 5, Window: time.Minute})
-	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rl := NewRateLimiter(ctx, RateLimiterConfig{MaxRequests: 5, Window: time.Minute})
+	handler := rl.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 5 requests (at the limit) — should all pass
@@ -184,8 +188,10 @@ func TestRateLimiterAllowsUnderLimit(t *testing.T) {
 }
 
 func TestRateLimiterBlocksOverLimit(t *testing.T) {
-	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 3, Window: time.Minute})
-	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rl := NewRateLimiter(ctx, RateLimiterConfig{MaxRequests: 3, Window: time.Minute})
+	handler := rl.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 3 requests (at the limit) — all pass
@@ -204,8 +210,10 @@ func TestRateLimiterBlocksOverLimit(t *testing.T) {
 }
 
 func TestRateLimiterResetsAfterWindow(t *testing.T) {
-	rl := NewRateLimiter(RateLimiterConfig{MaxRequests: 1, Window: 50 * time.Millisecond})
-	handler := rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rl := NewRateLimiter(ctx, RateLimiterConfig{MaxRequests: 1, Window: 50 * time.Millisecond})
+	handler := rl.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -263,4 +271,59 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	require.Equal(t, http.StatusOK, w2.Code)
+}
+
+func TestRateLimiterEvictsStaleEntries(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rl := NewRateLimiter(ctx, RateLimiterConfig{MaxRequests: 100, Window: 50 * time.Millisecond})
+	handler := rl.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Create entries from 100 different IPs
+	for i := 0; i < 100; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "192.168.1." + strconv.Itoa(i) + ":12345"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+
+	// Verify entries were created
+	require.Equal(t, 100, rl.entryCount(), "should have 100 entries before eviction")
+
+	// Wait for 2× window + buffer to ensure cleanup ticker fires
+	time.Sleep(110 * time.Millisecond)
+
+	// After cleanup, entries should be evicted
+	require.Equal(t, 0, rl.entryCount(), "entries should be evicted after 2× window")
+}
+
+func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rl := NewRateLimiter(ctx, RateLimiterConfig{MaxRequests: 1, Window: 50 * time.Millisecond})
+	handler := rl.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Create an entry
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, rl.entryCount())
+
+	// Cancel context to stop cleanup goroutine
+	cancel()
+
+	// Give goroutine time to exit
+	time.Sleep(10 * time.Millisecond)
+
+	// Rate limiter should still work (no panic, no deadlock)
+	req2 := httptest.NewRequest("GET", "/", nil)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusTooManyRequests, w2.Code, "second request from same IP should be blocked when MaxRequests=1")
 }

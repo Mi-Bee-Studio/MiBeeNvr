@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"encoding/base64"
 	"log/slog"
 	"net/http"
@@ -224,35 +225,82 @@ type RateLimiterConfig struct {
 	Window      time.Duration
 }
 
-// NewRateLimiter returns a middleware that rate limits requests per IP
-// using a sliding window approach.
-func NewRateLimiter(cfg RateLimiterConfig) func(http.Handler) http.Handler {
-	var mu sync.Mutex
-	entries := make(map[string]*rateLimitEntry)
+// RateLimiter provides per-IP rate limiting with automatic stale entry cleanup.
+type RateLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*rateLimitEntry
+	cfg     RateLimiterConfig
+}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := extractIP(r.RemoteAddr)
-
-			mu.Lock()
-			entry, ok := entries[ip]
-			now := time.Now()
-
-			if !ok || now.Sub(entry.windowStart) > cfg.Window {
-				entries[ip] = &rateLimitEntry{count: 1, windowStart: now}
-				mu.Unlock()
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			entry.count++
-			if entry.count > cfg.MaxRequests {
-				mu.Unlock()
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-			mu.Unlock()
-			next.ServeHTTP(w, r)
-		})
+// NewRateLimiter creates a new RateLimiter and starts a background cleanup goroutine.
+// The cleanup goroutine exits when ctx is cancelled.
+// Every 2×Window period, stale entries (older than Window) are evicted.
+func NewRateLimiter(ctx context.Context, cfg RateLimiterConfig) *RateLimiter {
+	rl := &RateLimiter{
+		entries: make(map[string]*rateLimitEntry),
+		cfg:     cfg,
 	}
+	go rl.cleanupLoop(ctx)
+	return rl
+}
+
+// Handler returns an HTTP middleware that rate limits per client IP.
+func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := extractIP(r.RemoteAddr)
+
+		rl.mu.Lock()
+		entry, ok := rl.entries[ip]
+		now := time.Now()
+
+		if !ok || now.Sub(entry.windowStart) > rl.cfg.Window {
+			rl.entries[ip] = &rateLimitEntry{count: 1, windowStart: now}
+			rl.mu.Unlock()
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		entry.count++
+		if entry.count > rl.cfg.MaxRequests {
+			rl.mu.Unlock()
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		rl.mu.Unlock()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// cleanupLoop runs a ticker that evicts entries with expired windows.
+// It exits when ctx is cancelled.
+func (rl *RateLimiter) cleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * rl.cfg.Window)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			rl.evictStale()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// evictStale removes all entries whose window has expired.
+func (rl *RateLimiter) evictStale() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	for ip, entry := range rl.entries {
+		if now.Sub(entry.windowStart) > rl.cfg.Window {
+			delete(rl.entries, ip)
+		}
+	}
+}
+
+// entryCount returns the number of tracked entries (for testing).
+func (rl *RateLimiter) entryCount() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return len(rl.entries)
 }

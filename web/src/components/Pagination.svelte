@@ -1,17 +1,26 @@
-<script>
+<script lang="ts">
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { t } from '$lib/i18n';
-  export let currentPage = 1;
-  export let totalPages = 1;
-  export let onPageChange = () => {};
 
-  $: canGoPrev = currentPage > 1;
-  $: canGoNext = currentPage < totalPages;
-  $: pages = generatePageNumbers(currentPage, totalPages);
+  interface Props {
+    currentPage?: number;
+    totalPages?: number;
+    onPageChange?: (page: number) => void;
+  }
 
-  function generatePageNumbers(current, total) {
+  let {
+    currentPage = 1,
+    totalPages = 1,
+    onPageChange = () => {}
+  }: Props = $props();
+
+  let canGoPrev = $derived(currentPage > 1);
+  let canGoNext = $derived(currentPage < totalPages);
+  let pages = $derived(generatePageNumbers(currentPage, totalPages));
+
+  function generatePageNumbers(current: number, total: number): number[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-    const pages = [];
+    const pages: number[] = [];
     pages.push(1);
     for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
       pages.push(i);
@@ -27,7 +36,7 @@
   </span>
   <div class="flex items-center gap-1">
     <button
-      on:click={() => onPageChange(currentPage - 1)}
+      onclick={() => onPageChange(currentPage - 1)}
       disabled={!canGoPrev}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
@@ -40,7 +49,7 @@
         </span>
       {:else}
         <button
-          on:click={() => onPageChange(page)}
+          onclick={() => onPageChange(page)}
           class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
         >
           {page}
@@ -48,7 +57,7 @@
       {/if}
     {/each}
     <button
-      on:click={() => onPageChange(currentPage + 1)}
+      onclick={() => onPageChange(currentPage + 1)}
       disabled={!canGoNext}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
@@ -61,9 +70,10 @@
         min="1"
         max={totalPages}
         value={currentPage}
-        on:keydown={(e) => {
+        onkeydown={(e: KeyboardEvent) => {
           if (e.key === 'Enter') {
-            const page = parseInt(e.target.value);
+            const target = e.target as HTMLInputElement;
+            const page = parseInt(target.value);
             if (page >= 1 && page <= totalPages) {
               onPageChange(page);
             }

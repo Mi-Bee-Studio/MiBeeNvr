@@ -82,3 +82,17 @@ func TestSetFeatureFlag_NewKey(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, flags["custom.flag"])
 }
+
+func TestGetFeatureFlags_DefaultIncludesSRTAndRTMP(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	flags, err := db.GetFeatureFlags(ctx)
+	require.NoError(t, err)
+	require.Equal(t, true, flags["protocol.xiaomi"], "protocol.xiaomi should be enabled by default")
+	require.Equal(t, true, flags["protocol.rtsp"], "protocol.rtsp should be enabled by default")
+	require.Equal(t, true, flags["protocol.http"], "protocol.http should be enabled by default")
+	require.Equal(t, true, flags["protocol.onvif"], "protocol.onvif should be enabled by default")
+	require.Equal(t, true, flags["protocol.srt"], "protocol.srt should be enabled by default")
+	require.Equal(t, true, flags["protocol.rtmp"], "protocol.rtmp should be enabled by default")
+}

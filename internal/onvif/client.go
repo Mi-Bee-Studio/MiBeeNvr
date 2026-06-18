@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	onvifgo "github.com/0x524a/onvif-go"
 )
 
 var logger = slog.Default().With("component", "onvif-client")
+
+var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // Client wraps an onvif-go Client for ONVIF device operations.
 type Client struct {
@@ -60,6 +63,8 @@ func (c *Client) Connect(ctx context.Context) error {
 
 // GetDeviceInformation retrieves device info (manufacturer, model, firmware).
 func (c *Client) GetDeviceInformation(ctx context.Context) (*DeviceInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -74,6 +79,8 @@ func (c *Client) GetDeviceInformation(ctx context.Context) (*DeviceInfo, error) 
 
 // GetProfiles retrieves media profiles from the device.
 func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -91,6 +98,8 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 }
 
 func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*StreamInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -121,6 +130,8 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 // Valid protocols: "RTSP" (default), "HTTP" (RTSP-over-HTTP tunneling), "UDP".
 // This uses raw SOAP since onvif-go doesn't support protocol selection.
 func (c *Client) GetStreamURIWithProtocol(ctx context.Context, profileToken, protocol string) (*StreamInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
@@ -161,7 +172,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 	}
 	req.Header.Set("Content-Type", "application/soap+xml")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("send request: %w", err)
 	}
@@ -199,6 +210,8 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 // capabilities (all flags false) instead of error, and caches the minimal result
 // to avoid repeated failing calls to limited devices.
 func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// Check cache first
 	c.capsMu.Lock()
 	if c.cachedCapabilities != nil {
@@ -307,7 +320,7 @@ func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string)
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 	// No auth header — camera firmware rejects WS-Security on some services
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -335,7 +348,7 @@ func (c *Client) DoRawSOAPBasicAuth(ctx context.Context, endpoint, soapBody stri
 		req.SetBasicAuth(c.username, c.password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -370,7 +383,7 @@ func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBo
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}

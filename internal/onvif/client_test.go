@@ -614,3 +614,53 @@ func TestMapStreamURI(t *testing.T) {
 	require.Equal(t, "profile_1", result.ProfileToken)
 	require.Empty(t, result.Encoding)
 }
+
+// --- Concurrency race tests ---
+
+func TestConcurrentAccess_NoDataRace(t *testing.T) {
+	mock := newOnvifMockServer(t)
+	mock.setHandler("GetCapabilities", soapGetCapabilitiesResponse)
+	mock.setHandler("GetDeviceInformation", soapGetDeviceInformationResponse)
+	mock.setHandler("GetProfiles", soapGetProfilesResponse)
+	mock.setHandler("GetStreamUri", soapGetStreamURIResponse)
+	server := mock.startServer(t)
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+	ctx := context.Background()
+	require.NoError(t, client.Connect(ctx))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetDeviceInformation(ctx)
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetProfiles(ctx)
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetStreamURI(ctx, "profile_1")
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetStreamURIWithProtocol(ctx, "profile_1", "RTSP")
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetCapabilities(ctx)
+		}()
+	}
+	wg.Wait()
+}

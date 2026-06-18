@@ -491,7 +491,9 @@ func (cm *CleanupManager) repairZeroDurationRecordings(ctx context.Context) {
 			continue
 		}
 		duration := cm.probeDuration(ctx, rec.FilePath)
-		if duration <= 0 {
+		// < 1ms in seconds — skip sub-ms values that truncate to zero
+		// when converted to time.Duration (anti-pattern: avoid duration <= 0)
+		if duration < 0.001 {
 			continue
 		}
 		// Calculate corrected ended_at = started_at + probed duration
