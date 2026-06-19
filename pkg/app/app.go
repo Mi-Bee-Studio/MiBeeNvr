@@ -37,6 +37,7 @@ type App struct {
 	mu       sync.Mutex
 	services map[string]Service
 	order    []string // registration order, for deterministic start/stop
+	values   map[string]any // typed values for retrieval via Value()
 	started  bool
 	stopped  bool
 }
@@ -45,6 +46,7 @@ type App struct {
 func New() *App {
 	return &App{
 		services: make(map[string]Service),
+		values:   make(map[string]any),
 	}
 }
 
@@ -76,6 +78,7 @@ func (a *App) Register(s Service) error {
 		return fmt.Errorf("app: service %q already registered", name)
 	}
 	a.services[name] = s
+	a.values[name] = s // also expose for typed retrieval
 	a.order = append(a.order, name)
 	slog.Debug("app: registered service", "name", name)
 	return nil
@@ -83,16 +86,54 @@ func (a *App) Register(s Service) error {
 
 // Get returns the Service with the given name, or nil if not registered.
 //
-// The caller is expected to type-assert the result to a specific interface
+// The returned Service can be type-asserted to a specific interface
 // exposed by a sibling pkg/ package (e.g., pkg/camera.Manager):
-//
 //	camSvc := a.Get("camera")
 //	if camSvc == nil { return errors.New("camera service not registered") }
 //	camMgr := camSvc.(camera.Manager)
+//
+// For values that are not lifecycle Services (e.g., wrapper adapters),
+// use Value() instead.
 func (a *App) Get(name string) Service {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.services[name]
+}
+
+// RegisterValue stores an arbitrary value under name, retrievable via Value.
+// Unlike Register, this does NOT add the value to the service lifecycle.
+// Use it to expose typed handles (e.g., a pkg/camera.Manager wrapper) for
+// out-of-module consumers when the underlying concrete type cannot satisfy
+// both pkg/app.Service and the public interface simultaneously
+// (e.g., due to method-name conflicts).
+//
+// Returns an error if name is already used by either a Service or a value,
+// or if Start has already been called.
+func (a *App) RegisterValue(name string, v any) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.started {
+		return fmt.Errorf("app: cannot register value %q after Start", name)
+	}
+	if _, exists := a.services[name]; exists {
+		return fmt.Errorf("app: name %q already registered as service", name)
+	}
+	if _, exists := a.values[name]; exists {
+		return fmt.Errorf("app: value %q already registered", name)
+	}
+	a.values[name] = v
+	slog.Debug("app: registered value", "name", name)
+	return nil
+}
+
+// Value returns the value registered under name, or nil if not registered.
+// The caller is expected to type-assert:
+//
+	//	m := a.Value("camera-manager").(camera.Manager)
+func (a *App) Value(name string) any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.values[name]
 }
 
 // Services returns the names of all registered services in registration order.
