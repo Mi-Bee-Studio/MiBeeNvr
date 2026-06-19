@@ -9,6 +9,7 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
+  import MjpegLivePlayer from '../components/MjpegLivePlayer.svelte';
   // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import { getStreamingSettings } from '$lib/api/settings';
   import { formatDate } from '$lib/format';
@@ -163,9 +164,23 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'snapshot' | 'unsupported';
+  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'mjpeg' | 'snapshot' | 'unsupported';
 
   function getCameraMode(camera: Camera): CameraMode {
+    // JPEG / MJPEG cameras (HTTP JPEG recorders, ONVIF JPEG delegates, ESP32 MiBeeCam):
+    // HLS/FLV/WebRTC/WebCodecs all require H.264/H.265 — these cameras can only play
+    // via the dedicated MJPEG live player (polls /api/cameras/{id}/latest-frame at 500ms).
+    // MUST be checked BEFORE the isHlsSupported gate: ONVIF JPEG cameras report
+    // protocol="onvif" (capabilities.hls=true) but their delegate is HTTPJPEGRecorder,
+    // so HLS would connect to a non-existent H.264 stream and render black.
+    const proto = normalizeProtocol(camera.protocol);
+    // Prefer user-configured encoding, fall back to stream_encoding which the backend
+    // probes via RTSP DESCRIBE / ONVIF GetProfiles. Critical for ESP32 MiBeeCam where
+    // the user-configured encoding is empty but the live stream is JPEG.
+    const enc = (camera.encoding || camera.stream_encoding || '').toLowerCase();
+    if (proto === 'http' || enc === 'mjpeg' || enc === 'jpeg') {
+      return 'mjpeg';
+    }
     if (!isHlsSupported(camera)) {
       if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
       return 'snapshot';
@@ -210,7 +225,10 @@
       shrinkToGrid();
       return;
     }
-    if (isHlsSupported(camera)) {
+    // Any playable camera (including MJPEG) can be expanded to fullscreen cell.
+    // Snapshot-only and unsupported cameras stay locked to the grid.
+    const mode = getCameraMode(camera);
+    if (mode !== 'snapshot' && mode !== 'unsupported') {
       expandToHls(camera.id);
     }
   }
@@ -519,6 +537,13 @@
                 {tabVisible}
                 hasAudio={camera.audio_enabled ?? false}
               />
+
+            {:else if mode === 'mjpeg'}
+              <MjpegLivePlayer
+                cameraId={camera.id}
+                cameraName={camera.name || camera.id}
+                expanded={expandedCameraId === camera.id}
+              />
             {:else if mode === 'wasm'}
               {#if WasmPlayerComponent}
                 {@const WasmPlayer = WasmPlayerComponent}
@@ -568,8 +593,8 @@
 
             <!-- Streaming protocol badge -->
             {#if mode !== 'unsupported'}
-              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : 'JPEG'}
-              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : 'bg-gray-500/60'}
+              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : mode === 'mjpeg' ? 'MJPEG' : 'JPEG'}
+              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : mode === 'mjpeg' ? 'bg-amber-500/60' : 'bg-gray-500/60'}
               <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
                 {protocolLabel}
               </span>
