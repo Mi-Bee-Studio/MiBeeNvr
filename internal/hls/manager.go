@@ -181,12 +181,57 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		return err
 	}
 
+	mux, track, err := m.createMuxAndTrack(isH265, sps, pps, vps, dirPath)
+	if err != nil {
+		os.RemoveAll(dirPath)
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(m.ctx)
+	entry := &streamEntry{
+		mux:              mux,
+		track:            track,
+		dirPath:          dirPath,
+		lastUsed:         time.Now(),
+		cancel:           cancel,
+		frameCh:          make(chan hlsFrame, m.writeBufSize),
+		isH265:           isH265,
+		maxFPS:           maxFPS,
+		observedSegments: make(map[string]bool),
+	}
+	m.streams[cameraID] = entry
+
+	// Start async writer goroutine for this stream
+	go m.writeLoop(ctx, cameraID, entry)
+
+	// Start idle watchdog
+	go m.idleWatchdog(ctx, cameraID)
+
+	codecStr := "H264"
+	if isH265 {
+		codecStr = "H265"
+	}
+	mode := "standard"
+	if m.lowLatency {
+		mode = "low-latency"
+	}
+	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr, "mode", mode)
+	if m.metrics != nil {
+		m.metrics.HLSActiveStreams.WithLabelValues(cameraID).Set(1)
+	}
+	return nil
+}
+
+// createMuxAndTrack builds a gohlslib muxer + track for the given codec
+// parameters. Shared between startStream (initial creation) and rebuildMuxer
+// (recovery after a transient write error). The caller owns dirPath cleanup
+// on error; this function only starts the muxer.
+func (m *Manager) createMuxAndTrack(isH265 bool, sps, pps, vps []byte, dirPath string) (*gohlslib.Muxer, *gohlslib.Track, error) {
 	var track *gohlslib.Track
 	var mux *gohlslib.Muxer
 
 	if m.lowLatency {
-		// LL-HLS: use MuxerVariantLowLatency (fMP4) for both H.264 and H.265
-		// Shorter segment duration (1s) + partial segments for sub-second latency
+		// LL-HLS: fMP4 for both codecs, 1s segments + partials for sub-second latency.
 		if isH265 {
 			track = &gohlslib.Track{
 				Codec:     &codecs.H265{VPS: vps, SPS: sps, PPS: pps},
@@ -236,43 +281,77 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	}
 
 	if err := mux.Start(); err != nil {
-		os.RemoveAll(dirPath)
-		return err
+		return nil, nil, fmt.Errorf("muxer start: %w", err)
 	}
+	return mux, track, nil
+}
 
-	ctx, cancel := context.WithCancel(m.ctx)
-	entry := &streamEntry{
-		mux:              mux,
-		track:            track,
-		dirPath:          dirPath,
-		lastUsed:         time.Now(),
-		cancel:           cancel,
-		frameCh:          make(chan hlsFrame, m.writeBufSize),
-		isH265:           isH265,
-		maxFPS:           maxFPS,
-		observedSegments: make(map[string]bool),
+// extractParamSets scans a H264/H265 access unit for its parameter set NALs
+// (SPS/PPS for H264, VPS/SPS/PPS for H265). Returns ok=false if any required
+// parameter is missing. Most cameras emit these immediately before each IDR.
+func extractParamSets(au [][]byte, isH265 bool) (vps, sps, pps []byte, ok bool) {
+	for _, nal := range au {
+		if len(nal) == 0 {
+			continue
+		}
+		if isH265 {
+			// HEVC NAL type is the low 6 bits of (first byte >> 1).
+			nalType := (nal[0] >> 1) & 0x3F
+			switch nalType {
+			case 32:
+				vps = nal // VPS_NUT
+			case 33:
+				sps = nal // SPS_NUT
+			case 34:
+				pps = nal // PPS_NUT
+			}
+		} else {
+			// AVC NAL type is the low 5 bits of the first byte.
+			nalType := nal[0] & 0x1F
+			switch nalType {
+			case 7:
+				sps = nal // SPS
+			case 8:
+				pps = nal // PPS
+			}
+		}
 	}
-	m.streams[cameraID] = entry
-
-	// Start async writer goroutine for this stream
-	go m.writeLoop(ctx, cameraID, entry)
-
-	// Start idle watchdog
-	go m.idleWatchdog(ctx, cameraID)
-
-	codecStr := "H264"
 	if isH265 {
-		codecStr = "H265"
+		return vps, sps, pps, vps != nil && sps != nil && pps != nil
 	}
-	mode := "standard"
-	if m.lowLatency {
-		mode = "low-latency"
+	return nil, sps, pps, sps != nil && pps != nil
+}
+
+// rebuildMuxer recreates the HLS muxer for a stream whose previous muxer was
+// destroyed by handleWriteError after a transient write failure (e.g. DTS
+// non-monotonic from RTP packet loss). Must be called from writeLoop only
+// (which owns entry.mux writes). The current frame must be an IDR carrying
+// fresh parameter sets. Returns true on success.
+func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte) bool {
+	vps, sps, pps, ok := extractParamSets(au, entry.isH265)
+	if !ok {
+		hlsLogger.Warn("HLS rebuild: IDR frame missing parameter sets, waiting for next IDR",
+			"camera_id", cameraID, "consecutive_errors", entry.consecutiveErrors)
+		return false
 	}
-	hlsLogger.Info("HLS stream started", "camera_id", cameraID, "codec", codecStr, "mode", mode)
+	mux, track, err := m.createMuxAndTrack(entry.isH265, sps, pps, vps, entry.dirPath)
+	if err != nil {
+		hlsLogger.Warn("HLS rebuild: failed to create muxer",
+			"camera_id", cameraID, "error", err, "consecutive_errors", entry.consecutiveErrors)
+		return false
+	}
+	entry.mu.Lock()
+	entry.mux = mux
+	entry.track = track
+	entry.mu.Unlock()
+	// Reset error tracking — the stream is healthy again until the next failure.
+	entry.consecutiveErrors = 0
+	entry.backoff = 0
 	if m.metrics != nil {
-		m.metrics.HLSActiveStreams.WithLabelValues(cameraID).Set(1)
+		m.metrics.HLSMuxerRestarts.WithLabelValues(cameraID).Inc()
 	}
-	return nil
+	hlsLogger.Info("HLS muxer rebuilt after transient failure", "camera_id", cameraID)
+	return true
 }
 
 // StartSubStreamReader starts a separate RTSP connection to a sub-stream URL for HLS.
@@ -472,6 +551,17 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 			if waitForFirstIDR(frame.au, entry.isH265, &entry.idrReceived) {
 				continue
 			}
+			// Muxer may have been nilled by handleWriteError after a transient write
+			// failure (e.g. non-monotonic DTS from RTP packet loss). Rebuild it on
+			// the next IDR frame so HLS recovers instead of staying broken forever.
+			if entry.mux == nil {
+				if !isIDR {
+					continue
+				}
+				if !m.rebuildMuxer(cameraID, entry, frame.au) {
+					continue
+				}
+			}
 			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, frame.au, frame.pts, cameraID); err != nil {
 				slog.Warn("frame_trace",
 					"trace_id", traceID,
@@ -619,11 +709,15 @@ func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *
 	}
 
 	// Destroy old muxer so it will be recreated on next write
+	entry.mu.Lock()
+	// Destroy old muxer so it will be recreated on next write (rebuilt by
+	// rebuildMuxer when the next IDR frame arrives in writeLoop).
 	if entry.mux != nil {
 		entry.mux.Close()
 		entry.mux = nil
 	}
 	entry.track = nil
+	entry.mu.Unlock()
 	entry.idrReceived = false // force wait for next IDR
 
 	// Sleep with backoff (interruptible by context cancellation)
@@ -820,7 +914,19 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 
 	entry.mu.Lock()
 	entry.lastUsed = time.Now()
+	// Snapshot muxer under the lock. handleWriteError sets entry.mux = nil
+	// on write failures; an HTTP request arriving in that window would
+	// dereference nil and panic the whole process (SIGSEGV addr=0xd0).
+	mux := entry.mux
 	entry.mu.Unlock()
+
+	if mux == nil {
+		// Muxer destroyed by write-error recovery and not yet recreated.
+		// Returning false lets the caller (HTTP handler) respond 404 so the
+		// frontend retries; the stream re-initialises on next start.
+		hlsLogger.Warn("HLS Handle: muxer not initialized", "camera_id", cameraID)
+		return false
+	}
 
 	// Guard against muxer blocking forever when no frames arrive.
 	// The muxer blocks on m3u8 requests until the first segment is ready.
@@ -832,8 +938,8 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 
 	done := make(chan struct{})
 	go func() {
-		entry.mux.Handle(w, r)
-		close(done)
+		defer close(done)
+		mux.Handle(w, r)
 	}()
 
 	select {

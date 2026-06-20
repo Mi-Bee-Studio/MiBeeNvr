@@ -1594,3 +1594,140 @@ func TestStartStopCycles_NoGoroutineLeak(t *testing.T) {
 	after := runtime.NumGoroutine()
 	require.LessOrEqual(t, after, baseline+1, "at most 1 extra goroutine tolerated after 5 start/stop cycles")
 }
+
+
+// --- extractParamSets Tests (added with muxer rebuild recovery) ---
+
+// TestExtractParamSets_H264 verifies extraction of SPS+PPS from an H264 access unit.
+func TestExtractParamSets_H264(t *testing.T) {
+	t.Helper()
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40} // NAL type 5 = IDR slice
+	au := [][]byte{sps, pps, idr}
+
+	gotVPS, gotSPS, gotPPS, ok := extractParamSets(au, false)
+	require.True(t, ok)
+	require.Nil(t, gotVPS, "H264 has no VPS")
+	require.Equal(t, sps, gotSPS)
+	require.Equal(t, pps, gotPPS)
+}
+
+// TestExtractParamSets_H264_MissingParams returns ok=false when SPS or PPS absent.
+func TestExtractParamSets_H264_MissingParams(t *testing.T) {
+	t.Helper()
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+	// Only IDR, no SPS/PPS.
+	_, _, _, ok := extractParamSets([][]byte{idr}, false)
+	require.False(t, ok)
+	// SPS but no PPS.
+	sps := []byte{0x67, 0x42}
+	_, _, _, ok = extractParamSets([][]byte{sps, idr}, false)
+	require.False(t, ok)
+}
+
+// TestExtractParamSets_H265 verifies extraction of VPS+SPS+PPS from an HEVC access unit.
+// HEVC NAL type = (byte0 >> 1) & 0x3F; VPS=32->0x40, SPS=33->0x42, PPS=34->0x44, IDR=19->0x26.
+func TestExtractParamSets_H265(t *testing.T) {
+	t.Helper()
+	vps := []byte{0x40, 0x01, 0x0c}
+	sps := []byte{0x42, 0x01, 0x01, 0x60}
+	pps := []byte{0x44, 0x01, 0xc1, 0x73}
+	idr := []byte{0x26, 0x01, 0xaf, 0x39}
+	au := [][]byte{vps, sps, pps, idr}
+
+	gotVPS, gotSPS, gotPPS, ok := extractParamSets(au, true)
+	require.True(t, ok)
+	require.Equal(t, vps, gotVPS)
+	require.Equal(t, sps, gotSPS)
+	require.Equal(t, pps, gotPPS)
+}
+
+// TestExtractParamSets_EmptyNAL skips zero-length NALs without panic.
+func TestExtractParamSets_EmptyNAL(t *testing.T) {
+	t.Helper()
+	sps := []byte{0x67, 0x42}
+	pps := []byte{0x68, 0xce}
+	_, _, _, ok := extractParamSets([][]byte{{}, sps, {}, pps}, false)
+	require.True(t, ok)
+}
+
+// --- rebuildMuxer Tests ---
+
+// TestRebuildMuxer_Success recreates the muxer from an IDR frame's param sets
+// and resets error tracking. This is the core of the HLS self-healing fix.
+func TestRebuildMuxer_Success(t *testing.T) {
+	t.Helper()
+	m := metrics.NewMetrics()
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0, m)
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	require.NoError(t, mgr.StartStream("test-cam", sps, pps, 0))
+
+	mgr.mu.Lock()
+	entry := mgr.streams["test-cam"]
+	mgr.mu.Unlock()
+	require.NotNil(t, entry)
+
+	// Simulate the post-handleWriteError state: muxer destroyed, error state set.
+	entry.mu.Lock()
+	entry.mux.Close()
+	entry.mux = nil
+	entry.track = nil
+	entry.mu.Unlock()
+	entry.consecutiveErrors = 42
+	entry.backoff = 16 * time.Second
+	entry.idrReceived = false
+
+	// IDR access unit carrying fresh SPS/PPS.
+	idrAU := [][]byte{sps, pps, {0x65, 0x88, 0x80, 0x40}}
+	ok := mgr.rebuildMuxer("test-cam", entry, idrAU)
+	require.True(t, ok, "rebuild should succeed with valid SPS/PPS in IDR frame")
+
+	entry.mu.Lock()
+	muxAfter := entry.mux
+	trackAfter := entry.track
+	entry.mu.Unlock()
+	require.NotNil(t, muxAfter, "muxer should be rebuilt")
+	require.NotNil(t, trackAfter, "track should be rebuilt")
+	require.Equal(t, 0, entry.consecutiveErrors, "consecutiveErrors should reset to 0")
+	require.Equal(t, time.Duration(0), entry.backoff, "backoff should reset")
+
+	mgr.StopAll()
+}
+
+// TestRebuildMuxer_MissingParamSets fails gracefully when the IDR frame lacks SPS/PPS,
+// leaving the entry unchanged so writeLoop can retry on the next IDR.
+func TestRebuildMuxer_MissingParamSets(t *testing.T) {
+	t.Helper()
+	mgr := newTestManager(t)
+
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	require.NoError(t, mgr.StartStream("test-cam", sps, pps, 0))
+
+	mgr.mu.Lock()
+	entry := mgr.streams["test-cam"]
+	mgr.mu.Unlock()
+
+	entry.mu.Lock()
+	entry.mux.Close()
+	entry.mux = nil
+	entry.track = nil
+	entry.mu.Unlock()
+	entry.consecutiveErrors = 5
+	entry.idrReceived = false
+
+	// IDR without SPS/PPS — rebuild cannot proceed.
+	idrOnly := [][]byte{{0x65, 0x88, 0x80, 0x40}}
+	ok := mgr.rebuildMuxer("test-cam", entry, idrOnly)
+	require.False(t, ok, "rebuild should fail without SPS/PPS")
+
+	entry.mu.Lock()
+	require.Nil(t, entry.mux, "muxer should remain nil on failed rebuild")
+	entry.mu.Unlock()
+	require.Equal(t, 5, entry.consecutiveErrors, "error counter unchanged on failed rebuild")
+
+	mgr.StopAll()
+}
