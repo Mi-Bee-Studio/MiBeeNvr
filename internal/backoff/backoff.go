@@ -34,3 +34,13 @@ func TieredBackoff(attempt int) time.Duration {
 func TieredBackoffWithJitter(attempt int) time.Duration {
 	return TieredBackoff(attempt) + time.Duration(rand.Int63n(int64(time.Second)))
 }
+
+// StorageBackoffWithJitter returns a long backoff (60s ± up to 10s jitter) for
+// use when storage is in a failed state. Recording attempts are pointless
+// while the disk is unavailable (e.g. filesystem remounted read-only, no space
+// left), so we slow the reconnect loop down to ~once per minute instead of
+// spamming logs and burning CPU with sub-second retries. We still retry
+// periodically so recording resumes quickly once storage recovers.
+func StorageBackoffWithJitter() time.Duration {
+	return time.Minute + time.Duration(rand.Int63n(int64(10*time.Second)))
+}
