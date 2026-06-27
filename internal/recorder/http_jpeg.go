@@ -212,7 +212,11 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		httpJpegLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
+		storageFailed := isStorageFailed(r.store)
+		if storageFailed {
+			backoff = StorageBackoffWithJitter()
+		}
+		httpJpegLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed)
 		r.recordError("connection")
 		r.setStatus(model.StatusReconnecting)
 
