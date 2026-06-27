@@ -4,19 +4,20 @@ import (
 	"time"
 )
 
-// Storage health state constants matching storage.HealthState values.
-const (
-	storageHealthHealthy = iota
-	storageHealthDegraded
-	storageHealthFailed
-)
-
 // isStorageFailed checks whether the SegmentStore reports a failed health state.
-// Returns false if the store does not implement the health check interface.
+// The store may optionally implement StorageFailed() bool (e.g. *storage.Manager);
+// returns false if the store does not expose storage health so behavior is
+// unchanged for stub/test stores.
+//
+// NOTE: the optional interface intentionally returns bool rather than an int
+// health enum. Go requires exact return-type matching for interface satisfaction,
+// so a store method returning a named int type (e.g. storage.HealthState) would
+// NOT satisfy an `StorageHealth() int` interface — that was the original bug that
+// silently disabled this guard for every recorder.
 func isStorageFailed(store SegmentStore) bool {
-	type healthHint interface{ StorageHealth() int }
+	type healthHint interface{ StorageFailed() bool }
 	if hc, ok := store.(healthHint); ok {
-		return hc.StorageHealth() >= storageHealthFailed
+		return hc.StorageFailed()
 	}
 	return false
 }

@@ -49,6 +49,16 @@ func (m *Manager) StorageHealth() HealthState {
 	return m.healthState
 }
 
+// StorageFailed reports whether storage is in a failed state and writes
+// should be skipped. Satisfies the recorder package's duck-typed
+// `StorageFailed() bool` health-check interface so recorders can short-circuit
+// recording attempts during disk outages (e.g. ext4 remounted read-only).
+func (m *Manager) StorageFailed() bool {
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
+	return m.healthState >= HealthFailed
+}
+
 // recordWriteFailureLocked increments the failure counter and escalates
 // health state if threshold is exceeded. Must be called while holding m.healthMu.
 // Returns the new health state.
