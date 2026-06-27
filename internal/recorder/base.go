@@ -330,12 +330,16 @@ func (b *baseRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
+		storageFailed := isStorageFailed(b.store)
+		if storageFailed {
+			backoff = StorageBackoffWithJitter()
+		}
 		if b.mtrics != nil {
 			b.mtrics.CameraReconnectBackoffSeconds.WithLabelValues(b.cfg.CameraID).Set(backoff.Seconds())
 		}
 		b.log.Error("connection error, reconnecting",
 			"camera_id", b.cfg.CameraID, "error", err,
-			"backoff", backoff, "attempt", retryCount)
+			"backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed)
 		b.recordError("connection")
 		b.setStatus(model.StatusReconnecting)
 		select {

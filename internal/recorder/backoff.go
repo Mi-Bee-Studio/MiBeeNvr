@@ -18,3 +18,9 @@ func TieredBackoff(attempt int) time.Duration {
 func TieredBackoffWithJitter(attempt int) time.Duration {
 	return backoff.TieredBackoffWithJitter(attempt)
 }
+
+// StorageBackoffWithJitter returns a long backoff (~60s + jitter) for use when
+// the storage subsystem is in a failed state. See backoff.StorageBackoffWithJitter.
+func StorageBackoffWithJitter() time.Duration {
+	return backoff.StorageBackoffWithJitter()
+}
