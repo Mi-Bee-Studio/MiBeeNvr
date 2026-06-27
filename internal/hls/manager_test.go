@@ -1456,6 +1456,65 @@ func TestHandleWriteError_ConsecutiveErrorsIncreaseBackoff(t *testing.T) {
 	require.Equal(t, 16*time.Second, entry.backoff)
 }
 
+// TestHandleWriteError_StorageErrorUsesLongBackoff verifies that persistent
+// storage errors (read-only filesystem, disk full, I/O error) get a long
+// fixed backoff instead of the short exponential one, preventing log spam
+// during disk outages.
+func TestHandleWriteError_StorageErrorUsesLongBackoff(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"read-only filesystem", fmt.Errorf("open /data/hls/seg.mp4: read-only file system")},
+		{"no space left", fmt.Errorf("write /data/hls/seg.mp4: no space left on device")},
+		{"input/output error", fmt.Errorf("write /data/hls/seg.mp4: input/output error")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := newTestStreamEntry(0)
+			entry.mux = nil
+			entry.track = nil
+			entry.idrReceived = true
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // pre-cancel to skip the 60s backoff sleep
+
+			mgr := &Manager{streams: make(map[string]*streamEntry)}
+			mgr.handleWriteError(ctx, "cam-1", entry, tt.err)
+
+			require.Equal(t, 1, entry.consecutiveErrors, "error counter should increment")
+			require.Equal(t, storageErrorBackoff, entry.backoff,
+				"storage errors should use long fixed backoff, not exponential")
+		})
+	}
+}
+
+// TestIsPersistentStorageError tests the storage error classifier directly.
+func TestIsPersistentStorageError(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"read-only", fmt.Errorf("open seg.mp4: read-only file system"), true},
+		{"no space", fmt.Errorf("write seg.mp4: no space left on device"), true},
+		{"io error", fmt.Errorf("write seg.mp4: input/output error"), true},
+		{"generic DTS error", fmt.Errorf("DTS non-monotonic"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isPersistentStorageError(tt.err))
+		})
+	}
+}
+
 // TestHandleWriteError_ContextCancellation verifies that backoff sleep is
 // interrupted when the context is cancelled.
 func TestHandleWriteError_ContextCancellation(t *testing.T) {
@@ -1654,8 +1713,9 @@ func TestExtractParamSets_EmptyNAL(t *testing.T) {
 
 // --- rebuildMuxer Tests ---
 
-// TestRebuildMuxer_Success recreates the muxer from an IDR frame's param sets
-// and resets error tracking. This is the core of the HLS self-healing fix.
+// TestRebuildMuxer_Success recreates the muxer from an IDR frame's param sets.
+// Error tracking (consecutiveErrors/backoff) is NOT reset here — only a
+// successful write in writeLoop clears it.
 func TestRebuildMuxer_Success(t *testing.T) {
 	t.Helper()
 	m := metrics.NewMetrics()
@@ -1691,8 +1751,10 @@ func TestRebuildMuxer_Success(t *testing.T) {
 	entry.mu.Unlock()
 	require.NotNil(t, muxAfter, "muxer should be rebuilt")
 	require.NotNil(t, trackAfter, "track should be rebuilt")
-	require.Equal(t, 0, entry.consecutiveErrors, "consecutiveErrors should reset to 0")
-	require.Equal(t, time.Duration(0), entry.backoff, "backoff should reset")
+	// rebuildMuxer no longer resets error tracking — only a successful frame
+	// write in writeLoop clears consecutiveErrors/backoff.
+	require.Equal(t, 42, entry.consecutiveErrors, "consecutiveErrors should NOT reset on rebuild")
+	require.Equal(t, 16*time.Second, entry.backoff, "backoff should NOT reset on rebuild")
 
 	mgr.StopAll()
 }
