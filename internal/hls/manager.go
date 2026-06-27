@@ -2,6 +2,7 @@ package hls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bluenviron/gohlslib/v2"
@@ -35,6 +37,7 @@ const (
 	defaultSegmentMaxSize = 10 * 1024 * 1024 // 10MB HLS segment max
 	maxBackoff            = 16 * time.Second
 	initialBackoff        = 1 * time.Second
+	storageErrorBackoff   = 60 * time.Second // persistent storage failures (read-only, disk full, I/O)
 )
 
 // hlsFrame is an async write request for the HLS muxer.
@@ -344,9 +347,10 @@ func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte)
 	entry.mux = mux
 	entry.track = track
 	entry.mu.Unlock()
-	// Reset error tracking — the stream is healthy again until the next failure.
-	entry.consecutiveErrors = 0
-	entry.backoff = 0
+	// NOTE: consecutiveErrors/backoff are NOT reset here — muxer creation can
+	// succeed on a read-only filesystem (the file write is deferred). They are
+	// only cleared on a successful frame write in writeLoop, proving the path
+	// is truly writable.
 	if m.metrics != nil {
 		m.metrics.HLSMuxerRestarts.WithLabelValues(cameraID).Inc()
 	}
@@ -693,7 +697,12 @@ func calculateBackoff(consecutiveErrors int) time.Duration {
 // destroying the muxer, resetting the IDR flag, and sleeping with backoff.
 func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *streamEntry, err error) {
 	entry.consecutiveErrors++
-	entry.backoff = calculateBackoff(entry.consecutiveErrors)
+	storageFailed := isPersistentStorageError(err)
+	if storageFailed {
+		entry.backoff = storageErrorBackoff
+	} else {
+		entry.backoff = calculateBackoff(entry.consecutiveErrors)
+	}
 	entry.lastErrorTime = time.Now()
 
 	hlsLogger.Error("HLS write error",
@@ -701,6 +710,7 @@ func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *
 		"error", err,
 		"consecutive_errors", entry.consecutiveErrors,
 		"backoff", entry.backoff,
+		"storage_failed", storageFailed,
 	)
 
 	if m.metrics != nil {
@@ -726,6 +736,26 @@ func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *
 		return
 	case <-time.After(entry.backoff):
 	}
+}
+
+// isPersistentStorageError reports whether err indicates a storage-layer
+// failure that won't be resolved by rebuilding the muxer (e.g. filesystem
+// remounted read-only, disk full, I/O error). For these we use a long fixed
+// backoff instead of the short exponential one, since retrying every few
+// seconds only produces log spam without resolving the underlying issue.
+func isPersistentStorageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EROFS) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EIO) {
+		return true
+	}
+	// gohlslib wraps file errors without syscall unwrapping, so fall back to
+	// substring matching for the common kernel error messages.
+	s := err.Error()
+	return strings.Contains(s, "read-only file system") ||
+		strings.Contains(s, "no space left") ||
+		strings.Contains(s, "input/output error")
 }
 
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
