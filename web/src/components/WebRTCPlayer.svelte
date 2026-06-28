@@ -2,6 +2,7 @@
   import { onDestroy, getContext, untrack } from 'svelte';
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
+  import CameraAudioButton from './CameraAudioButton.svelte';
   import { getAuthHeader } from '$lib/api';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
@@ -587,6 +588,9 @@ let destroyed = false;
       <span class="text-white/50 text-xs">WebRTC</span>
     </div>
   </div>
+
+  <!-- Audio button (top-right, before expand) -->
+  <CameraAudioButton {cameraId} />
 
   <!-- Expand/Shrink -->
   {#if expanded}

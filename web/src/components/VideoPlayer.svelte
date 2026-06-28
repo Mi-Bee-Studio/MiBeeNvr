@@ -2,6 +2,7 @@
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import CameraAudioButton from './CameraAudioButton.svelte';
   import { createHlsConfig } from '$lib/hls-config';
   import {
     setupHlsErrorHandling,
@@ -409,6 +410,9 @@ streamState = 'error';
       <span class="text-white text-sm font-medium truncate">{cameraName || cameraId}</span>
     </div>
   </div>
+
+  <!-- Audio button (top-right, before expand) -->
+  <CameraAudioButton {cameraId} />
 
   <!-- Expand/Shrink button (top-right) -->
   {#if expanded}
