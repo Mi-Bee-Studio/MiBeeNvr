@@ -348,8 +348,8 @@ func TestAddAudioTrackInvalidCodec(t *testing.T) {
 
 	m := NewMP4Muxer(path)
 
-	// Only "aac" is supported for now
-	_, err := m.AddAudioTrack("opus", []byte{0x00})
+	// Only aac, g711, and opus are supported
+	_, err := m.AddAudioTrack("mp3", []byte{0x00})
 	assert.Error(t, err)
 }
 
