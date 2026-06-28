@@ -2,12 +2,14 @@ package wsstream
 
 // Message types for WebSocket binary protocol.
 const (
-	MsgTypeCodecInfo   byte = 0x01 // codec_info: server→client
-	MsgTypeVideoFrame  byte = 0x02 // video_frame: server→client
-	MsgTypeAudioFrame  byte = 0x03 // audio_frame: reserved, server→client
-	MsgTypeKeyframeReq byte = 0x04 // keyframe_request: client→server
-	MsgTypeEOS       byte = 0xFF // eos: server→client, camera went offline
-)
+	MsgTypeCodecInfo      byte = 0x01 // codec_info: server→client
+	MsgTypeVideoFrame     byte = 0x02 // video_frame: server→client
+	MsgTypeAudioFrame     byte = 0x03 // audio_frame: server→client
+	MsgTypeKeyframeReq    byte = 0x04 // keyframe_request: client→server
+	MsgTypeAudioCodecInfo byte = 0x05 // audio_codec_info: server→client, sent before audio frames
+	MsgTypeEOS            byte = 0xFF // eos: server→client, camera went offline
+	)
+
 
 // Codec string constants.
 const (
@@ -37,3 +39,26 @@ type VideoFrame struct {
 	NALUs      [][]byte // access unit NALUs without start codes
 }
 
+// Audio codec byte constants for wire format.
+const (
+	AudioCodecG711Mu byte = 0x01 // G.711 μ-law
+	AudioCodecG711A  byte = 0x02 // G.711 A-law
+	AudioCodecOpus   byte = 0x03 // Opus
+	AudioCodecAAC    byte = 0x04 // AAC
+)
+
+// AudioCodecInfo contains audio codec configuration data sent once when
+// audio is available on a stream. Sent after CodecInfo on viewer connect.
+type AudioCodecInfo struct {
+	Codec       byte   // audio codec byte (AudioCodecG711Mu, etc.)
+	SampleRate  uint32 // sample rate in Hz (e.g. 8000, 44100, 48000)
+	Channels    uint8  // number of channels (1=mono, 2=stereo)
+}
+
+// AudioFrameData contains a single audio frame's presentation timestamp,
+// codec identifier, and raw encoded audio data.
+type AudioFrameData struct {
+	PTS   int64  // presentation timestamp in 90kHz clock
+	Codec byte   // audio codec byte (AudioCodecG711Mu, etc.)
+	Data  []byte // raw encoded audio data
+}
