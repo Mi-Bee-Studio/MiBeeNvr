@@ -756,10 +756,14 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 
 // writeMergeAudioSampleEntry writes mp4a+esds (AAC) or ulaw/alaw (G.711) sample entry.
 func writeMergeAudioSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
-	if tr.audioCodec == "g711" {
+	switch tr.audioCodec {
+	case "g711":
 		return writeMergeG711SampleEntry(w, tr)
+	case "opus":
+		return writeMergeOpusSampleEntry(w, tr)
+	default:
+		return writeMergeAACSampleEntry(w, tr)
 	}
-	return writeMergeAACSampleEntry(w, tr)
 }
 
 // writeMergeAACSampleEntry writes mp4a + esds boxes for AAC audio.
@@ -840,6 +844,57 @@ func writeMergeG711SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 	if _, err := w.Write(buf); err != nil {
 		return err
 	}
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi
+	return nil
+}
+
+// writeMergeOpusSampleEntry writes Opus sample entry + dOps box for Opus audio.
+func writeMergeOpusSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeOpus()})
+	if err != nil {
+		return err
+	}
+
+	chans := uint16(1) // mono default for camera audio
+
+	opus := &mp4.AudioSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.BoxTypeOpus()},
+			DataReferenceIndex: 1,
+		},
+		EntryVersion: 0,
+		ChannelCount: chans,
+		SampleSize:   16,
+		SampleRate:   48000 << 16,
+	}
+	if _, err := mp4.Marshal(w, opus, mp4.Context{}); err != nil {
+		return err
+	}
+
+	// dOps box
+	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeDOps()})
+	if err != nil {
+		return err
+	}
+	dOps := &mp4.DOps{
+		Version:              0,
+		OutputChannelCount:   uint8(chans),
+		PreSkip:              0,
+		InputSampleRate:      48000,
+		OutputGain:           0,
+		ChannelMappingFamily: 0,
+	}
+	if _, err := mp4.Marshal(w, dOps, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi2
 
 	if _, err := w.EndBox(); err != nil {
 		return err
