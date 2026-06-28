@@ -146,7 +146,7 @@
       stopQueuePolling();
       managerStatus = null;
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to disable transcoding', 'error');
+      showToast(e instanceof Error ? e.message : t('transcoding.disable_failed'), 'error');
     }
   }
 
@@ -226,7 +226,7 @@
       startFfmpegPolling();
     } catch (e) {
       ffmpegDownloading = false;
-      ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: e instanceof Error ? e.message : 'Download failed' };
+      ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: e instanceof Error ? e.message : t('transcoding.download_failed') };
       showToast(t('transcoding.ffmpeg_failed'), 'error');
     }
   }
@@ -241,7 +241,7 @@
       startFfmpegPolling();
     } catch (e) {
       ffmpegDownloading = false;
-      ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: e instanceof Error ? e.message : 'Download failed' };
+      ffmpegStatus = { ...ffmpegStatus, status: 'failed', error: e instanceof Error ? e.message : t('transcoding.download_failed') };
       showToast(t('transcoding.ffmpeg_failed'), 'error');
     }
   }
