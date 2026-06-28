@@ -380,6 +380,8 @@
   "live.backToCameras": "Back to Cameras",
   "live.fullscreen": "Fullscreen",
   "live.cameraIdRequired": "Camera ID is required",
+  "live.mute": "Mute",
+  "live.unmute": "Unmute",
   "live.maxStreamsReached": "Maximum concurrent streams reached. Try again later.",
   "live.hlsNotSupported": "HLS is not supported in this browser",
   "live.streamErrorRetries": "Stream error after retries. Click Retry to reconnect.",
