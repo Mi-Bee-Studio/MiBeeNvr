@@ -254,3 +254,47 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 	return vf, nil
 }
 
+// ─── AudioCodecInfo encode ────────────────────────────────────────────
+
+// EncodeAudioCodecInfo encodes an AudioCodecInfo into binary wire format.
+//
+// Wire format:
+//
+//	{type:1}{audio_codec:1}{sample_rate:4_BE}{channels:1}
+//
+// All multi-byte integers are big-endian.
+func EncodeAudioCodecInfo(ci *AudioCodecInfo) ([]byte, error) {
+	if ci == nil {
+		return nil, errors.New("wsstream: nil AudioCodecInfo")
+	}
+	buf := make([]byte, 7)
+	buf[0] = MsgTypeAudioCodecInfo
+	buf[1] = ci.Codec
+	binary.BigEndian.PutUint32(buf[2:], ci.SampleRate)
+	buf[6] = ci.Channels
+	return buf, nil
+}
+
+// ─── AudioFrame encode ────────────────────────────────────────────────
+
+// EncodeAudioFrame encodes an AudioFrameData into binary wire format.
+//
+// Wire format:
+//
+//	{type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}
+//
+// All multi-byte integers are big-endian.
+func EncodeAudioFrame(af *AudioFrameData) ([]byte, error) {
+	if af == nil {
+		return nil, errors.New("wsstream: nil AudioFrameData")
+	}
+	dataLen := len(af.Data)
+	// type(1) + pts(8) + codec(1) + data_len(4) + data
+	buf := make([]byte, 1+8+1+4+dataLen)
+	buf[0] = MsgTypeAudioFrame
+	binary.BigEndian.PutUint64(buf[1:], uint64(af.PTS))
+	buf[9] = af.Codec
+	binary.BigEndian.PutUint32(buf[10:], uint32(dataLen))
+	copy(buf[14:], af.Data)
+	return buf, nil
+}

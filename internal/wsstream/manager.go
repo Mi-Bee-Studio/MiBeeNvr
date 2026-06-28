@@ -57,6 +57,13 @@ type streamEntry struct {
 	hub        *model.StreamHub
 	hubSubID   string
 	dropCount  atomic.Int64
+
+	// Audio fields (zero-value = no audio)
+	audioCodec      byte              // wire format codec byte
+	audioSampleRate uint32            // sample rate in Hz
+	audioChannels   uint8             // number of channels
+	audioCh         chan model.AudioFrame // audio frame channel, nil if no audio
+	audioSubID      string            // StreamHub audio subscription ID
 }
 
 // upgrader is the WebSocket upgrader used by ServeWS.
@@ -142,6 +149,7 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
 		cancel:    cancel,
 		hub:       hub,
+		audioCh:   nil, // lazily allocated in SetAudioInfo
 	}
 
 	// Subscribe to recorder's StreamHub for live frames
@@ -155,6 +163,9 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 
 	m.streams[camID] = entry
 	go m.writeLoop(ctx, camID, entry)
+	// Initialize audio channel (nil by default, allocated lazily in SetAudioInfo)
+	entry.audioCh = nil
+
 
 	wsLogger.Load().Info("WebSocket stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
 	return nil
@@ -169,6 +180,10 @@ func (m *Manager) UnregisterStream(camID string) {
 		// to prevent race with hub callback accessing entry after removal.
 		if entry.hub != nil && entry.hubSubID != "" {
 			entry.hub.Unsubscribe(entry.hubSubID)
+		}
+		// Unsubscribe audio consumer
+		if entry.hub != nil && entry.audioSubID != "" {
+			entry.hub.UnsubscribeAudio(entry.audioSubID)
 		}
 		delete(m.streams, camID)
 	}
@@ -279,6 +294,129 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	}
 }
 
+// SetAudioInfo configures audio streaming for a registered stream.
+// Must be called after RegisterStream. Audio frames will be forwarded
+// from the StreamHub to WebSocket viewers alongside video frames.
+// For G.711 codecs, muLaw specifies μ-law (true) vs A-law (false).
+func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int) error {
+	m.mu.RLock()
+	entry, ok := m.streams[camID]
+	m.mu.RUnlock()
+	if !ok {
+		return ErrStreamNotActive
+	}
+
+	// Map model codec string to wire format byte
+	var codecByte byte
+	switch codec {
+	case "aac":
+		codecByte = AudioCodecAAC
+	case "g711":
+		if muLaw {
+			codecByte = AudioCodecG711Mu
+		} else {
+			codecByte = AudioCodecG711A
+		}
+	case "opus":
+		codecByte = AudioCodecOpus
+	default:
+		return fmt.Errorf("wsstream: unknown audio codec %q", codec)
+	}
+
+	entry.audioCodec = codecByte
+	entry.audioSampleRate = uint32(sampleRate)
+	entry.audioChannels = uint8(channels)
+
+	// Lazily allocate audio channel
+	if entry.audioCh == nil {
+		entry.audioCh = make(chan model.AudioFrame, m.writeBufSize)
+	}
+
+	// Subscribe to hub audio with callback that feeds into audioCh
+	if entry.hub != nil {
+		audioSubID := "ws-audio-" + camID
+		entry.audioSubID = audioSubID
+		cb := func(pts int64, audioCodec model.AudioCodec, data []byte) {
+			// Non-blocking send to audio channel
+			select {
+			case entry.audioCh <- model.AudioFrame{PTS: pts, Codec: audioCodec, Data: data}:
+			default:
+				// Audio frame dropped (buffer full)
+			}
+		}
+		if err := entry.hub.SubscribeAudio(audioSubID, cb); err != nil {
+			return fmt.Errorf("wsstream: subscribe audio: %w", err)
+		}
+	}
+
+	wsLogger.Load().Info("WebSocket audio configured",
+		"camera_id", camID,
+		"codec", codec,
+		"sample_rate", sampleRate,
+		"channels", channels,
+	)
+	return nil
+}
+
+// getAudioCh returns the audio channel, handling nil (no audio).
+// Used in writeLoop to avoid blocking on a nil channel.
+func (m *Manager) getAudioCh(entry *streamEntry) chan model.AudioFrame {
+	return entry.audioCh
+}
+
+// distributeVideoFrame encodes and distributes a video frame to all viewers.
+func (m *Manager) distributeVideoFrame(entry *streamEntry, camID string, msg model.FrameMsg) {
+	encoded, err := EncodeVideoFrame(&VideoFrame{
+		PTS:        msg.PTS,
+		IsKeyframe: msg.IsKeyframe,
+		NALUs:      msg.AU,
+	})
+	if err != nil {
+		wsLogger.Load().Warn("WebSocket encode frame error", "camera_id", camID, "error", err)
+		return
+	}
+
+	// Distribute to all viewers (non-blocking per viewer)
+	entry.viewerMu.Lock()
+	for _, v := range entry.viewers {
+		select {
+		case v.ch <- encoded:
+		default:
+			// Slow client — drop frame
+			cnt := entry.dropCount.Add(1)
+			if cnt%100 == 0 {
+				wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
+			}
+		}
+	}
+	entry.viewerMu.Unlock()
+}
+
+// distributeAudioFrame encodes and distributes an audio frame to all viewers.
+func (m *Manager) distributeAudioFrame(entry *streamEntry, camID string, af model.AudioFrame) {
+	encoded, err := EncodeAudioFrame(&AudioFrameData{
+		PTS:   af.PTS,
+		Codec: entry.audioCodec,
+		Data:  af.Data,
+	})
+	if err != nil {
+		wsLogger.Load().Warn("WebSocket encode audio frame error", "camera_id", camID, "error", err)
+		return
+	}
+
+	// Distribute to all viewers (non-blocking per viewer)
+	entry.viewerMu.Lock()
+	for _, v := range entry.viewers {
+		select {
+		case v.ch <- encoded:
+		default:
+			// Slow client — drop audio frame silently
+		}
+	}
+	entry.viewerMu.Unlock()
+}
+
+
 // writeLoop drains frames from the channel and distributes to all viewers.
 func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntry) {
 	defer func() {
@@ -287,37 +425,17 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 		}
 	}()
 
+	// Only select on audioCh if audio is configured
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case msg := <-entry.frameCh:
-			encoded, err := EncodeVideoFrame(&VideoFrame{
-				PTS:        msg.PTS,
-				IsKeyframe: msg.IsKeyframe,
-				NALUs:      msg.AU,
-			})
-			if err != nil {
-				wsLogger.Load().Warn("WebSocket encode frame error", "camera_id", camID, "error", err)
-				continue
-			}
-
-			// Distribute to all viewers (non-blocking per viewer)
-			entry.viewerMu.Lock()
-			for _, v := range entry.viewers {
-				select {
-				case v.ch <- encoded:
-				default:
-					// Slow client — drop frame
-					cnt := entry.dropCount.Add(1)
-					if cnt%100 == 0 {
-						wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
-					}
-				}
-			}
-			entry.viewerMu.Unlock()
+			m.distributeVideoFrame(entry, camID, msg)
+		case af := <-m.getAudioCh(entry):
+			m.distributeAudioFrame(entry, camID, af)
+		}
 	}
-}
 }
 
 // ServeWS handles a WebSocket upgrade request for a camera stream.
@@ -377,6 +495,18 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 
+	// Send AudioCodecInfo if audio is configured
+	if entry.audioCodec != 0 {
+		aci := &AudioCodecInfo{
+			Codec:      entry.audioCodec,
+			SampleRate: entry.audioSampleRate,
+			Channels:   entry.audioChannels,
+		}
+		aciData, err := EncodeAudioCodecInfo(aci)
+		if err == nil {
+			_ = conn.WriteMessage(websocket.BinaryMessage, aciData)
+		}
+	}
 	// Register viewer
 	viewerCtx, viewerCancel := context.WithCancel(r.Context())
 	viewerID := entry.viewerSeq.Add(1)
@@ -490,5 +620,6 @@ var _ interface {
 	writeH264(camID string, pts int64, au [][]byte)
 	writeH265(camID string, pts int64, au [][]byte)
 	ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
+	SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int) error
 	StopAll()
 } = (*Manager)(nil)
