@@ -63,7 +63,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		}
 		if seg.HasAudio && !bytes.Equal(seg.AudioConfig, audioConfig) {
 			return fmt.Errorf("segment %d: audio config mismatch", i)
-		}
+	}
 	}
 
 	// Validate that segments have samples.
@@ -128,6 +128,8 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		audioTrack = &mergeTrack{
 			isAudio:      true,
 			audioConfig:  audioConfig,
+			audioCodec:   first.AudioCodec,
+			g711MULaw:    first.G711MULaw,
 			timescale:    first.AudioTimescale,
 			totalSamples: totalAudioSamples,
 		}
@@ -373,6 +375,8 @@ type mergeTrack struct {
 	pps          []byte
 	vps          []byte
 	audioConfig  []byte
+	audioCodec   string // "g711" for G.711 audio, empty for AAC
+	g711MULaw    bool   // true=μ-law, false=A-law
 	timescale    uint32
 	totalSamples int
 	duration     uint32
@@ -750,8 +754,16 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	return err
 }
 
-// writeMergeAudioSampleEntry writes mp4a + esds boxes for AAC audio.
+// writeMergeAudioSampleEntry writes mp4a+esds (AAC) or ulaw/alaw (G.711) sample entry.
 func writeMergeAudioSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
+	if tr.audioCodec == "g711" {
+		return writeMergeG711SampleEntry(w, tr)
+	}
+	return writeMergeAACSampleEntry(w, tr)
+}
+
+// writeMergeAACSampleEntry writes mp4a + esds boxes for AAC audio.
+func writeMergeAACSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mp4a")})
 	if err != nil {
 		return err
@@ -787,6 +799,47 @@ func writeMergeAudioSampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 		return err
 	}
 	_ = bi2
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi
+	return nil
+}
+
+// writeMergeG711SampleEntry writes ulaw (μ-law) or alaw (A-law) sample entry for G.711 audio.
+// G.711 is raw PCM — no esds or codec config boxes needed.
+// Written as raw bytes since go-mp4 only registers AudioSampleEntry for mp4a/enca.
+func writeMergeG711SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
+	boxType := mp4.StrToBoxType("ulaw")
+	if !tr.g711MULaw {
+		boxType = mp4.StrToBoxType("alaw")
+	}
+
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: boxType})
+	if err != nil {
+		return err
+	}
+
+	// G.711: mono, 8-bit samples, 8000 Hz.
+	sampleRate := uint32(8000)
+
+	// Write AudioSampleEntry fields manually (same layout as mp4a without esds):
+	// reserved[6] + data_reference_index[2] + entry_version[2] + reserved[6] +
+	// channel_count[2] + sample_size[2] + pre_defined[2] + reserved[2] + sample_rate[4]
+	buf := make([]byte, 28)
+	buf[7] = 0x01  // data_reference_index = 1
+	buf[17] = 0x01 // channel_count = 1 (mono)
+	buf[19] = 0x08 // sample_size = 8
+	rateFixed := sampleRate << 16
+	buf[24] = byte(rateFixed >> 24)
+	buf[25] = byte(rateFixed >> 16)
+	buf[26] = byte(rateFixed >> 8)
+	buf[27] = byte(rateFixed)
+
+	if _, err := w.Write(buf); err != nil {
+		return err
+	}
 
 	if _, err := w.EndBox(); err != nil {
 		return err

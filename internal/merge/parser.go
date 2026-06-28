@@ -26,7 +26,9 @@ type SegmentInfo struct {
 
 	// Audio track fields (populated when segment contains audio).
 	HasAudio         bool
-	AudioConfig      []byte // AAC AudioSpecificConfig bytes
+	AudioConfig      []byte // AAC AudioSpecificConfig bytes (empty for G.711)
+	AudioCodec       string // "aac" or "g711" (empty if unknown/legacy)
+	G711MULaw        bool   // true=μ-law, false=A-law (only valid when AudioCodec=="g711")
 	AudioTimescale   uint32
 	AudioSampleCount int
 	AudioSamples     []SampleEntry
@@ -52,6 +54,8 @@ type trackAccum struct {
 
 	// Audio codec fields
 	audioConfig []byte
+	audioCodec  string // "g711" if detected from ulaw/alaw sample entry
+	g711MULaw   bool   // true=μ-law, false=A-law
 
 	// Sample table fields
 	sttsEntries []mp4.SttsEntry
@@ -120,6 +124,13 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 				boxType, h.BoxInfo.Size, fileSize)
 		}
 
+		// Detect G.711 audio sample entry types (ulaw/alaw are not registered
+		// in go-mp4, so IsSupportedType would skip them).
+		if current != nil && (boxType == "ulaw" || boxType == "alaw") {
+			current.audioCodec = "g711"
+			current.g711MULaw = boxType == "ulaw"
+			return h.Expand()
+		}
 		if !h.BoxInfo.IsSupportedType() {
 			return nil, nil
 		}
@@ -282,7 +293,7 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	}
 
 	// Build audio sample entries if audio track present.
-	if audioTrack != nil && audioTrack.sampleCount > 0 && len(audioTrack.audioConfig) > 0 {
+	if audioTrack != nil && audioTrack.sampleCount > 0 && (len(audioTrack.audioConfig) > 0 || audioTrack.audioCodec == "g711") {
 		audioSamples, err := buildTrackSamples(audioTrack)
 		if err != nil {
 			return nil, fmt.Errorf("build audio samples: %w", err)
@@ -290,6 +301,8 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 
 		info.HasAudio = true
 		info.AudioConfig = audioTrack.audioConfig
+		info.AudioCodec = audioTrack.audioCodec
+		info.G711MULaw = audioTrack.g711MULaw
 		info.AudioTimescale = audioTrack.timescale
 		info.AudioSampleCount = len(audioSamples)
 		info.AudioSamples = audioSamples
