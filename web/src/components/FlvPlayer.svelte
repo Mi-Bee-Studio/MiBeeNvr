@@ -2,6 +2,7 @@
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
+  import CameraAudioButton from './CameraAudioButton.svelte';
   import { getAuthHeader } from '$lib/api';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
@@ -531,6 +532,9 @@ let videoEventAc: AbortController | null = null;
       <span class="text-white/50 text-xs">HTTP-FLV</span>
     </div>
   </div>
+
+  <!-- Audio button (top-right, before expand) -->
+  <CameraAudioButton {cameraId} />
 
   <!-- Expand/Shrink -->
   {#if expanded}
