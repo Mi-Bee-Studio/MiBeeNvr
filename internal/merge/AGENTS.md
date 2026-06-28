@@ -42,7 +42,8 @@ mjpegmerge.go    # MergeMJPEGSegments() — directory-based JPEG file moves
 - **DO NOT** construct stsc entries without `SampleDescriptionIndex: 1` — merge builds new moov from scratch, same rule as MP4Muxer applies
 - **DO NOT** merge segments younger than `MinSegmentAge` — recorder may still be writing
 - **DO NOT** assume merge always succeeds — disk full, permission errors, corrupt segments all handled gracefully with warnings
-
+- **DO NOT** use `stco` for files with chunk offsets > 4GB — use `co64`
+- **Audio merge**: supports AAC (mp4a+esds), G.711 (ulaw/alaw), and Opus (Opus+dOps) sample entries. Parser detects codec from sample entry box type.
 
 ## METRICS
 
