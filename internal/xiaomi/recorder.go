@@ -518,11 +518,11 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add G.711 audio track if audio codec detected.
+		// Add audio track if audio codec detected (G.711 or Opus).
 		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			g711Cfg, ok := buildG711MuxerConfig(r.audioCodecID)
+			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
 			if ok {
-				aID, err := r.muxer.AddAudioTrack("g711", g711Cfg)
+				aID, err := r.muxer.AddAudioTrack(codec, cfg)
 				if err != nil {
 					xiaomiLogger.Debug("audio track not added to muxer", "camera_id", r.cfg.CameraID, "error", err)
 				} else {
@@ -616,11 +616,11 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add G.711 audio track if audio codec detected (same as H264 path).
+		// Add audio track if audio codec detected (same as H264 path).
 		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			g711Cfg, ok := buildG711MuxerConfig(r.audioCodecID)
+			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
 			if ok {
-				aID, err := r.muxer.AddAudioTrack("g711", g711Cfg)
+				aID, err := r.muxer.AddAudioTrack(codec, cfg)
 				if err != nil {
 					xiaomiLogger.Debug("audio track not added to muxer", "camera_id", r.cfg.CameraID, "error", err)
 				} else {
@@ -697,25 +697,33 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 	switch codecID {
 	case missCodecPCMA, missCodecPCMU, missCodecPCM:
 		return model.AudioG711, true
+	case missCodecOPUS:
+		return model.AudioOpus, true
 	default:
 		return "", false
 	}
 }
 
-// buildG711MuxerConfig builds the G.711 config bytes for the MP4 muxer.
-// Config format: 1 byte (0=A-law, 1=μ-law) + 4 bytes sample rate (big-endian).
-// Returns nil, false for raw PCM (not G.711, cannot mux) or unknown codecs.
-func buildG711MuxerConfig(codecID uint32) ([]byte, bool) {
-	sampleRate := 8000 // G.711 sample rate
+// buildAudioMuxerConfig returns the codec name and config bytes for the MP4 muxer
+// based on the MISS audio codec ID.
+func buildAudioMuxerConfig(codecID uint32) (codec string, config []byte, ok bool) {
 	switch codecID {
 	case missCodecPCMA:
-		return []byte{0, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)}, true
+		sr := 8000
+		return "g711", []byte{0, byte(sr >> 24), byte(sr >> 16), byte(sr >> 8), byte(sr)}, true
 	case missCodecPCMU:
-		return []byte{1, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)}, true
+		sr := 8000
+		return "g711", []byte{1, byte(sr >> 24), byte(sr >> 16), byte(sr >> 8), byte(sr)}, true
+	case missCodecOPUS:
+		// Opus config: 1 byte channel count + 2 bytes PreSkip (BE) + 4 bytes InputSampleRate (BE)
+		// Xiaomi cameras: mono, 16kHz input rate, no pre-skip info from MISS protocol
+		opusRate := 16000
+		return "opus", []byte{1, 0, 0, byte(opusRate >> 24), byte(opusRate >> 16), byte(opusRate >> 8), byte(opusRate)}, true
 	default:
-		return nil, false
+		return "", nil, false
 	}
 }
+
 
 // forwardAudio broadcasts audio data via StreamHub (non-blocking)
 // and writes to the MP4 muxer when an audio track is available.
@@ -755,8 +763,7 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	r.mu.Unlock()
 	if m != nil && aid > 0 {
 		pts := time.Since(start)
-		// G.711 audio: 20ms frames at 8kHz = 160 samples per frame.
-		// Duration per frame: 20ms.
+		// Audio frame duration: 20ms (G.711 and Opus both use 20ms frames).
 		dur := 20 * time.Millisecond
 		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
 			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
