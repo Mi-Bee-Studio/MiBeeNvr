@@ -22,10 +22,13 @@ type track struct {
 	vps         []byte
 	isH265      bool
 	isAudio     bool
-	audioCodec  string    // "aac" or "g711"
+	audioCodec  string    // "aac", "g711", or "opus"
 	audioConfig []byte    // AAC AudioSpecificConfig bytes
 	g711MULaw   bool      // true=μ-law, false=A-law
 	g711Rate    int       // sample rate (typically 8000)
+	opusChans   uint8     // Opus output channel count
+	opusPreSkip uint16    // Opus pre-skip (priming samples)
+	opusRate    uint32    // Opus input sample rate (typically 48000)
 	width       int
 	height      int
 	samples     []sample
@@ -136,8 +139,8 @@ func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) 
 		return 0, errors.New("muxer is closed")
 	}
 
-	if codec != "aac" && codec != "g711" {
-		return 0, fmt.Errorf("unsupported audio codec: %s (only aac and g711 are supported)", codec)
+	if codec != "aac" && codec != "g711" && codec != "opus" {
+		return 0, fmt.Errorf("unsupported audio codec: %s (only aac, g711, and opus are supported)", codec)
 	}
 
 	t := &track{
@@ -150,7 +153,7 @@ func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) 
 		configCopy := make([]byte, len(audioConfig))
 		copy(configCopy, audioConfig)
 		t.audioConfig = configCopy
-	} else {
+	} else if codec == "g711" {
 		// G.711: parse muLaw flag from config. config format: 1 byte (0=A-law, 1=μ-law) + 4 bytes sample rate (big-endian uint32)
 		if len(audioConfig) >= 1 {
 			t.g711MULaw = audioConfig[0] != 0
@@ -160,6 +163,20 @@ func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) 
 		}
 		if t.g711Rate == 0 {
 			t.g711Rate = 8000 // default
+		}
+	} else if codec == "opus" {
+		// Opus: config format: 1 byte channel count + 2 bytes PreSkip (BE) + 4 bytes InputSampleRate (BE)
+		t.opusChans = 1
+		t.opusPreSkip = 0
+		t.opusRate = 48000
+		if len(audioConfig) >= 1 {
+			t.opusChans = audioConfig[0]
+		}
+		if len(audioConfig) >= 3 {
+			t.opusPreSkip = uint16(audioConfig[1])<<8 | uint16(audioConfig[2])
+		}
+		if len(audioConfig) >= 7 {
+			t.opusRate = uint32(audioConfig[3])<<24 | uint32(audioConfig[4])<<16 | uint32(audioConfig[5])<<8 | uint32(audioConfig[6])
 		}
 	}
 
@@ -604,11 +621,16 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 		return err
 	}
 	if tr.isAudio {
-		if tr.audioCodec == "g711" {
+		switch tr.audioCodec {
+		case "g711":
 			if err := writeG711SampleEntry(w, tr); err != nil {
 				return err
 			}
-		} else {
+		case "opus":
+			if err := writeOpusSampleEntry(w, tr); err != nil {
+				return err
+			}
+		default:
 			if err := writeAACSampleEntry(w, tr); err != nil {
 				return err
 			}
@@ -909,6 +931,61 @@ func writeG711SampleEntry(w *mp4.Writer, tr *track) error {
 	if _, err := w.Write(buf); err != nil {
 		return err
 	}
+
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi
+	return nil
+}
+
+// writeOpusSampleEntry writes Opus sample entry ("Opus" box + "dOps" child) for Opus audio.
+// Uses go-mp4 native Opus box types (available since go-mp4 v0.12.0).
+func writeOpusSampleEntry(w *mp4.Writer, tr *track) error {
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeOpus()})
+	if err != nil {
+		return err
+	}
+
+	chans := uint16(tr.opusChans)
+	if chans == 0 {
+		chans = 1 // mono default
+	}
+
+	opus := &mp4.AudioSampleEntry{
+		SampleEntry: mp4.SampleEntry{
+			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.BoxTypeOpus()},
+			DataReferenceIndex: 1,
+		},
+		EntryVersion: 0,
+		ChannelCount: chans,
+		SampleSize:   16,
+		SampleRate:   48000 << 16, // Opus always uses 48kHz timescale per spec
+	}
+	if _, err := mp4.Marshal(w, opus, mp4.Context{}); err != nil {
+		return err
+	}
+
+	// dOps (OpusSpecificBox) — mandatory child
+	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeDOps()})
+	if err != nil {
+		return err
+	}
+	dOps := &mp4.DOps{
+		Version:              0,
+		OutputChannelCount:   uint8(chans),
+		PreSkip:              tr.opusPreSkip,
+		InputSampleRate:      tr.opusRate,
+		OutputGain:           0,
+		ChannelMappingFamily: 0, // simple mono/stereo
+	}
+	if _, err := mp4.Marshal(w, dOps, mp4.Context{}); err != nil {
+		return err
+	}
+	if _, err := w.EndBox(); err != nil {
+		return err
+	}
+	_ = bi2
 
 	if _, err := w.EndBox(); err != nil {
 		return err
