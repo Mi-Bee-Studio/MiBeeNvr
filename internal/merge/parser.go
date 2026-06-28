@@ -131,6 +131,13 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 			current.g711MULaw = boxType == "ulaw"
 			return h.Expand()
 		}
+		// Detect Opus audio sample entry ("Opus" is registered in go-mp4 as
+		// an AnyTypeBoxDef, so IsSupportedType returns true. But the dOps
+		// child box doesn't populate audioConfig, so we mark it manually.)
+		if current != nil && boxType == "Opus" {
+			current.audioCodec = "opus"
+			return h.Expand()
+		}
 		if !h.BoxInfo.IsSupportedType() {
 			return nil, nil
 		}
