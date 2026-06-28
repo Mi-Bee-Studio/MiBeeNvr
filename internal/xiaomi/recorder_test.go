@@ -625,7 +625,7 @@ func TestMissCodecToAudio(t *testing.T) {
 		{"PCMA (G.711 A-law)", missCodecPCMA, model.AudioG711, true},
 		{"PCMU (G.711 mu-law)", missCodecPCMU, model.AudioG711, true},
 		{"PCM raw", missCodecPCM, model.AudioG711, true},
-		{"OPUS", missCodecOPUS, "", false},
+		{"OPUS", missCodecOPUS, model.AudioOpus, true},
 		{"unknown high", 2000, "", false},
 		{"unknown low", 3, "", false},
 	}
@@ -738,8 +738,9 @@ func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Hub.UnsubscribeAudio("test")
 
-	// Unknown codec (OPUS) should be silently skipped.
-	r.forwardAudio(missCodecOPUS, []byte{0x01, 0x02})
+	// Unknown codec (e.g. codec_id=2000) should be silently skipped.
+	// Note: Opus (codec_id=1032) is now supported and will be forwarded.
+	r.forwardAudio(2000, []byte{0x01, 0x02})
 
 	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
