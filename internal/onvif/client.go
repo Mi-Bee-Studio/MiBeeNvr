@@ -42,9 +42,18 @@ func NewClient(endpoint, username, password string) *Client {
 }
 
 // Connect initializes the ONVIF connection and discovers service endpoints.
+// Idempotent: calling Connect again on an already-connected client is a no-op,
+// so the recorder, snapshot auto-populator and PTZ controller can safely share
+// one client without each triggering a fresh GetCapabilities handshake
+// (critical for minimal ONVIF devices like the ESP32 MiBeeCam, which block
+// under concurrent HTTP load).
 func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.ready {
+		return nil
+	}
 
 	onvifClient, err := onvifgo.NewClient(c.endpoint, onvifgo.WithCredentials(c.username, c.password))
 	if err != nil {
@@ -59,6 +68,15 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.ready = true
 	logger.Info("connected to ONVIF device", "endpoint", c.endpoint)
 	return nil
+}
+
+// IsReady reports whether Connect has completed successfully. Lets callers
+// holding a different lock (e.g. the camera manager's onvifMu) check readiness
+// and decide whether to Connect without racing the recorder's own Connect.
+func (c *Client) IsReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ready
 }
 
 // GetDeviceInformation retrieves device info (manufacturer, model, firmware).

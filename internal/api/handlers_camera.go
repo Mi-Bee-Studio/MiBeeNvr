@@ -762,7 +762,13 @@ func stripScheme(rawURL string) string {
 
 // probeONVIFEncoding connects to an ONVIF device and retrieves the encoding
 // from the first media profile. Returns "H264" or "H265", or empty string on failure.
+// A bounded timeout is applied so a stuck device (e.g. ESP32 MiBeeCam with very
+// limited concurrent HTTP capacity) cannot block the camera-create request — the
+// caller context may outlive both the user's patience and the frontend fetch timeout.
 func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
 	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {
 		return ""

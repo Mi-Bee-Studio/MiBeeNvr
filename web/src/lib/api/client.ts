@@ -117,10 +117,22 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
     headers['Authorization'] = authHeader;
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  // Default 30s timeout so a hung backend (e.g. ONVIF SOAP call blocked by a
+  // slow/minimal device) cannot leave every loading spinner spinning forever.
+  // A caller-supplied signal (e.g. abort on unmount) always takes precedence.
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal ?? AbortSignal.timeout(30000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new ApiRequestError('Request timed out', 'TIMEOUT');
+    }
+    throw e;
+  }
 
   // Detect Service Worker offline response (SW returns 503 when network fails)
   if (response.status === 503) {
@@ -152,7 +164,15 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
     headers['Authorization'] = authHeader;
   }
 
-  const response = await fetch(url, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(url, { ...options, headers, signal: options.signal ?? AbortSignal.timeout(30000) });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new Error('Request timed out');
+    }
+    throw e;
+  }
   if (!response.ok) {
     if (response.status === 401) {
       clearCredentials();
