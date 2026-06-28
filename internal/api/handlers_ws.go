@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
 )
@@ -77,6 +78,9 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Configure audio streaming if the recorder provides audio
+		setupAudioForWS(h, id, rec)
+	
 	}
 
 	slog.Info("WS: serving", "camera_id", id)
@@ -92,5 +96,45 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("WS: serve failed", "camera_id", id, "error", err, "error_type", fmt.Sprintf("%T", err))
+	}
+}
+
+// audioInfoProvider is the interface for recorders that expose audio parameters.
+type audioInfoProvider interface {
+	AudioCodec() string
+	AudioSampleRate() int
+	AudioChannels() int
+	AudioConfig() []byte
+}
+
+// setupAudioForWS configures audio streaming on the WebSocket manager
+// for a camera stream. It is called after RegisterStream.
+// If the recorder has audio, it extracts the codec parameters and calls
+// SetAudioInfo. Errors are non-fatal — video streaming continues.
+func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
+	actualRec := unwrapDelegate(rec)
+	provider, ok := actualRec.(audioInfoProvider)
+	if !ok {
+		return
+	}
+	audioCodec := provider.AudioCodec()
+	if audioCodec == "" {
+		return
+	}
+
+	sampleRate := provider.AudioSampleRate()
+	channels := provider.AudioChannels()
+
+	// For G.711, determine μ-law vs A-law from config bytes
+	muLaw := false
+	if audioCodec == "g711" {
+		config := provider.AudioConfig()
+		if len(config) > 0 && config[0] == 1 {
+			muLaw = true
+		}
+	}
+
+	if err := h.wsMgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels); err != nil {
+		slog.Warn("WS: failed to set audio info", "camera_id", id, "error", err)
 	}
 }
