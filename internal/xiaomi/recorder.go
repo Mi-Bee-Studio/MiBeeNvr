@@ -390,7 +390,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	defer client.Conn.Close()
 
 	// Start HD video stream (use configured channel for dual-lens cameras).
-	if err := client.StartMedia(r.cfg.Channel, "hd"); err != nil {
+	if err := client.StartMedia(r.cfg.Channel, "hd", r.cfg.AudioEnabled); err != nil {
 		return fmt.Errorf("miss start media: %w", err), false
 	}
 	defer func() {
@@ -518,16 +518,13 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add audio track if audio codec detected.
-		// Currently only AAC is supported by the muxer; G.711 (PCMA/PCMU/PCM)
-		// will be skipped with a debug log. When G.711 muxer support is added,
-		// audioTrackID will be set and forwardAudio will write to the segment.
+		// Add G.711 audio track if audio codec detected.
 		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			_, ok := missCodecToAudio(r.audioCodecID)
+			g711Cfg, ok := buildG711MuxerConfig(r.audioCodecID)
 			if ok {
-				aID, err := r.muxer.AddAudioTrack("aac", nil)
+				aID, err := r.muxer.AddAudioTrack("g711", g711Cfg)
 				if err != nil {
-					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
+					xiaomiLogger.Debug("audio track not added to muxer", "camera_id", r.cfg.CameraID, "error", err)
 				} else {
 					r.audioTrackID = aID
 				}
@@ -619,13 +616,13 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add audio track if audio codec detected (same as H264 path).
+		// Add G.711 audio track if audio codec detected (same as H264 path).
 		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			_, ok := missCodecToAudio(r.audioCodecID)
+			g711Cfg, ok := buildG711MuxerConfig(r.audioCodecID)
 			if ok {
-				aID, err := r.muxer.AddAudioTrack("aac", nil)
+				aID, err := r.muxer.AddAudioTrack("g711", g711Cfg)
 				if err != nil {
-					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
+					xiaomiLogger.Debug("audio track not added to muxer", "camera_id", r.cfg.CameraID, "error", err)
 				} else {
 					r.audioTrackID = aID
 				}
@@ -695,12 +692,28 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 
 // missCodecToAudio maps a MISS audio codec ID to a model.AudioCodec.
 // Returns (codec, true) for known codecs, ("", false) for unknown/unsupported.
+// PCMA, PCMU, and PCM all map to G.711 for StreamHub broadcast purposes.
 func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 	switch codecID {
 	case missCodecPCMA, missCodecPCMU, missCodecPCM:
 		return model.AudioG711, true
 	default:
 		return "", false
+	}
+}
+
+// buildG711MuxerConfig builds the G.711 config bytes for the MP4 muxer.
+// Config format: 1 byte (0=A-law, 1=μ-law) + 4 bytes sample rate (big-endian).
+// Returns nil, false for raw PCM (not G.711, cannot mux) or unknown codecs.
+func buildG711MuxerConfig(codecID uint32) ([]byte, bool) {
+	sampleRate := 8000 // G.711 sample rate
+	switch codecID {
+	case missCodecPCMA:
+		return []byte{0, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)}, true
+	case missCodecPCMU:
+		return []byte{1, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)}, true
+	default:
+		return nil, false
 	}
 }
 
@@ -714,7 +727,11 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	}
 	audioCodec, ok := missCodecToAudio(codecID)
 	if !ok {
-		xiaomiLogger.Warn("skipping unknown audio codec", "camera_id", r.cfg.CameraID, "codec_id", codecID)
+		// Log unsupported codecs once, not per-frame (e.g. Opus codec_id=1032)
+		if r.audioCodecID == 0 {
+			xiaomiLogger.Info("audio codec not yet supported for recording, skipping", "camera_id", r.cfg.CameraID, "codec_id", codecID)
+			r.audioCodecID = codecID // mark as seen to suppress repeated logs
+		}
 		return
 	}
 
@@ -731,9 +748,6 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	}
 
 	// Write audio to MP4 muxer if audio track is available.
-	// Note: The muxer currently only supports AAC tracks, so audioTrackID
-	// remains 0 for G.711. When G.711 muxer support is added, this will
-	// automatically write audio samples to the segment file.
 	r.mu.Lock()
 	m := r.muxer
 	aid := r.audioTrackID

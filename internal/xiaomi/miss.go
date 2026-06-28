@@ -161,8 +161,10 @@ func (c *MISSClient) WriteCommand(data []byte) error {
 }
 
 // StartMedia sends the video start command for the given channel and quality.
+// When audioEnabled is true, the enableaudio flag is included so the camera
+// sends audio packets alongside video.
 // Quality: "auto"=0, "sd"=1, "hd"=2 (or 3 for C200/C300), default="hd".
-func (c *MISSClient) StartMedia(channel, quality string) error {
+func (c *MISSClient) StartMedia(channel, quality string, audioEnabled bool) error {
 	// 0 - auto, 1 - sd, 2 - hd, default - hd
 	switch quality {
 	case "", "hd":
@@ -179,12 +181,18 @@ func (c *MISSClient) StartMedia(channel, quality string) error {
 		quality = "0"
 	}
 
+	// enableaudio: "1" = on, "0" = off (default on for most cameras)
+	audioFlag := "0"
+	if audioEnabled {
+		audioFlag = "1"
+	}
+
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStart)
 	switch channel {
 	case "", "0":
-		data = fmt.Appendf(data, `{"videoquality":%s}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":%s}`, quality, audioFlag)
 	default:
-		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":%s}`, quality, audioFlag)
 	}
 	return c.WriteCommand(data)
 }
