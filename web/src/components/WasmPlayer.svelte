@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
+  import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
   import type { StreamState } from '$lib/hls-errors';
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
   import { decodeVideoFrame } from '$lib/webcodecs-player/protocol';
   import { ConnectionManager, type ConnectionState } from '$lib/webcodecs-player/connection';
+  import { AudioPlayer } from '$lib/audio-player';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
@@ -49,6 +50,11 @@ let webgpuRenderer: WebGPURenderer | null = null;
 
   // Connection manager (WebSocket + reconnect + zombie detection)
   let cm: ConnectionManager | null = null;
+
+  // Audio playback
+  let audioPlayer: AudioPlayer | null = null;
+  let hasAudio = $state(false);
+  let audioMuted = $state(true); // Start muted per autoplay policy
 
   // Web Worker
   let worker: Worker | null = null;
@@ -402,6 +408,16 @@ function handleWebGpuLost() {
           },
         });
       },
+      onAudioCodecInfo: (info) => {
+        hasAudio = true;
+        // Pre-create AudioPlayer (but don't init until user clicks unmute)
+        audioPlayer = new AudioPlayer(info.codec, info.sampleRate, info.channels);
+      },
+      onAudioFrame: (frame) => {
+        if (audioPlayer?.initialized) {
+          audioPlayer.pushFrame(frame.data);
+        }
+      },
       onFrame: (data: ArrayBuffer) => {
         if (!worker) return;
         try {
@@ -437,6 +453,13 @@ function handleWebGpuLost() {
       cm.disconnect();
       cm = null;
     }
+    // Clean up audio player
+    if (audioPlayer) {
+      audioPlayer.destroy();
+      audioPlayer = null;
+    }
+    hasAudio = false;
+    audioMuted = true;
   }
 
 
@@ -786,6 +809,29 @@ onDestroy(() => {
   </div>
 
   <!-- Expand/Shrink button (top-right) -->
+  <!-- Audio mute/unmute button (only shown when audio is available) -->
+  {#if hasAudio}
+    <button
+      onclick={async (e: MouseEvent) => {
+        e.stopPropagation();
+        if (!audioPlayer) return;
+        if (!audioPlayer.initialized) {
+          await audioPlayer.init();
+        }
+        audioMuted = !audioMuted;
+        audioPlayer.setMuted(audioMuted);
+      }}
+      class="absolute top-2 right-{expanded ? '10' : '10'} p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10"
+      title={audioMuted ? t('live.unmute') || 'Unmute' : t('live.mute') || 'Mute'}
+    >
+      {#if audioMuted}
+        <VolumeX size={16} />
+      {:else}
+        <Volume2 size={16} />
+      {/if}
+    </button>
+  {/if}
+
   {#if expanded}
     <button
       onclick={(e: MouseEvent) => {
