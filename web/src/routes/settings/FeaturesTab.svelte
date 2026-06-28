@@ -204,7 +204,7 @@ async function savePerCameraAiSettingsLocal() {
 
 async function handleCreateZone() {
   if (!newZoneCamera || !newZoneName || !newZonePoints) {
-    showToast('Camera, name, and points are required', 'error');
+    showToast(t('settings.ai.zoneValidationRequired'), 'error');
     return;
   }
   zoneCreating = true;
@@ -216,7 +216,7 @@ async function handleCreateZone() {
       points.push([parseFloat(match[1]), parseFloat(match[2])]);
     }
     if (points.length < 3) {
-      showToast(t('settings.ai.createZoneFailed', { error: 'At least 3 points required' }), 'error');
+      showToast(t('settings.ai.createZoneFailed', { error: t('settings.ai.zoneMinPoints') }), 'error');
       return;
     }
     await createAIZone({
@@ -235,7 +235,7 @@ async function handleCreateZone() {
     showToast(
       e instanceof Error
         ? t('settings.ai.createZoneFailed', { error: e.message })
-        : t('settings.ai.createZoneFailed', { error: 'Unknown error' }),
+        : t('settings.ai.createZoneFailed', { error: t('settings.ai.unknownError') }),
       'error',
     );
   } finally {
