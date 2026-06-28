@@ -178,7 +178,7 @@ func TestMISSClientStartMediaDefaultHD(t *testing.T) {
 	client, mock := newTestMISSClient()
 	client.model = ModelC300 // C300 defaults to quality 3
 
-	err := client.StartMedia("", "")
+	err := client.StartMedia("", "", false)
 	require.NoError(t, err)
 
 	cmd, data, ok := mock.lastWrittenCmd()
@@ -202,7 +202,7 @@ func TestMISSClientStartMediaSD(t *testing.T) {
 	t.Helper()
 	client, mock := newTestMISSClient()
 
-	err := client.StartMedia("", "sd")
+	err := client.StartMedia("", "sd", false)
 	require.NoError(t, err)
 
 	_, data, ok := mock.lastWrittenCmd()
@@ -218,7 +218,7 @@ func TestMISSClientStartMediaAuto(t *testing.T) {
 	t.Helper()
 	client, mock := newTestMISSClient()
 
-	err := client.StartMedia("", "auto")
+	err := client.StartMedia("", "auto", false)
 	require.NoError(t, err)
 
 	_, data, ok := mock.lastWrittenCmd()
@@ -235,7 +235,7 @@ func TestMISSClientStartMediaSecondChannel(t *testing.T) {
 	client, mock := newTestMISSClient()
 	client.model = "some.other.model" // non-C200/C300 defaults to quality 2
 
-	err := client.StartMedia("1", "hd")
+	err := client.StartMedia("1", "hd", false)
 	require.NoError(t, err)
 
 	_, data, ok := mock.lastWrittenCmd()
@@ -253,7 +253,7 @@ func TestMISSClientStartMediaDefaultHDNonC200(t *testing.T) {
 	client, mock := newTestMISSClient()
 	client.model = "some.other.model"
 
-	err := client.StartMedia("", "hd")
+	err := client.StartMedia("", "hd", false)
 	require.NoError(t, err)
 
 	_, data, ok := mock.lastWrittenCmd()
@@ -509,7 +509,7 @@ func TestMISSClientStartMediaC200HD(t *testing.T) {
 	client, mock := newTestMISSClient()
 	client.model = ModelC200
 
-	err := client.StartMedia("", "")
+	err := client.StartMedia("", "", false)
 	require.NoError(t, err)
 
 	_, data, ok := mock.lastWrittenCmd()
