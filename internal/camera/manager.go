@@ -275,7 +275,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		if onvifEndpoint == "" {
 			onvifEndpoint = cam.URL
 		}
-		onvifClient := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
+		onvifClient := cm.reuseOrCreateONVIFClient(cam.ID, onvifEndpoint, cam.Username, cam.Password)
 		onvifCfg := recorder.ONVIFConfig{
 			CameraID:       cam.ID,
 			ProfileToken:   cam.ProfileToken,
@@ -1528,6 +1528,14 @@ func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID st
 	defer cm.onvifMu.Unlock()
 
 	if cached, ok := cm.onvifClients[cameraID]; ok {
+		// The recorder path may have inserted an unconnected client; connect it now
+		// (idempotent) so every caller receives a ready-to-use client instead of
+		// creating a second one and triggering another GetCapabilities handshake.
+		if !cached.IsReady() {
+			if err := cached.Connect(ctx); err != nil {
+				return nil, &model.ONVIFConnectionError{CameraID: cameraID, Err: err}
+			}
+		}
 		return cached, nil
 	}
 
@@ -1537,6 +1545,27 @@ func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID st
 	}
 	cm.onvifClients[cameraID] = client
 	return client, nil
+}
+
+// reuseOrCreateONVIFClient returns the cached ONVIF client for the camera if one
+// exists, otherwise creates a new client, registers it in the cache, and returns
+// it (unconnected). Sharing one client across the recorder, snapshot auto-populator
+// and PTZ controller avoids redundant GetCapabilities handshakes — critical for
+// minimal ONVIF devices (ESP32 MiBeeCam) that block under concurrent HTTP load.
+//
+// Unlike getOrCreateONVIFClient, this does NOT call GetCameraConfig (which takes
+// cm.mu.RLock) so it is safe to invoke while the caller already holds cm.mu
+// (e.g. createRecorder called from startRecorder under the cm.mu write lock).
+// Callers needing a connected client must call Connect on the result (idempotent).
+func (cm *CameraManager) reuseOrCreateONVIFClient(cameraID, endpoint, username, password string) *onvif.Client {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	if cached, ok := cm.onvifClients[cameraID]; ok {
+		return cached
+	}
+	c := onvif.NewClient(endpoint, username, password)
+	cm.onvifClients[cameraID] = c
+	return c
 }
 
 // CloseONVIFClient removes a cached ONVIF client for the given camera.
