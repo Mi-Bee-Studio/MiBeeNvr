@@ -13,7 +13,8 @@
  */
 
 import { MsgType } from './protocol';
-import type { CodecInfo } from './protocol';
+import type { CodecInfo, AudioCodecInfo, AudioFrame } from './protocol';
+import { decodeAudioCodecInfo, decodeAudioFrame } from './protocol';
 import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -37,6 +38,10 @@ export interface ConnectionManagerOptions {
   onFrameDrop?: (count: number) => void;
   /** Optional callback when camera goes offline (EOS received) */
   onCameraOffline?: () => void;
+  /** Optional callback when AudioCodecInfo message received */
+  onAudioCodecInfo?: (info: AudioCodecInfo) => void;
+  /** Optional callback for each AudioFrame */
+  onAudioFrame?: (frame: AudioFrame) => void;
   /** Optional reconnect coordinator for thundering herd prevention */
   coordinator?: ReconnectCoordinator;
   /** Camera ID (required when coordinator is provided) */
@@ -163,6 +168,18 @@ export class ConnectionManager {
           this._opts.onFrame(data);
           if (this._currentState !== 'playing') {
             this._setState('playing');
+          }
+        } else if (msgType === MsgType.AudioCodecInfo) {
+          try {
+            this._opts.onAudioCodecInfo?.(decodeAudioCodecInfo(data));
+          } catch {
+            // parse error — ignore
+          }
+        } else if (msgType === MsgType.AudioFrame) {
+          try {
+            this._opts.onAudioFrame?.(decodeAudioFrame(data));
+          } catch {
+            // parse error — ignore
           }
         } else if (msgType === MsgType.EOS) {
           // Camera went offline — notify and set state

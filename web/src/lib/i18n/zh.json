@@ -380,6 +380,8 @@
   "live.backToCameras": "返回摄像头",
   "live.fullscreen": "全屏",
   "live.cameraIdRequired": "摄像头 ID 为必填项",
+  "live.mute": "静音",
+  "live.unmute": "取消静音",
   "live.maxStreamsReached": "已达到最大并发流数，请稍后重试。",
   "live.hlsNotSupported": "此浏览器不支持 HLS",
   "live.streamErrorRetries": "重试后仍出错，点击重试重新连接。",
