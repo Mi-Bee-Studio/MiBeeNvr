@@ -37,10 +37,11 @@ var (
 
 // viewerConn represents a connected WebSocket client.
 type viewerConn struct {
-	id     int64
-	conn   *websocket.Conn
-	ch     chan []byte // encoded binary messages
-	cancel context.CancelFunc
+	id         int64
+	conn       *websocket.Conn
+	ch         chan []byte // encoded binary messages
+	cancel     context.CancelFunc
+	audioOnly  bool // true = skip video frames, audio only
 }
 
 // streamEntry holds per-camera WebSocket streaming state.
@@ -379,6 +380,9 @@ func (m *Manager) distributeVideoFrame(entry *streamEntry, camID string, msg mod
 	// Distribute to all viewers (non-blocking per viewer)
 	entry.viewerMu.Lock()
 	for _, v := range entry.viewers {
+		if v.audioOnly {
+			continue // audio-only viewers don't receive video
+		}
 		select {
 		case v.ch <- encoded:
 		default:
@@ -484,38 +488,32 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		VPS:     entry.vps,
 	}
 
-	ciData, err := EncodeCodecInfo(ci)
-	if err != nil {
-		conn.Close()
-		return err
-	}
+	// Check for audio-only mode (?audio_only=1 skips video frames)
+	audioOnly := r.URL.Query().Get("audio_only") == "1"
 
-	if err := conn.WriteMessage(websocket.BinaryMessage, ciData); err != nil {
-		conn.Close()
-		return err
-	}
-
-	// Send AudioCodecInfo if audio is configured
-	if entry.audioCodec != 0 {
-		aci := &AudioCodecInfo{
-			Codec:      entry.audioCodec,
-			SampleRate: entry.audioSampleRate,
-			Channels:   entry.audioChannels,
+	// Send CodecInfo as first message (skip for audio-only viewers)
+	if !audioOnly {
+		ciData, err := EncodeCodecInfo(ci)
+		if err != nil {
+			conn.Close()
+			return err
 		}
-		aciData, err := EncodeAudioCodecInfo(aci)
-		if err == nil {
-			_ = conn.WriteMessage(websocket.BinaryMessage, aciData)
+		if err := conn.WriteMessage(websocket.BinaryMessage, ciData); err != nil {
+			conn.Close()
+			return err
 		}
 	}
+
 	// Register viewer
 	viewerCtx, viewerCancel := context.WithCancel(r.Context())
 	viewerID := entry.viewerSeq.Add(1)
 	viewerCh := make(chan []byte, m.writeBufSize)
 	viewer := &viewerConn{
-		id:     viewerID,
-		conn:   conn,
-		ch:     viewerCh,
-		cancel: viewerCancel,
+		id:        viewerID,
+		conn:      conn,
+		ch:        viewerCh,
+		cancel:    viewerCancel,
+		audioOnly: audioOnly,
 	}
 
 	entry.viewerMu.Lock()
