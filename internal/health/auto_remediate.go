@@ -18,6 +18,14 @@ type RestartRecorderFunc func(ctx context.Context, cameraID string) error
 // IsCameraEnabledFunc checks whether a camera is enabled for auto-remediation.
 type IsCameraEnabledFunc func(cameraID string) bool
 
+// RediscoverFunc re-discovers a camera by its stable hardware identifier and
+// reconnects it. Injected (not imported) to avoid a circular dependency on
+// internal/camera. It is invoked once when a camera is blacklisted — i.e. after
+// persistent reconnection failure — which is the signal that the camera's IP has
+// likely changed and the recorder cannot recover on its own. Returning nil does
+// not necessarily mean the camera was found; it means the attempt was dispatched.
+type RediscoverFunc func(ctx context.Context, cameraID string) error
+
 // cameraRestartState tracks per-camera restart history and blacklist status.
 type cameraRestartState struct {
 	attempts         []time.Time
@@ -31,6 +39,10 @@ type AutoRemediator struct {
 	cfg         config.HealthAutoRemediationConfig
 	restartFn   RestartRecorderFunc
 	isEnabledFn IsCameraEnabledFunc
+	// rediscoverFn is invoked once when a camera is blacklisted (persistent
+	// failure). Optional: nil = no IP self-healing. The camera manager decides
+	// whether a given camera supports it (ONVIF only, must have a stable_id).
+	rediscoverFn RediscoverFunc
 
 	mu             sync.Mutex
 	cameraStates   map[string]*cameraRestartState
@@ -46,6 +58,15 @@ func NewAutoRemediator(cfg config.HealthAutoRemediationConfig, restartFn Restart
 		cameraStates:   make(map[string]*cameraRestartState),
 		globalRestarts: make([]time.Time, 0),
 	}
+}
+
+// SetRediscoverer registers the IP re-discovery callback. Optional — when unset,
+// blacklisted cameras are not re-discovered (legacy behavior). Safe to call
+// before or after Start.
+func (r *AutoRemediator) SetRediscoverer(fn RediscoverFunc) {
+	r.mu.Lock()
+	r.rediscoverFn = fn
+	r.mu.Unlock()
 }
 
 // Check evaluates whether a camera should be auto-restarted based on its status.
@@ -111,14 +132,31 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 
 	// Check if this attempt triggers blacklisting.
 	updatedRecent := filterRecent(state.attempts, now, time.Hour)
+	justBlacklisted := false
 	if len(updatedRecent) >= r.cfg.MaxRestartsPerHour {
 		state.blacklistedSince = now
+		justBlacklisted = true
 	}
+	// Snapshot the rediscovery callback under the lock so we can invoke it after
+	// releasing the lock (the callback may perform network scans).
+	rediscoverFn := r.rediscoverFn
 
 	// Release lock before calling restartFn (which may be slow).
 	r.mu.Unlock()
 	err := r.restartFn(context.Background(), cameraID)
 	r.mu.Lock() // re-acquire for deferred unlock
+
+	// When a camera is newly blacklisted, the recorder cannot recover on its own
+	// — this is the moment to attempt IP re-discovery (the camera likely roamed to
+	// a new address). Run it asynchronously so it never blocks the heal loop; it
+	// only affects this one camera and a restart will follow if it succeeds.
+	if justBlacklisted && rediscoverFn != nil {
+		go func() {
+			if rerr := rediscoverFn(context.Background(), cameraID); rerr != nil {
+				slog.Warn("rediscovery failed for blacklisted camera", "camera_id", cameraID, "error", rerr)
+			}
+		}()
+	}
 
 	return err
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,6 +30,54 @@ func TestHLSStreamHandler_Name(t *testing.T) {
 	t.Parallel()
 	h := &HLSStreamHandler{}
 	require.Equal(t, "hls", h.Name())
+}
+
+// TestGetCodecParams_JPEGRecorders guards the ESP32 MiBeeCam live-preview path.
+// HTTP-JPEG and RTSP-MJPEG recorders must report a JPEG-family codec so that
+// /protocols advertises the "mjpeg" protocol (served via latest-frame polling).
+// Regression: previously these returned "" → /protocols was empty → the frontend
+// could not live-preview ONVIF-JPEG cameras.
+func TestGetCodecParams_JPEGRecorders(t *testing.T) {
+	t.Parallel()
+
+	t.Run("HTTPJPEGRecorder", func(t *testing.T) {
+		t.Parallel()
+		rec := recorder.NewHTTPJPEGRecorder(recorder.HTTPJPEGConfig{
+			CameraID: "cam-jpeg", URL: "http://1.2.3.4:81/stream",
+		}, nil)
+		codec, sps, pps, vps := getCodecParams(rec)
+		require.Equal(t, model.EncJPEG, codec, "HTTPJPEGRecorder must report jpeg codec")
+		require.Nil(t, sps, "no SPS for JPEG")
+		require.Nil(t, pps, "no PPS for JPEG")
+		require.Nil(t, vps, "no VPS for JPEG")
+	})
+
+	t.Run("MJPEGRecorder", func(t *testing.T) {
+		t.Parallel()
+		rec := recorder.NewMJPEGRecorder(recorder.MJPEGConfig{
+			CameraID: "cam-mjpeg", RTSPURL: "rtsp://1.2.3.4/stream",
+		}, nil)
+		codec, _, _, _ := getCodecParams(rec)
+		require.Equal(t, model.FormatMJPEG, codec, "MJPEGRecorder must report mjpeg codec")
+	})
+}
+
+// TestMJPEGStreamHandler_ReportsForJPEGCamera confirms the end-to-end discovery:
+// a JPEG camera shows up with the "mjpeg" protocol available in /protocols.
+func TestMJPEGStreamHandler_ReportsForJPEGCamera(t *testing.T) {
+	t.Parallel()
+	reg := NewStreamRegistry()
+	reg.Register(&MJPEGStreamHandler{})
+
+	details := reg.ProtocolsDetailForCodec(model.EncJPEG)
+	require.True(t, containsProtocol(t, details, "mjpeg"), "jpeg camera should offer mjpeg protocol")
+
+	details = reg.ProtocolsDetailForCodec(model.FormatMJPEG)
+	require.True(t, containsProtocol(t, details, "mjpeg"), "mjpeg camera should offer mjpeg protocol")
+
+	// H.264 cameras must NOT show mjpeg.
+	details = reg.ProtocolsDetailForCodec(model.FormatH264)
+	require.False(t, containsProtocol(t, details, "mjpeg"), "h264 camera should not offer mjpeg")
 }
 
 // --- StreamRegistry tests ---

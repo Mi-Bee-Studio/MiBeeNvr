@@ -246,6 +246,8 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/events", h.handleCameraEvents)
 				r.Post("/start", h.handleStartCamera)
 				r.Post("/stop", h.handleStopCamera)
+				// Manually trigger IP self-healing for a camera whose address changed.
+				r.Post("/rediscover", h.handleRediscoverCamera)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -73,6 +74,18 @@ type CameraConfig struct {
 	AudioEnabled         bool                     `yaml:"audio_enabled"`
 	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+
+	// StableID is a hardware-level stable identifier (ONVIF serial number) used to
+	// re-acquire the SAME camera after its IP changes (e.g. after an AP reboot when
+	// cameras roam across subnets with per-subnet DHCP). Empty = IP self-healing
+	// disabled. ONVIF cameras auto-populate this on first successful connection.
+	// See internal/rediscovery/ for the re-discovery engine.
+	StableID string `yaml:"stable_id,omitempty" json:"stable_id,omitempty"`
+	// SubnetHints are candidate CIDRs (e.g. "192.168.63.0/24") where the camera may
+	// appear after roaming. The re-discovery scanner probes these in addition to the
+	// last-known host and the NVR's own interface subnets. Empty = scan last-known +
+	// local subnets only.
+	SubnetHints []string `yaml:"subnet_hints,omitempty" json:"subnet_hints,omitempty"`
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID     string `yaml:"did,omitempty"`     // Xiaomi Device ID
@@ -306,6 +319,35 @@ type HealthConfig struct {
 	Layer2          HealthLayer2Config          `yaml:"layer2"`
 	Layer2_5        HealthLayer2_5Config        `yaml:"layer2_5"`
 	AutoRemediation HealthAutoRemediationConfig `yaml:"auto_remediation"`
+	// Rediscovery triggers IP re-discovery (ONVIF unicast scan) when a camera is
+	// blacklisted by auto-remediation — i.e. the IP has permanently changed.
+	Rediscovery RediscoveryConfig `yaml:"rediscovery"`
+}
+
+// RediscoveryConfig controls the IP self-healing engine (internal/rediscovery/).
+// When a camera's IP changes (e.g. after an AP reboot across per-subnet DHCP),
+// the engine re-discovers the camera by its ONVIF serial number via unicast
+// probing (cross-subnet; does NOT rely on multicast WS-Discovery).
+type RediscoveryConfig struct {
+	// Enabled is a *bool so the feature defaults to ON when unset, but can be
+	// explicitly turned off with `rediscovery: { enabled: false }`. Use
+	// RediscoveryEnabled() to read the effective value.
+	Enabled     *bool `yaml:"enabled"`
+	MaxParallel int   `yaml:"max_parallel"` // concurrent unicast probes (default 16, RPi-3B friendly)
+	// ProbeTimeout is the per-IP probe timeout (default "2s").
+	ProbeTimeout string `yaml:"probe_timeout"`
+	// MaxDuration bounds a single full scan (default "30s") so a wide subnet_hints
+	// list cannot pin the heal loop forever.
+	MaxDuration string `yaml:"max_duration"`
+}
+
+// RediscoveryEnabled reports the effective enabled state (defaults to true when
+// the pointer is nil, i.e. when the user did not explicitly set it).
+func (r RediscoveryConfig) RediscoveryEnabled() bool {
+	if r.Enabled == nil {
+		return true
+	}
+	return *r.Enabled
 }
 
 type HealthAlertsConfig struct {
@@ -507,6 +549,23 @@ func Validate(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+		}
+
+		// Validate IP self-healing fields (stable_id + subnet_hints).
+		if strings.TrimSpace(c.StableID) != "" {
+			// Loose sanity: limit length to avoid accidental misuse (e.g. pasting a URL).
+			if len(c.StableID) > 128 {
+				return fmt.Errorf("camera[%d].stable_id is too long (max 128 chars): got %d", i, len(c.StableID))
+			}
+		}
+		for j, hint := range c.SubnetHints {
+			hint = strings.TrimSpace(hint)
+			if hint == "" {
+				return fmt.Errorf("camera[%d].subnet_hints[%d] is empty", i, j)
+			}
+			if _, _, err := net.ParseCIDR(hint); err != nil {
+				return fmt.Errorf("camera[%d].subnet_hints[%d] invalid CIDR %q: %w", i, j, hint, err)
+			}
 		}
 
 		// Validate push-out targets (relay).
@@ -1111,6 +1170,19 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
+	}
+
+	// IP re-discovery (self-healing) defaults. Enabled by default since it only
+	// activates for ONVIF cameras that have a stable_id AND are blacklisted, so it
+	// is a no-op for everything else. Honours RPi-3B constraints.
+	if cfg.Health.Rediscovery.MaxParallel == 0 {
+		cfg.Health.Rediscovery.MaxParallel = 16
+	}
+	if cfg.Health.Rediscovery.ProbeTimeout == "" {
+		cfg.Health.Rediscovery.ProbeTimeout = "2s"
+	}
+	if cfg.Health.Rediscovery.MaxDuration == "" {
+		cfg.Health.Rediscovery.MaxDuration = "30s"
 	}
 
 	// AI defaults
