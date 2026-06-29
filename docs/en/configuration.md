@@ -350,8 +350,8 @@ cameras:
 
 - **Type**: boolean
 - **Default**: `false`
-- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording.
-- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras)
+- **Description**: Enable audio recording for this camera. When enabled, the recorder captures audio from the RTSP/ONVIF/Xiaomi stream and muxes it into the MP4 recording. Audio is also available for live preview playback via the WebSocket audio endpoint.
+- **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras), Opus (Xiaomi cameras)
 - **Note**: Not supported for MJPEG or HTTP-JPEG cameras
 - **Example**: `true`, `false`
 

@@ -203,3 +203,62 @@ B) Push-out: NVR → remote destination
 C) Chained (NVR-to-NVR, the cross-network scenario):
    [Camera] ──RTSP──▶ [NVR-A] ──push-out relay──▶ [NVR-B (push-in ingest)] ──▶ records + live
 ```
+
+---
+
+## 7. Audio Pipeline
+
+Audio flows through the NVR from camera capture to browser playback. The pipeline handles multiple audio formats and integrates with all streaming protocols.
+
+### Components
+
+| Component | Location | Role |
+|-----------|----------|------|
+| Audio detection | Recorder implementations | Detect audio tracks from RTSP SDP (G.711 μ-law/A-law) or Xiaomi MISS protocol (G.711/Opus) |
+| Audio muxing | `internal/muxer/` | MP4 segments include audio tracks (AAC, G.711, Opus sample entries) |
+| Audio merge | `internal/merge/` | Preserves audio tracks during segment merge (detects `ulaw`/`alaw`/`Opus` boxes) |
+| Audio streaming | `internal/wsstream/` | WebSocket audio streaming via `?audio_only=1` endpoint |
+| Audio playback | Browser | Decodes G.711 via Web Audio API with JS lookup tables |
+
+### Data flow
+
+```
+Camera (RTSP SDP / Xiaomi MISS)
+    │  Detect audio track (G.711 μ-law, A-law, Opus)
+    ▼
+Recorder (audio_enabled flag)
+    │  Broadcast audio frames via StreamHub
+    ▼
+StreamHub
+    │  Fan-out to all consumers (recording, live, merge)
+    ▼
+MP4 Muxer (recording)
+    │  Write audio track (AAC/G.711/Opus sample entry)
+    ▼
+Segment Merge
+    │  Detect audio boxes (ulaw/alaw/Opus)
+    │  Preserve audio in merged MP4
+    ▼
+WebSocket Manager (live preview)
+    │  Send AudioCodecInfo (0x05) + AudioFrame (0x03)
+    ▼
+Browser
+    │  G.711 decoder (JS lookup tables)
+    │  Web Audio API playback
+```
+
+### Frontend integration
+
+The `CameraAudioButton.svelte` component provides audio toggle functionality embedded in:
+- VideoPlayer (HLS)
+- FlvPlayer (FLV)
+- WebRTCPlayer
+
+WasmPlayer (WebSocket video) has built-in audio support.
+
+### Key design points
+
+- **Per-camera control**: Each camera has an `audio_enabled` flag (default: false) for recording
+- **Format preservation**: Merge pipeline preserves audio tracks with codec-specific sample entries (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)
+- **Client-side decoding**: G.711 decode happens in browser via Web Audio API, not server
+- **Protocol support**: All four streaming protocols (WebSocket, FLV, HLS, WebRTC) support audio via the shared audio WebSocket endpoint

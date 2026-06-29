@@ -203,3 +203,62 @@ B) Push-out: NVR → remote destination
 C) Chained (NVR-to-NVR, the cross-network scenario):
    [Camera] ──RTSP──▶ [NVR-A] ──push-out relay──▶ [NVR-B (push-in ingest)] ──▶ records + live
 ```
+
+---
+
+## 7. 音频流水线
+
+音频从摄像头采集到浏览器回放流经整个 NVR。流水线支持多种音频格式,并与所有流媒体协议集成。
+
+### 组件
+
+| 组件 | 位置 | 职责 |
+|-----------|----------|------|
+| 音频检测 | Recorder 实现 | 从 RTSP SDP (G.711 μ-law/A-law) 或 Xiaomi MISS 协议 (G.711/Opus) 检测音频轨道 |
+| 音频复用 | `internal/muxer/` | MP4 分片包含音频轨道 (AAC、G.711、Opus sample entry) |
+| 音频合并 | `internal/merge/` | 分片合并期间保留音频轨道 (检测 `ulaw`/`alaw`/`Opus` box 类型) |
+| 音频流式传输 | `internal/wsstream/` | 通过 `?audio_only=1` 端点进行 WebSocket 音频流式传输 |
+| 音频回放 | 浏览器 | 通过 Web Audio API 使用 JS 查找表解码 G.711 |
+
+### 数据流
+
+```
+Camera (RTSP SDP / Xiaomi MISS)
+    │  检测音频轨道 (G.711 μ-law, A-law, Opus)
+    ▼
+Recorder (audio_enabled 标志)
+    │  通过 StreamHub 广播音频帧
+    ▼
+StreamHub
+    │  扇出到所有消费者 (录制、直播、合并)
+    ▼
+MP4 Muxer (录制)
+    │  写入音频轨道 (AAC/G.711/Opus sample entry)
+    ▼
+Segment Merge
+    │  检测音频 box (ulaw/alaw/Opus)
+    │  在合并的 MP4 中保留音频
+    ▼
+WebSocket Manager (实时预览)
+    │  发送 AudioCodecInfo (0x05) + AudioFrame (0x03)
+    ▼
+Browser
+    │  G.711 解码器 (JS 查找表)
+    │  Web Audio API 回放
+```
+
+### 前端集成
+
+`CameraAudioButton.svelte` 组件提供音频切换功能,嵌入于:
+- VideoPlayer (HLS)
+- FlvPlayer (FLV)
+- WebRTCPlayer
+
+WasmPlayer (WebSocket 视频) 内置了音频支持。
+
+### 关键设计要点
+
+- **按摄像头控制**: 每个摄像头都有 `audio_enabled` 标志 (默认: false) 用于录制
+- **格式保留**: 合并流水线保留音频轨道,并使用特定于编解码器的 sample entry (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)
+- **客户端解码**: G.711 解码在浏览器中通过 Web Audio API 进行,而非服务器端
+- **协议支持**: 所有四种流媒体协议 (WebSocket、FLV、HLS、WebRTC) 都通过共享的音频 WebSocket 端点支持音频
