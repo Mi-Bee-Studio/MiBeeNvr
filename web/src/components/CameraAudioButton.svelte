@@ -39,9 +39,20 @@
   function connect() {
     if (ws || connecting) return;
     connecting = true;
-
-    ws = new WebSocket(buildUrl());
+    const url = buildUrl();
+    console.log('[CameraAudioButton] Connecting to', url);
+    try {
+      ws = new WebSocket(url);
+    } catch (err) {
+      console.error('[CameraAudioButton] WS constructor error:', err);
+      connecting = false;
+      return;
+    }
     ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      console.log('[CameraAudioButton] WS connected');
+    };
 
     ws.onmessage = (event: MessageEvent) => {
       if (!(event.data instanceof ArrayBuffer)) return;
@@ -72,11 +83,13 @@
       }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (ev: Event) => {
+      console.error('[CameraAudioButton] WS error');
       connecting = false;
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev: CloseEvent) => {
+      console.log('[CameraAudioButton] WS closed:', ev.code, ev.reason);
       connecting = false;
       ws = null;
     };
@@ -98,9 +111,17 @@
   async function toggleMute(e: MouseEvent) {
     e.stopPropagation();
     if (!hasAudio) {
-      // First click: connect and initialize
+      // First click: connect WS, wait for audio codec info
       connect();
-      // Wait for audio codec info, then init on next click
+      // Wait up to 3s for audio codec info to arrive
+      for (let i = 0; i < 30 && !hasAudio; i++) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (hasAudio && audioPlayer) {
+        await audioPlayer.init();
+        muted = false;
+        audioPlayer.setMuted(false);
+      }
       return;
     }
     if (!audioPlayer) return;
@@ -116,16 +137,16 @@
   });
 </script>
 
-{#if hasAudio || connecting}
-  <button
-    onclick={toggleMute}
-    class="absolute top-2 right-10 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10 {className}"
-    title={muted ? '取消静音' : '静音'}
-  >
-    {#if muted}
-      <VolumeX size={16} />
-    {:else}
-      <Volume2 size={16} />
-    {/if}
-  </button>
-{/if}
+<button
+  onclick={toggleMute}
+  class="absolute top-2 right-10 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10 {className}"
+  title={muted ? '取消静音' : '静音'}
+>
+  {#if connecting}
+    <span class="text-xs">...</span>
+  {:else if muted}
+    <VolumeX size={16} />
+  {:else}
+    <Volume2 size={16} />
+  {/if}
+</button>
