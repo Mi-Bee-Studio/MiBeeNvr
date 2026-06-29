@@ -40,7 +40,7 @@ export class AudioPlayer {
   async init(): Promise<void> {
     if (this._initialized) return;
     try {
-      this._ctx = new AudioContext();
+      this._ctx = new AudioContext({ sampleRate: this._sampleRate });
       if (this._ctx.state === 'suspended') await this._ctx.resume();
       this._gainNode = this._ctx.createGain();
       this._gainNode.gain.value = this._muted ? 0 : 1;
