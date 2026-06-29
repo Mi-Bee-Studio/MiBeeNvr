@@ -122,12 +122,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - Automatic MP4 segment generation
 - Multi-camera concurrent recording
 - Per-camera retention policies
-- Automatic MP4 segment generation
-- Multi-camera concurrent recording
-- Per-camera retention policies
 - Audio capture (AAC + G.711 + Opus)
-- Segment merging with configurable policies
-- Periodic timelapse recording
 - Segment merging with configurable policies
 - Periodic timelapse recording
 
@@ -141,11 +136,6 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 ### 🤖 Smart Features
 - Browser-side AI detection (ONNX Runtime Web, WebGPU-accelerated) — no backend inference
 - Audio recording and live preview playback (G.711 μ-law/A-law + Opus)
-- Multi-layer camera health monitoring
-- Auto-remediation for connection issues
-- SSE-based real-time event system
-- Quality scoring and alerting
-- Browser-side AI detection (ONNX Runtime Web, WebGPU-accelerated) — no backend inference
 - Multi-layer camera health monitoring
 - Auto-remediation for connection issues
 - SSE-based real-time event system

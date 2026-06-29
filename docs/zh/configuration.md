@@ -301,8 +301,8 @@ cameras:
 
 - **类型**: boolean
 - **默认**: `false`
-- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像
-- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）
+- **描述**: 启用此摄像头的音频录制。启用后，录制器会从 RTSP/ONVIF/小米摄像头流中捕获音频并将其混入 MP4 录像。音频也可通过 WebSocket 音频端点进行实时预览播放。
+- **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）、Opus（小米摄像头）
 - **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
 - **示例**: `true`, `false`
 
