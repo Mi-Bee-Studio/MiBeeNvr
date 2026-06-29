@@ -48,6 +48,9 @@ plugins-*.png
 # Private documentation (not committed to remote)
 docs/private/
 
+# Cross-team collaboration (private, do NOT commit)
+docs/MiBee-Projects/
+
 # IDE / Editor
 .vscode/
 .idea/
