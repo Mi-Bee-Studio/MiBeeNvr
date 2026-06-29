@@ -504,6 +504,24 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Send AudioCodecInfo if audio is configured
+	if entry.audioCodec != 0 {
+		aci := &AudioCodecInfo{
+			Codec:      entry.audioCodec,
+			SampleRate: entry.audioSampleRate,
+			Channels:   entry.audioChannels,
+		}
+		aciData, err := EncodeAudioCodecInfo(aci)
+		if err != nil {
+			conn.Close()
+			return err
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, aciData); err != nil {
+			conn.Close()
+			return err
+		}
+	}
+
 	// Register viewer
 	viewerCtx, viewerCancel := context.WithCancel(r.Context())
 	viewerID := entry.viewerSeq.Add(1)
