@@ -18,7 +18,7 @@ import (
 // AVI FOURCC constants for merge operations.
 const (
 	fccRIFF = 0x46464952 // 'RIFF'
-	fccAVI  = 0x20205641 // 'AVI '
+	fccAVI  = 0x20495641 // 'AVI '
 	fccLIST = 0x5453494C // 'LIST'
 	fcchdrl = 0x6C726468 // 'hdrl'
 	fccavih = 0x68697661 // 'avih'
@@ -34,7 +34,7 @@ const (
 	aviKeyFrame = 0x00000010
 
 	aviMainHeaderSize   = 56
-	aviStreamHeaderSize = 64
+	aviStreamHeaderSize = 56
 
 	// Default microsec per frame for rate calculation (≈30fps).
 	defaultMicroSecPerFrame = 33333

@@ -358,12 +358,12 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 			// Write to AVI muxer (if active segment).
 			r.mu.Lock()
 			m := r.aviMuxer
-			r.mu.Unlock()
 			if m != nil {
 				if err := m.WriteAudio(data, 0); err != nil {
 					mjpegLogger.Error("failed to write audio to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
 				}
 			}
+			r.mu.Unlock()
 		})
 	}
 
