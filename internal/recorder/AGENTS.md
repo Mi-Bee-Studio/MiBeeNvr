@@ -36,6 +36,7 @@ backoff.go       # Shared exponential backoff with jitter
 | HLS frame callback | `OnHLSFrame` field on H264/H265 | Non-blocking, sends to HLS manager channel |
 | Fix ingest recorder | `ingest.go` | Passive recorder — NVR does NOT dial out, waits for SRT/RTMP publisher |
 | Fix baseRecorder pattern | `base.go` | Shared segment lifecycle, codecDriver interface — H264/H265 use this |
+| Fix audio capture | `h264.go`/`h265.go` audio RTP callbacks | G.711 via `rtplpcm.Decoder` (raw passthrough), AAC via `rtpmpeg4audio.Decoder`. Dual-write: `BroadcastAudio()` + `WriteAudioSample()` |
 
 ## CONVENTIONS
 
@@ -47,6 +48,7 @@ backoff.go       # Shared exponential backoff with jitter
 - **IDR sync**: H264 waits for NAL type 5, H265 waits for NAL type 19/20 before creating new segment muxer
 - **Metrics**: Optional `*metrics.Metrics` — all recorders have `incActive/decActive/recordSegmentCreated/recordBytes/recordError` helpers
 - **Thread safety**: `sync.Mutex` protects `status` field. `atomic.Int64` for `dropped` frame counter
+- **Audio capture**: H264/H265 recorders detect audio from RTSP SDP (PT 0=PCMU, PT 8=PCMA, PT 96+=AAC). `rtplpcm.Decoder` returns raw 8-bit G.711 bytes (NO decompression). Each audio frame is dual-written: `Hub.BroadcastAudio()` for live preview + `muxer.WriteAudioSample()` for recording. No transcoding — raw codec bytes pass through both paths identically.
 
 ## ANTI-PATTERNS
 
