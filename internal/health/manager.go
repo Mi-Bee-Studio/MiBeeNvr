@@ -238,6 +238,17 @@ func (m *Manager) SetCameraEnabledFn(fn IsCameraEnabledFunc) {
 	m.autoRemediate.isEnabledFn = fn
 }
 
+// SetRediscoverer injects the IP re-discovery callback invoked when a camera is
+// blacklisted after persistent reconnection failure. The callback should decide
+// per-camera whether re-discovery applies (e.g. ONVIF only). Optional: when not
+// called, blacklisted cameras are left alone (legacy behavior).
+func (m *Manager) SetRediscoverer(fn RediscoverFunc) {
+	if m == nil || m.autoRemediate == nil {
+		return
+	}
+	m.autoRemediate.SetRediscoverer(fn)
+}
+
 // OnCameraAdded starts monitoring a newly added camera.
 // If overrides is non-nil, per-camera thresholds are applied.
 func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder, overrides *config.ResolvedHealthOverrides) {

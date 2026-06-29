@@ -87,6 +87,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					cameras[i].SRTStreamID = cam.SRTStreamID
 					cameras[i].PushTargets = cam.PushTargets
 					cameras[i].PushRetentionDays = cam.PushRetentionDays
+					cameras[i].StableID = cam.StableID
+					cameras[i].SubnetHints = cam.SubnetHints
 					break
 				}
 			}
@@ -95,6 +97,26 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
 	for i := range cameras {
 		cameraRowForAPI(&cameras[i])
+	}
+	// Backfill encoding for cameras whose stored encoding is empty (e.g. ONVIF
+	// auto-detect cameras like the ESP32 MiBeeCam, where encoding is resolved at
+	// runtime by the recorder). Without this, the camera list reports encoding=""
+	// and frontend pages that select a player from the list (Surveillance grid)
+	// cannot tell a JPEG camera from an unknown one → they fall back to HLS and
+	// render black (the per-camera LiveView page works because it queries /protocols
+	// which already probes the live recorder). Probe the running recorder here so
+	// every list consumer sees the same resolved encoding.
+	if h.camMgr != nil {
+		for i := range cameras {
+			if cameras[i].Encoding != "" {
+				continue
+			}
+			if rec := h.camMgr.GetRecorder(cameras[i].ID); rec != nil {
+				if codec, _, _, _ := getCodecParams(rec); codec != "" {
+					cameras[i].Encoding = string(codec)
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, cameras)
 }
@@ -146,6 +168,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Push-out relay targets + retention
 		PushTargets       []config.PushTargetConfig `json:"push_targets"`
 		PushRetentionDays *int                      `json:"push_retention_days"`
+		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
+		StableID    string   `json:"stable_id"`
+		SubnetHints []string `json:"subnet_hints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -252,6 +277,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SRTStreamID:       body.SRTStreamID,
 		PushTargets:       body.PushTargets,
 		PushRetentionDays: body.PushRetentionDays,
+		StableID:          body.StableID,
+		SubnetHints:       body.SubnetHints,
 	}
 
 	if h.camMgr == nil {
@@ -344,11 +371,22 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				row.SRTStreamID = cam.SRTStreamID
 				row.PushTargets = cam.PushTargets
 				row.PushRetentionDays = cam.PushRetentionDays
+				row.StableID = cam.StableID
+				row.SubnetHints = cam.SubnetHints
 				break
 			}
 		}
 	}
 	cameraRowForAPI(row)
+	// Backfill encoding from the live recorder when the stored value is empty
+	// (ONVIF auto-detect cameras). See handleListCameras for the rationale.
+	if row.Encoding == "" && h.camMgr != nil {
+		if rec := h.camMgr.GetRecorder(id); rec != nil {
+			if codec, _, _, _ := getCodecParams(rec); codec != "" {
+				row.Encoding = string(codec)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, row)
 }
 
@@ -404,6 +442,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Push-out relay targets (replace whole list) + retention
 		PushTargets       *[]config.PushTargetConfig `json:"push_targets"`
 		PushRetentionDays *int                       `json:"push_retention_days"`
+		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
+		StableID    *string   `json:"stable_id"`
+		SubnetHints *[]string `json:"subnet_hints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -650,6 +691,48 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// handleRediscoverCamera manually triggers IP self-healing for a camera whose
+// network address may have changed (e.g. after an AP reboot across per-subnet
+// DHCP). It scans candidate subnets for a device whose ONVIF serial matches the
+// camera's StableID and, if found, updates the config and reconnects.
+func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if h.camMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		return
+	}
+	// The unicast scan can take up to MaxDuration (default 30s) on a wide subnet
+	// hint list, so do not bind it to the request's lifetime.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	found, err := h.camMgr.RediscoverAndReconnect(ctx, id)
+	if err != nil {
+		var cnf *model.CameraNotFoundError
+		switch {
+		case errors.As(err, &cnf):
+			writeAPIError(w, http.StatusNotFound, err)
+		default:
+			logger.Error("rediscover camera failed", "camera_id", id, "error", err, "path", r.URL.Path)
+			writeError(w, http.StatusInternalServerError, "rediscovery failed")
+		}
+		return
+	}
+	if !found {
+		// Not an error: camera may be unsupported (non-ONVIF), have no stable_id,
+		// or simply not be online in any candidate subnet yet.
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"found":  false,
+			"reason": "camera not found in candidate subnets (is it powered on? consider adding subnet_hints)",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"found":  true,
+		"status": "reconnected",
+	})
 }
 
 // handleTestConnection attempts to connect to a camera URL with a short timeout.

@@ -3,7 +3,7 @@
   import { normalizeProtocol } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight } from 'lucide-svelte';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -19,6 +19,7 @@
    mergeProgress?: number;
    mergeError?: string;
    onRetryMerge?: (camera: Camera) => void;
+   onrediscover?: (camera: Camera) => void;
  }
 
   let {
@@ -34,7 +35,8 @@
    mergeStatus = 'idle',
    mergeProgress = 0,
    mergeError = '',
-   onRetryMerge
+   onRetryMerge,
+   onrediscover
  }: Props = $props();
 
   let menuOpen = $state(false);
@@ -261,6 +263,20 @@ let healthShowWarningIcon = $derived(
             <RotateCw size={14} />
             <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.restartLabel')}</span>
           </button>
+     {/if}
+     <!-- Rediscover IP: re-locate an ONVIF camera whose address changed (AP
+          reboot / roaming). Only shown for ONVIF cameras that are failing to
+          connect AND have a stable_id (self-healing identity). -->
+     {#if onrediscover && (camera.status === 'error' || camera.status === 'reconnecting') && normalizeProtocol(camera.protocol) === 'onvif' && camera.stable_id}
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm text-sky-400 hover:text-sky-300"
+          onclick={() => onrediscover(camera)}
+          title={t('cameras.action.rediscoverHint')}
+          aria-label={t('cameras.action.rediscoverLabel')}
+        >
+          <WifiOff size={14} />
+          <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.rediscoverLabel')}</span>
+        </button>
      {/if}
      <!-- Retry merge button when merge failed -->
      {#if mergeStatus === 'failed' && onRetryMerge}

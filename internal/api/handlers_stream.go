@@ -296,6 +296,14 @@ func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byt
 		vps = r.VPS()
 		sps = r.SPS()
 		pps = r.PPS()
+	case *recorder.HTTPJPEGRecorder:
+		// ESP32 MiBeeCam and other HTTP JPEG cameras. Live preview is served via
+		// latest-frame polling (MjpegLivePlayer), advertised as the "mjpeg" protocol
+		// by MJPEGStreamHandler. Without this case, encoding probes return "" and
+		// /protocols reports no protocols → frontend cannot live-preview the camera.
+		codec = model.EncJPEG
+	case *recorder.MJPEGRecorder:
+		codec = model.FormatMJPEG
 	}
 	return
 }

@@ -59,6 +59,10 @@ type CameraRow struct {
 	// Push-out relay targets + retention, injected from YAML at API response time.
 	PushTargets       []config.PushTargetConfig `json:"push_targets,omitempty"`
 	PushRetentionDays *int                      `json:"push_retention_days,omitempty"`
+	// IP self-healing fields (injected from YAML, not stored in DB). StableID is the
+	// ONVIF serial number used to re-acquire the camera after its IP changes.
+	StableID    string   `json:"stable_id,omitempty"`
+	SubnetHints []string `json:"subnet_hints,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {

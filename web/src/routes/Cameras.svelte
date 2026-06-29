@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -376,6 +376,30 @@
     confirmAction = { camera, action: 'restart' };
   }
 
+  // Track which cameras are currently being re-located (the scan can take ~30s).
+  let rediscovering = $state<Set<string>>(new Set());
+
+  async function handleRediscoverCamera(camera: Camera) {
+    if (rediscovering.has(camera.id)) return;
+    rediscovering = new Set([...rediscovering, camera.id]);
+    showToast(t('cameras.action.rediscoverScanning'), 'info');
+    try {
+      const res = await rediscoverCamera(camera.id);
+      if (res.found) {
+        showToast(t('cameras.action.rediscoverFound'), 'success');
+      } else {
+        showToast(t('cameras.action.rediscoverNotFound'), 'warning');
+      }
+      await loadCameras();
+    } catch (e: any) {
+      showToast(e.message || t('cameras.action.rediscoverFailed'), 'error');
+    } finally {
+      const next = new Set(rediscovering);
+      next.delete(camera.id);
+      rediscovering = next;
+    }
+  }
+
 
   async function handleSaveName(camera: Camera, name: string) {
     try {
@@ -559,6 +583,7 @@
                 onstart={handleStartCamera}
                 onstop={handleStopCamera}
                 onrestart={handleRestartCamera}
+                onrediscover={handleRediscoverCamera}
                 onsaveName={handleSaveName}
               />
               <!-- Inline Edit Form for this camera -->

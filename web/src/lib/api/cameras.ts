@@ -43,6 +43,10 @@ export interface Camera {
   // Push-out relay (forward this camera's stream to remote targets)
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
+  // IP self-healing: ONVIF serial number (stable hardware identity) + candidate
+  // subnets used to relocate the camera after its IP changes.
+  stable_id?: string;
+  subnet_hints?: string[];
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -300,6 +304,24 @@ export async function stopCamera(id: string, signal?: AbortSignal): Promise<{ st
   return apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
     method: 'POST',
     signal,
+  });
+}
+
+// Manually trigger IP self-healing for a camera whose network address may have
+// changed (e.g. after an AP reboot across per-subnet DHCP). Scans candidate
+// subnets for a device whose ONVIF serial matches the camera's stable_id and, if
+// found, reconnects. Returns whether the camera was relocated.
+export async function rediscoverCamera(
+  id: string,
+  signal?: AbortSignal
+): Promise<{ found: boolean; status?: string; reason?: string }> {
+  // The unicast scan can run up to the configured MaxDuration (default 30s) plus
+  // restart time, so use a generous client-side timeout rather than the default
+  // 30s. Caller-supplied signal takes precedence.
+  const effectiveSignal = signal ?? AbortSignal.timeout(90000);
+  return apiRequest<{ found: boolean; status?: string; reason?: string }>(`/cameras/${id}/rediscover`, {
+    method: 'POST',
+    signal: effectiveSignal,
   });
 }
 
