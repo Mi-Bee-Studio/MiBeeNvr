@@ -208,9 +208,76 @@ C) Chained (NVR-to-NVR, the cross-network scenario):
 
 ## 7. 音频流水线
 
-音频从摄像头采集到浏览器回放流经整个 NVR。流水线支持多种音频格式,并与所有流媒体协议集成。
+### 7.1 概述
 
-### 组件
+音频从摄像头采集开始，经过两条并行路径（录制 + 实时预览）。支持 G.711 μ-law/A-law、AAC、Opus 编解码器。原始编码字节同时写入两条路径，不做转码，既保留了音质又最小化服务器 CPU 开销。
+
+### 7.2 编解码器检测
+
+每种摄像头类型的音频检测方式：
+
+| 摄像头类型 | 检测方式 | 编解码器映射 |
+|-----------|---------|------------|
+| RTSP 摄像头 | gortsplib 解析 SDP | PayloadType 0 = PCMU (μ-law)，PT 8 = PCMA (A-law)，PT 96+ = AAC |
+| Xiaomi 摄像头 | MISS 协议 codec ID | 1026=PCMU，1027=PCMA，1032=Opus |
+
+**检测后设置**：
+- `g711MULaw` 标志（区分 μ-law 和 A-law）
+- `g711SampleRate`（通常 8000 Hz）
+- `audioMuxerConfig` 字节（MP4 box 配置）
+
+G.711 使用 `rtplpcm.Decoder`（返回原始 8-bit 字节，不做解压），AAC 使用 `rtpmpeg4audio.Decoder`。PCMA/PCMU 统一映射到 `model.AudioG711`。
+
+### 7.3 双路径架构
+
+原始编码字节通过 StreamHub 同时写入两个消费者：
+
+1. **录制路径**：`muxer.WriteAudioSample()` → 原始字节存入 MP4 分片
+   - MP4 box 类型：`ulaw`/`alaw`（G.711，8-bit sample size）、`mp4a`+`esds`（AAC）、`Opus`+`dOps`（Opus，48kHz timescale）
+   - 无转码 — 原始编解码器数据直接透传
+
+2. **实时预览路径**：`hub.BroadcastAudio()` → wsstream → WebSocket 二进制帧 → 前端 JS 解码
+
+**关键点**：相同的原始字节流向两条路径。音质差异来自解码器，而非数据本身。
+
+### 7.4 录制回放（清晰音频）
+
+回放录制文件时，浏览器原生 `<video>`/`<audio>` 元素或 HLS 播放器解码 MP4 音频轨道。对于 G.711，浏览器读取 `ulaw`/`alaw` box 描述符并使用内置 G.711 解码器。这是经过充分测试的原生代码路径 → 音频清晰。
+
+### 7.5 实时预览（WebSocket 音频）
+
+**Wire protocol**（二进制 WebSocket 帧）：
+
+- **AudioCodecInfo**（type 0x05，发送一次）：`{type:1}{codec:1}{sample_rate:4_BE}{channels:1}` — 共 7 字节
+  - Codec 字节：0x01=μ-law，0x02=A-law，0x03=Opus，0x04=AAC
+
+- **AudioFrame**（type 0x03，每个 RTP 包一帧）：`{type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}` — 14 + data_len 字节
+  - Payload 为原始编解码器字节（从 StreamHub 无变换）
+
+**端点**：`GET /api/cameras/{id}/stream/ws?audio_only=1` — 纯音频模式完全跳过视频帧。
+
+### 7.6 前端 G.711 解码
+
+前端使用标准 ITU-T G.711 256 项查找表将 8-bit 压缩样本转换为 16-bit 线性 PCM：
+
+- **μ-law**（`decodeMuLaw`）：表直接用原始字节索引。ITU-T G.711 要求的按位 NOT（位翻转）已内置在表值中。最大输出：±32124（完整 16-bit 范围）。
+- **A-law**（`decodeALaw`）：表直接用原始字节索引。ITU-T G.711 要求的 XOR 0x55 已内置在表值中。最大输出：±32256。
+- PCM 样本通过 `pcm[i] / 32768` 归一化为 Float32 [-1.0, +1.0]。
+- **关键**：查找表来源于经过充分测试的参考实现（NAudio、Wireshark、janus-gateway）。位翻转变换绝不能由调用方额外执行 — 它已包含在表值中。
+
+**文件**：
+- `web/src/lib/g711-decoder.ts`（表 + 解码函数）
+- `web/src/lib/audio-player.ts`（Web Audio API 播放）
+
+### 7.7 Web Audio API 播放
+
+- **AudioContext 以流采样率创建**（`new AudioContext({ sampleRate: 8000 })`），而非浏览器默认值（48000）。这避免了缓冲边界的逐缓冲重采样伪影。
+- 每个音频帧创建一个 `AudioBuffer`，填充解码后的 Float32 样本。
+- **无缝调度**：通过 `_nextTime` 跟踪串联 `AudioBufferSourceNode` 实例。每个缓冲持续时间 = `frameCount / sampleRate`（G.711 通常 20ms）。如果调度超前 >1s，`_nextTime` 重置以防内存堆积。
+- AudioContext 在用户点击时创建（浏览器自动播放策略）。由 `CameraAudioButton.svelte` 处理。
+- 实时预览仅支持 G.711 解码。AAC 和 Opus 直接返回（不支持）。Opus 支持需要解码器库（如 libopus WASM）。
+
+### 7.8 组件表格
 
 | 组件 | 位置 | 职责 |
 |-----------|----------|------|
@@ -218,9 +285,9 @@ C) Chained (NVR-to-NVR, the cross-network scenario):
 | 音频复用 | `internal/muxer/` | MP4 分片包含音频轨道 (AAC、G.711、Opus sample entry) |
 | 音频合并 | `internal/merge/` | 分片合并期间保留音频轨道 (检测 `ulaw`/`alaw`/`Opus` box 类型) |
 | 音频流式传输 | `internal/wsstream/` | 通过 `?audio_only=1` 端点进行 WebSocket 音频流式传输 |
-| 音频回放 | 浏览器 | 通过 Web Audio API 使用 JS 查找表解码 G.711 |
+| 音频回放 | 浏览器 | 通过标准 ITU-T 查找表 + Web Audio API 以原始采样率解码 G.711 |
 
-### 数据流
+### 7.9 数据流图
 
 ```
 Camera (RTSP SDP / Xiaomi MISS)
@@ -243,22 +310,18 @@ WebSocket Manager (实时预览)
     │  发送 AudioCodecInfo (0x05) + AudioFrame (0x03)
     ▼
 Browser
-    │  G.711 解码器 (JS 查找表)
-    │  Web Audio API 回放
+    │  G.711 解码器 (ITU-T 标准 256 项查找表)
+    │  AudioContext 以流采样率运行 (8kHz)
+    │  Web Audio API 无缝播放
 ```
 
-### 前端集成
+### 7.10 关键设计要点
 
-`CameraAudioButton.svelte` 组件提供音频切换功能,嵌入于:
-- VideoPlayer (HLS)
-- FlvPlayer (FLV)
-- WebRTCPlayer
-
-WasmPlayer (WebSocket 视频) 内置了音频支持。
-
-### 关键设计要点
-
-- **按摄像头控制**: 每个摄像头都有 `audio_enabled` 标志 (默认: false) 用于录制
-- **格式保留**: 合并流水线保留音频轨道,并使用特定于编解码器的 sample entry (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)
-- **客户端解码**: G.711 解码在浏览器中通过 Web Audio API 进行,而非服务器端
-- **协议支持**: 所有四种流媒体协议 (WebSocket、FLV、HLS、WebRTC) 都通过共享的音频 WebSocket 端点支持音频
+- **标准 ITU-T 查找表**：G.711 查找表必须使用标准值（NAudio/Wireshark 参考）。位翻转（μ-law 的 NOT、A-law 的 XOR 0x55）已内置在表中 — 调用方直接用原始字节索引。
+- **AudioContext 采样率匹配**：AudioContext 必须以流的原生采样率（G.711 为 8000 Hz）创建。使用浏览器默认值（48000 Hz）会导致逐缓冲重采样伪影。
+- **无服务端解码**：所有 G.711 解码在浏览器中进行。后端直接透传原始编解码器字节，不做变换。
+- **录制与实时预览的差异**：录制回放使用浏览器原生 MP4 音频解码器（经过充分测试，清晰）。实时预览使用 JS 查找表 + Web Audio API（需要正确的表和采样率匹配）。
+- **AAC 和 Opus 限制**：实时预览仅支持 G.711 解码。AAC 和 Opus 摄像头在录制中有音频（浏览器原生解码），但实时预览无音频。
+- **按摄像头控制**：每个摄像头都有 `audio_enabled` 标志 (默认: false) 用于录制。
+- **格式保留**：合并流水线保留音频轨道，并使用特定于编解码器的 sample entry (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)。
+- **协议支持**：所有四种流媒体协议 (WebSocket、FLV、HLS、WebRTC) 都通过共享的音频 WebSocket 端点支持音频。
