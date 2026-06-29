@@ -19,7 +19,7 @@ var mjpegLogger = slog.Default().With("component", "mjpeg-proxy")
 // HTTP connections), this returns the direct MJPEG URL as JSON. The frontend
 // <img> tag connects directly to the camera using its own browser connection pool.
 //
-// Response: {"url": "http://192.168.63.225:80/stream"}
+// Response: {"url": "http://192.168.1.100:80/stream"}
 func (h *Handler) handleMjpegStream(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
 	if cameraID == "" {
