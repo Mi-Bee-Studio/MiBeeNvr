@@ -163,10 +163,10 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 	}
 
 	m.streams[camID] = entry
+	// NOTE: entry is fully constructed before writeLoop starts. Do NOT mutate
+	// entry fields after this point — writeLoop/getAudioCh read them without a
+	// lock, and a post-launch write (e.g. re-zeroing audioCh) is a data race.
 	go m.writeLoop(ctx, camID, entry)
-	// Initialize audio channel (nil by default, allocated lazily in SetAudioInfo)
-	entry.audioCh = nil
-
 
 	wsLogger.Load().Info("WebSocket stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
 	return nil

@@ -407,7 +407,14 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	_, err = readMessage(t, conn)
 	require.NoError(t, err)
 
+	// The viewer reads nothing after the CodecInfo handshake. With a write buffer
+	// of 5 and many broadcasts, the per-viewer send must be NON-BLOCKING: excess
+	// frames are dropped (select { default }) rather than stalling the hub.
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	entry := m.streams["cam1"]
+	require.NotNil(t, entry)
+	dropsBefore := entry.dropCount.Load()
 
 	iterations := 200
 	if testing.Short() {
@@ -418,8 +425,17 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
 
-	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
+	// The real assertion: frames were dropped (buffer=5, sent=200), proving the
+	// send path never blocks the broadcaster. The path is async (hub callback →
+	// frameCh → broadcaster goroutine → per-viewer drop), so poll generously —
+	// especially under -race, which slows the goroutine scheduler.
+	require.Eventually(t, func() bool {
+		return entry.dropCount.Load()-dropsBefore > 0
+	}, 5*time.Second, 2*time.Millisecond, "expected frames to be dropped for the slow viewer")
 
+	// Close the viewer and poll for cleanup — mirrors TestServeWS_DisconnectCleanup.
+	conn.Close()
+	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 }
 func TestFrameDropCounter(t *testing.T) {
 	// Capture log output to verify periodic warnings
