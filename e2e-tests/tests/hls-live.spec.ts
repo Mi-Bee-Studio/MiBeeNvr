@@ -7,7 +7,7 @@
  *
  * REQUIREMENTS:
  * - Headed Chromium browser (per AGENTS.md)
- * - Live NVR instance at NVR_URL (default: http://192.168.63.31:9090)
+ * - Live NVR instance at NVR_URL (default: http://localhost:9090)
  * - At least one HLS-capable camera (rtsp_h264 / rtsp_h265 / onvif / rtsp)
  *
  * DESIGN:
@@ -28,7 +28,7 @@ import {
   getCameraCells,
 } from './hls-helpers';
 
-const BASE_URL = process.env.NVR_URL || 'http://192.168.63.31:9090';
+const BASE_URL = process.env.NVR_URL || 'http://localhost:9090';
 const SCREENSHOT_DIR = 'tmp';
 
 test.describe('HLS Live Streaming (LiveView)', () => {
