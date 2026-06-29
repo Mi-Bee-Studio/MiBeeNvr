@@ -7,10 +7,10 @@
 // (other managers, hubs, config) at construction time; once Start is called
 // no further registration is allowed.
 //
-// # Open source vs commercial integration
+// # Extensibility
 //
-// Public main and commercial MiBeeNvrP2P both construct the App via RunFree,
-// which wires all open-source services. Commercial callers obtain the App,
+// Public main and third-party extensions both construct the App via RunFree,
+// which wires all open-source services. External callers obtain the App,
 // type-assert services to the interfaces exposed in sibling pkg/ packages,
 // and Register() their own services before Start().
 //
@@ -20,13 +20,13 @@
 //	if err != nil { return err }
 //	if err := a.Start(ctx); err != nil { return err }
 //
-// Example (commercial main):
+// Example (third-party extension):
 //
 //	a, err := app.RunFree(cfg, configPath)
 //	if err != nil { return err }
 //	camSvc := a.Get("camera").(camera.Manager)
-//	p2pSvc := p2p.New(camSvc, a.Get("eventbus").(eventbus.Bus))
-//	if err := a.Register(p2pSvc); err != nil { return err }
+//	extSvc := myextension.New(camSvc, a.Get("eventbus").(eventbus.Bus))
+//	if err := a.Register(extSvc); err != nil { return err }
 //	if err := a.Start(ctx); err != nil { return err }
 //
 // # Conventions
