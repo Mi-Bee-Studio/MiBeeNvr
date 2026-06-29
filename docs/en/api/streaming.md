@@ -97,16 +97,140 @@ curl -u username:password \
 
 **Endpoint:** `GET /api/cameras/{id}/stream/ws`
 
-WebSocket live stream. Upgrades to a WebSocket connection for real-time binary frame streaming.
+WebSocket live stream. Upgrades to a WebSocket connection for real-time binary frame streaming with support for both video and audio.
 
-**Request:**
+### Request
+
 ```bash
 # Use a WebSocket client
 wscat -c "ws://localhost:9090/api/cameras/front-door/stream/ws" \
   -H "Authorization: Basic $(echo -n 'username:password' | base64)"
 ```
 
-**Response:** WebSocket upgrade. Binary frames containing video data.
+### Query Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `audio_only` | integer | Set to `1` to receive audio-only frames (no video). Used by HLS/FLV/WebRTC players to get audio alongside their video protocol. |
+| `token` | string | Base64-encoded authentication token as alternative to `Authorization` header (required for browser WebSocket API which can't set headers). |
+
+### Audio-Only Mode
+
+When `audio_only=1` is set, the WebSocket sends only audio frames. This is used by players that receive video via another protocol (HLS, FLV, or WebRTC) but need a separate audio stream.
+
+**Request (audio-only):**
+```bash
+wscat -c "ws://localhost:9090/api/cameras/front-door/stream/ws?audio_only=1&token=$(echo -n 'username:password' | base64)"
+```
+
+### Binary Wire Format
+
+All messages are binary WebSocket frames with the following structure:
+
+#### Message Types
+
+| Type | Value | Description |
+|------|-------|-------------|
+| `CodecInfo` | 0x01 | Video codec configuration (sent first on connect) |
+| `VideoFrame` | 0x02 | Video frame data (not sent in audio-only mode) |
+| `AudioFrame` | 0x03 | Audio frame data (sent when audio is configured) |
+| `AudioCodecInfo` | 0x05 | Audio codec configuration (sent once when audio is available) |
+| `EOS` | 0xFF | End of stream (camera went offline) |
+
+#### CodecInfo (0x01)
+
+Video codec configuration sent as the first message on connect (skipped in audio-only mode).
+
+**Wire format:** `{type:1}{codec:1}{profile:1}{level:1}{sps_len:2}{sps}{pps_len:2}{pps}[vps_len:2][vps]`
+
+- `codec` byte: 4 = H.264, 5 = H.265
+- `profile` and `level`: values from the SPS
+- `sps`, `pps`, `vps`: raw NAL unit data (VPS only for H.265)
+- All multi-byte integers are big-endian
+
+#### AudioCodecInfo (0x05)
+
+Audio codec configuration sent once on connect when audio is configured.
+
+**Wire format:** `{type:1}{audio_codec:1}{sample_rate:4_BE}{channels:1}`
+
+- `audio_codec` byte: 0x01 = G.711 μ-law, 0x02 = G.711 A-law, 0x03 = Opus, 0x04 = AAC
+- `sample_rate`: sample rate in Hz (e.g., 8000, 44100, 48000)
+- `channels`: number of channels (1 = mono, 2 = stereo)
+
+#### VideoFrame (0x02)
+
+Video frame data with presentation timestamp and NAL unit payloads.
+
+**Wire format:** `{type:1}{pts:8_BE}{is_keyframe:1}{nalu_count:2}{nalu1_len:4}{nalu1}...`
+
+- `pts`: presentation timestamp in 90kHz clock (big-endian)
+- `is_keyframe`: 1 = IDR frame, 0 = non-IDR
+- `nalu_count`: number of NAL units in this frame (big-endian)
+- Each NAL unit has a 4-byte big-endian length prefix followed by raw NAL unit data (no start codes)
+
+#### AudioFrame (0x03)
+
+Audio frame data with codec identifier and raw encoded audio samples.
+
+**Wire format:** `{type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}`
+
+- `pts`: presentation timestamp in 90kHz clock (big-endian)
+- `codec`: audio codec byte (same as in AudioCodecInfo)
+- `data_len`: length of audio data in bytes (big-endian)
+- `data`: raw encoded audio data (G.711 samples, Opus packets, or AAC frames)
+
+#### EOS (0xFF)
+
+Single byte indicating the camera went offline. Sent when the stream is unregistered or when the idle timeout expires.
+
+**Wire format:** `{type:1}`
+
+### Supported Audio Codecs
+
+| Codec | Byte | Description |
+|-------|------|-------------|
+| G.711 μ-law | 0x01 | Telephony codec (8kHz mono, 64 kbps). Decoded via Web Audio API with G.711 μ-law lookup table. |
+| G.711 A-law | 0x02 | Telephony codec (8kHz mono, 64 kbps). Decoded via Web Audio API with G.711 A-law lookup table. |
+| Opus | 0x03 | Low-latency codec (8-48kHz, mono/stereo). Decoded via WebCodecs API. |
+| AAC | 0x04 | High-quality codec (8-48kHz, mono/stereo). Decoded via WebCodecs API. |
+
+### JavaScript Example
+
+The following example connects to the audio-only WebSocket endpoint and logs incoming audio frames:
+
+```javascript
+const ws = new WebSocket('ws://localhost:9090/api/cameras/front-door/stream/ws?audio_only=1&token=' + btoa('username:password'));
+
+ws.binaryType = 'arraybuffer';
+
+ws.onmessage = (event) => {
+  const view = new DataView(event.data);
+  const msgType = view.getUint8(0);
+
+  switch (msgType) {
+    case 0x05: // AudioCodecInfo
+      const audioCodec = view.getUint8(1);
+      const sampleRate = view.getUint32(2, false); // big-endian
+      const channels = view.getUint8(6);
+      console.log(`Audio codec: ${audioCodec}, sample rate: ${sampleRate}Hz, channels: ${channels}`);
+      break;
+
+    case 0x03: // AudioFrame
+      const pts = view.getBigUint64(1, false); // big-endian
+      const codec = view.getUint8(9);
+      const dataLen = view.getUint32(10, false); // big-endian
+      const audioData = new Uint8Array(event.data, 14, dataLen);
+      console.log(`Audio frame: pts=${pts}, codec=${codec}, size=${dataLen}`);
+      break;
+
+    case 0xFF: // EOS
+      console.log('Stream ended');
+      ws.close();
+      break;
+  }
+};
+```
 
 ## Camera Protocols
 
