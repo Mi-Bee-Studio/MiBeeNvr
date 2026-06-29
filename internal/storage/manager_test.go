@@ -156,6 +156,71 @@ func TestCreateSegment_H264(t *testing.T) {
 	}
 }
 
+func TestCreateSegment_AVI(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+	m.EnsureCameraDir("cam-03")
+
+	tempPath, finalPath, err := m.CreateSegment("cam-03", "avi")
+	if err != nil {
+		t.Fatalf("CreateSegment error: %v", err)
+	}
+
+	// temp file must exist
+	if _, err := os.Stat(tempPath); err != nil {
+		t.Fatalf("temp file not created: %v", err)
+	}
+
+	// temp file must end with .tmp
+	if !strings.HasSuffix(tempPath, ".tmp") {
+		t.Fatalf("temp path must end with .tmp, got: %s", tempPath)
+	}
+
+	// final path must end with .avi
+	if !strings.HasSuffix(finalPath, ".avi") {
+		t.Fatalf("final path must end with .avi, got: %s", finalPath)
+	}
+
+	// final path must NOT exist yet (atomic write guarantee)
+	if _, err := os.Stat(finalPath); err == nil {
+		t.Fatal("final path must not exist before CloseSegment")
+	}
+
+	// Write some data
+	data := []byte("fake-avi-data")
+	n, err := m.WriteFrame(tempPath, data)
+	if err != nil {
+		t.Fatalf("WriteFrame error: %v", err)
+	}
+	if n != len(data) {
+		t.Fatalf("WriteFrame wrote %d bytes, want %d", n, len(data))
+	}
+
+	// Close segment — atomic rename
+	if err := m.CloseSegment(tempPath, finalPath); err != nil {
+		t.Fatalf("CloseSegment error: %v", err)
+	}
+
+	// final path must now exist
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatalf("final file not created after CloseSegment: %v", err)
+	}
+
+	// temp path must no longer exist
+	if _, err := os.Stat(tempPath); err == nil {
+		t.Fatal("temp file still exists after CloseSegment")
+	}
+
+	// Verify content
+	content, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatalf("cannot read final file: %v", err)
+	}
+	if string(content) != string(data) {
+		t.Fatalf("content mismatch: got %q, want %q", content, data)
+	}
+}
+
 func TestCreateSegment_MJPEG(t *testing.T) {
 	dir := t.TempDir()
 	m, _ := NewManager(dir)

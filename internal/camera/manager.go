@@ -257,6 +257,8 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:     segDur,
 				SampleInterval: cam.SampleInterval,
 				DB:             cm.db,
+				AudioEnabled:   cam.AudioEnabled,
+				EventBus:       cm.eventBus,
 			}
 			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:

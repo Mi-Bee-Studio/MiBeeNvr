@@ -94,6 +94,15 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
 		}
 
+	case "avi":
+		tempPath = filepath.Join(cameraDir, uuid+".tmp")
+		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, now, uuid))
+		f, err := os.Create(tempPath)
+		if err != nil {
+			m.recordWriteFailure()
+			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
+		}
+		f.Close()
 	default:
 		return "", "", fmt.Errorf("storage: unsupported format %q", format)
 	}

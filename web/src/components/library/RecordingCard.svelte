@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Eye, Download, Trash2, RefreshCw, Clock, HardDrive, Image, Camera as CameraIcon } from 'lucide-svelte';
+  import { Eye, Download, Play, Trash2, RefreshCw, Clock, HardDrive, Image, Camera as CameraIcon } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { apiRequestBlob, getRecordingDownloadUrl, getMergedRecordingUrl } from '$lib/api';
@@ -18,6 +18,7 @@
     onmerge?: (recording: Recording) => void;
     /** Called when the user clicks transcode */
     ontranscode?: (recording: Recording) => void;
+    onplay?: (recordingId: string) => void;
     selected: boolean;
     onselect: (recording: Recording) => void;
   }
@@ -31,6 +32,7 @@
     ondownload,
     onmerge,
     ontranscode,
+    onplay,
     selected,
     onselect,
   }: Props = $props();
@@ -39,7 +41,8 @@
 
   let isTimelapse = $derived(recording.format === 'timelapse');
   let isVideo = $derived(recording.format === 'h264' || recording.format === 'h265');
-  let isMJPEG = $derived(recording.format === 'mjpeg');
+  let isJPEG = $derived(recording.format === 'mjpeg');
+  let isAVI = $derived(recording.format === 'avi');
   let isMerged = $derived(recording.format === 'timelapse' && recording.merge_status === 'merged');
   let showMergeButton = $derived(isTimelapse && !isMerged && recording.merge_status !== 'pending');
   let showDownloadButton = $derived(isMerged || isVideo);
@@ -49,6 +52,7 @@
       case 'h264': return t('recording.format.h264');
       case 'h265': return t('recording.format.h265');
       case 'mjpeg': return t('recording.format.mjpeg');
+      case 'avi': return t('recording.format.avi');
       case 'timelapse': return t('recording.format.timelapse');
       default: return recording.format;
     }
@@ -56,6 +60,7 @@
 
   let formatBadgeClass = $derived.by(() => {
     if (isTimelapse) return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300';
+    if (isAVI) return 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300';
     if (isVideo) return 'badge-info';
     return 'badge-neutral';
   });
@@ -101,7 +106,7 @@
     thumbnailLoaded = true;
 
     // H.264/H.265 recordings don't have thumbnail support
-    if (!isTimelapse && !isMJPEG) {
+    if (!isTimelapse && !isJPEG && !isAVI) {
       thumbnailError = true;
       return;
     }
@@ -185,6 +190,12 @@
     e.stopPropagation();
     ontranscode?.(recording);
   }
+
+  function handlePlayClick(e: Event) {
+    e.stopPropagation();
+    onplay?.(recording.id);
+  }
+
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -238,7 +249,7 @@
     {:else}
       <!-- Error / format-specific fallback icon -->
       <div class="absolute inset-0 flex items-center justify-center">
-        {#if isTimelapse || isMJPEG}
+        {#if isTimelapse || isJPEG || isAVI}
           <Image size={32} class="th-text-tertiary opacity-40" />
         {:else}
           <CameraIcon size={32} class="th-text-tertiary opacity-40" />
@@ -358,6 +369,18 @@
           <Download size={14} />
         </button>
       {/if}
+
+      <!-- Play (AVI recordings) -->
+      {#if isAVI}
+        <button
+          onclick={handlePlayClick}
+          class="btn btn-ghost px-2 py-1 text-xs th-text-secondary hover:text-green-500 transition-all duration-200"
+          title="Play AVI"
+        >
+          <Play size={14} />
+        </button>
+      {/if}
+
 
       <!-- Merge (for unmerged timelapse) -->
       {#if showMergeButton}

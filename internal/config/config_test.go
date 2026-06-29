@@ -1064,13 +1064,13 @@ func TestAudioEnabledDefaultFalse(t *testing.T) {
 	require.False(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to false")
 }
 
-func TestAudioEnabledRejectedForMJPEG(t *testing.T) {
+func TestAudioEnabledAllowedForMJPEG(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "c1", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://192.168.1.10/stream",
 		AudioEnabled: true,
 	}}}
 	cfg.ApplyDefaults()
-	require.False(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras have no audio source")
+	require.True(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras now support audio via AVI container")
 }
 
 func TestAudioEnabledRejectedForHTTPJPEG(t *testing.T) {

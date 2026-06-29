@@ -24,6 +24,7 @@
   import CompactList from '../components/library/CompactList.svelte';
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
+  import AviPlayback from '../components/AviPlayback.svelte';
 
   // ── URL params initialization ──
   let initialViewMode: 'gallery' | 'list' = 'gallery';
@@ -80,6 +81,10 @@
   // ── UI state ──
   let showBackToTop = $state(false);
   let abortController: AbortController | null = null;
+
+  // ── AVI playback modal state ──
+  let showAviPlayback = $state(false);
+  let playbackRecordingId = $state('');
   let refreshInterval: number;
 
 // ── Merge tracking ──
@@ -151,6 +156,12 @@ let batchMerging = $state(false);
   function viewRecording(recording: Recording) {
     window.location.hash = `#/recordings/${recording.id}`;
   }
+
+  function handlePlay(recordingId: string) {
+    playbackRecordingId = recordingId;
+    showAviPlayback = true;
+  }
+
 
   function handleSort(field: string) {
     if (sortBy === field) {
@@ -651,6 +662,8 @@ let batchMerging = $state(false);
           ontoggleselect={(r: Recording) => toggleSelect(r.id)}
           selectMode={selectedIds.size > 0}
           ondeleteRecording={(r: Recording) => deleteConfirm = r}
+          onplay={handlePlay}
+
         />
       {:else}
         <!-- ── List view ── -->
@@ -672,6 +685,8 @@ let batchMerging = $state(false);
           {totalPages}
           totalRecordings={totalRecordings}
           onpagechange={handlePageChange}
+          onplay={handlePlay}
+
         />
       {/if}
     </div>
@@ -784,3 +799,30 @@ let batchMerging = $state(false);
     <ArrowUp size={20} />
   </button>
 {/if}
+
+<!-- ── AVI Playback modal ── -->
+{#if showAviPlayback}
+  <div
+    class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
+    onclick={() => showAviPlayback = false}
+    role="dialog"
+    aria-modal="true"
+  >
+    <div
+      class="card max-w-3xl w-full p-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold th-text-primary">AVI Playback</h3>
+        <button
+          onclick={() => showAviPlayback = false}
+          class="btn btn-ghost btn-sm"
+        >
+          ✕
+        </button>
+      </div>
+      <AviPlayback recordingId={playbackRecordingId} />
+    </div>
+  </div>
+{/if}
+

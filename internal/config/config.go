@@ -1230,9 +1230,9 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Encoding = "h264"
 			}
 		}
-		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)
-		if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
-			slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
+		// Reject audio_enabled for HTTP-JPEG cameras (no audio source; MJPEG now supports G.711 via AVI container)
+		if cam.AudioEnabled && cam.Encoding == "jpeg" {
+			slog.Warn("audio_enabled not supported for HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
 			cam.AudioEnabled = false
 		}
 

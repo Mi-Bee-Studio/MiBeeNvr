@@ -13,6 +13,7 @@
     ontoggleselect = (r: Recording) => {},
     selectMode = false,
     ondeleteRecording = (r: Recording) => {},
+    onplay = undefined,
   }: {
     selectedDate?: string | null;
     recordings: Recording[];
@@ -22,6 +23,7 @@
     ontoggleselect?: (recording: Recording) => void;
     selectMode?: boolean;
     ondeleteRecording?: (recording: Recording) => void;
+    onplay?: (recordingId: string) => void;
   } = $props();
 
   function pad(n: number): string {
@@ -128,6 +130,8 @@
             onview={handleView}
             onselect={toggleSelection}
             ondelete={ondeleteRecording}
+            {onplay}
+
           />
         {/each}
       </div>

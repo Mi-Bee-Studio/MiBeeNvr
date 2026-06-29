@@ -13,9 +13,12 @@ import (
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -31,9 +34,13 @@ type MJPEGConfig struct {
 	SampleInterval int // if >1, only save every Nth frame
 	DB             RecordingDB
 	EventBus       *event.EventBus
+	AudioEnabled   bool
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
+// When audio is present (AudioEnabled + G.711 in SDP), it creates AVI files
+// with MJPEG video + G.711 audio. Without audio, it stores JPEG frames to a
+// directory (backward compatible).
 type MJPEGRecorder struct {
 	cfg     MJPEGConfig
 	store   SegmentStore
@@ -54,6 +61,61 @@ type MJPEGRecorder struct {
 	dropped         atomic.Int64
 	Hub             *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
 	lastHealthLogAt time.Time        // throttled log for storage health failures
+
+	// Audio/AVI fields
+	hasAudio       bool
+	g711MULaw      bool
+	g711SampleRate int
+	aviMuxer       *avi.Muxer
+	aviFile        *os.File
+}
+
+// segmentFormat returns the recording format for the current segment.
+func (r *MJPEGRecorder) segmentFormat() model.Format {
+	if r.hasAudio {
+		return model.FormatAVI
+	}
+	return model.FormatMJPEG
+}
+
+// jpegDimensions extracts JPEG image dimensions from raw JPEG data.
+func jpegDimensions(data []byte) (width, height int, ok bool) {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return 0, 0, false
+	}
+	idx := 2
+	for idx < len(data)-1 {
+		if data[idx] != 0xFF {
+			return 0, 0, false
+		}
+		marker := data[idx+1]
+		if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
+			// SOF0/1/2: length(2), precision(1), height(2), width(2)
+			if idx+9 >= len(data) {
+				return 0, 0, false
+			}
+			height = int(data[idx+5])<<8 | int(data[idx+6])
+			width = int(data[idx+7])<<8 | int(data[idx+8])
+			return width, height, true
+		}
+		if marker == 0xD9 || marker == 0xDA {
+			// EOI or SOS - no SOF found
+			return 0, 0, false
+		}
+		if marker == 0xFF || (marker >= 0xD0 && marker <= 0xD7) || marker == 0x01 {
+			idx += 2
+		} else {
+			if idx+3 >= len(data) {
+				return 0, 0, false
+			}
+			segLen := int(data[idx+2])<<8 | int(data[idx+3])
+			if segLen < 2 {
+				return 0, 0, false
+			}
+			idx += 2 + segLen
+		}
+	}
+	return 0, 0, false
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -76,7 +138,7 @@ func (r *MJPEGRecorder) decActive() {
 // recordSegmentCreated increments the segments created counter if metrics is available.
 func (r *MJPEGRecorder) recordSegmentCreated() {
 	if r.metrics != nil {
-		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "mjpeg").Inc()
+		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, string(r.segmentFormat())).Inc()
 	}
 }
 
@@ -184,6 +246,13 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 }
 
 func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
+	// Reset audio/AVI state for new connection.
+	r.hasAudio = false
+	r.mu.Lock()
+	r.aviMuxer = nil
+	r.aviFile = nil
+	r.mu.Unlock()
+
 	u, err := base.ParseURL(r.cfg.RTSPURL)
 	if err != nil {
 		return fmt.Errorf("invalid RTSP URL: %w", err), false
@@ -221,6 +290,34 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return fmt.Errorf("SETUP: %w", err), false
 	}
 
+	// Audio setup: find G.711 format if AudioEnabled.
+	var g711Dec *rtplpcm.Decoder
+	var g711Forma *format.G711
+	var audioMedi *description.Media
+
+	if r.cfg.AudioEnabled {
+		audioMedi = desc.FindFormat(&g711Forma)
+		if audioMedi != nil {
+			dec := &rtplpcm.Decoder{BitDepth: 8, ChannelCount: 1}
+			if err := dec.Init(); err != nil {
+				mjpegLogger.Warn("G.711 decoder init failed", "camera_id", r.cfg.CameraID, "error", err)
+			} else {
+				g711Dec = dec
+				if _, err := client.Setup(desc.BaseURL, audioMedi, 0, 1); err != nil {
+					mjpegLogger.Warn("G.711 audio SETUP failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
+					g711Dec = nil
+				} else {
+					r.hasAudio = true
+					r.g711MULaw = g711Forma.MULaw
+					r.g711SampleRate = g711Forma.SampleRate
+					mjpegLogger.Info("G.711 audio track detected", "camera_id", r.cfg.CameraID, "mulaw", g711Forma.MULaw, "rate", g711Forma.SampleRate)
+				}
+			}
+		} else {
+			mjpegLogger.Debug("no G.711 audio format found in stream", "camera_id", r.cfg.CameraID)
+		}
+	}
+
 	r.frameCh = make(chan []byte, DefaultRingBufCap)
 	r.dropped.Store(0)
 	r.frameSeq = 0
@@ -245,6 +342,30 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 			}
 		}
 	})
+
+	// Audio RTP callback: decode G.711 and dual-write to hub + AVI muxer.
+	if g711Dec != nil && audioMedi != nil && g711Forma != nil {
+		client.OnPacketRTP(audioMedi, g711Forma, func(pkt *rtp.Packet) {
+			data, err := g711Dec.Decode(pkt)
+			if err != nil {
+				mjpegLogger.Error("G.711 RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+				return
+			}
+			// Broadcast for live preview.
+			if r.Hub != nil {
+				r.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioG711, data)
+			}
+			// Write to AVI muxer (if active segment).
+			r.mu.Lock()
+			m := r.aviMuxer
+			r.mu.Unlock()
+			if m != nil {
+				if err := m.WriteAudio(data, 0); err != nil {
+					mjpegLogger.Error("failed to write audio to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
+				}
+			}
+		})
+	}
 
 	r.setStatus(model.StatusRecording)
 	if _, err := client.Play(nil); err != nil {
@@ -308,20 +429,57 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		if r.curTempPath == "" {
-			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
-			if err != nil {
-				mjpegLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
-				continue
+			if r.hasAudio {
+				// Create AVI file segment.
+				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatAVI))
+				if err != nil {
+					mjpegLogger.Error("failed to create AVI segment", "camera_id", r.cfg.CameraID, "error", err)
+					continue
+				}
+				w, h, ok := jpegDimensions(data)
+				if !ok {
+					w, h = 640, 480 // fallback dimensions
+				}
+				f, err := os.OpenFile(tempPath, os.O_RDWR, 0644)
+				if err != nil {
+					mjpegLogger.Error("failed to open AVI file", "camera_id", r.cfg.CameraID, "error", err)
+					// Clean up the temp path on failure.
+					os.Remove(tempPath)
+					continue
+				}
+				r.aviFile = f
+				r.aviMuxer = avi.NewMuxer(f, w, h, r.g711SampleRate, r.g711MULaw)
+				r.curTempPath = tempPath
+				r.curFinalPath = finalPath
+				r.segStart = time.Now()
+				r.frameCount = 0
+			} else {
+				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
+				if err != nil {
+					mjpegLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
+					continue
+				}
+				r.curTempPath = tempPath
+				r.curFinalPath = finalPath
+				r.segStart = time.Now()
+				r.frameCount = 0
 			}
-			r.curTempPath = tempPath
-			r.curFinalPath = finalPath
-			r.segStart = time.Now()
-			r.frameCount = 0
 		}
 
-		if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
-			mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
-			continue
+		if r.hasAudio && r.aviMuxer != nil {
+			// Write video frame to AVI muxer.
+			r.mu.Lock()
+			err := r.aviMuxer.WriteVideo(data, 0)
+			r.mu.Unlock()
+			if err != nil {
+				mjpegLogger.Error("failed to write video to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
+				continue
+			}
+		} else {
+			if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
+				mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
+				continue
+			}
 		}
 		r.frameCount++
 
@@ -335,6 +493,25 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	if r.curTempPath == "" {
 		return
 	}
+
+	// For AVI mode: close muxer and file before renaming.
+	if r.hasAudio {
+		r.mu.Lock()
+		if r.aviMuxer != nil {
+			if err := r.aviMuxer.Close(); err != nil {
+				mjpegLogger.Error("failed to close AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
+			}
+			r.aviMuxer = nil
+		}
+		if r.aviFile != nil {
+			if err := r.aviFile.Close(); err != nil {
+				mjpegLogger.Error("failed to close AVI file", "camera_id", r.cfg.CameraID, "error", err)
+			}
+			r.aviFile = nil
+		}
+		r.mu.Unlock()
+	}
+
 	if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
 		mjpegLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 	}
@@ -342,6 +519,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	// Insert recording entry into database
 	var totalSize int64
 	var recordingID string
+	segFormat := r.segmentFormat()
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -349,21 +527,28 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 			ID:         fmt.Sprintf("%d", now.UnixNano()),
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinalPath,
-			Format:     model.FormatMJPEG,
+			Format:     segFormat,
 			StartedAt:  r.segStart,
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
 		recordingID = rec.ID
-		// Get file size from disk
-		// For MJPEG, the finalPath is a directory; calculate total size
-		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				totalSize += info.Size()
+
+		if r.hasAudio {
+			// AVI is a single file.
+			if info, err := os.Stat(r.curFinalPath); err == nil {
+				totalSize = info.Size()
 			}
-			return nil
-		})
+		} else {
+			// MJPEG finalPath is a directory; walk to calculate total size.
+			filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
+				if err == nil && !info.IsDir() {
+					totalSize += info.Size()
+				}
+				return nil
+			})
+		}
 		rec.FileSize = totalSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
@@ -371,12 +556,13 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	}
 
 	// Publish SegmentCompleted event.
+	formatStr := string(segFormat)
 	if r.cfg.EventBus != nil && recordingID != "" {
 		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
 			CameraID:    r.cfg.CameraID,
 			FilePath:    r.curFinalPath,
-			Format:      string(model.FormatMJPEG),
-			Encoding:    string(model.FormatMJPEG),
+			Format:      formatStr,
+			Encoding:    formatStr,
 			StartedAt:   r.segStart.Format(time.RFC3339Nano),
 			EndedAt:     time.Now().Format(time.RFC3339Nano),
 			FileSize:    totalSize,

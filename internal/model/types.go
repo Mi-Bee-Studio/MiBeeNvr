@@ -186,7 +186,9 @@ const (
 	FormatH265      Format = "h265"
 	FormatMJPEG     Format = "mjpeg"
 	FormatTimelapse Format = "timelapse"
+	FormatAVI       Format = "avi"       // AVI container (MJPEG video + G.711 audio)
 )
+
 
 // Audio format constants
 const (

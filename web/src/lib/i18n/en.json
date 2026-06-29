@@ -307,6 +307,7 @@
   "recording.format.h264": "MP4",
   "recording.format.mjpeg": "JPEG",
   "recording.format.timelapse": "Timelapse",
+  "recording.format.avi": "AVI",
   "recording.mergeStatus": "Merge Status",
   "recording.thumbnail": "Thumbnail",
   "timelapse.title": "Timelapse",

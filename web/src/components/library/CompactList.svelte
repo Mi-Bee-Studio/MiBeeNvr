@@ -3,7 +3,7 @@
     ChevronUp, ChevronDown,
     CheckSquare, Square,
     Eye, Trash2, RefreshCw,
-    Download, XCircle, AlertCircle
+    Download, Play, XCircle, AlertCircle
   } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
@@ -20,6 +20,7 @@
     ondelete: (recording: Recording) => void;
     ontranscode?: (recording: Recording) => void;
     ondownload?: (recordingId: string) => void;
+    onplay?: (recordingId: string) => void;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
     onsort?: (field: string) => void;
@@ -40,6 +41,7 @@
     ondelete,
     ontranscode,
     ondownload,
+    onplay,
     sortBy = 'started_at',
     sortOrder = 'desc',
     onsort,
@@ -68,13 +70,14 @@
       case 'h264': return t('recording.format.h264');
       case 'h265': return t('recording.format.h265');
       case 'mjpeg': return t('recording.format.mjpeg');
+      case 'avi': return t('recording.format.avi');
       case 'timelapse': return t('recording.format.timelapse');
-      default: return recording.format;
     }
   }
 
   function getFormatBadgeClass(recording: Recording): string {
     if (recording.format === 'timelapse') return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300';
+    if (recording.format === 'avi') return 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300';
     if (recording.format === 'h264' || recording.format === 'h265') return 'badge-info';
     return 'badge-neutral';
   }
@@ -132,6 +135,12 @@
     e.stopPropagation();
     ondownload?.(recordingId);
   }
+
+  function handlePlayClick(e: Event, recordingId: string) {
+    e.stopPropagation();
+    onplay?.(recordingId);
+  }
+
 
   function handleDeleteClick(e: Event, recording: Recording) {
     e.stopPropagation();
@@ -398,6 +407,18 @@
                     <Download size={16} />
                   </button>
                 {/if}
+
+                <!-- Play (AVI recordings) -->
+                {#if recording.format === 'avi'}
+                  <button
+                    onclick={(e) => handlePlayClick(e, recording.id)}
+                    class="btn btn-ghost action-btn action-btn--play"
+                    title="Play AVI"
+                  >
+                    <Play size={16} />
+                  </button>
+                {/if}
+
 
                 <!-- Delete -->
                 <button
@@ -816,6 +837,11 @@
 
   .action-btn--download:hover {
     color: var(--color-success);
+
+  .action-btn--play:hover {
+    color: var(--color-success);
+  }
+
   }
 
   .action-label {
