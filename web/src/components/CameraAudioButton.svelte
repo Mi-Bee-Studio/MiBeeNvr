@@ -38,7 +38,7 @@
 
   function connect() {
     if (ws || connecting) return;
-    connecting = $state(true);
+    connecting = true;
 
     ws = new WebSocket(buildUrl());
     ws.binaryType = 'arraybuffer';
@@ -53,7 +53,7 @@
       if (msgType === MsgType.AudioCodecInfo) {
         try {
           const info: AudioCodecInfo = decodeAudioCodecInfo(data);
-          hasAudio = $state(true);
+          hasAudio = true;
           audioPlayer = new AudioPlayer(info.codec, info.sampleRate, info.channels);
         } catch {
           // parse error
@@ -73,11 +73,11 @@
     };
 
     ws.onerror = () => {
-      connecting = $state(false);
+      connecting = false;
     };
 
     ws.onclose = () => {
-      connecting = $state(false);
+      connecting = false;
       ws = null;
     };
   }
@@ -91,8 +91,8 @@
       audioPlayer.destroy();
       audioPlayer = null;
     }
-    hasAudio = $state(false);
-    muted = $state(true);
+    hasAudio = false;
+    muted = true;
   }
 
   async function toggleMute(e: MouseEvent) {
@@ -107,7 +107,7 @@
     if (!audioPlayer.initialized) {
       await audioPlayer.init();
     }
-    muted = $state(!muted);
+    muted = !muted;
     audioPlayer.setMuted(muted);
   }
 
