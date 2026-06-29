@@ -208,57 +208,148 @@ C) Chained (NVR-to-NVR, the cross-network scenario):
 
 ## 7. Audio Pipeline
 
-Audio flows through the NVR from camera capture to browser playback. The pipeline handles multiple audio formats and integrates with all streaming protocols.
+### 7.1 Overview
 
-### Components
+Audio flows from camera capture through dual paths: recording (MP4 segments stored on disk) and live preview (real-time WebSocket streaming to the browser). The pipeline supports multiple audio codecs: G.711 μ-law and A-law (8-bit logarithmic PCM), AAC (MPEG-4 Audio), and Opus. Raw encoded bytes from the camera are written simultaneously to both paths without transcoding, preserving audio quality while minimizing server CPU load.
+
+### 7.2 Codec Detection
+
+Each camera type detects audio tracks differently during stream initialization:
+
+
+| Camera Type | Detection Method | Codec Payload Mapping | Decoder Backend |
+|-------------|-----------------|----------------------|-----------------|
+| RTSP cameras | gortsplib parses SDP (Session Description Protocol) | PayloadType 0 = PCMU (μ-law), PT 8 = PCMA (A-law), PT 96+ = AAC (MPEG-4 Audio) | `rtplpcm.Decoder` for G.711 (returns raw 8-bit bytes, NO decompression), `rtpmpeg4audio.Decoder` for AAC |
+| Xiaomi cameras | MISS protocol codec IDs | 1026 = PCMU, 1027 = PCMA, 1032 = Opus | All PCMA/PCMU map to `model.AudioG711`; Opus passes raw bytes |
+
+The detection phase sets three critical fields on the recorder:
+- `g711MULaw` flag (true for μ-law, false for A-law)
+- `g711SampleRate` (typically 8000 Hz for G.711)
+- `audioMuxerConfig` bytes (codec-specific sample entry data for MP4)
+
+### 7.3 Dual-Path Architecture
+
+Raw encoded bytes from the camera RTP packets are written to TWO consumers simultaneously via the StreamHub frame bus:
+
+1. **Recording path**: `muxer.WriteAudioSample(pts, codec, bytes)` → raw bytes stored in MP4 segment. MP4 box types vary by codec: `ulaw`/`alaw` (G.711, 8-bit sample size), `mp4a`+`esds` (AAC with AudioSpecificConfig), `Opus`+`dOps` (Opus with OpusHead, 48kHz timescale). NO transcoding occurs — raw codec data passes through unchanged.
+
+2. **Live preview path**: `hub.BroadcastAudio(pts, codec, sampleRate, bytes)` → wsstream → WebSocket binary frames → frontend JS decode.
+
+The critical insight: the SAME raw bytes go to both paths. The difference in audio quality between recording playback and live preview comes from the DECODER, not the data. Recording playback uses the browser's native MP4 audio decoder (highly optimized native code), while live preview uses JavaScript lookup tables + Web Audio API (requires correct tables and sample rate matching).
+
+### 7.4 Recording Playback (Clean Audio)
+
+When playing back a recording, the browser's native `<video>`/`<audio>` element or HLS player decodes the MP4 audio track. For G.711, the browser reads the `ulaw` (μ-law) or `alaw` (A-law) box descriptor and uses its built-in G.711 decoder (typically hardware-accelerated or highly optimized native code). This is a well-tested code path in Chrome/Firefox/Safari that produces clean audio without artifacts. The same applies to AAC (native decoder) and Opus (native decoder in modern browsers).
+
+### 7.5 Live Preview (WebSocket Audio)
+
+Live preview audio uses a custom binary WebSocket protocol defined in `internal/wsstream/`. The wire format consists of two frame types:
+
+1. **AudioCodecInfo** (type 0x05, sent once when audio stream starts):
+```
+{type:1}{codec:1}{sample_rate:4_BE}{channels:1}
+```
+- Total: 7 bytes
+- `type`: 0x05 (codec info)
+- `codec`: 0x01 = μ-law, 0x02 = A-law, 0x03 = Opus, 0x04 = AAC
+- `sample_rate`: 32-bit big-endian integer (e.g., 8000 for G.711, 48000 for Opus)
+- `channels`: 1 = mono, 2 = stereo
+
+2. **AudioFrame** (type 0x03, per RTP packet):
+```
+{type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}
+```
+- Total: 14 + data_len bytes
+- `type`: 0x03 (audio frame)
+- `pts`: 64-bit big-endian presentation timestamp (microseconds since epoch)
+- `codec`: same codec byte as AudioCodecInfo
+- `data_len`: 32-bit big-endian length of audio payload
+- `data`: raw codec bytes (no transformation from StreamHub — identical to recording path)
+
+The WebSocket endpoint is `GET /api/cameras/{id}/stream/ws?audio_only=1`. The `audio_only=1` flag tells the server to skip video frames entirely, reducing bandwidth for audio-only monitoring scenarios.
+
+### 7.6 Frontend G.711 Decode
+
+The frontend uses standard ITU-T G.711 256-entry lookup tables to convert 8-bit compressed samples to 16-bit linear PCM:
+
+- **μ-law decoder** (`decodeMuLaw` in `web/src/lib/g711-decoder.ts`): Table indexed directly by raw byte. The bitwise NOT (bit-flip) required by ITU-T G.711 specification is already baked into the table values. Max output: ±32124 (full 16-bit range).
+
+- **A-law decoder** (`decodeALaw`): Table indexed directly by raw byte. The XOR 0x55 required by ITU-T G.711 specification is already baked into the table values. Max output: ±32256.
+
+- **PCM to Float32 conversion**: After decoding, PCM samples are normalized to Float32 range [-1.0, +1.0] via `pcm[i] / 32768` for Web Audio API consumption.
+
+**CRITICAL**: The lookup tables are sourced from well-tested reference implementations (NAudio, Wireshark, janus-gateway). The bit-flip transformation (NOT for μ-law, XOR 0x55 for A-law) MUST NOT be applied by the caller — it is already incorporated into the table values. Direct indexing by raw byte is correct.
+
+Key files: `web/src/lib/g711-decoder.ts` (tables + decode functions), `web/src/lib/audio-player.ts` (Web Audio API playback).
+
+### 7.7 Web Audio API Playback
+
+Live preview audio playback uses the Web Audio API for gapless, low-latency audio:
+
+- **AudioContext created at stream sample rate**: `new AudioContext({ sampleRate: 8000 })` for G.711, NOT the browser default (48000 Hz). This prevents per-buffer resampling artifacts at buffer boundaries caused by mismatched sample rates.
+
+- **Buffer creation**: Each audio frame creates an `AudioBuffer` at the stream sample rate (8000 Hz), filled with decoded Float32 samples from the G.711 lookup tables. Buffer duration = `frameCount / sampleRate` (typically 20ms for 160-byte G.711 frames at 8000 Hz).
+
+- **Gapless scheduling**: `AudioBufferSourceNode` instances are chained via `_nextTime` tracking. Each buffer is scheduled to start at `_nextTime`, then `_nextTime += buffer.duration`. If scheduling drifts >1 second ahead of current time (indicating accumulated timing errors or client buffering), `_nextTime` resets to `ctx.currentTime + 0.1` to prevent memory buildup and audible gaps.
+
+- **Autoplay policy**: AudioContext creation requires user gesture (browser autoplay policy). `CameraAudioButton.svelte` handles this by creating the AudioContext on the first click.
+
+- **Codec limitation**: Only G.711 is supported for live preview decode. AAC and Opus return early (unsupported) in the frontend. Opus support would require a decoder library (e.g., libopus compiled to WASM), which is not currently implemented due to complexity.
+
+### 7.8 Components
+
 
 | Component | Location | Role |
 |-----------|----------|------|
-| Audio detection | Recorder implementations | Detect audio tracks from RTSP SDP (G.711 μ-law/A-law) or Xiaomi MISS protocol (G.711/Opus) |
-| Audio muxing | `internal/muxer/` | MP4 segments include audio tracks (AAC, G.711, Opus sample entries) |
-| Audio merge | `internal/merge/` | Preserves audio tracks during segment merge (detects `ulaw`/`alaw`/`Opus` boxes) |
-| Audio streaming | `internal/wsstream/` | WebSocket audio streaming via `?audio_only=1` endpoint |
-| Audio playback | Browser | Decodes G.711 via Web Audio API with JS lookup tables |
+| Audio detection | Recorder implementations (`internal/recorder/`) | Detect audio tracks from RTSP SDP (G.711 μ-law/A-law/AAC) or Xiaomi MISS protocol (G.711/Opus) |
+| Audio muxing | `internal/muxer/` | MP4 segments include audio tracks with codec-specific sample entries (`ulaw`/`alaw`/`mp4a`/`Opus` boxes) |
+| Audio merge | `internal/merge/` | Preserves audio tracks during segment merge, detects and copies `ulaw`/`alaw`/`Opus` boxes |
+| Audio streaming | `internal/wsstream/` | WebSocket audio streaming via `?audio_only=1` endpoint, sends AudioCodecInfo (0x05) + AudioFrame (0x03) binary frames |
+| Audio playback | Browser | Decodes G.711 via standard ITU-T 256-entry lookup tables + Web Audio API at native sample rate (8kHz) |
 
-### Data flow
+### 7.9 Data Flow
 
 ```
 Camera (RTSP SDP / Xiaomi MISS)
-    │  Detect audio track (G.711 μ-law, A-law, Opus)
+    │  Detect audio track (G.711 μ-law, A-law, AAC, Opus)
+    │  Set g711MULaw flag, g711SampleRate, audioMuxerConfig
     ▼
 Recorder (audio_enabled flag)
-    │  Broadcast audio frames via StreamHub
+    │  BroadcastAudio(pts, codec, sampleRate, raw_bytes) via StreamHub
     ▼
 StreamHub
-    │  Fan-out to all consumers (recording, live, merge)
+    │  Fan-out to all consumers (recording muxer, live wsstream, merge)
     ▼
-MP4 Muxer (recording)
-    │  Write audio track (AAC/G.711/Opus sample entry)
-    ▼
-Segment Merge
-    │  Detect audio boxes (ulaw/alaw/Opus)
-    │  Preserve audio in merged MP4
-    ▼
-WebSocket Manager (live preview)
-    │  Send AudioCodecInfo (0x05) + AudioFrame (0x03)
-    ▼
-Browser
-    │  G.711 decoder (JS lookup tables)
-    │  Web Audio API playback
+┌─────────────────┴─────────────────┐
+│                                     │
+▼                                     ▼
+MP4 Muxer (recording)          WebSocket Manager (live preview)
+│  WriteAudioSample()                 │  Send AudioCodecInfo (0x05)
+│  Raw bytes → MP4 track             │  Send AudioFrame (0x03)
+│  ulaw/alaw/mp4a/Opus box            │  Binary WebSocket frames
+│                                     │
+▼                                     ▼
+Segment Merge                    Browser
+│  Detect audio boxes                   │  Parse AudioCodecInfo (0x05)
+│  Preserve audio in merged MP4        │  Parse AudioFrame (0x03)
+│                                     │  G.711 decoder (ITU-T standard 256-entry lookup tables)
+▼                                     │  AudioContext at stream sample rate (8kHz)
+Recording Playback (HLS/MP4)           │  Web Audio API gapless playback
+│  Browser native MP4 audio decoder    │
+│  Clean, well-tested audio            │
 ```
 
-### Frontend integration
+### 7.10 Key Design Points
 
-The `CameraAudioButton.svelte` component provides audio toggle functionality embedded in:
-- VideoPlayer (HLS)
-- FlvPlayer (FLV)
-- WebRTCPlayer
+- **Standard ITU-T tables**: G.711 lookup tables must use standard ITU-T G.711 values sourced from reference implementations (NAudio, Wireshark, janus-gateway). The bit-flip transformation (NOT for μ-law, XOR 0x55 for A-law) is baked into the table values — callers index by raw byte directly without applying transformations.
 
-WasmPlayer (WebSocket video) has built-in audio support.
+- **AudioContext sample rate matching**: AudioContext must be created at the stream's native sample rate (8000 Hz for G.711). Using the browser default (48000 Hz) causes per-buffer resampling artifacts at buffer boundaries, resulting in clicks or pops.
 
-### Key design points
+- **No server-side decode**: All G.711 decoding happens in the browser via JavaScript lookup tables. The backend passes raw codec bytes through without transformation or decompression, minimizing server CPU load and simplifying the pipeline.
 
-- **Per-camera control**: Each camera has an `audio_enabled` flag (default: false) for recording
-- **Format preservation**: Merge pipeline preserves audio tracks with codec-specific sample entries (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)
-- **Client-side decoding**: G.711 decode happens in browser via Web Audio API, not server
-- **Protocol support**: All four streaming protocols (WebSocket, FLV, HLS, WebRTC) support audio via the shared audio WebSocket endpoint
+- **Recording vs live difference**: Recording playback uses the browser's native MP4 audio decoder (well-tested, clean, hardware-accelerated in some browsers). Live preview uses JS lookup tables + Web Audio API (requires correct tables, sample rate matching, and gapless scheduling). The audio quality difference is decoder implementation, not data.
+
+- **AAC and Opus limitation**: Live preview only supports G.711 decode. AAC and Opus cameras have audio in recordings (native browser decode works perfectly) but no live preview audio (unsupported codec). Opus support would require a WASM decoder library (~200KB), which is not currently implemented.
+
+- **Dual-path preservation**: The same raw codec bytes flow to both recording and live paths. Any change to the encoding side (e.g., sample rate, codec selection) affects both paths equally. The decoder is the only variable between recording and live quality.
+
