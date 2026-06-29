@@ -41,6 +41,7 @@ export {
   getCameraRecordingStats,
   startCamera,
   stopCamera,
+  rediscoverCamera,
   getDashboardCameras,
   getSnapshotUrl,
   testConnection,

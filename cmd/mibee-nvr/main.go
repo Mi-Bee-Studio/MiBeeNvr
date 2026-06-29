@@ -585,6 +585,16 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		a.healthMgr.SetCameraEnabledFn(func(cameraID string) bool {
 			return a.camMgr.GetCameraConfig(cameraID) != nil
 		})
+		// Wire IP self-healing: when a camera is blacklisted after persistent
+		// reconnection failure, attempt to relocate it by its ONVIF serial number
+		// (cameras that roam across per-subnet-DHCP APs get new IPs). The manager
+		// decides per-camera whether rediscovery applies (ONVIF + has stable_id).
+		if cfg.Health.Rediscovery.RediscoveryEnabled() {
+			a.healthMgr.SetRediscoverer(func(ctx context.Context, cameraID string) error {
+				_, err := a.camMgr.RediscoverAndReconnect(ctx, cameraID)
+				return err
+			})
+		}
 	}
 
 	periodicMergeDir := filepath.Join(cfg.Storage.RootDir, "periodic-merge")
