@@ -7,8 +7,6 @@
     MsgType,
     decodeAudioCodecInfo,
     decodeAudioFrame,
-    type AudioCodecInfo,
-    type AudioFrame,
   } from '$lib/webcodecs-player/protocol';
 
   let {
@@ -23,7 +21,6 @@
   let audioPlayer: AudioPlayer | null = null;
   let hasAudio = $state(false);
   let muted = $state(true);
-  let connecting = $state(false);
 
   function buildUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -37,22 +34,14 @@
   }
 
   function connect() {
-    if (ws || connecting) return;
-    connecting = true;
-    const url = buildUrl();
-    console.log('[CameraAudioButton] Connecting to', url);
+    if (ws) return;
     try {
-      ws = new WebSocket(url);
+      ws = new WebSocket(buildUrl());
+      ws.binaryType = 'arraybuffer';
     } catch (err) {
-      console.error('[CameraAudioButton] WS constructor error:', err);
-      connecting = false;
+      console.error('[CameraAudioButton] WS error:', err);
       return;
     }
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = () => {
-      console.log('[CameraAudioButton] WS connected');
-    };
 
     ws.onmessage = (event: MessageEvent) => {
       if (!(event.data instanceof ArrayBuffer)) return;
@@ -63,78 +52,68 @@
 
       if (msgType === MsgType.AudioCodecInfo) {
         try {
-          const info: AudioCodecInfo = decodeAudioCodecInfo(data);
+          const info = decodeAudioCodecInfo(data);
           hasAudio = true;
           audioPlayer = new AudioPlayer(info.codec, info.sampleRate, info.channels);
-        } catch {
-          // parse error
+          // Auto-init on arrival — user gesture was the click that triggered connect()
+          audioPlayer.init().then(() => {
+            muted = false;
+            audioPlayer?.setMuted(false);
+          });
+        } catch (e) {
+          console.error('[CameraAudioButton] codec info parse error:', e);
         }
       } else if (msgType === MsgType.AudioFrame) {
-        if (audioPlayer?.initialized) {
+        if (audioPlayer?.initialized && !muted) {
           try {
-            const frame: AudioFrame = decodeAudioFrame(data);
+            const frame = decodeAudioFrame(data);
             audioPlayer.pushFrame(frame.data);
           } catch {
-            // parse error
+            // parse error — skip
           }
         }
       } else if (msgType === MsgType.EOS) {
-        disconnect();
+        cleanup();
       }
     };
 
-    ws.onerror = (ev: Event) => {
+    ws.onerror = () => {
       console.error('[CameraAudioButton] WS error');
-      connecting = false;
     };
 
     ws.onclose = (ev: CloseEvent) => {
-      console.log('[CameraAudioButton] WS closed:', ev.code, ev.reason);
-      connecting = false;
+      console.log('[CameraAudioButton] WS closed:', ev.code);
       ws = null;
     };
   }
 
-  function disconnect() {
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
-    if (audioPlayer) {
-      audioPlayer.destroy();
-      audioPlayer = null;
-    }
+  function cleanup() {
+    if (ws) { ws.close(); ws = null; }
+    if (audioPlayer) { audioPlayer.destroy(); audioPlayer = null; }
     hasAudio = false;
     muted = true;
   }
 
   async function toggleMute(e: MouseEvent) {
     e.stopPropagation();
-    if (!hasAudio) {
-      // First click: connect WS, wait for audio codec info
+
+    if (!ws) {
+      // First click: connect WS. Audio auto-starts when codec info arrives.
       connect();
-      // Wait up to 3s for audio codec info to arrive
-      for (let i = 0; i < 30 && !hasAudio; i++) {
-        await new Promise(r => setTimeout(r, 100));
-      }
-      if (hasAudio && audioPlayer) {
-        await audioPlayer.init();
-        muted = false;
-        audioPlayer.setMuted(false);
-      }
       return;
     }
-    if (!audioPlayer) return;
-    if (!audioPlayer.initialized) {
-      await audioPlayer.init();
-    }
+
+    // WS connected: toggle mute
     muted = !muted;
-    audioPlayer.setMuted(muted);
+    if (audioPlayer) {
+      if (!audioPlayer.initialized) {
+        await audioPlayer.init();
+      }
+      audioPlayer.setMuted(muted);
+    }
   }
 
-  onDestroy(() => {
-    disconnect();
-  });
+  onDestroy(() => cleanup());
 </script>
 
 <button
@@ -142,9 +121,7 @@
   class="absolute top-2 right-10 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10 {className}"
   title={muted ? '取消静音' : '静音'}
 >
-  {#if connecting}
-    <span class="text-xs">...</span>
-  {:else if muted}
+  {#if muted}
     <VolumeX size={16} />
   {:else}
     <Volume2 size={16} />
