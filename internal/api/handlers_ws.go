@@ -115,10 +115,12 @@ func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
 	actualRec := unwrapDelegate(rec)
 	provider, ok := actualRec.(audioInfoProvider)
 	if !ok {
+		slog.Info("WS: recorder does not expose audio info", "camera_id", id, "type", fmt.Sprintf("%T", actualRec))
 		return
 	}
 	audioCodec := provider.AudioCodec()
 	if audioCodec == "" {
+		slog.Info("WS: recorder has no audio", "camera_id", id)
 		return
 	}
 
@@ -136,5 +138,7 @@ func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
 
 	if err := h.wsMgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels); err != nil {
 		slog.Warn("WS: failed to set audio info", "camera_id", id, "error", err)
+	} else {
+		slog.Info("WS: audio configured", "camera_id", id, "codec", audioCodec, "muLaw", muLaw, "rate", sampleRate, "channels", channels)
 	}
 }

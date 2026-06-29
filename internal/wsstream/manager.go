@@ -545,7 +545,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				return
 			default:
 			}
-			conn.SetReadDeadline(time.Now().Add(time.Second))
+			conn.SetReadDeadline(time.Now().Add(m.idleTimeout))
 			_, _, err := conn.ReadMessage()
 			if err != nil {
 				viewerCancel()
