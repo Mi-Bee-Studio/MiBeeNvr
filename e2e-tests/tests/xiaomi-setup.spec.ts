@@ -7,7 +7,7 @@
  * - Auth API error handling for wrong credentials
  * - Device list rendering state after auth
  *
- * These tests run against a live NVR instance at http://192.168.63.31:9090.
+ * These tests run against a live NVR instance at http://localhost:9090.
  * No real Xiaomi credentials are used — tests verify UI behavior and error handling.
  */
 
