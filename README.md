@@ -87,6 +87,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in
 - **Modern Web UI**: Dark/light themes, i18n support, responsive design
 - **ONVIF Support**: Auto-discovery, PTZ control, stream URI management
+- **IP Self-Healing**: ONVIF cameras that change IP (Wi-Fi roaming across APs) are auto-relocated by serial number and reconnected — unicast probing works across routed subnets
 - **Smart Integrations**: MQTT triggers, WebDAV, FTP, FFmpeg transcoding
 
 ## Screenshots
