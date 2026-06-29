@@ -17,7 +17,7 @@ import (
 // FOURCC constants for AVI RIFF structure.
 const (
 	fccRIFF = 0x46464952 // 'RIFF' little-endian
-	fccAVI  = 0x20205641 // 'AVI ' little-endian
+	fccAVI  = 0x20495641 // 'AVI ' little-endian
 	fccLIST = 0x5453494C // 'LIST' little-endian
 
 	fcchdrl = 0x6C726468 // 'hdrl' little-endian
@@ -48,21 +48,20 @@ const defaultMicroSecPerFrame = 33333
 // Size constants for AVI structures.
 const (
 	aviMainHeaderSize    = 56
-	aviStreamHeaderSize  = 64
+	aviStreamHeaderSize  = 56
 	bitmapInfoHeaderSize = 40
 	waveformatexSize     = 18
 	indexEntrySize       = 16
 
 	// Pre-computed list sizes (no backpatching needed).
-	// video(72) + videoStrf(48) + fccstrl(4) = 124.
+	// Pre-computed list sizes (no backpatching needed).
+	// strh(8+56) + strf(8+40) + fccstrl(4) = 116.
 	videoStrlDataSize = 4 + 8 + aviStreamHeaderSize + 8 + bitmapInfoHeaderSize
 
-	// audio(72) + audioStrf(26) + fccstrl(4) = 102.
+	// strh(8+56) + strf(8+18) + fccstrl(4) = 94.
 	audioStrlDataSize = 4 + 8 + aviStreamHeaderSize + 8 + waveformatexSize
 
-	// fcchdrl(4) + avih(64) + videoStrl(132) + audioStrl(110) = 310.
-	// VideoStrl total = 8 + 124 = 132
-	// AudioStrl total = 8 + 102 = 110
+	// fcchdrl(4) + avih(8+56) + videoStrl(8+116) + audioStrl(8+94) = 294.
 	hdrlDataSize = 4 + 8 + aviMainHeaderSize + 8 + videoStrlDataSize + 8 + audioStrlDataSize
 )
 
@@ -311,10 +310,10 @@ func (m *Muxer) writeHeader() {
 	writeU32(b, 0)             // dwSuggestedBufferSize (backpatched in Close())
 	writeU32(b, 0xFFFFFFFF)    // dwQuality (-1 = default)
 	writeU32(b, 0)             // dwSampleSize
-	writeU32(b, 0)             // rcFrame left
-	writeU32(b, 0)             // rcFrame top
-	writeU32(b, uint32(m.width))  // rcFrame right
-	writeU32(b, uint32(m.height)) // rcFrame bottom
+	writeU16(b, 0)                    // rcFrame left (SHORT)
+	writeU16(b, 0)                    // rcFrame top (SHORT)
+	writeU16(b, uint16(m.width))      // rcFrame right (SHORT)
+	writeU16(b, uint16(m.height))     // rcFrame bottom (SHORT)
 
 	// Video strf (BITMAPINFOHEADER, 40 bytes)
 	writeU32(b, fccstrf)
@@ -354,17 +353,17 @@ func (m *Muxer) writeHeader() {
 	writeU32(b, 0)                    // dwSuggestedBufferSize (backpatched in Close())
 	writeU32(b, 0xFFFFFFFF)           // dwQuality (-1 = default)
 	writeU32(b, 1)                    // dwSampleSize (1 byte per sample)
-	writeU32(b, 0)                    // rcFrame left
-	writeU32(b, 0)                    // rcFrame top
-	writeU32(b, 0)                    // rcFrame right
-	writeU32(b, 0)                    // rcFrame bottom
+	writeU16(b, 0)                    // rcFrame left (SHORT)
+	writeU16(b, 0)                    // rcFrame top (SHORT)
+	writeU16(b, 0)                    // rcFrame right (SHORT)
+	writeU16(b, 0)                    // rcFrame bottom (SHORT)
 
 	// Audio strf (WAVEFORMATEX, 18 bytes)
 	writeU32(b, fccstrf)
 	writeU32(b, waveformatexSize)
-	fmtTag := uint16(0x0007) // WAVE_FORMAT_MULAW
+	fmtTag := uint16(0x0006) // WAVE_FORMAT_MULAW
 	if !m.muLaw {
-		fmtTag = 0x0006 // WAVE_FORMAT_ALAW
+		fmtTag = 0x0007 // WAVE_FORMAT_ALAW
 	}
 	writeU16(b, fmtTag)                  // wFormatTag
 	writeU16(b, 1)                       // nChannels

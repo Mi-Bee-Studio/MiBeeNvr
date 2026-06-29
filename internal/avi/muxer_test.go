@@ -194,8 +194,8 @@ func TestAVIMuxer_RIFFLayout(t *testing.T) {
 	}
 	// WAVEFORMATEX: wFormatTag at audioStrfOff+8+0
 	wFormatTag := readU32LE(t, data, audioStrfOff+8) & 0xFFFF
-	if wFormatTag != 0x0007 {
-		t.Errorf("wFormatTag: expected 0x0007 (MU-LAW), got 0x%04X", wFormatTag)
+	if wFormatTag != 0x0006 {
+		t.Errorf("wFormatTag: expected 0x0006 (MU-LAW), got 0x%04X", wFormatTag)
 	}
 
 	// Check idx1 at the end.
@@ -274,10 +274,10 @@ func TestAVIMuxer_G711AudioChunk(t *testing.T) {
 		t.Fatal("audio strf not found")
 	}
 
-	// Check wFormatTag = 0x0007
+	// Check wFormatTag = 0x0006 (MU-LAW)
 	wFormatTag := readU32LE(t, data, audioStrfOff+8) & 0xFFFF
-	if wFormatTag != 0x0007 {
-		t.Errorf("wFormatTag: expected 0x0007 (MU-LAW), got 0x%04X", wFormatTag)
+	if wFormatTag != 0x0006 {
+		t.Errorf("wFormatTag: expected 0x0006 (MU-LAW), got 0x%04X", wFormatTag)
 	}
 
 	// nChannels = 1 at +10
@@ -348,8 +348,8 @@ func TestAVIMuxer_AlawFormat(t *testing.T) {
 		t.Fatal("audio strf not found")
 	}
 	wFormatTag := readU32LE(t, data, audioStrfOff+8) & 0xFFFF
-	if wFormatTag != 0x0006 {
-		t.Errorf("wFormatTag: expected 0x0006 (A-LAW), got 0x%04X", wFormatTag)
+	if wFormatTag != 0x0007 {
+		t.Errorf("wFormatTag: expected 0x0007 (A-LAW), got 0x%04X", wFormatTag)
 	}
 }
 
