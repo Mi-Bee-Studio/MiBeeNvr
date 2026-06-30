@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
+	"sync"
 
 	pkgeventbus "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/eventbus"
 )
@@ -156,4 +157,32 @@ func TestBusAdapter_PrefixMatch_EmptyMatchesAll(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event with empty prefix, got %d", len(events))
 	}
+}
+
+func TestBusAdapter_ConcurrentSubUnsub(t *testing.T) {
+	t.Parallel()
+	adapter := helperNewBusAdapter(t, 64)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	// Concurrent subscribers subscribing and unsubscribing
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ch := make(chan pkgeventbus.Event, 16)
+			_ = adapter.Subscribe("test.topic", ch, 16)
+			adapter.Publish(ctx, "test.topic", "data")
+			adapter.Unsubscribe("test.topic", ch)
+		}()
+	}
+	// Concurrent publishers
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			adapter.Publish(ctx, "test.topic", "data")
+		}()
+	}
+	wg.Wait()
 }
