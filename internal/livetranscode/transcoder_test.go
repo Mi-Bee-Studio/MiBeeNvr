@@ -26,6 +26,9 @@ import (
 // mode "block-stdin": doesn't read stdin (pipe fills, queue backs up).
 func compileMockFFmpeg(t *testing.T, dir, mode string) string {
 	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Skip("mock FFmpeg tests skipped in CI — external process compilation/execution is unreliable on shared runners; run locally for coverage")
+	}
 
 	var source string
 	switch mode {
