@@ -48,16 +48,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     fi && \
     go build -trimpath -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/mibee-nvr/
 
-# ---- Stage 3: Minimal runtime image ----
-FROM alpine:3.21
-
-# Runtime dependencies:
-# - su-exec: privilege dropping in docker-entrypoint.sh
-# - tzdata: timezone database for recording timestamps
-# - ffmpeg: video transcoding (H.264/H.265), timelapse merge, live transcode — also provides ffprobe
-# - xz: decompression for the in-app FFmpeg auto-downloader (johnvansickle .tar.xz archives)
-# FFmpeg is the ONLY third-party binary dependency; the rest of the project is pure Go (CGO_ENABLED=0).
-RUN apk add --no-cache su-exec tzdata ffmpeg xz
+# ---- Stage 3: Runtime image ----
+# Pre-built base image (Alpine + FFmpeg + ffprobe + xz + su-exec + tzdata).
+# Built periodically by .github/workflows/base-image.yml — NOT on every release.
+# This eliminates the last QEMU bottleneck: no per-arch `apk add` in release builds.
+FROM ghcr.io/mi-bee-studio/mibeenvr-base:v1
 
 # Default data and config directories
 # These can be overridden via volume mounts
