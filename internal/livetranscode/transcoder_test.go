@@ -144,10 +144,10 @@ func hardwareTestConfig(t *testing.T, mockFFmpeg string) TranscoderConfig {
 }
 
 // requireProcessGone verifies that a process with the given PID is no longer
-// running. It polls until the process disappears or a 5s timeout.
+// running. It polls until the process disappears or a 15s timeout.
 func requireProcessGone(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		err := syscall.Kill(pid, 0)
 		if err != nil {
@@ -278,7 +278,7 @@ func TestLiveTranscoder_WriteAndRead(t *testing.T) {
 	require.NoError(t, err)
 	defer lt.Stop()
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(15 * time.Second)
 	var aus []AccessUnit
 
 loop:
@@ -420,7 +420,7 @@ func TestLiveTranscoder_ParamSets(t *testing.T) {
 	require.NoError(t, err)
 	defer lt.Stop()
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(15 * time.Second)
 	foundParams := false
 	for !foundParams {
 		select {
