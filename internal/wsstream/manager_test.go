@@ -50,7 +50,7 @@ func dialWS(t *testing.T, url string) *websocket.Conn {
 
 func readMessage(t *testing.T, conn *websocket.Conn) ([]byte, error) {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // generous for -race on slow CI runners
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // CI runners under -race can be very slow
 	_, msg, err := conn.ReadMessage()
 	return msg, err
 }
