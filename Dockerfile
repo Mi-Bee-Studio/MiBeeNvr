@@ -35,7 +35,13 @@ RUN go build -ldflags="-s -w -X main.appVersion=${VERSION}" -o /mibee-nvr ./cmd/
 # ---- Stage 3: Minimal runtime image ----
 FROM alpine:3.21
 
-RUN apk add --no-cache su-exec tzdata
+# Runtime dependencies:
+# - su-exec: privilege dropping in docker-entrypoint.sh
+# - tzdata: timezone database for recording timestamps
+# - ffmpeg: video transcoding (H.264/H.265), timelapse merge, live transcode — also provides ffprobe
+# - xz: decompression for the in-app FFmpeg auto-downloader (johnvansickle .tar.xz archives)
+# FFmpeg is the ONLY third-party binary dependency; the rest of the project is pure Go (CGO_ENABLED=0).
+RUN apk add --no-cache su-exec tzdata ffmpeg xz
 
 # Default data and config directories
 # These can be overridden via volume mounts
