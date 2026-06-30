@@ -77,7 +77,7 @@ func (a *busAdapter) Subscribe(topic string, ch chan pkgeventbus.Event, bufferSi
 // Unsubscribe removes the external channel from the given topic.
 // Idempotent — safe to call multiple times.
 func (a *busAdapter) Unsubscribe(topic string, ch chan pkgeventbus.Event) {
-	entry, updated := a.removeBridge(topic, ch, false)
+	entry := a.removeBridge(topic, ch, false)
 	if entry == nil {
 		return
 	}
@@ -85,7 +85,6 @@ func (a *busAdapter) Unsubscribe(topic string, ch chan pkgeventbus.Event) {
 	close(entry.stopCh)
 	a.bus.Unsubscribe(topic, entry.internalCh)
 	close(entry.internalCh)
-	a.bridges = updated
 }
 
 // SubscribeByPrefix registers an external channel for all topics starting
@@ -120,7 +119,7 @@ func (a *busAdapter) SubscribeByPrefix(prefix string, ch chan pkgeventbus.Event,
 
 // UnsubscribeByPrefix removes the prefix subscription. Idempotent.
 func (a *busAdapter) UnsubscribeByPrefix(prefix string, ch chan pkgeventbus.Event) {
-	entry, updated := a.removeBridge(prefix, ch, true)
+	entry := a.removeBridge(prefix, ch, true)
 	if entry == nil {
 		return
 	}
@@ -128,7 +127,6 @@ func (a *busAdapter) UnsubscribeByPrefix(prefix string, ch chan pkgeventbus.Even
 	close(entry.stopCh)
 	a.bus.UnsubscribeByPrefix(prefix, entry.internalCh)
 	close(entry.internalCh)
-	a.bridges = updated
 }
 
 // Publish sends an event to all matching subscribers (exact topic and
@@ -161,17 +159,21 @@ func (a *busAdapter) bridgeLoop(entry *bridgeEntry) {
 // removeBridge finds and removes a bridge entry matching topic, channel,
 // and subscription type. Returns the entry and the updated bridges slice.
 // Caller must close stopCh/internalCh after removal.
-func (a *busAdapter) removeBridge(topic string, ch chan pkgeventbus.Event, isPrefix bool) (*bridgeEntry, []*bridgeEntry) {
+// removeBridge finds and removes a bridge entry matching topic, channel,
+// and subscription type. Returns the removed entry, or nil if not found.
+// The removal (swap-drop + slice shrink) is performed entirely under the
+// lock to prevent a data race with concurrent Subscribe.
+// Caller must close stopCh/internalCh after removal.
+func (a *busAdapter) removeBridge(topic string, ch chan pkgeventbus.Event, isPrefix bool) *bridgeEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	for i, e := range a.bridges {
 		if e.topic == topic && e.externalCh == ch && e.isPrefix == isPrefix {
-			// Remove by swapping with last and shrinking.
 			a.bridges[i] = a.bridges[len(a.bridges)-1]
-			updated := a.bridges[:len(a.bridges)-1]
-			return e, updated
+			a.bridges = a.bridges[:len(a.bridges)-1]
+			return e
 		}
 	}
-	return nil, a.bridges
+	return nil
 }
