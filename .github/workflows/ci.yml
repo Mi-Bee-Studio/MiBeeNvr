@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,6 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
       - name: Lint
         run: go vet ./...
@@ -44,13 +49,15 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: test
+    # Run in parallel with test — build validates compilation; test validates correctness.
+    # Both signals are useful ASAP. Total CI time = max(test, build) instead of test+build.
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
       - uses: actions/setup-node@v4
         with:
@@ -64,4 +71,4 @@ jobs:
       - name: Build
         run: |
           cp -r web/dist/* internal/ui/static/
-          CGO_ENABLED=0 go build ./cmd/mibee-nvr/
+          CGO_ENABLED=0 go build -trimpath ./cmd/mibee-nvr/
