@@ -23,6 +23,7 @@ RUN go mod download
 # Copy Go source
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY pkg/ ./pkg/
 
 # Copy built frontend into the embed directory
 COPY --from=frontend /build/web/dist ./internal/ui/static/
