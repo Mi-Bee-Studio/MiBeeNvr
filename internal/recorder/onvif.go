@@ -109,6 +109,7 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 			return fmt.Errorf("onvif device has no media profiles")
 		}
 		profileToken = profiles[0].Token
+		r.cfg.ProfileToken = profileToken // cache so resolveProfileToken skips a redundant GetProfiles (ESP32 connection-pool exhaustion)
 		onvifRecLogger.Info("auto-selected ONVIF profile", "camera_id", r.cfg.CameraID, "profile_token", profileToken, "encoding", profiles[0].Encoding)
 	}
 
@@ -196,7 +197,10 @@ func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
 		}
 		for _, p := range profiles {
 			if p.Encoding == "JPEG" {
-				return "JPEG"
+				// A JPEG (MJPEG) profile may be served over RTSP or HTTP. RTSP is
+				// preferred because it enables AVI+G.711 audio recording; fall back to
+				// HTTP MJPEG (video-only) if the device exposes no rtsp:// MJPEG stream.
+				return r.resolveJPEGEncoding()
 			}
 		}
 	}
@@ -214,14 +218,84 @@ func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
 	return "H264"
 }
 
-// probeRTSPEncoding connects to the RTSP stream and checks the media format.
+// resolveJPEGEncoding decides how to record a device whose ONVIF profile reports
+// JPEG (MJPEG) encoding. Such devices may serve the stream over RTSP (MJPEG
+// video, often with G.711 audio — recordable into AVI) or over HTTP (multipart
+// MJPEG, video-only). RTSP is preferred because it enables audio capture.
+//
+// Start() resolved r.rtspURL via ONVIF GetStreamURI, but ESP32 RTSP-AVI firmware
+// often returns the http:// preview URL there even though it ALSO serves
+// rtsp://<host>:554/<same-path>. Rather than making another ONVIF call
+// (GetStreamURIWithProtocol) — which frequently fails because the ESP32's tiny
+// HTTP connection pool is already strained by Start's GetProfiles + GetStreamURI
+// — we DERIVE the rtsp:// URL from the http:// one and probe it. Returns "MJPEG"
+// (→ MJPEGRecorder over RTSP) or "JPEG" (→ HTTPJPEGRecorder).
+func (r *ONVIFRecorder) resolveJPEGEncoding() string {
+	candidate := r.rtspURL
+	if !strings.HasPrefix(candidate, "rtsp://") {
+		candidate = deriveRTSPURL(candidate)
+	}
+	if candidate == "" {
+		return "JPEG"
+	}
+	if enc := probeRTSPEncodingFor(candidate, r.cfg.Username, r.cfg.Password); enc == "MJPEG" {
+		onvifRecLogger.Info("JPEG device serves MJPEG over RTSP — using RTSP recorder (AVI+audio capable)", "camera_id", r.cfg.CameraID, "rtsp_url", candidate)
+		r.rtspURL = candidate
+		return "MJPEG"
+	}
+	return "JPEG"
+}
+
+// deriveRTSPURL converts an http(s):// MJPEG URL to its rtsp:// equivalent on port
+// 554. ESP32 RTSP-AVI firmware serves MJPEG+G.711 at rtsp://<host>:554/<same-path>
+// alongside the http:// preview, so the RTSP URL is derivable without another
+// ONVIF round-trip. Returns "" if the input can't be converted.
+func deriveRTSPURL(httpURL string) string {
+	u, err := url.Parse(httpURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	u.Scheme = "rtsp"
+	u.User = nil
+	u.Host = u.Hostname() + ":554"
+	return u.String()
+}
+
+// injectRTSPCredentials embeds userinfo into an rtsp:// URL when none is present.
+// This mirrors how manually-added rtsp+mjpeg cameras carry credentials in the URL
+// (e.g. rtsp://admin:admin@host/stream). ONVIF GetStreamURI returns a credential-
+// less URL, but ESP32 RTSP-AVI firmware requires auth, and MJPEGRecorder has no
+// separate auth fields — so we embed the creds here. Returns the original URL
+// unchanged if it already has userinfo, isn't rtsp://, or no username is set.
+func injectRTSPCredentials(rtspURL, username, password string) string {
+	if username == "" || !strings.HasPrefix(rtspURL, "rtsp://") {
+		return rtspURL
+	}
+	u, err := url.Parse(rtspURL)
+	if err != nil || u.User != nil {
+		return rtspURL
+	}
+	u.User = url.UserPassword(username, password)
+	return u.String()
+}
+
+// probeRTSPEncoding connects to the cached RTSP stream and checks the media format.
 func (r *ONVIFRecorder) probeRTSPEncoding() string {
-	u, err := base.ParseURL(r.rtspURL)
+	return probeRTSPEncodingFor(r.rtspURL, r.cfg.Username, r.cfg.Password)
+}
+
+// probeRTSPEncodingFor connects to an RTSP stream and reports its video format.
+// Returns "H265", "H264", "MJPEG", or "" if the format is unknown or the probe
+// fails. MJPEG is reported as a distinct value (not the ONVIF profile string
+// "JPEG") so callers can tell RTSP-served MJPEG — which can carry G.711 audio
+// and record into AVI — apart from HTTP-only multipart MJPEG.
+func probeRTSPEncodingFor(rtspURL, username, password string) string {
+	u, err := base.ParseURL(rtspURL)
 	if err != nil {
 		return ""
 	}
-	if u.User == nil && r.cfg.Username != "" {
-		u.User = url.UserPassword(r.cfg.Username, r.cfg.Password)
+	if u.User == nil && username != "" {
+		u.User = url.UserPassword(username, password)
 	}
 	tcp := gortsplib.ProtocolTCP
 	client := &gortsplib.Client{
@@ -248,6 +322,10 @@ func (r *ONVIFRecorder) probeRTSPEncoding() string {
 	var h264Forma *format.H264
 	if desc.FindFormat(&h264Forma) != nil {
 		return "H264"
+	}
+	var mjpegForma *format.MJPEG
+	if desc.FindFormat(&mjpegForma) != nil {
+		return "MJPEG"
 	}
 	return ""
 }
@@ -364,6 +442,32 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
 		return rec
+	case "MJPEG":
+		// RTSP-served MJPEG (e.g. ESP32 MiBeeCam running the RTSP-AVI firmware).
+		// Routes through MJPEGRecorder so the stream's G.711 audio is captured into
+		// AVI segments when AudioEnabled. r.rtspURL was overwritten with the rtsp://
+		// URL by resolveJPEGEncoding(); prefer it over the delegate param, which may
+		// be an http:// URL when ONVIF GetStreamURI returned the HTTP variant.
+		// Embed ONVIF credentials: ESP32 RTSP-AVI firmware requires auth (e.g.
+		// admin:admin) but ONVIF GetStreamURI returns a credential-less URL, and
+		// MJPEGRecorder has no separate auth fields.
+		mjpegRTSPURL := r.rtspURL
+		if mjpegRTSPURL == "" {
+			mjpegRTSPURL = rtspURL
+		}
+		mjpegRTSPURL = injectRTSPCredentials(mjpegRTSPURL, r.cfg.Username, r.cfg.Password)
+		mjpegCfg := MJPEGConfig{
+			CameraID:     r.cfg.CameraID,
+			RTSPURL:      mjpegRTSPURL,
+			SegmentDur:   r.cfg.SegmentDur,
+			DB:           r.cfg.DB,
+			EventBus:     r.cfg.EventBus,
+			AudioEnabled: r.cfg.AudioEnabled,
+		}
+		mjpegRec := NewMJPEGRecorder(mjpegCfg, r.store, r.metrics)
+		mjpegRec.Hub = r.Hub
+		return mjpegRec
+
 	case "JPEG":
 		// 1. Try cached HTTP MJPEG URL (caller holds mu, no need to re-lock)
 		if r.httpJPEGURL != "" {
