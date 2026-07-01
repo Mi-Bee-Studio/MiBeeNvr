@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
@@ -327,7 +329,13 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		jpeg, err := rtpDec.Decode(pkt)
 		if err != nil {
-			mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+			// "need more packets" is the normal multi-packet-frame accumulation
+			// signal (returned for every non-final fragment). ESP32 RTSP-AVI firmware
+			// sends large JPEGs fragmented across many RTP packets, so this fires
+			// dozens of times per frame — down-rate it to avoid flooding the log.
+			if !errors.Is(err, rtpmjpeg.ErrMorePacketsNeeded) {
+				mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
+			}
 			return
 		}
 		select {
