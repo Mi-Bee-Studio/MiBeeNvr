@@ -74,6 +74,17 @@ func eventually(t *testing.T, fn func() bool, timeout, interval time.Duration) {
 	}
 }
 
+// waitForViewer blocks until ServeWS has registered at least one viewer for
+// camID. CodecInfo is written directly to the conn BEFORE the viewer is added
+// to entry.viewers, so reading CodecInfo does NOT guarantee the writeLoop will
+// see this viewer. Without this barrier, a single broadcastFrame can be fanned
+// out to an empty viewer set and silently dropped — producing a 60s read
+// timeout under -race / CI load.
+func waitForViewer(t *testing.T, m *Manager, camID string) {
+	t.Helper()
+	eventually(t, func() bool { return m.viewerCount(camID) >= 1 }, 2*time.Second, time.Millisecond)
+}
+
 // ─── tests ───────────────────────────────────────────────────────────────
 
 func TestNewManager(t *testing.T) {
@@ -253,6 +264,7 @@ func TestServeWS_FrameStreaming(t *testing.T) {
 	msg, err := readMessage(t, conn)
 	require.NoError(t, err)
 	assert.Equal(t, MsgTypeCodecInfo, msg[0])
+	waitForViewer(t, m, "cam1")
 
 	// Broadcast a frame
 	idrNALU := []byte{0x65, 0x01, 0x02, 0x03}
@@ -291,6 +303,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 	// Read CodecInfo
 	_, err = readMessage(t, conn)
 	require.NoError(t, err)
+	waitForViewer(t, m, "cam1")
 
 	// Send 3 frames
 	for i := 0; i < 3; i++ {
@@ -791,6 +804,7 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 	// Read CodecInfo first
 	_, err = readMessage(t, conn)
 	require.NoError(t, err)
+	waitForViewer(t, m, "cam1")
 
 	// H.265 IDR_W_RADL (type 19): first byte = 0 | 19<<1 | 0 = 0x26
 	idrNALU := []byte{0x26, 0x01, 0x02, 0x03}
