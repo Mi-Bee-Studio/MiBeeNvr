@@ -533,13 +533,16 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 		tracks = append(tracks, g711Track)
 	}
 
-	client := &gortmplib.Client{URL: u, Publish: true}
-	if err := client.Initialize(ctx); err != nil {
+	// Use dialRTMPPublish for complex handshake digest support (required by
+	// Douyu/Huya/Bilibili FMS backends). gortmplib.Client does plain handshake
+	// without HMAC-SHA256 digest — rejected by strict FMS servers.
+	conn, connCleanup, err := dialRTMPPublish(ctx, t.Config.URL)
+	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer connCleanup()
 
-	writer := &gortmplib.Writer{Conn: client, Tracks: tracks}
+	writer := &gortmplib.Writer{Conn: conn, Tracks: tracks}
 	if err := writer.Initialize(); err != nil {
 		return err
 	}

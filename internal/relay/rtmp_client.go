@@ -37,7 +37,62 @@ type rtmpPublishConn struct {
 }
 
 func (c *rtmpPublishConn) Read() (message.Message, error) { return c.mrw.Read() }
+
+// Write intercepts Video and Audio messages to force Type 0 chunk headers
+// (full 12-byte header). gortmplib's standard writer uses Type 1/2/3 header
+// optimization for subsequent messages on the same chunk stream, which strict
+// RTMP receivers (e.g. Douyu Live Companion) cannot parse, causing immediate RST.
+//
+// Config messages (VideoTypeConfig, AudioAACTypeConfig) are rare and only sent
+// once during Writer.Initialize(), so they naturally get Type 0 from the standard
+// writer. We intercept only AU (frame data) messages to force Type 0 on every frame.
 func (c *rtmpPublishConn) Write(msg message.Message) error {
+	switch m := msg.(type) {
+	case *message.Video:
+		if m.Type == message.VideoTypeAU && m.AU != nil {
+			// Construct FLV video tag body: [frameType|codec] [0x01=AU] [compTime3B] [NALU data]
+			body := make([]byte, 5+len(m.AU))
+			if m.IsKeyFrame {
+				body[0] = 0x10 | m.Codec // keyframe(1)<<4 | codec
+			} else {
+				body[0] = 0x20 | m.Codec // inter(2)<<4 | codec
+			}
+			body[1] = 0x01 // AVCPacketType = NALU
+			ptsDelta := uint32(m.PTSDelta / time.Millisecond)
+			body[2] = byte(ptsDelta >> 16)
+			body[3] = byte(ptsDelta >> 8)
+			body[4] = byte(ptsDelta)
+			copy(body[5:], m.AU)
+			return c.writeRawMessage(m.ChunkStreamID, 0x09, uint32(m.DTS/time.Millisecond), body)
+		}
+
+	case *message.Audio:
+		// For AAC AU and G.711 raw data, force Type 0 headers.
+		// AACConfig (sent during Initialize) falls through to standard writer.
+		if m.Codec == message.CodecMPEG4Audio && m.AACType == message.AudioAACTypeAU && m.AU != nil {
+			body := make([]byte, 2+len(m.AU))
+			body[0] = (m.Codec << 4) | (uint8(m.Rate) << 2) | (uint8(m.Depth) << 1)
+			if m.IsStereo {
+				body[0] |= 1
+			}
+			body[1] = 0x01 // AACAU
+			copy(body[2:], m.AU)
+			return c.writeRawMessage(m.ChunkStreamID, 0x08, uint32(m.DTS/time.Millisecond), body)
+		}
+		if (m.Codec == message.CodecPCMA || m.Codec == message.CodecPCMU) && m.AU != nil {
+			body := make([]byte, 1+len(m.AU))
+			body[0] = (m.Codec << 4) | (uint8(m.Rate) << 2) | (uint8(m.Depth) << 1)
+			if m.IsStereo {
+				body[0] |= 1
+			}
+			copy(body[1:], m.AU)
+			return c.writeRawMessage(m.ChunkStreamID, 0x08, uint32(m.DTS/time.Millisecond), body)
+		}
+	}
+
+	// All other message types (commands, config, control) use standard writer.
+	// These are typically one-off or small, so Type 0 is used naturally.
+	// These are typically one-off or small, so Type 0 is used naturally.
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	return c.mrw.Write(msg)
@@ -266,8 +321,9 @@ func (c *rtmpPublishConn) BytesSent() uint64               { return c.bc.Writer.
 
 // RTMP digest-handshake constants (Adobe spec).
 var (
-	rtmpServerKeyS1 = []byte("Genuine Adobe Flash Media Server 001")
-	rtmpClientKeyC2 = append(append([]byte{}, []byte("Genuine Adobe Flash Player 001")...),
+	rtmpClientKeyC1 = []byte("Genuine Adobe Flash Player 001")
+	rtmpServerKeyS1  = []byte("Genuine Adobe Flash Media Server 001")
+	rtmpClientKeyC2  = append(append([]byte{}, []byte("Genuine Adobe Flash Player 001")...),
 		0xf0, 0xee, 0xc2, 0x4a, 0x80, 0x68, 0xbe, 0xe8,
 		0x2e, 0x00, 0xd0, 0xd1, 0x02, 0x9e, 0x7e, 0x57,
 		0x6e, 0xec, 0x5d, 0x2d, 0x29, 0x80, 0x6f, 0xab,
@@ -278,6 +334,46 @@ func rtmpHMAC(key, msg []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write(msg)
 	return h.Sum(nil)
+}
+
+// buildC1WithDigest constructs a 1536-byte C1 packet with an embedded
+// HMAC-SHA256 digest (complex handshake). This is required by Adobe FMS and
+// FMS-compatible platforms (Douyu, Huya, Bilibili) that validate the C1
+// digest even in plain RTMP (version=3) mode.
+//
+// The digest uses scheme 0 (digest position derived from Data[0:4]) with key
+// "Genuine Adobe Flash Player 001". The 32-byte digest is computed over C1
+// with the digest region excluded, then written into position.
+//
+// gortmplib's fillPlain() skips this digest — that's why native Go RTMP fails
+// against Douyu. See: https://codebuddy.work/agents/share/... (root cause analysis).
+func buildC1WithDigest() []byte {
+	c1 := make([]byte, 1536)
+	binary.BigEndian.PutUint32(c1[0:4], uint32(time.Now().Unix()))
+	// c1[4:8] = version = 0 (already zero)
+	if _, err := rand.Read(c1[8:]); err != nil {
+		// Fallback: leave zeros (rare — rand.Read practically never fails)
+		engineLogger.Warn("rand.Read failed for C1, using zeros", "err", err)
+	}
+
+	data := c1[8:] // 1528 bytes
+
+	// Scheme 0: digest position = digestChunkPos1(=4) + sum(Data[0:4]) % 728
+	digestPos := 4 + (int(data[0])+int(data[1])+int(data[2])+int(data[3])) % 728
+
+	// Build message = C1 with the 32-byte digest region excluded
+	msg := make([]byte, 0, 1536-32)
+	msg = append(msg, c1[:8]...)
+		// Time + Version
+	msg = append(msg, data[:digestPos]...)
+	// Data before digest
+	msg = append(msg, data[digestPos+32:]...)
+// Data after digest
+
+	digest := rtmpHMAC(rtmpClientKeyC1, msg)
+	copy(data[digestPos:digestPos+32], digest)
+
+	return c1
 }
 
 // detectS1Digest checks whether S1 (1536 B) has an HMAC-SHA256 digest at
@@ -361,16 +457,12 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 
 	// 2. Wrap with bytecounter + plain handshake.
 	bc := bytecounter.NewReadWriter(nconn)
-	// Custom plain RTMP handshake: C0+C1 written together (single TCP segment,
-	// like FFmpeg), C1.Time = current time (gortmplib's fillPlain leaves it 0,
-	// which some receivers reject). C2 = echo of S1 (standard plain handshake).
-	c1 := make([]byte, 1536)
-	binary.BigEndian.PutUint32(c1[0:4], uint32(time.Now().Unix()))
-	// c1[4:8] = version = 0 (already zero)
-	if _, err := rand.Read(c1[8:]); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("handshake rand: %w", err)
-	}
+	// Complex handshake: C1 contains an HMAC-SHA256 digest (key="Genuine Adobe
+	// Flash Player 001", scheme 0). Adobe FMS and FMS-compatible platforms
+	// (Douyu, Huya, Bilibili) validate this digest even in plain RTMP (v3) mode.
+	// gortmplib's fillPlain() skips it — that's why native Go RTMP fails there.
+	// C0+C1 are written together in a single TCP segment (matches FFmpeg).
+	c1 := buildC1WithDigest()
 	c0c1 := append([]byte{0x03}, c1...) // C0 (version 3) + C1
 	if _, err := bc.Write(c0c1); err != nil {
 		cleanup()
@@ -394,7 +486,7 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 
 	// 3. Message-level read/writer on the same byte stream.
 	mrw := message.NewReadWriter(bc, bc, false)
-	conn := &rtmpPublishConn{nconn: nconn, mrw: mrw, bc: bc, chunkSize: 128, streamID: 0x1000000}
+	conn := &rtmpPublishConn{nconn: nconn, mrw: mrw, bc: bc, chunkSize: 4096, streamID: 0x1000000}
 
 
 	app, streamKey := splitRTMPPath(u)
@@ -404,11 +496,20 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 	}
 	tcURL := getRTMPTcURL(u, app)
 
-	// 4. NOTE: do NOT send SetChunkSize before connect. The writer updates its
-	// internal chunk size on SetChunkSize write, so the connect would be sent as
-	// one >128B chunk. Some receivers (Douyu Live Companion) ignore the client's
-	// SetChunkSize and parse at the default 128B, mis-reading the large chunk.
-	// Keep the default 128B chunking for connect (matches FFmpeg).
+	// 4. Send SetChunkSize=4096 BEFORE connect (matches OBS/go2rtc). The server
+	// must know our write chunk size before receiving any large messages.
+	// go2rtc uses 4096 (comment: "OBS - 4096, Reolink - 4096"). Using 128
+	// (RTMP default) causes ~400 chunks per keyframe vs ~13 at 4096, which can
+	// overwhelm strict receivers.
+	if err := mrw.Write(&message.SetChunkSize{Value: 4096}); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("send SetChunkSize: %w", err)
+	}
+
+	// must know our write chunk size before receiving any large messages.
+	// go2rtc uses 4096 (comment: "OBS - 4096, Reolink - 4096"). Using 128
+	// (RTMP default) causes ~400 chunks per keyframe vs ~13 at 4096, which can
+	// overwhelm strict receivers.
 	// 5. Connect command — field set EXACTLY matches FFmpeg (pcap-verified).
 	// FFmpeg only sends 4 fields for publish mode: app, type, flashVer, tcUrl.
 	// Extra fields (fpad/capabilities/audioCodecs/videoCodecs/videoFunction)
@@ -489,12 +590,17 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 		return nil, nil, fmt.Errorf("publish status: %w", err)
 	}
 
-	// Send SetChunkSize=128 (keep default). Some companions ignore client-side
-	// SetChunkSize and always parse at 128 bytes. Using 128 ensures compatibility.
-	if err := mrw.Write(&message.SetChunkSize{Value: 128}); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("send SetChunkSize: %w", err)
-	}
+	// Background reader goroutine: consume server messages (PingRequest,
+	// WindowAckSize, onStatus, etc.) to prevent TCP receive buffer from filling.
+	// Without this, the companion thinks we're unresponsive and RSTs the connection.
+	// go2rtc does the same in its publish() function.
+	go func() {
+		for {
+			if _, err := conn.Read(); err != nil {
+				return
+			}
+		}
+	}()
 
 	return conn, cleanup, nil
 }
