@@ -120,6 +120,8 @@ type PushTargetConfig struct {
 	Platform            string                `yaml:"platform,omitempty" json:"platform,omitempty"`                 // preset name (bilibili/douyin/youtube/kuaishou/generic/empty)
 	TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"` // auto/force_sw/off
 	VideoPresetOverride *VideoPresetOverrides `yaml:"video_preset_override,omitempty" json:"video_preset_override,omitempty"`
+	SourceURL          string                `yaml:"source_url,omitempty" json:"source_url,omitempty"` // optional: if set, relay uses FFmpeg to pull from this URL instead of hub
+	UseFFmpeg          bool                  `yaml:"use_ffmpeg,omitempty" json:"use_ffmpeg,omitempty"`                // if true, use FFmpeg subprocess for relay (compatibility mode)
 }
 
 // VideoPresetOverrides allows overriding individual encoding parameters
@@ -628,6 +630,10 @@ func Validate(cfg *Config) error {
 				if v.Bframes < 0 || v.Bframes > 2 {
 					return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.bframes must be between 0 and 2", i, j)
 				}
+			}
+			// Warn when use_ffmpeg is enabled — requires FFmpeg binary at runtime.
+			if pt.UseFFmpeg && pt.SourceURL == "" {
+				slog.Warn("push_target use_ffmpeg enabled without source_url — will auto-resolve from camera URL", "camera_idx", i, "target_idx", j)
 			}
 		}
 

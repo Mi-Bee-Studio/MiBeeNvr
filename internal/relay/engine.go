@@ -1,10 +1,12 @@
 package relay
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -41,6 +43,8 @@ type PushTargetConfig struct {
 	Platform            string                // preset: bilibili/douyin/youtube/kuaishou/generic/empty
 	TranscodePolicy     string                // auto/force_sw/off
 	VideoPresetOverride *VideoPresetOverrides // optional override
+	UseFFmpeg           bool                  // if true, use FFmpeg subprocess for relay (compatibility mode)
+	SourceURL           string                // optional: override auto-resolved source URL for FFmpeg relay
 }
 
 // VideoPresetOverrides mirrors config.VideoPresetOverrides to avoid an
@@ -58,6 +62,10 @@ type VideoPresetOverrides struct {
 // code) so an RTMP target can initialize its track, and reports whether the
 // source is H.264 (RTMP targets require H.264; H.265 sources are rejected).
 type SPSProvider func() (sps, pps []byte, isH264 bool)
+
+// StreamURLProvider returns the source camera's stream URL (e.g. rtsp://...)
+// for FFmpeg relay mode. If it returns empty, SourceURL from config is used.
+type StreamURLProvider func(cameraID string) string
 
 // PushTarget is one push-out destination: it subscribes to a camera's StreamHub
 // and forwards each access unit to the target (RTMP or RTSP) over a dedicated
@@ -87,6 +95,7 @@ type PushTarget struct {
 	presetRegistry *PresetRegistry
 	hardwareCap    *transcoding.HardwareCapabilities
 	ffmpegPath     string
+	streamURLProvider StreamURLProvider
 
 	// Runtime monitoring state (set during connect, cleared on disconnect).
 	// Thread-safe via atomic.Pointer and atomic.Int64 so Status() can read
@@ -130,6 +139,12 @@ func (t *PushTarget) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
 // When empty, the transcoder auto-detects from HardwareCap or PATH.
 func (t *PushTarget) SetFFmpegPath(path string) {
 	t.ffmpegPath = path
+}
+
+// SetStreamURLProvider wires a function that resolves a camera's stream URL
+// (e.g. rtsp://...) for FFmpeg relay mode.
+func (t *PushTarget) SetStreamURLProvider(p StreamURLProvider) {
+	t.streamURLProvider = p
 }
 
 // Status returns a snapshot of the target's runtime status for the API/UI.
@@ -269,6 +284,11 @@ func (t *PushTarget) Run(ctx context.Context) {
 // connectAndStream establishes the target connection, subscribes to the hub,
 // and blocks while streaming. Returns a non-nil error when the stream ends.
 func (t *PushTarget) connectAndStream(ctx context.Context) error {
+	// FFmpeg relay mode: use FFmpeg subprocess for platforms with strict RTMP
+	// parsers (e.g. Douyu Live Companion) that reject the native Go RTMP writer.
+	if t.Config.UseFFmpeg {
+		return t.connectViaFFmpeg(ctx)
+	}
 	switch t.Config.Protocol {
 	case "rtmp":
 		return t.connectRTMP(ctx)
@@ -279,6 +299,83 @@ func (t *PushTarget) connectAndStream(ctx context.Context) error {
 		return errPermanent
 	}
 }
+
+// connectViaFFmpeg spawns an FFmpeg subprocess that pulls from the camera's
+// stream URL and pushes to the target. Used when use_ffmpeg is enabled —
+// some strict RTMP receivers (e.g. Douyu Live Companion) reject the native
+// Go RTMP writer. The subprocess lifecycle is tied to ctx.
+func (t *PushTarget) connectViaFFmpeg(ctx context.Context) error {
+	ffmpegPath := t.ffmpegPath
+	if ffmpegPath == "" {
+		var err error
+		ffmpegPath, err = exec.LookPath("ffmpeg")
+		if err != nil {
+			t.setStatus(StatusError, "FFmpeg not found for relay")
+			return errPermanent
+		}
+	}
+
+	// Resolve source URL: explicit override > auto-resolved from camera.
+	sourceURL := t.Config.SourceURL
+	if sourceURL == "" && t.streamURLProvider != nil {
+		sourceURL = t.streamURLProvider(t.CameraID)
+	}
+	if sourceURL == "" {
+		t.setStatus(StatusError, "cannot resolve source URL for FFmpeg relay")
+		return errPermanent
+	}
+	targetURL := t.Config.URL
+
+	args := []string{"-hide_banner", "-loglevel", "info"}
+	if strings.HasPrefix(sourceURL, "rtsp://") {
+		args = append(args, "-rtsp_transport", "tcp")
+	}
+	args = append(args, "-i", sourceURL, "-c", "copy", "-f", "flv", targetURL)
+
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.setStatus(StatusError, "ffmpeg stderr pipe: "+err.Error())
+		return err
+	}
+
+	t.setStatus(StatusConnecting, "ffmpeg relay starting")
+	engineLogger.Info("relay target starting FFmpeg relay",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"source", sourceURL, "target", targetURL)
+
+	if err := cmd.Start(); err != nil {
+		t.setStatus(StatusError, "ffmpeg start: "+err.Error())
+		return err
+	}
+
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line != "" && !strings.HasPrefix(line, "frame=") {
+				engineLogger.Info("ffmpeg relay stderr",
+					"camera_id", t.CameraID, "target_id", t.Config.ID,
+					"line", line)
+			}
+		}
+	}()
+
+	t.setStatus(StatusStreaming, "")
+	engineLogger.Info("relay target streaming (FFmpeg)",
+		"camera_id", t.CameraID, "target_id", t.Config.ID,
+		"protocol", t.Config.Protocol, "url", targetURL)
+
+	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if waitErr != nil {
+		return fmt.Errorf("ffmpeg relay exited: %w", waitErr)
+	}
+	return nil
+}
+
 
 // --- RTMP target ---
 
