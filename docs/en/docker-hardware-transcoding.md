@@ -292,48 +292,39 @@ services:
 
 ## FFmpeg Inside Docker
 
-MiBee NVR downloads and uses static FFmpeg builds from johnvansickle for ARM64/ARMv7 architectures at runtime.
+MiBee NVR's Docker image **bundles FFmpeg** (and `ffprobe`) via the Alpine `ffmpeg` package. Transcoding, timelapse FFmpeg-merge, and live transcode work out of the box — no manual download required.
 
-### FFmpeg Download and Storage
-
-FFmpeg is downloaded to `{StorageConfig.RootDir}/tools/` inside the container:
+### Verify Bundled FFmpeg
 
 ```bash
-# Default location inside container
-/data/tools/ffmpeg
+# FFmpeg is on PATH at /usr/bin/ffmpeg
+docker exec mibee-nvr ffmpeg -version
 
-# Check available FFmpeg version
-docker exec mibee-nvr /data/tools/ffmpeg -version
+# List available encoders (software libx264/libx265 are always present)
+docker exec mibee-nvr ffmpeg -encoders | grep -E "(h264|h265|nvenc|vaapi|v4l2)"
 ```
 
-### Persistent Storage Recommendation
+### Resolution Order
 
-For better performance and to avoid re-downloading FFmpeg, mount a persistent volume:
+The NVR resolves the FFmpeg binary in this order (see `internal/transcoding/downloader.go:GetFFmpegStatus`):
 
-```yaml
-services:
-  mibee-nvr:
-    # ... other configuration ...
-    
-    volumes:
-      - ./data:/data
-      - ./tools:/data/tools  # Persistent FFmpeg storage
-    
-    environment:
-      - NVR_DATA_DIR=/data
-      - NVR_FFMPEG_PATH=/data/tools/ffmpeg  # Optional: specify custom FFmpeg path
-```
+1. **`exec.LookPath("ffmpeg")`** — finds the bundled `/usr/bin/ffmpeg` first.
+2. **`{data_dir}/tools/ffmpeg`** — a user-supplied custom build (only used if the bundled one is absent).
+3. **In-app downloader** — fetches a static build from johnvansickle.com into `{data_dir}/tools/` (requires the `xz` tool, which is also bundled; serves as an upgrade/fallback path).
+
+Because the bundled FFmpeg wins on PATH, the downloader is effectively a no-op unless you explicitly remove Alpine's FFmpeg or want a newer/different build.
 
 ### Custom FFmpeg Build
 
-If you need a custom FFmpeg build, place it in the tools directory:
+To override the bundled FFmpeg with a custom build (e.g. a newer version with extra codecs), remove the bundled one and place your binary in the tools directory:
 
 ```bash
-# Download custom FFmpeg
-wget -O ./tools/ffmpeg https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+# In a derived Dockerfile:
+#   RUN apk del ffmpeg && mkdir -p /data/tools
+#   COPY my-ffmpeg /data/tools/ffmpeg
 
-# Make executable
-chmod +x ./tools/ffmpeg
+# Or at runtime via a mounted volume:
+docker run -v $(pwd)/my-ffmpeg:/data/tools/ffmpeg ...
 ```
 
 ## Troubleshooting Checklist

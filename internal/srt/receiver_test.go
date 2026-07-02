@@ -84,7 +84,7 @@ func TestReceiverFrameDistribution(t *testing.T) {
 
 	// Verify consumer received the frame
 	require.Eventually(t, func() bool {
-		return frameCount.Load() > 0
+		return frameCount.Load() > 0 && receivedFrames.Load() != nil
 	}, 2*time.Second, 10*time.Millisecond, "consumer should receive broadcast frame")
 
 	require.Equal(t, testPTS, receivedPTS.Load())

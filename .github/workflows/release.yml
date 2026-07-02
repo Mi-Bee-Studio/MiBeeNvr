@@ -6,6 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -23,6 +27,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
       - uses: actions/setup-node@v4
         with:
@@ -34,16 +39,18 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -timeout 5m -coverprofile=coverage.out ./...
 
       - name: Build frontend
         run: cd web && npm ci && npm run build && cp -r dist/* ../internal/ui/static/
 
       - name: Build binaries
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.appVersion=${{ github.ref_name }}" -o mibee-nvr-amd64 ./cmd/mibee-nvr/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.appVersion=${{ github.ref_name }}" -o mibee-nvr-arm64 ./cmd/mibee-nvr/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w -X main.appVersion=${{ github.ref_name }}" -o mibee-nvr-armv7 ./cmd/mibee-nvr/
+          LDFLAGS="-s -w -trimpath -X main.appVersion=${{ github.ref_name }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o mibee-nvr-amd64 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o mibee-nvr-arm64 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
+          wait
 
       - name: Update release assets
         uses: softprops/action-gh-release@v2
@@ -74,8 +81,6 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

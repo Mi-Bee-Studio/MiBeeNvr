@@ -292,48 +292,39 @@ services:
 
 ## Docker 内的 FFmpeg
 
-MiBee NVR 在运行时从 johnvansickle 下载 ARM64/ARMv7 架构的静态 FFmpeg 构建。
+MiBee NVR 的 Docker 镜像**内置了 FFmpeg**（以及 `ffprobe`），通过 Alpine 的 `ffmpeg` 包提供。转码、延时摄影 FFmpeg 合并、实时转码开箱即用——无需手动下载。
 
-### FFmpeg 下载和存储
-
-FFmpeg 下载到容器内的 `{StorageConfig.RootDir}/tools/`：
+### 验证内置的 FFmpeg
 
 ```bash
-# 容器内默认位置
-/data/tools/ffmpeg
+# FFmpeg 位于 PATH 上的 /usr/bin/ffmpeg
+docker exec mibee-nvr ffmpeg -version
 
-# 检查可用 FFmpeg 版本
-docker exec mibee-nvr /data/tools/ffmpeg -version
+# 列出可用的编码器（软件编码 libx264/libx265 始终存在）
+docker exec mibee-nvr ffmpeg -encoders | grep -E "(h264|h265|nvenc|vaapi|v4l2)"
 ```
 
-### 持久化存储建议
+### 解析顺序
 
-为了获得更好的性能并避免重新下载 FFmpeg，挂载持久卷：
+NVR 按以下顺序解析 FFmpeg 二进制文件（见 `internal/transcoding/downloader.go:GetFFmpegStatus`）：
 
-```yaml
-services:
-  mibee-nvr:
-    # ... 其他配置 ...
-    
-    volumes:
-      - ./data:/data
-      - ./tools:/data/tools  # 持久 FFmpeg 存储
-    
-    environment:
-      - NVR_DATA_DIR=/data
-      - NVR_FFMPEG_PATH=/data/tools/ffmpeg  # 可选：指定自定义 FFmpeg 路径
-```
+1. **`exec.LookPath("ffmpeg")`** —— 首先找到内置的 `/usr/bin/ffmpeg`。
+2. **`{data_dir}/tools/ffmpeg`** —— 用户提供的自定义构建（仅在内置版本不存在时使用）。
+3. **应用内下载器** —— 从 johnvansickle.com 获取静态构建到 `{data_dir}/tools/`（需要 `xz` 工具，已一同内置；作为升级/后备路径）。
+
+由于内置的 FFmpeg 在 PATH 上优先，下载器实际上是空操作，除非您明确移除 Alpine 的 FFmpeg 或需要更新/不同的构建。
 
 ### 自定义 FFmpeg 构建
 
-如果您需要自定义 FFmpeg 构建，请将其放在 tools 目录中：
+要用自定义构建覆盖内置的 FFmpeg（例如需要额外编解码器的更新版本），请移除内置版本并将二进制文件放在 tools 目录中：
 
 ```bash
-# 下载自定义 FFmpeg
-wget -O ./tools/ffmpeg https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+# 在派生的 Dockerfile 中：
+#   RUN apk del ffmpeg && mkdir -p /data/tools
+#   COPY my-ffmpeg /data/tools/ffmpeg
 
-# 设置可执行权限
-chmod +x ./tools/ffmpeg
+# 或通过挂载卷在运行时提供：
+docker run -v $(pwd)/my-ffmpeg:/data/tools/ffmpeg ...
 ```
 
 ## 故障排除清单

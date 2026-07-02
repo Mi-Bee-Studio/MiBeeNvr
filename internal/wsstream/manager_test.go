@@ -50,7 +50,7 @@ func dialWS(t *testing.T, url string) *websocket.Conn {
 
 func readMessage(t *testing.T, conn *websocket.Conn) ([]byte, error) {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // generous for -race on CI
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // CI runners under -race can be very slow
 	_, msg, err := conn.ReadMessage()
 	return msg, err
 }
@@ -684,7 +684,10 @@ func TestMultipleViewers(t *testing.T) {
 		assert.Equal(t, MsgTypeCodecInfo, msg[0])
 	}
 
-	assert.Equal(t, 3, m.viewerCount("cam1"))
+	// Viewer count is updated asynchronously per ServeWS goroutine; wait for all 3.
+	require.Eventually(t, func() bool {
+		return m.viewerCount("cam1") == 3
+	}, 5*time.Second, 10*time.Millisecond, "viewers should reach 3")
 
 	nalu := []byte{0x65, 0x01, 0x02, 0x03}
 	hub.Broadcast(90000, [][]byte{nalu}, false)

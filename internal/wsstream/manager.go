@@ -177,34 +177,41 @@ func (m *Manager) UnregisterStream(camID string) {
 	m.mu.Lock()
 	entry, ok := m.streams[camID]
 	if ok {
-		// Unsubscribe from recorder's StreamHub while holding the lock
-		// to prevent race with hub callback accessing entry after removal.
-		if entry.hub != nil && entry.hubSubID != "" {
-			entry.hub.Unsubscribe(entry.hubSubID)
-		}
-		// Unsubscribe audio consumer
-		if entry.hub != nil && entry.audioSubID != "" {
-			entry.hub.UnsubscribeAudio(entry.audioSubID)
-		}
+		// Remove from map FIRST under the lock so writeFrame() lookups fail fast.
 		delete(m.streams, camID)
 	}
 	m.mu.Unlock()
 
-	if ok {
-		entry.cancel()
-		entry.viewerMu.Lock()
-		eosMsg := []byte{byte(MsgTypeEOS)}
-		for _, v := range entry.viewers {
-			// Send EOS to viewer before closing
-			_ = v.conn.WriteMessage(websocket.BinaryMessage, eosMsg)
-			v.cancel()
-			close(v.ch)
-		}
-		entry.viewerMu.Unlock()
-		wsLogger.Load().Info("WebSocket stream unregistered", "camera_id", camID)
-		if cnt := entry.dropCount.Load(); cnt > 0 {
-			wsLogger.Load().Info("stream drop count", "camera_id", camID, "total_drops", cnt)
-		}
+	if !ok {
+		return
+	}
+
+	// Unsubscribe from StreamHub OUTSIDE m.mu to avoid lock-inversion deadlock:
+	// hub.Unsubscribe() waits for the drain goroutine, which calls writeFrame(),
+	// which needs m.mu.RLock(). If we held m.mu.Lock() here, the drain goroutine
+	// would block on RLock while we wait for it to finish -> deadlock.
+	// After the map deletion above, writeFrame's lookup (m.streams[camID]) returns
+	// ok=false and exits early — safe to unsubscribe without the lock.
+	if entry.hub != nil && entry.hubSubID != "" {
+		entry.hub.Unsubscribe(entry.hubSubID)
+	}
+	if entry.hub != nil && entry.audioSubID != "" {
+		entry.hub.UnsubscribeAudio(entry.audioSubID)
+	}
+
+	entry.cancel()
+	entry.viewerMu.Lock()
+	eosMsg := []byte{byte(MsgTypeEOS)}
+	for _, v := range entry.viewers {
+		// Send EOS to viewer before closing
+		_ = v.conn.WriteMessage(websocket.BinaryMessage, eosMsg)
+		v.cancel()
+		close(v.ch)
+	}
+	entry.viewerMu.Unlock()
+	wsLogger.Load().Info("WebSocket stream unregistered", "camera_id", camID)
+	if cnt := entry.dropCount.Load(); cnt > 0 {
+		wsLogger.Load().Info("stream drop count", "camera_id", camID, "total_drops", cnt)
 	}
 }
 

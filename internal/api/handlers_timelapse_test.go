@@ -1425,9 +1425,12 @@ func TestTimelapseBatchMerge_Success(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
+	storageDir := t.TempDir()
+	t.Cleanup(func() { time.Sleep(200 * time.Millisecond) }) // let merge goroutines settle before TempDir removal
+
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
-			RootDir: t.TempDir(),
+			RootDir: storageDir,
 		},
 		Cameras: []config.CameraConfig{
 			{
