@@ -59,7 +59,7 @@ docker run -d \
 
 # 方式 C：使用 docker-compose.yml
 mkdir -p data
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 
 > **首次设置**：在没有配置文件的情况下启动时，MiBee NVR 会自动生成默认配置并以**设置模式**运行 — 所有 API 端点无需认证即可访问。通过 Web UI 设置页面或 `NVR_PASSWORD` 环境变量设置密码。一旦设置密码，将强制执行身份验证。
 
@@ -124,9 +124,9 @@ services:
 
 ```bash
 # 多阶段构建（在容器内编译前端和后端，需要网络拉取基础镜像）
-docker build -t mibee-nvr .
+docker build -t mibee-nvr -f deploy/docker/Dockerfile .
 
-# 交叉编译 ARM64（在主机上交叉编译，不需要 QEMU）
+# 交叉编译 ARM64（在容器内交叉编译，不需要 QEMU）
 make docker-build-arm64
 
 # 构建所有架构

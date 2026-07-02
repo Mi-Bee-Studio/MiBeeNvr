@@ -41,7 +41,7 @@ chmod +x mibee-nvr-arm64
 ### 方式二：Docker
 
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
 在浏览器打开 http://localhost:9090。
