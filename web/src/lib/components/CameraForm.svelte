@@ -10,6 +10,7 @@
         testConnection,
         getDeviceCapabilities,
         getPushStatus,
+        getRelayCapabilities,
         apiRequest,
     } from '$lib/api';
     import type {
@@ -25,6 +26,7 @@
         PushTargetConfig,
         PushTargetStatus as PushTargetStatusType,
         VideoPresetOverrides,
+        RelayCapabilities,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
@@ -94,6 +96,8 @@
   // Relay presets for platform selector (fetched on mount)
   let relayPresets = $state<{ name: string; description?: string }[]>([]);
   let relayPresetsLoading = $state(true);
+  // Relay capabilities (FFmpeg availability for push-out)
+  let relayCapabilities = $state<RelayCapabilities | null>(null);
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -159,6 +163,21 @@ let validationErrors = $state<Record<string, string>>({});
         relayPresets = [];
       } finally {
         relayPresetsLoading = false;
+      }
+    })();
+    return () => ctrl.abort();
+  });
+
+  // Fetch relay capabilities (FFmpeg availability for relay)
+  $effect(() => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        relayCapabilities = await getRelayCapabilities(ctrl.signal);
+      } catch (e: any) {
+        if (ctrl.signal.aborted) return;
+        console.warn('Failed to load relay capabilities:', e);
+        relayCapabilities = null;
       }
     })();
     return () => ctrl.abort();
@@ -257,7 +276,7 @@ let validationErrors = $state<Record<string, string>>({});
     const id = 'tgt-' + Math.random().toString(36).slice(2, 8);
     formPushTargets = [
       ...formPushTargets,
-      { id, name: '', protocol: 'rtmp', url: '', enabled: true, platform: '', transcode_policy: 'auto' },
+      { id, name: '', protocol: 'rtmp', url: '', enabled: true, platform: '', transcode_policy: 'auto', use_ffmpeg: false },
     ];
   }
   function removePushTarget(id: string) {
@@ -726,7 +745,7 @@ async function performCameraSave() {
 
                   <!-- Transcode policy (hidden for H.264 source) -->
                   {#if formEncoding === 'h264'}
-                    <span class="text-xs th-text-muted whitespace-nowrap">n/a — H.264 source</span>
+                    <span class="text-xs th-text-muted whitespace-nowrap">{t('cameras.pushTranscodeNA')}</span>
                   {:else}
                     <select class="input w-auto" value={tgt.transcode_policy || 'auto'}
                       onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' })}>
@@ -742,6 +761,15 @@ async function performCameraSave() {
                     <input type="checkbox" class="checkbox" checked={tgt.enabled}
                       onchange={(e) => updatePushTarget(tgt.id, { enabled: (e.target as HTMLInputElement).checked })} />
                     {t('cameras.pushOutEnabled')}
+                  </label>
+                  <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap" title={t('cameras.pushOutUseFFmpegHint')}>
+                    <input type="checkbox" class="checkbox" checked={tgt.use_ffmpeg ?? false}
+                      disabled={!relayCapabilities?.ffmpeg_available}
+                      onchange={(e) => updatePushTarget(tgt.id, { use_ffmpeg: (e.target as HTMLInputElement).checked })} />
+                    {t('cameras.pushOutUseFFmpeg')}
+                    {#if !relayCapabilities?.ffmpeg_available}
+                      <span class="th-text-muted">({t('cameras.pushOutFFmpegNotInstalled')})</span>
+                    {/if}
                   </label>
                   {#if st}
                     <PushTargetStatus status={st} />

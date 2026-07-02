@@ -59,6 +59,7 @@ export interface PushTargetConfig {
   platform?: string;
   transcode_policy?: 'auto' | 'force_sw' | 'off';
   video_preset_override?: VideoPresetOverrides;
+  use_ffmpeg?: boolean;
 }
 
 /** Per-target encoding overrides for a push relay destination. */
@@ -95,6 +96,19 @@ export interface PushTargetStatus {
 export interface PushStatusResponse {
   camera_id: string;
   targets: PushTargetStatus[];
+}
+
+/** Relay system capabilities (from GET /api/relay/capabilities). */
+export interface RelayCapabilities {
+  ffmpeg_relay_supported: boolean;
+  ffmpeg_available: boolean;
+  max_targets_per_camera: number;
+}
+
+
+/** Fetch relay system capabilities (FFmpeg availability, limits). */
+export async function getRelayCapabilities(signal?: AbortSignal): Promise<RelayCapabilities> {
+  return apiRequest<RelayCapabilities>('/relay/capabilities', { signal });
 }
 
 export interface CreateCameraRequest {
