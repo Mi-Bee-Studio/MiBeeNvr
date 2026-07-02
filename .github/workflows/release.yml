@@ -46,10 +46,10 @@ jobs:
 
       - name: Build binaries
         run: |
-          LDFLAGS="-s -w -trimpath -X main.appVersion=${{ github.ref_name }}"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o mibee-nvr-amd64 ./cmd/mibee-nvr/ &
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o mibee-nvr-arm64 ./cmd/mibee-nvr/ &
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
+          LDFLAGS="-s -w -X main.appVersion=${{ github.ref_name }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-amd64 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-arm64 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
           wait
 
       - name: Update release assets
