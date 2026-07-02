@@ -346,6 +346,12 @@ func (t *PushTarget) connectViaFFmpeg(ctx context.Context) error {
 		engineLogger.Info("ffmpeg relay corrected output fps",
 			"camera_id", t.CameraID, "target_id", t.Config.ID, "fps", fps)
 	}
+	// I/O timeout (15s) for both RTSP input and RTMP output sockets. Without
+	// this, a mid-stream RTMP rejection (e.g. Douyu auth token expiring hours
+	// into a healthy stream) causes FFmpeg's muxer thread to die while the main
+	// thread is blocked on RTSP read — a silent deadlock that stalls the relay
+	// indefinitely and freezes the receiver's last frame forever.
+	args = append(args, "-rw_timeout", "15000000")
 	args = append(args, "-f", "flv", "-flvflags", "no_duration_filesize", targetURL)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
