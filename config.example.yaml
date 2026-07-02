@@ -12,7 +12,7 @@ server:
 
 # Storage settings
 # root_dir: where recordings, database, and HLS segments are stored.
-# Docker: set via NVR_DATA_DIR env var (default /data). See docker-compose.yml.
+# Docker: set via NVR_DATA_DIR env var (default /data). See deploy/docker/docker-compose.yml.
 # Binary: set via --data-dir flag or directly in YAML.
 storage:
   root_dir: "/var/lib/mibee-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
