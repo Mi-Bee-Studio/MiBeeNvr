@@ -344,6 +344,75 @@ tail -f /var/log/mibee-nvr.log | grep relay
 # 检查流密钥认证（如果适用）
 curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-interface/nav
 ```
+```
+
+## FFmpeg 转发模式（兼容性）
+
+部分直播平台使用严格或非标准的 RTMP 解析器，会拒绝 MiBee NVR 的原生 Go RTMP
+写入器（gortmplib）。最典型的例子是**斗鱼直播伴侣**，它接受 TCP 连接和 publish
+握手，但在收到视频数据时重置连接。
+
+对于这些平台，启用 `use_ffmpeg` 使用 FFmpeg 子进程进行转发。FFmpeg 经过数十年的
+RTMP 兼容性打磨，几乎兼容所有平台。
+
+### 何时使用 FFmpeg 转发
+
+| 平台 | 原生 Go | FFmpeg 转发 | 建议 |
+|------|---------|------------|------|
+| 哔哩哔哩 | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
+| YouTube | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
+| 抖音/TikTok | ⚠️ 未测试 | ✅ 可用 | FFmpeg（稳妥选择） |
+| **斗鱼（直播伴侣）** | **❌ 无画面** | **✅ 可用** | **必须用 FFmpeg** |
+| 快手 | ⚠️ 未测试 | ✅ 可用 | FFmpeg（稳妥选择） |
+| 通用 RTMP | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
+
+> **技术说明：** 原生 Go RTMP 写入器（gortmplib）使用 Type 1/2/3 chunk header
+> 优化以节省带宽。部分严格的接收端（如斗鱼伴侣）无法解析这些优化后的 header，
+> 导致连接稳定但显示"暂无视频流"。FFmpeg 始终使用 Type 0 header，所有接收端
+> 都能正确解析。
+
+### 配置方法
+
+```yaml
+cameras:
+  - id: "front-door"
+    push_targets:
+      - id: "douyu-live"
+        name: "斗鱼直播"
+        protocol: "rtmp"
+        url: "rtmp://192.168.1.10:1935/live/stream_key"
+        enabled: true
+        use_ffmpeg: true        # ← 启用 FFmpeg 转发
+        # source_url: ""        # 可选：覆盖自动解析的源地址
+```
+
+启用 `use_ffmpeg: true` 后：
+- 转发器启动 `ffmpeg -rtsp_transport tcp -i <摄像头地址> -c copy -f flv <目标地址>`
+- 摄像头的 RTSP 地址会**自动从录像器解析**（ONVIF 摄像头使用解析后的 RTSP 地址；
+  RTSP 摄像头直接使用配置 URL）
+- 可选的 `source_url` 可覆盖自动解析的地址（适用于非 RTSP 摄像头）
+- FFmpeg 子进程的生命周期与转发目标绑定（停止/禁用时自动终止）
+
+### 前提条件
+
+- NVR 服务器上必须安装 FFmpeg（`apt install ffmpeg` 或等效命令）
+- 通过 API 检查可用性：
+```bash
+curl -u admin:password http://localhost:9090/api/relay/capabilities
+# {"ffmpeg_available": true, ...}
+```
+- Web 界面仅在检测到 FFmpeg 时显示 `use_ffmpeg` 选项
+
+### 对比
+
+| 方面 | 原生 Go（gortmplib） | FFmpeg 转发 |
+|------|---------------------|------------|
+| CPU 占用 | 更低（零拷贝转封装） | 略高（FFmpeg 进程） |
+| 内存 | 每目标约 2MB | 每目标约 20-40MB（FFmpeg） |
+| 依赖 | 无额外依赖 | 需安装 FFmpeg |
+| 兼容性 | 大部分平台 | 所有平台 |
+| 音频支持 | 完整（AAC、G.711） | 仅视频（音频由平台混合） |
+
 
 ## 故障排除
 
