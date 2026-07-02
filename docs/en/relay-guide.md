@@ -1,6 +1,6 @@
 # Relay Guide — RTMP Live Platform Streaming
 
-> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Native Go relay by default, with optional FFmpeg mode for strict RTMP receivers.
+> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Native Go relay by default — handles all tested strict FMS-compatible receivers including Douyu Live Companion; optional FFmpeg mode as a fallback for exotic platforms.
 
 ## Quick Start
 
@@ -348,14 +348,9 @@ curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-i
 
 ## FFmpeg Relay Mode (Compatibility)
 
-Some live streaming platforms use strict or non-standard RTMP parsers that reject
-the native Go RTMP writer (gortmplib). The most notable example is **Douyu Live
-Companion (直播伴侣)**, which accepts the TCP connection and publish handshake but
-resets the connection when video data arrives.
+The native Go relay uses a **custom RTMP handshake + publish layer** (`internal/relay/rtmp_client.go`) — not `gortmplib.Client` — because strict FMS-compatible receivers (Douyu Live Companion, Huya, Bilibili) reject the plain handshake, Type 1/2/3 chunk headers, and sparse `onMetaData` that `gortmplib` emits. The custom layer implements: complex-handshake HMAC-SHA256 digest, `SetChunkSize=4096`, Type 0 chunk headers on every outbound message, full FFmpeg-style `onMetaData` parsed from SPS (width/height/framerate), and big-endian MessageStreamID. All six root causes are solved — the native Go path now works for every tested platform (Douyu/Bilibili/YouTube/SRS).
 
-For these platforms, enable `use_ffmpeg` to use an FFmpeg subprocess for the relay
-instead of the native Go writer. FFmpeg has decades of RTMP compatibility tuning
-and works with virtually all platforms.
+`use_ffmpeg` remains as an optional fallback config for exotic or untested platforms. FFmpeg has decades of RTMP compatibility tuning, so it is a safe last resort if a future receiver surfaces that the native layer cannot satisfy.
 
 ### When to Use FFmpeg Relay
 
@@ -363,15 +358,12 @@ and works with virtually all platforms.
 |----------|-----------|-------------|----------------|
 | Bilibili | ✅ Works | ✅ Works | Native (lower CPU) |
 | YouTube | ✅ Works | ✅ Works | Native (lower CPU) |
-| Douyin/TikTok | ⚠️ Untested | ✅ Works | FFmpeg (safe choice) |
-| **Douyu (直播伴侣)** | **❌ No video** | **✅ Works** | **FFmpeg required** |
-| Kuaishou | ⚠️ Untested | ✅ Works | FFmpeg (safe choice) |
+| Douyin/TikTok | ⚠️ Untested | ✅ Works | Native (try first, FFmpeg fallback) |
+| **Douyu (直播伴侣)** | **✅ Works** | **✅ Works** | **Native** (solved — custom handshake layer) |
+| Kuaishou | ⚠️ Untested | ✅ Works | Native (try first, FFmpeg fallback) |
 | Generic RTMP | ✅ Works | ✅ Works | Native (lower CPU) |
 
-> **Note:** The native Go RTMP writer (gortmplib) uses Type 1/2/3 chunk header
-> optimization. Some strict receivers like Douyu Companion cannot parse these
-> optimized headers, resulting in "no video stream" despite a stable connection.
-> FFmpeg always uses Type 0 headers, which all receivers accept.
+> **Technical note:** The native Go RTMP path uses a **custom handshake + publish layer** (`internal/relay/rtmp_client.go`), not `gortmplib`'s standard writer. It forces Type 0 chunk headers on every message (gortmplib would emit Type 1/2/3 optimizations that strict receivers cannot parse), computes the complex-handshake HMAC-SHA256 digest required by FMS-compatible receivers, and sends a full FFmpeg-style `onMetaData` (width/height/framerate parsed from SPS). This is why Douyu Live Companion — previously the one platform that needed FFmpeg — now works natively. `use_ffmpeg` remains only as an escape hatch for any future receiver the native layer cannot satisfy.
 
 ### Configuration
 
@@ -407,7 +399,7 @@ curl -u admin:password http://localhost:9090/api/relay/capabilities
 
 ### Trade-offs
 
-| Aspect | Native Go (gortmplib) | FFmpeg Relay |
+| Aspect | Native Go (custom writer) | FFmpeg Relay |
 |--------|----------------------|-------------|
 | CPU usage | Lower (zero-copy remux) | Slightly higher (FFmpeg process) |
 | Memory | ~2MB per target | ~20-40MB per target (FFmpeg) |

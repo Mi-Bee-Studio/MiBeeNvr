@@ -1,6 +1,6 @@
 # Relay Guide — RTMP 直播平台转发
 
-> 将摄像头流转发到直播平台（哔哩哔哩、YouTube、抖音、快手）的自动编码优化实现。纯 Go 实现，H.264 直通不使用 FFmpeg。
+> 将摄像头流转发到直播平台（哗哩哗啦、YouTube、抖音、快手）的自动编码优化实现。默认纯 Go 中继——已兼容所有测试过的严格 FMS 接收端（含斗鱼直播伴侣）；FFmpeg 模式仅作为异构平台的兼底。
 
 ## 快速入门
 
@@ -348,28 +348,22 @@ curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-i
 
 ## FFmpeg 转发模式（兼容性）
 
-部分直播平台使用严格或非标准的 RTMP 解析器，会拒绝 MiBee NVR 的原生 Go RTMP
-写入器（gortmplib）。最典型的例子是**斗鱼直播伴侣**，它接受 TCP 连接和 publish
-握手，但在收到视频数据时重置连接。
+原生 Go 中继使用**自定义 RTMP 握手 + 发布层**（`internal/relay/rtmp_client.go`）——而非 `gortmplib.Client`——因为严格的 FMS 兼容接收端（斗鱼直播伴侣、虎牙、哗哩哗啦）会拒绝 `gortmplib` 发出的简单握手、Type 1/2/3 chunk header 以及不完整的 `onMetaData`。该自定义层实现了：复杂握手 HMAC-SHA256 digest、`SetChunkSize=4096`、每条出站消息强制 Type 0 chunk header、从 SPS 解析出的完整 FFmpeg 风格 `onMetaData`（宽/高/帧率）、以及大端序 MessageStreamID。六大根因全部解决——原生 Go 路径现在适用于所有已测试平台（斗鱼/哗哩哗啦/YouTube/SRS）。
 
-对于这些平台，启用 `use_ffmpeg` 使用 FFmpeg 子进程进行转发。FFmpeg 经过数十年的
-RTMP 兼容性打磨，几乎兼容所有平台。
+`use_ffmpeg` 保留作为异构或未测试平台的可选兼底配置。FFmpeg 经过数十年的 RTMP 兼容性打磨，若未来出现原生层无法满足的接收端，它是稳妥的后备方案。
 
 ### 何时使用 FFmpeg 转发
 
 | 平台 | 原生 Go | FFmpeg 转发 | 建议 |
 |------|---------|------------|------|
-| 哔哩哔哩 | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
+| 哗哩哗啦 | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
 | YouTube | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
-| 抖音/TikTok | ⚠️ 未测试 | ✅ 可用 | FFmpeg（稳妥选择） |
-| **斗鱼（直播伴侣）** | **❌ 无画面** | **✅ 可用** | **必须用 FFmpeg** |
-| 快手 | ⚠️ 未测试 | ✅ 可用 | FFmpeg（稳妥选择） |
+| 抖音/TikTok | ⚠️ 未测试 | ✅ 可用 | 原生优先（FFmpeg 兜底） |
+| **斗鱼（直播伴侣）** | **✅ 可用** | **✅ 可用** | **原生**（已解决——自定义握手层） |
+| 快手 | ⚠️ 未测试 | ✅ 可用 | 原生优先（FFmpeg 兜底） |
 | 通用 RTMP | ✅ 可用 | ✅ 可用 | 原生（CPU 更低） |
 
-> **技术说明：** 原生 Go RTMP 写入器（gortmplib）使用 Type 1/2/3 chunk header
-> 优化以节省带宽。部分严格的接收端（如斗鱼伴侣）无法解析这些优化后的 header，
-> 导致连接稳定但显示"暂无视频流"。FFmpeg 始终使用 Type 0 header，所有接收端
-> 都能正确解析。
+> **技术说明：** 原生 Go RTMP 路径使用**自定义握手 + 发布层**（`internal/relay/rtmp_client.go`），而非 `gortmplib` 的标准写入器。它对每条消息强制使用 Type 0 chunk header（gortmplib 会发出 Type 1/2/3 优化，严格接收端无法解析），计算 FMS 兼容接收端所需的复杂握手 HMAC-SHA256 digest，并发送完整的 FFmpeg 风格 `onMetaData`（从 SPS 解析出宽/高/帧率）。这正是斗鱼直播伴侣——之前唯一需要 FFmpeg 的平台——现在能原生推流的原因。`use_ffmpeg` 仅作为未来未知接收端的遇险手段保留。
 
 ### 配置方法
 
@@ -405,7 +399,7 @@ curl -u admin:password http://localhost:9090/api/relay/capabilities
 
 ### 对比
 
-| 方面 | 原生 Go（gortmplib） | FFmpeg 转发 |
+| 方面 | 原生 Go（自定义写入器） | FFmpeg 转发 |
 |------|---------------------|------------|
 | CPU 占用 | 更低（零拷贝转封装） | 略高（FFmpeg 进程） |
 | 内存 | 每目标约 2MB | 每目标约 20-40MB（FFmpeg） |

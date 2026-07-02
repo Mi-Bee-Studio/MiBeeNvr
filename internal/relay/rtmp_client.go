@@ -28,34 +28,62 @@ import (
 // publish sequence, so we can match what FFmpeg sends for strict receivers
 // (e.g. Douyu Live Companion).
 type rtmpPublishConn struct {
-	nconn     net.Conn
-	mrw       *message.ReadWriter
-	bc        *bytecounter.ReadWriter
-	wmu       sync.Mutex // protects concurrent Write (video frames + PingResponse)
-	streamID  uint32     // message stream ID (0x1000000 = FMLE convention)
-	chunkSize uint32     // write chunk size (default 128)
+	nconn       net.Conn
+	mrw         *message.ReadWriter
+	bc          *bytecounter.ReadWriter
+	wmu         sync.Mutex // protects concurrent Write (video frames + PingResponse)
+	streamID    uint32     // message stream ID (0x1000000 = FMLE convention)
+	chunkSize   uint32     // write chunk size (default 128)
+	videoWidth  int        // for onMetaData (0 = unknown)
+	videoHeight int        // for onMetaData (0 = unknown)
+	videoFPS    float64    // for onMetaData (0 = unknown → omit)
 }
 
 func (c *rtmpPublishConn) Read() (message.Message, error) { return c.mrw.Read() }
 
-// Write intercepts Video and Audio messages to force Type 0 chunk headers
-// (full 12-byte header). gortmplib's standard writer uses Type 1/2/3 header
-// optimization for subsequent messages on the same chunk stream, which strict
-// RTMP receivers (e.g. Douyu Live Companion) cannot parse, causing immediate RST.
+// Write forces Type 0 chunk headers (full 12-byte header) on outbound messages
+// that strict RTMP receivers (Douyu Live Companion) choke on when they reuse a
+// chunk stream ID already used by a prior message. gortmplib's standard writer
+// emits a Type 1/2/3 header for the 2nd+ message on a CSID; the companion
+// cannot parse those and resets the connection right after Publish.Start.
 //
-// Config messages (VideoTypeConfig, AudioAACTypeConfig) are rare and only sent
-// once during Writer.Initialize(), so they naturally get Type 0 from the standard
-// writer. We intercept only AU (frame data) messages to force Type 0 on every frame.
+// Messages that MUST get Type 0 are those sent during gortmplib.Writer.Initialize()
+// that land on a CSID already occupied by a command:
+//   - onMetaData / @setDataFrame (DataAMF0 on CSID 4 — CSID 4 was first used by
+//     the publish command, so without this intercept the metadata would be a
+//     Type 1 header and trigger an RST).
+//   - AudioSpecificConfig (Audio AACTypeConfig on CSID 4 — same reason).
+//
+// Video frames (AU) are routed through writeRawMessage for uniformity.
+// AVC sequence header (Video VideoTypeConfig) is the first message on CSID 6, so
+// the standard writer already emits Type 0 for it — we leave it alone because
+// re-encoding its mp4 box payload would be needlessly complex.
+// Command messages (connect, publish, etc.) go through the standard writer;
+// dump analysis confirmed the companion accepts their Type 1 headers during
+// the handshake phase.
 func (c *rtmpPublishConn) Write(msg message.Message) error {
 	switch m := msg.(type) {
+	case *message.DataAMF0:
+		// onMetaData / @setDataFrame — replace the sparse gortmplib metadata
+		// (only videocodecid/videodatarate) with the full FFmpeg-style field set
+		// that strict receivers (Douyu Live Companion) validate. Without
+		// width/height/framerate the companion rejects the stream right after
+		// Publish.Start (the FFmpeg relay path documents this same requirement).
+		// Then force a Type 0 chunk header.
+		fullMeta := c.buildFullMetadata(m.Payload)
+		payload, err := fullMeta.Marshal()
+		if err != nil {
+			return fmt.Errorf("marshal onMetaData AMF0: %w", err)
+		}
+		return c.writeRawMessage(m.ChunkStreamID, 0x12, 0, payload) // msg type 18 = DataAMF0
+
 	case *message.Video:
 		if m.Type == message.VideoTypeAU && m.AU != nil {
-			// Construct FLV video tag body: [frameType|codec] [0x01=AU] [compTime3B] [NALU data]
 			body := make([]byte, 5+len(m.AU))
 			if m.IsKeyFrame {
-				body[0] = 0x10 | m.Codec // keyframe(1)<<4 | codec
+				body[0] = 0x10 | m.Codec
 			} else {
-				body[0] = 0x20 | m.Codec // inter(2)<<4 | codec
+				body[0] = 0x20 | m.Codec
 			}
 			body[1] = 0x01 // AVCPacketType = NALU
 			ptsDelta := uint32(m.PTSDelta / time.Millisecond)
@@ -67,15 +95,29 @@ func (c *rtmpPublishConn) Write(msg message.Message) error {
 		}
 
 	case *message.Audio:
-		// For AAC AU and G.711 raw data, force Type 0 headers.
-		// AACConfig (sent during Initialize) falls through to standard writer.
+		if m.Codec == message.CodecMPEG4Audio && m.AACType == message.AudioAACTypeConfig && m.AACConfig != nil {
+			// AudioSpecificConfig would be a Type 1 on CSID 4 (after onMetaData).
+			// Re-encode the raw config bytes from the struct and force Type 0.
+			raw, mErr := m.AACConfig.Marshal()
+			if mErr != nil {
+				return fmt.Errorf("marshal AudioSpecificConfig: %w", mErr)
+			}
+			body := make([]byte, 2+len(raw))
+			body[0] = (m.Codec << 4) | (uint8(m.Rate) << 2) | (uint8(m.Depth) << 1)
+			if m.IsStereo {
+				body[0] |= 1
+			}
+			body[1] = 0x00 // AAC sequence header
+			copy(body[2:], raw)
+			return c.writeRawMessage(m.ChunkStreamID, 0x08, 0, body)
+		}
 		if m.Codec == message.CodecMPEG4Audio && m.AACType == message.AudioAACTypeAU && m.AU != nil {
 			body := make([]byte, 2+len(m.AU))
 			body[0] = (m.Codec << 4) | (uint8(m.Rate) << 2) | (uint8(m.Depth) << 1)
 			if m.IsStereo {
 				body[0] |= 1
 			}
-			body[1] = 0x01 // AACAU
+			body[1] = 0x01 // AAC AU
 			copy(body[2:], m.AU)
 			return c.writeRawMessage(m.ChunkStreamID, 0x08, uint32(m.DTS/time.Millisecond), body)
 		}
@@ -90,12 +132,63 @@ func (c *rtmpPublishConn) Write(msg message.Message) error {
 		}
 	}
 
-	// All other message types (commands, config, control) use standard writer.
-	// These are typically one-off or small, so Type 0 is used naturally.
-	// These are typically one-off or small, so Type 0 is used naturally.
+	// AVC sequence header (VideoTypeConfig), command messages, and control
+	// messages use the standard writer. These are either first-on-CSID (Type 0)
+	// or accepted by the companion as Type 1 during handshake.
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	return c.mrw.Write(msg)
+}
+
+// buildFullMetadata takes gortmplib's sparse onMetaData payload
+// ([@setDataFrame, "onMetaData", {videocodecid, videodatarate, ...}]) and
+// returns a payload whose metadata object mirrors FFmpeg's full field set:
+// duration, width, height, videodatarate, framerate, videocodecid, and (for
+// audio tracks) audiodatarate, audiosamplerate, audiosamplesize, audiochannels,
+// audiocodecid, stereo. Strict receivers such as the Douyu Live Companion
+// validate width/height/framerate and reject the stream if they are absent.
+func (c *rtmpPublishConn) buildFullMetadata(orig amf0.Data) amf0.Data {
+	if len(orig) < 3 {
+		return orig // unexpected shape; leave untouched
+	}
+	// orig[0] = "@setDataFrame", orig[1] = "onMetaData", orig[2] = metadata object.
+	hasAudio := false
+	if obj, ok := orig[2].(amf0.Object); ok {
+		if v, found := obj.Get("audiocodecid"); found && v != nil {
+			hasAudio = true
+		}
+	}
+
+	meta := amf0.Object{
+		{Key: "duration", Value: float64(0)},
+	}
+	if c.videoWidth > 0 {
+		meta = append(meta, amf0.ObjectEntry{Key: "width", Value: float64(c.videoWidth)})
+	}
+	if c.videoHeight > 0 {
+		meta = append(meta, amf0.ObjectEntry{Key: "height", Value: float64(c.videoHeight)})
+	}
+	meta = append(meta,
+		amf0.ObjectEntry{Key: "videodatarate", Value: float64(0)},
+	)
+	if c.videoFPS > 0 {
+		meta = append(meta, amf0.ObjectEntry{Key: "framerate", Value: c.videoFPS})
+	}
+	meta = append(meta,
+		amf0.ObjectEntry{Key: "videocodecid", Value: float64(7)}, // H.264
+	)
+	if hasAudio {
+		meta = append(meta,
+			amf0.ObjectEntry{Key: "audiodatarate", Value: float64(0)},
+			amf0.ObjectEntry{Key: "audiosamplerate", Value: float64(44100)},
+			amf0.ObjectEntry{Key: "audiosamplesize", Value: float64(16)},
+			amf0.ObjectEntry{Key: "audiochannels", Value: float64(2)},
+			amf0.ObjectEntry{Key: "audiocodecid", Value: float64(10)}, // AAC
+			amf0.ObjectEntry{Key: "stereo", Value: true},
+		)
+	}
+
+	return amf0.Data{orig[0], orig[1], meta}
 }
 
 // writeRawMessage writes an RTMP message with a Type 0 chunk header (always
@@ -125,11 +218,11 @@ func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, 
 		buf[5] = byte(bodyLen >> 8)
 		buf[6] = byte(bodyLen)
 		buf[7] = msgType
-		buf[8] = byte(c.streamID)       // little-endian per RTMP spec
-		buf[9] = byte(c.streamID >> 8)
-		buf[10] = byte(c.streamID >> 16)
-		buf[11] = byte(c.streamID >> 24)
-		copy(buf[12:], payload)
+		buf[8] = byte(c.streamID >> 24)  // big-endian — matches gortmplib's
+		buf[9] = byte(c.streamID >> 16)  // chunk0.Marshal which strict FMS-
+		buf[10] = byte(c.streamID >> 8)  // compatible receivers (Douyu) expect.
+		buf[11] = byte(c.streamID)       // (RTMP spec says little-endian, but
+		copy(buf[12:], payload)          //  gortmplib/FFmpeg-in-practice use BE.)
 	} else {
 		// Multi-chunk: Type 0 first chunk + Type 3 continuations
 		numChunks := (bodyLen + cs - 1) / cs
@@ -142,10 +235,10 @@ func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, 
 		buf[5] = byte(bodyLen >> 8)
 		buf[6] = byte(bodyLen)
 		buf[7] = msgType
-		buf[8] = byte(c.streamID)
-		buf[9] = byte(c.streamID >> 8)
-		buf[10] = byte(c.streamID >> 16)
-		buf[11] = byte(c.streamID >> 24)
+		buf[8] = byte(c.streamID >> 24)
+		buf[9] = byte(c.streamID >> 16)
+		buf[10] = byte(c.streamID >> 8)
+		buf[11] = byte(c.streamID)
 		copy(buf[12:12+cs], payload[:cs])
 		off := uint32(12 + cs)
 		for pos := cs; pos < bodyLen; pos += cs {
@@ -164,157 +257,6 @@ func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, 
 	return err
 }
 
-// writeAVCSequenceHeader writes the H.264 AVC sequence header (SPS/PPS)
-// using a Type 0 chunk header. Includes High Profile extension fields.
-func (c *rtmpPublishConn) writeAVCSequenceHeader(sps, pps []byte) error {
-	if len(sps) < 4 || len(pps) == 0 {
-		return fmt.Errorf("invalid sps/pps")
-	}
-	profile, compat, level := sps[1], sps[2], sps[3]
-
-	// Build AVCC configuration record
-	avcc := []byte{
-		0x01,             // configurationVersion
-		profile,          // AVCProfileIndication
-		compat,           // profile_compatibility
-		level,            // AVCLevelIndication
-		0xFF,             // reserved(6) + lengthSizeMinusOne(2) = 4-byte NALU length
-		0xE1,             // reserved(3) + numSPS(5) = 1
-		byte(len(sps) >> 8), byte(len(sps)), // SPS length
-	}
-	avcc = append(avcc, sps...)
-	avcc = append(avcc, 0x01) // numPPS = 1
-	avcc = append(avcc, byte(len(pps)>>8), byte(len(pps)))
-	avcc = append(avcc, pps...)
-	// High Profile extension (profile_idc != 66/77/88)
-	if profile != 66 && profile != 77 && profile != 88 {
-		avcc = append(avcc,
-			0xFC|1, // reserved(6) + chroma_format_idc = 1 (4:2:0)
-			0xF8,   // reserved(5) + bit_depth_luma_minus8 = 0
-			0xF8,   // reserved(5) + bit_depth_chroma_minus8 = 0
-			0x00,   // numOfSequenceParameterSetExt = 0
-		)
-	}
-
-	// Build FLV video tag body: keyframe+H264 + config type + compTime(0) + AVCC
-	flvBody := make([]byte, 5+len(avcc))
-	flvBody[0] = 0x17 // keyframe(0x10) | H264(0x07)
-	flvBody[1] = 0x00 // AVCPacketType = sequence header
-	// flvBody[2..4] = compositionTime = 0
-copy(flvBody[5:], avcc)
-
-	engineLogger.Info("rtmp raw AVC header",
-		"flvBody_len", len(flvBody), "sps_len", len(sps), "pps_len", len(pps),
-		"hex", fmt.Sprintf("%x", flvBody[:min(40, len(flvBody))]))
-
-
-return c.writeRawMessage(4, 0x09, 0, flvBody) // csid=6, type=video, ts=0
-}
-
-// writeMetadata sends @setDataFrame via raw Type 0 header.
-// Encodes AMF0 manually to bypass gortmplib's Type 1/2/3 chunk optimization.
-func (c *rtmpPublishConn) writeMetadata() error {
-	data := amf0.Data{
-		"@setDataFrame",
-		"onMetaData",
-		amf0.Object{
-			{Key: "videocodecid", Value: float64(7)}, // H.264
-			{Key: "videodatarate", Value: float64(0)},
-		},
-	}
-	payload, err := data.Marshal()
-	if err != nil {
-		return err
-	}
-	return c.writeRawMessage(4, 0x12, 0, payload) // csid=4, type=DataAMF0(18), ts=0
-}
-
-// writeVideoFrame writes an H.264 video frame using a Type 0 chunk header.
-// au is the access unit (slice of NALUs). NALUs are AVCC-encoded (4-byte length prefix).
-func (c *rtmpPublishConn) writeVideoFrame(timeMS uint32, isKeyFrame bool, au [][]byte) error {
-	// AVCC-encode the NALUs
-	var avccData []byte
-	for _, nalu := range au {
-		if len(nalu) == 0 {
-			continue
-		}
-		lenBytes := []byte{
-			byte(len(nalu) >> 24),
-			byte(len(nalu) >> 16),
-			byte(len(nalu) >> 8),
-			byte(len(nalu)),
-		}
-		avccData = append(avccData, lenBytes...)
-		avccData = append(avccData, nalu...)
-	}
-
-	frameType := byte(0x20) // inter
-	if isKeyFrame {
-		frameType = 0x10 // keyframe
-	}
-
-	// FLV video tag body
-	flvBody := make([]byte, 5+len(avccData))
-	flvBody[0] = frameType | 0x07 // frameType | H264
-	flvBody[1] = 0x01              // AVCPacketType = NALU
-	// compositionTime = 0 (pts == dts for this source)
-	copy(flvBody[5:], avccData)
-
-	return c.writeRawMessage(4, 0x09, timeMS, flvBody)
-}
-
-// writeHandcraftedHighProfileSeqHeader writes the AVC sequence header
-// directly to the underlying socket, bypassing gortmplib's Writer and
-// go-mp4's marshal. Matches FFmpeg/libavformat's AVCC byte layout for
-// High profile exactly (reserved bits = 0x3F / 0x1F).
-func (c *rtmpPublishConn) writeHandcraftedHighProfileSeqHeader(sps, pps []byte, streamID uint32) error {
-	profile, compat, level := sps[1], sps[2], sps[3]
-	// FLV body (5) + AVCC ver/profile/compat/level (4) +
-	// reserved+numSPS (2) + SPS-len (2) + SPS + numPPS (1) + PPS-len (2) + PPS +
-	// High-prof ext (4).
-	bodyLen := 5 + 4 + 2 + 2 + len(sps) + 1 + 2 + len(pps) + 4
-	// RTMP chunk header: fmt=0 csid=6, ts=0, msg_type=9 (video), sid.
-	chunk := make([]byte, 12+bodyLen)
-	chunk[0] = 0x06 // basic byte: fmt=0, csid=6 (VideoChunkStreamID)
-	// chunk[1..3] = timestamp = 0
-	chunk[4] = byte((bodyLen >> 16) & 0xFF)
-	chunk[5] = byte((bodyLen >> 8) & 0xFF)
-	chunk[6] = byte(bodyLen & 0xFF)
-	chunk[7] = 0x09 // msg_type = video
-	chunk[8] = byte((streamID >> 24) & 0xFF)
-	chunk[9] = byte((streamID >> 16) & 0xFF)
-	chunk[10] = byte((streamID >> 8) & 0xFF)
-	chunk[11] = byte(streamID & 0xFF)
-
-	body := chunk[12:]
-	body[0] = 0x17 // keyframe + AVC
-	body[1] = 0x00 // AVC seq header
-	// body[2..4] = compositionTime = 0
-	body[5] = 0x01 // AVCC configurationVersion
-	body[6] = profile
-	body[7] = compat
-	body[8] = level
-	body[9] = 0xFF // 6 reserved bits (0x3F) + lengthSizeMinusOne=3 (4-byte NALU len)
-	body[10] = 0xE1 // 3 reserved bits (7) + numSPS=1
-	body[11] = byte((len(sps) >> 8) & 0xFF)
-	body[12] = byte(len(sps) & 0xFF)
-	off := 13 + copy(body[13:], sps)
-	body[off] = 0x01 // numPPS=1
-	body[off+1] = byte((len(pps) >> 8) & 0xFF)
-	body[off+2] = byte(len(pps) & 0xFF)
-	off += 3 + copy(body[off+3:], pps)
-	body[off] = 0xFD // 6 reserved bits (0x3F) + chroma_format_idc=1 (4:2:0)
-	body[off+1] = 0xF8 // 5 reserved bits (0x1F) + bit_depth_luma_minus8=0
-	body[off+2] = 0xF8 // 5 reserved bits (0x1F) + bit_depth_chroma_minus8=0
-	body[off+3] = 0x00 // numOfSequenceParameterSetExt=0
-
-	if _, err := c.bc.Write(chunk); err != nil {
-		return fmt.Errorf("write handcrafted AVC seq header: %w", err)
-	}
-	engineLogger.Info("wrote handcrafted High-Profile AVC seq header",
-		"profile_idc", profile, "sps_len", len(sps), "pps_len", len(pps))
-	return nil
-}
 func (c *rtmpPublishConn) BytesReceived() uint64           { return c.bc.Reader.Count() }
 func (c *rtmpPublishConn) BytesSent() uint64               { return c.bc.Writer.Count() }
 
@@ -435,7 +377,7 @@ func defaultRTMPPort(u *url.URL) {
 	}
 }
 
-func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func(), error) {
+func dialRTMPPublish(ctx context.Context, rawURL string, videoWidth, videoHeight int, videoFPS float64) (*rtmpPublishConn, func(), error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse rtmp url: %w", err)
@@ -456,7 +398,10 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 	// TODO: TLS for RTMPS (plain RTMP only for now — companion/Douyu use rtmp://).
 
 	// 2. Wrap with bytecounter + plain handshake.
-	bc := bytecounter.NewReadWriter(nconn)
+	//    wrapDump is a no-op unless NVR_RTMP_DEBUG_DUMP names a file; it lets us
+	//    capture every sent byte to diff against FFmpeg when debugging strict
+	//    receivers (e.g. Douyu Live Companion RST after Publish.Start).
+	bc := bytecounter.NewReadWriter(wrapDump(nconn))
 	// Complex handshake: C1 contains an HMAC-SHA256 digest (key="Genuine Adobe
 	// Flash Player 001", scheme 0). Adobe FMS and FMS-compatible platforms
 	// (Douyu, Huya, Bilibili) validate this digest even in plain RTMP (v3) mode.
@@ -486,7 +431,10 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 
 	// 3. Message-level read/writer on the same byte stream.
 	mrw := message.NewReadWriter(bc, bc, false)
-	conn := &rtmpPublishConn{nconn: nconn, mrw: mrw, bc: bc, chunkSize: 4096, streamID: 0x1000000}
+	conn := &rtmpPublishConn{
+		nconn: nconn, mrw: mrw, bc: bc, chunkSize: 4096, streamID: 0x1000000,
+		videoWidth: videoWidth, videoHeight: videoHeight, videoFPS: videoFPS,
+	}
 
 
 	app, streamKey := splitRTMPPath(u)
@@ -506,10 +454,6 @@ func dialRTMPPublish(ctx context.Context, rawURL string) (*rtmpPublishConn, func
 		return nil, nil, fmt.Errorf("send SetChunkSize: %w", err)
 	}
 
-	// must know our write chunk size before receiving any large messages.
-	// go2rtc uses 4096 (comment: "OBS - 4096, Reolink - 4096"). Using 128
-	// (RTMP default) causes ~400 chunks per keyframe vs ~13 at 4096, which can
-	// overwhelm strict receivers.
 	// 5. Connect command — field set EXACTLY matches FFmpeg (pcap-verified).
 	// FFmpeg only sends 4 fields for publish mode: app, type, flashVer, tcUrl.
 	// Extra fields (fpad/capabilities/audioCodecs/videoCodecs/videoFunction)
@@ -642,11 +586,7 @@ func getRTMPTcURL(u *url.URL, app string) string {
 // messages (WindowAckSize, SetPeerBandwidth, UserControl, etc.) are silently
 // consumed — this is how the server sends its post-connect control flow.
 func readRTMPCommandResult(mrw *message.ReadWriter, commandID int) (*message.CommandAMF0, error) {
-	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if remaining := time.Until(deadline); remaining > 0 {
-			// Best-effort read deadline — the underlying conn may not support it.
-		}
 		msg, err := mrw.Read()
 		if err != nil {
 			return nil, err
@@ -666,8 +606,6 @@ func readRTMPStatus(mrw *message.ReadWriter, commandID int) (*message.CommandAMF
 		if err != nil {
 			return nil, err
 		}
-		engineLogger.Info("rtmp handshake msg from server",
-			"type", fmt.Sprintf("%T", msg), "msg", fmt.Sprintf("%+v", msg))
 		if cmd, ok := msg.(*message.CommandAMF0); ok {
 			if cmd.CommandID == commandID || (cmd.CommandID == 0 && cmd.Name == "onStatus") {
 				return cmd, nil

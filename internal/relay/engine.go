@@ -27,6 +27,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/pion/rtp"
 )
@@ -536,7 +537,21 @@ func (t *PushTarget) connectRTMP(ctx context.Context) error {
 	// Use dialRTMPPublish for complex handshake digest support (required by
 	// Douyu/Huya/Bilibili FMS backends). gortmplib.Client does plain handshake
 	// without HMAC-SHA256 digest — rejected by strict FMS servers.
-	conn, connCleanup, err := dialRTMPPublish(ctx, t.Config.URL)
+	// Parse SPS for width/height/fps to populate the full onMetaData that strict
+	// receivers (Douyu Live Companion) require — the sparse gortmplib metadata
+	// (only videocodecid/videodatarate) is rejected by such receivers.
+	var vidWidth, vidHeight int
+	var vidFPS float64
+	var spsParsed h264.SPS
+	if err := spsParsed.Unmarshal(sps); err == nil {
+		vidWidth = spsParsed.Width()
+		vidHeight = spsParsed.Height()
+		vidFPS = spsParsed.FPS()
+		engineLogger.Debug("relay onMetaData from SPS",
+			"camera_id", t.CameraID, "target_id", t.Config.ID,
+			"width", vidWidth, "height", vidHeight, "fps", vidFPS)
+	}
+	conn, connCleanup, err := dialRTMPPublish(ctx, t.Config.URL, vidWidth, vidHeight, vidFPS)
 	if err != nil {
 		return err
 	}

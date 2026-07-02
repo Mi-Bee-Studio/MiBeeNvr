@@ -69,7 +69,7 @@ Per-camera `push_retention_days`: `nil` = follow global, `0` = live-only (no rec
 
 ## 3. Push-Out (Relay) — `internal/relay/`
 
-The NVR forwards a camera's live stream to remote RTMP/RTSP targets. **No FFmpeg** — uses the existing `gortsplib`/`gortmplib` client+publish APIs already in go.mod.
+The NVR forwards a camera's live stream to remote RTMP/RTSP targets. RTSP targets use `gortsplib.Client` (pure Go, zero-copy remux); RTMP targets use a **custom handshake + publish layer** (`rtmp_client.go`) that solves the six FMS-compat root causes (HMAC digest, chunk size, Type 0 headers, full `onMetaData`, big-endian streamID) strict receivers (Douyu/Huya/Bilibili) require — no FFmpeg needed for remux. H.265 sources transcode to H.264 via `livetranscode` (FFmpeg subprocess) when `TranscodePolicy` ≠ `off`.
 
 ### Components
 
@@ -89,9 +89,9 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
                       │
            ┌──────────┴──────────┐
            ▼                     ▼
-     gortmplib.Writer       gortsplib.Client
-     .WriteH264(track,      .WritePacketRTP(media, pkt)
-       pts, dts, au)          (rtpEnc.Encode(au))
+     rtmpPublishConn       gortsplib.Client
+     (custom handshake,    .WritePacketRTP(media, pkt)
+      Type 0 publish)        (rtpEnc.Encode(au))
            │                     │
            ▼                     ▼
      RTMP target            RTSP target
@@ -102,7 +102,7 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
 ### Key design points
 
 - **Source = zero-copy**: PushTarget subscribes to the camera's existing hub. No re-pull, no decode. Same frame bus as HLS/WebRTC/recording — adding a relay target adds one goroutine + one outbound socket, ~5-10MB on RPi 3B.
-- **H.264 remux only**: no transcode (no viable pure-Go H.265 encoder). RTMP targets reject H.265 sources (`errPermanent`). This is by design — transcoding remains the one FFmpeg exception.
+- **H.264 remux or H.265 transcode**: H.264 sources remux zero-copy. H.265 sources live-transcode to H.264 via `livetranscode.LiveTranscoder` (FFmpeg subprocess) when `TranscodePolicy` ≠ `off`; if `off`, H.265 is rejected with `errPermanent`. Thermal monitoring protects ARM SBCs. See [Relay Guide](relay-guide.md#h265-transcoding).
 - **Per-target independence**: each target is a separate goroutine + connection + reconnect loop (`TieredBackoffWithJitter`). Failure of one target never affects another, recording, or live.
 - **Dedicated `RelayStatus`**: NOT `RecorderStatus`. "Streaming to a target" ≠ "recording to disk" — the camera health UI must not conflate them.
 - **Reconcile is async**: `SetCameraTargets` runs in a goroutine (not under `cm.mu`) because it calls `GetHub` which re-locks the camera manager's mutex.

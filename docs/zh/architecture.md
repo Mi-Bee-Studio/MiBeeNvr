@@ -69,7 +69,7 @@ Publisher ──RTMP──▶ RTMP Server (handlePublisher)
 
 ## 3. Push-Out(转发) —— `internal/relay/`
 
-NVR 将摄像头的直播流转发到远端 RTMP/RTSP 目标。**不使用 FFmpeg** —— 复用 go.mod 中已有的 `gortsplib`/`gortmplib` client+publish API。
+NVR 将摄像头的直播流转发到远端 RTMP/RTSP 目标。RTSP 目标使用 `gortsplib.Client`（纯 Go，零拷贝转封装）；RTMP 目标使用**自定义握手 + 发布层**（`rtmp_client.go`），解决了严格接收端（斗鱼/虎牙/哗哩哗啦）所需的六大 FMS 兼容根因（HMAC digest、chunk size、Type 0 header、完整 `onMetaData`、大端序 streamID）——转封装无需 FFmpeg。H.265 源在 `TranscodePolicy` ≠ `off` 时经 `livetranscode`（FFmpeg 子进程）转码为 H.264。
 
 ### 组件
 
@@ -89,9 +89,9 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
                       │
            ┌──────────┴──────────┐
            ▼                     ▼
-     gortmplib.Writer       gortsplib.Client
-     .WriteH264(track,      .WritePacketRTP(media, pkt)
-       pts, dts, au)          (rtpEnc.Encode(au))
+     rtmpPublishConn       gortsplib.Client
+     (自定义握手,         .WritePacketRTP(media, pkt)
+      Type 0 发布)          (rtpEnc.Encode(au))
            │                     │
            ▼                     ▼
      RTMP target            RTSP target
@@ -102,7 +102,7 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
 ### 关键设计要点
 
 - **源端 = 零拷贝**:PushTarget 订阅摄像头现有的 hub。无需重新拉流,无需解码。与 HLS/WebRTC/录制使用相同的帧总线 —— 新增一个转发目标仅增加一个 goroutine + 一个出站 socket,在 RPi 3B 上约 5-10MB。
-- **仅 H.264 重封装**:无转码(没有可用的纯 Go H.265 编码器)。RTMP 目标会拒绝 H.265 源(`errPermanent`)。这是有意为之 —— 转码仍然是唯一保留的 FFmpeg 例外。
+- **H.264 转封装或 H.265 转码**:H.264 源零拷贝转封装。H.265 源在 `TranscodePolicy` ≠ `off` 时经 `livetranscode.LiveTranscoder`(FFmpeg 子进程)实时转码为 H.264;若为 `off`,H.265 以 `errPermanent` 拒绝。热监控保护 ARM SBC。参见[转发指南](relay-guide.md#h265-transcoding)。
 - **每个目标相互独立**:每个目标是独立的 goroutine + 连接 + 重连循环(`TieredBackoffWithJitter`)。某一个目标的失败绝不会影响其他目标、录制或直播。
 - **专用的 `RelayStatus`**:不是 `RecorderStatus`。"向目标推流" ≠ "录制到磁盘" —— 摄像头健康界面绝不能将两者混为一谈。
 - **调和是异步的**:`SetCameraTargets` 在 goroutine 中运行(而非在 `cm.mu` 之下),因为它调用了 `GetHub`,后者会重新加锁摄像头管理器的互斥量。
