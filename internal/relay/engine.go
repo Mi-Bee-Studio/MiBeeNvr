@@ -351,7 +351,17 @@ func (t *PushTarget) connectViaFFmpeg(ctx context.Context) error {
 	// into a healthy stream) causes FFmpeg's muxer thread to die while the main
 	// thread is blocked on RTSP read — a silent deadlock that stalls the relay
 	// indefinitely and freezes the receiver's last frame forever.
+	//
+	// Pass via TWO channels because FFmpeg 7.1.5's RTMP handler doesn't honor
+	// -rw_timeout as a bare CLI flag (it's silently consumed by the FLV muxer
+	// instead of the TCP socket): as a CLI flag AND as a URL query parameter
+	// (which the RTMP URL parser DOES forward to the URLContext/I/O layer).
 	args = append(args, "-rw_timeout", "15000000")
+	if strings.Contains(targetURL, "?") {
+		targetURL += "&rw_timeout=15000000"
+	} else {
+		targetURL += "?rw_timeout=15000000"
+	}
 	args = append(args, "-f", "flv", "-flvflags", "no_duration_filesize", targetURL)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
