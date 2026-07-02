@@ -934,7 +934,7 @@
 #YJ>
 #YJ>## Push-Out (Relay) — Forward a Camera to Remote Destinations
 #YJ>
-#YJ>Push-out (relay) is the reverse of push-in: the NVR forwards a camera's live stream OUT to remote destinations — another NVR's RTMP/SRT ingest, a live streaming platform, or a backup server. **It is pure Go, no FFmpeg required** — the relay uses the existing `gortsplib`/`gortmplib` libraries in-process.
+#YJ>Push-out (relay) is the reverse of push-in: the NVR forwards a camera's live stream OUT to remote destinations — another NVR's RTMP/SRT ingest, a live streaming platform, or a backup server. **Native Go relay by default** (FFmpeg optional for compatibility) — the relay uses the existing `gortsplib`/`gortmplib` libraries in-process.
 #YJ>
 #YJ>This is ideal for: sending a camera's feed to a remote NVR across the internet, mirroring to a backup site, or publishing to a live platform — all without an external process.
 #YJ>

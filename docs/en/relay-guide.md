@@ -1,6 +1,6 @@
 # Relay Guide — RTMP Live Platform Streaming
 
-> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Pure Go implementation, no FFmpeg for H.264 passthrough.
+> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Native Go relay by default, with optional FFmpeg mode for strict RTMP receivers.
 
 ## Quick Start
 

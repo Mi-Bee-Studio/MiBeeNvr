@@ -357,7 +357,7 @@ cameras:
 ### `cameras[].push_targets`
 - **类型**: array of objects
 - **可选**: 是（任何摄像头协议均可）
-- **描述**: 推流转发目标 — 将此摄像头的直播流转发到远程目的地（另一个 NVR 的推流接收、直播平台、备份）。纯 Go 实现，无需 FFmpeg。每个目标是一个独立连接。参见[推流转发指南](./relay-guide.md)。
+- **描述**: 推流转发目标 — 将此摄像头的直播流转发到远程目的地（另一个 NVR 的推流接收、直播平台、备份）。默认使用内置 Go 中继，可选 FFmpeg。每个目标是一个独立连接。参见[推流转发指南](./relay-guide.md)。
 - **每个目标的字段**:
   - `id` (string, required) — 摄像头内稳定标识符
   - `name` (string, optional) — 显示名称

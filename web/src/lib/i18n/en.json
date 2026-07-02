@@ -542,7 +542,7 @@
   "cameras.pushRetentionHint": "How long to keep recordings of pushed streams.",
   "cameras.days": "days",
   "cameras.pushOutTitle": "Push-Out (Relay)",
-  "cameras.pushOutHint": "Forward this camera's live stream to remote destinations (another NVR, a live platform, a backup). Each target is an independent connection. Uses in-process Go relay — no FFmpeg required.",
+  "cameras.pushOutHint": "Forward this camera's live stream to remote destinations (another NVR, a live platform, a backup). Each target is an independent connection. Uses native Go relay by default; FFmpeg optional for strict platforms.",
   "cameras.pushOutEmpty": "No push-out targets configured.",
   "cameras.pushOutName": "Name",
   "cameras.pushOutEnabled": "On",
