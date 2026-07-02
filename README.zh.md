@@ -87,7 +87,7 @@ chmod +x mibee-nvr-armv7
 ### 方式 2：Docker
 
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
 打开 `http://localhost:9090` 即可访问管理界面。
@@ -101,7 +101,7 @@ docker compose up -d
       - NVR_DATA_DIR=/data          # 必须与卷挂载一致
 ```
 
-详见 [`docker-compose.yml`](docker-compose.yml)。
+详见 [`deploy/docker/docker-compose.yml`](deploy/docker/docker-compose.yml)。
 
 ### 方式 3：一键安装脚本
 
@@ -151,22 +151,19 @@ make lint               # 代码检查
 
 ## Docker 容器镜像
 
-快速部署请参考 [`docker-compose.yml`](docker-compose.yml)：
+快速部署请参考 [`deploy/docker/docker-compose.yml`](deploy/docker/docker-compose.yml)：
 
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
-支持两种构建方式：
-
-- **多阶段构建**（`Dockerfile`）：在容器内完成前端+后端编译，需要网络拉取基础镜像
-- **交叉编译构建**（`Dockerfile.arm64`）：在宿主机交叉编译后打包，无需 QEMU，使用 `scratch` 基础镜像
+使用位于 `deploy/docker/Dockerfile` 的单一多架构构建文件：在容器内交叉编译前端与后端，并复用预构建的多架构基础镜像（含 FFmpeg），全程无需 QEMU 模拟。
 
 ```bash
-# 构建 amd64 镜像（多阶段构建）
+# 构建 amd64 镜像
 make docker-build
 
-# 构建 arm64 镜像（宿主交叉编译 + scratch 打包）
+# 构建 arm64 镜像（容器内交叉编译，无需 QEMU）
 make docker-build-arm64
 
 # 构建全部架构

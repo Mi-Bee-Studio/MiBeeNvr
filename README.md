@@ -53,7 +53,7 @@ Open `http://localhost:9090` to access the Web UI.
 ### Option 2: Docker
 
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
 Open `http://localhost:9090` to access the Web UI.
@@ -211,13 +211,13 @@ make test
 
 # Build Docker images
 make docker-build       # Multi-stage build
-make docker-build-arm64 # Cross-compile + scratch
+make docker-build-arm64 # Cross-compile arm64 (no QEMU)
 make docker-build-all   # All architectures
 ```
 
 Docker deployment:
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
 Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `latest`, `v1.2.3`, `sha-abc1234`
