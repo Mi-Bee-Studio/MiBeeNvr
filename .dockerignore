@@ -44,6 +44,7 @@ package-lock.json
 # Misc
 docs/
 deploy/
+!deploy/docker/docker-entrypoint.sh
 LICENSE
 README.md
 README.zh.md

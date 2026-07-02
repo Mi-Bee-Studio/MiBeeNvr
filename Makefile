@@ -69,16 +69,14 @@ uninstall-service:
 
 # Build native-arch container image (multi-stage, requires network for base image pulls)
 docker-build:
-	$(CONTAINER_RUNTIME) build -t $(DOCKER_REGISTRY):$(VERSION) .
+	$(CONTAINER_RUNTIME) build -t $(DOCKER_REGISTRY):$(VERSION) -f deploy/docker/Dockerfile .
 
-# Build arm64 container image using host cross-compilation (no QEMU needed)
-# Uses scratch base image — Go binary is statically linked, no runtime deps
-docker-build-arm64: cross
-	@mkdir -p .build-tmp
-	cp $(BUILD_DIR)/mibee-nvr-arm64 .build-tmp/mibee-nvr
-	$(CONTAINER_RUNTIME) build --platform linux/arm64 -f Dockerfile.arm64 \
+# Build arm64 container image (cross-compiled inside Docker, no QEMU needed).
+# The multi-arch Dockerfile cross-compiles the Go binary on the host arch and
+# pulls the prebuilt multi-arch base image — no QEMU emulation required.
+docker-build-arm64:
+	$(CONTAINER_RUNTIME) build --platform linux/arm64 -f deploy/docker/Dockerfile \
 		-t $(DOCKER_REGISTRY):$(VERSION)-arm64 .
-	@rm -rf .build-tmp
 
 # Build both amd64 and arm64 images
 docker-build-all: docker-build docker-build-arm64

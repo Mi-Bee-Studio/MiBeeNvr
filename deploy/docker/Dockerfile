@@ -64,7 +64,7 @@ ENV NVR_GID=1000
 VOLUME ["/data"]
 
 COPY --from=backend /mibee-nvr /usr/local/bin/mibee-nvr
-COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=0755 deploy/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 9090
 
