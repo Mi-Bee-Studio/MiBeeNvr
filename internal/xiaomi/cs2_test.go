@@ -414,10 +414,13 @@ func (m *mockCS2Conn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockCS2Conn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockCS2Conn) SetWriteDeadline(t time.Time) error { return nil }
 
-func TestCS2WorkerNoPongOnPing(t *testing.T) {
+func TestCS2WorkerRepliesPongOnPing(t *testing.T) {
 	t.Parallel()
 
-	// Simulate a PING packet as the camera would send it.
+	// The camera sends PING to probe client liveness. The worker MUST reply
+	// PONG, otherwise the camera tears down the connection after its retry
+	// window (~6s). This mirrors go2rtc behavior (PCAP: official Mi Home app
+	// replies PONG to every camera PING).
 	pingPacket := []byte{cs2Magic, cs2MsgPing, 0, 0}
 	wantErr := fmt.Errorf("mock read error")
 	mock := &mockCS2Conn{
@@ -446,17 +449,20 @@ func TestCS2WorkerNoPongOnPing(t *testing.T) {
 		t.Fatal("worker did not exit in time")
 	}
 
-	// Worker should have exited with our mocked error.
+	// Worker should have exited with our mocked error (the Read after PING fails).
 	cerr := c.Error()
 	require.Error(t, cerr)
 	require.Contains(t, cerr.Error(), "mock read error")
 
-	// Verify no PONG was written in response to PING.
+	// Verify a PONG was written in response to the camera's PING.
+	var gotPong bool
 	for _, w := range mock.writes {
-		if len(w) >= 2 && w[1] == cs2MsgPong {
-			t.Errorf("worker wrote unexpected PONG on PING: %x", w)
+		if len(w) >= 4 && w[0] == cs2Magic && w[1] == cs2MsgPong && w[2] == 0 && w[3] == 0 {
+			gotPong = true
+			break
 		}
 	}
+	require.True(t, gotPong, "worker must reply PONG to camera PING (go2rtc parity); writes=%v", mock.writes)
 }
 
 // newTestCS2Conn creates a CS2Conn suitable for unit tests.

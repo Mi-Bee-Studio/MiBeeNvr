@@ -204,6 +204,9 @@ func (c *CS2Conn) worker() {
 			}
 
 		case cs2MsgPing:
+			// Camera probes client liveness with PING; we MUST reply PONG or it
+			// tears down the connection after its retry window (~6s). go2rtc parity.
+			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPong, 0, 0})
 		case cs2MsgPong, cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
 		case cs2MsgDrwAck: // only for UDP
 			if c.cmdAck != nil {
