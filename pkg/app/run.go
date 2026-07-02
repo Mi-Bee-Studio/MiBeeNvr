@@ -444,6 +444,12 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	}
 	relayMgr.SetFFmpegPath(relayFFmpegPath)
 	relayMgr.SetHardwareCap(relayHwCap)
+	// Wire the source-URL resolver used by FFmpeg relay mode. Without this,
+	// connectViaFFmpeg() sees an empty provider, cannot resolve the camera's
+	// RTSP URL, and returns errPermanent on every retry (the 'permanent relay
+	// error (no retry)' log spam). Native (gortmplib) relay is unaffected — it
+	// subscribes to the StreamHub directly and never needs the source URL.
+	relayMgr.SetStreamURLProvider(camMgr.GetStreamURL)
 
 	// Load optional relay preset overrides from deploy/relay-presets.yaml.
 	// Falls back to built-in defaults on any error (missing file, invalid YAML).
