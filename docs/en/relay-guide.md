@@ -1,6 +1,6 @@
 # Relay Guide — RTMP Live Platform Streaming
 
-> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Pure Go implementation, no FFmpeg for H.264 passthrough.
+> Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Native Go relay by default, with optional FFmpeg mode for strict RTMP receivers.
 
 ## Quick Start
 
@@ -344,6 +344,77 @@ tail -f /var/log/mibee-nvr.log | grep relay
 # Check stream key authentication (if applicable)
 curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-interface/nav
 ```
+```
+
+## FFmpeg Relay Mode (Compatibility)
+
+Some live streaming platforms use strict or non-standard RTMP parsers that reject
+the native Go RTMP writer (gortmplib). The most notable example is **Douyu Live
+Companion (直播伴侣)**, which accepts the TCP connection and publish handshake but
+resets the connection when video data arrives.
+
+For these platforms, enable `use_ffmpeg` to use an FFmpeg subprocess for the relay
+instead of the native Go writer. FFmpeg has decades of RTMP compatibility tuning
+and works with virtually all platforms.
+
+### When to Use FFmpeg Relay
+
+| Platform | Native Go | FFmpeg Relay | Recommendation |
+|----------|-----------|-------------|----------------|
+| Bilibili | ✅ Works | ✅ Works | Native (lower CPU) |
+| YouTube | ✅ Works | ✅ Works | Native (lower CPU) |
+| Douyin/TikTok | ⚠️ Untested | ✅ Works | FFmpeg (safe choice) |
+| **Douyu (直播伴侣)** | **❌ No video** | **✅ Works** | **FFmpeg required** |
+| Kuaishou | ⚠️ Untested | ✅ Works | FFmpeg (safe choice) |
+| Generic RTMP | ✅ Works | ✅ Works | Native (lower CPU) |
+
+> **Note:** The native Go RTMP writer (gortmplib) uses Type 1/2/3 chunk header
+> optimization. Some strict receivers like Douyu Companion cannot parse these
+> optimized headers, resulting in "no video stream" despite a stable connection.
+> FFmpeg always uses Type 0 headers, which all receivers accept.
+
+### Configuration
+
+```yaml
+cameras:
+  - id: "front-door"
+    push_targets:
+      - id: "douyu-live"
+        name: "Douyu Live"
+        protocol: "rtmp"
+        url: "rtmp://192.168.1.10:1935/live/stream_key"
+        enabled: true
+        use_ffmpeg: true        # ← Enable FFmpeg relay
+        # source_url: ""        # Optional: override auto-resolved source URL
+```
+
+When `use_ffmpeg: true`:
+- The relay spawns `ffmpeg -rtsp_transport tcp -i <camera_url> -c copy -f flv <target_url>`
+- The camera's RTSP URL is **auto-resolved** from the recorder (ONVIF cameras get
+  their resolved RTSP URL; RTSP cameras use their config URL directly)
+- Optional `source_url` overrides the auto-resolved URL (useful for non-RTSP cameras)
+- FFmpeg subprocess lifecycle is tied to the relay target (killed on stop/disable)
+
+### Prerequisites
+
+- FFmpeg must be installed on the NVR server (`apt install ffmpeg` or equivalent)
+- Check availability via API:
+```bash
+curl -u admin:password http://localhost:9090/api/relay/capabilities
+# {"ffmpeg_available": true, ...}
+```
+- The web UI only shows the `use_ffmpeg` toggle when FFmpeg is detected
+
+### Trade-offs
+
+| Aspect | Native Go (gortmplib) | FFmpeg Relay |
+|--------|----------------------|-------------|
+| CPU usage | Lower (zero-copy remux) | Slightly higher (FFmpeg process) |
+| Memory | ~2MB per target | ~20-40MB per target (FFmpeg) |
+| Binary size | No extra deps | Requires FFmpeg installed |
+| Compatibility | Most platforms | All platforms |
+| Audio support | Full (AAC, G.711) | Video-only (audio mixed by platform) |
+
 
 ## Troubleshooting
 

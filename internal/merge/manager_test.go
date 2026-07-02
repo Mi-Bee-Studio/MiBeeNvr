@@ -1308,3 +1308,103 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		require.True(t, recs[0].Merged)
 	})
 }
+
+// insertMergeableAVIRecording creates an AVI file via the store and inserts a pending recording into the DB.
+func (e *mergeTestEnv) insertMergeableAVIRecording(t *testing.T, id string, cameraID string, startedAt, endedAt time.Time, numFrames int, hasAudio bool) string {
+	t.Helper()
+	ctx := context.Background()
+
+	tempPath, finalPath, err := e.store.CreateSegment(cameraID, string(model.FormatAVI))
+	require.NoError(t, err)
+
+	// Create AVI file at a temp directory, then move it to the store path.
+	segDir := t.TempDir()
+	aviFile := createTestAVI(t, segDir, "segment.avi", 640, 480, numFrames, hasAudio)
+
+	data, err := os.ReadFile(aviFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	os.Remove(aviFile)
+
+	require.NoError(t, e.store.CloseSegment(tempPath, finalPath))
+
+	fi, err := os.Stat(finalPath)
+	require.NoError(t, err)
+
+	rec := &model.Recording{
+		ID:         id,
+		CameraID:   cameraID,
+		FilePath:   finalPath,
+		Format:     model.FormatAVI,
+		StartedAt:  startedAt,
+		EndedAt:    endedAt,
+		Duration:   endedAt.Sub(startedAt).Seconds(),
+		FileSize:   fi.Size(),
+		FrameCount: numFrames,
+		Merged:     false,
+	}
+	require.NoError(t, e.db.InsertRecording(ctx, rec))
+
+	return finalPath
+}
+
+func TestRunOnce_AVIIntegration(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	cameraID := "cam1"
+	ctx := context.Background()
+	require.NoError(t, env.db.UpsertCamera(ctx, cameraID, "Test", "rtsp", "", "rtsp://localhost/test", "", "", "", "", ""))
+
+	// Insert AVI recordings old enough to pass min_age.
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	src1 := env.insertMergeableAVIRecording(t, "rec1", cameraID, oldTime, oldTime.Add(30*time.Second), 3, false)
+	src2 := env.insertMergeableAVIRecording(t, "rec2", cameraID, oldTime.Add(30*time.Second), oldTime.Add(60*time.Second), 2, false)
+
+	// Count recordings before merge.
+	recsBefore, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	require.Len(t, recsBefore, 2)
+
+	cfg := config.MergeConfig{
+		Enabled:            true,
+		CheckInterval:      "1h",
+		MinSegmentAge:      "1m",
+		BatchLimit:         100,
+		MinSegmentsToMerge: 2,
+	}
+
+	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
+
+	err = mgr.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	// After merge: old recordings should be deleted, new merged recording should exist.
+	recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
+	require.NoError(t, err)
+	require.Len(t, recsAfter, 1)
+
+	merged := recsAfter[0]
+	require.Equal(t, cameraID, merged.CameraID)
+	require.Equal(t, model.FormatAVI, merged.Format)
+	require.True(t, merged.Merged)
+	require.False(t, merged.StartedAt.IsZero())
+	require.False(t, merged.EndedAt.IsZero())
+	require.Greater(t, merged.FileSize, int64(0))
+	require.Equal(t, 5, merged.FrameCount) // 3+2
+
+	// Verify merged file exists and is valid AVI.
+	_, err = os.Stat(merged.FilePath)
+	require.NoError(t, err)
+
+	// Verify AVI structure via Demuxer.
+	frameCount := countAVIFrames(t, merged.FilePath)
+	require.Equal(t, 5, frameCount)
+
+	// Verify source files are deleted.
+	_, err = os.Stat(src1)
+	require.True(t, os.IsNotExist(err), "source file should be deleted: %s", src1)
+	_, err = os.Stat(src2)
+	require.True(t, os.IsNotExist(err), "source file should be deleted: %s", src2)
+}

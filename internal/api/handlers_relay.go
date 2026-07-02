@@ -40,3 +40,21 @@ func (h *Handler) handleGetRelayPreset(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, preset)
 }
+
+type relayCapabilitiesResponse struct {
+	FFmpegRelaySupported bool `json:"ffmpeg_relay_supported"`
+	FFmpegAvailable      bool `json:"ffmpeg_available"`
+	MaxTargetsPerCamera  int  `json:"max_targets_per_camera"`
+}
+
+func (h *Handler) handleRelayCapabilities(w http.ResponseWriter, r *http.Request) {
+	resp := relayCapabilitiesResponse{
+		FFmpegRelaySupported: true,
+		FFmpegAvailable:      false,
+		MaxTargetsPerCamera:  10,
+	}
+	if h.relayMgr != nil {
+		resp.FFmpegAvailable = h.relayMgr.FFmpegAvailable()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

@@ -1064,13 +1064,13 @@ func TestAudioEnabledDefaultFalse(t *testing.T) {
 	require.False(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to false")
 }
 
-func TestAudioEnabledRejectedForMJPEG(t *testing.T) {
+func TestAudioEnabledAllowedForMJPEG(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "c1", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://192.168.1.10/stream",
 		AudioEnabled: true,
 	}}}
 	cfg.ApplyDefaults()
-	require.False(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras have no audio source")
+	require.True(t, cfg.Cameras[0].AudioEnabled, "MJPEG cameras now support audio via AVI container")
 }
 
 func TestAudioEnabledRejectedForHTTPJPEG(t *testing.T) {
@@ -1100,6 +1100,21 @@ func TestAudioEnabledAllowedForONVIF(t *testing.T) {
 	}
 	cfg.ApplyDefaults()
 	require.True(t, cfg.Cameras[0].AudioEnabled, "ONVIF H.264 cameras should support audio")
+}
+
+func TestAudioEnabledAllowedForONVIFJPEG(t *testing.T) {
+	// Regression: an ONVIF camera whose profile reports Encoding="jpeg" (e.g. the
+	// ESP32 MiBeeCam-S3 with RTSP-AVI firmware) must keep audio_enabled. The device
+	// serves MJPEG+G.711 over RTSP and records into AVI; gating audio on the
+	// stored encoding would wrongly disable it.
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "onvif", Encoding: "jpeg", URL: "http://192.168.1.100/onvif/device_service",
+			AudioEnabled: true,
+		}},
+	}
+	cfg.ApplyDefaults()
+	require.True(t, cfg.Cameras[0].AudioEnabled, "ONVIF JPEG (MJPEG-over-RTSP) cameras are audio-capable via AVI")
 }
 
 func TestAudioEnabledAllowedForXiaomi(t *testing.T) {

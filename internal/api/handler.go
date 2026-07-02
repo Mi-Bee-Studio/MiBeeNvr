@@ -183,14 +183,12 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
 				r.Patch("/", h.handleUpdateRecording)
-				// MiBeeVision AI status update (API Key required inside handler)
-				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
-
 				r.Get("/frames", h.handleListFrames)
+				r.Get("/playback", h.handlePlayback)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
-			})
+		})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
@@ -315,6 +313,8 @@ func (h *Handler) Routes() http.Handler {
 		// Relay platform presets
 		r.Get("/api/relay-presets", h.handleListRelayPresets)
 		r.Get("/api/relay-presets/{name}", h.handleGetRelayPreset)
+		// Relay capabilities
+		r.Get("/api/relay/capabilities", h.handleRelayCapabilities)
 		// Transcoding endpoints
 		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
 		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)

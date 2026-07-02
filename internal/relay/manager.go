@@ -45,6 +45,7 @@ type Manager struct {
 	presetRegistry *PresetRegistry
 	hardwareCap    *transcoding.HardwareCapabilities
 	ffmpegPath     string
+	streamURLProvider StreamURLProvider // optional, resolves camera stream URL for FFmpeg relay
 }
 
 type runningTarget struct {
@@ -92,6 +93,24 @@ func (m *Manager) SetFFmpegPath(path string) {
 	m.mu.Lock()
 	m.ffmpegPath = path
 	m.mu.Unlock()
+}
+
+// SetStreamURLProvider wires a function that resolves a camera's stream URL
+// (e.g. rtsp://...) for FFmpeg relay mode.
+func (m *Manager) SetStreamURLProvider(p StreamURLProvider) {
+	m.mu.Lock()
+	m.streamURLProvider = p
+	m.mu.Unlock()
+}
+
+// FFmpegAvailable returns whether the FFmpeg binary is available for relay use.
+func (m *Manager) FFmpegAvailable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hardwareCap != nil {
+		return m.hardwareCap.FFmpegAvailable
+	}
+	return m.ffmpegPath != ""
 }
 
 // Start sets the root context used for all target goroutines.
@@ -148,8 +167,8 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 		local[i] = PushTargetConfig{
 			ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled,
 			Platform: c.Platform, TranscodePolicy: c.TranscodePolicy,
-			VideoPresetOverride: vpo,
-		}
+			VideoPresetOverride: vpo, SourceURL: c.SourceURL, UseFFmpeg: c.UseFFmpeg,
+	}
 	}
 
 	// Index desired targets by their ID.
@@ -201,6 +220,9 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 		}
 		if m.ffmpegPath != "" {
 			t.SetFFmpegPath(m.ffmpegPath)
+		}
+		if m.streamURLProvider != nil {
+			t.SetStreamURLProvider(func(cameraID string) string { return m.streamURLProvider(cameraID) })
 		}
 		ctx, cancel := context.WithCancel(m.ctx)
 		t.done = make(chan struct{})
@@ -291,7 +313,8 @@ func (m *Manager) GetPreset(name string) (Preset, bool) {
 func targetConfigEqual(a, b PushTargetConfig) bool {
 	if a.ID != b.ID || a.Name != b.Name || a.Protocol != b.Protocol ||
 		a.URL != b.URL || a.Enabled != b.Enabled ||
-		a.Platform != b.Platform || a.TranscodePolicy != b.TranscodePolicy {
+		a.Platform != b.Platform || a.TranscodePolicy != b.TranscodePolicy ||
+		a.UseFFmpeg != b.UseFFmpeg || a.SourceURL != b.SourceURL {
 		return false
 	}
 	return videoPresetOverrideEqual(a.VideoPresetOverride, b.VideoPresetOverride)

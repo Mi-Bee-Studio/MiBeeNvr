@@ -17,6 +17,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -41,7 +42,16 @@ func generateTestJPEG() []byte {
 	return buf.Bytes()
 }
 
-// --- MJPEG test RTSP server ---
+// generateTestAudio generates test G.711 mu-law audio samples.
+func generateTestAudio(sampleCount int) []byte {
+	data := make([]byte, sampleCount)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	return data
+}
+
+// --- MJPEG test RTSP server (video only) ---
 
 type mjpegTestServer struct {
 	server  *gortsplib.Server
@@ -141,6 +151,80 @@ func (s *mjpegTestServer) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
 
+// --- MJPEG test RTSP server with G.711 audio ---
+
+type mjpegTestServerWithAudio struct {
+	*mjpegTestServer
+	audioMedia *description.Media
+	audioForma *format.G711
+	audioEnc   *rtplpcm.Encoder
+}
+
+func newMjpegTestServerWithAudio(t *testing.T) *mjpegTestServerWithAudio {
+	t.Helper()
+	port := findPort(t)
+	time.Sleep(5 * time.Millisecond)
+
+	videoForma := &format.MJPEG{}
+	audioForma := &format.G711{
+		PayloadTyp:   0,
+		MULaw:        true,
+		SampleRate:   8000,
+		ChannelCount: 1,
+	}
+
+	desc := &description.Session{
+		Medias: []*description.Media{
+			{
+				Type:    description.MediaTypeVideo,
+				Formats: []format.Format{videoForma},
+			},
+			{
+				Type:    description.MediaTypeAudio,
+				Formats: []format.Format{audioForma},
+			},
+		},
+	}
+
+	s := &mjpegTestServer{playCh: make(chan struct{})}
+	s.media = desc.Medias[0]
+
+	enc, err := videoForma.CreateEncoder()
+	require.NoError(t, err)
+	s.rtpEnc = enc
+
+	s.server = &gortsplib.Server{
+		Handler:     s,
+		RTSPAddress: fmt.Sprintf("127.0.0.1:%d", port),
+	}
+	require.NoError(t, s.server.Start())
+
+	s.stream = &gortsplib.ServerStream{Server: s.server, Desc: desc}
+	require.NoError(t, s.stream.Initialize())
+
+	s.rtspURL = fmt.Sprintf("rtsp://127.0.0.1:%d/test", port)
+
+	audioEnc, err := audioForma.CreateEncoder()
+	require.NoError(t, err)
+
+	return &mjpegTestServerWithAudio{
+		mjpegTestServer: s,
+		audioMedia:      desc.Medias[1],
+		audioForma:      audioForma,
+		audioEnc:        audioEnc,
+	}
+}
+
+func (s *mjpegTestServerWithAudio) sendAudioFrame(data []byte) {
+	pkts, err := s.audioEnc.Encode(data)
+	if err != nil {
+		return
+	}
+	for _, pkt := range pkts {
+		s.stream.WritePacketRTP(s.audioMedia, pkt)
+	}
+}
+
 // --- MJPEG test helpers ---
 
 func countJPGFiles(t *testing.T, dir string) int {
@@ -162,6 +246,7 @@ func countSegmentDirs(t *testing.T, m *storage.Manager, cameraID string) int {
 	require.NoError(t, err)
 	return len(files)
 }
+
 
 // --- Tests ---
 
@@ -359,4 +444,184 @@ func TestMJPEGRecorder_StatusTransitions(t *testing.T) {
 
 	require.NoError(t, rec.Stop())
 	require.Equal(t, model.StatusStopped, rec.Status())
+}
+
+// --- Audio Tests ---
+
+func TestMJPEGRecorderWithAudio(t *testing.T) {
+	srv := newMjpegTestServerWithAudio(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+	hub := model.NewStreamHub()
+
+	rec := NewMJPEGRecorder(MJPEGConfig{
+		CameraID:     "cam-mjpeg-audio",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		AudioEnabled: true,
+	}, mgr)
+	rec.Hub = hub
+
+	collector := newAudioCollector(hub, "test-audio-mjpeg")
+	defer collector.close(hub, "test-audio-mjpeg")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send video frames.
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send audio frames.
+	for i := 0; i < 5; i++ {
+		srv.sendAudioFrame(generateTestAudio(160))
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+
+	// Verify audio frames were broadcast.
+	collector.waitFrames(t, 1, 3*time.Second)
+	frames := collector.count()
+	require.GreaterOrEqual(t, frames, 1, "expected at least 1 audio frame via BroadcastAudio")
+
+	// Verify all frames are G.711.
+	collector.mu.Lock()
+	for _, f := range collector.frames {
+		require.Equal(t, model.AudioG711, f.Codec, "audio codec should be G.711")
+	}
+	collector.mu.Unlock()
+
+	// Verify AVI file was created.
+	files, err := mgr.ListFiles("cam-mjpeg-audio")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected at least one segment")
+
+	hasAVI := false
+	for _, f := range files {
+		if filepath.Ext(f) == ".avi" {
+			hasAVI = true
+			info, err := os.Stat(f)
+			require.NoError(t, err)
+			require.False(t, info.IsDir(), "AVI segment should be a file, not a directory")
+			require.Greater(t, info.Size(), int64(0), "AVI file should have content")
+
+			// Verify AVI RIFF header.
+			data, err := os.ReadFile(f)
+			require.NoError(t, err)
+			require.True(t, len(data) >= 12, "AVI file should have header")
+			require.Equal(t, "RIFF", string(data[:4]), "AVI file should start with RIFF")
+		}
+	}
+	require.True(t, hasAVI, "expected at least one .avi file")
+}
+
+func TestMJPEGRecorderNoAudio(t *testing.T) {
+	// Regression test: AudioEnabled=true but no audio in SDP → JPEG directory path.
+	srv := newMjpegTestServer(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+	hub := model.NewStreamHub()
+
+	rec := NewMJPEGRecorder(MJPEGConfig{
+		CameraID:     "cam-noaudio",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		AudioEnabled: true,
+	}, mgr)
+	rec.Hub = hub
+
+	collector := newAudioCollector(hub, "test-noaudio-mjpeg")
+	defer collector.close(hub, "test-noaudio-mjpeg")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	require.Equal(t, model.StatusStopped, rec.Status())
+
+	// No audio frames should have been broadcast.
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 0, collector.count(), "no audio frames should be broadcast when no audio in SDP")
+
+	// Video should still be recorded as JPEG directory (backward compat).
+	files, err := mgr.ListFiles("cam-noaudio")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected video recording even with no audio in SDP")
+
+	// Verify all segments are directories with .jpg files.
+	for _, f := range files {
+		info, err := os.Stat(f)
+		require.NoError(t, err)
+		require.True(t, info.IsDir(), "MJPEG segment should be a directory when no audio")
+		n := countJPGFiles(t, f)
+		require.Greater(t, n, 0, "segment %s should contain .jpg files", f)
+	}
+}
+
+func TestMJPEGRecorderAudioDrop(t *testing.T) {
+	// Test: audio present then stops → recorder continues, no panic, AVI produced.
+	srv := newMjpegTestServerWithAudio(t)
+	defer srv.close()
+
+	mgr := newTestManager(t)
+
+	rec := NewMJPEGRecorder(MJPEGConfig{
+		CameraID:     "cam-audiodrop",
+		RTSPURL:      srv.rtspURL,
+		SegmentDur:   5 * time.Minute,
+		AudioEnabled: true,
+	}, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	srv.waitPlay(t, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send video + audio frames.
+	srv.sendFrames(3, 30*time.Millisecond)
+	for i := 0; i < 3; i++ {
+		srv.sendAudioFrame(generateTestAudio(160))
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop sending audio, continue video.
+	srv.sendFrames(5, 30*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+
+	// Verify AVI file was produced without panic.
+	files, err := mgr.ListFiles("cam-audiodrop")
+	require.NoError(t, err)
+	require.NotEmpty(t, files, "expected at least one segment")
+
+	hasAVI := false
+	for _, f := range files {
+		if filepath.Ext(f) == ".avi" {
+			hasAVI = true
+			info, err := os.Stat(f)
+			require.NoError(t, err)
+			require.False(t, info.IsDir(), "AVI segment should be a file")
+			require.Greater(t, info.Size(), int64(0), "AVI file should have content")
+		}
+	}
+	require.True(t, hasAVI, "expected at least one .avi file")
 }

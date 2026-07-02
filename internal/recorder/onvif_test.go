@@ -513,3 +513,142 @@ func TestONVIFRecorder_CreateDelegate_JPEG_CachedURL(t *testing.T) {
 	_, ok := rec.(*HTTPJPEGRecorder)
 	require.True(t, ok, "expected HTTPJPEGRecorder when cached URL is set")
 }
+
+// TestProbeRTSPEncodingFor_DetectsMJPEG verifies the RTSP DESCRIBE probe now
+// recognizes an MJPEG-only stream (previously it only detected H264/H265, so
+// ESP32 MiBeeCam RTSP-AVI firmware was misrouted).
+func TestProbeRTSPEncodingFor_DetectsMJPEG(t *testing.T) {
+	srv := newMjpegTestServer(t)
+	defer srv.close()
+
+	enc := probeRTSPEncodingFor(srv.rtspURL, "", "")
+	require.Equal(t, "MJPEG", enc, "MJPEG-only RTSP stream must be detected as MJPEG")
+}
+
+// TestProbeRTSPEncodingFor_InvalidURL returns "" for an unparseable URL.
+func TestProbeRTSPEncodingFor_InvalidURL(t *testing.T) {
+	require.Equal(t, "", probeRTSPEncodingFor("://not-a-url", "", ""))
+	require.Equal(t, "", probeRTSPEncodingFor("", "", ""))
+}
+
+// TestONVIFRecorder_DetectEncoding_JPEG_RTSPMJPEG verifies that a JPEG ONVIF
+// profile whose device advertises an rtsp:// MJPEG stream is resolved to
+// "MJPEG" (RTSP recorder path → AVI+audio), and that r.rtspURL is overwritten
+// with the rtsp:// URL even if Start()'s GetStreamURI returned an http:// URL.
+func TestONVIFRecorder_DetectEncoding_JPEG_RTSPMJPEG(t *testing.T) {
+	srv := newMjpegTestServer(t)
+	defer srv.close()
+
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	// Start() resolved an rtsp:// URI directly (some firmware returns rtsp://
+	// from the default GetStreamURI).
+	r.rtspURL = srv.rtspURL
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "MJPEG", enc)
+	require.Equal(t, srv.rtspURL, r.rtspURL)
+}
+
+// TestONVIFRecorder_DetectEncoding_JPEG_NoRTSPFallback confirms a JPEG device
+// whose derived rtsp:// URL is unreachable still resolves to "JPEG" (HTTP MJPEG),
+// preserving the legacy video-only behavior. Uses localhost:81 so the derived
+// rtsp://127.0.0.1:554/stream fails fast (connection refused) instead of hanging.
+func TestONVIFRecorder_DetectEncoding_JPEG_NoRTSPFallback(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client)
+	r.rtspURL = "http://127.0.0.1:81/stream"
+
+	require.Equal(t, "JPEG", r.detectEncoding(context.Background()))
+}
+
+// TestONVIFRecorder_CreateDelegate_JPEG_RTSPMJPEG verifies the full delegate
+// path: a JPEG ONVIF device with an rtsp:// MJPEG stream yields an
+// *MJPEGRecorder wired with the RTSP URL and AudioEnabled flag (so G.711 audio
+// is captured into AVI segments).
+func TestONVIFRecorder_CreateDelegate_JPEG_RTSPMJPEG(t *testing.T) {
+	srv := newMjpegTestServer(t)
+	defer srv.close()
+
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		or.cfg.AudioEnabled = true
+	})
+	r.rtspURL = srv.rtspURL
+
+	rec := r.createDelegate(r.rtspURL)
+	require.NotNil(t, rec)
+	mjpegRec, ok := rec.(*MJPEGRecorder)
+	require.True(t, ok, "expected *MJPEGRecorder for JPEG device with RTSP MJPEG stream")
+	// Credentials are injected into the RTSP URL (ESP32 RTSP-AVI firmware requires
+	// auth; ONVIF GetStreamURI returns a credential-less URL).
+	require.Equal(t, injectRTSPCredentials(srv.rtspURL, "admin", "pass"), mjpegRec.cfg.RTSPURL, "recorder must use the rtsp:// URL with credentials embedded")
+	require.True(t, mjpegRec.cfg.AudioEnabled, "AudioEnabled must propagate for AVI+audio recording")
+}
+
+func TestInjectRTSPCredentials(t *testing.T) {
+	tests := []struct {
+		name, in, user, pass, want string
+	}{
+		{"embeds creds", "rtsp://1.2.3.4:554/stream", "admin", "admin", "rtsp://admin:admin@1.2.3.4:554/stream"},
+		{"keeps existing userinfo", "rtsp://admin:admin@1.2.3.4:554/stream", "other", "x", "rtsp://admin:admin@1.2.3.4:554/stream"},
+		{"no username = unchanged", "rtsp://1.2.3.4:554/stream", "", "", "rtsp://1.2.3.4:554/stream"},
+		{"non-rtsp = unchanged", "http://1.2.3.4:81/stream", "admin", "admin", "http://1.2.3.4:81/stream"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, injectRTSPCredentials(tc.in, tc.user, tc.pass))
+		})
+	}
+}
+
+// TestResolveJPEGEncoding_ProbesCachedRTSPURL verifies that when Start() already
+// resolved an rtsp:// URL (the common case), resolveJPEGEncoding probes it
+// directly WITHOUT making extra GetStreamURIWithProtocol calls — critical for
+// the ESP32, whose tiny HTTP pool is exhausted by redundant ONVIF calls.
+func TestResolveJPEGEncoding_ProbesCachedRTSPURL(t *testing.T) {
+	srv := newMjpegTestServer(t)
+	defer srv.close()
+
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "p1", Encoding: "JPEG", Width: 640, Height: 480},
+		},
+		// Deliberately do NOT set StreamURIWithProtocol — the direct path must not need it.
+	}
+	r := newTestONVIFRecorder(t, client)
+	r.rtspURL = srv.rtspURL // Start() would have set this to rtsp://...
+
+	require.Equal(t, "MJPEG", r.detectEncoding(context.Background()))
+	require.Equal(t, 0, client.GetStreamURIWithProtocolCalls, "must probe cached rtsp:// URL directly, no extra ONVIF call")
+}
+
+func TestDeriveRTSPURL(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"http with port", "http://192.168.63.224:81/stream", "rtsp://192.168.63.224:554/stream"},
+		{"http default port", "http://192.168.63.224/stream", "rtsp://192.168.63.224:554/stream"},
+		{"already rtsp", "rtsp://1.2.3.4:554/stream", "rtsp://1.2.3.4:554/stream"},
+		{"strips userinfo", "http://admin:admin@1.2.3.4:81/stream", "rtsp://1.2.3.4:554/stream"},
+		{"garbage → empty", "://not-a-url", ""},
+		{"no host → empty", "http:///path", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, deriveRTSPURL(tc.in))
+		})
+	}
+}

@@ -458,7 +458,7 @@ cameras:
 ### `cameras[].push_targets`
 - **Type**: array of objects
 - **Optional**: Yes (any camera protocol)
-- **Description**: Push-out relay targets — forward this camera's live stream to remote destinations (another NVR's ingest, a live platform, a backup). Pure Go, no FFmpeg. Each target is an independent connection. See [Push-Out Relay](./camera-guide.md#push-out-relay--forward-a-camera-to-remote-destinations).
+- **Description**: Push-out relay targets — forward this camera's live stream to remote destinations (another NVR's ingest, a live platform, a backup). Native Go by default, FFmpeg optional for compatibility. Each target is an independent connection. See [Push-Out Relay](./camera-guide.md#push-out-relay--forward-a-camera-to-remote-destinations).
 - **Fields per target**:
   - `id` (string, required) — stable identifier within the camera
   - `name` (string, optional) — display name

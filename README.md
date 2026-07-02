@@ -109,7 +109,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - ONVIF discovery & management with PTZ control
 - Xiaomi CS2 P2P protocol support
 - SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
-- Native Go push-out relay (forward any camera to remote RTMP/RTSP targets — no FFmpeg)
+- Native Go push-out relay (forward any camera to remote RTMP/RTSP targets; FFmpeg optional for compatibility)
 
 ### 📺 Streaming & Live View
 - HLS on-demand streaming with LL-HLS support

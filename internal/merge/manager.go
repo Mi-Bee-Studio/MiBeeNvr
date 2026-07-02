@@ -319,6 +319,11 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		return m.mergeMJPEGGroup(ctx, cameraID, recs, cfg)
 	}
 
+	// AVI segments are files containing MJPEG+G.711 data — ParseSegment only handles MP4.
+	if format == string(model.FormatAVI) {
+		return m.mergeAVIGroup(ctx, cameraID, recs, cfg)
+	}
+
 	// Parse all segments.
 	type parsedRec struct {
 		rec    *model.Recording
@@ -597,6 +602,78 @@ func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, rec
 	m.metrics.RecordMergeSuccess(time.Since(mergeStart), mergedRec.FileSize)
 
 	logger.Info("merged MJPEG segments",
+		"camera_id", cameraID,
+		"segments", len(recs),
+		"duration_s", mergedRec.Duration,
+		"size_bytes", mergedRec.FileSize,
+		"freed_bytes", estSize,
+	)
+
+	return 1, len(recs), estSize
+}
+
+// mergeAVIGroup merges AVI recording files into a single merged AVI file.
+// AVI segments are single files containing MJPEG+G.711 data — ParseSegment only handles MP4.
+func (m *MergeManager) mergeAVIGroup(ctx context.Context, cameraID string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
+	if len(recs) < cfg.MinSegmentsToMerge {
+		return 0, 0, 0
+	}
+
+	mergeStart := time.Now()
+
+	// Estimate merged size from source recordings.
+	var estSize int64
+	for _, r := range recs {
+		estSize += r.FileSize
+	}
+
+	// Check disk space.
+	total, used, err := m.store.GetDiskUsage()
+	if err != nil {
+		logger.Warn("failed to get disk usage", "error", err)
+		m.metrics.RecordMergeFailure("disk_space")
+		return 0, 0, 0
+	}
+	freeSpace := total - used
+	required := estSize * 11 / 10
+	if freeSpace < required {
+		logger.Warn("insufficient disk space for AVI merge", "camera_id", cameraID, "needed", required, "free", freeSpace)
+		m.metrics.RecordMergeFailure("disk_space")
+		return 0, 0, 0
+	}
+
+	// Delegate to MergeAVISegments — handles streaming merge and output file creation.
+	mergedRec, sourcePaths, err := MergeAVISegments(ctx, recs, m.store, cameraID)
+	if err != nil {
+		logger.Error("failed to merge AVI segments", "camera_id", cameraID, "error", err)
+		m.metrics.RecordMergeFailure("merge_error")
+		return 0, 0, 0
+	}
+
+	mergedRec.Merged = true
+
+	// Atomic: insert merged recording + delete old recordings in single transaction.
+	ids := make([]string, len(recs))
+	for i, r := range recs {
+		ids[i] = r.ID
+	}
+	if err := storage.RetryOnBusy(ctx, func() error {
+		return m.db.MergeAndReplaceRecordings(ctx, mergedRec, ids)
+	}); err != nil {
+		logger.Error("failed to merge and replace AVI recordings", "camera_id", cameraID, "error", err)
+		os.Remove(mergedRec.FilePath)
+		m.metrics.RecordMergeFailure("db_error")
+		return 0, 0, 0
+	}
+
+	// Only delete source files AFTER successful DB transaction.
+	for _, path := range sourcePaths {
+		m.store.DeleteFile(path)
+	}
+
+	m.metrics.RecordMergeSuccess(time.Since(mergeStart), mergedRec.FileSize)
+
+	logger.Info("merged AVI segments",
 		"camera_id", cameraID,
 		"segments", len(recs),
 		"duration_s", mergedRec.Duration,

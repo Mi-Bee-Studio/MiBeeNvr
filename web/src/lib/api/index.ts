@@ -81,6 +81,7 @@ export {
   // Timelapse
   getTimelapseConfig,
   updateTimelapseConfig,
+  getRelayCapabilities,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -125,6 +126,7 @@ export type {
   ScheduleConfig,
   TimeRange,
   CameraRecordingStats,
+  RelayCapabilities,
 } from './cameras';
 // Recordings — list, download, frames, stats, archives
 export {
