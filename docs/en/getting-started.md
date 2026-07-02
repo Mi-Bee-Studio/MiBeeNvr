@@ -41,7 +41,7 @@ Open http://localhost:9090 in your browser.
 ### Option 2: Docker
 
 ```bash
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
 Open http://localhost:9090 in your browser.

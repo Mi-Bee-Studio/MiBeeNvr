@@ -59,7 +59,7 @@ docker run -d \
 
 # Option C: With docker-compose.yml
 mkdir -p data
-docker compose up -d
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 
 > **First-time setup**: When started without a config file, MiBee NVR auto-generates a default configuration and runs in **setup mode** — all API endpoints are accessible without authentication. Set a password via the Web UI Settings page or the `NVR_PASSWORD` environment variable. Once a password is set, authentication is enforced.
 
@@ -124,9 +124,9 @@ If you need custom builds or want the latest source code:
 
 ```bash
 # Multi-stage build (compiles frontend + backend inside container, requires network)
-docker build -t mibee-nvr .
+docker build -t mibee-nvr -f deploy/docker/Dockerfile .
 
-# Cross-compile ARM64 (on host, no QEMU needed)
+# Cross-compile ARM64 (inside Docker, no QEMU needed)
 make docker-build-arm64
 
 # Build both architectures
