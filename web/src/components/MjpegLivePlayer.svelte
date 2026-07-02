@@ -64,10 +64,10 @@
       if (!resp.ok) {
         consecutiveErrors++;
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          stopPolling();
-          stopFrozenDetection();
-          streamState = 'error';
-          onError?.(t('live.mjpegPlayer.error'));
+          // Transient failure — retry with backoff instead of dying for good.
+          // (scheduleReconnect gives up -> permanent 'error' only after 5 cycles.)
+          consecutiveErrors = 0;
+          scheduleReconnect();
         }
         return;
       }
@@ -95,10 +95,8 @@
       if (destroyed) return;
       consecutiveErrors++;
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        stopPolling();
-        stopFrozenDetection();
-        streamState = 'error';
-        onError?.(t('live.mjpegPlayer.error'));
+        consecutiveErrors = 0;
+        scheduleReconnect();
       }
     }
   }
@@ -147,7 +145,10 @@
       return;
     }
     reconnectAttempts++;
-    const delay = reconnectDelays[Math.min(reconnectAttempts - 1, reconnectDelays.length - 1)];
+    const base = reconnectDelays[Math.min(reconnectAttempts - 1, reconnectDelays.length - 1)];
+    // ±25% jitter desynchronizes cameras that died together after a shared
+    // transient backend hiccup, avoiding a thundering-herd retry stampede.
+    const delay = Math.round(base * (0.75 + Math.random() * 0.5));
     streamState = 'loading';
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -189,7 +190,10 @@
     consecutiveErrors = 0;
     streamState = 'loading';
 
-    const timer = setTimeout(() => startPolling(), 100);
+    // Stagger the first poll across cameras (100-500ms) so the fixed 500ms poll
+    // cycles stay phase-offset: a short backend hiccup won't push every camera
+    // past the consecutive-error threshold in the same window.
+    const timer = setTimeout(() => startPolling(), 100 + Math.random() * 400);
     return () => {
       clearTimeout(timer);
     };
