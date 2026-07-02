@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -330,7 +332,21 @@ func (t *PushTarget) connectViaFFmpeg(ctx context.Context) error {
 	if strings.HasPrefix(sourceURL, "rtsp://") {
 		args = append(args, "-rtsp_transport", "tcp")
 	}
-	args = append(args, "-i", sourceURL, "-c", "copy", "-f", "flv", targetURL)
+	args = append(args, "-i", sourceURL, "-c", "copy")
+	// Correct the FLV onMetaData frame rate to the source's ACTUAL fps.
+	// RTSP cameras frequently declare an inflated fps in their SDP (e.g. 30)
+	// while actually emitting fewer frames (e.g. 15). With plain -c copy,
+	// FFmpeg writes the SDP-declared (wrong) fps into the FLV onMetaData, and
+	// strict RTMP receivers (e.g. Douyu Live Companion) initialize a decoder
+	// for the declared rate, then freeze after a few seconds of half-rate
+	// input. -r only rewrites the metadata fps here -- frame data and PTS
+	// intervals stay identical (verified in production: 66ms @ 15fps).
+	if fps := probeSourceVideoFPS(ffmpegPath, sourceURL); fps > 0 {
+		args = append(args, "-r", strconv.Itoa(fps))
+		engineLogger.Info("ffmpeg relay corrected output fps",
+			"camera_id", t.CameraID, "target_id", t.Config.ID, "fps", fps)
+	}
+	args = append(args, "-f", "flv", "-flvflags", "no_duration_filesize", targetURL)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	stderr, err := cmd.StderrPipe()
@@ -374,6 +390,38 @@ func (t *PushTarget) connectViaFFmpeg(ctx context.Context) error {
 		return fmt.Errorf("ffmpeg relay exited: %w", waitErr)
 	}
 	return nil
+}
+
+// probeSourceVideoFPS returns the actual video frame rate of a source stream
+// via ffprobe's r_frame_rate. Returns 0 on any failure (the caller then skips
+// -r and falls back to FFmpeg's default, preserving previous behavior).
+func probeSourceVideoFPS(ffmpegPath, sourceURL string) int {
+	ffprobePath := "ffprobe"
+	if ffmpegPath != "" {
+		cand := filepath.Join(filepath.Dir(ffmpegPath), "ffprobe")
+		if _, err := exec.LookPath(cand); err == nil {
+			ffprobePath = cand
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffprobePath, "-hide_banner",
+		"-of", "csv=p=0", "-select_streams", "v:0",
+		"-show_entries", "stream=r_frame_rate", sourceURL).Output()
+	if err != nil {
+		return 0
+	}
+	// r_frame_rate is "num/den", e.g. "15/1".
+	numStr, denStr, ok := strings.Cut(strings.TrimSpace(string(out)), "/")
+	if !ok {
+		return 0
+	}
+	num, err1 := strconv.Atoi(numStr)
+	den, err2 := strconv.Atoi(denStr)
+	if err1 != nil || err2 != nil || den == 0 || num <= 0 {
+		return 0
+	}
+	return num / den
 }
 
 
