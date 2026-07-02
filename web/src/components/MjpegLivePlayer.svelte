@@ -28,7 +28,11 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
-  const maxReconnectAttempts = 5;
+  // No cap on reconnect attempts: a deploy-induced outage (service restart +
+  // ~60s camera reconnect) outlasts any finite cap, and a capped player gives
+  // up just before the camera comes back, requiring manual refresh. The
+  // backoff array below already rate-limits retries to ≤1 per 32s per camera,
+  // so unbounded retries are cheap (9 cameras × 1 req/32s = 0.3 req/s).
   const reconnectDelays = [2000, 4000, 8000, 16000, 32000];
   const FROZEN_TIMEOUT_MS = 15000;
   const FROZEN_CHECK_INTERVAL_MS = 3000;
@@ -137,13 +141,9 @@
   }
 
   function scheduleReconnect() {
-    if (reconnectAttempts >= maxReconnectAttempts) {
-      stopPolling();
-      stopFrozenDetection();
-      streamState = 'error';
-      onError?.(t('live.mjpegPlayer.error'));
-      return;
-    }
+    // Always retry — see note on reconnectDelays above. The 'error' state is
+    // reachable only via the manual 'Retry' button or by destroying the
+    // component, not by exhausting automatic retries.
     reconnectAttempts++;
     const base = reconnectDelays[Math.min(reconnectAttempts - 1, reconnectDelays.length - 1)];
     // ±25% jitter desynchronizes cameras that died together after a shared
