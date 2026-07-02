@@ -313,6 +313,8 @@ func (h *Handler) Routes() http.Handler {
 		// Relay platform presets
 		r.Get("/api/relay-presets", h.handleListRelayPresets)
 		r.Get("/api/relay-presets/{name}", h.handleGetRelayPreset)
+		// Relay capabilities
+		r.Get("/api/relay/capabilities", h.handleRelayCapabilities)
 		// Transcoding endpoints
 		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
 		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
