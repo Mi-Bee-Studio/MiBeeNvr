@@ -500,11 +500,14 @@ func TestCS2ConnErrorReturnsActualError(t *testing.T) {
 	// Close server side to make worker's Read return an error.
 	server.Close()
 
-	// Wait for worker to exit (channels close in defer).
+	// Wait for the worker to set its error. Do NOT use Pop() to detect channel
+	// closure: Pop returns (nil,false) on BOTH close and timeout, so under CI
+	// load a 1ms Pop timeout can be mistaken for "closed" and race ahead of the
+	// worker setting c.err — yielding a bare io.EOF from Error(). Polling the
+	// error directly is unambiguous.
 	require.Eventually(t, func() bool {
-		_, ok := c.channels[0].Pop(time.Millisecond)
-		return !ok // channel is closed
-	}, time.Second, 10*time.Millisecond)
+		return c.getErr() != nil
+	}, 3*time.Second, 5*time.Millisecond)
 
 	err := c.Error()
 	require.Error(t, err)
