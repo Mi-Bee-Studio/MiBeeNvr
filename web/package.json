@@ -30,5 +30,10 @@
     "lucide-svelte": "^0.577.0",
     "mpegts.js": "^1.8.0",
     "onnxruntime-web": "^1.26.0"
+  },
+  "overrides": {
+    "js-yaml": "^4.2.0",
+    "undici": "^7.28.0",
+    "protobufjs": "^7.6.3"
   }
 }
