@@ -22,7 +22,7 @@ var (
 	version    = flag.Bool("version", false, "print version and exit")
 )
 
-var appVersion = "0.1.0-dev" // overridden via -ldflags at build time
+var appVersion = "dev" // overridden via -ldflags -X main.appVersion=... at build time (see Makefile LDFLAGS)
 
 func autoInitConfig(configPath string) *config.Config {
 	// Determine data directory
