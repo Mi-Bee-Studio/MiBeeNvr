@@ -693,6 +693,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	}
 	a.relayMgr.SetFFmpegPath(relayFFmpegPath)
 	a.relayMgr.SetHardwareCap(relayHwCap)
+	a.relayMgr.SetStreamURLProvider(a.camMgr.GetStreamURL)
 
 	// Load optional relay preset overrides from deploy/relay-presets.yaml.
 	// Falls back to built-in defaults on any error (missing file, invalid YAML).

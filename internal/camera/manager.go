@@ -657,6 +657,22 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			}
 		}
 	}
+	// Replay push-out relay targets for cameras loaded from config. Add/Update
+	// reconcile targets at runtime, but Start() loads cameras directly from cfg —
+	// without this, every service restart silently drops all push_targets
+	// (push-status returns [] and no "relay target started" is ever logged).
+	// Run in a goroutine per camera: SetCameraTargets calls GetHub which re-locks
+	// cm.mu (RLock), and re-entering under a held Lock would self-deadlock.
+	if cm.relayMgr != nil {
+		for _, cam := range cm.cfg.Cameras {
+			if len(cam.PushTargets) == 0 {
+				continue
+			}
+			cameraID := cam.ID
+			targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+			go cm.relayMgr.SetCameraTargets(cameraID, targets)
+		}
+	}
 	return nil
 }
 
@@ -1072,6 +1088,28 @@ func (cm *CameraManager) GetCameraConfig(cameraID string) *config.CameraConfig {
 		}
 	}
 	return nil
+}
+
+// GetStreamURL returns the source camera's stream URL (e.g. rtsp://...)
+// for FFmpeg relay mode. Returns empty string when the camera is not found.
+func (cm *CameraManager) GetStreamURL(cameraID string) string {
+	// For RTSP cameras, the config URL IS the stream URL.
+	cam := cm.GetCameraConfig(cameraID)
+	if cam == nil {
+		return ""
+	}
+	if strings.HasPrefix(cam.URL, "rtsp://") {
+		return cam.URL
+	}
+	// For ONVIF cameras, resolve the RTSP URL from the live recorder.
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return ""
+	}
+	if onvifRec, ok := rec.(*recorder.ONVIFRecorder); ok {
+		return onvifRec.RTSPURL()
+	}
+	return ""
 }
 
 // AddCamera adds a new camera to the manager and starts its recorder if enabled.
