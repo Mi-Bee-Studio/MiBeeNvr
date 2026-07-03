@@ -165,6 +165,47 @@ install_service() {
     info "Installed systemd service to ${SERVICE_FILE}."
 }
 
+install_optional_ffmpeg() {
+    # FFmpeg is OPTIONAL — only needed for H.265↔H.264 transcoding (storage
+    # optimization + live relay transcode). All other features work without it.
+    if command -v ffmpeg &>/dev/null; then
+        info "FFmpeg already installed (transcoding available)."
+        return 0
+    fi
+
+    local pkg_mgr=""
+    if command -v apt-get &>/dev/null; then
+        pkg_mgr="apt-get"
+    elif command -v dnf &>/dev/null; then
+        pkg_mgr="dnf"
+    elif command -v yum &>/dev/null; then
+        pkg_mgr="yum"
+    elif command -v apk &>/dev/null; then
+        pkg_mgr="apk"
+    fi
+
+    if [[ -z "$pkg_mgr" ]]; then
+        warn "FFmpeg not found and no supported package manager detected."
+        warn "Transcoding will be disabled. Install ffmpeg manually to enable it,"
+        warn "or use the in-app downloader (Settings → Transcoding)."
+        return 0
+    fi
+
+    info "Attempting to install FFmpeg (optional, for transcoding) via ${pkg_mgr}..."
+    case "$pkg_mgr" in
+        apt-get) DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ffmpeg ;;
+        dnf|yum) $pkg_mgr install -y -q ffmpeg ;;
+        apk) apk add --no-cache ffmpeg ;;
+    esac
+
+    if command -v ffmpeg &>/dev/null; then
+        info "FFmpeg installed successfully — transcoding enabled."
+    else
+        warn "FFmpeg installation failed. Transcoding will be disabled."
+        warn "All other features work normally. Install ffmpeg manually to enable transcoding."
+    fi
+}
+
 enable_service() {
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}" &>/dev/null
@@ -205,6 +246,9 @@ print_success() {
     echo "  Next: Edit config to add cameras:"
     echo "    sudo nano ${DATA_DIR}/mibee-nvr.yaml"
     echo "    sudo systemctl restart ${SERVICE_NAME}"
+    echo ""
+    echo "  Note: Transcoding (H.265↔H.264) is optional and needs FFmpeg."
+    echo "        All other features work without it."
     echo ""
 }
 
@@ -285,6 +329,7 @@ do_install() {
     install_binary "$arch" "$version"
     init_config
     install_service
+    install_optional_ffmpeg
     enable_service
     wait_for_ready
     print_success

@@ -38,9 +38,16 @@ func BuildFFmpegCommand(opts TranscodeOptions, caps HardwareCapabilities) ([]str
 	}
 	args = append(args, videoArgs...)
 
-	// Audio passthrough — always copy except MJPEG (no audio stream)
+	// Audio: transcode to AAC (MP4-standard, universally compatible).
+	// We cannot use -c:a copy because some source audio codecs are not
+	// writable into MP4 by FFmpeg — notably G.711 (pcm_mulaw/alaw), which
+	// NVR's own muxer writes as a non-standard "ulaw"/"alaw" sample entry
+	// that FFmpeg rejects with "Could not find tag for codec pcm_mulaw in
+	// stream #1, codec not currently supported in container". AAC transcoding
+	// is cheap (8-48kHz mono) and avoids all container/codec-tag mismatches.
+	// MJPEG input has no audio stream, so skip it.
 	if inputCodec != "mjpeg" {
-		args = append(args, "-c:a", "copy")
+		args = append(args, "-c:a", "aac", "-b:a", "64k")
 	}
 
 	// Overwrite output without asking
@@ -60,10 +67,11 @@ func validateCodecCombination(input, output string) error {
 	if !validOutput[output] {
 		return fmt.Errorf("unsupported output codec: %s", output)
 	}
-	// MJPEG cannot be transcoded directly to H.265 — must go through H.264 first.
-	if (input == "mjpeg" || input == "jpeg") && output == "h265" {
-		return fmt.Errorf("unsupported codec combination: MJPEG to H.265 requires intermediate decode; use MJPEG→H.264 instead")
-	}
+	// All four combinations are supported:
+	//   H264→H264, H264→H265, H265→H264, H265→H265, MJPEG→H264, MJPEG→H265.
+	// MJPEG input forces software encoding (resolveEncoder) because v4l2m2m
+	// hangs on MJPEG input — but libx264/libx265 software encoders handle
+	// MJPEG→any-output fine (FFmpeg decodes JPEG internally, then encodes).
 	return nil
 }
 

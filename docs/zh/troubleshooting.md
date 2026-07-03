@@ -62,6 +62,33 @@
      disk_threshold_percent: 90  # 从 95 降低到 90
    ```
 
+## FFmpeg / 转码
+
+### FFmpeg 是必须安装的吗？
+
+**不是。** FFmpeg 是**可选依赖**，仅用于 H.265↔H.264 转码（存储优化 + 实时推流转码）。
+所有其他功能（录制、回放、直播、推流、延时摄影、合并）都是纯 Go 实现，**不需要 FFmpeg**。
+
+- **不安装 FFmpeg**：NVR 完整可用，仅转码功能被禁用（启动日志会提示"Transcoding disabled"）
+- **安装 FFmpeg**：转码功能自动启用（H.265→H.264 兼容旧设备、H.264→H.265 节省存储）
+- Docker 镜像已内置 FFmpeg，开箱即用
+- 裸机安装（`install.sh`）会尝试自动安装 FFmpeg，失败不阻断
+
+### 如何手动安装 FFmpeg？
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y ffmpeg
+
+# RHEL/CentOS/Fedora
+sudo dnf install -y ffmpeg
+
+# Alpine
+sudo apk add ffmpeg
+```
+
+或使用 NVR 内置下载器：**设置 → 转码 → 下载 FFmpeg**（下载静态二进制到数据目录）。
+
 ## 摄像头问题
 
 ### 摄像头未找到

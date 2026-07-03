@@ -17,7 +17,8 @@ var (
 // Results are cached — only one probe per app lifecycle unless ResetDetectTier is called.
 // Pass ffmpegPath to proactively check a specific FFmpeg binary path,
 // or "" to let the probe search the system PATH.
-func DetectMergeTier(ffmpegPath string) MergeTier {
+// preferFFmpeg=true opts into the FFmpeg tier when available (default false → pure Go).
+func DetectMergeTier(ffmpegPath string, preferFFmpeg ...bool) MergeTier {
 	mu.Lock()
 	if cached {
 		defer mu.Unlock()
@@ -25,8 +26,9 @@ func DetectMergeTier(ffmpegPath string) MergeTier {
 	}
 	mu.Unlock()
 
+	optIn := len(preferFFmpeg) > 0 && preferFFmpeg[0]
 	caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
-	tier := selectTier(caps)
+	tier := selectTier(caps, optIn)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -45,8 +47,11 @@ func DetectMergeTier(ffmpegPath string) MergeTier {
 func tierReason(tier MergeTier, caps *transcoding.HardwareCapabilities) string {
 	switch tier {
 	case TierFFmpeg:
-		return "FFmpeg available"
+		return "FFmpeg explicitly enabled (use_ffmpeg=true)"
 	case TierGo:
+		if caps.FFmpegAvailable {
+			return "Go merge (default; FFmpeg available but not preferred)"
+		}
 		return "sufficient resources for Go merge"
 	case TierJPEG:
 		return "insufficient resources, using JPEG fallback"
@@ -56,9 +61,14 @@ func tierReason(tier MergeTier, caps *transcoding.HardwareCapabilities) string {
 }
 
 // selectTier selects the merge tier from hardware capabilities.
+//
+// Default is TierGo (pure-Go, no external dependency). FFmpeg (TierFFmpeg) is
+// only selected when the caller explicitly opts in via preferFFmpeg=true — this
+// keeps FFmpeg as an opt-in accelerator rather than a default dependency, so
+// systems without FFmpeg installed produce identical timelapse output.
 // Exported for testing — consumers should use DetectMergeTier.
-func selectTier(caps *transcoding.HardwareCapabilities) MergeTier {
-	if caps.FFmpegAvailable {
+func selectTier(caps *transcoding.HardwareCapabilities, preferFFmpeg bool) MergeTier {
+	if preferFFmpeg && caps.FFmpegAvailable {
 		return TierFFmpeg
 	}
 	if caps.TotalCores >= 2 && caps.TotalMemoryMB >= 100 {

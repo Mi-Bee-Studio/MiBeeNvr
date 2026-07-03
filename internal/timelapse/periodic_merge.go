@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -125,17 +127,30 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 		)
 	}
 
-	// Attempt FFmpeg concat merge if compatible.
-	if compatible && m.merger != nil && m.merger.CanMerge() {
-		err = m.ffmpegConcatMerge(ctx, segments, outputPath)
-		if err == nil {
+	// Attempt Go concat merge (pure-Go, lossless -c copy equivalent) if compatible.
+	// Falls back to FFmpeg concat, then to Go keyframe merge.
+	if compatible {
+		// Prefer pure-Go concat (merge.MergeMP4Segments) — no external process.
+		if err := m.goConcatMerge(ctx, segments, outputPath); err == nil {
 			return m.finalizeMerge(ctx, segments, outputPath)
+		} else if m.merger != nil && m.merger.CanMerge() {
+			// Go concat failed (e.g. SPS/PPS mismatch that merge rejects) — try FFmpeg concat.
+			slog.Warn("periodic merge: Go concat failed, trying FFmpeg concat",
+				"error", err)
+			_ = os.Remove(outputPath)
+			if err := m.ffmpegConcatMerge(ctx, segments, outputPath); err == nil {
+				return m.finalizeMerge(ctx, segments, outputPath)
+			} else {
+				slog.Warn("periodic merge: FFmpeg concat failed, falling back to Go merge",
+					"error", err)
+				_ = os.Remove(outputPath)
+				_ = m.markMergeFailed(ctx, segments, err)
+				return err
+			}
+		} else {
+			_ = m.markMergeFailed(ctx, segments, err)
+			return err
 		}
-		slog.Warn("periodic merge: FFmpeg merge failed, falling back to Go merge",
-			"error", err,
-		)
-		_ = m.markMergeFailed(ctx, segments, err)
-		return err
 	}
 
 	// Fall back to Go merge.
@@ -242,6 +257,52 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 		"segment_id", seg.ID,
 		"output_path", outputPath,
 	)
+	return nil
+}
+
+// goConcatMerge merges MP4 segments losslessly using the pure-Go merge package
+// (equivalent to `ffmpeg -f concat -c copy`). Requires all segments to share
+// the same codec and SPS/PPS (H.264) or VPS/SPS/PPS (H.265) — enforced by
+// merge.MergeMP4Segments. No external process, no pixel decoding.
+//
+// Returns an error (caller falls back to FFmpeg concat or Go keyframe merge)
+// if segments are not MP4, fail to parse, or have mismatched params.
+func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []model.Recording, outputPath string) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("periodic merge: create output dir: %w", err)
+	}
+
+	// Parse each segment into a SegmentInfo for the merge package.
+	// Only MP4 files are supported; non-MP4 inputs cause a fallback to FFmpeg.
+	segInfos := make([]*merge.SegmentInfo, 0, len(segments))
+	totalFrames := 0
+	for _, seg := range segments {
+		if !mediaprobe.IsLikelyMP4(seg.FilePath) {
+			return fmt.Errorf("segment %s is not MP4 (Go concat requires MP4)", seg.ID)
+		}
+		info, err := merge.ParseSegment(seg.FilePath)
+		if err != nil {
+			return fmt.Errorf("parse segment %s: %w", seg.ID, err)
+		}
+		segInfos = append(segInfos, info)
+		totalFrames += info.SampleCount
+	}
+
+	slog.Debug("periodic merge: running Go concat",
+		"segments", len(segInfos),
+		"total_frames", totalFrames,
+	)
+
+	// merge.MergeMP4Segments validates codec/SPS/PPS/VPS/audio consistency.
+	if err := merge.MergeMP4Segments(ctx, segInfos, outputPath); err != nil {
+		_ = os.Remove(outputPath)
+		return fmt.Errorf("Go concat merge: %w", err)
+	}
+
+	// Report 100% progress — Go concat is fast (streaming copy), no granular progress.
+	if totalFrames > 0 {
+		m.updateProgressBatch(ctx, segments, 100)
+	}
 	return nil
 }
 
@@ -611,7 +672,7 @@ func filterMergedSegments(recordings []model.Recording) []model.Recording {
 }
 
 // checkSegmentCompatibility checks if all segments have compatible resolution and codec.
-// Uses ffprobe to read metadata from each segment.
+// Uses the pure-Go mediaprobe by default, falling back to ffprobe when needed.
 func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) (bool, error) {
 	if len(segments) < 2 {
 		return true, nil
@@ -650,8 +711,21 @@ func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) 
 	return true, nil
 }
 
-// probeSegmentMetadata uses ffprobe to extract video resolution and codec from a file.
+// probeSegmentMetadata extracts video resolution and codec from a file.
+//
+// It prefers the pure-Go mediaprobe (no external process) and falls back to
+// ffprobe when mediaprobe fails or the file is not MP4. The returned codec
+// uses ffprobe-compatible names ("h264", "hevc") so compatibility comparisons
+// behave identically to the previous ffprobe-only implementation.
 func probeSegmentMetadata(ctx context.Context, filePath string) (width, height int, codec string, err error) {
+	// Fast path: pure-Go probe.
+	if mediaprobe.IsLikelyMP4(filePath) {
+		if info, e := mediaprobe.ProbeMP4(filePath); e == nil {
+			return info.Width, info.Height, info.CodecName, nil
+		}
+	}
+
+	// Fallback: ffprobe subprocess (requires ffprobe on PATH).
 	args := []string{
 		"-v", "quiet",
 		"-print_format", "json",
@@ -684,8 +758,21 @@ func probeSegmentMetadata(ctx context.Context, filePath string) (width, height i
 	return width, height, codec, nil
 }
 
-// probeVideoFrameCount returns the total number of video frames in a file using ffprobe.
+// probeVideoFrameCount returns the total number of video frames in a file.
+//
+// Uses the pure-Go mediaprobe (reads stsz box, no decoding) and falls back to
+// ffprobe -count_frames when mediaprobe fails or the file is not MP4. The
+// mediaprobe path is dramatically faster since ffprobe -count_frames must
+// decode the entire file to count frames.
 func probeVideoFrameCount(ctx context.Context, filePath string) (int, error) {
+	// Fast path: pure-Go probe — frame count comes from stsz.SampleCount.
+	if mediaprobe.IsLikelyMP4(filePath) {
+		if info, err := mediaprobe.ProbeMP4(filePath); err == nil {
+			return info.FrameCount, nil
+		}
+	}
+
+	// Fallback: ffprobe subprocess.
 	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "error",
 		"-count_frames",

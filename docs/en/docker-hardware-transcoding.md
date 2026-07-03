@@ -292,7 +292,12 @@ services:
 
 ## FFmpeg Inside Docker
 
-MiBee NVR's Docker image **bundles FFmpeg** (and `ffprobe`) via the Alpine `ffmpeg` package. Transcoding, timelapse FFmpeg-merge, and live transcode work out of the box — no manual download required.
+MiBee NVR's Docker image **bundles FFmpeg** (and `ffprobe`) via the Alpine `ffmpeg` package.
+
+> **Note**: FFmpeg is an **optional dependency**. All core NVR features (recording,
+> playback, live streaming, relay, timelapse, merge) are pure Go and **do not need
+> FFmpeg**. The Docker image bundles it only for out-of-the-box transcoding.
+> Transcoding and live transcode work out of the box — no manual download required.
 
 ### Verify Bundled FFmpeg
 

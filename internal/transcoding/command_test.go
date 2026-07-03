@@ -88,7 +88,8 @@ func TestBuildCommand_H264ToH265_Software(t *testing.T) {
 	}
 	argsContain(t, args, "-c:v", "libx265")
 	argsContain(t, args, "-preset", "faster")
-	argsContain(t, args, "-c:a", "copy")
+	argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 	argsContain(t, args, "-y", "/tmp/output.mp4")
 }
 
@@ -100,7 +101,8 @@ func TestBuildCommand_H264ToH265_V4L2M2M(t *testing.T) {
 	argsContain(t, args, "-c:v", "hevc_v4l2m2m")
 	argsContain(t, args, "-g", "50")
 	argsContain(t, args, "-bf", "0")
-	argsContain(t, args, "-c:a", "copy")
+	argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 }
 
 func TestBuildCommand_H264ToH265_VAAPI(t *testing.T) {
@@ -128,7 +130,8 @@ func TestBuildCommand_H265ToH264_Software(t *testing.T) {
 	argsContain(t, args, "-c:v", "libx264")
 	argsContain(t, args, "-preset", "faster")
 	argsContain(t, args, "-crf", "23")
-	argsContain(t, args, "-c:a", "copy")
+	argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 }
 
 func TestBuildCommand_CRFOverride(t *testing.T) {
@@ -217,7 +220,8 @@ func TestBuildCommand_H265ToH264_V4L2M2M(t *testing.T) {
 	argsContain(t, args, "-c:v", "h264_v4l2m2m")
 	argsContain(t, args, "-g", "50")
 	argsContain(t, args, "-bf", "0")
-	argsContain(t, args, "-c:a", "copy")
+	argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 }
 
 func TestBuildCommand_MJPEGToH264(t *testing.T) {
@@ -235,11 +239,13 @@ func TestBuildCommand_MJPEGToH264(t *testing.T) {
 	argsContain(t, args, "-framerate", "15")
 	argsContain(t, args, "-i", filepath.Join("/tmp/frames", "%*.jpg"))
 	argsContain(t, args, "-c:v", "libx264")
-	// MJPEG has no audio, so no -c:a copy
-	argsNotContain(t, args, "copy")
+	// MJPEG has no audio, so no -c:a aac
+	argsNotContain(t, args, "aac")
 }
 
-func TestBuildCommand_MJPEGToH265_Rejected(t *testing.T) {
+func TestBuildCommand_MJPEGToH265_Supported(t *testing.T) {
+	// MJPEG→H.265 is supported via software libx265 encoder (FFmpeg decodes
+	// JPEG internally then encodes). v4l2m2m is bypassed for MJPEG input.
 	opts := TranscodeOptions{
 		InputPath:   "/tmp/frames",
 		OutputPath:  "/tmp/out.mp4",
@@ -247,17 +253,18 @@ func TestBuildCommand_MJPEGToH265_Rejected(t *testing.T) {
 		OutputCodec: "h265",
 		Framerate:   15,
 	}
-	_, err := BuildFFmpegCommand(opts, softwareCaps())
-	if err == nil {
-		t.Fatal("expected error for MJPEG→H.265, got nil")
+	args, err := BuildFFmpegCommand(opts, softwareCaps())
+	if err != nil {
+		t.Fatalf("MJPEG→H.265 should be supported, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported") {
-		t.Errorf("error should mention 'unsupported', got: %v", err)
-	}
+	// MJPEG input forces software encoder (libx265, not v4l2m2m).
+	argsContain(t, args, "-c:v", "libx265")
+	// MJPEG input pattern.
+	argsContain(t, args, "-i", filepath.Join("/tmp/frames", "%*.jpg"))
 }
 
 func TestBuildCommand_AudioPassthrough(t *testing.T) {
-	// All non-MJPEG valid commands must include -c:a copy
+	// All non-MJPEG valid commands must include -c:a aac (transcoded, not copy)
 	cases := []struct {
 		name string
 		opts TranscodeOptions
@@ -276,7 +283,8 @@ func TestBuildCommand_AudioPassthrough(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			argsContain(t, args, "-c:a", "copy")
+			argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 		})
 	}
 }
@@ -374,7 +382,8 @@ func TestBuildCommand_NVENC(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	argsContain(t, args, "-c:v", "hevc_nvenc")
-	argsContain(t, args, "-c:a", "copy")
+	argsContain(t, args, "-c:a", "aac")
+	argsContain(t, args, "-b:a", "64k")
 }
 
 func TestBuildCommand_JPEGToH264(t *testing.T) {
@@ -392,11 +401,12 @@ func TestBuildCommand_JPEGToH264(t *testing.T) {
 	argsContain(t, args, "-framerate", "15")
 	argsContain(t, args, "-i", filepath.Join("/tmp/frames", "%*.jpg"))
 	argsContain(t, args, "-c:v", "libx264")
-	// JPEG has no audio, so no -c:a copy
-	argsNotContain(t, args, "copy")
+	// JPEG has no audio, so no -c:a aac
+	argsNotContain(t, args, "aac")
 }
 
-func TestBuildCommand_JPEGToH265_Rejected(t *testing.T) {
+func TestBuildCommand_JPEGToH265_Supported(t *testing.T) {
+	// JPEG→H.265 is supported via software libx265 encoder.
 	opts := TranscodeOptions{
 		InputPath:   "/tmp/frames",
 		OutputPath:  "/tmp/out.mp4",
@@ -404,13 +414,11 @@ func TestBuildCommand_JPEGToH265_Rejected(t *testing.T) {
 		OutputCodec: "h265",
 		Framerate:   15,
 	}
-	_, err := BuildFFmpegCommand(opts, softwareCaps())
-	if err == nil {
-		t.Fatal("expected error for JPEG→H.265, got nil")
+	args, err := BuildFFmpegCommand(opts, softwareCaps())
+	if err != nil {
+		t.Fatalf("JPEG→H.265 should be supported, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported") {
-		t.Errorf("error should mention 'unsupported', got: %v", err)
-	}
+	argsContain(t, args, "-c:v", "libx265")
 }
 
 // --- ARM Software Encoding Prohibition Tests ---

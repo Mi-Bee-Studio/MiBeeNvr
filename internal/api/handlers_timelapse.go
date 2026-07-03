@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/go-chi/chi/v5"
@@ -351,7 +352,7 @@ func (h *Handler) generateThumbnail(sourcePath, segDir, cachePath string, useFFm
 
 	var src image.Image
 	if useFFmpeg {
-		data, err := h.extractJPEGFromMP4(sourcePath)
+		data, err := h.extractFirstFrame(sourcePath)
 		if err != nil {
 			// Fallback: try recording's segment directory
 			img, err := h.firstJPEGFrame(segDir)
@@ -476,13 +477,30 @@ func (h *Handler) firstJPEGFrame(dirPath string) (image.Image, error) {
 	return img, nil
 }
 
-// extractJPEGFromMP4 extracts the first frame from an MP4 as JPEG data using ffmpeg.
-func (h *Handler) extractJPEGFromMP4(path string) ([]byte, error) {
-	// Check if ffmpeg is available
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not available")
+// extractFirstFrame extracts the first frame from an MP4 as JPEG data.
+//
+// It tries ffmpeg first (real decoded frame) when available, then falls back
+// to a pure-Go generated placeholder image (showing codec + resolution) when
+// ffmpeg is absent — since pure Go has no H.264/H.265 decoder. The placeholder
+// ensures timelapse listings always render a thumbnail without a hard ffmpeg
+// dependency.
+func (h *Handler) extractFirstFrame(path string) ([]byte, error) {
+	// Try ffmpeg for a real decoded frame (optional accelerator).
+	if _, err := exec.LookPath("ffmpeg"); err == nil {
+		if data, err := h.extractFirstFrameFFmpeg(path); err == nil {
+			return data, nil
+		} else {
+			logger.Debug("ffmpeg frame extraction failed, using Go placeholder",
+				"path", path, "error", err)
+		}
 	}
 
+	// Pure-Go fallback: placeholder image annotated with codec + resolution.
+	return h.generatePlaceholderFrame(path)
+}
+
+// extractFirstFrameFFmpeg runs ffmpeg to decode one frame to JPEG (optional path).
+func (h *Handler) extractFirstFrameFFmpeg(path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -508,6 +526,189 @@ func (h *Handler) extractJPEGFromMP4(path string) ([]byte, error) {
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// generatePlaceholderFrame creates a pure-Go JPEG placeholder for an MP4 that
+// cannot be decoded without ffmpeg. Reads resolution/codec via mediaprobe (no
+// pixel decoding) and renders an annotated solid-color frame.
+func (h *Handler) generatePlaceholderFrame(path string) ([]byte, error) {
+	width, height := 640, 360
+	codecLabel := "video"
+	if info, err := mediaprobe.ProbeMP4(path); err == nil {
+		codecLabel = strings.ToUpper(info.CodecName)
+		if info.Width > 0 && info.Height > 0 {
+			width, height = info.Width, info.Height
+		}
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Fill with a dark slate background.
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 30, G: 30, B: 36, A: 255})
+		}
+	}
+	// Draw a centered play-triangle to indicate a video frame placeholder.
+	drawPlaceholderIcon(img, width, height, color.RGBA{R: 200, G: 200, B: 210, A: 255})
+	// Annotate with codec + resolution at the bottom.
+	label := fmt.Sprintf("%s %dx%d", codecLabel, width, height)
+	drawPlaceholderLabel(img, width, height, label, color.RGBA{R: 180, G: 180, B: 190, A: 255})
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
+		return nil, fmt.Errorf("placeholder encode: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// drawPlaceholderIcon draws a centered play-triangle on the placeholder image.
+func drawPlaceholderIcon(img *image.RGBA, w, h int, c color.Color) {
+	cx, cy := w/2, h/2
+	// Triangle sized relative to image; clamp for tiny images.
+	size := w / 8
+	if size < 12 {
+		size = 12
+	}
+	// Vertices of a right-pointing play triangle.
+	p1 := image.Pt(cx-size/2, cy-size)   // top-left
+	p2 := image.Pt(cx-size/2, cy+size)   // bottom-left
+	p3 := image.Pt(cx+size, cy)          // right
+	fillTriangle(img, p1, p2, p3, c)
+}
+
+// drawPlaceholderLabel draws a small text-like label at the bottom-center.
+// Renders 5x7 bitmap font digits/letters (minimal, monospaced) since we avoid
+// pulling in a font rendering dependency for a non-critical placeholder.
+func drawPlaceholderLabel(img *image.RGBA, w, h int, label string, c color.Color) {
+	// Scale font to image width: each char cell is ~8px wide at baseline.
+	cellW := w / 60
+	if cellW < 5 {
+		cellW = 5
+	}
+	cellH := cellW * 2
+	// Bottom strip background.
+	for y := h - cellH - cellW; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if x >= 0 && x < w && y >= 0 && y < h {
+				img.SetRGBA(x, y, color.RGBA{R: 0, G: 0, B: 0, A: 180})
+			}
+		}
+	}
+	// Center the label.
+	startX := (w - len(label)*cellW) / 2
+	startY := h - cellH - cellW/2
+	if startX < 0 {
+		startX = 0
+	}
+	for i := 0; i < len(label) && i < 40; i++ {
+		drawChar(img, label[i], startX+i*cellW, startY, cellW, cellH, c)
+	}
+}
+
+// fillTriangle fills a triangle defined by three points using a simple
+// barycentric bounding-box scan.
+func fillTriangle(img *image.RGBA, p1, p2, p3 image.Point, c color.Color) {
+	minX := min(min(p1.X, p2.X), p3.X)
+	maxX := max(max(p1.X, p2.X), p3.X)
+	minY := min(min(p1.Y, p2.Y), p3.Y)
+	maxY := max(max(p1.Y, p2.Y), p3.Y)
+	bounds := img.Bounds()
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			if x < bounds.Min.X || x >= bounds.Max.X || y < bounds.Min.Y || y >= bounds.Max.Y {
+				continue
+			}
+			if pointInTriangle(image.Pt(x, y), p1, p2, p3) {
+				img.Set(x, y, c)
+			}
+		}
+	}
+}
+
+func pointInTriangle(p, p1, p2, p3 image.Point) bool {
+	d1 := sign(p, p1, p2)
+	d2 := sign(p, p2, p3)
+	d3 := sign(p, p3, p1)
+	hasNeg := (d1 < 0) || (d2 < 0) || (d3 < 0)
+	hasPos := (d1 > 0) || (d2 > 0) || (d3 > 0)
+	return !(hasNeg && hasPos)
+}
+
+func sign(p1, p2, p3 image.Point) int {
+	return (p1.X-p3.X)*(p2.Y-p3.Y) - (p2.X-p3.X)*(p1.Y-p3.Y)
+}
+
+// drawChar draws a single ASCII char using a minimal 5x7 bitmap. Unsupported
+// chars render as a filled block (keeps spacing readable). This is intentionally
+// minimal — only digits, uppercase letters, 'x', and common symbols used in
+// the codec/resolution label are needed.
+var font5x7 = map[byte][]string{
+	'0': {"01110", "10001", "10011", "10101", "11001", "10001", "01110"},
+	'1': {"00100", "01100", "00100", "00100", "00100", "00100", "01110"},
+	'2': {"01110", "10001", "00001", "00010", "00100", "01000", "11111"},
+	'3': {"11111", "00010", "00100", "00010", "00001", "10001", "01110"},
+	'4': {"00010", "00110", "01010", "10010", "11111", "00010", "00010"},
+	'5': {"11111", "10000", "11110", "00001", "00001", "10001", "01110"},
+	'6': {"00110", "01000", "10000", "11110", "10001", "10001", "01110"},
+	'7': {"11111", "00001", "00010", "00100", "01000", "01000", "01000"},
+	'8': {"01110", "10001", "10001", "01110", "10001", "10001", "01110"},
+	'9': {"01110", "10001", "10001", "01111", "00001", "00010", "01100"},
+	'A': {"01110", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'C': {"01111", "10000", "10000", "10000", "10000", "10000", "01111"},
+	'D': {"11110", "10001", "10001", "10001", "10001", "10001", "11110"},
+	'E': {"11111", "10000", "10000", "11110", "10000", "10000", "11111"},
+	'F': {"11111", "10000", "10000", "11110", "10000", "10000", "10000"},
+	'H': {"10001", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'I': {"01110", "00100", "00100", "00100", "00100", "00100", "01110"},
+	'L': {"10000", "10000", "10000", "10000", "10000", "10000", "11111"},
+	'M': {"10001", "11011", "10101", "10101", "10001", "10001", "10001"},
+	'N': {"10001", "11001", "10101", "10011", "10001", "10001", "10001"},
+	'O': {"01110", "10001", "10001", "10001", "10001", "10001", "01110"},
+	'P': {"11110", "10001", "10001", "11110", "10000", "10000", "10000"},
+	'Q': {"01110", "10001", "10001", "10001", "10101", "10010", "01101"},
+	'R': {"11110", "10001", "10001", "11110", "10100", "10010", "10001"},
+	'S': {"01111", "10000", "10000", "01110", "00001", "00001", "11110"},
+	'T': {"11111", "00100", "00100", "00100", "00100", "00100", "00100"},
+	'U': {"10001", "10001", "10001", "10001", "10001", "10001", "01110"},
+	'V': {"10001", "10001", "10001", "10001", "10001", "01010", "00100"},
+	'W': {"10001", "10001", "10001", "10101", "10101", "11011", "10001"},
+	'X': {"10001", "10001", "01010", "00100", "01010", "10001", "10001"},
+	'Y': {"10001", "10001", "01010", "00100", "00100", "00100", "00100"},
+	'Z': {"11111", "00001", "00010", "00100", "01000", "10000", "11111"},
+	' ': {"00000", "00000", "00000", "00000", "00000", "00000", "00000"},
+	'x': {"00000", "00000", "10001", "01010", "00100", "01010", "10001"},
+}
+
+func drawChar(img *image.RGBA, ch byte, ox, oy, cellW, cellH int, c color.Color) {
+	glyph, ok := font5x7[ch]
+	if !ok {
+		// Unknown char: draw nothing (keeps spacing).
+		return
+	}
+	pixW := cellW / 6
+	pixH := cellH / 8
+	if pixW < 1 {
+		pixW = 1
+	}
+	if pixH < 1 {
+		pixH = 1
+	}
+	bounds := img.Bounds()
+	for row := 0; row < 7; row++ {
+		for col := 0; col < 5; col++ {
+			if glyph[row][col] == '1' {
+				for dy := 0; dy < pixH; dy++ {
+					for dx := 0; dx < pixW; dx++ {
+						x := ox + col*pixW + dx
+						y := oy + row*pixH + dy
+						if x >= bounds.Min.X && x < bounds.Max.X && y >= bounds.Min.Y && y < bounds.Max.Y {
+							img.Set(x, y, c)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // resizeImage resizes an image to fit within maxW x maxH while maintaining aspect ratio.
