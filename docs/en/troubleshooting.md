@@ -62,6 +62,38 @@ This guide helps you diagnose and resolve common issues with MiBee NVR. If you c
      disk_threshold_percent: 90  # Lower from 95 to 90
    ```
 
+## FFmpeg / Transcoding
+
+### Is FFmpeg required?
+
+**No.** FFmpeg is an **optional dependency**, used only for H.265↔H.264 transcoding
+(storage optimization + live relay transcoding). All other features (recording,
+playback, live streaming, relay, timelapse, merge) are pure Go and **do not need FFmpeg**.
+
+- **Without FFmpeg**: The NVR is fully functional; only transcoding is disabled
+  (startup log shows "Transcoding disabled").
+- **With FFmpeg**: Transcoding is auto-enabled (H.265→H.264 for old-device compat,
+  H.264→H.265 to save storage).
+- Docker images ship FFmpeg built-in for out-of-the-box transcoding.
+- Bare-metal install (`install.sh`) attempts to install FFmpeg automatically;
+  failure is non-blocking.
+
+### How to install FFmpeg manually?
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y ffmpeg
+
+# RHEL/CentOS/Fedora
+sudo dnf install -y ffmpeg
+
+# Alpine
+sudo apk add ffmpeg
+```
+
+Or use the in-app downloader: **Settings → Transcoding → Download FFmpeg**
+(downloads a static binary into the data directory).
+
 ## Camera Issues
 
 ### Camera Not Found

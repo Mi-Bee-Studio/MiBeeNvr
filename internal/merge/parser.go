@@ -125,18 +125,25 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		}
 
 		// Detect G.711 audio sample entry types (ulaw/alaw are not registered
-		// in go-mp4, so IsSupportedType would skip them).
+		// in go-mp4, so IsSupportedType would skip them). Do NOT call Expand()
+		// on these — they are unregistered box types and expanding them makes
+		// go-mp4 try ReadPayload on children, which returns ErrBoxInfoNotFound
+		// and aborts the entire box traversal (breaking stco/co64 reads for the
+		// same track). Returning nil,nil skips this box and continues parsing
+		// siblings, which is all we need (codec is already recorded above).
 		if current != nil && (boxType == "ulaw" || boxType == "alaw") {
 			current.audioCodec = "g711"
 			current.g711MULaw = boxType == "ulaw"
-			return h.Expand()
+			return nil, nil
 		}
 		// Detect Opus audio sample entry ("Opus" is registered in go-mp4 as
 		// an AnyTypeBoxDef, so IsSupportedType returns true. But the dOps
 		// child box doesn't populate audioConfig, so we mark it manually.)
+		// Do NOT Expand() — dOps may be unregistered and Expand would abort
+		// traversal with ErrBoxInfoNotFound (same class of bug as ulaw above).
 		if current != nil && boxType == "Opus" {
 			current.audioCodec = "opus"
-			return h.Expand()
+			return nil, nil
 		}
 		if !h.BoxInfo.IsSupportedType() {
 			return nil, nil

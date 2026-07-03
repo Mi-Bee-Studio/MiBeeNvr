@@ -288,7 +288,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			Config:          cfg,
 		}, metrics)
 		if err != nil {
-			slog.Warn("Transcoding disabled", "error", err)
+			slog.Warn("Transcoding disabled — FFmpeg is an OPTIONAL dependency; all other features (recording, playback, live streaming, relay, timelapse, merge) work without it. To enable transcoding, install ffmpeg/ffprobe or use the in-app downloader.",
+				"error", err)
 			transcoding.SetDisabledReason(err.Error())
 		} else {
 			transcodeMgr = mgr

@@ -350,3 +350,19 @@ func parseHEVCSPSResolution(sps []byte) (width, height int, err error) {
 	}
 	return width, height, nil
 }
+
+// Exported wrappers for cross-package reuse (e.g. internal/mediaprobe).
+// These exist so callers outside the merge package can resolve SPS
+// resolution without reimplementing the bitstream parsers.
+
+// ParseSPSResolution extracts width and height from an H.264 SPS NAL unit.
+// Returns an error if the SPS is malformed.
+func ParseSPSResolution(sps []byte) (width, height int, err error) {
+	return parseSPSResolution(sps)
+}
+
+// ParseHEVCSPSResolution extracts width and height from an H.265/HEVC SPS NAL unit.
+// Returns an error if the SPS is malformed.
+func ParseHEVCSPSResolution(sps []byte) (width, height int, err error) {
+	return parseHEVCSPSResolution(sps)
+}

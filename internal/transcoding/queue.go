@@ -588,7 +588,10 @@ func (q *TranscodeQueue) replaceOriginal(task *storage.TranscodeTask) {
 	}
 
 	// Step 2: Move original to backup
+	// Clear any stale backup from a prior failed attempt first (rename to an
+	// existing target fails with "file exists" on most filesystems).
 	backupPath := filepath.Join(inputDir, ".mibee-replace-bak-"+filepath.Base(task.InputPath))
+	_ = os.RemoveAll(backupPath) // best-effort; ignore errors (may not exist)
 	if err := atomicRename(task.InputPath, backupPath); err != nil {
 		// Restore: move temp back to output
 		if restoreErr := atomicRename(tmpPath, task.OutputPath); restoreErr != nil {
@@ -611,8 +614,10 @@ func (q *TranscodeQueue) replaceOriginal(task *storage.TranscodeTask) {
 		return
 	}
 
-	// Step 4: Remove backup (original is gone, new file is in place)
-	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+	// Step 4: Remove backup (original is gone, new file is in place).
+	// Use RemoveAll because MJPEG recordings are directories (JPEG frame
+	// sequences) — os.Remove only handles empty dirs or single files.
+	if err := os.RemoveAll(backupPath); err != nil && !os.IsNotExist(err) {
 		queueLogger.Warn("failed to remove backup file", "task_id", task.ID, "path", backupPath, "error", err)
 	}
 

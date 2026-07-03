@@ -292,7 +292,9 @@ services:
 
 ## Docker 内的 FFmpeg
 
-MiBee NVR 的 Docker 镜像**内置了 FFmpeg**（以及 `ffprobe`），通过 Alpine 的 `ffmpeg` 包提供。转码、延时摄影 FFmpeg 合并、实时转码开箱即用——无需手动下载。
+MiBee NVR 的 Docker 镜像**内置了 FFmpeg**（以及 `ffprobe`），通过 Alpine 的 `ffmpeg` 包提供。
+
+> **注意**：FFmpeg 是**可选依赖**。NVR 的所有核心功能（录制、回放、直播、推流、延时摄影、合并）都是纯 Go 实现，**不需要 FFmpeg**。Docker 镜像内置它只是为了开箱即用的转码体验。转码、实时转码开箱即用——无需手动下载。
 
 ### 验证内置的 FFmpeg
 

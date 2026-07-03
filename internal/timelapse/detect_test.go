@@ -9,13 +9,29 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
-func TestDetectTierFFmpeg(t *testing.T) {
+func TestDetectTierGo_DefaultEvenWithFFmpeg(t *testing.T) {
+	// FFmpeg is available but not opted in → default to TierGo (pure Go).
 	tier := selectTier(&transcoding.HardwareCapabilities{
 		FFmpegAvailable: true,
 		FFmpegPath:      "/usr/bin/ffmpeg",
-	})
+		TotalCores:      4,
+		TotalMemoryMB:   512,
+	}, false)
+	if tier != TierGo {
+		t.Errorf("selectTier with FFmpegAvailable=true, preferFFmpeg=false: expected TierGo, got %q", tier)
+	}
+}
+
+func TestDetectTierFFmpeg_OptIn(t *testing.T) {
+	// Explicit opt-in + FFmpeg available → TierFFmpeg.
+	tier := selectTier(&transcoding.HardwareCapabilities{
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
+		TotalCores:      4,
+		TotalMemoryMB:   512,
+	}, true)
 	if tier != TierFFmpeg {
-		t.Errorf("selectTier with FFmpegAvailable=true: expected TierFFmpeg, got %q", tier)
+		t.Errorf("selectTier with FFmpegAvailable=true, preferFFmpeg=true: expected TierFFmpeg, got %q", tier)
 	}
 }
 
@@ -24,7 +40,7 @@ func TestDetectTierGo(t *testing.T) {
 		FFmpegAvailable: false,
 		TotalCores:      4,
 		TotalMemoryMB:   512,
-	})
+	}, false)
 	if tier != TierGo {
 		t.Errorf("selectTier with 4 cores, 512MB: expected TierGo, got %q", tier)
 	}
@@ -36,7 +52,7 @@ func TestDetectTierJPEG(t *testing.T) {
 			FFmpegAvailable: false,
 			TotalCores:      1,
 			TotalMemoryMB:   4096,
-		})
+		}, false)
 		if tier != TierJPEG {
 			t.Errorf("selectTier with 1 core: expected TierJPEG, got %q", tier)
 		}
@@ -47,7 +63,7 @@ func TestDetectTierJPEG(t *testing.T) {
 			FFmpegAvailable: false,
 			TotalCores:      4,
 			TotalMemoryMB:   50,
-		})
+		}, false)
 		if tier != TierJPEG {
 			t.Errorf("selectTier with 50MB RAM: expected TierJPEG, got %q", tier)
 		}
@@ -59,14 +75,14 @@ func TestDetectTierGo_BareMinimum(t *testing.T) {
 		FFmpegAvailable: false,
 		TotalCores:      2,
 		TotalMemoryMB:   100,
-	})
+	}, false)
 	if tier != TierGo {
 		t.Errorf("selectTier with 2 cores, 100MB: expected TierGo, got %q", tier)
 	}
 }
 
 func TestDetectMergeTier(t *testing.T) {
-	t.Run("FFmpeg available via real binary", func(t *testing.T) {
+	t.Run("FFmpeg available but default to Go tier", func(t *testing.T) {
 		transcoding.ResetProbe()
 		ResetDetectTier()
 
@@ -76,9 +92,26 @@ func TestDetectMergeTier(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Default (no opt-in): FFmpeg available but tier is Go.
 		tier := DetectMergeTier(ffmpegPath)
+		if tier != TierGo {
+			t.Errorf("DetectMergeTier with temp ffmpeg, no opt-in: expected TierGo, got %q", tier)
+		}
+	})
+
+	t.Run("FFmpeg tier when opted in", func(t *testing.T) {
+		transcoding.ResetProbe()
+		ResetDetectTier()
+
+		tmpDir := t.TempDir()
+		ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
+		if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\necho fake"), 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		tier := DetectMergeTier(ffmpegPath, true)
 		if tier != TierFFmpeg {
-			t.Errorf("DetectMergeTier with temp ffmpeg: expected TierFFmpeg, got %q", tier)
+			t.Errorf("DetectMergeTier with temp ffmpeg, opt-in: expected TierFFmpeg, got %q", tier)
 		}
 	})
 

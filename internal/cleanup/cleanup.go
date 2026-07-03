@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -34,7 +35,7 @@ type CleanupManager struct {
 	healthRetention           time.Duration
 	transcodeOrphanFn         func(ctx context.Context) error
 	transcodeHistoryRetention time.Duration // 0 = disabled
-	ffprobePath               string         // empty = skip repair
+	ffprobePath               string         // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                  *event.EventBus
 }
 
@@ -464,17 +465,10 @@ func (cm *CleanupManager) fixStaleMJPEGRecords(ctx context.Context, cameraID str
 }
 
 // repairZeroDurationRecordings fixes recordings with duration=0 by probing actual
-// media files with ffprobe. Only runs when ffprobePath is configured.
+// media files. Uses the pure-Go mediaprobe by default (no external binary);
+// falls back to ffprobe when configured (cm.ffprobePath non-empty and available)
+// for non-MP4 inputs or when mediaprobe fails.
 func (cm *CleanupManager) repairZeroDurationRecordings(ctx context.Context) {
-	if cm.ffprobePath == "" {
-		return
-	}
-	// Verify ffprobe is available
-	if _, err := os.Stat(cm.ffprobePath); err != nil {
-		logger.Warn("zero-duration repair: ffprobe not available, skipping", "path", cm.ffprobePath)
-		cm.ffprobePath = "" // don't keep retrying
-		return
-	}
 	recordings, err := cm.db.RepairZeroDurationRecordings(ctx)
 	if err != nil {
 		logger.Warn("zero-duration repair: failed to query recordings", "error", err)
@@ -512,9 +506,22 @@ func (cm *CleanupManager) repairZeroDurationRecordings(ctx context.Context) {
 	}
 }
 
-// probeDuration runs ffprobe to get the duration of a media file.
-// Returns 0 on any error.
+// probeDuration returns the duration (in seconds) of a media file.
+//
+// It tries the pure-Go mediaprobe first (reads MP4 box metadata only — no
+// external process, ~10-100x faster than ffprobe). If that fails or the file
+// is not MP4, it falls back to ffprobe when cm.ffprobePath is configured and
+// available. Returns 0 on any error (best-effort, never fatal).
 func (cm *CleanupManager) probeDuration(ctx context.Context, filePath string) float64 {
+	// Fast path: pure-Go probe — works without any external binary.
+	if d, err := mediaprobe.ProbeDuration(filePath); err == nil && d > 0 {
+		return d
+	}
+
+	// Fallback: ffprobe subprocess (only when explicitly configured).
+	if cm.ffprobePath == "" {
+		return 0
+	}
 	cmd := exec.CommandContext(ctx, cm.ffprobePath,
 		"-v", "quiet",
 		"-show_entries", "format=duration",
