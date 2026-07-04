@@ -532,27 +532,28 @@ func (h *Handler) extractFirstFrameFFmpeg(path string) ([]byte, error) {
 // cannot be decoded without ffmpeg. Reads resolution/codec via mediaprobe (no
 // pixel decoding) and renders an annotated solid-color frame.
 func (h *Handler) generatePlaceholderFrame(path string) ([]byte, error) {
-	width, height := 640, 360
+	canvasW, canvasH := 640, 360
+	realW, realH := canvasW, canvasH
 	codecLabel := "video"
 	if info, err := mediaprobe.ProbeMP4(path); err == nil {
 		codecLabel = strings.ToUpper(info.CodecName)
 		if info.Width > 0 && info.Height > 0 {
-			width, height = info.Width, info.Height
+			realW, realH = info.Width, info.Height
 		}
 	}
 
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := image.NewRGBA(image.Rect(0, 0, canvasW, canvasH))
 	// Fill with a dark slate background.
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := 0; y < canvasH; y++ {
+		for x := 0; x < canvasW; x++ {
 			img.Set(x, y, color.RGBA{R: 30, G: 30, B: 36, A: 255})
 		}
 	}
 	// Draw a centered play-triangle to indicate a video frame placeholder.
-	drawPlaceholderIcon(img, width, height, color.RGBA{R: 200, G: 200, B: 210, A: 255})
+	drawPlaceholderIcon(img, canvasW, canvasH, color.RGBA{R: 200, G: 200, B: 210, A: 255})
 	// Annotate with codec + resolution at the bottom.
-	label := fmt.Sprintf("%s %dx%d", codecLabel, width, height)
-	drawPlaceholderLabel(img, width, height, label, color.RGBA{R: 180, G: 180, B: 190, A: 255})
+	label := fmt.Sprintf("%s %dx%d", codecLabel, realW, realH)
+	drawPlaceholderLabel(img, canvasW, canvasH, label, color.RGBA{R: 180, G: 180, B: 190, A: 255})
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
