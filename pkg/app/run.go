@@ -973,6 +973,10 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	if err := a.RegisterValue("config", cfg); err != nil {
 		return nil, fmt.Errorf("register config value: %w", err)
 	}
+	if err := a.RegisterValue("http-router", r); err != nil {
+		return nil, fmt.Errorf("register http-router value: %w", err)
+	}
+
 	if err := a.RegisterValue("http-server", httpServer); err != nil {
 		return nil, fmt.Errorf("register http-server value: %w", err)
 	}
