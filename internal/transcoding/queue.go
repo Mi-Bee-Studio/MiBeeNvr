@@ -11,10 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"syscall"
-	"regexp"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -32,7 +32,6 @@ var queueLogger = slog.Default().With("component", "transcode-queue")
 // causes SQLITE_BUSY contention under concurrent load.
 const progressUpdateInterval = 2 * time.Second
 
-
 // TranscodeQueue manages async transcoding tasks with a bounded worker pool.
 // Tasks are dequeued from the database (FIFO) and dispatched to worker goroutines.
 type TranscodeQueue struct {
@@ -42,17 +41,17 @@ type TranscodeQueue struct {
 	config     QueueConfig
 	m          *metrics.Metrics
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	activeJobs map[int64]context.CancelFunc // task ID → cancel function
-	wg         sync.WaitGroup
-	stopped    bool
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	activeJobs   map[int64]context.CancelFunc // task ID → cancel function
+	wg           sync.WaitGroup
+	stopped      bool
 	completionFn CompletionFunc // optional post-completion callback
 }
 
 // QueueConfig holds configuration for the transcode queue.
 type QueueConfig struct {
-	DataDir         string        // root data directory for orphan cleanup
+	DataDir         string // root data directory for orphan cleanup
 	MaxWorkers      int
 	FFmpegPath      string
 	FFprobePath     string
@@ -159,8 +158,18 @@ func (q *TranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTas
 			if q.caps.H265DecoderType != EncoderV4L2M2M && q.caps.H265DecoderType != EncoderVAAPI && q.caps.H265DecoderType != EncoderNVENC {
 				slog.Warn("no hardware H.265 decoder on ARM — using software decode", "arch", q.caps.Arch)
 			}
+
+		}
+		// MJPEG→H265 uses libx265 software encode (v4l2m2m cannot handle MJPEG input).
+		// On RPi 3B (1GB RAM) this can be memory-intensive — warn but allow (user-initiated, has timeout).
+		if isMJPEGInputTask(task.InputFormat) &&
+			task.OutputFormat == "h265" &&
+			q.caps.H265EncoderType == EncoderSoftware {
+			slog.Warn("MJPEG→H.265 software transcoding on ARM — libx265 is memory-intensive on 1GB devices; task may be slow or trigger OOM",
+				"arch", q.caps.Arch, "task_id", task.ID)
+		}
+
 	}
-}
 
 	// Check input resolution against encoder limits (all architectures)
 	if q.caps != nil && (q.caps.MaxEncodeWidth > 0 || q.caps.MaxEncodeHeight > 0) {
@@ -303,7 +312,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 		if q.completionFn != nil {
 			q.completionFn(task, success)
 		}
-		}()
+	}()
 
 	// Convert storage task to transcoding options with default preset
 	opts := q.taskToOptions(task, "")
@@ -532,7 +541,6 @@ func (q *TranscodeQueue) parseProgress(ctx context.Context, taskID int64, stderr
 		lastProgressUpdate = time.Now()
 	}
 }
-
 
 // taskToOptions converts a storage.TranscodeTask to TranscodeOptions for FFmpeg command building.
 // preset specifies the encoding preset ("ultrafast", "faster", "medium", etc.);
