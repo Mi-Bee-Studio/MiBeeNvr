@@ -734,6 +734,23 @@ cameras:
 - **描述**: 启用 pprof 调试端点进行性能分析
 - **注意**: 生产环境中请谨慎使用
 
+## 扩展配置（Extensions）
+
+`extensions` 字段是一个通用的键值对映射，用于外部模块的配置透传。MiBeeNvr 核心不读取也不校验这些内容。
+
+### `extensions`
+
+```yaml
+extensions:
+  # example_key: example_value
+```
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `extensions` | `map[string]any` | `nil` | 外部模块配置的通用透传。核心 NVR 不读取也不校验。 |
+
+---
+
 ## 摄像头协议示例
 
 ### RTSP 摄像头

@@ -228,3 +228,9 @@ observability:
 #   username: ""                     # Metrics endpoint username (empty = public access)
 #   password: ""                     # Metrics endpoint password
 #   password_hash: ""                 # Metrics endpoint password hash (bcrypt)
+
+# Extensions — arbitrary key-value pairs for external module config passthrough.
+# MiBeeNvr core does NOT read or validate these. Use for out-of-module service
+# extensions registered via pkg/app.App.Register. Unknown keys are silently ignored.
+# extensions:
+#   example_key: example_value

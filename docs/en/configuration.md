@@ -1040,6 +1040,24 @@ cameras:
 - **Minimum**: 24h
 - **Example**: `"168h"`, `"720h"`, `""`
 
+## Extensions Configuration
+
+`extensions` is a generic key-value map for external module configuration passthrough.
+MiBeeNvr core does NOT read or validate these values.
+
+### `extensions`
+
+```yaml
+extensions:
+  # example_key: example_value
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `extensions` | `map[string]any` | `nil` | Generic passthrough for external module config. Core NVR does not read or validate. |
+
+---
+
 ## Camera Protocol Examples
 
 ### RTSP Camera
