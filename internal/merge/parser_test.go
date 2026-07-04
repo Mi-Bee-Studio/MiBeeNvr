@@ -61,6 +61,34 @@ func createTestH264SegmentWithParams(t *testing.T, dir string, sps, pps []byte) 
 	return path
 }
 
+// createH264SegmentWithG711Audio creates an H.264 MP4 with G.711 μ-law audio track.
+func createH264SegmentWithG711Audio(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "test_h264_g711.mp4")
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+
+	m := muxer.NewMP4Muxer(path)
+	videoTrackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+	// G.711 μ-law 8kHz: config = [1, 0x00, 0x00, 0x1F, 0x40]
+	audioTrackID, err := m.AddAudioTrack("g711", []byte{1, 0x00, 0x00, 0x1F, 0x40})
+	require.NoError(t, err)
+
+	// 2 video samples
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	require.NoError(t, m.WriteSample(videoTrackID, idrNAL, 0, 33*time.Millisecond))
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+	require.NoError(t, m.WriteSample(videoTrackID, pNAL, 33*time.Millisecond, 33*time.Millisecond))
+
+	// 2 audio samples (1-byte G.711 payloads)
+	require.NoError(t, m.WriteAudioSample(audioTrackID, []byte{0x55}, 0, 20*time.Millisecond))
+	require.NoError(t, m.WriteAudioSample(audioTrackID, []byte{0xAA}, 20*time.Millisecond, 20*time.Millisecond))
+
+	require.NoError(t, m.Close())
+	return path
+}
+
 // createTestH265Segment creates a small valid H.265 MP4 file with one IDR + one P-frame.
 func createTestH265Segment(t *testing.T, dir string) string {
 	t.Helper()
@@ -138,6 +166,25 @@ func TestParseSegment_H265(t *testing.T) {
 	require.True(t, info.Samples[0].IsKeyFrame)
 	// Second sample should NOT be a keyframe (TRAIL_R, NAL type 1)
 	require.False(t, info.Samples[1].IsKeyFrame)
+}
+
+func TestParseSegment_G711Audio_TraversalNotAborted(t *testing.T) {
+	dir := t.TempDir()
+	path := createH264SegmentWithG711Audio(t, dir)
+
+	info, err := ParseSegment(path)
+	require.NoError(t, err)
+
+	// Codec detection
+	require.Equal(t, "h264", info.Codec)
+	require.Equal(t, "g711", info.AudioCodec)
+	require.True(t, info.G711MULaw, "expected μ-law flag")
+
+	// Video sample count — regression: old Expand() aborted traversal, losing stsz/stco for BOTH tracks
+	require.GreaterOrEqual(t, info.SampleCount, 2, "video sample count should be ≥ 2")
+
+	// Audio sample count — same root cause: Expand() aborted traversal
+	require.GreaterOrEqual(t, info.AudioSampleCount, 2, "audio sample count should be ≥ 2")
 }
 
 func TestParseSegment_NonExistentFile(t *testing.T) {
