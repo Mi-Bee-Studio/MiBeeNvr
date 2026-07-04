@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1497,4 +1498,39 @@ func TestPushTarget_NilVideoPresetOverride(t *testing.T) {
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
+}
+
+func TestConfigExtensions(t *testing.T) {
+	dir := t.TempDir()
+
+	// Test with extensions
+	yamlContent := `
+server:
+  listen: ":9090"
+extensions:
+  example_key: example_value
+  count: 42
+  nested:
+    sub_key: sub_value
+`
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Extensions)
+	assert.Equal(t, "example_value", cfg.Extensions["example_key"])
+	assert.Equal(t, 42, cfg.Extensions["count"])
+
+	// Test without extensions
+	yamlContent2 := `
+server:
+  listen: ":9090"
+`
+	path2 := filepath.Join(dir, "config2.yaml")
+	require.NoError(t, os.WriteFile(path2, []byte(yamlContent2), 0644))
+
+	cfg2, err := Load(path2)
+	require.NoError(t, err)
+	assert.Nil(t, cfg2.Extensions)
 }

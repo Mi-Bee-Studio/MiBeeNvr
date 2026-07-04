@@ -42,6 +42,13 @@ type Config struct {
 	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
 	Timezone      string              `yaml:"timezone"` // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
+
+	// Extensions holds arbitrary key-value pairs for external modules to
+	// declare custom configuration sections. MiBeeNvr core does NOT read
+	// or validate these — they are a passthrough for out-of-module consumers
+	// (e.g. service extensions registered via pkg/app.App.Register).
+	// Unknown keys are silently ignored if no consumer reads them.
+	Extensions map[string]any `yaml:"extensions,omitempty"`
 }
 
 type ServerConfig struct {
