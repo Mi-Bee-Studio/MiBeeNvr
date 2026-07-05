@@ -316,7 +316,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Return CameraRow with status
-	row, err := h.db.GetCamera(r.Context(), id)
+	row, _ := h.db.GetCamera(r.Context(), id)
 	if row != nil {
 		if h.camMgr != nil {
 			row.Status = h.camMgr.CameraStatus(id)

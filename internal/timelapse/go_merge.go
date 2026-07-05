@@ -93,7 +93,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 	for _, framePath := range frames {
 		select {
 		case <-ctx.Done():
-			muxer.close()
+			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
 			os.Remove(outputPath)
 			return &MergeResult{
 				Tier:  TierGo,
@@ -104,7 +104,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 
 		data, err := os.ReadFile(framePath)
 		if err != nil {
-			muxer.close()
+			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -115,7 +115,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		if m.jpegQuality >= 0 {
 			data, err = reencodeJPEG(data, m.jpegQuality)
 			if err != nil {
-				muxer.close()
+				muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
 				return &MergeResult{
 					Tier:  TierGo,
 					Error: fmt.Sprintf("re-encode frame %s: %v", framePath, err),
@@ -124,7 +124,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 
 		if err := muxer.addSample(data, sampleDuration); err != nil {
-			muxer.close()
+			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),

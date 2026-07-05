@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -16,7 +15,6 @@ type AIHandler struct {
 	manager    *ai.Manager
 	config     *config.Config
 	configPath string
-	mu         sync.Mutex
 }
 
 // NewAIHandler creates a new AIHandler.

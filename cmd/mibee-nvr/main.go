@@ -168,12 +168,12 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	if err := a.Start(ctx); err != nil {
+		cancel()
 		slog.Error("start", "error", err)
 		os.Exit(1)
 	}
+	defer cancel()
 
 	httpSrv := a.Value("http-server").(*http.Server)
 	go func() {

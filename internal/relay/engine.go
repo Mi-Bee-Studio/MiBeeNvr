@@ -85,7 +85,6 @@ type PushTarget struct {
 	status RelayStatus
 	errMsg string
 	since  time.Time // status-effective time (connect/stream start)
-	cancel context.CancelFunc
 	done   chan struct{}
 
 	// bitrate accounting (atomic, sampled by status())

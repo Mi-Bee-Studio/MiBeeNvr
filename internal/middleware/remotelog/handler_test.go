@@ -1,6 +1,7 @@
 package remotelog
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -55,13 +56,13 @@ func TestHandler_Enabled(t *testing.T) {
 	h := New("http://localhost/insert/jsonline", "jsonline", slog.LevelInfo, nil)
 	defer h.Close()
 
-	if !h.Enabled(nil, slog.LevelInfo) {
+	if !h.Enabled(context.TODO(), slog.LevelInfo) {
 		t.Fatal("expected INFO level to be enabled")
 	}
-	if !h.Enabled(nil, slog.LevelError) {
+	if !h.Enabled(context.TODO(), slog.LevelError) {
 		t.Fatal("expected ERROR level to be enabled")
 	}
-	if h.Enabled(nil, slog.LevelDebug) {
+	if h.Enabled(context.TODO(), slog.LevelDebug) {
 		t.Fatal("expected DEBUG level to be disabled")
 	}
 }
@@ -78,7 +79,7 @@ func TestHandler_Handle_BatchFlush(t *testing.T) {
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "test message", 0)
 		r.AddAttrs(slog.Int("index", i))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	// Wait for async flush
@@ -120,7 +121,7 @@ func TestHandler_Handle_FailureTolerance(t *testing.T) {
 
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "fail test", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &reqCount, 1, 2*time.Second)
@@ -137,7 +138,7 @@ func TestHandler_Close_FlushesRemaining(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "remaining msg", 0)
 		r.AddAttrs(slog.Int("idx", i))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	// Close should flush remaining
@@ -173,7 +174,7 @@ func TestHandler_WithAttrs(t *testing.T) {
 	child := h.WithAttrs([]slog.Attr{slog.String("component", "test-comp")})
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "attrs test", 0)
-		_ = child.Handle(nil, r)
+		_ = child.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -220,7 +221,7 @@ func TestHandler_WithGroup(t *testing.T) {
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "grouped test", 0)
 		r.AddAttrs(slog.String("host", "localhost"))
-		_ = grouped.Handle(nil, r)
+		_ = grouped.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -267,7 +268,7 @@ func TestHandler_NilMetrics(t *testing.T) {
 
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "nil metrics", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -360,7 +361,7 @@ func TestSend_UsesMsgField(t *testing.T) {
 
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "test message content", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -401,7 +402,7 @@ func TestSend_ExtractsFieldsFromMessage(t *testing.T) {
 
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "connection error component=recorder camera_id=cam-abc", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -445,7 +446,7 @@ func TestExtractFields_DoesNotOverwrite(t *testing.T) {
 	for i := 0; i < defaultBufferSize; i++ {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "msg camera_id=extracted-value", 0)
 		r.AddAttrs(slog.String("camera_id", "explicit-value"))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)

@@ -330,7 +330,7 @@ func NewTranscodeManager(
 	// Build downgraded preset: halve bitrate, drop resolution to 480p
 	downgraded := basePreset
 	if downgraded.VideoBitrateKbps > 0 {
-		downgraded.VideoBitrateKbps = downgraded.VideoBitrateKbps / 2
+		downgraded.VideoBitrateKbps /= 2
 	}
 	if downgraded.VideoBitrateKbps < 100 {
 		downgraded.VideoBitrateKbps = 100 // floor

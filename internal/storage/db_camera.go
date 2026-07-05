@@ -99,6 +99,9 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 			c.ArchivedAt = &t
 		}
 		res = append(res, c)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }
@@ -138,6 +141,9 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 			c.ArchivedAt = &t
 		}
 		res = append(res, c)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }

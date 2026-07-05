@@ -20,10 +20,6 @@ const (
 	naluTypeIDR = 5
 	naluTypeSPS = 7
 	naluTypePPS = 8
-
-	// Start codes
-	startCode3 = "\x00\x00\x01"
-	startCode4 = "\x00\x00\x00\x01"
 )
 
 var (

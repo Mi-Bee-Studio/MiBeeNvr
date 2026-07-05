@@ -260,7 +260,7 @@ func (b *baseRecorder) start(ctx context.Context) error {
 	if b.status == model.StatusRecording || b.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", b.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	b.cancel = cancel
 	b.done = make(chan struct{})
 	b.status = model.StatusRecording

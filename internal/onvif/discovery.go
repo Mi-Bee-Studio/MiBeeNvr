@@ -173,7 +173,7 @@ func probeViaWSDiscovery(ctx context.Context, endpoint string) (*DiscoveredDevic
 
 	if resp.StatusCode != http.StatusOK {
 		logger.Debug("WS-Discovery probe returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
-		return nil, nil
+		return nil, nil // TODO(#51): probe failed with non-200 status, skip device
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
@@ -193,7 +193,7 @@ func probeViaGetDeviceInformation(ctx context.Context, endpoint string) (*Discov
 		return nil, err
 	}
 	if info == nil {
-		return nil, nil
+		return nil, nil // TODO(#51): device info is nil, skip device
 	}
 
 	name := info.Manufacturer
@@ -294,7 +294,7 @@ func fetchDeviceInformation(ctx context.Context, endpoint string) (*deviceInfoFi
 
 	if resp.StatusCode != http.StatusOK {
 		logger.Debug("GetDeviceInformation returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
-		return nil, nil
+		return nil, nil // TODO(#51): GetDeviceInformation failed with non-200 status, skip device
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

@@ -9,13 +9,13 @@ import (
 
 // fakeService is a minimal Service implementation for tests.
 type fakeService struct {
-	name      string
-	startErr  error
-	stopErr   error
-	startCnt  int
-	stopCnt   int
-	startSlow bool
-	mu        sync.Mutex
+	name     string
+	startErr error
+	stopErr  error
+	startCnt int
+	stopCnt  int
+
+	mu sync.Mutex
 }
 
 func (f *fakeService) Name() string { return f.name }

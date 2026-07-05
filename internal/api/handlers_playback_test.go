@@ -89,8 +89,9 @@ func TestPlaybackWS_BasicFlow(t *testing.T) {
 
 	// Connect WebSocket.
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/playback-test-1/playback"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	defer conn.Close()
 
 	// Read frames — expect at least 5 video frames (audio may vary).
@@ -150,8 +151,9 @@ func TestPlaybackWS_PlayPause(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/playback-test-2/playback"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	defer conn.Close()
 
 	// Read one frame to confirm streaming.
@@ -182,7 +184,10 @@ func TestPlaybackWS_NotFound(t *testing.T) {
 	// Connect to a non-existent recording — the handler should return an error
 	// before upgrade. Since the WS won't be upgraded, Dial should fail.
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/non-existent/playback"
-	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad handshake")
 }

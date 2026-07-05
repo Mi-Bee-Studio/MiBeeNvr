@@ -41,16 +41,6 @@ func (s *mp4BoxScanner) hasBox(boxName string) bool {
 	return bytes.Contains(s.data[4:], needle)
 }
 
-// hasBoxes checks that ALL named boxes exist in the file.
-func (s *mp4BoxScanner) hasBoxes(boxNames ...string) bool {
-	for _, name := range boxNames {
-		if !s.hasBox(name) {
-			return false
-		}
-	}
-	return true
-}
-
 // panicStore wraps a real SegmentStore but panics on the first CreateSegment call.
 type panicStore struct {
 	SegmentStore

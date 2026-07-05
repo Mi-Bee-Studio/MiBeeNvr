@@ -2,9 +2,9 @@ package api
 
 import (
 	"bytes"
-	"errors"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -717,7 +717,7 @@ func extractEXIFDateTime(filePath string) (time.Time, bool) {
 	// EXIF data is typically in the first few KB; read 64KB to be safe
 	buf := make([]byte, 65536)
 	n, err := io.ReadFull(f, buf)
-		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return time.Time{}, false
 	}
 	if n < 4 {

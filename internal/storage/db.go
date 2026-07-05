@@ -42,19 +42,19 @@ func New(dbPath string) (*DB, error) {
 		return nil, err
 	}
 	// Set pragmas on open
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA journal_mode=WAL;"); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec("PRAGMA synchronous=NORMAL;"); err != nil {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA synchronous=NORMAL;"); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA busy_timeout=5000;"); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec("PRAGMA cache_size=-2000;"); err != nil {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA cache_size=-2000;"); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -389,7 +389,7 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrateEncodings() {
-	rows, err := d.db.Query("SELECT id, protocol FROM cameras WHERE encoding = ''")
+	rows, err := d.db.QueryContext(context.Background(), "SELECT id, protocol FROM cameras WHERE encoding = ''")
 	if err != nil {
 		return
 	}
@@ -406,15 +406,15 @@ func (d *DB) migrateEncodings() {
 		}
 		// Only update if protocol actually changed (was a combined format)
 		if proto != protocol {
-			d.db.Exec("UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
-		} else {
-			// Same protocol (onvif or already normalized) — just set encoding if available
-			if enc != "" {
-				d.db.Exec("UPDATE cameras SET encoding = ? WHERE id = ?", enc, id)
-			}
+			d.db.ExecContext(context.Background(), "UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return
+	}
 }
+
+// Backup creates a backup of the database using VACUUM INTO.
 
 // Backup creates a backup of the database using VACUUM INTO.
 func (d *DB) Backup(ctx context.Context, destPath string) error {
@@ -422,6 +422,7 @@ func (d *DB) Backup(ctx context.Context, destPath string) error {
 	return err
 }
 
+// sqliteTimeFormat is the format used to store timestamps in SQLite.
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
 // Uses UTC without timezone suffix, compatible with SQLite's datetime() for string comparison.
 const sqliteTimeFormat = "2006-01-02 15:04:05.999999999"

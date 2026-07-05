@@ -405,6 +405,7 @@ func (c *Cloud) Login(username, password string) error {
 	if err != nil {
 		return fmt.Errorf("xiaomi: login step 1: %w", err)
 	}
+	defer res.Body.Close()
 
 	var v1 struct {
 		Qs       string `json:"qs"`

@@ -298,7 +298,7 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Load display timezone for merge window alignment and camera scheduling.
-	var appLoc *time.Location = time.Local // Default: use server's local timezone
+	appLoc := time.Local // Default: use server's local timezone
 	if cfg.Timezone != "" && cfg.Timezone != "Local" {
 		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
 			appLoc = loc

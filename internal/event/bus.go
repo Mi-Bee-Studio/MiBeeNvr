@@ -56,10 +56,6 @@ func NewEventBus(bufferSize int) *EventBus {
 // event when the channel is full. The caller is responsible for reading from ch.
 // Returns ErrDuplicateSubscriber if the same channel is already subscribed.
 func (b *EventBus) Subscribe(topic string, ch chan Event, bufferSize int) error {
-	if bufferSize <= 0 {
-		bufferSize = b.bufferSize
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -92,10 +88,6 @@ func (b *EventBus) Unsubscribe(topic string, ch chan Event) {
 // SubscribeByPrefix registers a channel for all topics that start with the given prefix.
 // An empty prefix matches all topics. The caller is responsible for reading from ch.
 func (b *EventBus) SubscribeByPrefix(prefix string, ch chan Event, bufferSize int) error {
-	if bufferSize <= 0 {
-		bufferSize = b.bufferSize
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

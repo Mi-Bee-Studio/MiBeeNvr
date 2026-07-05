@@ -130,23 +130,10 @@ func localSubnets() []*net.IPNet {
 }
 
 func addrIPNet(addr net.Addr) (*net.IPNet, bool) {
-	switch v := addr.(type) {
-	case *net.IPNet:
+	if v, ok := addr.(*net.IPNet); ok {
 		return v, true
 	}
 	return nil, false
-}
-
-// ipv4sInCIDR enumerates all usable IPv4 hosts in a CIDR string, skipping
-// network and broadcast addresses. Returns nil on parse error or prefix > /24
-// (to keep scans bounded — larger ranges should be expressed via SubnetHints
-// as explicit /24s by the user).
-func ipv4sInCIDR(cidr string) []string {
-	_, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return nil
-	}
-	return ipsInIPNet(ipnet)
 }
 
 // ipsInIPNet enumerates usable hosts for /24-or-smaller IPv4 networks. Returns

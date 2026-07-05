@@ -109,7 +109,9 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		e.BBox = bbox.String
 		e.SnapshotPath = snapshotPath.String
 		e.Metadata = metadata.String
-		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
 	return events, total, nil
 }
@@ -173,8 +175,16 @@ func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Ti
 		}
 		stats = append(stats, s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return stats, nil
 }
+
+// joinStrings is a local helper to avoid importing strings just for Join.
 
 // joinStrings is a local helper to avoid importing strings just for Join.
 func joinStrings(ss []string, sep string) string {

@@ -148,7 +148,7 @@ func (r *HTTPJPEGRecorder) Start(ctx context.Context) error {
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.watchdogDone = make(chan struct{})

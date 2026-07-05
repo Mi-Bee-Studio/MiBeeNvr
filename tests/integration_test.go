@@ -909,8 +909,6 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	// 5. Stop non-existent stream → 200 (not active)
-	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
-
 	// 5. Stop non-existent stream → 200 (not active)
 	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -1541,23 +1539,4 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 		"goroutine leak: %d goroutines remain (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Logf("final goroutines: %d (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Log("no goroutine leaks detected")
-}
-
-// eventuallyWS polls fn until it returns true or timeout elapses.
-func eventuallyWS(t *testing.T, fn func() bool, timeout, interval time.Duration) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if fn() {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("eventuallyWS: timed out after %v", timeout)
-		case <-ticker.C:
-		}
-	}
 }

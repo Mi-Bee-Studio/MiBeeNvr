@@ -2341,7 +2341,8 @@ func TestGetCameraMergeConfig_Success(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Seed a camera
-	_, err := db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
+	var err error
+	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
 
 	// Set per-camera merge config

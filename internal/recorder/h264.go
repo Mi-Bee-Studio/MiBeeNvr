@@ -1,9 +1,9 @@
 package recorder
 
 import (
-	"errors"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -350,7 +350,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		client.OnPacketRTP(audioMedi, audioForma, func(pkt *rtp.Packet) {
 			aus, err := audioDec.Decode(pkt)
 			if err != nil {
-			if !errors.Is(err, rtpmpeg4audio.ErrMorePacketsNeeded) {
+				if !errors.Is(err, rtpmpeg4audio.ErrMorePacketsNeeded) {
 					h264Logger.Error("audio RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 				}
 				return

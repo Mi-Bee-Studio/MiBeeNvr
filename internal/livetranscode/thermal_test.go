@@ -19,9 +19,7 @@ import (
 // mockTranscoder implements Transcoder for testing. It signals crash via
 // the done channel optionally after a delay.
 type mockTranscoder struct {
-	t       *testing.T
-	startFn func(ctx context.Context) error
-	stopFn  func() error
+	t *testing.T
 
 	mu   sync.Mutex
 	done chan struct{} // closed when the "process" exits

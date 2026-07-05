@@ -185,9 +185,7 @@ func TestH264FrameExtraction(t *testing.T) {
 	err := hub.Subscribe("test", func(pts int64, au [][]byte) {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, nalu := range au {
-			receivedFrames = append(receivedFrames, nalu)
-		}
+		receivedFrames = append(receivedFrames, au...)
 	})
 	require.NoError(t, err)
 

@@ -25,9 +25,77 @@ linters:
     nolintlint:
       require-explanation: true
       require-specific: true
+    staticcheck:
+      checks:
+        - all
+        - -QF*
+        - -ST*
+        - -SA1019  # Deprecated API usage (tracked for future migration)
+    gocritic:
+      disabled-checks:
+        - ifElseChain
   exclusions:
     paths:
       - web/
+    rules:
+      # Test files: loose checking
+      - path: _test\.go
+        linters: [errcheck, noctx, gocritic, contextcheck, nilnil, bodyclose]
+      - path: internal/(onvif|upload|merge|storage|ftp|wsstream)/
+        linters: [nilnil, ineffassign]
+      - path: internal/xiaomi/
+        linters: [bodyclose]
+      - path: internal/storage/
+        linters: [rowserrcheck]
+      # Internal packages: context intentionally omitted (non-blocking I/O)
+      - path: internal/
+        linters: [noctx, contextcheck]
+      - path: cmd/
+        linters: [noctx, contextcheck]
+      # errcheck patterns: legitimate cleanup/write patterns
+      - source: 'defer .+\.Close\(\)'
+        linters: [errcheck]
+      - source: '\.Write\('
+        linters: [errcheck]
+      - source: '\.Stop\('
+        linters: [errcheck]
+      - source: '\.Rollback\('
+        linters: [errcheck]
+      - source: '\.Flush\('
+        linters: [errcheck]
+      - source: '\.Close\('
+        linters: [errcheck]
+      - source: '\.Encode\('
+        linters: [errcheck]
+      - source: '\.RunOnce\('
+        linters: [errcheck]
+      - source: '\.Wait\('
+        linters: [errcheck]
+      - source: '\.WriteString\('
+        linters: [errcheck]
+      - source: 'MkdirAll\('
+        linters: [errcheck]
+      - source: 'RemoveAll\('
+        linters: [errcheck]
+      - source: 'DeleteFile\('
+        linters: [errcheck]
+      - source: 'filepath\.Walk\('
+        linters: [errcheck]
+      - source: 'os\.(Remove|RemoveAll)\('
+        linters: [errcheck]
+      - source: '(SetReadDeadline)\('
+        linters: [errcheck]
+      - source: 'SubscribeByPrefix\('
+        linters: [errcheck]
+      - source: 'fmt\.Sscanf\('
+        linters: [errcheck]
+      - source: 'fmt\.Fprintf\('
+        linters: [errcheck]
+      - source: '\.Exec'
+        linters: [errcheck]
+      # gocritic style preferences
+      - source: 'ifElseChain'
+        linters: [gocritic]
 
 formatters:
   enable:

@@ -17,6 +17,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// Pre-compiled regex patterns for validation (avoids SA6000: regexp.MatchString in loop)
+var (
+	rePlatformName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	reResolution   = regexp.MustCompile(`^\d+x\d+$`)
+	reBitrate      = regexp.MustCompile(`^(0|\d+(\.\d+)?[kMG])$`)
+)
+
 type Config struct {
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
@@ -603,7 +610,7 @@ func Validate(cfg *Config) error {
 			}
 			// Validate platform preset name.
 			if pt.Platform != "" {
-				if matched, _ := regexp.MatchString(`^[a-zA-Z0-9_]+$`, pt.Platform); !matched {
+				if !rePlatformName.MatchString(pt.Platform) {
 					return fmt.Errorf("camera[%d].push_targets[%d].platform must be alphanumeric (underscores allowed)", i, j)
 				}
 			}
@@ -618,7 +625,7 @@ func Validate(cfg *Config) error {
 			if pt.VideoPresetOverride != nil {
 				v := pt.VideoPresetOverride
 				if v.Resolution != "" {
-					if matched, _ := regexp.MatchString(`^\d+x\d+$`, v.Resolution); !matched {
+					if !reResolution.MatchString(v.Resolution) {
 						return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.resolution must be in format WxH (e.g. 1920x1080)", i, j)
 					}
 				}
@@ -760,8 +767,7 @@ func Validate(cfg *Config) error {
 		}
 
 		if cam.Transcoding.Bitrate != "" {
-			matched, err := regexp.MatchString(`^(0|\d+(\.\d+)?[kMG])$`, cam.Transcoding.Bitrate)
-			if err != nil || !matched {
+			if !reBitrate.MatchString(cam.Transcoding.Bitrate) {
 				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
 			}
 		}

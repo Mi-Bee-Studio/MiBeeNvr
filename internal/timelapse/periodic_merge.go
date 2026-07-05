@@ -302,7 +302,7 @@ func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []mod
 	// merge.MergeMP4Segments validates codec/SPS/PPS/VPS/audio consistency.
 	if err := merge.MergeMP4Segments(ctx, segInfos, outputPath); err != nil {
 		_ = os.Remove(outputPath)
-		return fmt.Errorf("Go concat merge: %w", err)
+		return fmt.Errorf("go concat merge: %w", err)
 	}
 
 	// Report 100% progress — Go concat is fast (streaming copy), no granular progress.

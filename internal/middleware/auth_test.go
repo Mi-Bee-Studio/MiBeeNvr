@@ -108,7 +108,7 @@ func TestConcurrentAccess(t *testing.T) {
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
-				// non-fatal in goroutine
+				_ = w.Code
 			}
 			done <- true
 		}(i)

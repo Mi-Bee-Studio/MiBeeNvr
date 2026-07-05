@@ -1,11 +1,11 @@
 package transcoding
 
 import (
-	"errors"
 	"archive/tar"
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -348,8 +348,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 		tarReader = tar.NewReader(gzr)
 	} else if strings.HasSuffix(url, ".tar.xz") {
 		// Use xz command for decompression (pure Go xz not in stdlib)
-		f.Close() // close file, xz will read it directly
-		cmd := exec.Command("xz", "-dc", archivePath)
+		cmd := exec.CommandContext(context.Background(), "xz", "-dc", archivePath)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return fmt.Errorf("xz stdout pipe: %w", err)

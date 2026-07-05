@@ -157,7 +157,8 @@ func TestCleanupIncomplete(t *testing.T) {
 	_ = db.Init(ctx)
 
 	// Insert directly with NULL ended_at to test cleanup (InsertRecording serializes zero time as 0001-01-01, not NULL)
-	_, err := db.db.ExecContext(
+	var err error
+	_, _ = db.db.ExecContext(
 		ctx,
 		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
 		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,

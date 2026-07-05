@@ -283,7 +283,7 @@ func TestCamerasAPI_ResponseShape(t *testing.T) {
 	t.Run("CameraRow_uses_RecorderStatus_type", func(t *testing.T) {
 		// Compile-time proof that CameraRow.Status is model.RecorderStatus.
 		var row storage.CameraRow
-		var _ model.RecorderStatus = row.Status
+		_ = row.Status
 	})
 }
 

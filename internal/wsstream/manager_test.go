@@ -631,9 +631,9 @@ func TestGoroutineCleanup(t *testing.T) {
 }
 
 func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
-	baseline := runtime.NumGoroutine()
 	time.Sleep(100 * time.Millisecond) // let GC settle
-	baseline = runtime.NumGoroutine()
+	time.Sleep(100 * time.Millisecond) // let GC settle
+	baseline := runtime.NumGoroutine()
 
 	m := NewManager(WithIdleTimeout(5 * time.Second))
 	hub := newTestHub(t)

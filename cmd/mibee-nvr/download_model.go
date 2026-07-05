@@ -13,8 +13,7 @@ import (
 func cmdDownloadModel() {
 	var cfgPath string
 	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--config":
+		if os.Args[i] == "--config" {
 			i++
 			if i < len(os.Args) {
 				cfgPath = os.Args[i]
@@ -76,16 +75,17 @@ func downloadModelFile(modelDir, filename string) {
 		fmt.Fprintf(os.Stderr, "Error creating file: %v\n", err)
 		os.Exit(1)
 	}
-	defer out.Close()
+	out.Close()
 
 	resp, err := http.Get(modelURL)
 	if err != nil {
+		out.Close()
 		fmt.Fprintf(os.Stderr, "Error downloading model: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		out.Close()
 		fmt.Fprintf(os.Stderr, "Download failed: HTTP %d\n", resp.StatusCode)
 		os.Exit(1)
 	}

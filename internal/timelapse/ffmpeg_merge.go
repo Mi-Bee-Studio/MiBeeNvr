@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 
@@ -220,9 +219,6 @@ func selectMergeEncoder(caps *transcoding.HardwareCapabilities) string {
 	}
 	return "libx264"
 }
-
-// mergeProgressRegex matches FFmpeg's standard stderr progress line.
-var mergeProgressRegex = regexp.MustCompile(`time=(\d+):(\d+):(\d+\.\d+)`)
 
 // consumeStderr reads FFmpeg stderr and returns the last meaningful output for diagnostics.
 // It fully consumes stderr to prevent the FFmpeg process from blocking on stderr writes.

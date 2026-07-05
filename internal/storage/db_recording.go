@@ -401,7 +401,7 @@ func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string,
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil
@@ -422,7 +422,7 @@ func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil
@@ -442,7 +442,7 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil
@@ -482,7 +482,7 @@ func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil
@@ -504,7 +504,7 @@ func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil
@@ -527,7 +527,7 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
 		res = append(res, r)
 	}
 	return res, nil

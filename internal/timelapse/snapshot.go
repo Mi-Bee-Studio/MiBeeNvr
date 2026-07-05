@@ -60,7 +60,7 @@ func deriveSnapshotFromRTSP(rtspURL string) string {
 	// Build the base HTTP URL from the RTSP host:port
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
 
 	// Try common snapshot paths, returning the first that matches common patterns.
@@ -119,7 +119,7 @@ func snapshotCandidatesFromRTSP(rtspURL string) []string {
 
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
 
 	var candidates []string

@@ -1,10 +1,10 @@
 package merge
 
 import (
-	"errors"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
