@@ -13,8 +13,8 @@ import (
 type Scheduler struct {
 	// now returns the current time. If nil, time.Now().In(s.loc) is used.
 	// Exposed as a field for testing only — do not set in production code.
-now func() time.Time
-loc *time.Location
+	now func() time.Time
+	loc *time.Location
 }
 
 // NewScheduler creates a new Scheduler with default time source.

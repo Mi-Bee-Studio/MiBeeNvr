@@ -8,7 +8,8 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/stretchr/testify/require")
+	"github.com/stretchr/testify/require"
+)
 
 // newCollector creates a StreamStatsCollector for testing with reasonable defaults.
 func newCollector(t *testing.T, windowSize time.Duration) (*StreamStatsCollector, *[]model.HealthEvent) {

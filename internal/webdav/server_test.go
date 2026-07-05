@@ -28,13 +28,13 @@ func createTestFiles(t *testing.T, rootDir string) {
 	t.Helper()
 	// camera-01 dir with recording files
 	cam1 := filepath.Join(rootDir, "camera-01")
-	require.NoError(t, os.MkdirAll(cam1, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cam1, "recording_001.mp4"), []byte("fake-mp4-data"), 0644))
+	require.NoError(t, os.MkdirAll(cam1, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cam1, "recording_001.mp4"), []byte("fake-mp4-data"), 0o644))
 
 	// camera-02 dir with recording files
 	cam2 := filepath.Join(rootDir, "camera-02")
-	require.NoError(t, os.MkdirAll(cam2, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cam2, "recording_002.mp4"), []byte("fake-mp4-data-2"), 0644))
+	require.NoError(t, os.MkdirAll(cam2, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cam2, "recording_002.mp4"), []byte("fake-mp4-data-2"), 0o644))
 }
 
 func TestPROPFINDRoot(t *testing.T) {

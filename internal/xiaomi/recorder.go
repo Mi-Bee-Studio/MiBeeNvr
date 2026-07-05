@@ -144,8 +144,10 @@ func (r *XiaomiRecorder) AudioChannels() int {
 	return 0
 }
 
-var _ model.Recorder = (*XiaomiRecorder)(nil)
-var _ model.HLSProvider = (*XiaomiRecorder)(nil)
+var (
+	_ model.Recorder    = (*XiaomiRecorder)(nil)
+	_ model.HLSProvider = (*XiaomiRecorder)(nil)
+)
 
 // NewXiaomiRecorder creates a new Xiaomi MISS protocol recorder.
 func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*metrics.Metrics) *XiaomiRecorder {
@@ -723,7 +725,6 @@ func buildAudioMuxerConfig(codecID uint32) (codec string, config []byte, ok bool
 		return "", nil, false
 	}
 }
-
 
 // forwardAudio broadcasts audio data via StreamHub (non-blocking)
 // and writes to the MP4 muxer when an audio track is available.

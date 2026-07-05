@@ -69,7 +69,8 @@ func (s *MergeScheduler) addOrUpdateAt(now time.Time, cameraID string, duration 
 		nextRun:  computeNextRun(now, duration, s.loc),
 	}
 
-	slog.Debug("merge scheduler: added/updated camera",
+	slog.Debug(
+		"merge scheduler: added/updated camera",
 		"camera_id", cameraID,
 		"duration", duration,
 		"next_run", s.entries[cameraID].nextRun.Format(time.RFC3339),
@@ -150,7 +151,8 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 			// Run merge in background — do not block the loop
 			go func(camID string, refTime time.Time) {
 				if err := s.runFunc(ctx, camID, refTime); err != nil {
-					slog.Error("merge scheduler: merge failed",
+					slog.Error(
+						"merge scheduler: merge failed",
 						"camera_id", camID,
 						"ref_time", refTime.Format(time.RFC3339),
 						"error", err,
@@ -159,8 +161,9 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 			}(id, now)
 
 			// Recompute next run after this one
-		entry.nextRun = computeNextRun(now, entry.duration, s.loc)
-			slog.Debug("merge scheduler: triggered merge",
+			entry.nextRun = computeNextRun(now, entry.duration, s.loc)
+			slog.Debug(
+				"merge scheduler: triggered merge",
 				"camera_id", id,
 				"duration", entry.duration,
 				"next_run", entry.nextRun.Format(time.RFC3339),
@@ -185,7 +188,7 @@ func (s *MergeScheduler) runLoop() {
 		var earliest time.Time
 		for _, entry := range s.entries {
 			if entry.nextRun.IsZero() {
-			entry.nextRun = computeNextRun(time.Now().In(s.loc), entry.duration, s.loc)
+				entry.nextRun = computeNextRun(time.Now().In(s.loc), entry.duration, s.loc)
 			}
 			if earliest.IsZero() || entry.nextRun.Before(earliest) {
 				earliest = entry.nextRun
@@ -217,7 +220,7 @@ func (s *MergeScheduler) runLoop() {
 		}
 
 		// Trigger all due cameras
-	s.triggerDueAt(s.ctx, time.Now().In(s.loc))
+		s.triggerDueAt(s.ctx, time.Now().In(s.loc))
 	}
 }
 

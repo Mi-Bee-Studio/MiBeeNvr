@@ -131,7 +131,6 @@ func TestDriftMonitor_DriftRecovers(t *testing.T) {
 }
 
 func TestDriftMonitor_DriftMsValues(t *testing.T) {
-
 	tests := []struct {
 		name   string
 		video  int64

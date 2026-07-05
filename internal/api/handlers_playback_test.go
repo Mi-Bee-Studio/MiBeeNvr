@@ -55,7 +55,7 @@ func createTestAVIFile(t *testing.T, path string, numFrames int, includeAudio bo
 		}
 	}
 	require.NoError(t, m.Close())
-	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0644))
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
 }
 
 // --- Tests ---

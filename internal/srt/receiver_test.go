@@ -331,6 +331,7 @@ func (m *mockSRTConn) WritePacket(p packet.Packet) error  { return nil }
 func (m *mockSRTConn) LocalAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}
 }
+
 func (m *mockSRTConn) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5678}
 }

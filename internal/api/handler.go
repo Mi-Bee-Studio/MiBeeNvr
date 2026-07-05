@@ -188,7 +188,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
 				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
-		})
+			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
@@ -614,7 +614,7 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Serve from {storage_root}/models/ directory
 	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
-	
+
 	// Sanitize: prevent path traversal
 	cleanPath := filepath.Clean(filepath.Join(modelDir, filename))
 	modelDirWithSep := modelDir + string(filepath.Separator)
@@ -622,6 +622,6 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid filename")
 		return
 	}
-	
+
 	http.ServeFile(w, r, cleanPath)
 }

@@ -38,11 +38,11 @@ type SnapshotCapturerConfig struct {
 // interval and writes them as frame sequences in segment directories.
 // Implements model.Recorder.
 type SnapshotCapturer struct {
-	cfg     SnapshotCapturerConfig
-	store   SegmentStore
-	metrics *metrics.Metrics
+	cfg      SnapshotCapturerConfig
+	store    SegmentStore
+	metrics  *metrics.Metrics
 	mergeMgr *RollingMergeManager
-	client  *http.Client
+	client   *http.Client
 
 	mu     sync.Mutex
 	status model.RecorderStatus
@@ -84,7 +84,7 @@ func NewSnapshotCapturer(cfg SnapshotCapturerConfig, store SegmentStore, opts ..
 		metrics:  m,
 		mergeMgr: cfg.MergeMgr,
 		client: &http.Client{
-			Timeout:   30 * time.Second,
+			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				DisableKeepAlives: true,
 			},
@@ -236,7 +236,7 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 
 	frameName := fmt.Sprintf("frame_%06d.jpg", frameCount)
 	jpgPath := filepath.Join(curTempPath, frameName)
-	if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+	if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
 		snapshotCapturerLogger.Error("failed to write snapshot frame",
 			"camera_id", r.cfg.CameraID, "error", err)
 		r.mu.Lock()
@@ -400,4 +400,3 @@ func (r *SnapshotCapturer) closeCurrentSegment() {
 		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, finalPath, finalPath+".mp4", recordingID)
 	}
 }
-

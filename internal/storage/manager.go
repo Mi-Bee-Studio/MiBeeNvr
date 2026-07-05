@@ -40,7 +40,7 @@ func NewManager(rootDir string, opts ...*metrics.Metrics) (*Manager, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("storage: root directory path must not be empty")
 	}
-	if err := os.MkdirAll(rootDir, 0755); err != nil {
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("storage: failed to create root directory %q: %w", rootDir, err)
 	}
 	return &Manager{rootDir: rootDir, metrics: m}, nil
@@ -54,7 +54,7 @@ func (m *Manager) RootDir() string {
 // EnsureCameraDir creates the directory for a camera if it doesn't exist.
 func (m *Manager) EnsureCameraDir(cameraID string) error {
 	dir := filepath.Join(m.rootDir, cameraID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("storage: failed to create camera dir %q: %w", dir, err)
 	}
 	return nil
@@ -89,7 +89,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		tempPath = filepath.Join(cameraDir, uuid+".tmp")
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
-		if err := os.MkdirAll(tempPath, 0755); err != nil {
+		if err := os.MkdirAll(tempPath, 0o755); err != nil {
 			m.recordWriteFailure()
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
 		}
@@ -179,7 +179,7 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 		// MJPEG: write individual JPEG file with timestamp name
 		ts := time.Now().Format("20060102_150405.000")
 		jpgPath := filepath.Join(tempPath, ts+".jpg")
-		if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+		if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
 			m.recordWriteFailure()
 			return 0, fmt.Errorf("storage: failed to write JPEG frame: %w", err)
 		}
@@ -188,7 +188,7 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 	}
 
 	// H.264: append to temp file
-	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		m.recordWriteFailure()
 		return 0, fmt.Errorf("storage: failed to open temp file for writing: %w", err)

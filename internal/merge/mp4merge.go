@@ -63,7 +63,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		}
 		if seg.HasAudio && !bytes.Equal(seg.AudioConfig, audioConfig) {
 			return fmt.Errorf("segment %d: audio config mismatch", i)
-	}
+		}
 	}
 
 	// Validate that segments have samples.
@@ -452,8 +452,8 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	tkhd := &mp4.Tkhd{
 		TrackID:    trackID,
 		DurationV0: tr.duration,
-		Width:  uint32(tr.width) << 16,
-		Height: uint32(tr.height) << 16,
+		Width:      uint32(tr.width) << 16,
+		Height:     uint32(tr.height) << 16,
 		Matrix: [9]int32{
 			0x00010000, 0, 0,
 			0, 0x00010000, 0,

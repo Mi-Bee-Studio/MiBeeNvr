@@ -8,7 +8,7 @@ import (
 
 // MockDiscoverer is a testable Discoverer that returns configured values.
 type MockDiscoverer struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
 	Devices []DiscoveredDevice
 	Error   error
 
@@ -49,8 +49,8 @@ type MockDeviceClient struct {
 	GetCapabilitiesCalls      int
 
 	GetStreamURIWithProtocolCalls int
-	StreamURIWithProtocol        *StreamInfo
-	StreamURIWithProtocolError   error
+	StreamURIWithProtocol         *StreamInfo
+	StreamURIWithProtocolError    error
 }
 
 func (m *MockDeviceClient) Connect(ctx context.Context) error {
@@ -120,7 +120,7 @@ type MockPTZController struct {
 	GoToPresetCalls     int
 	RemovePresetCalls   int
 
-	Presets       []PTZPreset
+	Presets        []PTZPreset
 	SetPresetToken string
 }
 
@@ -190,13 +190,12 @@ func (m *MockPTZController) RemovePreset(ctx context.Context, token string) erro
 	return m.Error
 }
 
-
 // MockImagingController is a testable ImagingController.
 type MockImagingController struct {
-	mu              sync.Mutex
-	Settings        *ImagingSettings
-	Options         *ImagingOptions
-	Error           error
+	mu       sync.Mutex
+	Settings *ImagingSettings
+	Options  *ImagingOptions
+	Error    error
 
 	GetImagingSettingsCalls int
 	SetImagingSettingsCalls int
@@ -228,9 +227,9 @@ var _ ImagingController = (*MockImagingController)(nil)
 
 // MockPresetManager is a testable PresetManager.
 type MockPresetManager struct {
-	mu        sync.Mutex
-	Presets   []PTZPreset
-	Error     error
+	mu      sync.Mutex
+	Presets []PTZPreset
+	Error   error
 
 	GetPresetsCalls   int
 	SetPresetCalls    int
@@ -270,9 +269,9 @@ var _ PresetManager = (*MockPresetManager)(nil)
 
 // MockEventSubscriber is a testable EventSubscriber.
 type MockEventSubscriber struct {
-	mu        sync.Mutex
-	Events    []ONVIFEvent
-	Error     error
+	mu     sync.Mutex
+	Events []ONVIFEvent
+	Error  error
 
 	SubscribeCalls        int
 	UnsubscribeCalls      int
@@ -304,12 +303,12 @@ var _ EventSubscriber = (*MockEventSubscriber)(nil)
 
 // MockDeviceManager is a testable DeviceManager.
 type MockDeviceManager struct {
-	mu                  sync.Mutex
-	NetworkInterfaces   []NetworkInterface
-	Users               []ONVIFUser
-	Error               error
+	mu                sync.Mutex
+	NetworkInterfaces []NetworkInterface
+	Users             []ONVIFUser
+	Error             error
 
-	SystemRebootCalls          int
+	SystemRebootCalls         int
 	GetNetworkInterfacesCalls int
 	SetNetworkInterfacesCalls int
 	GetUsersCalls             int

@@ -68,9 +68,9 @@ const errUnreachable stringErr = "unreachable"
 func TestDiscoverByStableID_MatchesBySerial(t *testing.T) {
 	// Camera last known at .10; it roamed to .50. Same serial everywhere.
 	cam := config.CameraConfig{
-		ID:           "cam-1",
-		Protocol:     "onvif",
-		StableID:     "SN-AAA",
+		ID:            "cam-1",
+		Protocol:      "onvif",
+		StableID:      "SN-AAA",
 		ONVIFEndpoint: "http://192.0.2.10:80/onvif/device_service",
 		// Use TEST-NET-1 (192.0.2.0/24) so localSubnets() does not pollute it.
 		SubnetHints: []string{"192.0.2.0/24"},

@@ -71,7 +71,8 @@ func getMediaInfoFFprobe(ffprobePath, filePath string) (*MediaInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, ffprobePath,
+	cmd := exec.CommandContext(
+		ctx, ffprobePath,
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=codec_name,duration,width,height",

@@ -275,7 +275,7 @@ func TestProbeDevice_SendsSOAPProbe(t *testing.T) {
 	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, device)
-require.NotEmpty(t, receivedBody, "should have sent a SOAP body")
+	require.NotEmpty(t, receivedBody, "should have sent a SOAP body")
 }
 
 // validGetDeviceInfoResponse is a realistic GetDeviceInformationResponse.

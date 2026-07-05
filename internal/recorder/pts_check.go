@@ -108,7 +108,8 @@ func checkPTSMonotonicity(lastPTS, curPTS int64) ptsCheckResult {
 
 // logPTSAnomaly logs a warning for the detected PTS anomaly.
 func logPTSAnomaly(logger *slog.Logger, cameraID string, result ptsCheckResult) {
-	logger.Warn("PTS anomaly detected",
+	logger.Warn(
+		"PTS anomaly detected",
 		"camera_id", cameraID,
 		"anomaly", result.Anomaly.String(),
 		"last_pts", result.LastPTS,

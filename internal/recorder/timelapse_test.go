@@ -358,7 +358,7 @@ func TestTimelapseReconnect(t *testing.T) {
 func TestTimelapseInvalidFramesDropped(t *testing.T) {
 	invalidFrames := [][]byte{
 		[]byte("this-is-not-a-jpeg"),
-		[]byte{0xFF, 0x01, 0x02}, // wrong magic after FF
+		{0xFF, 0x01, 0x02}, // wrong magic after FF
 		[]byte("also-not-jpeg-data"),
 	}
 	srv := newTestMJPEGServer(t, invalidFrames)

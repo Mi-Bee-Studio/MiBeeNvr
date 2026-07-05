@@ -338,7 +338,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 					DB:           cm.db,
 					AudioEnabled: cam.AudioEnabled,
 				}
- 
+
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h265Cfg.FrameWatchdogTimeout = d
 				}

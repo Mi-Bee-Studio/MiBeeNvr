@@ -401,7 +401,6 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 }
 
 func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
-
 	defer func() {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
@@ -448,7 +447,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 				if !ok {
 					w, h = 640, 480 // fallback dimensions
 				}
-				f, err := os.OpenFile(tempPath, os.O_RDWR, 0644)
+				f, err := os.OpenFile(tempPath, os.O_RDWR, 0o644)
 				if err != nil {
 					mjpegLogger.Error("failed to open AVI file", "camera_id", r.cfg.CameraID, "error", err)
 					// Clean up the temp path on failure.

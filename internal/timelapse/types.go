@@ -51,7 +51,6 @@ const (
 	FrameSourceMJPEG FrameSource = "mjpeg"
 )
 
-
 // MergeStatus represents the merge process status for a timelapse recording.
 type MergeStatus string
 
@@ -135,8 +134,8 @@ func NewAutoDetectMerger() *AutoDetectMerger {
 	}
 }
 
-func (m *AutoDetectMerger) CanMerge() bool { return true }
-func (m *AutoDetectMerger) Tier() MergeTier  { return TierGo }
+func (m *AutoDetectMerger) CanMerge() bool  { return true }
+func (m *AutoDetectMerger) Tier() MergeTier { return TierGo }
 
 func (m *AutoDetectMerger) Merge(ctx context.Context, framesDir, outputPath string, fps int) (*MergeResult, error) {
 	if hasH265Frames(framesDir) {

@@ -68,9 +68,9 @@ func BenchmarkListRecordings(b *testing.B) {
 	// Seed with realistic data: 5 cameras, ~60 days, ~48 recordings/day each
 	// Total: 5 * 60 * 48 = 14,400 recordings
 	const (
-		numCameras            = 5
-		numDays               = 60
-		recsPerDayPerCam      = 48 // every 30 minutes
+		numCameras       = 5
+		numDays          = 60
+		recsPerDayPerCam = 48 // every 30 minutes
 	)
 
 	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)

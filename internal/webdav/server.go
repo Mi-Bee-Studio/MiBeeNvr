@@ -23,11 +23,11 @@ var webdavLogger = slog.Default().With("component", "webdav")
 
 // Server provides a WebDAV server for browsing and optionally uploading camera recordings.
 type Server struct {
-	store     *storage.Manager
+	store      *storage.Manager
 	pathPrefix string
-	authMW    func(http.Handler) http.Handler
-	db        *storage.DB
-	readWrite bool
+	authMW     func(http.Handler) http.Handler
+	db         *storage.DB
+	readWrite  bool
 }
 
 // NewServer creates a new WebDAV server.
@@ -182,7 +182,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 		return
 	}
 
-	webdavLogger.Info("registered uploaded recording",
+	webdavLogger.Info(
+		"registered uploaded recording",
 		"id", recording.ID,
 		"camera_id", cameraID,
 		"path", relPath,

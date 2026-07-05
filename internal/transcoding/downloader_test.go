@@ -27,7 +27,6 @@ func newTestDownloader(t *testing.T) *Downloader {
 	return NewDownloader(t.TempDir(), nil)
 }
 
-
 // mustCreateFakeFFmpeg creates a fake ffmpeg shell script that responds to -version.
 func mustCreateFakeFFmpeg(t *testing.T, dir string) string {
 	t.Helper()
@@ -178,8 +177,8 @@ func TestDownload_TarGzExtraction(t *testing.T) {
 	ffprobeContent := []byte("#!/bin/sh\necho 'ffprobe version 7.0-test'\n")
 
 	archive := createTarGzArchive(t, map[string][]byte{
-		"ffmpeg-git-amd64-static/ffmpeg":  ffmpegContent,
-		"ffmpeg-git-amd64-static/ffprobe": ffprobeContent,
+		"ffmpeg-git-amd64-static/ffmpeg":     ffmpegContent,
+		"ffmpeg-git-amd64-static/ffprobe":    ffprobeContent,
 		"ffmpeg-git-amd64-static/readme.txt": []byte("docs"),
 	})
 

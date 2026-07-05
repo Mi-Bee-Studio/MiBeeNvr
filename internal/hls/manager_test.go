@@ -158,10 +158,10 @@ func TestStartSubStreamReader_Dedup(t *testing.T) {
 	mgr.mu.Lock()
 	_, cancel := context.WithCancel(context.Background())
 	entry := &streamEntry{
-		frameCh:        make(chan hlsFrame, defaultWriteBufSize),
-		maxFPS:         0,
+		frameCh:         make(chan hlsFrame, defaultWriteBufSize),
+		maxFPS:          0,
 		subStreamCancel: cancel,
-		cancel:         cancel,
+		cancel:          cancel,
 	}
 	mgr.streams[cameraID] = entry
 	mgr.mu.Unlock()
@@ -1653,7 +1653,6 @@ func TestStartStopCycles_NoGoroutineLeak(t *testing.T) {
 	after := runtime.NumGoroutine()
 	require.LessOrEqual(t, after, baseline+1, "at most 1 extra goroutine tolerated after 5 start/stop cycles")
 }
-
 
 // --- extractParamSets Tests (added with muxer rebuild recovery) ---
 

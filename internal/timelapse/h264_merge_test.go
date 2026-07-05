@@ -50,7 +50,6 @@ func generateTestJPEG(t *testing.T, path string, width, height, quality int) {
 	}
 }
 
-
 // --- Tests ---
 
 // TestEnhancedGoMerge_ValidOutput verifies the enhanced Go merger produces a valid MP4.
@@ -59,7 +58,7 @@ func TestEnhancedGoMerge_ValidOutput(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,7 +162,7 @@ func TestEnhancedGoMerge_SizeReduction(t *testing.T) {
 	outputPassthrough := filepath.Join(tmpDir, "passthrough.mp4")
 
 	for _, d := range []string{framesDir, passthroughDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -177,7 +176,7 @@ func TestEnhancedGoMerge_SizeReduction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(passthroughDir, fmt.Sprintf("frame_%06d.jpg", i)), src, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(passthroughDir, fmt.Sprintf("frame_%06d.jpg", i)), src, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,7 +218,7 @@ func TestEnhancedGoMerge_SingleFrame(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,7 +266,7 @@ func TestEnhancedGoMerge_QualityLevels(t *testing.T) {
 			framesDir := filepath.Join(tmpDir, "frames")
 			outputPath := filepath.Join(tmpDir, "output.mp4")
 
-			if err := os.MkdirAll(framesDir, 0755); err != nil {
+			if err := os.MkdirAll(framesDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
 
@@ -299,7 +298,7 @@ func TestEnhancedGoMerge_EmptyDir(t *testing.T) {
 	emptyDir := filepath.Join(tmpDir, "empty")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(emptyDir, 0755); err != nil {
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -345,7 +344,7 @@ func TestEnhancedGoMerge_FFprobeValidation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -362,7 +361,8 @@ func TestEnhancedGoMerge_FFprobeValidation(t *testing.T) {
 	}
 
 	// Run ffprobe to validate the MP4.
-	cmd := exec.Command("ffprobe",
+	cmd := exec.Command(
+		"ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
@@ -399,7 +399,7 @@ func TestEnhancedGoMerge_ContextCancellation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -430,7 +430,7 @@ func TestEnhancedGoMerge_MergeResult(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -468,7 +468,7 @@ func TestEnhancedGoMerge_PassthroughMode(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 

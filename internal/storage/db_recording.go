@@ -44,7 +44,8 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			logger.Warn("insert recording: database busy, retrying",
+			logger.Warn(
+				"insert recording: database busy, retrying",
 				"camera_id", r.CameraID,
 				"file_path", r.FilePath,
 				"attempt", attempt,
@@ -62,7 +63,8 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 		}
 		lastErr = err
 	}
-	logger.Error("insert recording: exhausted retries",
+	logger.Error(
+		"insert recording: exhausted retries",
 		"camera_id", r.CameraID,
 		"file_path", r.FilePath,
 		"max_retries", maxRetries,

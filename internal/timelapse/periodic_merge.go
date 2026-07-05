@@ -92,7 +92,8 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 
 	// 2. Handle no segments.
 	if len(segments) == 0 {
-		slog.Warn("periodic merge: no segments found for window",
+		slog.Warn(
+			"periodic merge: no segments found for window",
 			"camera_id", cameraID,
 			"window", windowLabel,
 		)
@@ -109,7 +110,7 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 
 // runMergePipeline runs the core merge logic on the given segments.
 func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []model.Recording, outputPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 	// Set initial merge progress to 0 for all segments.
@@ -122,7 +123,8 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 	// Check segment compatibility.
 	compatible, err := checkSegmentCompatibility(ctx, segments)
 	if err != nil {
-		slog.Warn("periodic merge: compatibility check failed, using Go fallback",
+		slog.Warn(
+			"periodic merge: compatibility check failed, using Go fallback",
 			"error", err,
 		)
 	}
@@ -213,7 +215,7 @@ func parseMergeRange(t time.Time, dur time.Duration, loc *time.Location) (time.T
 
 // handleSingleSegment copies a single segment to the output path.
 func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg model.Recording, outputPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
@@ -236,7 +238,8 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 	// Set progress to 100 for completed single segment merge.
 	if m.updater != nil {
 		if err := m.updater.UpdateMergeProgress(ctx, seg.ID, 100); err != nil {
-			slog.Warn("periodic merge: failed to update merge progress",
+			slog.Warn(
+				"periodic merge: failed to update merge progress",
 				"recording_id", seg.ID,
 				"error", err,
 			)
@@ -245,14 +248,16 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, []string{seg.ID}, "daily_merged"); err != nil {
-			slog.Warn("periodic merge: failed to update merge status",
+			slog.Warn(
+				"periodic merge: failed to update merge status",
 				"recording_id", seg.ID,
 				"error", err,
 			)
 		}
 	}
 
-	slog.Info("periodic merge: single segment processed",
+	slog.Info(
+		"periodic merge: single segment processed",
 		"camera_id", seg.CameraID,
 		"segment_id", seg.ID,
 		"output_path", outputPath,
@@ -268,7 +273,7 @@ func (m *PeriodicMergeManager) handleSingleSegment(ctx context.Context, seg mode
 // Returns an error (caller falls back to FFmpeg concat or Go keyframe merge)
 // if segments are not MP4, fail to parse, or have mismatched params.
 func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []model.Recording, outputPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
@@ -288,7 +293,8 @@ func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []mod
 		totalFrames += info.SampleCount
 	}
 
-	slog.Debug("periodic merge: running Go concat",
+	slog.Debug(
+		"periodic merge: running Go concat",
 		"segments", len(segInfos),
 		"total_frames", totalFrames,
 	)
@@ -308,7 +314,7 @@ func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []mod
 
 // ffmpegConcatMerge merges segments using FFmpeg concat demuxer.
 func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments []model.Recording, outputPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
@@ -351,7 +357,8 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 		outputPath,
 	}
 
-	slog.Debug("periodic merge: running ffmpeg concat",
+	slog.Debug(
+		"periodic merge: running ffmpeg concat",
 		"path", ffmpegPath,
 		"args", args,
 		"segments", len(segments),
@@ -427,7 +434,7 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 		return fmt.Errorf("periodic merge: no merger available")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
@@ -510,7 +517,8 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 		return fmt.Errorf("periodic merge: merge failed: %w", err)
 	}
 
-	slog.Info("periodic merge: Go merge completed",
+	slog.Info(
+		"periodic merge: Go merge completed",
 		"output_path", result.OutputPath,
 		"frames_merged", result.FramesMerged,
 		"duration", result.Duration,
@@ -538,14 +546,16 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, "daily_merged"); err != nil {
-			slog.Warn("periodic merge: failed to update merge statuses",
+			slog.Warn(
+				"periodic merge: failed to update merge statuses",
 				"count", len(ids),
 				"error", err,
 			)
 		}
 	}
 
-	slog.Info("periodic merge: completed successfully",
+	slog.Info(
+		"periodic merge: completed successfully",
 		"segments", len(segments),
 		"output_path", outputPath,
 	)
@@ -580,7 +590,8 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, model.MergeStatusFailed); err != nil {
-			slog.Warn("periodic merge: failed to set merge status to failed",
+			slog.Warn(
+				"periodic merge: failed to set merge status to failed",
 				"count", len(ids),
 				"error", err,
 			)
@@ -589,12 +600,14 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	}
 
 	if maxRetriesReached {
-		slog.Error("periodic merge: permanently failed after 3 retries",
+		slog.Error(
+			"periodic merge: permanently failed after 3 retries",
 			"segments", len(segments),
 			"error", mergeErr,
 		)
 	} else {
-		slog.Warn("periodic merge: failed, will retry on next cycle",
+		slog.Warn(
+			"periodic merge: failed, will retry on next cycle",
 			"segments", len(segments),
 			"retry_count", func() int {
 				m.retryMu.Lock()
@@ -618,7 +631,8 @@ func (m *PeriodicMergeManager) updateProgressBatch(ctx context.Context, segments
 	}
 	for _, seg := range segments {
 		if err := m.updater.UpdateMergeProgress(ctx, seg.ID, progress); err != nil {
-			slog.Warn("periodic merge: failed to update merge progress",
+			slog.Warn(
+				"periodic merge: failed to update merge progress",
 				"recording_id", seg.ID,
 				"progress", progress,
 				"error", err,
@@ -690,7 +704,8 @@ func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) 
 		}
 
 		if width != refWidth || height != refHeight {
-			slog.Warn("merge: segment resolution mismatch",
+			slog.Warn(
+				"merge: segment resolution mismatch",
 				"segment_id", segments[i].ID,
 				"expected", fmt.Sprintf("%dx%d", refWidth, refHeight),
 				"got", fmt.Sprintf("%dx%d", width, height),
@@ -699,7 +714,8 @@ func checkSegmentCompatibility(ctx context.Context, segments []model.Recording) 
 		}
 
 		if codec != refCodec {
-			slog.Warn("merge: segment codec mismatch",
+			slog.Warn(
+				"merge: segment codec mismatch",
 				"segment_id", segments[i].ID,
 				"expected", refCodec,
 				"got", codec,
@@ -773,7 +789,8 @@ func probeVideoFrameCount(ctx context.Context, filePath string) (int, error) {
 	}
 
 	// Fallback: ffprobe subprocess.
-	cmd := exec.CommandContext(ctx, "ffprobe",
+	cmd := exec.CommandContext(
+		ctx, "ffprobe",
 		"-v", "error",
 		"-count_frames",
 		"-select_streams", "v:0",

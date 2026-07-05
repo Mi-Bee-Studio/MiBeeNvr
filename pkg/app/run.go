@@ -55,9 +55,9 @@ type serviceFunc struct {
 	stopFunc  func() error
 }
 
-func (s *serviceFunc) Name() string                     { return s.name }
-func (s *serviceFunc) Start(ctx context.Context) error  { return s.startFunc(ctx) }
-func (s *serviceFunc) Stop() error                      { return s.stopFunc() }
+func (s *serviceFunc) Name() string                    { return s.name }
+func (s *serviceFunc) Start(ctx context.Context) error { return s.startFunc(ctx) }
+func (s *serviceFunc) Stop() error                     { return s.stopFunc() }
 
 // aiConfigFromConfig converts the public AIConfig type to the internal ai.Config.
 func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
@@ -163,7 +163,7 @@ func buildRouter(
 //	if err := a.Start(ctx); err != nil { return err }
 func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// Step 0: Ensure storage root directory exists
-	if err := os.MkdirAll(cfg.Storage.RootDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Storage.RootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)
 	}
 
@@ -358,7 +358,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 				if parsed, err := config.ParseMergeDuration(cam.Timelapse.MergeDuration); err == nil {
 					dur = parsed
 				} else {
-					slog.Warn("merge scheduler: invalid merge duration, defaulting to 24h",
+					slog.Warn(
+						"merge scheduler: invalid merge duration, defaulting to 24h",
 						"camera_id", cam.ID,
 						"merge_duration", cam.Timelapse.MergeDuration,
 						"error", err,
@@ -367,7 +368,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			}
 			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur, appLoc)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
-			slog.Info("merge scheduler: configured camera",
+			slog.Info(
+				"merge scheduler: configured camera",
 				"camera_id", cam.ID,
 				"duration", dur.String(),
 			)
@@ -431,7 +433,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// These must be set before Start so targets can resolve presets and hardware caps.
 	relayFFmpegPath := cfg.Transcoding.FFmpegPath
 	relayHwCap := transcoding.ProbeHardwareCapabilities(relayFFmpegPath)
-	slog.Info("relay: hardware capabilities",
+	slog.Info(
+		"relay: hardware capabilities",
 		"arch", relayHwCap.Arch,
 		"h264_encoder", relayHwCap.H264EncoderType,
 		"ffmpeg_available", relayHwCap.FFmpegAvailable,

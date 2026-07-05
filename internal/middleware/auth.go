@@ -111,7 +111,6 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 				return
 			}
 
-
 			user, pass, ok := r.BasicAuth()
 			if !ok {
 				// Fallback: check ?token= query parameter (for WebSocket which cannot set headers)
@@ -217,7 +216,6 @@ func resetAuthFailures() {
 		return true
 	})
 }
-
 
 // RateLimiterConfig defines parameters for a per-IP rate limiter.
 type RateLimiterConfig struct {

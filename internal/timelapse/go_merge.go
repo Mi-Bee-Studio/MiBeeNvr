@@ -736,7 +736,6 @@ func parseJPEGDimensions(data []byte) (width, height int) {
 	return 0, 0
 }
 
-
 // reencodeJPEG decodes a JPEG image and re-encodes it at the given quality level.
 // This provides file size reduction at the cost of visual quality.
 // quality: 1-100 (1 = smallest, 100 = best).

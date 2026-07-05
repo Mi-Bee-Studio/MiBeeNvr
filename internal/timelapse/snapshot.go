@@ -78,7 +78,8 @@ func deriveSnapshotFromRTSP(rtspURL string) string {
 	p := path.Clean(u.Path)
 	if p != "" && p != "/" && p != "." {
 		dir := path.Dir(p)
-		endpoints = append(endpoints,
+		endpoints = append(
+			endpoints,
 			"http://"+host+dir+"/snapshot.jpg",
 			"http://"+host+dir+"/snapshot",
 		)
@@ -124,7 +125,8 @@ func snapshotCandidatesFromRTSP(rtspURL string) []string {
 	var candidates []string
 
 	// Common snapshot endpoints
-	candidates = append(candidates,
+	candidates = append(
+		candidates,
 		"http://"+host+"/cgi-bin/snapshot.cgi",
 		"http://"+host+"/cgi-bin/snapshot",
 		"http://"+host+"/snapshot.jpg",
@@ -136,7 +138,8 @@ func snapshotCandidatesFromRTSP(rtspURL string) []string {
 	p := path.Clean(u.Path)
 	if p != "" && p != "/" && p != "." {
 		dir := path.Dir(p)
-		candidates = append(candidates,
+		candidates = append(
+			candidates,
 			"http://"+host+dir+"/snapshot.jpg",
 			"http://"+host+dir+"/snapshot",
 		)

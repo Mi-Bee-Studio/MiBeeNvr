@@ -80,7 +80,7 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		}
 		// Configure audio streaming if the recorder provides audio
 		setupAudioForWS(h, id, rec)
-	
+
 	}
 
 	slog.Info("WS: serving", "camera_id", id)

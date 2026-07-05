@@ -881,9 +881,9 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 		if chromaFormatIDC == 3 {
 			r.readBit() // separate_colour_plane_flag
 		}
-		r.readUE() // bit_depth_luma_minus8
-		r.readUE() // bit_depth_chroma_minus8
-		r.readBit() // qpprime_y_zero_transform_bypass_flag
+		r.readUE()            // bit_depth_luma_minus8
+		r.readUE()            // bit_depth_chroma_minus8
+		r.readBit()           // qpprime_y_zero_transform_bypass_flag
 		if r.readBit() != 0 { // seq_scaling_matrix_present_flag
 			skipScalingLists(r)
 		}
@@ -964,9 +964,9 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 // --- Bit-level reader for H.264 SPS parsing ---
 
 type bitReader struct {
-	data   []byte
-	pos    int // bit position (0-7 in current byte)
-	offset int // byte offset
+	data    []byte
+	pos     int  // bit position (0-7 in current byte)
+	offset  int  // byte offset
 	overran bool // true if we read past the end of data
 }
 
@@ -1060,7 +1060,6 @@ func listH264FrameFiles(dir string) ([]string, error) {
 	sort.Strings(matches)
 	return matches, nil
 }
-
 
 // Ensure H264GoMerger satisfies the TimelapseMerger interface.
 var _ TimelapseMerger = (*H264GoMerger)(nil)

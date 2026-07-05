@@ -67,14 +67,14 @@ func autoInitConfig(configPath string) *config.Config {
 		cfg.Auth.Password = password
 	}
 	// Create data directory if needed
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		slog.Warn("failed to create data directory", "dir", dataDir, "error", err)
 	}
 
 	// Create config directory if needed
 	configDir := filepath.Dir(configPath)
 	if configDir != "." && configDir != "/" {
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
 			slog.Warn("failed to create config directory", "dir", configDir, "error", err)
 		}
 	}

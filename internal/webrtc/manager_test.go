@@ -672,7 +672,7 @@ func TestFrameMsgKeyframeDetection(t *testing.T) {
 
 	// IDR access unit: SPS (type 7) + PPS (type 8) + IDR (type 5)
 	idrAU := [][]byte{
-		{0x67, 0x64, 0x00, 0x1f},    // SPS
+		{0x67, 0x64, 0x00, 0x1f},       // SPS
 		{0x68, 0xee, 0x3c, 0x80},       // PPS
 		{0x65, 0x88, 0x84, 0x00, 0x40}, // IDR slice
 	}
@@ -798,7 +798,7 @@ func TestCongestionTracker_IDRAlwaysSent(t *testing.T) {
 		tracker.recordSent()
 		tracker.recordDropped()
 	}
-	
+
 	for i := 0; i < 10; i++ {
 		require.False(t, tracker.shouldSkipFrame(true), "IDR must never be skipped (iter %d)", i)
 	}

@@ -1,14 +1,14 @@
 package timelapse
 
 import (
-"context"
-"fmt"
-"sync"
-"sync/atomic"
-"testing"
-"time"
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
 
-"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/require"
 )
 
 // fixedNow returns a fixed UTC time for deterministic testing:

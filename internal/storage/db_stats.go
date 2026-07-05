@@ -51,8 +51,8 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 
 	// Aggregate into per-date stats using local timezone dates
 	type dailyKey struct {
-		date     string
-		camID    string
+		date  string
+		camID string
 	}
 	agg := make(map[dailyKey]*model.DailyStats)
 

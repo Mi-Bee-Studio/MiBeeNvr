@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-
 )
 
 func TestNewPeriodicMergeManager(t *testing.T) {
@@ -266,16 +265,16 @@ func TestPeriodicMergeManager_Run_WithSegments(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	camDir := filepath.Join(dataDir, "test-cam")
-	os.MkdirAll(camDir, 0755)
+	os.MkdirAll(camDir, 0o755)
 
 	// Create segment directories with dummy frames for Go merge.
 	segDir1 := filepath.Join(dataDir, "seg-1")
-	os.MkdirAll(segDir1, 0755)
-	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir1, 0o755)
+	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0o644)
 
 	segDir2 := filepath.Join(dataDir, "seg-2")
-	os.MkdirAll(segDir2, 0755)
-	os.WriteFile(filepath.Join(segDir2, "frame_000002.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir2, 0o755)
+	os.WriteFile(filepath.Join(segDir2, "frame_000002.jpg"), []byte("dummy"), 0o644)
 
 	merger := &successMerger{delay: 10 * time.Millisecond}
 	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
@@ -295,8 +294,8 @@ func TestPeriodicMergeManager_Run_CancelledContext(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	segDir := filepath.Join(dataDir, "seg-1")
-	os.MkdirAll(segDir, 0755)
-	os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir, 0o755)
+	os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
 
 	merger := &successMerger{delay: 1 * time.Second}
 	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
@@ -351,21 +350,21 @@ func TestPeriodicMergeProgress(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	camDir := filepath.Join(dataDir, "test-cam")
-	os.MkdirAll(camDir, 0755)
+	os.MkdirAll(camDir, 0o755)
 
 	// Create 3 segments with dummy frames for Go merge.
 	segDir1 := filepath.Join(dataDir, "seg-1")
-	os.MkdirAll(segDir1, 0755)
-	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0644)
-	os.WriteFile(filepath.Join(segDir1, "frame_000002.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir1, 0o755)
+	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0o644)
+	os.WriteFile(filepath.Join(segDir1, "frame_000002.jpg"), []byte("dummy"), 0o644)
 
 	segDir2 := filepath.Join(dataDir, "seg-2")
-	os.MkdirAll(segDir2, 0755)
-	os.WriteFile(filepath.Join(segDir2, "frame_000003.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir2, 0o755)
+	os.WriteFile(filepath.Join(segDir2, "frame_000003.jpg"), []byte("dummy"), 0o644)
 
 	segDir3 := filepath.Join(dataDir, "seg-3")
-	os.MkdirAll(segDir3, 0755)
-	os.WriteFile(filepath.Join(segDir3, "frame_000004.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir3, 0o755)
+	os.WriteFile(filepath.Join(segDir3, "frame_000004.jpg"), []byte("dummy"), 0o644)
 
 	db := newTrackDB()
 	merger := &successMerger{delay: 5 * time.Millisecond}
@@ -519,16 +518,16 @@ func TestPeriodicMergeManager_Run_DiskFull(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	camDir := filepath.Join(dataDir, "test-cam")
-	os.MkdirAll(camDir, 0755)
+	os.MkdirAll(camDir, 0o755)
 
 	// Make the camera output directory read-only to simulate disk full / ENOSPC.
-	os.Chmod(camDir, 0444)
-	t.Cleanup(func() { os.Chmod(camDir, 0755) })
+	os.Chmod(camDir, 0o444)
+	t.Cleanup(func() { os.Chmod(camDir, 0o755) })
 
 	// Create a segment directory with frames.
 	segDir := filepath.Join(dataDir, "seg-1")
-	os.MkdirAll(segDir, 0755)
-	os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir, 0o755)
+	os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
 
 	merger := &successMerger{delay: 10 * time.Millisecond}
 	mgr := NewPeriodicMergeManager(&mockRecordingListerWithSegments{
@@ -548,7 +547,7 @@ func TestPeriodicMergeManager_Run_CorruptedSegment(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	camDir := filepath.Join(dataDir, "test-cam")
-	os.MkdirAll(camDir, 0755)
+	os.MkdirAll(camDir, 0o755)
 
 	// Segment FilePath points to a non-existent path — simulates a corrupted/missing segment.
 	segPath := filepath.Join(dataDir, "missing-segment")
@@ -590,12 +589,12 @@ func TestPeriodicMergeManager_Run_MixedFormatSegments(t *testing.T) {
 
 	// Create 2 segments with different recording formats.
 	segDir1 := filepath.Join(dataDir, "seg-1")
-	os.MkdirAll(segDir1, 0755)
-	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir1, 0o755)
+	os.WriteFile(filepath.Join(segDir1, "frame_000001.jpg"), []byte("dummy"), 0o644)
 
 	segDir2 := filepath.Join(dataDir, "seg-2")
-	os.MkdirAll(segDir2, 0755)
-	os.WriteFile(filepath.Join(segDir2, "frame_000002.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segDir2, 0o755)
+	os.WriteFile(filepath.Join(segDir2, "frame_000002.jpg"), []byte("dummy"), 0o644)
 
 	db := newTrackDB()
 	merger := &successMerger{delay: 10 * time.Millisecond}

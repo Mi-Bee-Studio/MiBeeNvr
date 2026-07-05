@@ -33,7 +33,7 @@ func wrapDump(rw io.ReadWriter) io.ReadWriter {
 	if path == "" {
 		return rw
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		engineLogger.Warn("NVR_RTMP_DEBUG_DUMP: cannot open dump file, disabled", "path", path, "err", err)
 		return rw

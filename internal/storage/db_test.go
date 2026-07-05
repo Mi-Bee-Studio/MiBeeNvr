@@ -157,8 +157,9 @@ func TestCleanupIncomplete(t *testing.T) {
 	_ = db.Init(ctx)
 
 	// Insert directly with NULL ended_at to test cleanup (InsertRecording serializes zero time as 0001-01-01, not NULL)
-	_, err := db.db.ExecContext(ctx,
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+	_, err := db.db.ExecContext(
+		ctx,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
 		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	err = db.CleanupIncomplete(ctx)
@@ -191,9 +192,7 @@ func TestCloseAndReopen(t *testing.T) {
 	require.NoError(t, db2.Close())
 }
 
-
 func TestUpsertCamera(t *testing.T) {
-
 	dir := t.TempDir()
 
 	dbPath := filepath.Join(dir, "test10.db")
@@ -204,15 +203,11 @@ func TestUpsertCamera(t *testing.T) {
 
 	_ = db.Init(ctx)
 
-
-
 	// Test insert new camera
 
 	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was inserted
 
@@ -233,15 +228,11 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "user", cameras[0].Username)
 	require.True(t, cameras[0].HasPassword)
 
-
-
 	// Test update existing camera
 
 	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was updated
 
@@ -262,10 +253,7 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "newuser", cameras2[0].Username)
 	require.True(t, cameras2[0].HasPassword)
 
-
-
 	require.NoError(t, db.Close())
-
 }
 
 func TestGetCamera(t *testing.T) {
@@ -519,6 +507,7 @@ func TestListExpiredRecordings(t *testing.T) {
 	// Both old recordings should be found (merged does NOT protect from cleanup)
 	require.Len(t, expired, 2)
 }
+
 func TestParseTimeLegacyFormat(t *testing.T) {
 	// Verify parseTime handles the old time.Time.String() format with monotonic clock
 	tests := []struct {

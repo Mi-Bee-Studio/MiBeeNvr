@@ -124,7 +124,7 @@ func cmdInit() {
 		fmt.Fprintf(os.Stderr, "Error: config file %s already exists (use --force to overwrite)\n", cfgPath)
 		os.Exit(2)
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
 		os.Exit(1)
 	}

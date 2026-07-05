@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestTranscodeTask_EnqueueDequeue(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -193,11 +192,11 @@ func TestTranscodeTask_DeleteCompleted(t *testing.T) {
 		CreatedAt:    formatTime(now.Add(-3 * time.Hour)),
 	}
 	require.NoError(t, db.EnqueueTask(ctx, oldTask))
-require.NoError(t, db.UpdateTaskStatus(ctx, oldTask.ID, "completed", 1.0, ""))
-// Set completed_at to the past (2 hours ago) so it's older than the 1h threshold
-pastTime := formatTime(now.Add(-2 * time.Hour))
-_, err := db.db.ExecContext(ctx, "UPDATE transcoding_tasks SET completed_at = ? WHERE id = ?", pastTime, oldTask.ID)
-require.NoError(t, err)
+	require.NoError(t, db.UpdateTaskStatus(ctx, oldTask.ID, "completed", 1.0, ""))
+	// Set completed_at to the past (2 hours ago) so it's older than the 1h threshold
+	pastTime := formatTime(now.Add(-2 * time.Hour))
+	_, err := db.db.ExecContext(ctx, "UPDATE transcoding_tasks SET completed_at = ? WHERE id = ?", pastTime, oldTask.ID)
+	require.NoError(t, err)
 
 	// Recent completed task (completed 5 minutes ago)
 	recentTask := &TranscodeTask{

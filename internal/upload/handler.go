@@ -1,18 +1,18 @@
 package upload
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"context"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // Handler handles HTTP upload endpoints for camera frames and videos.
@@ -212,10 +212,10 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 var allowedVideoTypes = map[string]bool{
-	"video/mp4":       true,
-	"video/avi":       true,
-	"video/x-msvideo": true,
-	"video/quicktime": true,
+	"video/mp4":        true,
+	"video/avi":        true,
+	"video/x-msvideo":  true,
+	"video/quicktime":  true,
 	"video/x-matroska": true,
 }
 

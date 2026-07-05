@@ -96,9 +96,9 @@ func buildTestH265SPS(width, height int) []byte {
 	bw.writeBit(1)
 
 	// profile_tier_level()
-	bw.writeBits(0, 2)  // general_profile_space = 0
-	bw.writeBit(0)       // general_tier_flag = 0 (Main tier)
-	bw.writeBits(1, 5)   // general_profile_idc = 1 (Main profile)
+	bw.writeBits(0, 2) // general_profile_space = 0
+	bw.writeBit(0)     // general_tier_flag = 0 (Main tier)
+	bw.writeBits(1, 5) // general_profile_idc = 1 (Main profile)
 
 	// general_profile_compatibility_flags (32 bits)
 	bw.writeBits(0, 32)
@@ -232,7 +232,7 @@ func TestH265GoMerger_ValidOutput(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,7 +245,7 @@ func TestH265GoMerger_ValidOutput(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -324,7 +324,7 @@ func TestH265GoMerger_ValidOutputBoxStructure(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -336,7 +336,7 @@ func TestH265GoMerger_ValidOutputBoxStructure(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,7 +373,7 @@ func TestH265GoMerger_EmptyDir(t *testing.T) {
 	emptyDir := filepath.Join(tmpDir, "empty")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(emptyDir, 0755); err != nil {
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -390,7 +390,7 @@ func TestH265GoMerger_SingleFrame(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -401,7 +401,7 @@ func TestH265GoMerger_SingleFrame(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
 	frameData := buildTestH265Frame(vps, sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -468,7 +468,7 @@ func TestH265GoMerger_ContextCancellation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -481,7 +481,7 @@ func TestH265GoMerger_ContextCancellation(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -507,7 +507,7 @@ func TestH265GoMerger_MergeResult(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -519,7 +519,7 @@ func TestH265GoMerger_MergeResult(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -556,7 +556,7 @@ func TestH265GoMerger_MissingSPS(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -574,7 +574,7 @@ func TestH265GoMerger_MissingSPS(t *testing.T) {
 	buf.Write(idr)
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
-	if err := os.WriteFile(framePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(framePath, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -591,7 +591,7 @@ func TestH265GoMerger_MissingPPS(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -609,7 +609,7 @@ func TestH265GoMerger_MissingPPS(t *testing.T) {
 	buf.Write(idr)
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
-	if err := os.WriteFile(framePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(framePath, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -626,7 +626,7 @@ func TestH265GoMerger_InvalidFPSEdgeCase(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -637,7 +637,7 @@ func TestH265GoMerger_InvalidFPSEdgeCase(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
 	frameData := buildTestH265Frame(vps, sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -778,7 +778,7 @@ func TestListH265FrameFiles(t *testing.T) {
 		"frame_000003.h265",
 	}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(tmpDir, f), []byte("test"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(tmpDir, f), []byte("test"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -830,7 +830,7 @@ func TestH265GoMerger_VPSMissing(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -848,7 +848,7 @@ func TestH265GoMerger_VPSMissing(t *testing.T) {
 	buf.Write(idr)
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
-	if err := os.WriteFile(framePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(framePath, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -865,7 +865,7 @@ func TestAutoDetectMerger_H265Routing(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -876,7 +876,7 @@ func TestAutoDetectMerger_H265Routing(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h265")
 	frameData := buildTestH265Frame(vps, sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -910,7 +910,7 @@ func TestAutoDetectMerger_H264Routing(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -920,7 +920,7 @@ func TestAutoDetectMerger_H264Routing(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
 	frameData := buildTestH264Frame(sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -12,7 +12,7 @@ import (
 
 // mockDB implements MergeStatusUpdater for testing.
 type mockDB struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	statuses map[string]string
 }
 
@@ -52,7 +52,7 @@ type slowMerger struct {
 	delay time.Duration
 }
 
-func (s *slowMerger) CanMerge() bool { return true }
+func (s *slowMerger) CanMerge() bool  { return true }
 func (s *slowMerger) Tier() MergeTier { return TierGo }
 func (s *slowMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
 	select {
@@ -70,7 +70,7 @@ func TestRollingMergeManager_StartStopLifecycle(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -107,7 +107,7 @@ func TestRollingMergeManager_AsyncDoesNotBlock(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -133,7 +133,7 @@ func TestRollingMergeManager_StopAll(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +163,7 @@ func TestRollingMergeManager_ReplaceActiveMerge(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -191,7 +191,7 @@ func TestRollingMergeManager_MergeCompletes(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -216,7 +216,7 @@ func TestRollingMergeManager_ContextCancellation(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +240,7 @@ type zeroFrameMerger struct {
 	delay time.Duration
 }
 
-func (z *zeroFrameMerger) CanMerge() bool { return true }
+func (z *zeroFrameMerger) CanMerge() bool  { return true }
 func (z *zeroFrameMerger) Tier() MergeTier { return TierGo }
 func (z *zeroFrameMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
 	select {
@@ -260,11 +260,11 @@ func TestDeleteOriginal_True(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
 	for i := 0; i < 3; i++ {
-		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0644)
+		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
@@ -302,11 +302,11 @@ func TestDeleteOriginal_False(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
 	for i := 0; i < 3; i++ {
-		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0644)
+		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
@@ -339,11 +339,11 @@ func TestDeleteOriginal_ZeroFrames(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
 	for i := 0; i < 3; i++ {
-		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0644)
+		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
@@ -376,7 +376,7 @@ func TestRollingMergeManager_ProgressCleanup(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -420,7 +420,7 @@ func TestRollingMergeManager_ConcurrentMultiCamera(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -460,7 +460,7 @@ func TestRollingMergeManager_ConcurrentCancelDuringMerge(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -492,7 +492,7 @@ func TestRollingMergeManager_ConcurrentProgressReadWrite(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -543,7 +543,7 @@ func TestRollingMergeManager_ConcurrentStopAllAndStart(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -579,7 +579,7 @@ func TestRollingMergeManager_MergeEmptyDir(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "empty-segment")
-	os.MkdirAll(segmentDir, 0755)
+	os.MkdirAll(segmentDir, 0o755)
 	// No files in segment dir — 0 frames.
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
@@ -617,8 +617,8 @@ func TestRollingMergeManager_RapidStartStop(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	os.MkdirAll(segmentDir, 0755)
-	os.WriteFile(filepath.Join(segmentDir, "frame_000001.jpg"), []byte("dummy"), 0644)
+	os.MkdirAll(segmentDir, 0o755)
+	os.WriteFile(filepath.Join(segmentDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())

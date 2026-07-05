@@ -26,11 +26,11 @@ func defaultDownloadURL(goos, goarch string) string {
 	base := "https://johnvansickle.com/ffmpeg/builds"
 	switch goos + "/" + goarch {
 	case "linux/amd64":
-	return base + "/ffmpeg-git-amd64-static.tar.xz"
-case "linux/arm64":
-	return base + "/ffmpeg-git-arm64-static.tar.xz"
-case "linux/arm":
-	return base + "/ffmpeg-git-armhf-static.tar.xz"
+		return base + "/ffmpeg-git-amd64-static.tar.xz"
+	case "linux/arm64":
+		return base + "/ffmpeg-git-arm64-static.tar.xz"
+	case "linux/arm":
+		return base + "/ffmpeg-git-armhf-static.tar.xz"
 	default:
 		return ""
 	}
@@ -253,7 +253,7 @@ func (d *Downloader) downloadOnceWithURL(ctx context.Context, url string) error 
 
 	// Create tools directory
 	toolsDir := filepath.Join(d.dataDir, "tools")
-	if err := os.MkdirAll(toolsDir, 0755); err != nil {
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create tools directory: %w", err)
 	}
 
@@ -367,7 +367,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 			return fmt.Errorf("rename to ffmpeg: %w", err)
 		}
 		// Don't remove archive since we renamed it
-		return os.Chmod(d.FFmpegPath(), 0755)
+		return os.Chmod(d.FFmpegPath(), 0o755)
 
 	}
 	// Extract ffmpeg and ffprobe from tar archive
@@ -398,7 +398,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 
 		// Atomic write: extract to .tmp first, then rename
 		tmpTarget := targetPath + ".tmp2"
-		outFile, err := os.OpenFile(tmpTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		outFile, err := os.OpenFile(tmpTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
 			return fmt.Errorf("create %s: %w", baseName, err)
 		}
@@ -410,7 +410,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 		}
 		outFile.Close()
 
-		if err := os.Chmod(tmpTarget, 0755); err != nil {
+		if err := os.Chmod(tmpTarget, 0o755); err != nil {
 			os.Remove(tmpTarget)
 			return fmt.Errorf("chmod %s: %w", baseName, err)
 		}
@@ -481,9 +481,9 @@ func (d *Downloader) saveState() {
 	}
 
 	toolsDir := filepath.Join(d.dataDir, "tools")
-	os.MkdirAll(toolsDir, 0755)
+	os.MkdirAll(toolsDir, 0o755)
 
-	if err := os.WriteFile(d.StatePath(), data, 0644); err != nil {
+	if err := os.WriteFile(d.StatePath(), data, 0o644); err != nil {
 		slog.Warn("Failed to save download state", "error", err)
 	}
 }

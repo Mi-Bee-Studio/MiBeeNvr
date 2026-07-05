@@ -413,7 +413,8 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 	// Success
 	duration := time.Since(startTime)
 	q.finishTask(context.Background(), task, "completed", 1.0, "")
-	queueLogger.Info("task completed",
+	queueLogger.Info(
+		"task completed",
 		"task_id", task.ID,
 		"duration", duration,
 	)

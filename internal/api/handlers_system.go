@@ -406,6 +406,7 @@ func buildAPIKeyInfo(keys []config.APIKeyConfig) []map[string]any {
 	}
 	return result
 }
+
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")
@@ -723,7 +724,7 @@ func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create backup directory")
 		return
 	}

@@ -61,7 +61,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	for _, encoder := range encoders {
 		args := m.buildArgs(framesDir, outputPath, fps, encoder)
 
-		slog.Debug("running ffmpeg merge",
+		slog.Debug(
+			"running ffmpeg merge",
 			"path", m.caps.FFmpegPath,
 			"args", args,
 			"framesDir", framesDir,
@@ -76,7 +77,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 			codec := m.detectCodec(outputPath)
 			framesMerged := countFramesInDir(framesDir)
 
-			slog.Debug("ffmpeg merge completed",
+			slog.Debug(
+				"ffmpeg merge completed",
 				"encoder", encoder,
 				"codec", codec,
 				"frames", framesMerged,
@@ -92,7 +94,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 			}, nil
 		}
 
-		slog.Warn("ffmpeg merge attempt failed, trying next encoder",
+		slog.Warn(
+			"ffmpeg merge attempt failed, trying next encoder",
 			"encoder", encoder,
 			"error", err,
 		)

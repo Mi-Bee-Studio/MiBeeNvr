@@ -702,9 +702,9 @@ func buildHvcC(vps, sps, pps []byte) []byte {
 	buf.WriteByte(3)
 
 	// Write arrays in standard order: VPS, SPS, PPS.
-	writeHvcCArray(&buf, 32, vps)  // VPS type 32
-	writeHvcCArray(&buf, 33, sps)  // SPS type 33
-	writeHvcCArray(&buf, 34, pps)  // PPS type 34
+	writeHvcCArray(&buf, 32, vps) // VPS type 32
+	writeHvcCArray(&buf, 33, sps) // SPS type 33
+	writeHvcCArray(&buf, 34, pps) // PPS type 34
 
 	return buf.Bytes()
 }
@@ -1103,5 +1103,6 @@ func listH265FrameFiles(dir string) ([]string, error) {
 	sort.Strings(matches)
 	return matches, nil
 }
+
 // Ensure H265GoMerger satisfies the TimelapseMerger interface.
 var _ TimelapseMerger = (*H265GoMerger)(nil)

@@ -77,7 +77,8 @@ func (m *Manager) recordWriteFailureLocked() HealthState {
 
 	if newState != prevState {
 		m.metrics.IncStorageWriteErrors()
-		slog.Warn("storage health state changed",
+		slog.Warn(
+			"storage health state changed",
 			"from", healthStateStr(prevState),
 			"to", healthStateStr(newState),
 			"failures", count,
@@ -96,7 +97,8 @@ func (m *Manager) recordWriteSuccessLocked() {
 	m.healthState = HealthHealthy
 
 	if prevState != HealthHealthy {
-		slog.Info("storage health restored",
+		slog.Info(
+			"storage health restored",
 			"from", healthStateStr(prevState),
 			"to", "healthy",
 			"root", m.rootDir,

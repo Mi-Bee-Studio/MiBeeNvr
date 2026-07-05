@@ -37,7 +37,8 @@ func (h *Handler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("telemetry",
+	slog.Info(
+		"telemetry",
 		"event", req.Event,
 		"camera_id", req.CameraID,
 		"duration_ms", req.DurationMs,

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/datarhei/gosrt"
+	srt "github.com/datarhei/gosrt"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -112,12 +112,10 @@ func (r *Receiver) Running() bool {
 	return r.running.Load()
 }
 
-
 // getDropCount returns total frames dropped by the hub.
 func (r *Receiver) getDropCount() int64 {
 	return r.dropCount.Load()
 }
-
 
 // readLoop reads MPEG-TS data from the SRT connection, demuxes it,
 // extracts H.264 NALUs, and broadcasts access units to the StreamHub.

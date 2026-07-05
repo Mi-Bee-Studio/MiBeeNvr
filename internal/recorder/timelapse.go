@@ -363,7 +363,7 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		r.frameCount++
 		frameName := fmt.Sprintf("frame_%06d.jpg", r.frameCount)
 		jpgPath := filepath.Join(r.curTempPath, frameName)
-		if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+		if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
 			timelapseLogger.Error("failed to write timelapse frame", "camera_id", r.cfg.CameraID, "error", err)
 			r.frameCount--
 			continue

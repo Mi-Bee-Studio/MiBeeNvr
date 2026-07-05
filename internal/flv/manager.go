@@ -241,14 +241,16 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	// Non-blocking send
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_recv",
 			"is_idr", isKeyframe,
 		)
 	default:
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_drop",

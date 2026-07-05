@@ -13,62 +13,62 @@ import (
 )
 
 func TestValidCredentials(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusOK {
-        t.Fatalf("expected 200, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
 }
 
 func TestInvalidPassword(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestMissingAuthHeader(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestMalformedAuth(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("not base64")))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("not base64")))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestEmptyHashReturnsSetupRequired(t *testing.T) {
@@ -86,42 +86,42 @@ func TestEmptyHashReturnsSetupRequired(t *testing.T) {
 }
 
 func TestHashCheckRoundTrip(t *testing.T) {
-    pass := "abc123"
-    hash, _ := HashPassword(pass)
-    if !CheckPassword(pass, hash) {
-        t.Fatalf("hash check failed for valid password")
-    }
+	pass := "abc123"
+	hash, _ := HashPassword(pass)
+	if !CheckPassword(pass, hash) {
+		t.Fatalf("hash check failed for valid password")
+	}
 }
 
 func TestConcurrentAccess(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("u", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    reqs := 50
-    done := make(chan bool)
-    for i := 0; i < reqs; i++ {
-        go func(i int) {
-            req := httptest.NewRequest("GET", "/", nil)
-            req.Header.Set("Authorization", "Basic "+basic("u", "secret"))
-            w := httptest.NewRecorder()
-            handler.ServeHTTP(w, req)
-            if w.Code != http.StatusOK {
-                // non-fatal in goroutine
-            }
-            done <- true
-        }(i)
-    }
-    for i := 0; i < reqs; i++ {
-        <-done
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("u", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	reqs := 50
+	done := make(chan bool)
+	for i := 0; i < reqs; i++ {
+		go func(i int) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("Authorization", "Basic "+basic("u", "secret"))
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				// non-fatal in goroutine
+			}
+			done <- true
+		}(i)
+	}
+	for i := 0; i < reqs; i++ {
+		<-done
+	}
 }
 
 // helper to build basic auth header quickly
 func basic(user, pass string) string {
-    s := user + ":" + pass
-    return base64.StdEncoding.EncodeToString([]byte(s))
+	s := user + ":" + pass
+	return base64.StdEncoding.EncodeToString([]byte(s))
 }
 
 // staticProvider returns an AuthProvider with fixed values for testing.
@@ -240,7 +240,7 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 }
 
 func TestSetupUpdatesHashDynamically(t *testing.T) {
-   t.Helper()
+	t.Helper()
 	currentHash := ""
 	currentUsername := "admin"
 	provider := AuthProvider{

@@ -22,13 +22,13 @@ type track struct {
 	vps         []byte
 	isH265      bool
 	isAudio     bool
-	audioCodec  string    // "aac", "g711", or "opus"
-	audioConfig []byte    // AAC AudioSpecificConfig bytes
-	g711MULaw   bool      // true=μ-law, false=A-law
-	g711Rate    int       // sample rate (typically 8000)
-	opusChans   uint8     // Opus output channel count
-	opusPreSkip uint16    // Opus pre-skip (priming samples)
-	opusRate    uint32    // Opus input sample rate (typically 48000)
+	audioCodec  string // "aac", "g711", or "opus"
+	audioConfig []byte // AAC AudioSpecificConfig bytes
+	g711MULaw   bool   // true=μ-law, false=A-law
+	g711Rate    int    // sample rate (typically 8000)
+	opusChans   uint8  // Opus output channel count
+	opusPreSkip uint16 // Opus pre-skip (priming samples)
+	opusRate    uint32 // Opus input sample rate (typically 48000)
 	width       int
 	height      int
 	samples     []sample

@@ -376,7 +376,7 @@ func TestDeleteRecording_Success(t *testing.T) {
 	rec := makeRecording("rec-del", "cam-1", "h264", now, false)
 	// Create actual file so DeleteFile can succeed
 	rec.FilePath = filepath.Join(store.RootDir(), "rec-del.mp4")
-	if err := os.WriteFile(rec.FilePath, []byte("test-data"), 0644); err != nil {
+	if err := os.WriteFile(rec.FilePath, []byte("test-data"), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 	seedRecording(t, db, rec)
@@ -427,7 +427,7 @@ func TestDownloadRecording(t *testing.T) {
 	rec := makeRecording("rec-dl", "cam-1", "h264", now, false)
 	rec.FilePath = filepath.Join(store.RootDir(), "rec-dl.mp4")
 	testData := []byte("fake-mp4-data")
-	if err := os.WriteFile(rec.FilePath, testData, 0644); err != nil {
+	if err := os.WriteFile(rec.FilePath, testData, 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 	seedRecording(t, db, rec)
@@ -622,10 +622,12 @@ func TestLogin_ResponseContentType(t *testing.T) {
 func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
 	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
 }
+
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "", middleware.AuthRateLimitConfig{})
 	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil)
 }
+
 func TestGetSettings_NoConfig(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
@@ -680,7 +682,6 @@ func TestGetSettings_WithConfig(t *testing.T) {
 	if cleanup["disk_threshold_percent"] != float64(80) {
 		t.Fatalf("expected disk_threshold_percent=80, got %v", cleanup["disk_threshold_percent"])
 	}
-
 }
 
 func TestUpdateSettings_NoConfig(t *testing.T) {
@@ -863,17 +864,17 @@ func TestListFrames_MJPEG_Success(t *testing.T) {
 
 	// Create a directory with frame files for the MJPEG recording
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-mjpeg-frames")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 	// Create some fake JPEG frames
 	for _, name := range []string{"frame001.jpg", "frame002.jpg", "frame003.jpg"} {
-		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("fake-jpeg-"+name), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("fake-jpeg-"+name), 0o644); err != nil {
 			t.Fatalf("failed to create frame file: %v", err)
 		}
 	}
 	// Create a non-JPEG file that should be filtered out
-	if err := os.WriteFile(filepath.Join(frameDir, "readme.txt"), []byte("not a frame"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(frameDir, "readme.txt"), []byte("not a frame"), 0o644); err != nil {
 		t.Fatalf("failed to create non-jpeg file: %v", err)
 	}
 
@@ -906,7 +907,7 @@ func TestListFrames_MJPEG_EmptyDirectory(t *testing.T) {
 
 	// Create empty frame directory
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-empty")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 
@@ -937,12 +938,12 @@ func TestListFrames_MJPEG_FrameOrdering(t *testing.T) {
 	h := TestHandler(db, store)
 
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-ordered")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 	// Create frames out of order to verify sorting
 	for _, name := range []string{"frame003.jpg", "frame001.jpg", "frame002.jpg"} {
-		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("data-"+name), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("data-"+name), 0o644); err != nil {
 			t.Fatalf("failed to create frame file: %v", err)
 		}
 	}
@@ -1008,7 +1009,7 @@ func TestListFrames_MJPEG_FilePathIsNotDirectory(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	rec := makeRecording("rec-file", "cam-1", "mjpeg", now, false)
 	rec.FilePath = filepath.Join(store.RootDir(), "single-file.jpg")
-	if err := os.WriteFile(rec.FilePath, []byte("fake-jpeg"), 0644); err != nil {
+	if err := os.WriteFile(rec.FilePath, []byte("fake-jpeg"), 0o644); err != nil {
 		t.Fatalf("failed to create file: %v", err)
 	}
 	seedRecording(t, db, rec)
@@ -1369,12 +1370,12 @@ func TestListFrames_JPEGCaseInsensitive(t *testing.T) {
 	h := TestHandler(db, store)
 
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-mixedcase")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 	// Mixed case extensions should all be picked up
 	for _, name := range []string{"frame1.JPG", "frame2.jpeg", "frame3.JPEG"} {
-		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("data"), 0o644); err != nil {
 			t.Fatalf("failed to create frame file: %v", err)
 		}
 	}
@@ -1409,7 +1410,7 @@ func TestDownloadFrame_Success(t *testing.T) {
 
 	// Create a directory with frame files for MJPEG recording
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-frame-dl")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 	frameData := map[string]string{
@@ -1418,12 +1419,12 @@ func TestDownloadFrame_Success(t *testing.T) {
 		"frame003.jpg": "data-frame-003",
 	}
 	for name, data := range frameData {
-		if err := os.WriteFile(filepath.Join(frameDir, name), []byte(data), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(frameDir, name), []byte(data), 0o644); err != nil {
 			t.Fatalf("failed to create frame file: %v", err)
 		}
 	}
 	// Non-image file should be ignored
-	if err := os.WriteFile(filepath.Join(frameDir, "readme.txt"), []byte("not-a-frame"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(frameDir, "readme.txt"), []byte("not-a-frame"), 0o644); err != nil {
 		t.Fatalf("failed to create non-image file: %v", err)
 	}
 
@@ -1456,10 +1457,10 @@ func TestDownloadFrame_FirstFrame(t *testing.T) {
 	h := TestHandler(db, store)
 
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-first-frame")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(frameDir, "001.jpg"), []byte("first"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(frameDir, "001.jpg"), []byte("first"), 0o644); err != nil {
 		t.Fatalf("failed to create frame: %v", err)
 	}
 
@@ -1485,10 +1486,10 @@ func TestDownloadFrame_OutOfRange(t *testing.T) {
 	h := TestHandler(db, store)
 
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-oob")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(frameDir, "only.jpg"), []byte("only"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(frameDir, "only.jpg"), []byte("only"), 0o644); err != nil {
 		t.Fatalf("failed to create frame: %v", err)
 	}
 
@@ -1511,7 +1512,7 @@ func TestDownloadFrame_InvalidIndex(t *testing.T) {
 	h := TestHandler(db, store)
 
 	frameDir := filepath.Join(store.RootDir(), "cam-1", "rec-invalid")
-	if err := os.MkdirAll(frameDir, 0755); err != nil {
+	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
 
@@ -1536,7 +1537,7 @@ func TestDownloadFrame_IgnoredForH264(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	rec := makeRecording("rec-h264-frame", "cam-1", "h264", now, false)
 	rec.FilePath = filepath.Join(store.RootDir(), "rec-h264-frame.mp4")
-	if err := os.WriteFile(rec.FilePath, []byte("fake-mp4"), 0644); err != nil {
+	if err := os.WriteFile(rec.FilePath, []byte("fake-mp4"), 0o644); err != nil {
 		t.Fatalf("failed to create file: %v", err)
 	}
 	seedRecording(t, db, rec)
@@ -1833,9 +1834,9 @@ func TestServeModel_ValidFile(t *testing.T) {
 	// Create a temp models directory with a test file
 	rootDir := t.TempDir()
 	modelsDir := filepath.Join(rootDir, "models")
-	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+	require.NoError(t, os.MkdirAll(modelsDir, 0o755))
 	testFile := filepath.Join(modelsDir, "test.onnx")
-	require.NoError(t, os.WriteFile(testFile, []byte("model data"), 0644))
+	require.NoError(t, os.WriteFile(testFile, []byte("model data"), 0o644))
 
 	cfg := &config.Config{
 		Storage: config.StorageConfig{RootDir: rootDir},
@@ -1871,10 +1872,10 @@ func TestServeModel_PathTraversal_SingleSegment(t *testing.T) {
 
 	rootDir := t.TempDir()
 	modelsDir := filepath.Join(rootDir, "models")
-	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+	require.NoError(t, os.MkdirAll(modelsDir, 0o755))
 	// Create a file OUTSIDE the models dir to confirm it's NOT served
 	outsideFile := filepath.Join(rootDir, "secret.txt")
-	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0644))
+	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0o644))
 
 	cfg := &config.Config{
 		Storage: config.StorageConfig{RootDir: rootDir},
@@ -1897,7 +1898,7 @@ func TestServeModel_NonExistentFile(t *testing.T) {
 
 	rootDir := t.TempDir()
 	modelsDir := filepath.Join(rootDir, "models")
-	require.NoError(t, os.MkdirAll(modelsDir, 0755))
+	require.NoError(t, os.MkdirAll(modelsDir, 0o755))
 
 	cfg := &config.Config{
 		Storage: config.StorageConfig{RootDir: rootDir},
@@ -2571,15 +2572,19 @@ func (noopCloudProxy) SetCloudConfig(_ context.Context, _, _, _ string) error { 
 func (noopCloudProxy) SignIn(_ context.Context, _, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (noopCloudProxy) SubmitCaptcha(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (noopCloudProxy) SubmitVerify(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (noopCloudProxy) ListDevices(_ context.Context) ([]CloudDeviceInfo, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+
 func (noopCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
@@ -2812,7 +2817,7 @@ func TestExtractEXIFDateTime(t *testing.T) {
 		t.Parallel()
 		jpeg := createTestJPEG(t, 100, 100)
 		tmpFile := filepath.Join(t.TempDir(), "noexif.jpg")
-		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+		if err := os.WriteFile(tmpFile, jpeg, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		got, ok := extractEXIFDateTime(tmpFile)
@@ -2825,7 +2830,7 @@ func TestExtractEXIFDateTime(t *testing.T) {
 		t.Parallel()
 		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
 		tmpFile := filepath.Join(t.TempDir(), "withexif.jpg")
-		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+		if err := os.WriteFile(tmpFile, jpeg, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		got, ok := extractEXIFDateTime(tmpFile)
@@ -2864,7 +2869,7 @@ func TestExtractFrameTimestamp(t *testing.T) {
 		t.Parallel()
 		jpeg := makeTestJPEGWithEXIF(t, "2024:06:15 14:30:00")
 		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
-		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+		if err := os.WriteFile(tmpFile, jpeg, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		modTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -2879,7 +2884,7 @@ func TestExtractFrameTimestamp(t *testing.T) {
 		t.Parallel()
 		jpeg := createTestJPEG(t, 100, 100) // no EXIF
 		tmpFile := filepath.Join(t.TempDir(), "frame_000001.jpg")
-		if err := os.WriteFile(tmpFile, jpeg, 0644); err != nil {
+		if err := os.WriteFile(tmpFile, jpeg, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		// Set explicit ModTime by writing and then modifying

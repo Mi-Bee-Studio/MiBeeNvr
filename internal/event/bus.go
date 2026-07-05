@@ -12,16 +12,14 @@ const (
 	TopicSegmentCompleted     = "segment.completed"
 	TopicSegmentDeleted       = "segment.deleted"
 	TopicStorageHealthChanged = "storage.health.changed"
-	TopicAIDetection         = "ai.detection"
-	TopicAIPerson            = "ai.detection.person"
-	TopicAIVehicle           = "ai.detection.vehicle"
-	TopicAIAnimal            = "ai.detection.animal"
-	TopicAIEventCreated      = "ai.event.created"
+	TopicAIDetection          = "ai.detection"
+	TopicAIPerson             = "ai.detection.person"
+	TopicAIVehicle            = "ai.detection.vehicle"
+	TopicAIAnimal             = "ai.detection.animal"
+	TopicAIEventCreated       = "ai.event.created"
 )
 
-var (
-	ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")
-)
+var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")
 
 // subscriber holds a channel and its mutex.
 type subscriber struct {

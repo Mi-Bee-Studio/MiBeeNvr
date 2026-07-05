@@ -27,9 +27,9 @@ const (
 )
 
 var (
-	ErrNoSyncByte      = errors.New("srt: MPEG-TS sync byte not found")
-	ErrInvalidPacket   = errors.New("srt: invalid MPEG-TS packet")
-	ErrShortPacket     = errors.New("srt: packet too short")
+	ErrNoSyncByte    = errors.New("srt: MPEG-TS sync byte not found")
+	ErrInvalidPacket = errors.New("srt: invalid MPEG-TS packet")
+	ErrShortPacket   = errors.New("srt: packet too short")
 )
 
 // TSDemuxer demuxes MPEG-TS packets and extracts H.264 NALUs from PES payloads.
@@ -37,11 +37,11 @@ var (
 // into individual NALUs using Annex B start code detection.
 type TSDemuxer struct {
 	// Current PES assembly state
-	pid         uint16         // Current PID being assembled
-	pts         int64          // PTS from PES header (90kHz clock)
-	payload     []byte         // PES payload buffer (NALU data)
-	hasPTS      bool           // Whether we've parsed PTS from current PES
-	started     bool           // Whether we've seen a PES start
+	pid     uint16 // Current PID being assembled
+	pts     int64  // PTS from PES header (90kHz clock)
+	payload []byte // PES payload buffer (NALU data)
+	hasPTS  bool   // Whether we've parsed PTS from current PES
+	started bool   // Whether we've seen a PES start
 }
 
 // NewTSDemuxer creates a new MPEG-TS to H.264 NALU demuxer.
@@ -314,7 +314,7 @@ func assembleAccessUnit(nalus []NALU) [][][]byte {
 				frames = append(frames, current)
 				current = nil
 			}
-			}
+		}
 
 		// Make a copy to avoid aliasing
 		naluCopy := make([]byte, len(nalu.Data))
@@ -336,4 +336,3 @@ func formatPTS(pts int64) string {
 	}
 	return fmt.Sprintf("%.3fs", float64(pts)/90000.0)
 }
-

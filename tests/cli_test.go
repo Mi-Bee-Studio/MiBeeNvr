@@ -51,7 +51,7 @@ func TestInitRejectsExistingConfig(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "test-config.yaml")
 	dataDir := filepath.Join(tmpDir, "data")
 
-	err := os.WriteFile(configPath, []byte("existing: true"), 0644)
+	err := os.WriteFile(configPath, []byte("existing: true"), 0o644)
 	require.NoError(t, err)
 
 	cmd := exec.Command(binPath, "init", "--password", "testpass123", "--data-dir", dataDir, "--config", configPath)

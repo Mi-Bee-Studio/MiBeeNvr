@@ -155,7 +155,7 @@ func TestGETDirectory(t *testing.T) {
 func TestPUTAllowedInReadWriteMode(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -300,7 +300,7 @@ func TestGETPathTraversal(t *testing.T) {
 	// So the file IS accessible (by design — it's inside root).
 	// This test verifies the handler doesn't serve arbitrary paths,
 	// only paths within its configured filesystem.
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0o644))
 
 	ts := setupTestServer(t, tmpDir, nil)
 	defer ts.Close()
@@ -364,8 +364,8 @@ func TestServerNoAuthMiddleware(t *testing.T) {
 func TestDELETEAllowedInReadWriteMode(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "to-delete.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "to-delete.mp4"), []byte("data"), 0o644))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -524,8 +524,8 @@ func TestOPTIONSHeaders(t *testing.T) {
 func TestPUTPathTraversalReadWrite(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0o644))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -585,7 +585,7 @@ func TestMKCOLPathTraversalReadWrite(t *testing.T) {
 func TestDELETEPathTraversalReadWrite(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "protected.txt"), []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "protected.txt"), []byte("data"), 0o644))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -614,8 +614,8 @@ func TestDELETEPathTraversalReadWrite(t *testing.T) {
 func TestCOPYInReadWriteMode(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "src.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "src.mp4"), []byte("data"), 0o644))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -642,8 +642,8 @@ func TestCOPYInReadWriteMode(t *testing.T) {
 func TestMOVEInReadWriteMode(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "src.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "camera-01", "src.mp4"), []byte("data"), 0o644))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -669,7 +669,7 @@ func TestMOVEInReadWriteMode(t *testing.T) {
 func TestAuthEnforcedOnPUT(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01"), 0o755))
 
 	hash, err := middleware.HashPassword("secret")
 	require.NoError(t, err)
@@ -810,7 +810,7 @@ func TestGETPathTraversalURLEncoded(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	createTestFiles(t, tmpDir)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "secret.txt"), []byte("sensitive"), 0o644))
 
 	ts := setupTestServer(t, tmpDir, nil)
 	defer ts.Close()
@@ -830,7 +830,7 @@ func TestGETPathTraversalURLEncoded(t *testing.T) {
 func TestPUTNestedPathReadWrite(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01", "subdir"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "camera-01", "subdir"), 0o755))
 
 	store, err := storage.NewManager(tmpDir)
 	require.NoError(t, err)
@@ -850,4 +850,3 @@ func TestPUTNestedPathReadWrite(t *testing.T) {
 	assert.True(t, resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent,
 		"expected 200/201/204, got %d", resp.StatusCode)
 }
-

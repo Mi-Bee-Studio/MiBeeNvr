@@ -19,12 +19,12 @@ var imagingLogger = slog.Default().With("component", "onvif-imaging")
 // ImagingControllerImpl implements ImagingController by delegating to onvif-go's imaging service
 // via raw SOAP requests.
 type ImagingControllerImpl struct {
-	client           *onvifgo.Client
-	profileToken     string
-	imagingEndpoint  string // may differ from device endpoint
-	username         string
-	password         string
-	mu               sync.Mutex
+	client          *onvifgo.Client
+	profileToken    string
+	imagingEndpoint string // may differ from device endpoint
+	username        string
+	password        string
+	mu              sync.Mutex
 }
 
 // NewImagingController creates an ImagingController backed by an onvif-go client.
@@ -95,7 +95,8 @@ func (c *ImagingControllerImpl) SetImagingSettings(ctx context.Context, settings
 	exposureXML := buildExposureSettingsXML(settings.Exposure)
 	wbXML := buildWhiteBalanceSettingsXML(settings.WhiteBalance)
 
-	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	soapBody := fmt.Sprintf(
+		`<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
  xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl"
  xmlns:tt="http://www.onvif.org/ver10/schema">
@@ -210,9 +211,9 @@ func (c *ImagingControllerImpl) doRawSOAP(ctx context.Context, endpoint, soapBod
 type soapAuthStrategy int
 
 const (
-	authNone      soapAuthStrategy = iota
+	authNone       soapAuthStrategy = iota
 	authBasic                       // HTTP Basic Auth header
-	authWSSecurity                   // WS-Security UsernameToken in SOAP header
+	authWSSecurity                  // WS-Security UsernameToken in SOAP header
 )
 
 // sendSOAP dispatches a single SOAP request using the given auth strategy.
@@ -280,14 +281,14 @@ func hasSOAPFault(body []byte) bool {
 type imagingSettingsResponse struct {
 	XMLName xml.Name `xml:"Envelope"`
 	Body    struct {
-		XMLName xml.Name `xml:"Body"`
+		XMLName                    xml.Name `xml:"Body"`
 		GetImagingSettingsResponse struct {
 			XMLName         xml.Name `xml:"GetImagingSettingsResponse"`
 			ImagingSettings struct {
-				Brightness     float64 `xml:"Brightness"`
+				Brightness      float64 `xml:"Brightness"`
 				ColorSaturation float64 `xml:"ColorSaturation"`
-				Contrast       float64 `xml:"Contrast"`
-				Sharpness      float64 `xml:"Sharpness"`
+				Contrast        float64 `xml:"Contrast"`
+				Sharpness       float64 `xml:"Sharpness"`
 			} `xml:"ImagingSettings"`
 		} `xml:"GetImagingSettingsResponse"`
 	} `xml:"Body"`
@@ -300,10 +301,10 @@ func parseImagingSettingsResponse(body []byte) (*ImagingSettings, error) {
 	}
 	s := envelope.Body.GetImagingSettingsResponse.ImagingSettings
 	return &ImagingSettings{
-		Brightness:  s.Brightness,
-		Saturation:  s.ColorSaturation,
-		Contrast:    s.Contrast,
-		Sharpness:   s.Sharpness,
+		Brightness: s.Brightness,
+		Saturation: s.ColorSaturation,
+		Contrast:   s.Contrast,
+		Sharpness:  s.Sharpness,
 	}, nil
 }
 
@@ -311,9 +312,9 @@ func parseImagingSettingsResponse(body []byte) (*ImagingSettings, error) {
 type imagingOptionsResponse struct {
 	XMLName xml.Name `xml:"Envelope"`
 	Body    struct {
-		XMLName xml.Name `xml:"Body"`
+		XMLName            xml.Name `xml:"Body"`
 		GetOptionsResponse struct {
-			XMLName       xml.Name `xml:"GetOptionsResponse"`
+			XMLName        xml.Name `xml:"GetOptionsResponse"`
 			ImagingOptions struct {
 				Brightness struct {
 					Min float64 `xml:"Min"`

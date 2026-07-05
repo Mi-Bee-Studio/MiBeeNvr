@@ -38,9 +38,9 @@ type KeyframeExtractorConfig struct {
 	SegmentDur time.Duration // duration of each segment (default: 10min)
 	IsH265     bool          // true if the source stream is H.265
 
-	Store    SegmentStore          // required
-	DB       RecordingDB           // optional — enables DB recording entries
-	MergeMgr *RollingMergeManager  // optional — enables rolling merge on segment close
+	Store    SegmentStore         // required
+	DB       RecordingDB          // optional — enables DB recording entries
+	MergeMgr *RollingMergeManager // optional — enables rolling merge on segment close
 }
 
 // KeyframeExtractor subscribes to a recorder's StreamHub and captures
@@ -61,9 +61,9 @@ type KeyframeExtractor struct {
 	segmentDur time.Duration
 	isH265     bool
 
-	store    SegmentStore
-	db       RecordingDB
-	mergeMgr *RollingMergeManager
+	store      SegmentStore
+	db         RecordingDB
+	mergeMgr   *RollingMergeManager
 	mu         sync.Mutex
 	hub        *model.StreamHub
 	consumerID string
@@ -144,7 +144,8 @@ func (k *KeyframeExtractor) Start(ctx context.Context, hub *model.StreamHub) err
 
 	go k.captureLoop(ctx)
 
-	kfeLogger.Info("keyframe extractor started",
+	kfeLogger.Info(
+		"keyframe extractor started",
 		"camera_id", k.cameraID,
 		"interval", k.interval,
 		"segment_dur", k.segmentDur,
@@ -327,8 +328,9 @@ func (k *KeyframeExtractor) captureFrame() {
 		data = append(data, nalu...)
 	}
 
-	if err := os.WriteFile(framePath, data, 0644); err != nil {
-		kfeLogger.Error("failed to write keyframe file",
+	if err := os.WriteFile(framePath, data, 0o644); err != nil {
+		kfeLogger.Error(
+			"failed to write keyframe file",
 			"camera_id", k.cameraID,
 			"frame", frameCount,
 			"error", err,
@@ -339,7 +341,8 @@ func (k *KeyframeExtractor) captureFrame() {
 		return
 	}
 
-	kfeLogger.Debug("keyframe captured",
+	kfeLogger.Debug(
+		"keyframe captured",
 		"camera_id", k.cameraID,
 		"frame", frameCount,
 		"pts", frame.pts,
@@ -375,7 +378,8 @@ func (k *KeyframeExtractor) ensureSegment() error {
 	k.segStart = time.Now()
 	k.frameCount = 0
 
-	kfeLogger.Info("new keyframe segment created",
+	kfeLogger.Info(
+		"new keyframe segment created",
 		"camera_id", k.cameraID,
 		"temp_path", tempPath,
 		"final_path", finalPath,
@@ -403,7 +407,8 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 
 	// Close segment via storage (atomic rename).
 	if err := k.store.CloseSegment(tempPath, finalPath); err != nil {
-		kfeLogger.Error("failed to close keyframe segment",
+		kfeLogger.Error(
+			"failed to close keyframe segment",
 			"camera_id", k.cameraID,
 			"temp_path", tempPath,
 			"error", err,
@@ -438,7 +443,8 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 		}
 
 		if err := k.db.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
-			kfeLogger.Error("failed to insert recording entry",
+			kfeLogger.Error(
+				"failed to insert recording entry",
 				"camera_id", k.cameraID,
 				"error", err,
 			)
@@ -451,7 +457,8 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 	}
 
 	if frameCount > 0 {
-		kfeLogger.Info("keyframe segment closed",
+		kfeLogger.Info(
+			"keyframe segment closed",
 			"camera_id", k.cameraID,
 			"frames", frameCount,
 			"final_path", finalPath,

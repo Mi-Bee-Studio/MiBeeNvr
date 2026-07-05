@@ -16,8 +16,8 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
-	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -246,7 +246,6 @@ func countSegmentDirs(t *testing.T, m *storage.Manager, cameraID string) int {
 	require.NoError(t, err)
 	return len(files)
 }
-
 
 // --- Tests ---
 

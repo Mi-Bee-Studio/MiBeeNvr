@@ -212,7 +212,6 @@ func clientExtractSOAPAction(body string) string {
 	return env.Body.Inner.XMLName.Local
 }
 
-
 // --- Existing tests (updated) ---
 
 func TestNewClient(t *testing.T) {

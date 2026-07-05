@@ -393,10 +393,10 @@ func (h *Handler) generateThumbnail(sourcePath, segDir, cachePath string, useFFm
 	data := buf.Bytes()
 
 	// Save to cache
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		logger.Warn("failed to create thumbnail cache dir", "path", filepath.Dir(cachePath), "error", err)
 	} else {
-		if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		if err := os.WriteFile(cachePath, data, 0o644); err != nil {
 			logger.Warn("failed to write thumbnail cache", "path", cachePath, "error", err)
 		}
 	}
@@ -504,7 +504,8 @@ func (h *Handler) extractFirstFrameFFmpeg(path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+	cmd := exec.CommandContext(
+		ctx, "ffmpeg",
 		"-i", path,
 		"-vframes", "1",
 		"-f", "image2pipe",
@@ -571,9 +572,9 @@ func drawPlaceholderIcon(img *image.RGBA, w, h int, c color.Color) {
 		size = 12
 	}
 	// Vertices of a right-pointing play triangle.
-	p1 := image.Pt(cx-size/2, cy-size)   // top-left
-	p2 := image.Pt(cx-size/2, cy+size)   // bottom-left
-	p3 := image.Pt(cx+size, cy)          // right
+	p1 := image.Pt(cx-size/2, cy-size) // top-left
+	p2 := image.Pt(cx-size/2, cy+size) // bottom-left
+	p3 := image.Pt(cx+size, cy)        // right
 	fillTriangle(img, p1, p2, p3, c)
 }
 

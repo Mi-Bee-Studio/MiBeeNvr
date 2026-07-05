@@ -35,38 +35,38 @@ func argsNotContain(t *testing.T, args []string, want string) {
 // Helper: software-only capabilities (no hardware encoders).
 func softwareCaps() HardwareCapabilities {
 	return HardwareCapabilities{
-		Arch:             "amd64",
-		H265Encoder:      "libx265",
-		H264EncoderType:  EncoderSoftware,
-		H265EncoderType:  EncoderSoftware,
-		FFmpegAvailable:  true,
-		FFmpegPath:       "/usr/bin/ffmpeg",
+		Arch:            "amd64",
+		H265Encoder:     "libx265",
+		H264EncoderType: EncoderSoftware,
+		H265EncoderType: EncoderSoftware,
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
 	}
 }
 
 // Helper: V4L2M2M capabilities.
 func v4l2m2mCaps() HardwareCapabilities {
 	return HardwareCapabilities{
-		Arch:             "arm64",
-		H264Encoder:      "h264_v4l2m2m",
-		H265Encoder:      "hevc_v4l2m2m",
-		H264EncoderType:  EncoderV4L2M2M,
-		H265EncoderType:  EncoderV4L2M2M,
-		FFmpegAvailable:  true,
-		FFmpegPath:       "/usr/bin/ffmpeg",
+		Arch:            "arm64",
+		H264Encoder:     "h264_v4l2m2m",
+		H265Encoder:     "hevc_v4l2m2m",
+		H264EncoderType: EncoderV4L2M2M,
+		H265EncoderType: EncoderV4L2M2M,
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
 	}
 }
 
 // Helper: VAAPI capabilities.
 func vaapiCaps() HardwareCapabilities {
 	return HardwareCapabilities{
-		Arch:             "amd64",
-		H264Encoder:      "h264_vaapi",
-		H265Encoder:      "hevc_vaapi",
-		H264EncoderType:  EncoderVAAPI,
-		H265EncoderType:  EncoderVAAPI,
-		FFmpegAvailable:  true,
-		FFmpegPath:       "/usr/bin/ffmpeg",
+		Arch:            "amd64",
+		H264Encoder:     "h264_vaapi",
+		H265Encoder:     "hevc_vaapi",
+		H264EncoderType: EncoderVAAPI,
+		H265EncoderType: EncoderVAAPI,
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
 	}
 }
 
@@ -284,7 +284,7 @@ func TestBuildCommand_AudioPassthrough(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			argsContain(t, args, "-c:a", "aac")
-	argsContain(t, args, "-b:a", "64k")
+			argsContain(t, args, "-b:a", "64k")
 		})
 	}
 }
@@ -426,26 +426,26 @@ func TestBuildCommand_JPEGToH265_Supported(t *testing.T) {
 // Helper: ARM software-only capabilities (no hardware encoders).
 func armSoftwareCaps() HardwareCapabilities {
 	return HardwareCapabilities{
-		Arch:             "arm64",
-		H264Encoder:      "libx264",
-		H265Encoder:      "libx265",
-		H264EncoderType:  EncoderSoftware,
-		H265EncoderType:  EncoderSoftware,
-		FFmpegAvailable:  true,
-		FFmpegPath:       "/usr/bin/ffmpeg",
+		Arch:            "arm64",
+		H264Encoder:     "libx264",
+		H265Encoder:     "libx265",
+		H264EncoderType: EncoderSoftware,
+		H265EncoderType: EncoderSoftware,
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
 	}
 }
 
 // Helper: ARM (32-bit) software-only capabilities.
 func arm32SoftwareCaps() HardwareCapabilities {
 	return HardwareCapabilities{
-		Arch:             "arm",
-		H264Encoder:      "libx264",
-		H265Encoder:      "libx265",
-		H264EncoderType:  EncoderSoftware,
-		H265EncoderType:  EncoderSoftware,
-		FFmpegAvailable:  true,
-		FFmpegPath:       "/usr/bin/ffmpeg",
+		Arch:            "arm",
+		H264Encoder:     "libx264",
+		H265Encoder:     "libx265",
+		H264EncoderType: EncoderSoftware,
+		H265EncoderType: EncoderSoftware,
+		FFmpegAvailable: true,
+		FFmpegPath:      "/usr/bin/ffmpeg",
 	}
 }
 

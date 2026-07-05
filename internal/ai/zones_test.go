@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // makeDetection creates a Detection with the given bounding box for testing.
 func makeDetection(t *testing.T, x1, y1, x2, y2 float64) Detection {
 	t.Helper()
@@ -278,9 +277,9 @@ func TestFilterDetectionsByZone_AllOutside(t *testing.T) {
 	}
 
 	detections := []Detection{
-		makeDetection(t, 0.0, 0.0, 0.1, 0.1),   // center (0.05, 0.05)
-		makeDetection(t, 0.8, 0.8, 0.9, 0.9),   // center (0.85, 0.85)
-		makeDetection(t, 0.7, 0.1, 0.8, 0.2),   // center (0.75, 0.15)
+		makeDetection(t, 0.0, 0.0, 0.1, 0.1), // center (0.05, 0.05)
+		makeDetection(t, 0.8, 0.8, 0.9, 0.9), // center (0.85, 0.85)
+		makeDetection(t, 0.7, 0.1, 0.8, 0.2), // center (0.75, 0.15)
 	}
 
 	filtered := FilterDetectionsByZone(detections, zone)
@@ -327,12 +326,12 @@ func TestFilterDetectionsByZone_BBoxCenterCalculation(t *testing.T) {
 		bbox   [4]float64
 		inside bool
 	}{
-		{"bbox entirely left but straddles center line", [4]float64{0.4, 0.4, 0.6, 0.6}, true},  // cx=0.5 → right edge
-		{"bbox entirely in right", [4]float64{0.6, 0.4, 0.8, 0.6}, true},                         // cx=0.7
-		{"bbox entirely in left", [4]float64{0.1, 0.4, 0.3, 0.6}, false},                         // cx=0.2
-		{"bbox spans full width", [4]float64{0.0, 0.4, 1.0, 0.6}, true},                          // cx=0.5 → right edge
-		{"single point at right", [4]float64{0.7, 0.5, 0.7, 0.5}, true},                          // cx=0.7
-		{"single point at left", [4]float64{0.3, 0.5, 0.3, 0.5}, false},                          // cx=0.3
+		{"bbox entirely left but straddles center line", [4]float64{0.4, 0.4, 0.6, 0.6}, true}, // cx=0.5 → right edge
+		{"bbox entirely in right", [4]float64{0.6, 0.4, 0.8, 0.6}, true},                       // cx=0.7
+		{"bbox entirely in left", [4]float64{0.1, 0.4, 0.3, 0.6}, false},                       // cx=0.2
+		{"bbox spans full width", [4]float64{0.0, 0.4, 1.0, 0.6}, true},                        // cx=0.5 → right edge
+		{"single point at right", [4]float64{0.7, 0.5, 0.7, 0.5}, true},                        // cx=0.7
+		{"single point at left", [4]float64{0.3, 0.5, 0.3, 0.5}, false},                        // cx=0.3
 	}
 
 	for _, tt := range tests {
@@ -735,9 +734,9 @@ func TestZoneManager_FilterIntegration(t *testing.T) {
 
 	// Filter detections.
 	detections := []Detection{
-		makeDetection(t, 0.1, 0.1, 0.2, 0.2),   // center (0.15, 0.15) — inside entrance
-		makeDetection(t, 0.8, 0.1, 0.9, 0.2),   // center (0.85, 0.15) — inside driveway (disabled)
-		makeDetection(t, 0.5, 0.5, 0.6, 0.6),   // center (0.55, 0.55) — outside both
+		makeDetection(t, 0.1, 0.1, 0.2, 0.2), // center (0.15, 0.15) — inside entrance
+		makeDetection(t, 0.8, 0.1, 0.9, 0.2), // center (0.85, 0.15) — inside driveway (disabled)
+		makeDetection(t, 0.5, 0.5, 0.6, 0.6), // center (0.55, 0.55) — outside both
 	}
 
 	filtered := FilterDetectionsByZone(detections, activeZones)

@@ -206,6 +206,7 @@ func TestSaveOverwrite(t *testing.T) {
 	require.Equal(t, ":3333", loaded.Server.Listen)
 	require.Equal(t, "/new", loaded.Storage.RootDir)
 }
+
 func TestValidateOnvifProtocol(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", ONVIFEndpoint: "http://192.168.1.100/onvif/device_service", Protocol: "onvif"}}}
 	cfg.ApplyDefaults()
@@ -488,6 +489,7 @@ func TestHLSMaxStreamsValidation_TooLow(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hls.max_streams")
 }
+
 func TestHLSMaxStreamsValidation_TooHigh(t *testing.T) {
 	cfg := &Config{HLS: HLSConfig{MaxStreams: 21, SegmentCount: 7}}
 	cfg.ApplyDefaults()
@@ -1153,7 +1155,7 @@ metrics_auth:
 `
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "test.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "metrics", cfg.MetricsAuth.Username)
@@ -1514,7 +1516,7 @@ extensions:
     sub_key: sub_value
 `
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o644))
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
@@ -1528,7 +1530,7 @@ server:
   listen: ":9090"
 `
 	path2 := filepath.Join(dir, "config2.yaml")
-	require.NoError(t, os.WriteFile(path2, []byte(yamlContent2), 0644))
+	require.NoError(t, os.WriteFile(path2, []byte(yamlContent2), 0o644))
 
 	cfg2, err := Load(path2)
 	require.NoError(t, err)

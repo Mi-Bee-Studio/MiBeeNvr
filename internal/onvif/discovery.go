@@ -142,7 +142,7 @@ func ProbeDevice(ctx context.Context, host string, port int, timeout time.Durati
 			logger.Warn("ProbeDevice panic recovered", "endpoint", endpoint, "panic", r)
 			device, err = nil, fmt.Errorf("probe panic: %v", r)
 		}
-		}()
+	}()
 
 	// Strategy 1: WS-Discovery Probe via HTTP POST
 	if d, e := probeViaWSDiscovery(ctx, endpoint); e != nil || d != nil {

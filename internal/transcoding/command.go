@@ -139,7 +139,7 @@ func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]
 
 	// Encoder-specific flags
 	switch {
-case strings.Contains(encoder, "v4l2m2m"):
+	case strings.Contains(encoder, "v4l2m2m"):
 		// V4L2 M2M requires explicit GOP and no B-frames
 		args = append(args, "-g", "50", "-bf", "0")
 

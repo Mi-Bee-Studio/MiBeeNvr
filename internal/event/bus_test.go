@@ -130,7 +130,7 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 	bus.Unsubscribe("idem", ch)
 }
 
-	func TestOverflow_DropsOldest(t *testing.T) {
+func TestOverflow_DropsOldest(t *testing.T) {
 	t.Parallel()
 	// Use a very small buffer and don't consume.
 	bus := NewEventBus(3)

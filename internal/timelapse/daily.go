@@ -19,7 +19,7 @@ type RecordingLister interface {
 // It wraps PeriodicMergeManager with a 24-hour interval for backward compatibility.
 type DailyMergeManager struct {
 	inner *PeriodicMergeManager
-	loc  *time.Location
+	loc   *time.Location
 }
 
 // NewDailyMergeManager creates a new DailyMergeManager wrapping a PeriodicMergeManager with 24h duration.
@@ -65,7 +65,8 @@ func (m *DailyMergeManager) Run(ctx context.Context, cameraID string, date strin
 
 	// Handle no segments.
 	if len(segments) == 0 {
-		slog.Warn("daily merge: no segments found for date",
+		slog.Warn(
+			"daily merge: no segments found for date",
 			"camera_id", cameraID,
 			"date", date,
 		)

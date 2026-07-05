@@ -42,9 +42,9 @@ type Manager struct {
 	ctx     context.Context
 
 	// Transcode dependencies (optional, wired via setters).
-	presetRegistry *PresetRegistry
-	hardwareCap    *transcoding.HardwareCapabilities
-	ffmpegPath     string
+	presetRegistry    *PresetRegistry
+	hardwareCap       *transcoding.HardwareCapabilities
+	ffmpegPath        string
 	streamURLProvider StreamURLProvider // optional, resolves camera stream URL for FFmpeg relay
 }
 
@@ -168,7 +168,7 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 			ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled,
 			Platform: c.Platform, TranscodePolicy: c.TranscodePolicy,
 			VideoPresetOverride: vpo, SourceURL: c.SourceURL, UseFFmpeg: c.UseFFmpeg,
-	}
+		}
 	}
 
 	// Index desired targets by their ID.

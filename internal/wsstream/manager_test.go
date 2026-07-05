@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,9 +30,11 @@ func broadcastFrame(t *testing.T, hub *model.StreamHub, pts int64, au [][]byte) 
 	hub.Broadcast(pts, au, false)
 }
 
-var sampleSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
-var samplePPS = []byte{0x68, 0xce, 0x38, 0x80}
-var sampleVPS = []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00}
+var (
+	sampleSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
+	samplePPS = []byte{0x68, 0xce, 0x38, 0x80}
+	sampleVPS = []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00}
+)
 
 func dialWS(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
@@ -450,6 +452,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	conn.Close()
 	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 }
+
 func TestFrameDropCounter(t *testing.T) {
 	// Capture log output to verify periodic warnings
 	var logBuf bytes.Buffer
@@ -625,8 +628,8 @@ func TestGoroutineCleanup(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
-
 }
+
 func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	time.Sleep(100 * time.Millisecond) // let GC settle

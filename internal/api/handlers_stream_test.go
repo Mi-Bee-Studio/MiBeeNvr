@@ -258,9 +258,11 @@ func (s *stubStreamHandler) CanHandle(codec model.Format) bool {
 	}
 	return false
 }
+
 func (s *stubStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
 	return nil
 }
+
 func (s *stubStreamHandler) StopStream(camID string) error {
 	return nil
 }

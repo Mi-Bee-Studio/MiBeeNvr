@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 )
+
 func TestServiceFunc_NonBlockingStart(t *testing.T) {
 	t.Helper()
 	a := New()
@@ -107,15 +108,15 @@ func minimalConfig(t *testing.T) (*config.Config, string) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		Server:  config.ServerConfig{Listen: ":0"},
-		Storage: config.StorageConfig{RootDir: dir, SegmentDuration: "30s"},
-		Auth:    config.AuthConfig{Username: "admin", PasswordHash: "$2a$10$dummyhashfortesting"},
-		Cameras: []config.CameraConfig{},
-		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
-		FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
-		WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
+		Server:        config.ServerConfig{Listen: ":0"},
+		Storage:       config.StorageConfig{RootDir: dir, SegmentDuration: "30s"},
+		Auth:          config.AuthConfig{Username: "admin", PasswordHash: "$2a$10$dummyhashfortesting"},
+		Cameras:       []config.CameraConfig{},
+		Cleanup:       config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		FTP:           config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
+		WebDAV:        config.WebDAVConfig{PathPrefix: "/dav"},
 		Observability: config.ObservabilityConfig{LogLevel: "info", LogFormat: "text"},
-		Version: "1.0",
+		Version:       "1.0",
 		AI: config.AIConfig{
 			Enabled:             false,
 			ConfidenceThreshold: 0.5,

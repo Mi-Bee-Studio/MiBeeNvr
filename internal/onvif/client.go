@@ -29,7 +29,7 @@ type Client struct {
 
 	cachedCapabilities *DeviceCapabilitiesDetailed
 	capsMu             sync.Mutex
-	}
+}
 
 // NewClient creates a new ONVIF client for a specific device.
 // Call Connect() before using device operations.
@@ -131,7 +131,7 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 	// with some devices. Fallback to raw SOAP request if URI is empty.
 	if strings.TrimSpace(uri.URI) == "" {
 		logger.Warn("onvif-go returned empty URI, trying raw SOAP fallback", "profile_token", profileToken)
-	rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
+		rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
 		if rawErr != nil {
 			logger.Warn("raw SOAP fallback failed", "error", rawErr)
 		} else if strings.TrimSpace(rawURI) != "" {
@@ -206,7 +206,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 	var envelope struct {
 		XMLName xml.Name `xml:"Envelope"`
 		Body    struct {
-			XMLName xml.Name `xml:"Body"`
+			XMLName              xml.Name `xml:"Body"`
 			GetStreamURIResponse struct {
 				XMLName  xml.Name `xml:"GetStreamUriResponse"`
 				MediaURI struct {

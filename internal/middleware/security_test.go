@@ -65,6 +65,7 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 		t.Fatalf("expected 429 after 20 failures, got %d", w.Code)
 	}
 }
+
 func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
 	resetAuthFailures()
 	hash, _ := HashPassword("secret")

@@ -316,6 +316,7 @@ func TestParseHEVCSPSResolution_ShortRbsp(t *testing.T) {
 		t.Fatal("expected error for short HEVC SPS RBSP, got nil")
 	}
 }
+
 // H.264 SPS with pic_order_cnt_type=1 (baseline profile, 640x128).
 // Bit layout after profile/constraints/level (24 bits):
 // [seq_param ue0=1] [log2_max_frame_num ue0=1] [poc_type ue1=010]
@@ -398,7 +399,7 @@ var hevcSPSMaxSubLayers1 = []byte{
 	0x03, 0x01, // vps_id=0, max_sub_layers=1, nesting=1, profile=1
 	0x00, 0x00, 0x00, 0x00, // profile compatibility flags (32 bits, all 0)
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // constraint indicators (48 bits, all 0)
-	0x00, // general_level_idc = 0
+	0x00,       // general_level_idc = 0
 	0x1A, 0x40, // sub_layer bits + exp-golomb: chroma=0, width=1 ue(1), height=1 ue(1)
 }
 
@@ -424,7 +425,7 @@ var hevcSPSChromaFormat3 = []byte{
 	0x01, 0x01, // vps_id=0, max_sub=0, nesting=1, profile=1
 	0x00, 0x00, 0x00, 0x00, // profile compatibility flags
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // constraint indicators
-	0x00, // general_level_idc = 0
+	0x00,       // general_level_idc = 0
 	0x90, 0xD8, // chroma=3 (00100), sep=0, width ue(2)=011, height ue(2)=011 + padding
 }
 
@@ -440,7 +441,6 @@ func TestParseHEVCSPSResolution_Chroma3(t *testing.T) {
 		t.Errorf("height = %d, want 2", h)
 	}
 }
-
 
 // H.264 SPS with high profile (100), chromaFormatIDC=3 (4:4:4 chroma), no cropping.
 // Tests the chromaFormatIDC==3 branch (separate_colour_plane_flag at line 128-132 of sps.go).
@@ -583,7 +583,7 @@ func TestParseHEVCSPSResolution_RBSPSize(t *testing.T) {
 // Tests the present==1 delta loop body (lines 156-171 of sps.go).
 var h264SPSHighProfileScalingPresent = []byte{
 	0x67, 0x64, 0x00, 0x00, // NAL + profile(100) + constraints + level
-	0xAD, // high profile: seq=1, chroma=010, depth=1,1, qpprime=0, scaling=1
+	0xAD,             // high profile: seq=1, chroma=010, depth=1,1, qpprime=0, scaling=1
 	0xFF, 0xFF, 0x80, // present[0]=1 + 16 deltas (each se(0)=ue("1"), 1 bit) + present[1..7]=0
 	0xF0, 0x28, // common fields (all ue(0)) + ue(39): width=640
 	0x11, 0x80, // ue(7): height=128 + frame_mbs=1, direct=1, crop=0
@@ -647,4 +647,3 @@ func TestParseHEVCSPSResolution_SeqParamUEOverflow(t *testing.T) {
 		t.Fatal("expected error for seq_param ue overflow, got nil")
 	}
 }
-

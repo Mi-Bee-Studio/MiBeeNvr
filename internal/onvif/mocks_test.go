@@ -10,7 +10,7 @@ import (
 
 var errTestNotFound = &testError{msg: "not found"}
 
-type testError struct { msg string }
+type testError struct{ msg string }
 
 func (e *testError) Error() string { return e.msg }
 

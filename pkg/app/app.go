@@ -36,7 +36,7 @@ type Service interface {
 type App struct {
 	mu       sync.Mutex
 	services map[string]Service
-	order    []string // registration order, for deterministic start/stop
+	order    []string       // registration order, for deterministic start/stop
 	values   map[string]any // typed values for retrieval via Value()
 	started  bool
 	stopped  bool
@@ -88,6 +88,7 @@ func (a *App) Register(s Service) error {
 //
 // The returned Service can be type-asserted to a specific interface
 // exposed by a sibling pkg/ package (e.g., pkg/camera.Manager):
+//
 //	camSvc := a.Get("camera")
 //	if camSvc == nil { return errors.New("camera service not registered") }
 //	camMgr := camSvc.(camera.Manager)
@@ -129,7 +130,7 @@ func (a *App) RegisterValue(name string, v any) error {
 // Value returns the value registered under name, or nil if not registered.
 // The caller is expected to type-assert:
 //
-	//	m := a.Value("camera-manager").(camera.Manager)
+//	m := a.Value("camera-manager").(camera.Manager)
 func (a *App) Value(name string) any {
 	a.mu.Lock()
 	defer a.mu.Unlock()

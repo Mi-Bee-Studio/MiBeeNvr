@@ -9,14 +9,16 @@ import (
 
 // mockNow returns a fixed time for testing.
 // June 6, 2026 is a Saturday (weekday=6).
-var saturday0630 = time.Date(2026, 6, 6, 6, 30, 0, 0, time.UTC)  // 06:30 Saturday
-var saturday1030 = time.Date(2026, 6, 6, 10, 30, 0, 0, time.UTC) // 10:30 Saturday
-var saturday0800 = time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC)   // 08:00 Saturday
-var saturday1700 = time.Date(2026, 6, 6, 17, 0, 0, 0, time.UTC)  // 17:00 Saturday
-var saturday2359 = time.Date(2026, 6, 6, 23, 59, 0, 0, time.UTC) // 23:59 Saturday
-var saturday0000 = time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)   // 00:00 Saturday
-var sunday0000 = time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)     // 00:00 Sunday (day=0)
-var monday0900 = time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)     // 09:00 Monday (day=1)
+var (
+	saturday0630 = time.Date(2026, 6, 6, 6, 30, 0, 0, time.UTC)  // 06:30 Saturday
+	saturday1030 = time.Date(2026, 6, 6, 10, 30, 0, 0, time.UTC) // 10:30 Saturday
+	saturday0800 = time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC)   // 08:00 Saturday
+	saturday1700 = time.Date(2026, 6, 6, 17, 0, 0, 0, time.UTC)  // 17:00 Saturday
+	saturday2359 = time.Date(2026, 6, 6, 23, 59, 0, 0, time.UTC) // 23:59 Saturday
+	saturday0000 = time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)   // 00:00 Saturday
+	sunday0000   = time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)   // 00:00 Sunday (day=0)
+	monday0900   = time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)   // 09:00 Monday (day=1)
+)
 
 func TestScheduler_IsRecordingTime(t *testing.T) {
 	t.Run("within range + matching day", func(t *testing.T) {

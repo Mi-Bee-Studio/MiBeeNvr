@@ -910,6 +910,7 @@ func getAPIBaseURL(region string) string {
 	}
 	return "https://api.io.mi.com/app"
 }
+
 func randString(length int) string {
 	const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	result := make([]byte, length)

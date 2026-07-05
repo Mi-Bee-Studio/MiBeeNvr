@@ -146,7 +146,7 @@ func TestImagingController_SetImagingSettings_Success(t *testing.T) {
 			Gain:         0.5,
 		},
 		WhiteBalance: WhiteBalanceSettings{
-			Mode:              "auto",
+			Mode:             "auto",
 			ColorTemperature: 5500,
 		},
 	}

@@ -2,9 +2,9 @@ package event
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 
 	pkgeventbus "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/eventbus"
 )

@@ -285,7 +285,6 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("mdat box at offset %d with size %d exceeds file size %d", mdatOffset, mdatSize, fileSize)
 	}
 
-
 	// Calculate total video duration from stts.
 	totalDur := time.Duration(0)
 	for _, e := range videoTrack.sttsEntries {

@@ -54,7 +54,7 @@ func cmdDownloadModel() {
 		fmt.Printf("Config not found, using default data directory: %s\n", dataDir)
 	}
 
-	if err := os.MkdirAll(modelDir, 0755); err != nil {
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating models directory %s: %v\n", modelDir, err)
 		os.Exit(1)
 	}

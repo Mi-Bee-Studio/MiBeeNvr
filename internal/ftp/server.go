@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
 var logger = slog.Default().With("component", "ftp")

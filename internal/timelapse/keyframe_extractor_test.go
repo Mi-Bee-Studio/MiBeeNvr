@@ -1,17 +1,17 @@
 package timelapse
 
 import (
-"context"
-"os"
-"path/filepath"
-"sync"
-"sync/atomic"
-"testing"
-"time"
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
 
-"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-"github.com/stretchr/testify/require"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 // ============================================================

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -95,9 +95,9 @@ type PushTarget struct {
 	sampleKbps  atomic.Int64
 
 	// Transcode dependencies (optional, nil when transcode path not needed).
-	presetRegistry *PresetRegistry
-	hardwareCap    *transcoding.HardwareCapabilities
-	ffmpegPath     string
+	presetRegistry    *PresetRegistry
+	hardwareCap       *transcoding.HardwareCapabilities
+	ffmpegPath        string
 	streamURLProvider StreamURLProvider
 
 	// Runtime monitoring state (set during connect, cleared on disconnect).
@@ -440,7 +440,6 @@ func probeSourceVideoFPS(ffmpegPath, sourceURL string) int {
 	}
 	return num / den
 }
-
 
 // --- RTMP target ---
 
@@ -1358,7 +1357,6 @@ func (t *PushTarget) connectRTSPWithTranscode(ctx context.Context) error {
 			audioMedia = desc.Medias[audioMediaIdx]
 		}
 	}
-
 
 	// 11. Audio subscription (if configured).
 	if audioMedia != nil && audioRtpEnc != nil {

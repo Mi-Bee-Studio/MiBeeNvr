@@ -135,11 +135,11 @@ func TestAVIDemuxer_InterleavedOrder(t *testing.T) {
 // returns an error and does not panic.
 func TestAVIDemuxer_CorruptFile(t *testing.T) {
 	tests := [][]byte{
-		{},                              // empty
-		{0, 0, 0, 0, 0, 0, 0, 0},       // all zeros
+		{},                                 // empty
+		{0, 0, 0, 0, 0, 0, 0, 0},           // all zeros
 		[]byte("RIFF\xff\xff\xff\xffWAVE"), // RIFF but not AVI
-		[]byte("NOTA"),                  // random garbage
-		make([]byte, 100),               // zero-filled
+		[]byte("NOTA"),                     // random garbage
+		make([]byte, 100),                  // zero-filled
 	}
 
 	for i, testData := range tests {

@@ -198,7 +198,8 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 		traceID = fmt.Sprintf("%s-%d", h.cameraID, pts)
 	}
 
-	slog.Debug("frame_trace",
+	slog.Debug(
+		"frame_trace",
 		"trace_id", traceID,
 		"camera_id", h.cameraID,
 		"stage", "streamhub_in",
@@ -247,7 +248,8 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 				h.trySendIDR(e.entry.ch, msg)
 			} else {
 				e.entry.drops.Add(1)
-				slog.Warn("frame_trace",
+				slog.Warn(
+					"frame_trace",
 					"trace_id", "no-trace",
 					"camera_id", h.cameraID,
 					"stage", "streamhub_drop",
@@ -281,7 +283,8 @@ func (h *StreamHub) detectDisorder(pts int64) bool {
 			h.OnJitterReorder(h.cameraID)
 		}
 		h.jitterBufferEnabled.Store(true)
-		slog.Info("jitter_buffer_activated",
+		slog.Info(
+			"jitter_buffer_activated",
 			"camera_id", h.cameraID,
 			"last_pts", h.jitterBufferLastPTS,
 			"current_pts", pts,
@@ -458,7 +461,8 @@ func (h *StreamHub) checkDropRate(consumerID string, entry *consumerEntry) {
 	}
 	rate := float64(drops) / float64(total)
 	if rate > h.dropRateWarnThreshold {
-		slog.Warn("high consumer drop rate",
+		slog.Warn(
+			"high consumer drop rate",
 			"camera_id", h.cameraID,
 			"consumer", consumerID,
 			"drop_rate", rate,
