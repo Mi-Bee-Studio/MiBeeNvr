@@ -440,7 +440,7 @@ func (d *Demuxer) enterMovi() error {
 		var header [8]byte
 		_, err := io.ReadFull(d.r, header[:])
 		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				d.atMovi = true
 				d.atEnd = true
 				return io.EOF

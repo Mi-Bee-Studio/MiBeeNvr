@@ -2,6 +2,7 @@ package merge
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -465,7 +466,7 @@ func detectKeyframes(f *os.File, samples []SampleEntry, codec string) error {
 		}
 
 		n, err := f.ReadAt(buf, samples[i].Offset)
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return fmt.Errorf("read sample %d at offset %d: %w", i, samples[i].Offset, err)
 		}
 		if n < 5 {

@@ -236,11 +236,15 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 	info, ok := h.timelapseMergeMgr.GetProgress(cameraID)
 	if !ok {
 		// No progress tracked yet — send an initial event with status idle.
-		data, _ := json.Marshal(timelapse.MergeProgressInfo{
+		data, err := json.Marshal(timelapse.MergeProgressInfo{
 			CameraID: cameraID,
 			Progress: 0,
 			Status:   "idle",
 		})
+		if err != nil {
+			slog.Error("failed to marshal progress info", "error", err)
+			return
+		}
 		fmt.Fprintf(w, "event: progress\ndata: %s\n\n", data)
 		flusher.Flush()
 		return
@@ -248,12 +252,15 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 
 	// If already completed or failed, send the final event and return.
 	if info.Status == "completed" || info.Status == "failed" {
-		data, _ := json.Marshal(info)
+		data, err := json.Marshal(info)
+		if err != nil {
+			slog.Error("failed to marshal progress info", "error", err)
+			return
+		}
 		fmt.Fprintf(w, "event: progress\ndata: %s\n\n", data)
 		flusher.Flush()
 		return
 	}
-
 	// Stream progress updates until completion.
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -274,10 +281,13 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 				return
 			}
 
-			data, _ := json.Marshal(info)
+			data, err := json.Marshal(info)
+			if err != nil {
+				slog.Error("failed to marshal progress info", "error", err)
+				continue
+			}
 			fmt.Fprintf(w, "event: progress\ndata: %s\n\n", data)
 			flusher.Flush()
-
 			// Stop if merge completed or failed.
 			if info.Status == "completed" || info.Status == "failed" {
 				return

@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -66,7 +67,7 @@ func countAVIFrames(t *testing.T, path string) int {
 	count := 0
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -90,7 +91,7 @@ func countAVIAudio(t *testing.T, path string) int {
 	count := 0
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -513,7 +514,7 @@ func TestAVIMerge_DemuxerRoundTrip(t *testing.T) {
 	var audioChunks [][]byte
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)

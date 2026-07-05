@@ -48,7 +48,7 @@ func TestAVIDemuxer_RoundTrip(t *testing.T) {
 	var gotVideo, gotAudio int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -112,7 +112,7 @@ func TestAVIDemuxer_InterleavedOrder(t *testing.T) {
 	var idx int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -164,7 +164,7 @@ func TestAVIDemuxer_CorruptFile(t *testing.T) {
 		t.Fatalf("NewDemuxer on truncated: %v", err)
 	}
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF for truncated file, got %v", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestAVIDemuxer_PTSValues(t *testing.T) {
 	var ptsIdx int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -244,7 +244,7 @@ func TestAVIDemuxer_EmptyMovi(t *testing.T) {
 	}
 
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF for empty AVI, got %v", err)
 	}
 }
@@ -279,7 +279,7 @@ func TestAVIDemuxer_AudioOnly(t *testing.T) {
 	}
 
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF, got %v", err)
 	}
 }
@@ -440,7 +440,7 @@ func TestAVIDemuxer_CloseAfterEOF(t *testing.T) {
 	// Read all chunks.
 	for i := 0; i < 5; i++ {
 		_, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return
 		}
 		if i == 0 && err != nil {
@@ -473,7 +473,7 @@ func TestAVIDemuxer_SeekConsistency(t *testing.T) {
 		count := 0
 		for {
 			_, err := d.NextChunk()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

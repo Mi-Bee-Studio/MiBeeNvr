@@ -1,6 +1,7 @@
 package srt
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -134,7 +135,7 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 			if !r.running.Load() {
 				return // Clean shutdown
 			}
-			if err == io.EOF || err == srt.ErrClientClosed {
+			if errors.Is(err, io.EOF) || errors.Is(err, srt.ErrClientClosed) {
 				logger.Info("SRT connection closed", "camera_id", r.cameraID)
 				return
 			}

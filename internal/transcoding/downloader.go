@@ -1,6 +1,7 @@
 package transcoding
 
 import (
+	"errors"
 	"archive/tar"
 	"compress/gzip"
 	"context"
@@ -374,7 +375,7 @@ func (d *Downloader) extractArchive(archivePath, toolsDir, url string) error {
 	extracted := 0
 	for {
 		hdr, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

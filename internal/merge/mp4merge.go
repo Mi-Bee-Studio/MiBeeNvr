@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -351,7 +352,7 @@ func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte)
 			toRead = remaining
 		}
 		n, err := src.Read(buf[:toRead])
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			return written, err
 		}
 		if n == 0 {

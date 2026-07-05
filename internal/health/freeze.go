@@ -2,6 +2,7 @@ package health
 
 import (
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,13 +98,17 @@ func (f *FreezeDetector) Check() {
 		if !state.frozen && elapsed > timeout {
 			state.frozen = true
 			state.freezeSince = lastFrame
-			meta, _ := json.Marshal(map[string]any{"frozen_for": elapsed.String()})
+			metaBytes, err := json.Marshal(map[string]any{"frozen_for": elapsed.String()})
+			if err != nil {
+				slog.Warn("failed to marshal freeze metadata", "error", err)
+			}
+			meta := string(metaBytes)
 			f.eventHandler(cameraID, model.HealthEvent{
 				CameraID:  cameraID,
 				EventType: string(model.HealthEventFreezeDetected),
 				Status:    string(model.HealthStatusError),
 				Message:   "Video freeze detected",
-				Metadata:  string(meta),
+				Metadata:  meta,
 			})
 		}
 	}
@@ -122,13 +127,17 @@ func (f *FreezeDetector) OnFrameReceived(cameraID string) {
 
 	frozenDuration := time.Since(state.freezeSince)
 	state.frozen = false
-	meta, _ := json.Marshal(map[string]any{"frozen_duration": frozenDuration.String()})
+	metaBytes, err := json.Marshal(map[string]any{"frozen_duration": frozenDuration.String()})
+	if err != nil {
+		slog.Warn("failed to marshal freeze metadata", "error", err)
+	}
+	meta := string(metaBytes)
 	f.eventHandler(cameraID, model.HealthEvent{
 		CameraID:  cameraID,
 		EventType: string(model.HealthEventFreezeRecovered),
 		Status:    string(model.HealthStatusHealthy),
 		Message:   "Video recovered from freeze",
-		Metadata:  string(meta),
+		Metadata:  meta,
 	})
 }
 

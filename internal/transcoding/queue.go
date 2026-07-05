@@ -256,7 +256,7 @@ func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 			return err
 		})
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				queueLogger.Warn("failed to dequeue task", "error", err)
 			}
 			return // no more pending tasks

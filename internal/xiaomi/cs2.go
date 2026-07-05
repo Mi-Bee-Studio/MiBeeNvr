@@ -7,6 +7,7 @@
 package xiaomi
 
 import (
+	"errors"
 	"bufio"
 	"bytes"
 	"encoding/binary"
@@ -154,7 +155,8 @@ func (c *CS2Conn) worker() {
 
 		n, err := c.Conn.Read(buf)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 				// TCP: send keepalive ping on each timeout wakeup.
 				if c.isTCP && time.Now().After(keepaliveTS) {
 					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})

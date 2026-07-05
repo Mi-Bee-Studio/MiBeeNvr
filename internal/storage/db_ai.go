@@ -190,6 +190,9 @@ func joinStrings(ss []string, sep string) string {
 
 // MarshalBBox converts a [4]float64 to JSON string for storage.
 func MarshalBBox(bbox [4]float64) string {
-	b, _ := json.Marshal(bbox)
+	b, err := json.Marshal(bbox)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }

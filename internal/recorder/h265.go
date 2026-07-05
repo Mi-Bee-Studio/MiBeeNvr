@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"fmt"
@@ -300,7 +301,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		au, err := rtpDec.Decode(pkt)
 		if err != nil {
-			if err != rtph265.ErrNonStartingPacketAndNoPrevious && err != rtph265.ErrMorePacketsNeeded {
+			if !errors.Is(err, rtph265.ErrNonStartingPacketAndNoPrevious) && !errors.Is(err, rtph265.ErrMorePacketsNeeded) {
 				h265Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
@@ -344,7 +345,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		client.OnPacketRTP(audioMedi, audioForma, func(pkt *rtp.Packet) {
 			aus, err := audioDec.Decode(pkt)
 			if err != nil {
-				if err != rtpmpeg4audio.ErrMorePacketsNeeded {
+			if !errors.Is(err, rtpmpeg4audio.ErrMorePacketsNeeded) {
 					h265Logger.Error("audio RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 				}
 				return

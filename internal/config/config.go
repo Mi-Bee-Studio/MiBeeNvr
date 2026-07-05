@@ -833,7 +833,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("cameras.%s.timelapse.merge_output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.MergeOutputFPS)
 		}
 		if _, err := ParseMergeDuration(cam.Timelapse.MergeDuration); err != nil {
-			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %v", cam.ID, err)
+			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %w", cam.ID, err)
 		}
 	}
 

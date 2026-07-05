@@ -458,7 +458,7 @@ func (m *Manager) readSubStreamH264(ctx context.Context, client *gortsplib.Clien
 
 		aus, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
-			if decErr != rtph264.ErrNonStartingPacketAndNoPrevious && decErr != rtph264.ErrMorePacketsNeeded {
+			if !errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) && !errors.Is(decErr, rtph264.ErrMorePacketsNeeded) {
 				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
 			}
 			return
@@ -508,7 +508,7 @@ func (m *Manager) readSubStreamH265(ctx context.Context, client *gortsplib.Clien
 
 		aus, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
-			if decErr != rtph265.ErrNonStartingPacketAndNoPrevious && decErr != rtph265.ErrMorePacketsNeeded {
+			if !errors.Is(decErr, rtph265.ErrNonStartingPacketAndNoPrevious) && !errors.Is(decErr, rtph265.ErrMorePacketsNeeded) {
 				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
 			}
 			return

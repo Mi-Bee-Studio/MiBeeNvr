@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -396,7 +397,7 @@ func TestConcurrentWHEPSessionCreation(t *testing.T) {
 	for _, err := range results {
 		if err == nil {
 			success++
-		} else if err == ErrMaxPeersReached {
+		} else if errors.Is(err, ErrMaxPeersReached) {
 			maxReached++
 		}
 	}

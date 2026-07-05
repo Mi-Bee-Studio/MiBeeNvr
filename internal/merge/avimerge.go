@@ -158,7 +158,7 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 		// Stream chunks one at a time.
 		for {
 			chunk, err := demuxer.NextChunk()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

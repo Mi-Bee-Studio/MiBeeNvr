@@ -1,6 +1,7 @@
 package srt
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -116,7 +117,7 @@ func (l *Listener) Start() error {
 	}
 
 	go func() {
-		if err := l.server.ListenAndServe(); err != nil && err != srt.ErrServerClosed {
+		if err := l.server.ListenAndServe(); err != nil && !errors.Is(err, srt.ErrServerClosed) {
 			logger.Error("SRT server error", "error", err)
 		}
 	}()

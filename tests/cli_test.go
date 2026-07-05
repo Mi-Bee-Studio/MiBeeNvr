@@ -1,6 +1,7 @@
 package mibee_nvr_tests
 
 import (
+	"errors"
 	"context"
 	"net"
 	"net/http"
@@ -59,7 +60,8 @@ func TestInitRejectsExistingConfig(t *testing.T) {
 	require.Error(t, err, "init should fail when config already exists")
 	require.Contains(t, string(output), "already exists")
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		require.Equal(t, 2, exitErr.ExitCode(), "exit code should be 2 for existing config")
 	}
 }
@@ -88,7 +90,8 @@ func TestHealthFailureNoServer(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err, "health should fail when no server is listening: %s", string(output))
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		require.Equal(t, 1, exitErr.ExitCode(), "exit code should be 1 for failed health check")
 	}
 }

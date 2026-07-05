@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"errors"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -135,7 +136,7 @@ func playbackLoop(conn *websocket.Conn, aviPath string) {
 		state.mu.Unlock()
 
 		chunk, err := demuxer.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
