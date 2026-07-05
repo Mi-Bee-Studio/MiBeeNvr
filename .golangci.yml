@@ -1,0 +1,35 @@
+version: "2"
+
+run:
+  go: "1.26"
+
+linters:
+  enable:
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - govet
+    - gocritic
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - nilnil
+    - contextcheck
+    - noctx
+    - gocheckcompilerdirectives
+    - nolintlint
+    - errorlint
+    - misspell
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    paths:
+      - web/
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
