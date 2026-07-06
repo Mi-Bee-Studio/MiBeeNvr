@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -31,7 +33,10 @@ func (d *DB) GetFeatureFlag(ctx context.Context, key string, defaultValue bool) 
 	var value bool
 	err := d.db.QueryRowContext(ctx, "SELECT value FROM feature_flags WHERE key = ?", key).Scan(&value)
 	if err != nil {
-		return defaultValue, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return defaultValue, nil
+		}
+		return false, err
 	}
 	return value, nil
 }

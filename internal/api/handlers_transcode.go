@@ -47,7 +47,7 @@ func (h *Handler) handleTranscodingCheck(w http.ResponseWriter, r *http.Request)
 	caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
 
 	// Check FFmpeg download status if downloader is available
-	ffmpegStatus := ""
+	var ffmpegStatus string
 	if h.downloader != nil {
 		status := h.downloader.GetFFmpegStatus()
 		ffmpegStatus = status.Status

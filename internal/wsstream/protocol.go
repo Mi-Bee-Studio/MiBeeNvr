@@ -89,7 +89,6 @@ func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 		binary.BigEndian.PutUint16(buf[offset:], uint16(len(ci.VPS)))
 		offset += 2
 		copy(buf[offset:], ci.VPS)
-		offset += len(ci.VPS)
 	}
 
 	return buf, nil
@@ -156,7 +155,6 @@ func decodeCodecInfo(data []byte) (*CodecInfo, error) {
 		}
 		ci.VPS = make([]byte, vpsLen)
 		copy(ci.VPS, data[offset:offset+vpsLen])
-		offset += vpsLen
 	}
 
 	return ci, nil
@@ -213,7 +211,6 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 		copy(buf[offset:], nalu)
 		offset += len(nalu)
 	}
-
 	return buf, nil
 }
 

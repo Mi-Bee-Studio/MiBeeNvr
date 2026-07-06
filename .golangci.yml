@@ -28,6 +28,10 @@ linters:
     - intrange
     - usestdlibvars
     - predeclared
+    - nilerr
+    - nilnesserr
+    - wastedassign
+    - fatcontext
   settings:
     nolintlint:
       require-explanation: true
@@ -62,6 +66,9 @@ linters:
       # rationale: SQLite queries with rows.Close() pattern — DB package manages cleanup
       - path: internal/storage/
         linters: [rowserrcheck]
+      # rationale: WalkDir/Walk callback nil returns skip inaccessible entries — standard Go pattern
+      - path: internal/storage/manager\.go
+        linters: [nilerr]
       # Internal packages: context intentionally omitted (non-blocking I/O)
       # rationale: Internal packages use non-blocking I/O — context passed explicitly where needed
       - path: internal/
