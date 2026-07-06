@@ -46,7 +46,10 @@ cross-armv7: frontend
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-armv7 ./cmd/mibee-nvr/
 
 lint:
-	go vet ./...
+	golangci-lint run
+
+lint-install:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
 clean:
 	rm -rf $(BUILD_DIR) web/dist .build-tmp
