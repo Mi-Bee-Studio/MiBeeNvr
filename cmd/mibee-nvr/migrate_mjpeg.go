@@ -82,7 +82,7 @@ func cmdMigrateMJPEG() {
 	}
 
 	// Initialise DB.
-	dbPath := cfg.Storage.RootDir + "/recordings.db"
+	dbPath := cfg.Storage.RootDir + "/mibee-nvr.db"
 	db, err := storage.New(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database %q: %v\n", dbPath, err)
