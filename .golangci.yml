@@ -1,8 +1,12 @@
 version: "2"
 
 run:
+  timeout: 5m
   go: "1.26"
 
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
 linters:
   enable:
     - staticcheck
@@ -21,6 +25,9 @@ linters:
     - nolintlint
     - errorlint
     - misspell
+    - intrange
+    - usestdlibvars
+    - predeclared
   settings:
     nolintlint:
       require-explanation: true
@@ -34,7 +41,12 @@ linters:
     gocritic:
       disabled-checks:
         - ifElseChain
+    perfsprint:
+      strerror: true
   exclusions:
+    presets:
+      - common-false-positives
+    warn-unused: true
     paths:
       - web/
     rules:
