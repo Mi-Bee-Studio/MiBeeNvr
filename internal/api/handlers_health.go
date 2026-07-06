@@ -48,7 +48,7 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("limit"); v != "" {
 		limit, err := strconv.Atoi(v)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid limit parameter")
+			WriteError(w, http.StatusBadRequest, "invalid limit parameter")
 			return
 		}
 		filter.Limit = limit
@@ -57,7 +57,7 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("offset"); v != "" {
 		offset, err := strconv.Atoi(v)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid offset parameter")
+			WriteError(w, http.StatusBadRequest, "invalid offset parameter")
 			return
 		}
 		filter.Offset = offset
@@ -65,7 +65,7 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 
 	events, total, err := h.db.ListHealthEvents(r.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list health events")
+		WriteError(w, http.StatusInternalServerError, "failed to list health events")
 		return
 	}
 
@@ -83,18 +83,18 @@ func (h *Handler) handleGetHealthEvents(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) handleGetCameraHealth(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "missing camera id")
+		WriteError(w, http.StatusBadRequest, "missing camera id")
 		return
 	}
 
 	if h.healthMgr == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
 	health := h.healthMgr.GetCameraHealth(cameraID)
 	if health == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
@@ -118,18 +118,18 @@ func (h *Handler) handleGetStability(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetCameraStability(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "camera_id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "missing camera id")
+		WriteError(w, http.StatusBadRequest, "missing camera id")
 		return
 	}
 
 	if h.stabilityProvider == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
 	data := h.stabilityProvider.GetStability(cameraID)
 	if data == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 

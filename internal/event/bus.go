@@ -115,7 +115,7 @@ func (b *EventBus) UnsubscribeByPrefix(prefix string, ch chan Event) {
 
 // Publish sends an event to all subscribers of the given topic.
 // Respects context cancellation. Never blocks on any single subscriber.
-func (b *EventBus) Publish(ctx context.Context, topic string, data interface{}) {
+func (b *EventBus) Publish(ctx context.Context, topic string, data any) {
 	evt := Event{Topic: topic, Data: data}
 
 	b.mu.RLock()

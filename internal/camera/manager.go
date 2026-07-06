@@ -103,7 +103,7 @@ type RelayManager interface {
 	RemoveCamera(cameraID string)
 }
 
-func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
+func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...any) *CameraManager {
 	var m *metrics.Metrics
 	var mm *merge.MergeManager
 	var tm *transcoding.TranscodeManager
@@ -780,7 +780,7 @@ func (cm *CameraManager) SetRelayManager(rm RelayManager) {
 // RelayStatus returns the runtime status of a camera's push-out targets, for the
 // push-status API and the camera card UI. Empty when no relay manager is wired.
 // RelayStatusProvider is the minimal shape the API handler needs.
-func (cm *CameraManager) RelayStatus(cameraID string) []interface{} {
+func (cm *CameraManager) RelayStatus(cameraID string) []any {
 	if rm, ok := cm.relayMgr.(relayStatusProvider); ok {
 		return rm.CameraStatusJSON(cameraID)
 	}
@@ -790,7 +790,7 @@ func (cm *CameraManager) RelayStatus(cameraID string) []interface{} {
 // relayStatusProvider is implemented by *relay.Manager to return JSON-serializable
 // status without internal/camera importing internal/relay.
 type relayStatusProvider interface {
-	CameraStatusJSON(cameraID string) []interface{}
+	CameraStatusJSON(cameraID string) []any
 }
 
 // GetSPS returns the source camera's current H.264 SPS/PPS (raw NALUs, no start

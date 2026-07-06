@@ -25,17 +25,17 @@ func (h *Handler) handleListRelayPresets(w http.ResponseWriter, r *http.Request)
 // It returns a single platform preset by name.
 func (h *Handler) handleGetRelayPreset(w http.ResponseWriter, r *http.Request) {
 	if h.relayMgr == nil {
-		writeError(w, http.StatusNotFound, "relay manager not available")
+		WriteError(w, http.StatusNotFound, "relay manager not available")
 		return
 	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "preset name required")
+		WriteError(w, http.StatusBadRequest, "preset name required")
 		return
 	}
 	preset, ok := h.relayMgr.GetPreset(name)
 	if !ok {
-		writeError(w, http.StatusNotFound, "preset not found")
+		WriteError(w, http.StatusNotFound, "preset not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, preset)

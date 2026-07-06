@@ -429,7 +429,7 @@ const sqliteTimeFormat = "2006-01-02 15:04:05.999999999"
 
 // timeToDB converts time.Time to a SQLite-compatible string value.
 // Returns nil for zero time (which SQLite stores as NULL).
-func timeToDB(t time.Time) interface{} {
+func timeToDB(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}

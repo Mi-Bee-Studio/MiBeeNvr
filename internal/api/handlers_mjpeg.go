@@ -23,13 +23,13 @@ var mjpegLogger = slog.Default().With("component", "mjpeg-proxy")
 func (h *Handler) handleMjpegStream(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID required")
+		WriteError(w, http.StatusBadRequest, "camera ID required")
 		return
 	}
 
 	mjpegURL := h.resolveMjpegURL(cameraID)
 	if mjpegURL == "" {
-		writeError(w, http.StatusNotFound, "MJPEG stream not available for this camera")
+		WriteError(w, http.StatusNotFound, "MJPEG stream not available for this camera")
 		return
 	}
 
@@ -95,13 +95,13 @@ func getMjpegURLFromRecorder(rec interface{}) string {
 func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID required")
+		WriteError(w, http.StatusBadRequest, "camera ID required")
 		return
 	}
 
 	frame := h.getLatestFrameFromRecorder(cameraID)
 	if frame == nil {
-		writeError(w, http.StatusNotFound, "no frame available")
+		WriteError(w, http.StatusNotFound, "no frame available")
 		return
 	}
 

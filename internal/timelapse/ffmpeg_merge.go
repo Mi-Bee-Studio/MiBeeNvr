@@ -23,6 +23,9 @@ type FFmpegMerger struct {
 	config *MergeConfig
 }
 
+	// Interface compliance check.
+var _ TimelapseMerger = (*FFmpegMerger)(nil)
+
 // NewFFmpegMerger creates a new FFmpegMerger with the given hardware capabilities
 // and optional merge configuration.
 func NewFFmpegMerger(caps *transcoding.HardwareCapabilities, config *MergeConfig) *FFmpegMerger {

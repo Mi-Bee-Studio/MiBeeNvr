@@ -256,11 +256,11 @@ func (m *Manager) CameraStatus(cameraID string) []TargetStatus {
 	return out
 }
 
-// CameraStatusJSON returns the camera's target statuses as []interface{} so the
+// CameraStatusJSON returns the camera's target statuses as []any so the
 // camera manager (which can't import relay) can pass them to the JSON API.
-func (m *Manager) CameraStatusJSON(cameraID string) []interface{} {
+func (m *Manager) CameraStatusJSON(cameraID string) []any {
 	statuses := m.CameraStatus(cameraID)
-	out := make([]interface{}, len(statuses))
+	out := make([]any, len(statuses))
 	for i, s := range statuses {
 		out[i] = s
 	}

@@ -34,7 +34,7 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "id")
 
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -72,23 +72,23 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "id")
 
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 	if h.configPath == "" {
-		writeError(w, http.StatusInternalServerError, "config path not available")
+		WriteError(w, http.StatusInternalServerError, "config path not available")
 		return
 	}
 
 	var raw json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	var body config.CameraTimelapseConfig
 	if err := json.Unmarshal(raw, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -106,11 +106,11 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	if body.Interval != "" {
 		dur, err := time.ParseDuration(body.Interval)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("interval must be a valid duration (e.g., \"5s\", \"1m\"): %v", err))
+			WriteError(w, http.StatusBadRequest, fmt.Sprintf("interval must be a valid duration (e.g., \"5s\", \"1m\"): %v", err))
 			return
 		}
 		if dur < time.Second {
-			writeError(w, http.StatusBadRequest, "interval must be at least 1s")
+			WriteError(w, http.StatusBadRequest, "interval must be at least 1s")
 			return
 		}
 	}
@@ -121,20 +121,20 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		case "auto", "snapshot", "rtsp_keyframe", "mjpeg":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "frame_source must be \"auto\", \"snapshot\", \"rtsp_keyframe\", or \"mjpeg\"")
+			WriteError(w, http.StatusBadRequest, "frame_source must be \"auto\", \"snapshot\", \"rtsp_keyframe\", or \"mjpeg\"")
 			return
 		}
 	}
 
 	// Validate merge_mode
 	if body.MergeMode != "" && body.MergeMode != "auto" && body.MergeMode != "mp4" && body.MergeMode != "jpeg" {
-		writeError(w, http.StatusBadRequest, "merge_mode must be \"auto\", \"mp4\", or \"jpeg\"")
+		WriteError(w, http.StatusBadRequest, "merge_mode must be \"auto\", \"mp4\", or \"jpeg\"")
 		return
 	}
 
 	// Validate merge_output_fps
 	if body.MergeOutputFPS != 0 && (body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60) {
-		writeError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
+		WriteError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
 		return
 	}
 
@@ -167,14 +167,14 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !found {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config after timelapse update", "camera_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
@@ -213,13 +213,13 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 	cameraID := chi.URLParam(r, "cameraId")
 
 	if h.timelapseMergeMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		WriteError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -313,16 +313,16 @@ func (h *Handler) handleTimelapseThumbnail(w http.ResponseWriter, r *http.Reques
 
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	if rec.Format != model.Format("timelapse") && rec.Format != "mjpeg" {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
@@ -342,7 +342,7 @@ func (h *Handler) handleTimelapseThumbnail(w http.ResponseWriter, r *http.Reques
 	segDir := timelapseResolvePath(h.store.RootDir(), rec.FilePath)
 	body, err := h.generateThumbnail(sourcePath, segDir, cachePath, useFFmpeg)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -855,14 +855,14 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 	// Get total count for pagination
 	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to count recordings")
 		return
 	}
 
 	// Get paginated results from DB
 	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
@@ -886,7 +886,7 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	// Dedup: prevent concurrent merges for the same camera
 	_, loaded := h.activeMerges.LoadOrStore(cameraID, struct{}{})
 	if loaded {
-		writeError(w, http.StatusConflict, "a merge is already in progress for this camera")
+		WriteError(w, http.StatusConflict, "a merge is already in progress for this camera")
 		return
 	}
 
@@ -900,7 +900,7 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	// No duration — use configured DailyMergeManager (backward compat)
 	if h.timelapseDailyMgr == nil {
 		h.activeMerges.Delete(cameraID)
-		writeError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
 		return
 	}
 
@@ -936,17 +936,17 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 	dur, err := config.ParseMergeDuration(durationStr)
 	if err != nil {
 		h.activeMerges.Delete(cameraID)
-		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		WriteError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
 		return
 	}
 	if h.db == nil {
 		h.activeMerges.Delete(cameraID)
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if h.config == nil {
 		h.activeMerges.Delete(cameraID)
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -1006,11 +1006,11 @@ func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 	if h.configPath == "" {
-		writeError(w, http.StatusInternalServerError, "config path not available")
+		WriteError(w, http.StatusInternalServerError, "config path not available")
 		return
 	}
 
@@ -1019,7 +1019,7 @@ func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == cameraID {
 			if h.config.Cameras[i].Timelapse == nil {
-				writeError(w, http.StatusNotFound, "camera has no timelapse configuration")
+				WriteError(w, http.StatusNotFound, "camera has no timelapse configuration")
 				return
 			}
 			h.config.Cameras[i].Timelapse.Paused = true
@@ -1029,7 +1029,7 @@ func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !found {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
@@ -1043,7 +1043,7 @@ func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config after timelapse pause", "camera_id", cameraID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
@@ -1056,11 +1056,11 @@ func (h *Handler) handleTimelapseResume(w http.ResponseWriter, r *http.Request) 
 	cameraID := chi.URLParam(r, "id")
 
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 	if h.configPath == "" {
-		writeError(w, http.StatusInternalServerError, "config path not available")
+		WriteError(w, http.StatusInternalServerError, "config path not available")
 		return
 	}
 
@@ -1069,7 +1069,7 @@ func (h *Handler) handleTimelapseResume(w http.ResponseWriter, r *http.Request) 
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == cameraID {
 			if h.config.Cameras[i].Timelapse == nil {
-				writeError(w, http.StatusNotFound, "camera has no timelapse configuration")
+				WriteError(w, http.StatusNotFound, "camera has no timelapse configuration")
 				return
 			}
 			h.config.Cameras[i].Timelapse.Paused = false
@@ -1079,7 +1079,7 @@ func (h *Handler) handleTimelapseResume(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if !found {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
@@ -1093,7 +1093,7 @@ func (h *Handler) handleTimelapseResume(w http.ResponseWriter, r *http.Request) 
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config after timelapse resume", "camera_id", cameraID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
@@ -1107,16 +1107,16 @@ func (h *Handler) handleTimelapseGet(w http.ResponseWriter, r *http.Request) {
 
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	if rec.Format != model.Format("timelapse") && rec.Format != "mjpeg" {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
@@ -1131,22 +1131,22 @@ func (h *Handler) handleTimelapseDelete(w http.ResponseWriter, r *http.Request) 
 
 	rec, err := h.db.GetRecording(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	if rec.Format != model.Format("timelapse") && rec.Format != "mjpeg" {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
 	// Delete from DB first (authoritative source)
 	if err := h.db.DeleteRecording(ctx, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete recording")
+		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return
 	}
 
@@ -1182,16 +1182,16 @@ func (h *Handler) handleTimelapseDownload(w http.ResponseWriter, r *http.Request
 
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	if rec.MergeStatus != "merged" || rec.MergePath == "" {
-		writeError(w, http.StatusNotFound, "merged recording not available")
+		WriteError(w, http.StatusNotFound, "merged recording not available")
 		return
 	}
 
@@ -1205,38 +1205,38 @@ func (h *Handler) handleRetryTimelapseMerge(w http.ResponseWriter, r *http.Reque
 	recordingID := chi.URLParam(r, "id")
 
 	if h.timelapseMergeMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
 		return
 	}
 
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	// Fetch the recording from DB.
 	rec, err := h.db.GetRecording(r.Context(), recordingID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	// Only timelapse recordings can be retried.
 	if rec.Format != "timelapse" {
-		writeError(w, http.StatusBadRequest, "only timelapse recordings can be retried")
+		WriteError(w, http.StatusBadRequest, "only timelapse recordings can be retried")
 		return
 	}
 
 	// Allow retry for failed or pending recordings.
 	if rec.MergeStatus != "failed" && rec.MergeStatus != "pending" {
-		writeError(w, http.StatusBadRequest, "recording is not in a retryable state (current: "+rec.MergeStatus+")")
+		WriteError(w, http.StatusBadRequest, "recording is not in a retryable state (current: "+rec.MergeStatus+")")
 		return
 	}
 
 	// The file_path points to the frame directory.
 	frameDir := rec.FilePath
 	if frameDir == "" {
-		writeError(w, http.StatusBadRequest, "recording has no frame directory")
+		WriteError(w, http.StatusBadRequest, "recording has no frame directory")
 		return
 	}
 
@@ -1268,12 +1268,12 @@ func (h *Handler) handleTimelapseMergeCancel(w http.ResponseWriter, r *http.Requ
 	cameraID := chi.URLParam(r, "cameraId")
 
 	if h.timelapseMergeMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
 		return
 	}
 
 	if !h.timelapseMergeMgr.IsActive(cameraID) {
-		writeError(w, http.StatusNotFound, "no active merge for this camera")
+		WriteError(w, http.StatusNotFound, "no active merge for this camera")
 		return
 	}
 
@@ -1292,17 +1292,17 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		Date      string   `json:"date"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if len(body.CameraIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "camera_ids must not be empty")
+		WriteError(w, http.StatusBadRequest, "camera_ids must not be empty")
 		return
 	}
 
 	if len(body.CameraIDs) > 10 {
-		writeError(w, http.StatusBadRequest, "batch size exceeds maximum of 10 cameras")
+		WriteError(w, http.StatusBadRequest, "batch size exceeds maximum of 10 cameras")
 		return
 	}
 
@@ -1312,16 +1312,16 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 
 	dur, err := config.ParseMergeDuration(body.Duration)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		WriteError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
 		return
 	}
 
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -1395,31 +1395,31 @@ func (h *Handler) handleTimelapsePreview(w http.ResponseWriter, r *http.Request)
 
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	if rec.Format != model.Format("timelapse") {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
 	info, err := os.Stat(rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "timelapse directory not found")
+		WriteError(w, http.StatusNotFound, "timelapse directory not found")
 		return
 	}
 	if !info.IsDir() {
-		writeError(w, http.StatusNotFound, "timelapse recording is not a directory")
+		WriteError(w, http.StatusNotFound, "timelapse recording is not a directory")
 		return
 	}
 
 	entries, err := os.ReadDir(rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read timelapse directory")
+		WriteError(w, http.StatusInternalServerError, "failed to read timelapse directory")
 		return
 	}
 

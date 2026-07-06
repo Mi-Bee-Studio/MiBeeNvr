@@ -149,7 +149,7 @@ func (h *Handler) handleFFmpegStatus(w http.ResponseWriter, r *http.Request) {
 // Starts download in background goroutine, returns 202 Accepted.
 func (h *Handler) handleFFmpegDownload(w http.ResponseWriter, r *http.Request) {
 	if h.downloader == nil {
-		writeError(w, http.StatusServiceUnavailable, "FFmpeg downloader not available")
+		WriteError(w, http.StatusServiceUnavailable, "FFmpeg downloader not available")
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *Handler) handleFFmpegDownload(w http.ResponseWriter, r *http.Request) {
 // Only works if status is "failed". Returns 409 Conflict otherwise.
 func (h *Handler) handleFFmpegDownloadRetry(w http.ResponseWriter, r *http.Request) {
 	if h.downloader == nil {
-		writeError(w, http.StatusServiceUnavailable, "FFmpeg downloader not available")
+		WriteError(w, http.StatusServiceUnavailable, "FFmpeg downloader not available")
 		return
 	}
 
@@ -259,7 +259,7 @@ func (h *Handler) handleTranscodingStatus(w http.ResponseWriter, r *http.Request
 // Returns paginated transcode tasks with optional filters.
 func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
@@ -292,7 +292,7 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 	tasks, total, err := h.db.ListTranscodeTasks(r.Context(), filter)
 	if err != nil {
 		logger.Warn("failed to list transcode tasks", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list tasks")
+		WriteError(w, http.StatusInternalServerError, "failed to list tasks")
 		return
 	}
 
@@ -319,11 +319,11 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 // Manually enqueue a transcode task. Validates recording exists and camera has transcoding enabled.
 func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
-		writeError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
 		return
 	}
 
@@ -333,17 +333,17 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		TargetCodec string `json:"target_codec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	// Validate required fields
 	if body.CameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera_id is required")
+		WriteError(w, http.StatusBadRequest, "camera_id is required")
 		return
 	}
 	if body.RecordingID == "" {
-		writeError(w, http.StatusBadRequest, "recording_id is required")
+		WriteError(w, http.StatusBadRequest, "recording_id is required")
 		return
 	}
 	if body.TargetCodec == "" {
@@ -352,7 +352,7 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 
 	// Validate target codec
 	if body.TargetCodec != "h264" && body.TargetCodec != "h265" {
-		writeError(w, http.StatusBadRequest, "target_codec must be h264 or h265")
+		WriteError(w, http.StatusBadRequest, "target_codec must be h264 or h265")
 		return
 	}
 
@@ -360,7 +360,7 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 	if h.config != nil {
 		camConfig := h.config.ResolveTranscodingConfig(body.CameraID)
 		if !camConfig.Enabled {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", body.CameraID))
+			WriteError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", body.CameraID))
 			return
 		}
 	}
@@ -369,11 +369,11 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 	rec, err := h.db.GetRecording(r.Context(), body.RecordingID)
 	if err != nil {
 		logger.Warn("failed to get recording", "error", err, "recording_id", body.RecordingID)
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
@@ -393,7 +393,7 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 
 	if err := h.transcodeMgr.Queue().Enqueue(r.Context(), task); err != nil {
 		logger.Warn("failed to enqueue transcode task", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to enqueue task")
+		WriteError(w, http.StatusInternalServerError, "failed to enqueue task")
 		return
 	}
 
@@ -406,14 +406,14 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 // Cancels a pending or running task. Returns 409 for completed/failed/cancelled tasks.
 func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid task ID")
+		WriteError(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
 
@@ -421,24 +421,24 @@ func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Req
 	task, err := h.db.GetTaskByID(r.Context(), id)
 	if err != nil {
 		logger.Warn("failed to get transcode task", "error", err, "task_id", id)
-		writeError(w, http.StatusInternalServerError, "failed to get task")
+		WriteError(w, http.StatusInternalServerError, "failed to get task")
 		return
 	}
 	if task == nil {
-		writeError(w, http.StatusNotFound, "task not found")
+		WriteError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
 	// Only pending or running tasks can be cancelled
 	switch task.Status {
 	case "completed":
-		writeError(w, http.StatusConflict, "cannot cancel completed task")
+		WriteError(w, http.StatusConflict, "cannot cancel completed task")
 		return
 	case "failed":
-		writeError(w, http.StatusConflict, "cannot cancel failed task")
+		WriteError(w, http.StatusConflict, "cannot cancel failed task")
 		return
 	case "cancelled":
-		writeError(w, http.StatusConflict, "task already cancelled")
+		WriteError(w, http.StatusConflict, "task already cancelled")
 		return
 	}
 
@@ -446,14 +446,14 @@ func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Req
 	if h.transcodeMgr != nil && h.transcodeMgr.Queue() != nil {
 		if err := h.transcodeMgr.Queue().CancelTask(r.Context(), id); err != nil {
 			logger.Warn("failed to cancel transcode task", "error", err, "task_id", id)
-			writeError(w, http.StatusInternalServerError, "failed to cancel task")
+			WriteError(w, http.StatusInternalServerError, "failed to cancel task")
 			return
 		}
 	} else {
 		// No queue manager — cancel in DB directly
 		if err := h.db.CancelTask(r.Context(), id); err != nil {
 			logger.Warn("failed to cancel transcode task in DB", "error", err, "task_id", id)
-			writeError(w, http.StatusInternalServerError, "failed to cancel task")
+			WriteError(w, http.StatusInternalServerError, "failed to cancel task")
 			return
 		}
 	}
@@ -468,18 +468,18 @@ func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Req
 // Creates a new pending transcoding task from a failed task.
 func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
-		writeError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
 		return
 	}
 
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid task ID")
+		WriteError(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
 
@@ -487,17 +487,17 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 	task, err := h.db.GetTaskByID(r.Context(), id)
 	if err != nil {
 		logger.Warn("failed to get transcode task", "error", err, "task_id", id)
-		writeError(w, http.StatusInternalServerError, "failed to get task")
+		WriteError(w, http.StatusInternalServerError, "failed to get task")
 		return
 	}
 	if task == nil {
-		writeError(w, http.StatusNotFound, "task not found")
+		WriteError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
 	// Only failed tasks can be retried
 	if task.Status != "failed" {
-		writeError(w, http.StatusConflict, "can only retry failed tasks")
+		WriteError(w, http.StatusConflict, "can only retry failed tasks")
 		return
 	}
 
@@ -517,7 +517,7 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 
 	if err := h.transcodeMgr.Queue().Enqueue(r.Context(), newTask); err != nil {
 		logger.Warn("failed to enqueue retry transcode task", "error", err, "task_id", id)
-		writeError(w, http.StatusInternalServerError, "failed to enqueue retry task")
+		WriteError(w, http.StatusInternalServerError, "failed to enqueue retry task")
 		return
 	}
 
@@ -528,18 +528,18 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 // Enqueues all untranscoded recordings for a camera into the transcode queue.
 func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := r.URL.Query().Get("camera_id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera_id is required")
+		WriteError(w, http.StatusBadRequest, "camera_id is required")
 		return
 	}
 
 	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
-		writeError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
 		return
 	}
 
@@ -553,14 +553,14 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		if !cameraFound {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("camera %s not found", cameraID))
+			WriteError(w, http.StatusBadRequest, fmt.Sprintf("camera %s not found", cameraID))
 			return
 		}
 
 		// Check if transcoding is enabled for this camera
 		camConfig := h.config.ResolveTranscodingConfig(cameraID)
 		if !camConfig.Enabled {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", cameraID))
+			WriteError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", cameraID))
 			return
 		}
 	}
@@ -580,7 +580,7 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		logger.Warn("failed to list recordings", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
@@ -588,7 +588,7 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 	recordings, err := h.db.ListRecordingsWithoutTranscode(r.Context(), cameraID)
 	if err != nil {
 		logger.Warn("failed to list recordings without transcode", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
@@ -628,7 +628,7 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 // Returns resolved transcoding config for each camera.
 func (h *Handler) handleTranscodingCameraConfigs(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -656,20 +656,20 @@ func (h *Handler) handleTranscodingCameraConfigs(w http.ResponseWriter, r *http.
 // Returns the count of recordings that have not been transcoded for a camera.
 func (h *Handler) handleTranscodingRecordingsWithoutTranscode(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := r.URL.Query().Get("camera_id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera_id is required")
+		WriteError(w, http.StatusBadRequest, "camera_id is required")
 		return
 	}
 
 	recordings, err := h.db.ListRecordingsWithoutTranscode(r.Context(), cameraID)
 	if err != nil {
 		logger.Warn("failed to list recordings without transcode", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 

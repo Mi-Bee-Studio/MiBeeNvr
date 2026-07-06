@@ -13,7 +13,7 @@ import (
 
 func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -29,7 +29,7 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -43,7 +43,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -52,35 +52,35 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	}
 	if body.CheckInterval != nil {
 		if _, err := time.ParseDuration(*body.CheckInterval); err != nil {
-			writeError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
+			WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
 			return
 		}
 		h.config.Merge.CheckInterval = *body.CheckInterval
 	}
 	if body.WindowSize != nil {
 		if _, err := time.ParseDuration(*body.WindowSize); err != nil {
-			writeError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
+			WriteError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
 			return
 		}
 		h.config.Merge.WindowSize = *body.WindowSize
 	}
 	if body.BatchLimit != nil {
 		if *body.BatchLimit < 1 {
-			writeError(w, http.StatusBadRequest, "batch_limit must be >= 1")
+			WriteError(w, http.StatusBadRequest, "batch_limit must be >= 1")
 			return
 		}
 		h.config.Merge.BatchLimit = *body.BatchLimit
 	}
 	if body.MinSegmentAge != nil {
 		if _, err := time.ParseDuration(*body.MinSegmentAge); err != nil {
-			writeError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
+			WriteError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
 			return
 		}
 		h.config.Merge.MinSegmentAge = *body.MinSegmentAge
 	}
 	if body.MinSegmentsToMerge != nil {
 		if *body.MinSegmentsToMerge < 1 {
-			writeError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
+			WriteError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
 			return
 		}
 		h.config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
@@ -96,13 +96,13 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := chi.URLParam(r, "id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID is required")
+		WriteError(w, http.StatusBadRequest, "camera ID is required")
 		return
 	}
 
@@ -116,7 +116,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -124,17 +124,17 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	for _, d := range []*string{body.CheckInterval, body.WindowSize, body.MinSegmentAge} {
 		if d != nil {
 			if _, err := time.ParseDuration(*d); err != nil {
-				writeError(w, http.StatusBadRequest, "duration fields must be valid (e.g., \"30m\", \"1h\")")
+				WriteError(w, http.StatusBadRequest, "duration fields must be valid (e.g., \"30m\", \"1h\")")
 				return
 			}
 		}
 	}
 	if body.BatchLimit != nil && *body.BatchLimit < 1 {
-		writeError(w, http.StatusBadRequest, "batch_limit must be >= 1")
+		WriteError(w, http.StatusBadRequest, "batch_limit must be >= 1")
 		return
 	}
 	if body.MinSegmentsToMerge != nil && *body.MinSegmentsToMerge < 1 {
-		writeError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
+		WriteError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
 		return
 	}
 
@@ -142,7 +142,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 		body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
 		body.BatchLimit, body.MinSegmentsToMerge); err != nil {
 		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to update merge config")
+		WriteError(w, http.StatusInternalServerError, "failed to update merge config")
 		return
 	}
 
@@ -151,13 +151,13 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 
 func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := chi.URLParam(r, "id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID is required")
+		WriteError(w, http.StatusBadRequest, "camera ID is required")
 		return
 	}
 
@@ -165,7 +165,7 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
 		nil, nil, nil, nil, nil, nil); err != nil {
 		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to clear merge config")
+		WriteError(w, http.StatusInternalServerError, "failed to clear merge config")
 		return
 	}
 
@@ -174,24 +174,24 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 
 func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := chi.URLParam(r, "id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera ID is required")
+		WriteError(w, http.StatusBadRequest, "camera ID is required")
 		return
 	}
 
 	cam, err := h.db.GetCamera(r.Context(), cameraID)
 	if err != nil {
 		logger.Warn("failed to get camera", "error", err, "camera_id", cameraID)
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 

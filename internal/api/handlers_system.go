@@ -279,19 +279,19 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	total, used, err := h.store.GetDiskUsage()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get disk usage")
+		WriteError(w, http.StatusInternalServerError, "failed to get disk usage")
 		return
 	}
 
 	count, err := h.db.CountRecordings(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to count recordings")
 		return
 	}
 
 	cameras, err := h.db.ListCameras(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to count cameras")
+		WriteError(w, http.StatusInternalServerError, "failed to count cameras")
 		return
 	}
 
@@ -322,7 +322,7 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 
 	trends, err := h.db.GetRecordingTrends(r.Context(), days, loc)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording trends")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording trends")
 		return
 	}
 	writeJSON(w, http.StatusOK, trends)
@@ -332,7 +332,7 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -409,7 +409,7 @@ func buildAPIKeyInfo(keys []config.APIKeyConfig) []map[string]any {
 
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -428,7 +428,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -436,21 +436,21 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if body.Cleanup != nil {
 		if body.Cleanup.RetentionDays != nil {
 			if *body.Cleanup.RetentionDays < 1 {
-				writeError(w, http.StatusBadRequest, "retention_days must be >= 1")
+				WriteError(w, http.StatusBadRequest, "retention_days must be >= 1")
 				return
 			}
 			h.config.Cleanup.RetentionDays = *body.Cleanup.RetentionDays
 		}
 		if body.Cleanup.DiskThresholdPercent != nil {
 			if *body.Cleanup.DiskThresholdPercent < 1 || *body.Cleanup.DiskThresholdPercent > 100 {
-				writeError(w, http.StatusBadRequest, "disk_threshold_percent must be between 1 and 100")
+				WriteError(w, http.StatusBadRequest, "disk_threshold_percent must be between 1 and 100")
 				return
 			}
 			h.config.Cleanup.DiskThresholdPercent = *body.Cleanup.DiskThresholdPercent
 		}
 		if body.Cleanup.CheckInterval != nil {
 			if _, err := time.ParseDuration(*body.Cleanup.CheckInterval); err != nil {
-				writeError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
+				WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
 				return
 			}
 			h.config.Cleanup.CheckInterval = *body.Cleanup.CheckInterval
@@ -478,7 +478,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		tz := strings.TrimSpace(*body.Timezone)
 		if tz != "" && tz != "UTC" && tz != "Local" {
 			if _, err := time.LoadLocation(tz); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid timezone: %q", tz))
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid timezone: %q", tz))
 				return
 			}
 		}
@@ -498,14 +498,14 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 // Returns the full key ONCE (never exposed again).
 func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 	var body struct {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -520,7 +520,7 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err := config.Save(h.configPath, h.config); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
@@ -536,12 +536,12 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/settings/api-keys/{name}
 func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
@@ -554,12 +554,12 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, "API key not found")
+		WriteError(w, http.StatusNotFound, "API key not found")
 		return
 	}
 
 	if err := config.Save(h.configPath, h.config); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
@@ -569,7 +569,7 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -594,7 +594,7 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 
 func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -617,7 +617,7 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -672,7 +672,7 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -684,7 +684,7 @@ func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Re
 
 func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
+		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
@@ -694,13 +694,13 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if body.MaxWorkers != nil {
 		if *body.MaxWorkers < 1 || *body.MaxWorkers > 4 {
-			writeError(w, http.StatusBadRequest, "max_workers must be between 1 and 4")
+			WriteError(w, http.StatusBadRequest, "max_workers must be between 1 and 4")
 			return
 		}
 		h.config.Transcoding.MaxWorkers = *body.MaxWorkers
@@ -720,18 +720,18 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	backupDir := filepath.Join(filepath.Dir(h.configPath), "backups")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create backup directory")
+		WriteError(w, http.StatusInternalServerError, "failed to create backup directory")
 		return
 	}
 	filename := fmt.Sprintf("nvr-backup-%s.db", time.Now().Format("20060102-150405"))
 	destPath := filepath.Join(backupDir, filename)
 	if err := h.db.Backup(r.Context(), destPath); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create backup")
+		WriteError(w, http.StatusInternalServerError, "failed to create backup")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "created", "file": filename})
@@ -821,7 +821,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetFeatures(w http.ResponseWriter, r *http.Request) {
 	flags, err := h.db.GetFeatureFlags(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get feature flags")
+		WriteError(w, http.StatusInternalServerError, "failed to get feature flags")
 		return
 	}
 	protocols := make(map[string]bool)
@@ -839,7 +839,7 @@ func (h *Handler) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
 		Protocols map[string]bool `json:"protocols"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	ctx := r.Context()

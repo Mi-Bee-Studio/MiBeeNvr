@@ -29,6 +29,9 @@ type GoMerger struct {
 	jpegQuality int
 }
 
+	// Interface compliance check.
+var _ TimelapseMerger = (*GoMerger)(nil)
+
 // NewGoMerger creates a new GoMerger with passthrough mode (original JPEG quality preserved).
 func NewGoMerger() *GoMerger {
 	return &GoMerger{jpegQuality: -1}

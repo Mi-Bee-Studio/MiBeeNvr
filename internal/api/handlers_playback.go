@@ -49,35 +49,35 @@ type playbackState struct {
 func (h *Handler) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "recording id is required")
+		WriteError(w, http.StatusBadRequest, "recording id is required")
 		return
 	}
 
 	// Look up recording in DB.
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	// Must be AVI format.
 	if rec.Format != model.FormatAVI {
-		writeError(w, http.StatusBadRequest, "recording is not an AVI file")
+		WriteError(w, http.StatusBadRequest, "recording is not an AVI file")
 		return
 	}
 
 	// Validate and resolve file path.
 	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording file not found")
+		WriteError(w, http.StatusNotFound, "recording file not found")
 		return
 	}
 	if _, err := os.Stat(validPath); err != nil {
-		writeError(w, http.StatusNotFound, "recording file not found on disk")
+		WriteError(w, http.StatusNotFound, "recording file not found on disk")
 		return
 	}
 

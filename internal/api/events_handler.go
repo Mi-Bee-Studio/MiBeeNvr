@@ -15,13 +15,13 @@ import (
 // Supports ?filter=onvif. to filter by topic prefix.
 func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if h.eventBus == nil {
-		writeError(w, http.StatusServiceUnavailable, "event bus not available")
+		WriteError(w, http.StatusServiceUnavailable, "event bus not available")
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		WriteError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -74,13 +74,13 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
 	if h.eventBus == nil {
-		writeError(w, http.StatusServiceUnavailable, "event bus not available")
+		WriteError(w, http.StatusServiceUnavailable, "event bus not available")
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		WriteError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 

@@ -24,25 +24,25 @@ type setupRequest struct {
 func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// Security: reject if auth is already configured
 	if strings.TrimSpace(h.config.Auth.PasswordHash) != "" {
-		writeError(w, http.StatusConflict, "setup already completed")
+		WriteError(w, http.StatusConflict, "setup already completed")
 		return
 	}
 
 	var req setupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	// Validate username
 	if strings.TrimSpace(req.Username) == "" {
-		writeError(w, http.StatusBadRequest, "username is required")
+		WriteError(w, http.StatusBadRequest, "username is required")
 		return
 	}
 
 	// Validate password (same rule as CLI: min 8 chars)
 	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		WriteError(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
 	}
 
@@ -50,7 +50,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	hash, err := middleware.HashPassword(req.Password)
 	if err != nil {
 		logger.Error("failed to hash password", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		WriteError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
@@ -87,7 +87,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// Atomic save
 	if err := config.Save(h.configPath, &cfg); err != nil {
 		logger.Error("failed to save config", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 
