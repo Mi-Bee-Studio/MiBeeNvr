@@ -56,6 +56,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		DB:           db,
 		AudioEnabled: cfg.AudioEnabled,
 		Channel:      cfg.Channel,
+		Quality:      cfg.Quality,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

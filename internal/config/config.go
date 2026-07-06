@@ -106,6 +106,7 @@ type CameraConfig struct {
 	DID     string `yaml:"did,omitempty"`     // Xiaomi Device ID
 	Vendor  string `yaml:"vendor,omitempty"`  // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality string `yaml:"quality,omitempty"` // Xiaomi stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
 
 	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
 	// For these cameras the publisher connects TO the NVR; the URL field is

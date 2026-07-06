@@ -68,6 +68,7 @@ type XiaomiRecorderConfig struct {
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
 	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality      string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
 	EventBus     *event.EventBus
 }
 
@@ -101,8 +102,12 @@ type XiaomiRecorder struct {
 	// Audio state (probed from first audio packet)
 	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
 
-	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
-	streamStart time.Time        // For PTS rebase (used by forwardHLS)
+	Hub             *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	streamStart     time.Time        // For PTS rebase (used by forwardHLS)
+
+	// Quality auto-fallback state (HD→SD downgrade after repeated no-media failures)
+	currentQuality    string // effective quality for next connectAndRecord attempt
+	noMediaFailCount  int    // consecutive "no media data" failures at current quality
 }
 
 // Interface compliance check.
@@ -342,8 +347,24 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
 
+	// Initialize quality for auto-fallback.
+	// "auto" or "" starts at HD; downgrades to SD after 3 no-media failures.
+	// Ported from go2rtc: subtype URL parameter + issue #2114 (isa.camera.hlc8 needs SD).
+	r.currentQuality = r.cfg.Quality
+	if r.currentQuality == "" || r.currentQuality == "auto" {
+		r.currentQuality = "hd"
+	}
+
 	var retryCount int
 	for {
+		// Wake up battery-powered cateye/doorbell cameras before resolving URL.
+		// Ported from go2rtc internal/xiaomi/xiaomi.go.
+		if strings.Contains(r.cfg.Model, ".cateye.") {
+			if wakeErr := WakeUpCamera(r.cfg.CloudCfg, r.cfg.DID); wakeErr != nil {
+				xiaomiLogger.Warn("failed to wake up cateye camera", "camera_id", r.cfg.CameraID, "error", wakeErr)
+			}
+		}
+
 		// Resolve xiaomi://deviceID to miss://... URL via cloud API.
 		missURL, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
 		if err != nil {
@@ -373,6 +394,20 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			retryCount = 0
 			r.recordXiaomiReconnect()
 		}
+
+		// Quality auto-fallback: if "no media data" errors persist at HD, downgrade to SD.
+		// Some models (isa.camera.hlc8) silently refuse HD streaming — go2rtc issue #2114.
+		if err != nil && strings.Contains(err.Error(), "no media data") {
+			r.noMediaFailCount++
+			if r.noMediaFailCount >= 3 && r.currentQuality == "hd" && (r.cfg.Quality == "" || r.cfg.Quality == "auto") {
+				r.currentQuality = "sd"
+				xiaomiLogger.Warn("auto-downgrading quality HD→SD after repeated no-media failures",
+					"camera_id", r.cfg.CameraID, "failures", r.noMediaFailCount, "model", r.cfg.Model)
+				r.noMediaFailCount = 0
+			}
+		} else if connected {
+			r.noMediaFailCount = 0
+		}
 		retryCount++
 		backoff := recorder.TieredBackoffWithJitter(retryCount)
 		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
@@ -395,8 +430,9 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	}
 	defer client.Conn.Close()
 
-	// Start HD video stream (use configured channel for dual-lens cameras).
-	if err := client.StartMedia(r.cfg.Channel, "hd", r.cfg.AudioEnabled); err != nil {
+	// Start video stream using current quality (HD default, auto-downgrades to SD).
+	// Channel is used for dual-lens cameras.
+	if err := client.StartMedia(r.cfg.Channel, r.currentQuality, r.cfg.AudioEnabled); err != nil {
 		return fmt.Errorf("miss start media: %w", err), false
 	}
 	defer func() {

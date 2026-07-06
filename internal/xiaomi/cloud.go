@@ -385,6 +385,29 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	return missURL.String(), nil
 }
 
+// WakeUpCamera sends a wakeup RPC to a battery-powered Xiaomi camera (cateye/doorbell).
+// These cameras sleep to conserve power and must be woken before P2P connection.
+// Ported from go2rtc internal/xiaomi/xiaomi.go:wakeUpCamera.
+func WakeUpCamera(xiaomiCfg XiaomiCloudConfig, did string) error {
+	session, err := SignInWithToken(xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
+	if err != nil {
+		return fmt.Errorf("xiaomi cloud auth: %w", err)
+	}
+
+	c := &Cloud{
+		client: session.client,
+		sid:    "xiaomiio",
+		region: session.Region,
+		ssecurity: session.ssecurity,
+		cookies:   session.cookies,
+		userID:    session.UserID,
+	}
+
+	params := `{"id":1,"method":"wakeup","params":{"video":"1"}}`
+	_, err = c.Request(getAPIBaseURL(session.Region), "/home/rpc/"+did, params, nil)
+	return err
+}
+
 // --- Internal cloud client ---
 
 type Cloud struct {
