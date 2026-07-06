@@ -185,6 +185,12 @@ func (c *CS2Conn) worker() {
 			channel := c.channels[ch]
 
 			if c.isTCP {
+				// Send PING on data receive, matching official Mi Home app behavior.
+				// Ported from go2rtc: PING sent inside msgDrw handler, throttled to 1s.
+				if now := time.Now(); now.After(keepaliveTS) {
+					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					keepaliveTS = now.Add(pingInterval)
+				}
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int

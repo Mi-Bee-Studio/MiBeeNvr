@@ -143,6 +143,21 @@ func SignInWithCaptcha(username, password, region string) (session *CloudSession
 }
 
 // SignInWithToken re-authenticates using a stored passToken.
+
+// sessionCacheTTL is how long a cached cloud session is considered fresh.
+// Ported from go2rtc's pattern of caching LoginWithToken sessions.
+const sessionCacheTTL = 30 * time.Minute
+
+type cachedSession struct {
+	session  *CloudSession
+	cachedAt time.Time
+}
+
+var (
+	sessionCacheMu sync.Mutex
+	sessionCache    = make(map[string]*cachedSession) // key: userID+"|"+region
+)
+
 func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if userID == "" || passToken == "" {
 		return nil, errors.New("xiaomi: user_id and token are required")
@@ -150,6 +165,11 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if region == "" {
 		region = "cn"
 	}
+	// Check session cache first to avoid redundant cloud auth on reconnects.
+	if cached := getCachedSession(userID, region); cached != nil {
+		return cached, nil
+	}
+
 
 	c := &Cloud{
 		client: &http.Client{Timeout: 15 * time.Second},
@@ -160,16 +180,34 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if err := c.LoginWithToken(userID, passToken); err != nil {
 		return nil, err
 	}
-
 	actualUserID, actualPassToken := c.UserToken()
-	return &CloudSession{
+	session := &CloudSession{
 		UserID:    actualUserID,
 		PassToken: actualPassToken,
 		Region:    region,
 		client:    c.client,
 		ssecurity: c.ssecurity,
 		cookies:   c.cookies,
-	}, nil
+	}
+
+	// Cache the session for future reconnects.
+	putCachedSession(actualUserID, region, session)
+	return session, nil
+}
+
+func getCachedSession(userID, region string) *CloudSession {
+	sessionCacheMu.Lock()
+	defer sessionCacheMu.Unlock()
+	if c := sessionCache[userID+"|"+region]; c != nil && time.Since(c.cachedAt) < sessionCacheTTL {
+		return c.session
+	}
+	return nil
+}
+
+func putCachedSession(userID, region string, session *CloudSession) {
+	sessionCacheMu.Lock()
+	defer sessionCacheMu.Unlock()
+	sessionCache[userID+"|"+region] = &cachedSession{session: session, cachedAt: time.Now()}
 }
 
 // CaptchaSessionError wraps a LoginError with a new session ID for continued flow.
