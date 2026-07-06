@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -454,5 +453,3 @@ func (m *Manager) stopAll() {
 	}
 }
 
-// Ensure time package is used
-var _ time.Duration

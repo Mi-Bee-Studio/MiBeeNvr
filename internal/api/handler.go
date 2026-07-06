@@ -357,7 +357,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
+func WriteError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
@@ -510,11 +510,11 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
@@ -609,7 +609,7 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
 	if filename == "" {
-		writeError(w, http.StatusBadRequest, "filename required")
+		WriteError(w, http.StatusBadRequest, "filename required")
 		return
 	}
 	// Serve from {storage_root}/models/ directory
@@ -619,7 +619,7 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	cleanPath := filepath.Clean(filepath.Join(modelDir, filename))
 	modelDirWithSep := modelDir + string(filepath.Separator)
 	if cleanPath != modelDir && !strings.HasPrefix(cleanPath, modelDirWithSep) {
-		writeError(w, http.StatusBadRequest, "invalid filename")
+		WriteError(w, http.StatusBadRequest, "invalid filename")
 		return
 	}
 

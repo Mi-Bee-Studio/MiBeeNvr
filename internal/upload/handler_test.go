@@ -101,10 +101,10 @@ func TestUploadUnknownCamera(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
-	var resp errorResponse
+	var resp map[string]string
 	err := json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Contains(t, resp.Error, "nonexistent")
+	assert.Contains(t, resp["error"], "nonexistent")
 }
 
 func TestUploadOversized(t *testing.T) {
@@ -138,10 +138,10 @@ func TestUploadOversized(t *testing.T) {
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 
-	var resp errorResponse
+	var resp map[string]string
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Contains(t, resp.Error, "maximum size")
+	assert.Contains(t, resp["error"], "maximum size")
 }
 
 func TestUploadBadContentType(t *testing.T) {
@@ -160,10 +160,10 @@ func TestUploadBadContentType(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
-	var resp errorResponse
+	var resp map[string]string
 	err := json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Contains(t, resp.Error, "text/plain")
+	assert.Contains(t, resp["error"], "text/plain")
 }
 
 func TestUploadVideo(t *testing.T) {
@@ -251,10 +251,10 @@ func TestUploadVideoBadContentType(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
-	var resp errorResponse
+	var resp map[string]string
 	err := json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Contains(t, resp.Error, "text/html")
+	assert.Contains(t, resp["error"], "text/html")
 }
 
 // TestUploadJPEGWritesFile verifies that a JPEG upload actually creates a file on disk.
