@@ -414,7 +414,7 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 	require.NoError(t, err)
 
 	// Create fake JPEG files in the temp directory.
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		filename := fmt.Sprintf("frame%03d.jpg", frameStart+i)
 		require.NoError(t, os.WriteFile(filepath.Join(tempPath, filename), []byte("fake-jpeg-data"), 0o644))
 	}
@@ -424,7 +424,7 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 
 	// Calculate total file size.
 	var totalSize int64
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		filename := fmt.Sprintf("frame%03d.jpg", frameStart+i)
 		fi, err := os.Stat(filepath.Join(finalPath, filename))
 		require.NoError(t, err)
@@ -704,7 +704,7 @@ func (e *mergeTestEnv) insertTimelapseRecording(t *testing.T, id string, cameraI
 	require.NoError(t, os.MkdirAll(finalPath, 0o755))
 
 	// Create fake JPEG files.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		filename := fmt.Sprintf("frame_%06d.jpg", i)
 		require.NoError(t, os.WriteFile(filepath.Join(finalPath, filename), []byte("fake-jpeg"), 0o644))
 	}
@@ -912,7 +912,7 @@ func TestMergeStatusRace(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Launch concurrent readers.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -921,7 +921,7 @@ func TestMergeStatusRace(t *testing.T) {
 	}
 
 	// Launch concurrent writers.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1289,7 +1289,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 
 		// Barrier: all goroutines block on channel, released simultaneously
 		start := make(chan struct{})
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

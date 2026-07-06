@@ -102,7 +102,7 @@ func TestHandleTelemetry_RateLimiting(t *testing.T) {
 	rl := telemetryRateLimiter()
 
 	body := `{"event":"playback_start","camera_id":"front-door","duration_ms":100}`
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))
 		rr := httptest.NewRecorder()
 		rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

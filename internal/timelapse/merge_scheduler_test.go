@@ -510,13 +510,13 @@ func TestMergeScheduler_ConcurrentAddRemove(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			s.AddOrUpdate("cam-concurrent", 8*time.Hour)
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			s.Remove("cam-concurrent")
 			s.AddOrUpdate("cam-concurrent", 24*time.Hour)
 		}
@@ -549,7 +549,7 @@ func TestMergeScheduler_ConcurrentTriggerDuringLoop(t *testing.T) {
 	})
 
 	// Add multiple cameras.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		s.AddOrUpdate(fmt.Sprintf("cam-%d", i), 8*time.Hour)
 	}
 
@@ -557,7 +557,7 @@ func TestMergeScheduler_ConcurrentTriggerDuringLoop(t *testing.T) {
 
 	// Call TriggerDue from many goroutines concurrently.
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -578,7 +578,7 @@ func TestMergeScheduler_ConcurrentAddMultipleCameras(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Add many cameras from different goroutines.
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()

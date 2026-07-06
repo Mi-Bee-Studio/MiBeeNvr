@@ -184,7 +184,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
   </s:Body>
 </s:Envelope>`, protocol, profileToken)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -331,7 +331,7 @@ func (c *Client) DeviceEndpoint() string {
 // DoRawSOAPNoAuth sends a raw SOAP request without any authentication header.
 // Used as fallback for cameras with buggy per-service WS-Security validation.
 func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -357,7 +357,7 @@ func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string)
 // DoRawSOAPBasicAuth sends a raw SOAP request with HTTP Basic Auth.
 // Used as fallback for cameras that accept BasicAuth but reject WS-Security.
 func (c *Client) DoRawSOAPBasicAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -395,7 +395,7 @@ func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBo
 	// Inject WS-Security header before <s:Body>
 	bodyWithAuth := strings.Replace(soapBody, "<s:Body>", c.buildWSSecurityHeader()+"<s:Body>", 1)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(bodyWithAuth))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(bodyWithAuth))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

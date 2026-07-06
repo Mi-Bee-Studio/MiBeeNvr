@@ -31,8 +31,8 @@ func generateTestJPEG(t *testing.T, path string, width, height, quality int) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	// Fill with a natural-image-like pattern (gradient + detail) to test compression.
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			// Colorful gradient with some high-frequency detail.
 			r := uint8((x * 255 / width) * (y * 128 / height) / 255)
 			g := uint8((y * 255 / height) * (255 - x*128/width) / 255)
@@ -63,7 +63,7 @@ func TestEnhancedGoMerge_ValidOutput(t *testing.T) {
 	}
 
 	// Generate 5 test frames at Q=85 (typical capture quality).
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -135,7 +135,7 @@ func TestEnhancedGoMerge_ValidOutput(t *testing.T) {
 
 	// Verify output file is smaller than source frames (compression check).
 	sourceTotal := int64(0)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		if fii, err := os.Stat(framePath); err == nil {
 			sourceTotal += fii.Size()
@@ -168,7 +168,7 @@ func TestEnhancedGoMerge_SizeReduction(t *testing.T) {
 	}
 
 	// Generate frames and copy to both directories.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 320, 240, 85)
 		// Copy to passthrough dir.
@@ -271,7 +271,7 @@ func TestEnhancedGoMerge_QualityLevels(t *testing.T) {
 			}
 
 			// Generate 3 frames.
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 				generateTestJPEG(t, framePath, 320, 240, 85)
 			}
@@ -349,7 +349,7 @@ func TestEnhancedGoMerge_FFprobeValidation(t *testing.T) {
 	}
 
 	// Generate 5 frames with a more natural image pattern.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -404,7 +404,7 @@ func TestEnhancedGoMerge_ContextCancellation(t *testing.T) {
 	}
 
 	// Generate frames.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -434,7 +434,7 @@ func TestEnhancedGoMerge_MergeResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}

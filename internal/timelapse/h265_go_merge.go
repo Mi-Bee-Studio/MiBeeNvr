@@ -828,7 +828,7 @@ func parseH265ProfileLevel(sps []byte) *h265SPSProfile {
 
 	r := &bitReader{data: data}
 	// Skip NAL header (2 bytes).
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		r.readBit()
 	}
 
@@ -850,14 +850,14 @@ func parseH265ProfileLevel(sps []byte) *h265SPSProfile {
 
 	// general_profile_compatibility_flags (32 bits)
 	compatFlags := uint32(0)
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		compatFlags = (compatFlags << 1) | uint32(r.readBit())
 	}
 
 	// general_constraint_indicator_flags (48 bits)
 	var constraintFlags [6]byte
-	for i := 0; i < 6; i++ {
-		for j := 0; j < 8; j++ {
+	for i := range 6 {
+		for range 8 {
 			constraintFlags[i] = (constraintFlags[i] << 1) | r.readBit()
 		}
 	}
@@ -875,14 +875,14 @@ func parseH265ProfileLevel(sps []byte) *h265SPSProfile {
 			profilePresent bool
 			levelPresent   bool
 		}, maxSubLayers)
-		for i := 0; i < maxSubLayers-1; i++ {
+		for i := range maxSubLayers - 1 {
 			subLayerFlags[i].profilePresent = r.readBit() == 1
 			subLayerFlags[i].levelPresent = r.readBit() == 1
 		}
-		for i := 0; i < maxSubLayers-1; i++ {
+		for i := range maxSubLayers - 1 {
 			if subLayerFlags[i].profilePresent {
 				// Recursive profile_tier_level(0) - skip 96 bits.
-				for j := 0; j < 96; j++ {
+				for range 96 {
 					r.readBit()
 				}
 			}
@@ -963,7 +963,7 @@ func parseH265Dimensions(sps []byte) (width, height int) {
 	r := &bitReader{data: data}
 
 	// Skip NAL header (2 bytes).
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		r.readBit()
 	}
 
@@ -982,7 +982,7 @@ func parseH265Dimensions(sps []byte) (width, height int) {
 	// Skip: profile_space(2) + tier_flag(1) + profile_idc(5) = 8 bits
 	// + compat_flags(32) + constraint_flags(48) + level_idc(8) = 88 bits
 	// Total fixed portion: 96 bits = 12 bytes
-	for i := 0; i < 96; i++ {
+	for range 96 {
 		r.readBit()
 	}
 
@@ -996,14 +996,14 @@ func parseH265Dimensions(sps []byte) (width, height int) {
 			profilePresent bool
 			levelPresent   bool
 		}, maxSubLayers)
-		for i := 0; i < maxSubLayers-1; i++ {
+		for i := range maxSubLayers - 1 {
 			subLayerFlags[i].profilePresent = r.readBit() == 1
 			subLayerFlags[i].levelPresent = r.readBit() == 1
 		}
-		for i := 0; i < maxSubLayers-1; i++ {
+		for i := range maxSubLayers - 1 {
 			if subLayerFlags[i].profilePresent {
 				// profile_tier_level(0) = 96 bits
-				for j := 0; j < 96; j++ {
+				for range 96 {
 					r.readBit()
 				}
 			}

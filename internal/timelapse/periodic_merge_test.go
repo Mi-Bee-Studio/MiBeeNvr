@@ -410,7 +410,7 @@ func TestRetryExhaustion_PermanentFailure(t *testing.T) {
 	}
 
 	// 3 failures to exhaust retries.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("error %d", i+1)); err != nil {
 			t.Fatalf("markMergeFailed failed on attempt %d: %v", i+1, err)
 		}
@@ -476,7 +476,7 @@ func TestRetryExhaustion_Recovery(t *testing.T) {
 	}
 
 	// 2 failures — retries still remaining.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("error %d", i+1)); err != nil {
 			t.Fatalf("markMergeFailed failed on attempt %d: %v", i+1, err)
 		}

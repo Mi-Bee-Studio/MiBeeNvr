@@ -87,12 +87,12 @@ func (s *Server) Handler() http.Handler {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions, "PROPFIND":
 			davHandler.ServeHTTP(w, r)
-		case "PUT", "MKCOL", "DELETE", "COPY", "MOVE", "LOCK", "UNLOCK":
+		case http.MethodPut, "MKCOL", http.MethodDelete, "COPY", "MOVE", "LOCK", "UNLOCK":
 			if !s.readWrite {
 				http.Error(w, "Forbidden: read-only WebDAV server", http.StatusForbidden)
 				return
 			}
-			if r.Method == "PUT" {
+			if r.Method == http.MethodPut {
 				s.handlePut(w, r, davHandler)
 				return
 			}

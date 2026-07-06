@@ -555,8 +555,8 @@ func (h *Handler) generatePlaceholderFrame(path string) ([]byte, error) {
 
 	img := image.NewRGBA(image.Rect(0, 0, canvasW, canvasH))
 	// Fill with a dark slate background.
-	for y := 0; y < canvasH; y++ {
-		for x := 0; x < canvasW; x++ {
+	for y := range canvasH {
+		for x := range canvasW {
 			img.Set(x, y, color.RGBA{R: 30, G: 30, B: 36, A: 255})
 		}
 	}
@@ -600,7 +600,7 @@ func drawPlaceholderLabel(img *image.RGBA, w, h int, label string, c color.Color
 	cellH := cellW * 2
 	// Bottom strip background.
 	for y := h - cellH - cellW; y < h; y++ {
-		for x := 0; x < w; x++ {
+		for x := range w {
 			if x >= 0 && x < w && y >= 0 && y < h {
 				img.SetRGBA(x, y, color.RGBA{R: 0, G: 0, B: 0, A: 180})
 			}
@@ -706,11 +706,11 @@ func drawChar(img *image.RGBA, ch byte, ox, oy, cellW, cellH int, c color.Color)
 		pixH = 1
 	}
 	bounds := img.Bounds()
-	for row := 0; row < 7; row++ {
-		for col := 0; col < 5; col++ {
+	for row := range 7 {
+		for col := range 5 {
 			if glyph[row][col] == '1' {
-				for dy := 0; dy < pixH; dy++ {
-					for dx := 0; dx < pixW; dx++ {
+				for dy := range pixH {
+					for dx := range pixW {
 						x := ox + col*pixW + dx
 						y := oy + row*pixH + dy
 						if x >= bounds.Min.X && x < bounds.Max.X && y >= bounds.Min.Y && y < bounds.Max.Y {
@@ -744,8 +744,8 @@ func resizeImage(src image.Image, maxW, maxH int) image.Image {
 	}
 
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	for dy := 0; dy < h; dy++ {
-		for dx := 0; dx < w; dx++ {
+	for dy := range h {
+		for dx := range w {
 			sx := float64(dx) * float64(srcW) / float64(w)
 			sy := float64(dy) * float64(srcH) / float64(h)
 			dst.Set(dx, dy, bilinearInterpolate(src, sx, sy))
@@ -810,14 +810,6 @@ func clampFloat(v float64) float64 {
 		return 255
 	}
 	return v
-}
-
-// min returns the smaller of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // --- Timelapse API endpoints ---
@@ -1463,7 +1455,7 @@ func (h *Handler) handleTimelapsePreview(w http.ResponseWriter, r *http.Request)
 		selected = frames
 	} else {
 		step := float64(totalFrames-1) / float64(sampleCount-1)
-		for i := 0; i < sampleCount; i++ {
+		for i := range sampleCount {
 			idx := int(math.Round(float64(i) * step))
 			if idx >= totalFrames {
 				idx = totalFrames - 1

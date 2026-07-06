@@ -242,7 +242,7 @@ func TestH265GoMerger_ValidOutput(t *testing.T) {
 	idr := buildTestH265IDR()
 
 	// Generate 5 test frame files.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -333,7 +333,7 @@ func TestH265GoMerger_ValidOutputBoxStructure(t *testing.T) {
 	pps := buildTestH265PPS()
 	idr := buildTestH265IDR()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -478,7 +478,7 @@ func TestH265GoMerger_ContextCancellation(t *testing.T) {
 	idr := buildTestH265IDR()
 
 	// Generate 20 frames.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -516,7 +516,7 @@ func TestH265GoMerger_MergeResult(t *testing.T) {
 	pps := buildTestH265PPS()
 	idr := buildTestH265IDR()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h265", i))
 		frameData := buildTestH265Frame(vps, sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {

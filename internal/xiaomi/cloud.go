@@ -480,7 +480,7 @@ func (c *Cloud) Login(username, password string) error {
 }
 
 func (c *Cloud) LoginWithToken(userID, passToken string) error {
-	req, err := http.NewRequest("GET", "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid="+c.sid, nil)
+	req, err := http.NewRequest(http.MethodGet, "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid="+c.sid, nil)
 	if err != nil {
 		return err
 	}
@@ -535,7 +535,7 @@ func (c *Cloud) Request(baseURL, apiURL, params string, headers map[string]strin
 	// 4. add nonce
 	form.Set("_nonce", base64.StdEncoding.EncodeToString(nonce))
 
-	req, err := http.NewRequest("POST", baseURL+apiURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequest(http.MethodPost, baseURL+apiURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}

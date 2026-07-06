@@ -26,8 +26,8 @@ func createTestJPEG(t *testing.T, width, height int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	// Fill with a simple gradient pattern
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			idx := y*img.Stride + x*4
 			img.Pix[idx] = byte(x * 255 / width)                    // R
 			img.Pix[idx+1] = byte(y * 255 / height)                 // G
@@ -55,7 +55,7 @@ func createTestRecording(t *testing.T, db *storage.DB, store *storage.Manager, i
 
 	// Write a few JPEG frames
 	jpegData := createTestJPEG(t, 1920, 1080)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(segDir, "frame_00000"+string(rune('0'+i))+".jpg")
 		if err := os.WriteFile(framePath, jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
@@ -549,7 +549,7 @@ func TestMergeProgress_Complete(t *testing.T) {
 	}
 	// Write some test frames
 	jpegData := createTestJPEG(t, 100, 100)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
 		}
@@ -617,7 +617,7 @@ func TestMergeProgress_Failed(t *testing.T) {
 		t.Fatalf("failed to create segment dir: %v", err)
 	}
 	jpegData := createTestJPEG(t, 100, 100)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
 		}
@@ -819,7 +819,7 @@ func TestTimelapseList_Pagination(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedRecording(t, db, makeRecording("rec-tl-"+strconv.Itoa(i), "cam-1", "timelapse", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -1507,7 +1507,7 @@ func TestTimelapseBatchMerge_TooMany(t *testing.T) {
 	h := TestHandler(db, store)
 
 	cameraIDs := make([]string, 11)
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		cameraIDs[i] = fmt.Sprintf("cam-%d", i)
 	}
 

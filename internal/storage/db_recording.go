@@ -42,7 +42,7 @@ func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
 // Non-SQLITE_BUSY errors are returned immediately without retry.
 func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error {
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if attempt > 0 {
 			logger.Warn(
 				"insert recording: database busy, retrying",

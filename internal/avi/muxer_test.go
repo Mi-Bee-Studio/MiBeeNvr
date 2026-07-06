@@ -357,7 +357,7 @@ func TestAVIMuxer_AlawFormat(t *testing.T) {
 func TestAVIMuxer_AVIHeaderFields(t *testing.T) {
 	var buf bytes.Buffer
 	m := NewMuxer(&buf, 1920, 1080, 8000, true)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := m.WriteVideo(makeJPEGFrame(t, byte(i), 200+i), 0); err != nil {
 			t.Fatalf("WriteVideo %d: %v", i, err)
 		}
@@ -448,7 +448,7 @@ func TestAVIMuxer_MultipleChunks(t *testing.T) {
 	var buf bytes.Buffer
 	m := NewMuxer(&buf, 640, 480, 8000, true)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := m.WriteVideo(makeJPEGFrame(t, byte(i), 100+i*10), int64(i)*33333); err != nil {
 			t.Fatalf("WriteVideo %d: %v", i, err)
 		}
@@ -471,7 +471,7 @@ func TestAVIMuxer_MultipleChunks(t *testing.T) {
 	}
 	off += 4 // skip 'movi' fourcc
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if off+8 > len(data) {
 			t.Fatalf("chunk %d: out of data at offset %d", i, off)
 		}
@@ -508,7 +508,7 @@ func TestAVIMuxer_MultipleChunks(t *testing.T) {
 
 	// Verify index entries reference correct chunks.
 	idx1Data := data[idx1Off+8:]
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		entryOff := i * 16
 		ckID := readU32LE(t, idx1Data, entryOff)
 		entryOffset := readU32LE(t, idx1Data, entryOff+8)
@@ -717,7 +717,7 @@ func TestAVIMuxer_Idx1Offsets(t *testing.T) {
 
 	idx1Data := data[idx1Off+8:]
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		entryOff := i * 16
 		ckID := readU32LE(t, idx1Data, entryOff)
 		entryOffset := readU32LE(t, idx1Data, entryOff+8)

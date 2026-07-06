@@ -89,7 +89,7 @@ func (s *testRTSPServerH265) sendAU(au [][]byte) {
 }
 
 func (s *testRTSPServerH265) sendFrames(count int, interval time.Duration) {
-	for i := 0; i < count; i++ {
+	for range count {
 		s.sendAU([][]byte{testVPS265, testSPS265, testPPS265, testIDR265})
 		if interval > 0 {
 			time.Sleep(interval)
@@ -245,7 +245,7 @@ func TestH265Recorder_AudioBroadcast(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send audio frames.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		srv.sendAudioFrame([]byte{0x01, 0x02, 0x03, 0x04})
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -295,7 +295,7 @@ func TestH265Recorder_AudioDisabled_StillRecordsVideo(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Send audio — should be ignored.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAudioFrame([]byte{0xAA, 0xBB})
 		time.Sleep(20 * time.Millisecond)
 	}

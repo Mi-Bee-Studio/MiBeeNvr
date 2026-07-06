@@ -413,7 +413,7 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old health events (2 hours ago - past retention)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		event := model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "offline",
@@ -425,7 +425,7 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	}
 
 	// Insert recent health events (30 min ago - within retention)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		event := model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "online",
@@ -465,7 +465,7 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old health events
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		event := model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "offline",
@@ -611,7 +611,7 @@ func TestTimeBasedCleanup_TimelapseDirectory(t *testing.T) {
 
 	// Create the directory with fake JPEG files.
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.NoError(t, os.WriteFile(filepath.Join(segDir, fmt.Sprintf("frame_%06d.jpg", i)), []byte("fake-jpeg"), 0o644))
 	}
 

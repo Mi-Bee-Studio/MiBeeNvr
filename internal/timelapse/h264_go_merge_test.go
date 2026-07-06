@@ -260,7 +260,7 @@ func (w *testBitWriter) writeUE(val uint32) {
 	}
 	codeNum := val + 1
 	leadingZeros := bits.Len32(codeNum) - 1
-	for i := 0; i < leadingZeros; i++ {
+	for range leadingZeros {
 		w.writeBit(0)
 	}
 	w.writeBit(1)
@@ -271,7 +271,7 @@ func (w *testBitWriter) bytes() []byte {
 	// Pad remaining bits with 1s (RBSP stop bit + alignment).
 	if w.pos > 0 && w.pos < 8 {
 		remaining := 8 - w.pos
-		for i := 0; i < remaining; i++ {
+		for range remaining {
 			w.writeBit(1)
 		}
 	}
@@ -295,7 +295,7 @@ func TestH264GoMerger_ValidOutput(t *testing.T) {
 	idr := buildTestIDR()
 
 	// Generate 5 test frame files.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -480,7 +480,7 @@ func TestH264GoMerger_ContextCancellation(t *testing.T) {
 	idr := buildTestIDR()
 
 	// Generate 20 frames.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -517,7 +517,7 @@ func TestH264GoMerger_MergeResult(t *testing.T) {
 	pps := buildTestPPS()
 	idr := buildTestIDR()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
 		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {

@@ -955,7 +955,7 @@ func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
 	require.NotNil(t, hub)
 
 	// Simulate 500 frames — expect ~5 histogram samples (1/100 sampling)
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, i == 0)
 	}
 

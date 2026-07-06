@@ -128,7 +128,7 @@ func TestAutoRemediator_RespectsMaxRestartsPerHour(t *testing.T) {
 	r, mock, _ := newTestRemediatorWithConfig(t, cfg)
 
 	// First two should succeed.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		err := r.Check("cam-1", string(model.StatusError))
 		if err != nil {
 			t.Fatalf("Check %d returned error: %v", i+1, err)
@@ -160,7 +160,7 @@ func TestAutoRemediator_BlacklistAfterMaxFailures(t *testing.T) {
 	r, mock, _ := newTestRemediatorWithConfig(t, cfg)
 
 	// Exhaust all 3 attempts.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := r.Check("cam-1", string(model.StatusError))
 		if err != nil {
 			t.Fatalf("Check %d returned error: %v", i+1, err)

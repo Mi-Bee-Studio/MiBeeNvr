@@ -141,7 +141,7 @@ func TestH264Characterization_SPSChangeRotatesSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send frames with DIFFERENT SPS (testSPS2) => triggers segment rotation
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{testSPS2, testPPS, testIDR})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -182,7 +182,7 @@ func TestH264Characterization_PPSChangeRotatesSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send frames with DIFFERENT PPS => triggers segment rotation
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{testSPS, altPPS, testIDR})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -259,7 +259,7 @@ func TestH264Characterization_AudioCapturedInSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send audio frames
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		srv.sendAudioFrame([]byte{0x01, 0x02, 0x03, 0x04})
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -336,7 +336,7 @@ func TestH264Characterization_ReconnectAfterConnectionLoss(t *testing.T) {
 	// Send frames to verify recording works after reconnect
 	enc, err := forma.CreateEncoder()
 	require.NoError(t, err)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		pkts, _ := enc.Encode([][]byte{testSPS, testPPS, testIDR})
 		for _, pkt := range pkts {
 			stream.WritePacketRTP(desc.Medias[0], pkt)
@@ -514,7 +514,7 @@ func TestH265Characterization_VPSChangeRotatesSegment(t *testing.T) {
 	altVPS[len(altVPS)-1] ^= 0x01 // flip last bit
 
 	// Send frames with different VPS — should trigger segment rotation
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{altVPS, testSPS265, testPPS265, testIDR265})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -557,7 +557,7 @@ func TestH265Characterization_SPSChangeRotatesSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send frames with different SPS — should trigger segment rotation
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{testVPS265, altSPS, testPPS265, testIDR265})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -600,7 +600,7 @@ func TestH265Characterization_PPSChangeRotatesSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send frames with different PPS — should trigger segment rotation
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{testVPS265, testSPS265, altPPS, testIDR265})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -676,7 +676,7 @@ func TestH265Characterization_AudioCapturedInSegment(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send audio frames
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		srv.sendAudioFrame([]byte{0x01, 0x02, 0x03, 0x04})
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -751,7 +751,7 @@ func TestH265Characterization_ReconnectAfterConnectionLoss(t *testing.T) {
 	// Send frames after reconnect
 	enc, err := forma.CreateEncoder()
 	require.NoError(t, err)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		pkts, _ := enc.Encode([][]byte{testVPS265, testSPS265, testPPS265, testIDR265})
 		for _, pkt := range pkts {
 			stream.WritePacketRTP(desc.Medias[0], pkt)

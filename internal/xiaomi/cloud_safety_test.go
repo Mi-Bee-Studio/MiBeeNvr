@@ -140,7 +140,7 @@ func TestPendingCloudConcurrentAccess(t *testing.T) {
 	wg.Add(goroutines)
 
 	ids := make(chan string, goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			c := &Cloud{region: "cn", sid: "xiaomiio"}

@@ -105,7 +105,7 @@ func (ct *congestionTracker) dropRateLocked() float64 {
 		return 0
 	}
 	var drops int
-	for i := 0; i < ct.windowCount; i++ {
+	for i := range ct.windowCount {
 		if !ct.window[i] {
 			drops++
 		}

@@ -992,7 +992,7 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 	now := time.Now()
 	// Insert 5 source recordings
 	oldIDs := make([]string, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := fmt.Sprintf("old-%d", i)
 		oldIDs[i] = id
 		rec := &model.Recording{

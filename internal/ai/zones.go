@@ -186,7 +186,7 @@ func PointInPolygon(x, y float64, polygon [][2]float64) bool {
 	inside := false
 	n := len(polygon)
 	j := n - 1
-	for i := 0; i < n; i++ {
+	for i := range n {
 		xi, yi := polygon[i][0], polygon[i][1]
 		xj, yj := polygon[j][0], polygon[j][1]
 

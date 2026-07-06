@@ -352,7 +352,7 @@ func (m *mockSRTConn) Version() uint32                        { return 4 }
 func TestReceiverStartStopRace(t *testing.T) {
 	t.Helper()
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		mock := &mockSRTConn{}
 		hub := model.NewStreamHub()
 		rec := NewReceiver(config.SRTStream{

@@ -37,7 +37,7 @@ func TestStorageBackoffWithJitter_Range(t *testing.T) {
 		min = 60 * time.Second
 		max = 70 * time.Second
 	)
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		d := StorageBackoffWithJitter()
 		require.GreaterOrEqual(t, d, min)
 		require.Less(t, d, max)

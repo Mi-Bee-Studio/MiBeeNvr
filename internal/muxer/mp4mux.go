@@ -1177,7 +1177,7 @@ func (r *bitReader) readBit() int {
 
 func (r *bitReader) readBits(n int) int {
 	var val int
-	for i := 0; i < n; i++ {
+	for range n {
 		val = (val << 1) | r.readBit()
 	}
 	return val
@@ -1269,7 +1269,7 @@ func parseSPSResolution(sps []byte) (width, height int) {
 			if chromaFormatIDC == 3 {
 				count = 12
 			}
-			for i := 0; i < count; i++ {
+			for i := range count {
 				present := r.readBit()
 				if present == 1 {
 					size := 16
@@ -1277,7 +1277,7 @@ func parseSPSResolution(sps []byte) (width, height int) {
 						size = 64
 					}
 					lastScale := 8
-					for j := 0; j < size; j++ {
+					for range size {
 						delta := r.readSE()
 						nextScale := (lastScale + delta + 256) % 256
 						if nextScale == 0 {
@@ -1302,7 +1302,7 @@ func parseSPSResolution(sps []byte) (width, height int) {
 		r.readSE()  // offset_for_non_ref_pic
 		r.readSE()  // offset_for_top_to_bottom_field
 		numRefFrames := r.readUE()
-		for i := 0; i < numRefFrames; i++ {
+		for range numRefFrames {
 			r.readSE()
 		}
 	}
@@ -1389,12 +1389,12 @@ func parseHEVCSPSResolution(sps []byte) (width, height int) {
 	// general_level_idc: 8 bits
 	r.readBits(8)
 	// sub-layer profile_present/level_present flags: 2 bits per sub-layer (skip)
-	for i := 0; i < maxSubLayersMinus1; i++ {
+	for range maxSubLayersMinus1 {
 		r.readBits(2)
 	}
 	if maxSubLayersMinus1 > 0 {
 		// sub_layer_level_present_flag: 1 bit per sub-layer
-		for i := 0; i < maxSubLayersMinus1; i++ {
+		for range maxSubLayersMinus1 {
 			r.readBit()
 		}
 	}

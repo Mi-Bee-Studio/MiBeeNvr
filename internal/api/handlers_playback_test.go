@@ -46,7 +46,7 @@ func createTestAVIFile(t *testing.T, path string, numFrames int, includeAudio bo
 	var buf bytes.Buffer
 	m := avi.NewMuxer(&buf, 320, 240, 8000, true) // mu-law
 
-	for i := 0; i < numFrames; i++ {
+	for i := range numFrames {
 		frame := makeTestJPEG(t, 0xAA+byte(i), 100+i)
 		require.NoError(t, m.WriteVideo(frame, int64(i*33333)))
 		if includeAudio {
@@ -98,7 +98,7 @@ func TestPlaybackWS_BasicFlow(t *testing.T) {
 	var videoCount, audioCount int
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			break

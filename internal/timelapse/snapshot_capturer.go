@@ -260,7 +260,7 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 // Retries up to 3 times with exponential backoff on transient errors.
 func (r *SnapshotCapturer) fetchSnapshot(ctx context.Context) ([]byte, error) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if attempt > 0 {
 			// Exponential backoff: 200ms, 400ms, 800ms
 			backoff := time.Duration(200<<uint(attempt-1)) * time.Millisecond

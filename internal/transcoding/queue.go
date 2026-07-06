@@ -248,7 +248,7 @@ func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 	slotsAvailable := q.config.MaxWorkers - activeCount
 	q.mu.Unlock()
 
-	for i := 0; i < slotsAvailable; i++ {
+	for range slotsAvailable {
 		var task *storage.TranscodeTask
 		err := storage.RetryOnBusy(ctx, func() error {
 			var err error

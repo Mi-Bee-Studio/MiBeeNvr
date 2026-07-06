@@ -223,7 +223,7 @@ func (c *ImagingControllerImpl) sendSOAP(ctx context.Context, endpoint, soapBody
 		payload = strings.Replace(soapBody, "<s:Body>", buildWSSecurityHeaderFor(c.username, c.password)+"<s:Body>", 1)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

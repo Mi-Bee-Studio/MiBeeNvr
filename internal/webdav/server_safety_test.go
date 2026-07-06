@@ -216,7 +216,7 @@ func TestMethodNotAllowed(t *testing.T) {
 	ts := setupTestServer(t, tmpDir, nil)
 	defer ts.Close()
 
-	req, err := http.NewRequest("PATCH", ts.URL+"/dav/camera-01/recording_001.mp4", strings.NewReader("data"))
+	req, err := http.NewRequest(http.MethodPatch, ts.URL+"/dav/camera-01/recording_001.mp4", strings.NewReader("data"))
 	require.NoError(t, err)
 
 	resp, err := ts.Client().Do(req)
@@ -424,7 +424,7 @@ func TestConcurrentGET(t *testing.T) {
 	const numRequests = 10
 	errCh := make(chan error, numRequests)
 
-	for i := 0; i < numRequests; i++ {
+	for range numRequests {
 		go func() {
 			resp, err := ts.Client().Get(ts.URL + "/dav/camera-01/recording_001.mp4")
 			if err != nil {
@@ -440,7 +440,7 @@ func TestConcurrentGET(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < numRequests; i++ {
+	for range numRequests {
 		require.NoError(t, <-errCh)
 	}
 }

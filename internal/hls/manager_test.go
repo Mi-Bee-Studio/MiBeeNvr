@@ -49,7 +49,7 @@ func TestFrameRateLimiter_DropsExcessFrames(t *testing.T) {
 	// Send 10 frames rapidly — only ~1 should pass (first frame always passes,
 	// subsequent frames within 500ms interval are dropped)
 	passed := 0
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		err := mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00, 0x01}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -79,7 +79,7 @@ func TestFrameRateLimiter_Disabled(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// Send 10 frames rapidly — all should pass
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		err := mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00, 0x01}})
 		require.NoError(t, err)
 	}
@@ -130,7 +130,7 @@ func TestFrameRateLimiter_H265(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// H265 frames should also be rate-limited
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		err := mgr.WriteH265(cameraID, int64(i*1000), [][]byte{{0x00}})
 		require.NoError(t, err)
 	}
@@ -282,11 +282,11 @@ func TestConcurrentWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Concurrently write frames from multiple goroutines
-	for g := 0; g < 5; g++ {
+	for range 5 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				_ = mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00}})
 			}
 		}()
@@ -318,7 +318,7 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			_ = mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00}})
 		}
 	}()
@@ -327,7 +327,7 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			_ = mgr.IsActive(cameraID)
 		}
 	}()
@@ -345,7 +345,7 @@ func TestStartStream_AtCapacity_EvictsLRU(t *testing.T) {
 
 	// Fill streams to maxStreams capacity
 	mgr.mu.Lock()
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
 			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
@@ -401,7 +401,7 @@ func TestLRUEviction_EvictsOldestStream(t *testing.T) {
 	// Create 4 streams with staggered lastUsed times
 	mgr.mu.Lock()
 	now := time.Now()
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
 			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
@@ -432,7 +432,7 @@ func TestLRUEviction_EvictedStreamCleanedUp(t *testing.T) {
 
 	// Fill to capacity
 	mgr.mu.Lock()
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
 			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
@@ -475,7 +475,7 @@ func TestGetActiveStreamCount_WithStreams(t *testing.T) {
 	mgr := newTestManager(t)
 
 	mgr.mu.Lock()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
 			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
@@ -521,14 +521,14 @@ func TestGetStreamStatus_ConcurrentReads(t *testing.T) {
 	mgr.mu.Unlock()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			require.True(t, mgr.GetStreamStatus(cameraID))
 		}()
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -545,7 +545,7 @@ func TestConcurrentStartStreams_NoDeadlock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Start 4 streams concurrently (at maxStreams limit)
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -566,7 +566,7 @@ func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
 	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill to max capacity
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		mgr.mu.Lock()
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
@@ -579,7 +579,7 @@ func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
 
 	// Multiple goroutines try to start a 5th stream — all should succeed (LRU eviction)
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -600,7 +600,7 @@ func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
 	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 
 	// Pre-fill streams
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		mgr.mu.Lock()
 		_, cancel := context.WithCancel(context.Background())
 		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
@@ -613,7 +613,7 @@ func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
 
 	// Stop all streams concurrently
 	var wg sync.WaitGroup
-	for i := 0; i < defaultMaxStreams; i++ {
+	for i := range defaultMaxStreams {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -630,7 +630,7 @@ func TestConcurrentStartStopMix_NoDeadlock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Interleave starts and stops
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
@@ -668,7 +668,7 @@ func TestWriteFrame_DropCounterIncrements(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// Fill the buffer completely
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		err := mgr.WriteH264(cameraID, int64(i*1000), [][]byte{{0x00}})
 		require.NoError(t, err)
 	}
@@ -1017,7 +1017,7 @@ func TestFrameRateLimiter_CreditSmoothing(t *testing.T) {
 	<-entry.frameCh // drain
 
 	// Next 9 frames sent rapidly should all be dropped (no credit accumulated)
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		err := mgr.WriteH264(cameraID, int64(i+1), [][]byte{{0x01}})
 		require.NoError(t, err)
 	}
@@ -1052,7 +1052,7 @@ func TestFrameRateLimiter_CreditCapAfterBurst(t *testing.T) {
 
 	// Only ONE frame should pass per call (credit capped at 2*minInterval)
 	passed := 0
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		err := mgr.WriteH264(cameraID, int64(i), [][]byte{{0x01}})
 		require.NoError(t, err)
 		select {
@@ -1084,7 +1084,7 @@ func TestFrameRateLimiter_FPSThrottleMetric(t *testing.T) {
 	<-entry.frameCh
 
 	// Send 5 more rapidly — all should be dropped by FPS throttle
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_ = mgr.WriteH264(cameraID, int64(i+1), [][]byte{{0x01}})
 	}
 
@@ -1124,7 +1124,7 @@ func TestWriteBufferCapacity(t *testing.T) {
 	mgr.mu.Unlock()
 
 	// Fill the entire buffer — all should succeed
-	for i := 0; i < defaultWriteBufSize; i++ {
+	for i := range defaultWriteBufSize {
 		err := mgr.WriteH264(cameraID, int64(i), [][]byte{{byte(i)}})
 		require.NoError(t, err)
 	}
@@ -1641,7 +1641,7 @@ func TestStartStopCycles_NoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	// 5 start/stop cycles
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		err := mgr.StartStream(fmt.Sprintf("cam-%d", i), sps, pps, 0)
 		require.NoError(t, err)
 		time.Sleep(50 * time.Millisecond) // let goroutines start

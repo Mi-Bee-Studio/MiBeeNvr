@@ -378,7 +378,7 @@ func TestStreamHubBroadcastNonBlocking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			testAU := [][]byte{{0x65, 0x88}}
 			hub.Broadcast(int64(i), testAU, false)
 		}

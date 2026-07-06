@@ -32,7 +32,7 @@ func createTestAVI(t *testing.T, dir, name string, width, height int, numFrames 
 
 	m := avi.NewMuxer(f, width, height, 8000, true) // mu-law audio at 8kHz
 
-	for i := 0; i < numFrames; i++ {
+	for i := range numFrames {
 		// Write a minimal JPEG-like frame (not a real JPEG, just unique data).
 		frame := make([]byte, 64+i*8) // increasing frame size to test maxFrameSize tracking
 		for j := range frame {

@@ -213,7 +213,7 @@ func TestFrameForwarding(t *testing.T) {
 	idrFrame := []byte{0x65, 0x88, 0x84, 0x00, 0x40, 0xff, 0xfe, 0xf8, 0xc0}
 
 	// Send many frames to ensure delivery through the async pipeline
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		pts := int64(i * 3000) // 3000 ticks = ~33ms at 90kHz
 		mgr.WriteH264("test-cam", pts, [][]byte{sps, pps, idrFrame})
 		time.Sleep(10 * time.Millisecond) // small delay between frames
@@ -237,7 +237,7 @@ func TestMaxViewerLimit(t *testing.T) {
 	// Create 3 clients and pre-generate offer SDPs
 	clients := make([]*testClient, 3)
 	offers := make([][]byte, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		clients[i] = newTestClient(t, false)
 		defer clients[i].close()
 		offers[i] = createOfferSDP(t, clients[i].pc)
@@ -370,7 +370,7 @@ func TestConcurrentWHEPSessionCreation(t *testing.T) {
 	// Pre-create 3 client PCs and their offer SDPs (no concurrency issues here)
 	clients := make([]*testClient, 3)
 	offers := make([][]byte, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		clients[i] = newTestClient(t, false)
 		defer clients[i].close()
 		offers[i] = createOfferSDP(t, clients[i].pc)
@@ -381,7 +381,7 @@ func TestConcurrentWHEPSessionCreation(t *testing.T) {
 	results := make([]error, 3)
 	sessions := make([]string, 3)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -470,7 +470,7 @@ func TestWriteH264NonBlocking(t *testing.T) {
 
 	// Rapidly write more frames than the buffer can hold
 	start := time.Now()
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		mgr.WriteH264("test-cam", int64(i*3000), [][]byte{{0x65, 0x88}})
 	}
 	elapsed := time.Since(start)
@@ -538,9 +538,9 @@ func TestMultipleCameras(t *testing.T) {
 	defer mgr.StopAll()
 
 	// Each camera should allow up to 2 peers
-	for camIdx := 0; camIdx < 3; camIdx++ {
+	for camIdx := range 3 {
 		camID := "cam-" + string(rune('A'+camIdx))
-		for peerIdx := 0; peerIdx < 2; peerIdx++ {
+		for range 2 {
 			client := newTestClient(t, false)
 			defer client.close()
 			offerSDP := createOfferSDP(t, client.pc)
@@ -565,7 +565,7 @@ func TestAtomicDropCounter(t *testing.T) {
 	_, _ = connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
 
 	// Write many frames rapidly to overflow the buffer
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		mgr.WriteH264("test-cam", int64(i*3000), [][]byte{{0x65, 0x88}})
 	}
 
@@ -633,7 +633,7 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 	pps := []byte{0x68, 0xee, 0x3c, 0x80}
 	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x40, 0xff, 0xfe, 0xf8, 0xc0}
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		hub.Broadcast(int64(i*3000), [][]byte{sps, pps, idr}, false)
 	}
 
@@ -745,10 +745,10 @@ func TestCongestionTracker_HighDropRateTriggersSkipping(t *testing.T) {
 	tracker := newCongestionTracker(100)
 
 	// Fill window with 80 sent + 20 dropped = 20% drop rate (exactly at threshold)
-	for i := 0; i < 80; i++ {
+	for range 80 {
 		tracker.recordSent()
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		tracker.recordDropped()
 	}
 	// 20% exactly at threshold — should NOT skip yet (need > 20%)
@@ -768,16 +768,16 @@ func TestCongestionTracker_RecoveryRestoresFullRate(t *testing.T) {
 	tracker := newCongestionTracker(100)
 
 	// Build up to congestion: 30 dropped out of 100 (30%)
-	for i := 0; i < 70; i++ {
+	for range 70 {
 		tracker.recordSent()
 	}
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		tracker.recordDropped()
 	}
 	require.True(t, tracker.shouldSkipFrame(false), "30%% drop rate should trigger skipping")
 
 	// Recovery: push 95 sent frames to evict most drops from the window
-	for i := 0; i < 95; i++ {
+	for range 95 {
 		tracker.recordSent()
 	}
 	// Window now: last 95 sent + 5 remaining drops from original 30 = 5/100 = 5%
@@ -795,12 +795,12 @@ func TestCongestionTracker_IDRAlwaysSent(t *testing.T) {
 	tracker := newCongestionTracker(100)
 
 	// Fill with 50% drops — extreme congestion
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		tracker.recordSent()
 		tracker.recordDropped()
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.False(t, tracker.shouldSkipFrame(true), "IDR must never be skipped (iter %d)", i)
 	}
 }
@@ -811,14 +811,14 @@ func TestCongestionTracker_SlidingWindow(t *testing.T) {
 	tracker := newCongestionTracker(10) // small window for testing
 
 	// Fill with all drops
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tracker.recordDropped()
 	}
 	// 10/10 = 100% drops — should skip
 	require.True(t, tracker.shouldSkipFrame(false), "100%% drop rate should skip")
 
 	// Push 10 sent frames — old drops evicted, window now all sent
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tracker.recordSent()
 	}
 	// 0/10 = 0% drops — should not skip
@@ -838,10 +838,10 @@ func TestCongestionTracker_AlternatingSkip(t *testing.T) {
 	tracker := newCongestionTracker(100)
 
 	// Trigger high congestion: 30 drops out of 50
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		tracker.recordSent()
 	}
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		tracker.recordDropped()
 	}
 	require.True(t, tracker.shouldSkipFrame(false), "should be congested")
@@ -849,7 +849,7 @@ func TestCongestionTracker_AlternatingSkip(t *testing.T) {
 	// Track skip pattern — should alternate
 	skipCount := 0
 	const iterations = 20
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		if tracker.shouldSkipFrame(false) {
 			skipCount++
 		}

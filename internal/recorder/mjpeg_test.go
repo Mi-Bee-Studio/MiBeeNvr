@@ -27,8 +27,8 @@ import (
 // generateTestJPEG creates a valid 16x16 JPEG image for testing.
 func generateTestJPEG() []byte {
 	img := image.NewYCbCr(image.Rect(0, 0, 16, 16), image.YCbCrSubsampleRatio420)
-	for y := 0; y < 16; y++ {
-		for x := 0; x < 16; x++ {
+	for y := range 16 {
+		for x := range 16 {
 			c := color.YCbCr{Y: 128, Cb: 128, Cr: 128}
 			img.Y[img.YOffset(x, y)] = c.Y
 			img.Cb[img.COffset(x, y)] = c.Cb
@@ -111,7 +111,7 @@ func (s *mjpegTestServer) sendJPEG(jpeg []byte) {
 }
 
 func (s *mjpegTestServer) sendFrames(count int, interval time.Duration) {
-	for i := 0; i < count; i++ {
+	for range count {
 		s.sendJPEG(generateTestJPEG())
 		if interval > 0 {
 			time.Sleep(interval)
@@ -477,7 +477,7 @@ func TestMJPEGRecorderWithAudio(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send audio frames.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		srv.sendAudioFrame(generateTestAudio(160))
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -595,7 +595,7 @@ func TestMJPEGRecorderAudioDrop(t *testing.T) {
 
 	// Send video + audio frames.
 	srv.sendFrames(3, 30*time.Millisecond)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAudioFrame(generateTestAudio(160))
 		time.Sleep(20 * time.Millisecond)
 	}

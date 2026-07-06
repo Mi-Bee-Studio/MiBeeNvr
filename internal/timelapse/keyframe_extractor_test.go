@@ -257,7 +257,7 @@ func TestKeyframeExtractor_NonBlockingCallback(t *testing.T) {
 	// Broadcast many frames rapidly — the callback must not block.
 	// If it blocks, the broadcast will time out or drop frames.
 	start := time.Now()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		au := makeH264AU(1) // P-frames
 		hub.Broadcast(int64(i), au, false)
 	}
@@ -334,7 +334,7 @@ func TestKeyframeExtractor_FallsBackToPFrame(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Broadcast only P-frames (no IDRs).
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		au := makeH264AU(1)
 		hub.Broadcast(int64(i), au, false)
 	}
@@ -421,7 +421,7 @@ func TestKeyframeExtractor_SegmentRotation(t *testing.T) {
 
 	// Broadcast IDR frames continuously.
 	au := makeH264AU(7, 8, 5)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		hub.Broadcast(1000, au, true)
 		time.Sleep(60 * time.Millisecond)
 	}
@@ -457,7 +457,7 @@ func TestKeyframeExtractor_StoresRecordingInDB(t *testing.T) {
 
 	// Broadcast IDR frames to trigger captures and segment rotation.
 	au := makeH264AU(7, 8, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		hub.Broadcast(1000, au, true)
 		time.Sleep(60 * time.Millisecond)
 	}
@@ -511,7 +511,7 @@ func TestKeyframeExtractor_DoesNotBlockOriginalRecorder(t *testing.T) {
 	// Measure how long it takes to broadcast with the extractor active.
 	start := time.Now()
 	var broadcastCount atomic.Int64
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		au := makeH264AU(7, 8, 5)
 		hub.Broadcast(int64(i), au, true)
 		broadcastCount.Add(1)
@@ -663,7 +663,7 @@ func TestKeyframeExtractor_MultipleSegmentsOverTime(t *testing.T) {
 
 	// Broadcast IDR frames over a long enough period to rotate segments.
 	au := makeH264AU(7, 8, 5)
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		hub.Broadcast(int64(i*1000), au, true)
 		time.Sleep(40 * time.Millisecond)
 	}
@@ -754,7 +754,7 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 
 	// Broadcast IDR frames to trigger captures and segment rotation.
 	au := makeH264AU(7, 8, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		hub.Broadcast(1000, au, true)
 		time.Sleep(60 * time.Millisecond)
 	}
@@ -809,13 +809,13 @@ func TestKeyframeExtractor_ConcurrentStartStopDuringBroadcast(t *testing.T) {
 
 	// Broadcast frames from many goroutines while the extractor is running.
 	var broadcastWg sync.WaitGroup
-	for g := 0; g < 5; g++ {
+	for range 5 {
 		broadcastWg.Add(1)
 		go func() {
 			defer broadcastWg.Done()
 			ticker := time.NewTicker(1 * time.Millisecond)
 			defer ticker.Stop()
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				au := makeH264AU(7, 8, 5)
 				hub.Broadcast(int64(i*1000), au, true)
 				<-ticker.C
@@ -860,11 +860,11 @@ func TestKeyframeExtractor_ConcurrentFrameBroadcast(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 10
 	framesPerGoroutine := 50
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(base int) {
 			defer wg.Done()
-			for i := 0; i < framesPerGoroutine; i++ {
+			for i := range framesPerGoroutine {
 				au := makeH264AU(7, 8, 5)
 				hub.Broadcast(int64(base*framesPerGoroutine+i)+1, au, true)
 			}

@@ -328,7 +328,7 @@ func TestLiveTranscoder_WriteInput_Overflow(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		err := lt.WriteInput(bigAU)
 		if err != nil {
 			t.Logf("write %d: %v (expected after queue full)", i, err)
@@ -477,7 +477,7 @@ func TestLiveTranscoder_ConcurrentWriteInput(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -674,7 +674,7 @@ func TestLiveTranscoder_RealFFmpeg(t *testing.T) {
 			0x00, 0x01,
 		},
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = lt.WriteInput(au)
 		require.NoError(t, err)
 	}

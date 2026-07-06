@@ -236,7 +236,7 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 	offset := 12
 
 	vf.NALUs = make([][]byte, 0, naluCount)
-	for i := 0; i < naluCount; i++ {
+	for i := range naluCount {
 		if offset+4 > len(data) {
 			return nil, fmt.Errorf("wsstream: video frame truncated at NALU %d length", i)
 		}

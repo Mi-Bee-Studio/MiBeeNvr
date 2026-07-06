@@ -835,7 +835,7 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 		r.readBit() // delta_pic_order_always_zero_flag
 		r.readSE()  // offset_for_non_ref_pic
 		numRefFramesInPOC := r.readUE()
-		for i := uint32(0); i < numRefFramesInPOC; i++ {
+		for range numRefFramesInPOC {
 			r.readSE() // offset_for_ref_frame
 		}
 	}
@@ -922,7 +922,7 @@ func (r *bitReader) readBit() uint8 {
 // readBits reads n bits as a uint32 (MSB first).
 func (r *bitReader) readBits(n int) uint32 {
 	var val uint32
-	for i := 0; i < n; i++ {
+	for range n {
 		val = (val << 1) | uint32(r.readBit())
 	}
 	return val
@@ -964,7 +964,7 @@ func (r *bitReader) readSE() int32 {
 
 // skipScalingLists skips scaling list fields in an SPS.
 func skipScalingLists(r *bitReader) {
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if r.readBit() != 0 {
 			size := 16
 			if i >= 6 {
@@ -972,7 +972,7 @@ func skipScalingLists(r *bitReader) {
 			}
 			lastScale := int32(8)
 			nextScale := int32(8)
-			for j := 0; j < size; j++ {
+			for range size {
 				if nextScale != 0 {
 					delta := r.readSE()
 					nextScale = (lastScale + delta + 256) % 256

@@ -374,7 +374,7 @@ func (h *StreamHub) trySendIDR(ch chan FrameMsg, msg FrameMsg) {
 	// and try to drain the next one. We want to preserve IDRs.
 	// Limit scan to channel capacity to avoid infinite loop when buffer is all IDRs.
 	bufCap := cap(ch)
-	for i := 0; i < bufCap; i++ {
+	for range bufCap {
 		select {
 		case old := <-ch:
 			if old.IsKeyframe {

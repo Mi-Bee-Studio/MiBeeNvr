@@ -85,7 +85,7 @@ func TestCollectorFrameCount(t *testing.T) {
 	camera := "cam-1"
 
 	// Feed 100 frames
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		au := makeH264Frame(t, 1, 1000) // non-IDR, 1001 bytes
 		cb(int64(i), au)
 	}
@@ -104,9 +104,9 @@ func TestCollectorBitrateCalc(t *testing.T) {
 
 	// Feed 25 frames, each 10000 bytes total (10 NALUs of 1000 bytes each)
 	const frameBytes = 10000
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		au := make([][]byte, 0, 10)
-		for j := 0; j < 10; j++ {
+		for range 10 {
 			au = append(au, make([]byte, 1000))
 		}
 		cb(int64(i), au)
@@ -132,7 +132,7 @@ func TestCollectorFPSCalc(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed 30 frames
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -150,7 +150,7 @@ func TestCollectorIDRDetection(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed non-IDR frames
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 500) // non-IDR
 		cb(int64(i), au)
 	}
@@ -162,7 +162,7 @@ func TestCollectorIDRDetection(t *testing.T) {
 	beforeIDR := c.GetStats("cam-1")
 
 	// Feed more non-IDR
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(20+i), au)
 	}
@@ -214,14 +214,14 @@ func TestCollectorLowFPSAnomaly(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// First check: feed only 2 frames (below minFPS=5) — streak=1, no emit
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
 	c.CheckAndReset()
 
 	// Second check: feed 2 more frames — streak=2, should emit
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(2+i), au)
 	}
@@ -267,21 +267,21 @@ func TestCollectorBitrateAnomaly(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Window 1: feed 10 frames with small payload → low bitrate
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 100) // 101 bytes each
 		cb(int64(i), au)
 	}
 	c.CheckAndReset()
 
 	// Window 2: high bitrate (>50% change) — streak=1, no emit
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 10000) // 10001 bytes each
 		cb(int64(10+i), au)
 	}
 	c.CheckAndReset()
 
 	// Window 3: back to low bitrate → another >50% change — streak=2, emit
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 100) // 101 bytes each
 		cb(int64(20+i), au)
 	}
@@ -318,7 +318,7 @@ func TestCollectorIDRIntervalAnomaly(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed only non-IDR frames
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -352,7 +352,7 @@ func TestCollectorNoBlocking(t *testing.T) {
 
 	// The callback should return in well under 1ms since it only does atomics
 	start := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		cb(int64(i), au)
 	}
 	elapsed := time.Since(start)
@@ -375,7 +375,7 @@ func TestCollectorCheckAndResetCounters(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed frames
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -401,7 +401,7 @@ func TestCollectorMultipleCameras(t *testing.T) {
 	cb1 := c.OnFrame("cam-1")
 	cb2 := c.OnFrame("cam-2")
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 500)
 		cb1(int64(i), au)
 		cb2(int64(i), au)
@@ -449,7 +449,7 @@ func TestCollectorNoAnomalyWhenDisabled(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed only 1 frame (would be low FPS if threshold were > 0)
-	for i := 0; i < 1; i++ {
+	for i := range 1 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -471,7 +471,7 @@ func TestCollectorResetOnReconnect(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed frames including an IDR frame to set lastIDRTime
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		au := makeH264Frame(t, 1, 500) // non-IDR
 		cb(int64(i), au)
 	}
@@ -525,7 +525,7 @@ func TestCollectorResetPreventsFalseIDRAlert(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed only non-IDR frames (lastIDRTime from init)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -566,7 +566,7 @@ func TestCollectorDebounceSuppressesSingleCheck(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// Feed only 2 frames in the window (below minFPS=5)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -590,21 +590,21 @@ func TestCollectorDebounceResetsOnRecovery(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// First check: low FPS — streak=1
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
 	c.CheckAndReset()
 
 	// Second check: normal FPS — resets streak
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(2+i), au)
 	}
 	c.CheckAndReset()
 
 	// Third check: low FPS again — streak=1 (reset happened)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(22+i), au)
 	}
@@ -627,7 +627,7 @@ func TestCollectorDebounceResetOnReconnect(t *testing.T) {
 	cb := c.OnFrame("cam-1")
 
 	// First check: IDR interval exceeded — streak=1
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(i), au)
 	}
@@ -638,7 +638,7 @@ func TestCollectorDebounceResetOnReconnect(t *testing.T) {
 	c.ResetCameraState("cam-1")
 
 	// Feed frames again, still no IDR
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		au := makeH264Frame(t, 1, 500)
 		cb(int64(5+i), au)
 	}
@@ -664,7 +664,7 @@ func TestCollectorPrometheusBridge(t *testing.T) {
 
 	// Simulate 50 frames at 1000 bytes each over the window
 	idrNalu := makeH264Frame(t, 5, 100) // H.264 IDR
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		onFrame(int64(i*33), idrNalu) // ~30fps, 100 bytes each
 		if i == 0 {
 			onFrame(int64(i*33), idrNalu)

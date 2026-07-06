@@ -105,7 +105,7 @@ func TestHealthAgainstRealHTTPServer(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/health", nil)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)

@@ -331,7 +331,7 @@ func detectVideoDevices() []string {
 // Extracted for testability.
 func detectVideoDevicesInDir(dir string) []string {
 	var devices []string
-	for i := 0; i <= 32; i++ {
+	for i := range 33 {
 		name := fmt.Sprintf("video%d", i)
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err == nil {

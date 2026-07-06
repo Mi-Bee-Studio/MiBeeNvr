@@ -118,7 +118,7 @@ func TestTranscodeTask_GetByStatus(t *testing.T) {
 	ctx := context.Background()
 
 	now := formatTime(time.Now().UTC())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		task := &TranscodeTask{
 			CameraID:     "cam1",
 			RecordingID:  "rec-00%d",
@@ -250,7 +250,7 @@ func TestTranscodeTask_DequeueOrder(t *testing.T) {
 
 	// Insert 3 tasks with staggered creation times
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		createdAt := formatTime(base.Add(time.Duration(i) * 10 * time.Minute))
 		task := &TranscodeTask{
 			CameraID:     "cam1",

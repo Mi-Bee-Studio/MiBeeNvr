@@ -598,7 +598,7 @@ func TestTranscodingBackfill_Success(t *testing.T) {
 
 	// Seed recordings without transcode tasks
 	now := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seedRecording(t, db, &model.Recording{
 			ID:        fmt.Sprintf("rec-bf-%d", i),
 			CameraID:  "cam-bf",

@@ -392,7 +392,7 @@ func buildSampleEntries(
 	if len(stts) > 0 {
 		durIdx := 0
 		durRemaining := stts[0].SampleCount
-		for i := 0; i < n; i++ {
+		for i := range n {
 			for durRemaining == 0 && durIdx+1 < len(stts) {
 				durIdx++
 				durRemaining = stts[durIdx].SampleCount

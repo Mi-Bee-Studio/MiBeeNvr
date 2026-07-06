@@ -33,7 +33,7 @@ func TestGenerateCameraID_Unique(t *testing.T) {
 	ids := make(map[string]bool)
 
 	// Generate 100 IDs and check for uniqueness
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		id := GenerateCameraID()
 		ids[id] = true
 	}

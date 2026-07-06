@@ -806,7 +806,7 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 	var exifIFDOffset int
 
 	// Scan IFD0 entries
-	for j := 0; j < numEntries; j++ {
+	for j := range numEntries {
 		entryOff := ifdOffset + 2 + j*12
 		if entryOff+12 > len(data) {
 			break
@@ -836,7 +836,7 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 	// Try EXIF IFD first for DateTimeOriginal
 	if exifIFDOffset > 0 && exifIFDOffset+2 <= len(data) {
 		numExifEntries := int(bo.Uint16(data[exifIFDOffset : exifIFDOffset+2]))
-		for j := 0; j < numExifEntries; j++ {
+		for j := range numExifEntries {
 			entryOff := exifIFDOffset + 2 + j*12
 			if entryOff+12 > len(data) {
 				break

@@ -231,7 +231,7 @@ func TestRandStringLength(t *testing.T) {
 func TestRandStringUniqueness(t *testing.T) {
 	t.Helper()
 	results := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		s := randString(16)
 		require.False(t, results[s], "randString should produce unique values")
 		results[s] = true
@@ -279,7 +279,7 @@ func TestGenNonceLength(t *testing.T) {
 func TestGenNonceUniqueness(t *testing.T) {
 	t.Helper()
 	nonces := make(map[string]bool)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		n := genNonce()
 		s := hex.EncodeToString(n)
 		require.False(t, nonces[s], "genNonce should produce unique values")

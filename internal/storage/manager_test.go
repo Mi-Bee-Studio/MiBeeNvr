@@ -341,7 +341,7 @@ func TestMultipleSegments_NoCollision(t *testing.T) {
 	temps := make([]string, 0)
 	finals := make([]string, 0)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		temp, final, err := m.CreateSegment("cam-04", "h264")
 		if err != nil {
 			t.Fatalf("segment %d error: %v", i, err)

@@ -188,7 +188,7 @@ func formatPrefixMask(prefixLength int) string {
 		return ""
 	}
 	mask := net.IPv4Mask(0, 0, 0, 0)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		bits := prefixLength - i*8
 		if bits >= 8 {
 			mask[i] = 0xFF

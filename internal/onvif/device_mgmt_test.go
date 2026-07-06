@@ -302,7 +302,7 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
 	done := make(chan struct{})
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			_ = m.SystemReboot(ctx)
@@ -313,7 +313,7 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 
 	// Wait for all goroutines
 	timeout := time.After(500 * time.Millisecond)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		select {
 		case <-done:
 		case <-timeout:

@@ -39,7 +39,7 @@ func TestWHEP_AuthRequired(t *testing.T) {
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
-	req := httptest.NewRequest("POST", "/api/cameras/test-cam/stream/webrtc", strings.NewReader("v=0"))
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/stream/webrtc", strings.NewReader("v=0"))
 	req.Header.Set("Content-Type", "application/sdp")
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -120,7 +120,7 @@ func TestWHEP_InvalidContentType(t *testing.T) {
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
 	h.SetWebRTCManager(webrtcMgr)
 
-	req := httptest.NewRequest("POST", "/api/cameras/cam1/stream/webrtc", strings.NewReader("v=0"))
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/cam1/stream/webrtc", strings.NewReader("v=0"))
 	req.Header.Set("Content-Type", "text/plain")
 	req.SetBasicAuth("admin", "pass")
 	rr := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestFLV_AuthRequired(t *testing.T) {
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
-	req := httptest.NewRequest("GET", "/api/cameras/test-cam/stream.flv", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/stream.flv", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 
@@ -205,7 +205,7 @@ func TestCameraProtocols_AuthRequired(t *testing.T) {
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
-	req := httptest.NewRequest("GET", "/api/cameras/test-cam/protocols", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/protocols", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 
@@ -377,7 +377,7 @@ func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 
 	r := h.Routes()
 	// Verify WHEP POST route responds (not 404)
-	req := httptest.NewRequest("POST", "/api/cameras/test/stream/webrtc", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test/stream/webrtc", nil)
 	req.SetBasicAuth("admin", "pass")
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -386,7 +386,7 @@ func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 
 	// Verify WHEP DELETE route is registered — returns 404 for missing session, not 405
 	// A 404 here means the route handler was invoked (session not found), confirming wiring
-	req = httptest.NewRequest("DELETE", "/api/cameras/test/stream/webrtc/some-session", nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/cameras/test/stream/webrtc/some-session", nil)
 	req.SetBasicAuth("admin", "pass")
 	rr = httptest.NewRecorder()
 	r.ServeHTTP(rr, req)

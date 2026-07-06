@@ -263,7 +263,7 @@ func TestDeleteOriginal_True(t *testing.T) {
 	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
@@ -305,7 +305,7 @@ func TestDeleteOriginal_False(t *testing.T) {
 	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
@@ -342,7 +342,7 @@ func TestDeleteOriginal_ZeroFrames(t *testing.T) {
 	os.MkdirAll(segmentDir, 0o755)
 
 	// Create some dummy source frame files.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), []byte("dummy"), 0o644)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
@@ -428,7 +428,7 @@ func TestRollingMergeManager_ConcurrentMultiCamera(t *testing.T) {
 
 	var wg sync.WaitGroup
 	numCameras := 10
-	for i := 0; i < numCameras; i++ {
+	for i := range numCameras {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -469,7 +469,7 @@ func TestRollingMergeManager_ConcurrentCancelDuringMerge(t *testing.T) {
 	mgr.StartSegmentMerge(ctx, "cam-cancel", segmentDir, outputPath, "")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -500,13 +500,13 @@ func TestRollingMergeManager_ConcurrentProgressReadWrite(t *testing.T) {
 
 	// Start a few merges.
 	const numCameras = 5
-	for i := 0; i < numCameras; i++ {
+	for i := range numCameras {
 		mgr.StartSegmentMerge(ctx, fmt.Sprintf("cam-%d", i), segmentDir, outputPath, "")
 	}
 
 	// Read progress from many goroutines while merges are in flight.
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -521,7 +521,7 @@ func TestRollingMergeManager_ConcurrentProgressReadWrite(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Read progress concurrently after completion.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -552,7 +552,7 @@ func TestRollingMergeManager_ConcurrentStopAllAndStart(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrently start merges and call StopAll.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -624,7 +624,7 @@ func TestRollingMergeManager_RapidStartStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		mgr.StartSegmentMerge(ctx, "cam-rapid", segmentDir, outputPath, "")
 		mgr.StopSegmentMerge("cam-rapid")
 	}

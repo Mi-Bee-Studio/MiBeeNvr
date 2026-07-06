@@ -27,7 +27,7 @@ func TestStreamWS_AuthRequired(t *testing.T) {
 	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
 
 	r := h.Routes()
-	req := httptest.NewRequest("GET", "/api/cameras/test-cam/stream/ws", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/stream/ws", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 

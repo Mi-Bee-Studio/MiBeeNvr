@@ -308,7 +308,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 	waitForViewer(t, m, "cam1")
 
 	// Send 3 frames
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		nalu := []byte{0x65, byte(i), 0x02, 0x03}
 		broadcastFrame(t, hub, int64(90000*(i+1)), [][]byte{nalu})
 		time.Sleep(10 * time.Millisecond)
@@ -316,7 +316,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 
 	// Read 3 video frames (collect all, then verify order)
 	var receivedPTS []int64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		msg, err := readMessage(t, conn)
 		require.NoError(t, err, "frame %d", i)
 		assert.Equal(t, MsgTypeVideoFrame, msg[0], "frame %d", i)
@@ -435,7 +435,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	if testing.Short() {
 		iterations = 50
 	}
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		nalu := []byte{0x65, byte(i)}
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
@@ -493,7 +493,7 @@ func TestFrameDropCounter(t *testing.T) {
 	if testing.Short() {
 		iterations = 100
 	}
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{{0x65, byte(i)}}, false)
 	}
 
@@ -620,7 +620,7 @@ func TestGoroutineCleanup(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		conn := dialWS(t, wsURL)
 		_, _ = readMessage(t, conn)
 		conn.Close()
@@ -689,7 +689,7 @@ func TestMultipleViewers(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 
 	var conns []*websocket.Conn
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		conn := dialWS(t, wsURL)
 		conns = append(conns, conn)
 	}
@@ -845,7 +845,7 @@ func BenchmarkWriteFrame(b *testing.B) {
 
 	nalu := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		m.writeH264("cam1", int64(90000*(i+1)), [][]byte{nalu})
 	}
 }
@@ -861,7 +861,7 @@ func BenchmarkEncodeVideoFrame(b *testing.B) {
 		NALUs:      [][]byte{nalu, nalu},
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = EncodeVideoFrame(vf)
 	}
 }

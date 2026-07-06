@@ -18,7 +18,7 @@ func TestValidCredentials(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -33,7 +33,7 @@ func TestInvalidPassword(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -48,7 +48,7 @@ func TestMissingAuthHeader(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -62,7 +62,7 @@ func TestMalformedAuth(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("not base64")))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -76,7 +76,7 @@ func TestEmptyHashReturnsSetupRequired(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, "expected 503 when no password configured")
@@ -101,9 +101,9 @@ func TestConcurrentAccess(t *testing.T) {
 	}))
 	reqs := 50
 	done := make(chan bool)
-	for i := 0; i < reqs; i++ {
+	for i := range reqs {
 		go func(i int) {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Header.Set("Authorization", "Basic "+basic("u", "secret"))
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
@@ -113,7 +113,7 @@ func TestConcurrentAccess(t *testing.T) {
 			done <- true
 		}(i)
 	}
-	for i := 0; i < reqs; i++ {
+	for range reqs {
 		<-done
 	}
 }
@@ -140,7 +140,7 @@ func TestPlaintextPasswordAutoHash(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("admin", "mypassword"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -158,13 +158,13 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("admin", "prehashed-pass"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req2.Header.Set("Authorization", "Basic "+basic("admin", "ignored-plaintext"))
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -179,8 +179,8 @@ func TestRateLimiterAllowsUnderLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 5 requests (at the limit) — should all pass
-	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 5 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
@@ -195,15 +195,15 @@ func TestRateLimiterBlocksOverLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 3 requests (at the limit) — all pass
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 3 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
 	}
 
 	// 4th request should be blocked
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusTooManyRequests, w.Code, "request over limit should be 429")
@@ -218,13 +218,13 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	}))
 
 	// First request passes
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// Second request blocked
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusTooManyRequests, w.Code)
@@ -233,7 +233,7 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 
 	// Should be allowed again
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -254,7 +254,7 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 	}))
 
 	// Before setup: no hash configured → 503 SETUP_REQUIRED
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
@@ -266,7 +266,7 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 	currentHash = hash
 
 	// After setup: middleware picks up the new hash → 200 OK
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req2.Header.Set("Authorization", "Basic "+basic("admin", "newpassword123"))
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -283,8 +283,8 @@ func TestRateLimiterEvictsStaleEntries(t *testing.T) {
 	}))
 
 	// Create entries from 100 different IPs
-	for i := 0; i < 100; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 100 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = "192.168.1." + strconv.Itoa(i) + ":12345"
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -309,7 +309,7 @@ func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
 	}))
 
 	// Create an entry
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -322,7 +322,7 @@ func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Rate limiter should still work (no panic, no deadlock)
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	require.Equal(t, http.StatusTooManyRequests, w2.Code, "second request from same IP should be blocked when MaxRequests=1")

@@ -167,7 +167,7 @@ func TestHealth_Events_WithPagination(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	now := time.Now().UTC()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, db.InsertHealthEvent(context.Background(), model.HealthEvent{
 			CameraID: "cam-1", EventType: "connection_lost", Status: "error", CreatedAt: now.Add(time.Duration(i) * time.Minute),
 		}))

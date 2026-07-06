@@ -668,14 +668,14 @@ func TestHLSSubscribeConcurrent(t *testing.T) {
 	})
 
 	// Forward from multiple goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			r.forwardHLS([]byte{0x41, 0x01})
 		}()
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 

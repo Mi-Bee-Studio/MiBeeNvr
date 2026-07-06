@@ -81,8 +81,8 @@ func parseJSON(t *testing.T, rr *httptest.ResponseRecorder, v interface{}) {
 // generateTestJPEG creates a valid 16x16 JPEG image for testing.
 func generateTestJPEG() []byte {
 	img := image.NewYCbCr(image.Rect(0, 0, 16, 16), image.YCbCrSubsampleRatio420)
-	for y := 0; y < 16; y++ {
-		for x := 0; x < 16; x++ {
+	for y := range 16 {
+		for x := range 16 {
 			c := color.YCbCr{Y: 128, Cb: 128, Cr: 128}
 			img.Y[img.YOffset(x, y)] = c.Y
 			img.Cb[img.COffset(x, y)] = c.Cb
@@ -320,7 +320,7 @@ func TestMultiCameraConcurrent(t *testing.T) {
 			temp, final, err := store.CreateSegment(cid, "mjpeg")
 			require.NoError(t, err)
 
-			for i := 0; i < numFrames; i++ {
+			for range numFrames {
 				_, err := store.WriteFrame(temp, generateTestJPEG())
 				require.NoError(t, err)
 				time.Sleep(10 * time.Millisecond) // ensure unique timestamps
@@ -500,7 +500,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	// 3. Upload a JPEG frame via upload handler
 	jpegData := generateTestJPEG()
-	req := httptest.NewRequest("POST", "/api/upload/"+cameraID, bytes.NewReader(jpegData))
+	req := httptest.NewRequest(http.MethodPost, "/api/upload/"+cameraID, bytes.NewReader(jpegData))
 	req.Header.Set("Content-Type", "image/jpeg")
 	rr := httptest.NewRecorder()
 	uploadRouter.ServeHTTP(rr, req)
@@ -1342,7 +1342,7 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	db, store := setupEnv(t)
 
 	// Seed initial recordings for concurrent reads
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seedRecording(t, db, store, fmt.Sprintf("concurrent-%d", i),
 			"cam-concurrent", "h264", false)
 	}
@@ -1355,11 +1355,11 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	ctx := context.Background()
 
 	// Concurrent readers
-	for g := 0; g < numGoroutines/2; g++ {
+	for g := range numGoroutines / 2 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+			for i := range opsPerGoroutine {
 				recID := fmt.Sprintf("concurrent-%d", (id+i)%10)
 				_, err := db.GetRecording(ctx, recID)
 				if err != nil {
@@ -1370,11 +1370,11 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	}
 
 	// Concurrent writers (insert + delete)
-	for g := 0; g < numGoroutines/2; g++ {
+	for g := range numGoroutines / 2 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+			for i := range opsPerGoroutine {
 				rec := &model.Recording{
 					ID:         fmt.Sprintf("lock-test-%d-%d", id, i),
 					CameraID:   "cam-concurrent",
@@ -1499,7 +1499,7 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	require.Equal(t, wsstream.MsgTypeVideoFrame, msg[0], "second message should be VideoFrame")
 
 	// --- Step 8: Broadcast additional frames and verify delivery ---
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		nalu := []byte{0x41, byte(i), 0x02, 0x03}
 		hub.Broadcast(int64(90000*(i+2)), [][]byte{nalu}, false)
 		time.Sleep(10 * time.Millisecond)

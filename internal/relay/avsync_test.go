@@ -190,7 +190,7 @@ func TestDriftMonitor_IntegrationCallbackPattern(t *testing.T) {
 	// Simulate interleaved video and audio callbacks with increasing PTS.
 	// Real scenario: at 30fps each callback fires ~33ms apart.
 	// Audio PTS lags video PTS by 120000 ticks ≈ 1.33s.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		videoPTS := int64(100000 + i*3000) // monotonic video
 		audioPTS := int64(0 + i*3000)      // audio starts at 0, same rate
 

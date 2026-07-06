@@ -242,9 +242,9 @@ func TestMaxViewers_Enforced(t *testing.T) {
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	// First 2 viewers should succeed
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", "/live/cam1.flv", nil)
+		r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil)
 		// Consume in background so ServeFLV doesn't block
 		done := make(chan struct{})
 		go func() {
@@ -256,7 +256,7 @@ func TestMaxViewers_Enforced(t *testing.T) {
 
 	// Third viewer should get error
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil)
 	err := mgr.ServeFLV("cam1", w, r)
 	require.ErrorIs(t, err, ErrMaxViewers)
 
@@ -273,7 +273,7 @@ func TestClientDisconnect_Cleanup(t *testing.T) {
 	defer cancel()
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	viewerDone := make(chan struct{})
 	go func() {
@@ -303,7 +303,7 @@ func TestNonBlockingWrite_DropsFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := &blockingResponseWriter{}
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	viewerDone := make(chan struct{})
 	go func() {
@@ -313,7 +313,7 @@ func TestNonBlockingWrite_DropsFrames(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write many frames — should not block, excess frames dropped
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		start := time.Now()
 		mgr.writeH264("cam1", int64(i*3000), [][]byte{idrNALU})
 		require.WithinDuration(t, start, time.Now(), 100*time.Millisecond,
@@ -361,7 +361,7 @@ func TestGOPCache_NewClientGetsCachedKeyframe(t *testing.T) {
 			mu.Unlock()
 		},
 	}
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	viewerDone := make(chan struct{})
 	go func() {
@@ -422,7 +422,7 @@ func TestGOPCache_UpdatedOnNewKeyframe(t *testing.T) {
 func TestServeFLV_StreamNotActive(t *testing.T) {
 	mgr := newTestManager(t)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/nonexistent.flv", nil)
+	r := httptest.NewRequest(http.MethodGet, "/live/nonexistent.flv", nil)
 	err := mgr.ServeFLV("nonexistent", w, r)
 	require.ErrorIs(t, err, ErrStreamNotActive)
 }
@@ -434,7 +434,7 @@ func TestServeFLV_SetsCorrectHeaders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	// Cancel quickly to end the connection
 	go func() {
@@ -456,7 +456,7 @@ func TestServeFLV_WritesFLVHeader(t *testing.T) {
 
 	var buf bytes.Buffer
 	w := &capturingResponseWriter{w: &buf}
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -488,7 +488,7 @@ func TestStreamHubIntegration_SubscribeOnFirstViewer(t *testing.T) {
 	// Start a viewer
 	ctx, cancel := context.WithCancel(context.Background())
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	viewerDone := make(chan struct{})
 	go func() {
@@ -517,7 +517,7 @@ func TestViewerCount(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx1)
+	r1 := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx1)
 
 	done1 := make(chan struct{})
 	go func() {
@@ -549,11 +549,11 @@ func TestConcurrentWrites(t *testing.T) {
 	_ = mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil)
 
 	var wg sync.WaitGroup
-	for g := 0; g < 5; g++ {
+	for range 5 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 50; i++ {
+			for i := range 50 {
 				mgr.writeH264("cam1", int64(i*3000), [][]byte{idrNALU})
 			}
 		}()
@@ -588,7 +588,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx1)
+	r1 := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx1)
 
 	viewerDone1 := make(chan struct{})
 	go func() {
@@ -602,7 +602,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 
 	// Second viewer should get ErrMaxViewers
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest("GET", "/live/cam1.flv", nil)
+	r2 := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil)
 	err := mgr.ServeFLV("cam1", w2, r2)
 	require.ErrorIs(t, err, ErrMaxViewers)
 
@@ -618,7 +618,7 @@ func TestViewerCleanup_FreesSlot(t *testing.T) {
 	ctx3, cancel3 := context.WithCancel(context.Background())
 	defer cancel3()
 	w3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx3)
+	r3 := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx3)
 
 	viewerDone3 := make(chan struct{})
 	go func() {
@@ -643,7 +643,7 @@ func TestGOPCacheMiss_Metric(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/live/cam1.flv", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodGet, "/live/cam1.flv", nil).WithContext(ctx)
 
 	viewerDone := make(chan struct{})
 	go func() {

@@ -225,7 +225,7 @@ func TestQueueConcurrencyLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	var taskIDs []int64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
 		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
@@ -306,7 +306,7 @@ func TestQueueActiveCount(t *testing.T) {
 	q := newSlowTestQueue(t, db, 2, "5s")
 
 	tmpDir := t.TempDir()
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
 		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
@@ -1049,7 +1049,7 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 	const numTasks = 10
 	taskIDs := make([]int64, numTasks)
 	// Rapid sequential enqueue (simulates API calls) — exercises DB contention
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
 		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))

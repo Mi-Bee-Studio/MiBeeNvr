@@ -315,7 +315,7 @@ func TestListRecordings_Pagination(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedRecording(t, db, makeRecording("rec-"+strconv.Itoa(i), "cam-1", "h264", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -578,7 +578,7 @@ func TestProtectedEndpoints_WithAuth(t *testing.T) {
 // --- Helper to parse method/path ---
 
 func splitEndpoint(ep string) (string, string) {
-	for i := 0; i < len(ep); i++ {
+	for i := range len(ep) {
 		if ep[i] == ' ' {
 			return ep[:i], ep[i+1:]
 		}
@@ -1029,7 +1029,7 @@ func TestListRecordings_OffsetZero(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seedRecording(t, db, makeRecording("rec-"+strconv.Itoa(i), "cam-1", "h264", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -1054,7 +1054,7 @@ func TestListRecordings_OffsetBeyondTotal(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seedRecording(t, db, makeRecording("rec-"+strconv.Itoa(i), "cam-1", "h264", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -1080,7 +1080,7 @@ func TestListRecordings_LimitZero(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedRecording(t, db, makeRecording("rec-"+strconv.Itoa(i), "cam-1", "h264", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -1315,7 +1315,7 @@ func TestListRecordings_TotalCount(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seedRecording(t, db, makeRecording("rec-"+strconv.Itoa(i), "cam-1", "h264", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -2626,7 +2626,7 @@ func TestXiaomiDevicesNoAuth(t *testing.T) {
 	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
 
 	// Without auth should return 401
-	req := httptest.NewRequest("GET", "/api/xiaomi/devices", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/xiaomi/devices", nil)
 	rr := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusUnauthorized, rr.Code)

@@ -121,7 +121,7 @@ func TestParseHEVCSPSResolution_Invalid(t *testing.T) {
 func TestBitReader_Overflow(t *testing.T) {
 	r := &bitReader{data: []byte{0x00}}
 	// Read 8 bits (the single byte)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		bit, err := r.readBit()
 		if err != nil {
 			t.Fatalf("unexpected error at bit %d: %v", i, err)

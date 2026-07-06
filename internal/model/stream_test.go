@@ -38,7 +38,7 @@ func TestStreamHub_SubscribeAndBroadcast(t *testing.T) {
 	}
 
 	// Broadcast 5 frames
-	for i := int64(0); i < 5; i++ {
+	for i := range int64(5) {
 		hub.Broadcast(i, [][]byte{{byte(i)}}, false)
 	}
 
@@ -146,7 +146,7 @@ func TestStreamHub_FrameDropTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send many frames — the buffer (150) will fill up, causing drops
-	for i := 0; i < 250; i++ {
+	for i := range 250 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	// Wait a bit for buffer to fill
@@ -181,11 +181,11 @@ func TestStreamHub_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 	wg.Add(goroutines * 2)
 
 	// Concurrent subscribers
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			cid := string(rune('A' + id%26))
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				_ = hub.Subscribe(cid, func(pts int64, au [][]byte) {})
 				hub.Unsubscribe(cid)
 			}
@@ -193,10 +193,10 @@ func TestStreamHub_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 	}
 
 	// Concurrent broadcasters
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				hub.Broadcast(int64(j), [][]byte{{byte(id)}}, false)
 			}
 		}(i)
@@ -269,7 +269,7 @@ func TestStreamHub_AudioSubscribeAndBroadcast(t *testing.T) {
 	}
 
 	// Broadcast 5 audio frames
-	for i := int64(0); i < 5; i++ {
+	for i := range int64(5) {
 		hub.BroadcastAudio(i, AudioAAC, []byte{byte(i)})
 	}
 
@@ -388,7 +388,7 @@ func TestStreamHub_AudioDropTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send many frames — buffer (50) will fill up, causing drops
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		hub.BroadcastAudio(int64(i), AudioG711, []byte{byte(i)})
 	}
 
@@ -424,11 +424,11 @@ func TestStreamHub_AudioConcurrentSubscribeUnsubscribe(t *testing.T) {
 	wg.Add(goroutines * 2)
 
 	// Concurrent audio subscribers
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			cid := fmt.Sprintf("audio-%d", id)
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				_ = hub.SubscribeAudio(cid, func(pts int64, codec AudioCodec, data []byte) {})
 				hub.UnsubscribeAudio(cid)
 			}
@@ -436,10 +436,10 @@ func TestStreamHub_AudioConcurrentSubscribeUnsubscribe(t *testing.T) {
 	}
 
 	// Concurrent audio broadcasters
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				hub.BroadcastAudio(int64(j), AudioAAC, []byte{byte(id)})
 			}
 		}(i)
@@ -481,7 +481,7 @@ func TestStreamHub_BufferOverflow(t *testing.T) {
 
 	// Drain goroutine consumes 1 frame and blocks, leaving buffer capacity - 1 slots
 	// Send well beyond capacity to force drops regardless of timing
-	for i := 0; i < hub.consumerBufferSize+100; i++ {
+	for i := range hub.consumerBufferSize + 100 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -526,7 +526,7 @@ func helperTestIDRProtection(t *testing.T, raceMode bool) {
 	require.NoError(t, err)
 
 	// Fill the buffer with non-IDR frames (5 buffered + 1 in drain = 6 total)
-	for i := 0; i < hub.consumerBufferSize+1; i++ {
+	for i := range hub.consumerBufferSize + 1 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	// Wait for drain goroutine to consume 1 frame and block
@@ -571,7 +571,7 @@ func TestStreamHub_NonIDRDroppedWhenBufferFull(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fill buffer + send more non-IDR frames
-	for i := 0; i < hub.consumerBufferSize+10; i++ {
+	for i := range hub.consumerBufferSize + 10 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -607,7 +607,7 @@ func TestStreamHub_IDRProtectionMultiConsumer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send many frames to fill consumer A's buffer
-	for i := 0; i < hub.consumerBufferSize+10; i++ {
+	for i := range hub.consumerBufferSize + 10 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	require.Eventually(t, func() bool { return receivedA.Load() >= 1 }, 3*time.Second, 10*time.Millisecond)
@@ -646,7 +646,7 @@ func TestStreamHub_IDRProtectionPreservesIDRInBuffer(t *testing.T) {
 	// Send frames to fill buffer beyond capacity:
 	// Drain goroutine takes 1, buffer holds 5.
 	// Mix of IDR and non-IDR frames.
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		isIDR := i%4 == 0
 		hub.Broadcast(int64(i*10), [][]byte{{byte(i)}}, isIDR)
 	}
@@ -713,11 +713,11 @@ func helperHighContention(t *testing.T, audio bool) {
 	wg.Add(goroutines * 3)
 
 	// Concurrent subscribers/unsubscribers
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			cid := fmt.Sprintf("c-%d", id)
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				var cb FrameCallback = func(pts int64, au [][]byte) {
 					// Simulate slow consumer to fill buffers
 					if id%3 == 0 {
@@ -746,10 +746,10 @@ func helperHighContention(t *testing.T, audio bool) {
 	}
 
 	// Concurrent broadcasters
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				isIDR := j%10 == 0 // 10% IDR frames to exercise trySendIDR
 				if audio {
 					hub.BroadcastAudio(int64(j), AudioAAC, []byte{byte(id)})
@@ -761,10 +761,10 @@ func helperHighContention(t *testing.T, audio bool) {
 	}
 
 	// Concurrent consumer count readers
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				if audio {
 					_ = hub.AudioConsumerCount()
 					_ = hub.AudioDrops(fmt.Sprintf("c-%d", j%goroutines))
@@ -823,7 +823,7 @@ func TestStreamHub_DropRate_AllDelivered(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	require.Eventually(t, func() bool { return received.Load() == 10 }, 2*time.Second, 10*time.Millisecond)
@@ -844,7 +844,7 @@ func TestStreamHub_DropRate_WithDrops(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fill buffer (5) + drain takes 1 = 6 slots used. Send 200 total.
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -884,7 +884,7 @@ func TestStreamHub_DropRateThreshold_Callback(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send many frames to trigger drops and hit the 100-drop check interval
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -929,7 +929,7 @@ func TestJitterBuffer_PassthroughInOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send 10 frames in-order — jitter buffer should NOT activate
-	for i := int64(0); i < 10; i++ {
+	for i := range int64(10) {
 		hub.Broadcast(i*100, [][]byte{{byte(i)}}, i%5 == 0)
 	}
 

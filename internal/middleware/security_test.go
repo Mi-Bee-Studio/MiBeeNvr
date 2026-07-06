@@ -12,7 +12,7 @@ func TestSecurityHeaders(t *testing.T) {
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -43,8 +43,8 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 	}))
 
 	// Send 20 failed requests
-	for i := 0; i < 20; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 20 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -57,7 +57,7 @@ func TestRateLimitBlocksAfterMaxFailures(t *testing.T) {
 
 	// Next failed request should be 429 (rate limiter checks BEFORE incrementing)
 	// After 20 failures, the 21st request should be blocked
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -75,15 +75,15 @@ func TestRateLimitDoesNotBlockValidAuthAfterFailures(t *testing.T) {
 	}))
 
 	// Send some failed requests but don't hit the limit
-	for i := 0; i < 15; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for range 15 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 	}
 
 	// Valid auth should still work
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -101,8 +101,8 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 	}))
 
 	// Send 15 failures (below limit)
-	for i := 0; i < 15; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for range 15 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -111,7 +111,7 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 	}
 
 	// Successful auth resets the counter
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -120,8 +120,8 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 	}
 
 	// Should be able to try 20 more times
-	for i := 0; i < 20; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 20 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -131,7 +131,7 @@ func TestRateLimitResetsOnSuccess(t *testing.T) {
 	}
 
 	// Now should be 429
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

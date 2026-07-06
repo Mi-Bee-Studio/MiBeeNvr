@@ -200,7 +200,7 @@ func TestPointInPolygon_MultipleVertices(t *testing.T) {
 	// A 20-sided regular polygon (icosagon) approximating a circle.
 	// All points near the center should be inside.
 	poly := make([][2]float64, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		angle := float64(i) * 2 * math.Pi / 20
 		poly[i] = [2]float64{
 			0.5 + 0.4*math.Cos(angle),
@@ -681,7 +681,7 @@ func TestZoneManager_Concurrency(t *testing.T) {
 	const numZones = 100
 	errs := make(chan error, numZones)
 
-	for i := 0; i < numZones; i++ {
+	for i := range numZones {
 		go func(idx int) {
 			name := "zone"
 			if idx >= 0 {
@@ -692,7 +692,7 @@ func TestZoneManager_Concurrency(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < numZones; i++ {
+	for range numZones {
 		err := <-errs
 		// Errors are expected for duplicates, but no panics.
 		t.Logf("concurrent add result: %v", err)
