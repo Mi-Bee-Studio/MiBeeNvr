@@ -2,7 +2,7 @@ package recorder
 
 import "testing"
 
-// healthAwareStore implements SegmentStore plus the optional StorageFailed()
+// healthAwareStore implements SegmentStore plus the optional StorageFailed(cameraID string)
 // bool method, mirroring how *storage.Manager satisfies the duck-typed
 // healthHint interface. The original bug was that storage.Manager exposed
 // StorageHealth() HealthState while the interface demanded StorageHealth() int
@@ -14,7 +14,7 @@ func (s *healthAwareStore) CreateSegment(string, string) (string, string, error)
 }
 func (s *healthAwareStore) WriteFrame(string, []byte) (int, error) { return 0, nil }
 func (s *healthAwareStore) CloseSegment(string, string) error      { return nil }
-func (s *healthAwareStore) StorageFailed() bool                    { return s.failed }
+func (s *healthAwareStore) StorageFailed(cameraID string) bool     { return s.failed }
 
 // plainStore implements only SegmentStore (no health method) — exercises the
 // backward-compatible fallback where isStorageFailed returns false.
@@ -31,10 +31,10 @@ func (s *plainStore) CloseSegment(string, string) error      { return nil }
 // fix this always returned false because of the interface type mismatch.
 func TestIsStorageFailed_HealthAwareStore(t *testing.T) {
 	t.Helper()
-	if isStorageFailed(&healthAwareStore{failed: true}) != true {
+	if isStorageFailed(&healthAwareStore{failed: true}, "cam-1") != true {
 		t.Fatal("expected isStorageFailed=true when store reports StorageFailed()=true")
 	}
-	if isStorageFailed(&healthAwareStore{failed: false}) != false {
+	if isStorageFailed(&healthAwareStore{failed: false}, "cam-1") != false {
 		t.Fatal("expected isStorageFailed=false when store reports StorageFailed()=false")
 	}
 }
@@ -44,7 +44,7 @@ func TestIsStorageFailed_HealthAwareStore(t *testing.T) {
 // block recording for stores without health insight).
 func TestIsStorageFailed_PlainStore(t *testing.T) {
 	t.Helper()
-	if isStorageFailed(&plainStore{}) != false {
+	if isStorageFailed(&plainStore{}, "cam-1") != false {
 		t.Fatal("expected isStorageFailed=false for store without StorageFailed() method")
 	}
 }

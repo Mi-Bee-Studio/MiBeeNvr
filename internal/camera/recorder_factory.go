@@ -80,6 +80,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			Username:   cam.Username,
 			Password:   cam.Password,
 			DB:         cm.db,
+			AVI:        cam.HTTPJPEGAVI,
 		}
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):

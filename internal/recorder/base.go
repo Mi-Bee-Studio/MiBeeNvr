@@ -331,7 +331,7 @@ func (b *baseRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(b.store)
+		storageFailed := isStorageFailed(b.store, b.cfg.CameraID)
 		if storageFailed {
 			backoff = StorageBackoffWithJitter()
 		}
@@ -396,7 +396,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		}
 
 		// Step 5: Storage health check — skip recording but keep stream alive.
-		if isStorageFailed(b.store) {
+		if isStorageFailed(b.store, b.cfg.CameraID) {
 			b.handleStorageFailure()
 			continue
 		}

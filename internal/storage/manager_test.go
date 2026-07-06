@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -996,4 +997,161 @@ func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
 	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
 	require.NoError(t, err)
 	require.Equal(t, 0, count)
+}
+
+// TestReconcileIncrementalCommit verifies that ReconcileOrphanedFiles processes each camera
+// directory independently with per-camera commits, allowing partial progress if interrupted.
+func TestReconcileIncrementalCommit(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_incr.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Create 3 cameras with 10 files each
+	cameraIDs := map[string]bool{}
+	fileCount := 10
+	expectedTotal := 0
+	for camIdx := 1; camIdx <= 3; camIdx++ {
+		camID := fmt.Sprintf("cam-%d", camIdx)
+		cameraIDs[camID] = true
+		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+
+		camDir := filepath.Join(storeDir, camID)
+		require.NoError(t, os.MkdirAll(camDir, 0o755))
+
+		for fileIdx := 0; fileIdx < fileCount; fileIdx++ {
+			// Format: cameraID_20260514_120000_<nanotimestamp>.mp4
+			// Use unique timestamps so each file gets a unique ID
+			dateTime := fmt.Sprintf("20260514_%02d%02d%02d", 9+camIdx, 0, fileIdx)
+			nano := fmt.Sprintf("%019d", int64(camIdx)*1000000000000000000+int64(fileIdx))
+			fileName := fmt.Sprintf("%s_%s_%s.mp4", camID, dateTime, nano)
+			require.NoError(t, os.WriteFile(filepath.Join(camDir, fileName), []byte("fake-mp4-data"), 0o644))
+			expectedTotal++
+		}
+	}
+
+	// First run: all files should be reconciled
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, expectedTotal, count, "all files should be reconciled on first run")
+
+	// Verify all recordings exist in DB
+	for camID := range cameraIDs {
+		list, err := db.ListRecordings(ctx, model.RecordingFilter{CameraID: camID})
+		require.NoError(t, err)
+		require.Len(t, list, fileCount, "camera %q should have %d recordings", camID, fileCount)
+	}
+
+	// Second run: idempotent — should reconcile 0 new files
+	count, err = m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 0, count, "second reconcile should find no orphans")
+}
+
+// TestReconcilePerCameraCommit verifies that ReconcileOrphanedFiles commits per camera directory,
+// so a partial reconcile (limited camera IDs) can be completed incrementally.
+func TestReconcilePerCameraCommit(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_partial.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Create 3 cameras with 5 files each
+	for camIdx := 1; camIdx <= 3; camIdx++ {
+		camID := fmt.Sprintf("cam-%d", camIdx)
+		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+
+		camDir := filepath.Join(storeDir, camID)
+		require.NoError(t, os.MkdirAll(camDir, 0o755))
+
+		for fileIdx := 0; fileIdx < 5; fileIdx++ {
+			dateTime := fmt.Sprintf("20260514_%02d%02d%02d", 9+camIdx, 0, fileIdx)
+			nano := fmt.Sprintf("%019d", int64(camIdx)*1000000000000000000+int64(fileIdx))
+			fileName := fmt.Sprintf("%s_%s_%s.mp4", camID, dateTime, nano)
+			require.NoError(t, os.WriteFile(filepath.Join(camDir, fileName), []byte("fake-mp4-data"), 0o644))
+		}
+	}
+
+	// Step 1: reconcile only camera 1
+	count, err := m.ReconcileOrphanedFiles(ctx, db, map[string]bool{"cam-1": true})
+	require.NoError(t, err)
+	require.Equal(t, 5, count, "camera 1 should have 5 files reconciled")
+
+	// Step 2: reconcile all 3 cameras — should only pick up cameras 2 and 3
+	count, err = m.ReconcileOrphanedFiles(ctx, db, map[string]bool{"cam-1": true, "cam-2": true, "cam-3": true})
+	require.NoError(t, err)
+	require.Equal(t, 10, count, "cameras 2 and 3 should have 10 files reconciled total")
+
+	// Verify all recordings exist
+	for _, camID := range []string{"cam-1", "cam-2", "cam-3"} {
+		list, err := db.ListRecordings(ctx, model.RecordingFilter{CameraID: camID})
+		require.NoError(t, err)
+		require.Len(t, list, 5, "camera %q should have 5 recordings", camID)
+	}
+
+	// Step 3: third reconcile should find nothing
+	count, err = m.ReconcileOrphanedFiles(ctx, db, map[string]bool{"cam-1": true, "cam-2": true, "cam-3": true})
+	require.NoError(t, err)
+	require.Equal(t, 0, count, "third reconcile should be idempotent")
+}
+
+// TestInsertOrphanRecordingsBatching verifies that InsertOrphanRecordings commits in batches
+// of orphanBatchSize and returns the correct inserted count.
+func TestInsertOrphanRecordingsBatching(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "orphan_batch.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Insert a camera so foreign key constraint works (if any)
+	require.NoError(t, db.UpsertCamera(ctx, "batch-cam", "Batch Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+
+	// Create 1200 orphan recordings (2 full batches of 500 + 1 partial batch of 200)
+	// orphanBatchSize = 500, so: 500 + 500 + 200 = 1200
+	var recs []*model.Recording
+	for i := 0; i < 1200; i++ {
+		recs = append(recs, &model.Recording{
+			ID:         fmt.Sprintf("batch-rec-%d", i),
+			CameraID:   "batch-cam",
+			FilePath:   fmt.Sprintf("/path/file_%d.mp4", i),
+			Format:     model.FormatH264,
+			StartedAt:  time.Now(),
+			EndedAt:    time.Now().Add(time.Minute),
+			Duration:   60,
+			FileSize:   1024,
+			FrameCount: 30,
+			Merged:     false,
+		})
+	}
+
+	inserted, err := db.InsertOrphanRecordings(ctx, recs)
+	require.NoError(t, err)
+	require.Equal(t, 1200, inserted, "all 1200 orphan recordings should be inserted")
+
+	// Verify all are in the DB
+	list, err := db.ListRecordings(ctx, model.RecordingFilter{CameraID: "batch-cam"})
+	require.NoError(t, err)
+	require.Len(t, list, 1200, "all 1200 recordings should exist in DB")
+
+	// Second insert should be idempotent (INSERT OR IGNORE)
+	inserted, err = db.InsertOrphanRecordings(ctx, recs)
+	require.NoError(t, err)
+	require.Equal(t, 0, inserted, "second insert should find no new records")
 }

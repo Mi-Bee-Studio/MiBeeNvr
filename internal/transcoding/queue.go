@@ -536,7 +536,9 @@ func (q *TranscodeQueue) parseProgress(ctx context.Context, taskID int64, stderr
 			continue
 		}
 
-		if err := q.store.UpdateTaskStatus(ctx, taskID, "running", progress, ""); err != nil {
+		if err := storage.RetryOnBusy(ctx, func() error {
+			return q.store.UpdateTaskStatus(ctx, taskID, "running", progress, "")
+		}); err != nil {
 			queueLogger.Warn("failed to update progress", "task_id", taskID, "error", err)
 		}
 		lastProgressUpdate = time.Now()

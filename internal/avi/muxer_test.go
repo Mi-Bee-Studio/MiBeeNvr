@@ -740,3 +740,169 @@ func TestAVIMuxer_Idx1Offsets(t *testing.T) {
 		}
 	}
 }
+
+// TestMuxerVideoOnly verifies video-only AVI output structure.
+func TestMuxerVideoOnly(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewVideoOnlyMuxer(&buf, 640, 480)
+
+	// Write 3 JPEG frames.
+	for i := range 3 {
+		if err := m.WriteVideo(makeJPEGFrame(t, byte(i), 100+i), 0); err != nil {
+			t.Fatalf("WriteVideo %d: %v", i, err)
+		}
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data := buf.Bytes()
+	t.Logf("Video-only file size: %d bytes", len(data))
+
+	// Check RIFF magic.
+	if v := binary.LittleEndian.Uint32(data[0:]); v != fccRIFF {
+		t.Fatalf("expected RIFF at offset 0, got 0x%08X", v)
+	}
+	riffSize := readU32LE(t, data, 4)
+	if int(riffSize) != len(data)-8 {
+		t.Errorf("RIFF size mismatch: expected %d, got %d", len(data)-8, riffSize)
+	}
+
+	// dwStreams must be 1 (no audio).
+	avihOff := findFOURCC(t, data, fccavih)
+	if avihOff < 0 {
+		t.Fatal("avih not found")
+	}
+	dwStreams := readU32LE(t, data, avihOff+8+24)
+	if dwStreams != 1 {
+		t.Errorf("dwStreams: expected 1 (video only), got %d", dwStreams)
+	}
+
+	// Only one strl list should exist (no audio strl).
+	strhCount := 0
+	for i := 0; i <= len(data)-4; i++ {
+		if binary.LittleEndian.Uint32(data[i:]) == fccstrh {
+			strhCount++
+		}
+	}
+	if strhCount != 1 {
+		t.Errorf("expected 1 strh (video only), got %d", strhCount)
+	}
+
+	// idx1 must have 3 entries (one per video frame).
+	idx1Off := findFOURCC(t, data, fccidx1)
+	if idx1Off < 0 {
+		t.Fatal("idx1 not found")
+	}
+	idx1DataSize := readU32LE(t, data, idx1Off+4)
+	expectedIdx1Size := 3 * 16
+	if int(idx1DataSize) != expectedIdx1Size {
+		t.Errorf("idx1 data size: expected %d, got %d", expectedIdx1Size, idx1DataSize)
+	}
+
+	// Each idx1 entry must point to a chunk starting with FF D8 (JPEG SOI).
+	moviOff := findFOURCC(t, data, fccmovi)
+	if moviOff < 0 {
+		t.Fatal("movi not found")
+	}
+	moviDataStart := moviOff + 4
+	idx1Data := data[idx1Off+8:]
+	for i := range 3 {
+		entryOff := i * 16
+		entryCkID := readU32LE(t, idx1Data, entryOff)
+		if entryCkID != fcc00dc {
+			t.Errorf("idx1 entry %d: expected 00dc, got 0x%08X", i, entryCkID)
+		}
+		entryOffset := readU32LE(t, idx1Data, entryOff+8)
+		chunkStart := moviDataStart + int(entryOffset)
+		// Chunk header is 8 bytes (fourcc + size), data starts after.
+		dataStart := chunkStart + 8
+		if dataStart+2 > len(data) {
+			t.Fatalf("entry %d: data offset %d out of range", i, dataStart)
+		}
+		if data[dataStart] != 0xFF || data[dataStart+1] != 0xD8 {
+			t.Errorf("entry %d: expected JPEG SOI (FF D8), got %02X %02X",
+				i, data[dataStart], data[dataStart+1])
+		}
+	}
+
+	// Verify no audio chunks exist.
+	if off := findFOURCC(t, data, fcc01wb); off >= 0 {
+		t.Error("unexpected audio chunk (01wb) in video-only output")
+	}
+}
+
+// TestMuxerWithAudioBackwardCompat verifies hasAudio=true path unchanged.
+func TestMuxerWithAudioBackwardCompat(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewMuxer(&buf, 640, 480, 8000, true)
+
+	if err := m.WriteVideo(makeJPEGFrame(t, 0xAA, 100), 0); err != nil {
+		t.Fatalf("WriteVideo: %v", err)
+	}
+	if err := m.WriteAudio(makeG711Audio(t, 0xBB, 80), 0); err != nil {
+		t.Fatalf("WriteAudio: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data := buf.Bytes()
+
+	// dwStreams must be 2 (video + audio).
+	avihOff := findFOURCC(t, data, fccavih)
+	if avihOff < 0 {
+		t.Fatal("avih not found")
+	}
+	dwStreams := readU32LE(t, data, avihOff+8+24)
+	if dwStreams != 2 {
+		t.Errorf("dwStreams: expected 2, got %d", dwStreams)
+	}
+
+	// Two strl lists should exist (video + audio) = 2 strh entries.
+	strhCount := 0
+	for i := 0; i <= len(data)-4; i++ {
+		if binary.LittleEndian.Uint32(data[i:]) == fccstrh {
+			strhCount++
+		}
+	}
+	if strhCount != 2 {
+		t.Errorf("expected 2 strh (video + audio), got %d", strhCount)
+	}
+
+	// Verify audio strh has auds fccType.
+	strhFound := 0
+	for i := 0; i <= len(data)-4; i++ {
+		if binary.LittleEndian.Uint32(data[i:]) == fccstrh {
+			strhFound++
+			if strhFound == 2 {
+				// Audio strh fccType (at strhOff+8).
+				fccType := binary.LittleEndian.Uint32(data[i+8:])
+				if fccType != fccauds {
+					t.Errorf("audio strh fccType: expected auds (0x%08X), got 0x%08X", fccauds, fccType)
+				}
+				break
+			}
+		}
+	}
+
+	// idx1 must have 2 entries.
+	idx1Off := findFOURCC(t, data, fccidx1)
+	if idx1Off < 0 {
+		t.Fatal("idx1 not found")
+	}
+	idx1DataSize := readU32LE(t, data, idx1Off+4)
+	expectedIdx1Size := 2 * 16
+	if int(idx1DataSize) != expectedIdx1Size {
+		t.Errorf("idx1 data size: expected %d, got %d", expectedIdx1Size, idx1DataSize)
+	}
+
+	// First idx1 entry is video (00dc), second is audio (01wb).
+	idx1Data := data[idx1Off+8:]
+	if ckID := readU32LE(t, idx1Data, 0); ckID != fcc00dc {
+		t.Errorf("idx1 entry 0: expected 00dc, got 0x%08X", ckID)
+	}
+	if ckID := readU32LE(t, idx1Data, 16); ckID != fcc01wb {
+		t.Errorf("idx1 entry 1: expected 01wb, got 0x%08X", ckID)
+	}
+}

@@ -15,7 +15,6 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 
@@ -57,25 +56,21 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 			}
 			msg := fmt.Sprintf("%d%% used (%d / %d bytes)", pct, used, total)
 
-			// Check I/O health state
-			storageHealth := h.store.StorageHealth()
+			// Check I/O health state — per-camera health aggregated.
+			storageFailed := h.store.StorageFailedLegacy()
 			var healthMsg string
-			switch storageHealth {
-			case storage.HealthFailed:
-				healthMsg = " I/O failed — writes disabled"
+			if storageFailed {
+				healthMsg = " I/O errors detected — some cameras may fail to record"
 				hasError = true
-			case storage.HealthDegraded:
-				healthMsg = " I/O degraded — possible failures"
-				hasWarning = true
 			}
 
-			if storageHealth >= storage.HealthFailed {
+			if storageFailed {
 				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
 			} else if pct > 95 {
-				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg + healthMsg}
+				resp.Checks["storage"] = HealthCheck{Status: "error", Message: msg}
 				hasError = true
-			} else if pct > 90 || storageHealth >= storage.HealthDegraded {
-				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg + healthMsg}
+			} else if pct > 90 {
+				resp.Checks["storage"] = HealthCheck{Status: "warning", Message: msg}
 				hasWarning = true
 			} else {
 				resp.Checks["storage"] = HealthCheck{Status: "ok", Message: msg}

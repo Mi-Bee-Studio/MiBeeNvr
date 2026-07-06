@@ -26,6 +26,7 @@
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
+  import AviPlayback from '$lib/components/AviPlayback.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
 
@@ -1476,7 +1477,9 @@ $effect(() => {
               </div>
             {/if}
           {/if}
-          {#if recording.format === 'mjpeg'}
+          {#if recording.format === 'avi'}
+            <AviPlayback recordingId={currentId} />
+          {:else if recording.format === 'mjpeg'}
             <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
             <!-- Keyboard shortcuts hint -->
             <div class="px-4 py-2 th-bg-tertiary">
@@ -1484,7 +1487,7 @@ $effect(() => {
                 {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
               </p>
             </div>
-          {:else if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse'}
+          {:else if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse' && recording.format !== 'avi'}
             <div class="flex items-center justify-center h-64 bg-black">
               <div class="text-center th-text-tertiary">
                 <div class="text-4xl mb-2 flex justify-center"><HelpCircle size={48} /></div>
@@ -1517,7 +1520,9 @@ $effect(() => {
                   ? t('recording.format.timelapse')
                   : (recording.format === 'h264' || recording.format === 'h265')
                     ? t('recording.format.h264')
-                    : t('recording.format.mjpeg')}
+                    : recording.format === 'avi'
+                      ? 'AVI'
+                      : t('recording.format.mjpeg')
               </span>
               {#if recording.format === 'timelapse' && recording.merge_status}
                 <span class="badge {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : mergeInProgress ? 'badge-info' : 'badge-neutral'}">

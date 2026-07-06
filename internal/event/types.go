@@ -8,6 +8,7 @@ type Event struct {
 
 // StorageHealthChanged is published when storage health state transitions occur.
 type StorageHealthChanged struct {
+	CameraID      string `json:"camera_id"`
 	PreviousState string `json:"previous_state"`
 	CurrentState  string `json:"current_state"`
 	Message       string `json:"message"`

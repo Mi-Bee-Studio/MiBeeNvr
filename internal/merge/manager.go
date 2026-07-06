@@ -349,9 +349,9 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		}
 
 		// Validate audio config consistency.
-		if info.HasAudio && len(info.AudioConfig) == 0 {
+		if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
 			logger.Warn("audio config mismatch: hasAudio=true but audioConfig is empty, disabling audio",
-				"recording_id", rec.ID, "file_path", rec.FilePath)
+				"recording_id", rec.ID, "file_path", rec.FilePath, "audio_codec", info.AudioCodec)
 			info.HasAudio = false
 		}
 

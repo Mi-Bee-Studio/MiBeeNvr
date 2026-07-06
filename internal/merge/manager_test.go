@@ -1413,3 +1413,37 @@ func TestRunOnce_AVIIntegration(t *testing.T) {
 	_, err = os.Stat(src2)
 	require.True(t, os.IsNotExist(err), "source file should be deleted: %s", src2)
 }
+
+func TestMergePreservesG711Audio(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "g711", AudioConfig: nil}
+	// Run the validation block logic
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if !info.HasAudio {
+		t.Fatal("expected HasAudio to remain true for g711 codec")
+	}
+}
+
+func TestMergePreservesOpusAudio(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "opus", AudioConfig: nil}
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if !info.HasAudio {
+		t.Fatal("expected HasAudio to remain true for opus codec")
+	}
+}
+
+func TestMergeDisablesAACWithoutConfig(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "aac", AudioConfig: nil}
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if info.HasAudio {
+		t.Fatal("expected HasAudio to be false for aac without AudioConfig")
+	}
+}

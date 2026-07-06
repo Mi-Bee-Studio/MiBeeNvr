@@ -265,7 +265,7 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	}
 
 	// ---- Storage health check (lock only for muxer cleanup) ----
-	if isStorageFailed(r.cfg.Store) {
+	if isStorageFailed(r.cfg.Store, r.cfg.CameraID) {
 		r.mu.Lock()
 		if r.muxer != nil {
 			r.muxer.Close()

@@ -63,6 +63,9 @@ const (
 
 	// fcchdrl(4) + avih(8+56) + videoStrl(8+116) + audioStrl(8+94) = 294.
 	hdrlDataSize = 4 + 8 + aviMainHeaderSize + 8 + videoStrlDataSize + 8 + audioStrlDataSize
+
+	// fcchdrl(4) + avih(8+56) + videoStrl(8+116) = 192.
+	videoOnlyHdrlDataSize = 4 + 8 + aviMainHeaderSize + 8 + videoStrlDataSize
 )
 
 // indexEntry holds information for one idx1 index entry.
@@ -84,6 +87,7 @@ type Muxer struct {
 	height     int
 	sampleRate int
 	muLaw      bool
+	hasAudio   bool
 
 	buf       bytes.Buffer
 	entries   []indexEntry
@@ -118,6 +122,22 @@ func NewMuxer(w io.Writer, width, height, sampleRate int, muLaw bool) *Muxer {
 		height:     height,
 		sampleRate: sampleRate,
 		muLaw:      muLaw,
+		hasAudio:   true,
+	}
+	m.writeHeader()
+	return m
+}
+
+// NewVideoOnlyMuxer creates a new AVI muxer with video only (no audio stream).
+//
+// Parameters:
+//   - w: destination writer (data is flushed on Close())
+//   - width, height: video frame dimensions
+func NewVideoOnlyMuxer(w io.Writer, width, height int) *Muxer {
+	m := &Muxer{
+		w:      w,
+		width:  width,
+		height: height,
 	}
 	m.writeHeader()
 	return m
@@ -220,9 +240,11 @@ func (m *Muxer) Close() error {
 	binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posVideoLength:], uint32(m.videoFrames))
 	binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posVideoLength+4:], uint32(m.maxFrameSize))
 
-	// Backpatch audio strh dwLength and dwSuggestedBufferSize.
-	binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posAudioLength:], uint32(m.audioBytes))
-	binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posAudioBufSize:], uint32(m.audioBytes))
+	if m.hasAudio {
+		// Backpatch audio strh dwLength and dwSuggestedBufferSize.
+		binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posAudioLength:], uint32(m.audioBytes))
+		binary.LittleEndian.PutUint32(m.buf.Bytes()[m.posAudioBufSize:], uint32(m.audioBytes))
+	}
 
 	// Compute and backpatch movi list size.
 	// moviSize = 'movi'(4) + data_chunks.
@@ -265,7 +287,11 @@ func (m *Muxer) writeHeader() {
 
 	// ---- hdrl LIST ----
 	writeU32(b, fccLIST)
-	writeU32(b, uint32(hdrlDataSize)) // pre-computed: includes fcchdrl + avih + videoStrl + audioStrl
+	hdSz := uint32(hdrlDataSize)
+	if !m.hasAudio {
+		hdSz = uint32(videoOnlyHdrlDataSize)
+	}
+	writeU32(b, hdSz) // pre-computed: includes fcchdrl + avih + videoStrl [+ audioStrl]
 	writeU32(b, fcchdrl)
 
 	// ---- avih chunk (56 bytes) ----
@@ -277,9 +303,13 @@ func (m *Muxer) writeHeader() {
 	writeU32(b, 0)                                              // dwPaddingGranularity
 	writeU32(b, avifHasIndex|avifIsInterleaved|avifTrustCKType) // dwFlags
 	m.posTotalFrames = b.Len()
-	writeU32(b, 0)                // dwTotalFrames (backpatched in Close())
-	writeU32(b, 0)                // dwInitialFrames
-	writeU32(b, 2)                // dwStreams
+	writeU32(b, 0) // dwTotalFrames (backpatched in Close())
+	writeU32(b, 0) // dwInitialFrames
+	strms := uint32(2)
+	if !m.hasAudio {
+		strms = 1
+	}
+	writeU32(b, strms)            // dwStreams
 	writeU32(b, 0)                // dwSuggestedBufferSize
 	writeU32(b, uint32(m.width))  // dwWidth
 	writeU32(b, uint32(m.height)) // dwHeight
@@ -330,48 +360,50 @@ func (m *Muxer) writeHeader() {
 	writeU32(b, 0)                    // biClrUsed
 	writeU32(b, 0)                    // biClrImportant
 
-	// ---- Audio strl LIST (size is pre-computed constant) ----
-	writeU32(b, fccLIST)
-	writeU32(b, uint32(audioStrlDataSize))
-	writeU32(b, fccstrl)
+	if m.hasAudio {
+		// ---- Audio strl LIST (size is pre-computed constant) ----
+		writeU32(b, fccLIST)
+		writeU32(b, uint32(audioStrlDataSize))
+		writeU32(b, fccstrl)
 
-	// Audio strh (56 bytes)
-	writeU32(b, fccstrh)
-	writeU32(b, aviStreamHeaderSize)
-	writeU32(b, fccauds)              // fccType
-	writeU32(b, 0)                    // fccHandler
-	writeU32(b, 0)                    // dwFlags
-	writeU16(b, 0)                    // wPriority
-	writeU16(b, 0)                    // wLanguage
-	writeU32(b, 0)                    // dwInitialFrames
-	writeU32(b, 1)                    // dwScale
-	writeU32(b, uint32(m.sampleRate)) // dwRate
-	writeU32(b, 0)                    // dwStart
-	m.posAudioLength = b.Len()
-	writeU32(b, 0) // dwLength (backpatched in Close())
-	m.posAudioBufSize = b.Len()
-	writeU32(b, 0)          // dwSuggestedBufferSize (backpatched in Close())
-	writeU32(b, 0xFFFFFFFF) // dwQuality (-1 = default)
-	writeU32(b, 1)          // dwSampleSize (1 byte per sample)
-	writeU16(b, 0)          // rcFrame left (SHORT)
-	writeU16(b, 0)          // rcFrame top (SHORT)
-	writeU16(b, 0)          // rcFrame right (SHORT)
-	writeU16(b, 0)          // rcFrame bottom (SHORT)
+		// Audio strh (56 bytes)
+		writeU32(b, fccstrh)
+		writeU32(b, aviStreamHeaderSize)
+		writeU32(b, fccauds)              // fccType
+		writeU32(b, 0)                    // fccHandler
+		writeU32(b, 0)                    // dwFlags
+		writeU16(b, 0)                    // wPriority
+		writeU16(b, 0)                    // wLanguage
+		writeU32(b, 0)                    // dwInitialFrames
+		writeU32(b, 1)                    // dwScale
+		writeU32(b, uint32(m.sampleRate)) // dwRate
+		writeU32(b, 0)                    // dwStart
+		m.posAudioLength = b.Len()
+		writeU32(b, 0) // dwLength (backpatched in Close())
+		m.posAudioBufSize = b.Len()
+		writeU32(b, 0)          // dwSuggestedBufferSize (backpatched in Close())
+		writeU32(b, 0xFFFFFFFF) // dwQuality (-1 = default)
+		writeU32(b, 1)          // dwSampleSize (1 byte per sample)
+		writeU16(b, 0)          // rcFrame left (SHORT)
+		writeU16(b, 0)          // rcFrame top (SHORT)
+		writeU16(b, 0)          // rcFrame right (SHORT)
+		writeU16(b, 0)          // rcFrame bottom (SHORT)
 
-	// Audio strf (WAVEFORMATEX, 18 bytes)
-	writeU32(b, fccstrf)
-	writeU32(b, waveformatexSize)
-	fmtTag := uint16(0x0006) // WAVE_FORMAT_MULAW
-	if !m.muLaw {
-		fmtTag = 0x0007 // WAVE_FORMAT_ALAW
+		// Audio strf (WAVEFORMATEX, 18 bytes)
+		writeU32(b, fccstrf)
+		writeU32(b, waveformatexSize)
+		fmtTag := uint16(0x0006) // WAVE_FORMAT_MULAW
+		if !m.muLaw {
+			fmtTag = 0x0007 // WAVE_FORMAT_ALAW
+		}
+		writeU16(b, fmtTag)               // wFormatTag
+		writeU16(b, 1)                    // nChannels
+		writeU32(b, uint32(m.sampleRate)) // nSamplesPerSec
+		writeU32(b, uint32(m.sampleRate)) // nAvgBytesPerSec
+		writeU16(b, 1)                    // nBlockAlign
+		writeU16(b, 8)                    // wBitsPerSample
+		writeU16(b, 0)                    // cbSize
 	}
-	writeU16(b, fmtTag)               // wFormatTag
-	writeU16(b, 1)                    // nChannels
-	writeU32(b, uint32(m.sampleRate)) // nSamplesPerSec
-	writeU32(b, uint32(m.sampleRate)) // nAvgBytesPerSec
-	writeU16(b, 1)                    // nBlockAlign
-	writeU16(b, 8)                    // wBitsPerSample
-	writeU16(b, 0)                    // cbSize
 
 	// ---- movi LIST header (size backpatched in Close()) ----
 	writeU32(b, fccLIST)

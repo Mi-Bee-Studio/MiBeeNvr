@@ -230,7 +230,7 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(r.store)
+		storageFailed := isStorageFailed(r.store, r.cfg.CameraID)
 		if storageFailed {
 			backoff = StorageBackoffWithJitter()
 		}
@@ -424,7 +424,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		// Check storage health — if failed, skip recording but keep stream alive.
-		if isStorageFailed(r.store) {
+		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()
 			}

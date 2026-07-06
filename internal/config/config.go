@@ -88,6 +88,7 @@ type CameraConfig struct {
 	AudioEnabled         bool                     `yaml:"audio_enabled"`
 	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+	HTTPJPEGAVI          bool                     `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
 
 	// StableID is a hardware-level stable identifier (ONVIF serial number) used to
 	// re-acquire the SAME camera after its IP changes (e.g. after an AP reboot when

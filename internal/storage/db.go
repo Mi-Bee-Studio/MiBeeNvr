@@ -36,26 +36,12 @@ func (d *DB) DB() *sql.DB {
 }
 
 func New(dbPath string) (*DB, error) {
-	dsn := dbPath
+	// Use DSN-level _pragma so EVERY connection from the pool has these settings,
+	// not just the one that ran the ExecContext PRAGMA call.
+	// This is critical for busy_timeout to work across goroutines.
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-2000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, err
-	}
-	// Set pragmas on open
-	if _, err := db.ExecContext(context.Background(), "PRAGMA journal_mode=WAL;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(context.Background(), "PRAGMA synchronous=NORMAL;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(context.Background(), "PRAGMA busy_timeout=5000;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(context.Background(), "PRAGMA cache_size=-2000;"); err != nil {
-		db.Close()
 		return nil, err
 	}
 	return &DB{path: dbPath, db: db}, nil

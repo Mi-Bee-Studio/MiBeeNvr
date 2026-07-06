@@ -23,10 +23,13 @@ type Manager struct {
 	metrics *metrics.Metrics
 	mu      sync.Mutex
 
-	// Health tracking
-	healthMu       sync.Mutex
-	healthState    HealthState
-	writeFailCount int
+	// Health tracking (per-camera)
+	healthMu      sync.Mutex
+	cameraHealths map[string]*cameraHealth
+
+	// tempPath → cameraID mapping for WriteFrame/CloseSegment health tracking.
+	segmentCameraMap map[string]string
+	segMapMu         sync.RWMutex
 
 	// Optional event bus for health state change notifications
 	eventBus *event.EventBus
@@ -44,7 +47,12 @@ func NewManager(rootDir string, opts ...*metrics.Metrics) (*Manager, error) {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("storage: failed to create root directory %q: %w", rootDir, err)
 	}
-	return &Manager{rootDir: rootDir, metrics: m}, nil
+	return &Manager{
+		rootDir:          rootDir,
+		metrics:          m,
+		cameraHealths:    make(map[string]*cameraHealth),
+		segmentCameraMap: make(map[string]string),
+	}, nil
 }
 
 // RootDir returns the root directory path.
@@ -67,7 +75,7 @@ func (m *Manager) EnsureCameraDir(cameraID string) error {
 // Returns the temp path (for writing) and the suggested final path (for CloseSegment).
 func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string, finalPath string, err error) {
 	if err := m.EnsureCameraDir(cameraID); err != nil {
-		m.recordWriteFailure()
+		m.recordWriteFailure(cameraID)
 		return "", "", err
 	}
 
@@ -81,7 +89,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
-			m.recordWriteFailure()
+			m.recordWriteFailure(cameraID)
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
 		}
 		f.Close()
@@ -91,7 +99,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
 
 		if err := os.MkdirAll(tempPath, 0o755); err != nil {
-			m.recordWriteFailure()
+			m.recordWriteFailure(cameraID)
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
 		}
 
@@ -100,13 +108,18 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, now, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
-			m.recordWriteFailure()
+			m.recordWriteFailure(cameraID)
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
 		}
 		f.Close()
 	default:
 		return "", "", fmt.Errorf("storage: unsupported format %q", format)
 	}
+
+	// Register tempPath → cameraID mapping for WriteFrame health tracking.
+	m.segMapMu.Lock()
+	m.segmentCameraMap[tempPath] = cameraID
+	m.segMapMu.Unlock()
 
 	return tempPath, finalPath, nil
 }
@@ -116,7 +129,8 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 	// Check if temp is a directory (MJPEG) or file (H.264)
 	info, err := os.Stat(tempPath)
 	if err != nil {
-		m.recordWriteFailure()
+		m.RecordWriteFailureForPath(tempPath)
+		m.unregisterTempPath(tempPath)
 		return fmt.Errorf("storage: temp path not found: %w", err)
 	}
 
@@ -124,42 +138,48 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		// Sync the directory for MJPEG
 		dirFd, err := os.Open(tempPath)
 		if err != nil {
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
 		}
 		if err := dirFd.Sync(); err != nil {
 			dirFd.Close()
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
 			return fmt.Errorf("storage: failed to sync temp dir: %w", err)
 		}
 		dirFd.Close()
 
 		// Atomic rename of directory
 		if err := os.Rename(tempPath, finalPath); err != nil {
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: failed to rename temp dir to final: %w", err)
 		}
 	} else {
 		// Sync and close the file for H.264
 		f, err := os.OpenFile(tempPath, os.O_WRONLY, 0)
 		if err != nil {
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
 		}
 		if err := f.Sync(); err != nil {
 			f.Close()
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
 			return fmt.Errorf("storage: failed to sync temp file: %w", err)
 		}
 		f.Close()
 
 		// Atomic rename
 		if err := os.Rename(tempPath, finalPath); err != nil {
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: failed to rename temp file to final: %w", err)
 		}
 	}
 
+	// Success — unregister mapping.
+	m.unregisterTempPath(tempPath)
 	return nil
 }
 
@@ -172,7 +192,7 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 
 	info, err := os.Stat(tempPath)
 	if err != nil {
-		m.recordWriteFailure()
+		m.RecordWriteFailureForPath(tempPath)
 		return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
 	}
 
@@ -181,29 +201,37 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 		ts := time.Now().Format("20060102_150405.000")
 		jpgPath := filepath.Join(tempPath, ts+".jpg")
 		if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
-			m.recordWriteFailure()
+			m.RecordWriteFailureForPath(tempPath)
 			return 0, fmt.Errorf("storage: failed to write JPEG frame: %w", err)
 		}
-		m.recordWriteSuccess()
+		m.RecordWriteSuccessForPath(tempPath)
 		return 0, nil
 	}
 
 	// H.264: append to temp file
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		m.recordWriteFailure()
+		m.RecordWriteFailureForPath(tempPath)
 		return 0, fmt.Errorf("storage: failed to open temp file for writing: %w", err)
 	}
 	defer f.Close()
 
 	n, err := f.Write(data)
 	if err != nil {
-		m.recordWriteFailure()
+		m.RecordWriteFailureForPath(tempPath)
 		return n, fmt.Errorf("storage: write failed: %w", err)
 	}
 
-	m.recordWriteSuccess()
+	m.RecordWriteSuccessForPath(tempPath)
 	return n, nil
+}
+
+// unregisterTempPath removes the tempPath → cameraID mapping.
+// Safe for concurrent use.
+func (m *Manager) unregisterTempPath(tempPath string) {
+	m.segMapMu.Lock()
+	delete(m.segmentCameraMap, tempPath)
+	m.segMapMu.Unlock()
 }
 
 // ListFiles lists all recording files (non-.tmp) for a camera.
@@ -335,14 +363,16 @@ func (m *Manager) CleanupTempFiles() error {
 
 // ReconcileOrphanedFiles scans camera directories for .mp4 files that are not registered
 // in the database and inserts their metadata. Returns the number of reconciled files.
+// Uses per-camera incremental commits to avoid holding the write lock too long.
+// Context timeout is checked between camera directories.
 func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs map[string]bool) (int, error) {
 	entries, err := os.ReadDir(m.rootDir)
 	if err != nil {
 		return 0, err
 	}
 
-	var orphans []model.Recording
 	skippedDirs := map[string]bool{"hls": true, "recordings": true, "logs": true, "backups": true, "bin": true}
+	totalReconciled := 0
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -353,107 +383,130 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 			continue
 		}
 
-		files, err := os.ReadDir(filepath.Join(m.rootDir, dirName))
+		// Check context timeout between cameras
+		if ctx.Err() != nil {
+			return totalReconciled, ctx.Err()
+		}
+
+		reconciled, err := m.reconcileCameraDir(ctx, db, dirName)
 		if err != nil {
-			logger.Warn("reconcile: cannot read camera dir", "dir", dirName, "error", err)
+			logger.Warn("reconcile: error processing camera dir", "dir", dirName, "error", err)
+			continue
+		}
+		totalReconciled += reconciled
+	}
+
+	if totalReconciled > 0 {
+		logger.Info("reconciled orphaned recording files", "count", totalReconciled)
+	}
+
+	return totalReconciled, nil
+}
+
+// reconcileCameraDir scans a single camera directory and inserts orphaned recordings.
+// Uses incremental batches of orphanBatchSize to minimize write lock duration.
+func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string) (int, error) {
+	files, err := os.ReadDir(filepath.Join(m.rootDir, dirName))
+	if err != nil {
+		return 0, err
+	}
+
+	var cameraOrphans []model.Recording
+	for _, f := range files {
+		name := f.Name()
+
+		var baseName string
+		var frameCount int
+		var totalSize int64
+		var format model.Format
+		info, infoErr := f.Info()
+		if infoErr != nil {
 			continue
 		}
 
-		for _, f := range files {
-			name := f.Name()
-
-			var baseName string
-			var frameCount int
-			var totalSize int64
-			var format model.Format
-			info, infoErr := f.Info()
-			if infoErr != nil {
+		if f.IsDir() {
+			// Skip dirs with extensions (e.g., .tmp dirs)
+			if ext := filepath.Ext(name); ext != "" {
 				continue
 			}
-
-			if f.IsDir() {
-				// Skip dirs with extensions (e.g., .tmp dirs)
-				if ext := filepath.Ext(name); ext != "" {
-					continue
-				}
-				baseName = name
-				format = model.FormatMJPEG
-				// Count JPEG frames and total size
-				dirPath := filepath.Join(m.rootDir, dirName, name)
-				filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
-					if err != nil || fi.IsDir() {
-						return nil
-					}
-					frameCount++
-					totalSize += fi.Size()
+			baseName = name
+			format = model.FormatMJPEG
+			// Count JPEG frames and total size
+			dirPath := filepath.Join(m.rootDir, dirName, name)
+			filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
+				if err != nil || fi.IsDir() {
 					return nil
-				})
-				if frameCount == 0 {
-					continue
 				}
-			} else {
-				if !strings.HasSuffix(name, ".mp4") {
-					continue
-				}
-				baseName = strings.TrimSuffix(name, ".mp4")
-				format = model.FormatH264
-				if info.Size() == 0 {
-					continue
-				}
-				totalSize = info.Size()
-			}
-
-			parts := strings.SplitN(baseName, "_", 4)
-			if len(parts) != 4 {
-				continue
-			}
-
-			cameraIDPart := parts[0]
-			dateStr := parts[1]
-			timeStr := parts[2]
-			nanoStr := parts[3]
-
-			if cameraIDPart != dirName {
-				continue
-			}
-
-			startedAt, err := time.ParseInLocation("20060102_150405", dateStr+"_"+timeStr, time.Local)
-			if err != nil {
-				continue
-			}
-
-			orphans = append(orphans, model.Recording{
-				ID:         nanoStr,
-				CameraID:   dirName,
-				FilePath:   filepath.Join(m.rootDir, dirName, name),
-				Format:     format,
-				StartedAt:  startedAt,
-				EndedAt:    startedAt,
-				Duration:   0,
-				FileSize:   totalSize,
-				FrameCount: frameCount,
-				Merged:     false,
+				frameCount++
+				totalSize += fi.Size()
+				return nil
 			})
+			if frameCount == 0 {
+				continue
+			}
+		} else {
+			if !strings.HasSuffix(name, ".mp4") {
+				continue
+			}
+			baseName = strings.TrimSuffix(name, ".mp4")
+			format = model.FormatH264
+			if info.Size() == 0 {
+				continue
+			}
+			totalSize = info.Size()
 		}
+
+		parts := strings.SplitN(baseName, "_", 4)
+		if len(parts) != 4 {
+			continue
+		}
+
+		cameraIDPart := parts[0]
+		dateStr := parts[1]
+		timeStr := parts[2]
+		nanoStr := parts[3]
+
+		if cameraIDPart != dirName {
+			continue
+		}
+
+		startedAt, err := time.ParseInLocation("20060102_150405", dateStr+"_"+timeStr, time.Local)
+		if err != nil {
+			continue
+		}
+
+		cameraOrphans = append(cameraOrphans, model.Recording{
+			ID:         nanoStr,
+			CameraID:   dirName,
+			FilePath:   filepath.Join(m.rootDir, dirName, name),
+			Format:     format,
+			StartedAt:  startedAt,
+			EndedAt:    startedAt,
+			Duration:   0,
+			FileSize:   totalSize,
+			FrameCount: frameCount,
+			Merged:     false,
+		})
 	}
 
-	if len(orphans) == 0 {
+	if len(cameraOrphans) == 0 {
 		return 0, nil
 	}
 
-	paths := make([]string, len(orphans))
-	for i, o := range orphans {
+	// Query which files already exist in DB
+	paths := make([]string, len(cameraOrphans))
+	for i, o := range cameraOrphans {
 		paths[i] = o.FilePath
 	}
 	existing, err := db.GetRecordingsByPathSet(ctx, paths)
 	if err != nil {
-		return 0, fmt.Errorf("query existing recordings: %w", err)
+		return 0, fmt.Errorf("query existing recordings for %q: %w", dirName, err)
 	}
 
 	var toInsert []*model.Recording
-	for i := range orphans {
-		if !existing[orphans[i].FilePath] {
-			toInsert = append(toInsert, &orphans[i])
+	for i := range cameraOrphans {
+		if !existing[cameraOrphans[i].FilePath] {
+			toInsert = append(toInsert, &cameraOrphans[i])
 		}
 	}
 
@@ -463,11 +516,7 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 
 	reconciled, err := db.InsertOrphanRecordings(ctx, toInsert)
 	if err != nil {
-		return 0, fmt.Errorf("insert orphan recordings: %w", err)
-	}
-
-	if reconciled > 0 {
-		logger.Info("reconciled orphaned recording files", "count", reconciled)
+		return 0, fmt.Errorf("insert orphan recordings for %q: %w", dirName, err)
 	}
 
 	return reconciled, nil

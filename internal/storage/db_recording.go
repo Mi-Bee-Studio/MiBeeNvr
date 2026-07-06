@@ -288,26 +288,59 @@ func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[st
 	return result, nil
 }
 
+// orphanBatchSize controls how many orphans are inserted per transaction.
+// Larger batches reduce transaction count but increase lock duration.
+// 500 strikes a balance between throughput and write lock hold time.
+const orphanBatchSize = 500
+
 // InsertOrphanRecordings batch-inserts orphan recording metadata using INSERT OR IGNORE.
 // Returns the number of actually inserted rows (skips duplicates).
+// Inserts are performed in batches of orphanBatchSize to avoid holding the
+// write lock for too long. Context timeout is checked between batches.
 func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Recording) (int, error) {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
+	if len(recordings) == 0 {
+		return 0, nil
 	}
-	defer tx.Rollback()
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 
 	q := `INSERT OR IGNORE INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status) VALUES(?,?,?,?,?,?,?,?,?,?,?);`
-	inserted := 0
-	for _, r := range recordings {
-		result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), r.MergeTier)
-		if err != nil {
-			return 0, err
+	totalInserted := 0
+
+	for i := 0; i < len(recordings); i += orphanBatchSize {
+		if ctx.Err() != nil {
+			return totalInserted, ctx.Err()
 		}
-		n, _ := result.RowsAffected()
-		inserted += int(n)
+
+		end := i + orphanBatchSize
+		if end > len(recordings) {
+			end = len(recordings)
+		}
+
+		tx, err := d.db.BeginTx(ctx, nil)
+		if err != nil {
+			return totalInserted, err
+		}
+
+		batchInserted := 0
+		for _, r := range recordings[i:end] {
+			result, err := tx.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatusFromBool(r.Merged), r.MergeTier)
+			if err != nil {
+				tx.Rollback()
+				return totalInserted, err
+			}
+			n, _ := result.RowsAffected()
+			batchInserted += int(n)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return totalInserted, err
+		}
+		totalInserted += batchInserted
 	}
-	return inserted, tx.Commit()
+
+	return totalInserted, nil
 }
 
 func (d *DB) DeleteRecording(ctx context.Context, id string) error {
@@ -315,34 +348,30 @@ func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 	return err
 }
 
-// DeleteRecordingsBatch deletes multiple recordings by ID using a transaction.
-// Returns a slice of IDs that were successfully deleted.
+// DeleteRecordingsBatch deletes multiple recordings by ID using a single batch DELETE.
+// Returns the slice of IDs requested for deletion on success (nil on failure).
+// Uses a single IN clause to minimize transaction duration and SQLITE_BUSY contention.
 func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "DELETE FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	res, err := d.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-
-	deleted := []string{}
-	for _, id := range ids {
-		res, err := tx.ExecContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
-		if err != nil {
-			logger.Warn("batch delete: failed to delete recording", "id", id, "error", err)
-			continue
-		}
-		n, _ := res.RowsAffected()
-		if n > 0 {
-			deleted = append(deleted, id)
-		}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		return ids, nil
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return deleted, nil
+	return nil, nil
 }
 
 func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {

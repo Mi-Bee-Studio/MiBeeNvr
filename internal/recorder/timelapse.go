@@ -335,7 +335,7 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 			continue // another goroutine captured first
 		}
 		// Check storage health — if failed, skip recording but keep stream alive.
-		if isStorageFailed(r.store) {
+		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()
 			}
