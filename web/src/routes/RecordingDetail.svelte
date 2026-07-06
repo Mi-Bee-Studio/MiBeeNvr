@@ -26,7 +26,7 @@
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
-  import AviPlayback from '$lib/components/AviPlayback.svelte';
+  import AviPlayback from '../components/AviPlayback.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
 
@@ -1522,7 +1522,7 @@ $effect(() => {
                     ? t('recording.format.h264')
                     : recording.format === 'avi'
                       ? 'AVI'
-                      : t('recording.format.mjpeg')
+                    : t('recording.format.mjpeg')}
               </span>
               {#if recording.format === 'timelapse' && recording.merge_status}
                 <span class="badge {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : mergeInProgress ? 'badge-info' : 'badge-neutral'}">
