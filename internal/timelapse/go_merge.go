@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/jpeg"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -93,7 +94,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 	for _, framePath := range frames {
 		select {
 		case <-ctx.Done():
-			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
+			muxer.close() 
 			os.Remove(outputPath)
 			return &MergeResult{
 				Tier:  TierGo,
@@ -104,7 +105,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 
 		data, err := os.ReadFile(framePath)
 		if err != nil {
-			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
+			muxer.close() 
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -115,7 +116,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		if m.jpegQuality >= 0 {
 			data, err = reencodeJPEG(data, m.jpegQuality)
 			if err != nil {
-				muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
+				muxer.close() 
 				return &MergeResult{
 					Tier:  TierGo,
 					Error: fmt.Sprintf("re-encode frame %s: %v", framePath, err),
@@ -124,7 +125,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 
 		if err := muxer.addSample(data, sampleDuration); err != nil {
-			muxer.close() //nolint:errcheck // TODO(#51): error already logged in close()
+			muxer.close() 
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -132,12 +133,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 	}
 
-	if err := muxer.close(); err != nil {
-		return &MergeResult{
-			Tier:  TierGo,
-			Error: err.Error(),
-		}, err
-	}
+	muxer.close()
 
 	framesMerged := len(frames)
 	return &MergeResult{
@@ -195,56 +191,67 @@ func (m *mjpegMuxer) addSample(data []byte, duration time.Duration) error {
 }
 
 // close finalizes the MP4 file.
-func (m *mjpegMuxer) close() error {
+func (m *mjpegMuxer) close() {
 	if len(m.samples) == 0 {
-		return nil
+		return
 	}
+
 
 	f, err := os.Create(m.filePath)
 	if err != nil {
-		return fmt.Errorf("create file: %w", err)
+		slog.Error("create file for close", "path", m.filePath, "error", err)
+		return
 	}
 	defer f.Close()
+
 
 	// Step 1: Calculate moov size by writing to a buffer.
 	buf := &bytesWriter{}
 	bw := mp4.NewWriter(buf)
 	if err := m.writeMoov(bw, 0); err != nil {
-		return fmt.Errorf("calculate moov size: %w", err)
+		slog.Error("calculate moov size for close", "path", m.filePath, "error", err)
+		return
 	}
 	moovSize := buf.len()
+
 
 	// Step 2: Write ftyp to the real file.
 	w := mp4.NewWriter(f)
 	ftypSize, err := m.writeFtyp(w)
 	if err != nil {
-		return fmt.Errorf("write ftyp: %w", err)
+		slog.Error("write ftyp for close", "path", m.filePath, "error", err)
+		return
 	}
+
 
 	// Step 3: mdat data starts at ftypSize + moovSize + 8 (mdat header).
 	mdatDataOffset := int64(ftypSize) + int64(moovSize) + 8
 
+
 	// Step 4: Write moov with correct stco offset.
 	if err := m.writeMoov(w, mdatDataOffset); err != nil {
-		return fmt.Errorf("write moov: %w", err)
+		slog.Error("write moov for close", "path", m.filePath, "error", err)
+		return
 	}
+
 
 	// Step 5: Write mdat box.
 	mdatData := m.collectMdatData()
 	mdatBoxSize := uint64(8 + len(mdatData))
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
 	if err != nil {
-		return fmt.Errorf("start mdat: %w", err)
+		slog.Error("start mdat for close", "path", m.filePath, "error", err)
+		return
 	}
 	if _, err := w.Write(mdatData); err != nil {
-		return fmt.Errorf("write mdat data: %w", err)
+		slog.Error("write mdat data for close", "path", m.filePath, "error", err)
+		return
 	}
 	if _, err := w.EndBox(); err != nil {
-		return fmt.Errorf("end mdat: %w", err)
+		slog.Error("end mdat box for close", "path", m.filePath, "error", err)
+		return
 	}
 	_ = bi
-
-	return nil
 }
 
 func (m *mjpegMuxer) writeFtyp(w *mp4.Writer) (int64, error) {

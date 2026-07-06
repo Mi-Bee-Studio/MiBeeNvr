@@ -61,7 +61,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) 
 		res = append(res, &r)
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -215,7 +215,7 @@ func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) //nolint:errcheck // TODO(#51): error is already in row.Scan
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr) 
 		res = append(res, &r)
 	}
 	return res, nil
