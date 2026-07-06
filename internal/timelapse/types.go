@@ -123,9 +123,9 @@ type AutoDetectMerger struct {
 	jpegMerger *GoMerger
 	h264Merger *H264GoMerger
 	h265Merger *H265GoMerger
-	}
+}
 
-	// Interface compliance check.
+// Interface compliance check.
 var _ TimelapseMerger = (*AutoDetectMerger)(nil)
 
 // NewAutoDetectMerger creates a merger that auto-detects frame types.

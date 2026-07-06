@@ -49,7 +49,6 @@ type uploadResponse struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-
 func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "camera_id")
 	if err := h.validateCamera(r.Context(), cameraID); err != nil {

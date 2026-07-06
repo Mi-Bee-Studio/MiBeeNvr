@@ -23,7 +23,7 @@ type FFmpegMerger struct {
 	config *MergeConfig
 }
 
-	// Interface compliance check.
+// Interface compliance check.
 var _ TimelapseMerger = (*FFmpegMerger)(nil)
 
 // NewFFmpegMerger creates a new FFmpegMerger with the given hardware capabilities

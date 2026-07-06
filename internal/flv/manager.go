@@ -452,4 +452,3 @@ func (m *Manager) stopAll() {
 		m.unregisterStream(id)
 	}
 }
-

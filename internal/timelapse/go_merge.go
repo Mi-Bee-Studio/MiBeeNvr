@@ -29,7 +29,7 @@ type GoMerger struct {
 	jpegQuality int
 }
 
-	// Interface compliance check.
+// Interface compliance check.
 var _ TimelapseMerger = (*GoMerger)(nil)
 
 // NewGoMerger creates a new GoMerger with passthrough mode (original JPEG quality preserved).
@@ -97,7 +97,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 	for _, framePath := range frames {
 		select {
 		case <-ctx.Done():
-			muxer.close() 
+			muxer.close()
 			os.Remove(outputPath)
 			return &MergeResult{
 				Tier:  TierGo,
@@ -108,7 +108,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 
 		data, err := os.ReadFile(framePath)
 		if err != nil {
-			muxer.close() 
+			muxer.close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -119,7 +119,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		if m.jpegQuality >= 0 {
 			data, err = reencodeJPEG(data, m.jpegQuality)
 			if err != nil {
-				muxer.close() 
+				muxer.close()
 				return &MergeResult{
 					Tier:  TierGo,
 					Error: fmt.Sprintf("re-encode frame %s: %v", framePath, err),
@@ -128,7 +128,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 
 		if err := muxer.addSample(data, sampleDuration); err != nil {
-			muxer.close() 
+			muxer.close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -199,14 +199,12 @@ func (m *mjpegMuxer) close() {
 		return
 	}
 
-
 	f, err := os.Create(m.filePath)
 	if err != nil {
 		slog.Error("create file for close", "path", m.filePath, "error", err)
 		return
 	}
 	defer f.Close()
-
 
 	// Step 1: Calculate moov size by writing to a buffer.
 	buf := &bytesWriter{}
@@ -217,7 +215,6 @@ func (m *mjpegMuxer) close() {
 	}
 	moovSize := buf.len()
 
-
 	// Step 2: Write ftyp to the real file.
 	w := mp4.NewWriter(f)
 	ftypSize, err := m.writeFtyp(w)
@@ -226,17 +223,14 @@ func (m *mjpegMuxer) close() {
 		return
 	}
 
-
 	// Step 3: mdat data starts at ftypSize + moovSize + 8 (mdat header).
 	mdatDataOffset := int64(ftypSize) + int64(moovSize) + 8
-
 
 	// Step 4: Write moov with correct stco offset.
 	if err := m.writeMoov(w, mdatDataOffset); err != nil {
 		slog.Error("write moov for close", "path", m.filePath, "error", err)
 		return
 	}
-
 
 	// Step 5: Write mdat box.
 	mdatData := m.collectMdatData()

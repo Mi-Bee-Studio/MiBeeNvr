@@ -104,7 +104,7 @@ type XiaomiRecorder struct {
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 }
 
-	// Interface compliance check.
+// Interface compliance check.
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 
 // GetHub returns the StreamHub for frame fan-out.
