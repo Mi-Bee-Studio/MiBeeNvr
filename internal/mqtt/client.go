@@ -152,6 +152,6 @@ func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event 
 		Detections: detections,
 	}
 
-	topic := fmt.Sprintf("ai/%s", cameraID)
+	topic := "ai/" + cameraID
 	return c.Publish(topic, msg)
 }

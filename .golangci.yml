@@ -32,6 +32,7 @@ linters:
     - nilnesserr
     - wastedassign
     - fatcontext
+    - perfsprint
   settings:
     nolintlint:
       require-explanation: true
@@ -46,7 +47,13 @@ linters:
       disabled-checks:
         - ifElseChain
     perfsprint:
-      strerror: true
+      errorf: false      # suppress fmt.Errorf -> errors.New (behavior change)
+      err-error: false    # suppress fmt.Sprintf(err) -> err.Error() (panic risk)
+      integer-format: true  # optimize %d
+      hex-format: true     # optimize %x/%X
+      string-format: true  # optimize %s
+      bool-format: true    # optimize %t
+      int-conversion: true # optimize int conversion
   exclusions:
     presets:
       - common-false-positives

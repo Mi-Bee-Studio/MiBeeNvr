@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -116,7 +117,7 @@ func NewKeyframeExtractor(cfg KeyframeExtractorConfig) *KeyframeExtractor {
 		store:      cfg.Store,
 		db:         cfg.DB,
 		mergeMgr:   cfg.MergeMgr,
-		consumerID: fmt.Sprintf("keyframe-extractor-%s", cfg.CameraID),
+		consumerID: "keyframe-extractor-" + cfg.CameraID,
 	}
 }
 
@@ -430,7 +431,7 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 		})
 
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   k.cameraID,
 			FilePath:   finalPath,
 			Format:     model.FormatTimelapse,

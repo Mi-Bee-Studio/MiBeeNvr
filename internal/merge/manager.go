@@ -3,10 +3,12 @@ package merge
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -379,7 +381,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		h.Write(p.spsKey)
 		h.Write(p.ppsKey)
 		h.Write(p.info.VPS)
-		keyStr := fmt.Sprintf("%x", h.Sum(nil))
+		keyStr := hex.EncodeToString(h.Sum(nil))
 		groups[keyStr] = append(groups[keyStr], p)
 	}
 
@@ -464,7 +466,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 
 		// Insert new recording.
 		mergedRec := &model.Recording{
-			ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
+			ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
 			CameraID:   cameraID,
 			FilePath:   finalPath,
 			Format:     model.Format(format),

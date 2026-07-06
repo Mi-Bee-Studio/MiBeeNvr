@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -403,12 +404,12 @@ func (lt *LiveTranscoder) buildFFmpegArgs() []string {
 
 	// GOP control: force keyframe interval to GopSeconds
 	gop := lt.cfg.Preset.GopSeconds * lt.cfg.Preset.Framerate
-	args = append(args, "-g", fmt.Sprintf("%d", gop))
-	args = append(args, "-keyint_min", fmt.Sprintf("%d", gop))
+	args = append(args, "-g", strconv.Itoa(gop))
+	args = append(args, "-keyint_min", strconv.Itoa(gop))
 	args = append(args, "-sc_threshold", "0")
 
 	// B-frames (0 for max compatibility)
-	args = append(args, "-bf", fmt.Sprintf("%d", lt.cfg.Preset.Bframes))
+	args = append(args, "-bf", strconv.Itoa(lt.cfg.Preset.Bframes))
 
 	// Bitrate control
 	bitrate := lt.cfg.Preset.VideoBitrateKbps
@@ -422,7 +423,7 @@ func (lt *LiveTranscoder) buildFFmpegArgs() []string {
 	}
 
 	// Framerate
-	args = append(args, "-r", fmt.Sprintf("%d", lt.cfg.Preset.Framerate))
+	args = append(args, "-r", strconv.Itoa(lt.cfg.Preset.Framerate))
 
 	// Output — raw H.264 Annex-B byte stream to stdout
 	args = append(args, "-f", "h264")

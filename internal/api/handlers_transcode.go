@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -360,7 +359,7 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 	if h.config != nil {
 		camConfig := h.config.ResolveTranscodingConfig(body.CameraID)
 		if !camConfig.Enabled {
-			WriteError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", body.CameraID))
+			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+body.CameraID)
 			return
 		}
 	}
@@ -553,14 +552,14 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		if !cameraFound {
-			WriteError(w, http.StatusBadRequest, fmt.Sprintf("camera %s not found", cameraID))
+			WriteError(w, http.StatusBadRequest, "camera "+cameraID+" not found")
 			return
 		}
 
 		// Check if transcoding is enabled for this camera
 		camConfig := h.config.ResolveTranscodingConfig(cameraID)
 		if !camConfig.Enabled {
-			WriteError(w, http.StatusBadRequest, fmt.Sprintf("transcoding is not enabled for camera %s", cameraID))
+			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+cameraID)
 			return
 		}
 	}

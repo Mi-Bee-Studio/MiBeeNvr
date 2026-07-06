@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -92,7 +93,7 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 
 	// Step 6: Build the merged recording metadata.
 	merged := &model.Recording{
-		ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
 		CameraID:   cameraID,
 		FilePath:   finalPath,
 		Format:     model.FormatMJPEG,

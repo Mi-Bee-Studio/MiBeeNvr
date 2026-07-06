@@ -395,7 +395,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinalPath,
 			Format:     model.FormatMJPEG,

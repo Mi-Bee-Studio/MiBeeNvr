@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -366,7 +367,7 @@ func (r *SnapshotCapturer) closeCurrentSegment() {
 	if r.cfg.DB != nil && finalPath != "" && frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(segStart).Seconds()
-		recordingID = fmt.Sprintf("%d", now.UnixNano())
+		recordingID = strconv.FormatInt(now.UnixNano(), 10)
 		rec := &model.Recording{
 			ID:         recordingID,
 			CameraID:   r.cfg.CameraID,

@@ -391,7 +391,7 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 	var totalSize int64
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
-		recordingID = fmt.Sprintf("%d", now.UnixNano())
+		recordingID = strconv.FormatInt(now.UnixNano(), 10)
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
 			ID:         recordingID,

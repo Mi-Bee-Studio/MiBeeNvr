@@ -1286,7 +1286,7 @@ func TestConcurrentRecordingStress(t *testing.T) {
 	for i, id := range cameraIDs {
 		recorders[i] = recorder.NewH264Recorder(recorder.H264Config{
 			CameraID:   id,
-			RTSPURL:    fmt.Sprintf("rtsp://127.0.0.1:1/%s", id),
+			RTSPURL:    "rtsp://127.0.0.1:1/" + id,
 			SegmentDur: 5 * time.Minute,
 			RingBufCap: 50,
 		}, store)

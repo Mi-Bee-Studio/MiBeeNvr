@@ -74,13 +74,14 @@ func soapGetPresetsResponse(presets []struct {
 	PanX, PanY, ZoomX float64
 },
 ) string {
-	var presetXML string
+	var b strings.Builder
 	for _, p := range presets {
-		presetXML += fmt.Sprintf(`<Preset token="%s"><Name>%s</Name>`+
+		b.WriteString(fmt.Sprintf(`<Preset token="%s"><Name>%s</Name>`+
 			`<PTZPosition xmlns:tt="http://www.onvif.org/ver10/schema">`+
 			`<tt:PanTilt x="%f" y="%f"/><tt:Zoom x="%f"/>`+
-			`</PTZPosition></Preset>`, p.Token, p.Name, p.PanX, p.PanY, p.ZoomX)
+			`</PTZPosition></Preset>`, p.Token, p.Name, p.PanX, p.PanY, p.ZoomX))
 	}
+	presetXML := b.String()
 	return soapEnvelope(fmt.Sprintf(`<tptz:GetPresetsResponse xmlns:tptz="%s">%s</tptz:GetPresetsResponse>`, soapPTZNamespace, presetXML))
 }
 

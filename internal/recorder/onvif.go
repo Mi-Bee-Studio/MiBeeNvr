@@ -363,8 +363,8 @@ func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
 	// preview onto port 81 to avoid blocking the main HTTP server on port 80.
 	host := onvifURL.Hostname()
 	baseURLs := []string{
-		fmt.Sprintf("http://%s:81", host),
-		fmt.Sprintf("http://%s", onvifURL.Host),
+		"http://" + host + ":81",
+		"http://" + onvifURL.Host,
 	}
 
 	client := &http.Client{

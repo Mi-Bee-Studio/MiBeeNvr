@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -72,7 +73,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 
 	cameraDir := filepath.Join(m.rootDir, cameraID)
 	now := time.Now().Format("20060102_150405")
-	uuid := fmt.Sprintf("%d", time.Now().UnixNano())
+	uuid := strconv.FormatInt(time.Now().UnixNano(), 10)
 
 	switch strings.ToLower(format) {
 	case "h264", "h265":

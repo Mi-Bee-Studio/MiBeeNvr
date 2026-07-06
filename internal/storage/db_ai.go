@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -184,18 +185,8 @@ func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Ti
 	return stats, nil
 }
 
-// joinStrings is a local helper to avoid importing strings just for Join.
-
-// joinStrings is a local helper to avoid importing strings just for Join.
 func joinStrings(ss []string, sep string) string {
-	if len(ss) == 0 {
-		return ""
-	}
-	result := ss[0]
-	for i := 1; i < len(ss); i++ {
-		result += sep + ss[i]
-	}
-	return result
+	return strings.Join(ss, sep)
 }
 
 // MarshalBBox converts a [4]float64 to JSON string for storage.

@@ -25,7 +25,7 @@ func BuildFFmpegCommand(opts TranscodeOptions, caps HardwareCapabilities) ([]str
 
 	// Input flags — MJPEG uses directory glob pattern with framerate
 	if inputCodec == "mjpeg" {
-		args = append(args, "-framerate", fmt.Sprintf("%d", opts.Framerate))
+		args = append(args, "-framerate", strconv.Itoa(opts.Framerate))
 		args = append(args, "-i", filepath.Join(opts.InputPath, "%*.jpg"))
 	} else {
 		args = append(args, "-i", opts.InputPath)

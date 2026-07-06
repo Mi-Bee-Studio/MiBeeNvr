@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -164,7 +165,7 @@ func (m *FFmpegMerger) buildArgs(framesDir, outputPath string, fps int, encoder 
 	var args []string
 
 	// Input: image sequence with framerate.
-	args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+	args = append(args, "-framerate", strconv.Itoa(fps))
 	args = append(args, "-i", filepath.Join(framesDir, "frame_%06d.jpg"))
 
 	// Encoder selection.
@@ -191,7 +192,7 @@ func (m *FFmpegMerger) buildArgs(framesDir, outputPath string, fps int, encoder 
 			if m.config != nil && m.config.CRF > 0 {
 				crf = m.config.CRF
 			}
-			args = append(args, "-crf", fmt.Sprintf("%d", crf))
+			args = append(args, "-crf", strconv.Itoa(crf))
 		}
 	}
 

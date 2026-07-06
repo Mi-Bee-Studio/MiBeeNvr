@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -368,8 +369,8 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	q := missURL.Query()
 	q.Set("vendor", vendorName)
 	q.Set("device_public", resp.PublicKey)
-	q.Set("client_private", fmt.Sprintf("%x", clientPrivate))
-	q.Set("client_public", fmt.Sprintf("%x", clientPublic))
+	q.Set("client_private", hex.EncodeToString(clientPrivate))
+	q.Set("client_public", hex.EncodeToString(clientPublic))
 	q.Set("sign", resp.Sign)
 	if model != "" {
 		q.Set("model", model)

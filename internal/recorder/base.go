@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -529,7 +530,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(b.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   b.cfg.CameraID,
 			FilePath:   b.curFinalPath,
 			Format:     b.driver.segmentFormat(),
