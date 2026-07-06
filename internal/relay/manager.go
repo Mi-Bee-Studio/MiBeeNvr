@@ -81,9 +81,9 @@ func (m *Manager) SetPresetRegistry(r *PresetRegistry) {
 
 // SetHardwareCap wires HardwareCapabilities for transcoder encoder selection.
 // Should be set before Start.
-func (m *Manager) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
+func (m *Manager) SetHardwareCap(hwCap *transcoding.HardwareCapabilities) {
 	m.mu.Lock()
-	m.hardwareCap = cap
+	m.hardwareCap = hwCap
 	m.mu.Unlock()
 }
 

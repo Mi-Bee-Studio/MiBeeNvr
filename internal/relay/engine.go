@@ -133,8 +133,8 @@ func (t *PushTarget) SetPresetRegistry(r *PresetRegistry) {
 
 // SetHardwareCap wires hardware capabilities for transcoder encoder selection.
 // Should be set before Run if transcode may be used.
-func (t *PushTarget) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
-	t.hardwareCap = cap
+func (t *PushTarget) SetHardwareCap(hwCap *transcoding.HardwareCapabilities) {
+	t.hardwareCap = hwCap
 }
 
 // SetFFmpegPath sets an explicit FFmpeg binary path for the transcoder.

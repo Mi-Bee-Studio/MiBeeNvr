@@ -605,14 +605,14 @@ func newAudioCollector(hub *model.StreamHub, id string) *audioCollector {
 	return c
 }
 
-func (c *audioCollector) waitFrames(t *testing.T, min int, timeout time.Duration) {
+func (c *audioCollector) waitFrames(t *testing.T, minFrames int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
 		n := len(c.frames)
 		c.mu.Unlock()
-		if n >= min {
+		if n >= minFrames {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -620,7 +620,7 @@ func (c *audioCollector) waitFrames(t *testing.T, min int, timeout time.Duration
 	c.mu.Lock()
 	n := len(c.frames)
 	c.mu.Unlock()
-	t.Fatalf("timed out waiting for %d audio frames, got %d", min, n)
+	t.Fatalf("timed out waiting for %d audio frames, got %d", minFrames, n)
 }
 
 func (c *audioCollector) count() int {

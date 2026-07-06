@@ -146,7 +146,7 @@ func TestDiscoverByStableID_PortPreservedFromEndpoint(t *testing.T) {
 
 func TestScanFor_StopsAtMaxParallel(t *testing.T) {
 	// Issue 100 concurrent probes; ensure the worker pool never exceeds MaxParallel.
-	const max = 8
+	const maxScans = 8
 	const total = 100
 	var inflight, peak int32
 	var mu sync.Mutex
@@ -170,10 +170,10 @@ func TestScanFor_StopsAtMaxParallel(t *testing.T) {
 		hosts[i] = "10.255.0." + itoa(i+1)
 	}
 
-	eng := NewEngine(Config{MaxParallel: max, ProbeTimeout: time.Second, MaxDuration: 10 * time.Second}, probe)
+	eng := NewEngine(Config{MaxParallel: maxScans, ProbeTimeout: time.Second, MaxDuration: 10 * time.Second}, probe)
 	got := eng.scanFor(context.Background(), hosts, 80, "nobody")
 	mustEqual(t, got, "", "no match expected")
-	mustEqual(t, int(peak) <= max, true, "peak concurrency must not exceed MaxParallel")
+	mustEqual(t, int(peak) <= maxScans, true, "peak concurrency must not exceed MaxParallel")
 	mustEqual(t, int(atomic.LoadInt32(&probeCount)), total, "all hosts probed")
 }
 
