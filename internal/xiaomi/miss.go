@@ -9,9 +9,12 @@ package xiaomi
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +24,20 @@ const (
 	missCmdAuthRes    = 0x101
 	missCmdVideoStart = 0x102
 	missCmdVideoStop  = 0x103
+
+	missCmdAudioStart      = 0x104
+	missCmdAudioStop       = 0x105
+	missCmdSpeakerStartReq = 0x106
+	missCmdSpeakerStartRes = 0x107
+	missCmdSpeakerStop     = 0x108
+	missCmdStreamCtrlReq   = 0x109
+	missCmdStreamCtrlRes   = 0x10A
+	missCmdGetAudioFmtReq  = 0x10B
+	missCmdGetAudioFmtRes  = 0x10C
+	missCmdDevInfoReq      = 0x110
+	missCmdDevInfoRes      = 0x111
+	missCmdMotorReq        = 0x112
+	missCmdMotorRes        = 0x113
 
 	missCmdEncoded = 0x1001
 )
@@ -43,6 +60,7 @@ const (
 	ModelC300     = "chuangmi.camera.72ac1"
 	ModelXiaofang = "isa.camera.isc5c1"
 	ModelHLC8     = "isa.camera.hlc8"
+	ModelMijia    = "chuangmi.camera.v2"
 )
 
 // missHdrSize is the size of a MISS media packet header.
@@ -64,9 +82,10 @@ type MISSConn interface {
 
 // MISSClient wraps a MISSConn with encryption and protocol logic.
 type MISSClient struct {
-	Conn  MISSConn
-	key   []byte
-	model string
+	Conn    MISSConn
+	key     []byte
+	model   string
+	writeMu sync.Mutex
 }
 
 // MISSPacket is a decoded media packet from a Xiaomi camera.
@@ -151,8 +170,27 @@ func (c *MISSClient) version() string {
 	return fmt.Sprintf("%s (%s)", c.Conn.Version(), c.model)
 }
 
+// wirePacket builds, encrypts, and sends a MISS WirePacket command.
+// It acquires writeMu to serialize concurrent writes.
+func (c *MISSClient) wirePacket(cmd uint32, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	buf := binary.BigEndian.AppendUint32(nil, cmd)
+	buf = append(buf, data...)
+	encrypted, err := Encode(buf, c.key)
+	if err != nil {
+		return err
+	}
+	return c.Conn.WriteCommand(missCmdEncoded, encrypted)
+}
+
 // WriteCommand encrypts data and sends it as an encoded command.
+// It acquires writeMu to serialize concurrent writes.
 func (c *MISSClient) WriteCommand(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	data, err := Encode(data, c.key)
 	if err != nil {
 		return err
@@ -201,6 +239,127 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled bool) erro
 func (c *MISSClient) StopMedia() error {
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStop)
 	return c.WriteCommand(data)
+}
+
+// StartAudio sends the audio start command.
+func (c *MISSClient) StartAudio() error {
+	return c.wirePacket(missCmdAudioStart, nil)
+}
+
+// StopAudio sends the audio stop command.
+func (c *MISSClient) StopAudio() error {
+	return c.wirePacket(missCmdAudioStop, nil)
+}
+
+// MotorControl sends a motor control command with direction and speed.
+func (c *MISSClient) MotorControl(direction string, speed int) error {
+	body := fmt.Sprintf(`{"direction":"%s","speed":%d}`, direction, speed)
+	return c.wirePacket(missCmdMotorReq, []byte(body))
+}
+
+// GetDeviceInfo requests device information and returns the parsed response.
+func (c *MISSClient) GetDeviceInfo() (map[string]interface{}, error) {
+	if err := c.wirePacket(missCmdDevInfoReq, nil); err != nil {
+		return nil, err
+	}
+	_, data, err := c.Conn.ReadCommand()
+	if err != nil {
+		return nil, fmt.Errorf("miss: get device info: %w", err)
+	}
+	decrypted, err := Decode(data, c.key)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(decrypted, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// StreamControl sends a stream control command with the given quality.
+func (c *MISSClient) StreamControl(quality string) error {
+	body := fmt.Sprintf(`{"quality":"%s"}`, quality)
+	return c.wirePacket(missCmdStreamCtrlReq, []byte(body))
+}
+
+// GetAudioFormat requests audio format information and returns the parsed response.
+func (c *MISSClient) GetAudioFormat() (map[string]interface{}, error) {
+	if err := c.wirePacket(missCmdGetAudioFmtReq, nil); err != nil {
+		return nil, err
+	}
+	_, data, err := c.Conn.ReadCommand()
+	if err != nil {
+		return nil, fmt.Errorf("miss: get audio format: %w", err)
+	}
+	decrypted, err := Decode(data, c.key)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(decrypted, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// StartSpeaker starts two-way audio speaker playback.
+// Returns an error on CS2 transport (requires TUTK).
+func (c *MISSClient) StartSpeaker() error {
+	if strings.HasPrefix(c.Conn.Protocol(), "cs2") {
+		return fmt.Errorf("two-way audio requires TUTK transport")
+	}
+	if err := c.wirePacket(missCmdSpeakerStartReq, nil); err != nil {
+		return err
+	}
+	_, data, err := c.Conn.ReadCommand()
+	if err != nil {
+		return fmt.Errorf("miss: start speaker: %w", err)
+	}
+	decrypted, err := Decode(data, c.key)
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(decrypted, []byte("success")) {
+		return fmt.Errorf("miss: start speaker: %s", decrypted)
+	}
+	return nil
+}
+
+// SpeakerCodec returns the audio codec ID for speaker output based on camera model.
+func (c *MISSClient) SpeakerCodec() uint32 {
+	switch c.model {
+	case ModelDafang, ModelXiaofang, "isa.camera.hlc6":
+		return missCodecPCM // 1024
+	case ModelC300:
+		return missCodecOPUS // 1032
+	default:
+		return 0
+	}
+}
+
+// WriteAudio encrypts and sends an audio packet for two-way audio playback.
+// Returns an error on CS2 transport (requires TUTK).
+func (c *MISSClient) WriteAudio(codecID uint32, payload []byte) error {
+	if strings.HasPrefix(c.Conn.Protocol(), "cs2") {
+		return fmt.Errorf("two-way audio requires TUTK transport")
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	encrypted, err := Encode(payload, c.key)
+	if err != nil {
+		return err
+	}
+
+	n := uint32(len(encrypted))
+	header := make([]byte, missHdrSize)
+	binary.LittleEndian.PutUint32(header[0:4], n)
+	binary.LittleEndian.PutUint32(header[4:8], codecID)
+	// header[8:16] stays zero
+	binary.LittleEndian.PutUint64(header[16:24], uint64(time.Now().UnixMilli()))
+	// header[24:32] stays zero
+	return c.Conn.WritePacket(header, encrypted)
 }
 
 // ReadPacket reads and decrypts a media packet from the connection.

@@ -23,9 +23,14 @@ import (
 // mockMISSConn is a test mock implementing the MISSConn interface.
 type mockMISSConn struct {
 	mu          sync.Mutex
+	protocol    string
 	writtenCmds []struct {
 		cmd  uint32
 		data []byte
+	}
+	writtenPackets []struct {
+		hdr     []byte
+		payload []byte
 	}
 	readCmdResp struct {
 		cmd  uint32
@@ -35,12 +40,17 @@ type mockMISSConn struct {
 	closed        bool
 }
 
-func (m *mockMISSConn) Protocol() string { return "cs2+udp" }
-func (m *mockMISSConn) Version() string  { return "CS2" }
-func (m *mockMISSConn) RemoteAddr() net.Addr {
-	addr, _ := net.ResolveUDPAddr("udp", "192.168.1.1:32108")
-	return addr
+func (m *mockMISSConn) Protocol() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.protocol != "" {
+		return m.protocol
+	}
+	return "cs2+udp"
 }
+
+func (m *mockMISSConn) Version() string             { return "CS2" }
+func (m *mockMISSConn) RemoteAddr() net.Addr         { return nil }
 func (m *mockMISSConn) SetDeadline(t time.Time) error { return nil }
 
 func (m *mockMISSConn) Close() error {
@@ -72,7 +82,13 @@ func (m *mockMISSConn) ReadPacket() (hdr, payload []byte, err error) {
 }
 
 func (m *mockMISSConn) WritePacket(hdr, payload []byte) error {
-	return fmt.Errorf("not implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writtenPackets = append(m.writtenPackets, struct {
+		hdr     []byte
+		payload []byte
+	}{hdr: hdr, payload: payload})
+	return nil
 }
 
 func (m *mockMISSConn) lastWrittenCmd() (uint32, []byte, bool) {
@@ -83,6 +99,16 @@ func (m *mockMISSConn) lastWrittenCmd() (uint32, []byte, bool) {
 	}
 	last := m.writtenCmds[len(m.writtenCmds)-1]
 	return last.cmd, last.data, true
+}
+
+func (m *mockMISSConn) lastWrittenPacket() ([]byte, []byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.writtenPackets) == 0 {
+		return nil, nil, false
+	}
+	last := m.writtenPackets[len(m.writtenPackets)-1]
+	return last.hdr, last.payload, true
 }
 
 func newTestMISSClient() (*MISSClient, *mockMISSConn) {
@@ -289,22 +315,22 @@ func TestMISSPacketSampleRate(t *testing.T) {
 		wantRate uint32
 	}{
 		{
-			name:     "flags with sample rate bits set → 16000",
-			flags:    0b000011000, // bits 3-6 = 0b0011 = 3 → nonzero
+			name:     "flags with sample rate bits set -> 16000",
+			flags:    0b000011000, // bits 3-6 = 0b0011 = 3 -> nonzero
 			wantRate: 16000,
 		},
 		{
-			name:     "flags with zero sample rate bits → 8000",
+			name:     "flags with zero sample rate bits -> 8000",
 			flags:    0b000000000,
 			wantRate: 8000,
 		},
 		{
-			name:     "flags value from comment example 1_0011_000 → 16000",
+			name:     "flags value from comment example 1_0011_000 -> 16000",
 			flags:    0b10011000,
 			wantRate: 16000,
 		},
 		{
-			name:     "flags value from comment 100_00_01_0000_000 → 8000",
+			name:     "flags value from comment 100_00_01_0000_000 -> 8000",
 			flags:    0b10000010000000,
 			wantRate: 8000,
 		},
@@ -337,6 +363,7 @@ func TestMISSModelConstants(t *testing.T) {
 	require.Equal(t, "chuangmi.camera.72ac1", ModelC300)
 	require.Equal(t, "isa.camera.isc5c1", ModelXiaofang)
 	require.Equal(t, "isa.camera.hlc8", ModelHLC8)
+	require.Equal(t, "chuangmi.camera.v2", ModelMijia)
 }
 
 func TestMISSNewClientUnsupportedVendor(t *testing.T) {
@@ -519,4 +546,311 @@ func TestMISSClientStartMediaC200HD(t *testing.T) {
 	require.NoError(t, err)
 	body := string(decoded[4:])
 	require.Contains(t, body, `"videoquality":3`)
+}
+
+// --- New tests for enriched MISS protocol ---
+
+func TestStartAudio(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.StartAudio()
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdAudioStart), innerCmd)
+	// No payload body expected
+	require.Len(t, decoded, 4)
+}
+
+func TestStopAudio(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.StopAudio()
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdAudioStop), innerCmd)
+	require.Len(t, decoded, 4)
+}
+
+func TestMotorControl(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.MotorControl("left", 50)
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdMotorReq), innerCmd)
+
+	// Verify JSON payload encoding
+	body := string(decoded[4:])
+	require.Contains(t, body, `"direction":"left"`)
+	require.Contains(t, body, `"speed":50`)
+
+	// Verify JSON is valid
+	var payload map[string]interface{}
+	err = json.Unmarshal(decoded[4:], &payload)
+	require.NoError(t, err)
+	require.Equal(t, "left", payload["direction"])
+	require.Equal(t, float64(50), payload["speed"])
+}
+
+func TestGetDeviceInfo(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	// Prepare mock response
+	respData := []byte(`{"model":"test","firmware":"1.0.0"}`)
+	encrypted, err := Encode(respData, client.key)
+	require.NoError(t, err)
+	mock.readCmdResp = struct {
+		cmd  uint32
+		data []byte
+	}{cmd: missCmdEncoded, data: encrypted}
+
+	result, err := client.GetDeviceInfo()
+	require.NoError(t, err)
+	require.Equal(t, "test", result["model"])
+	require.Equal(t, "1.0.0", result["firmware"])
+
+	// Verify wirePacket was sent with the correct command
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdDevInfoReq), innerCmd)
+}
+
+func TestWriteAudioHeader(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+	mock.protocol = "tutk" // non-CS2 to bypass gate
+
+	payload := []byte("test audio data for header test")
+	codecID := uint32(1024) // PCM
+
+	err := client.WriteAudio(codecID, payload)
+	require.NoError(t, err)
+
+	hdr, encPayload, ok := mock.lastWrittenPacket()
+	require.True(t, ok)
+
+	// Header should be 32 bytes
+	require.Len(t, hdr, missHdrSize)
+
+	// Check header[0:4] = encrypted payload length (LE)
+	payloadLen := binary.LittleEndian.Uint32(hdr[0:4])
+	require.Equal(t, uint32(len(encPayload)), payloadLen)
+
+	// Check header[4:8] = codecID (LE)
+	actualCodecID := binary.LittleEndian.Uint32(hdr[4:8])
+	require.Equal(t, codecID, actualCodecID)
+
+	// Bytes 8-16 should be zeros
+	require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0}, hdr[8:16])
+
+	// Timestamp at 16-24 should be nonzero
+	ts := binary.LittleEndian.Uint64(hdr[16:24])
+	require.Greater(t, ts, uint64(0))
+
+	// Bytes 24-32 should be zeros
+	require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0}, hdr[24:32])
+}
+
+func TestWriteAudioEncrypt(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+	mock.protocol = "tutk" // non-CS2 to bypass gate
+
+	payload := []byte("test audio payload for encrypt test")
+	err := client.WriteAudio(missCodecPCM, payload)
+	require.NoError(t, err)
+
+	_, encPayload, ok := mock.lastWrittenPacket()
+	require.True(t, ok)
+
+	// Payload should be encrypted (differs from input)
+	require.NotEqual(t, payload, encPayload)
+
+	// Encrypted payload has 8-byte nonce prefix
+	require.Len(t, encPayload, 8+len(payload))
+
+	// Decrypting should give back original
+	decrypted, err := Decode(encPayload, client.key)
+	require.NoError(t, err)
+	require.Equal(t, payload, decrypted)
+}
+
+func TestStartSpeaker(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+	mock.protocol = "tutk" // non-CS2, gate passes
+
+	// Configure mock response with success
+	respData := []byte(`{"result":"success"}`)
+	encrypted, err := Encode(respData, client.key)
+	require.NoError(t, err)
+	mock.readCmdResp = struct {
+		cmd  uint32
+		data []byte
+	}{cmd: missCmdEncoded, data: encrypted}
+
+	err = client.StartSpeaker()
+	require.NoError(t, err)
+
+	// Verify wirePacket was sent
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdSpeakerStartReq), innerCmd)
+}
+
+func TestStartSpeakerCS2Blocked(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+	_ = mock // default protocol is "cs2+udp"
+
+	err := client.StartSpeaker()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "two-way audio requires TUTK transport")
+}
+
+func TestWriteAudioCS2Blocked(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+	_ = mock // default protocol is "cs2+udp"
+
+	err := client.WriteAudio(missCodecPCM, []byte("test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "two-way audio requires TUTK transport")
+}
+
+func TestConcurrentWrite(t *testing.T) {
+	t.Helper()
+	client, _ := newTestMISSClient()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := client.WriteCommand([]byte(`{"test":1}`))
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestStreamControl(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.StreamControl("hd")
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdStreamCtrlReq), innerCmd)
+
+	body := string(decoded[4:])
+	require.Contains(t, body, `"quality":"hd"`)
+}
+
+func TestGetAudioFormat(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	// Prepare mock response
+	respData := []byte(`{"codec":"pcm","samplerate":8000}`)
+	encrypted, err := Encode(respData, client.key)
+	require.NoError(t, err)
+	mock.readCmdResp = struct {
+		cmd  uint32
+		data []byte
+	}{cmd: missCmdEncoded, data: encrypted}
+
+	result, err := client.GetAudioFormat()
+	require.NoError(t, err)
+	require.Equal(t, "pcm", result["codec"])
+	require.Equal(t, float64(8000), result["samplerate"])
+
+	// Verify wirePacket was sent
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdGetAudioFmtReq), innerCmd)
+}
+
+func TestSpeakerCodec(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name      string
+		model     string
+		wantCodec uint32
+	}{
+		{name: "Dafang returns PCM", model: ModelDafang, wantCodec: missCodecPCM},
+		{name: "Xiaofang returns PCM", model: ModelXiaofang, wantCodec: missCodecPCM},
+		{name: "HLC6 returns PCM", model: "isa.camera.hlc6", wantCodec: missCodecPCM},
+		{name: "C300 returns Opus", model: ModelC300, wantCodec: missCodecOPUS},
+		{name: "unknown model returns 0", model: "unknown.model", wantCodec: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			client := &MISSClient{model: tt.model}
+			require.Equal(t, tt.wantCodec, client.SpeakerCodec())
+		})
+	}
+}
+
+func TestCommandConstants(t *testing.T) {
+	t.Helper()
+	require.Equal(t, uint32(0x104), uint32(missCmdAudioStart))
+	require.Equal(t, uint32(0x105), uint32(missCmdAudioStop))
+	require.Equal(t, uint32(0x106), uint32(missCmdSpeakerStartReq))
+	require.Equal(t, uint32(0x107), uint32(missCmdSpeakerStartRes))
+	require.Equal(t, uint32(0x108), uint32(missCmdSpeakerStop))
+	require.Equal(t, uint32(0x109), uint32(missCmdStreamCtrlReq))
+	require.Equal(t, uint32(0x10A), uint32(missCmdStreamCtrlRes))
+	require.Equal(t, uint32(0x10B), uint32(missCmdGetAudioFmtReq))
+	require.Equal(t, uint32(0x10C), uint32(missCmdGetAudioFmtRes))
+	require.Equal(t, uint32(0x110), uint32(missCmdDevInfoReq))
+	require.Equal(t, uint32(0x111), uint32(missCmdDevInfoRes))
+	require.Equal(t, uint32(0x112), uint32(missCmdMotorReq))
+	require.Equal(t, uint32(0x113), uint32(missCmdMotorRes))
 }
