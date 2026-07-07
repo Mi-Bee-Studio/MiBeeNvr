@@ -30,9 +30,8 @@ const (
 
 // cameraHealth holds per-camera storage health state.
 type cameraHealth struct {
-	state           HealthState
-	failCount       int
-	lastHealthLogAt time.Time
+	state     HealthState
+	failCount int
 }
 
 // healthStateStr returns a human-readable string for the health state.

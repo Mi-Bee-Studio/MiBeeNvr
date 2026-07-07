@@ -155,7 +155,7 @@ type cachedSession struct {
 
 var (
 	sessionCacheMu sync.Mutex
-	sessionCache    = make(map[string]*cachedSession) // key: userID+"|"+region
+	sessionCache   = make(map[string]*cachedSession) // key: userID+"|"+region
 )
 
 func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
@@ -169,7 +169,6 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if cached := getCachedSession(userID, region); cached != nil {
 		return cached, nil
 	}
-
 
 	c := &Cloud{
 		client: &http.Client{Timeout: 15 * time.Second},
@@ -433,9 +432,9 @@ func WakeUpCamera(xiaomiCfg XiaomiCloudConfig, did string) error {
 	}
 
 	c := &Cloud{
-		client: session.client,
-		sid:    "xiaomiio",
-		region: session.Region,
+		client:    session.client,
+		sid:       "xiaomiio",
+		region:    session.Region,
 		ssecurity: session.ssecurity,
 		cookies:   session.cookies,
 		userID:    session.UserID,

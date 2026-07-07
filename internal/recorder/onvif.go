@@ -35,7 +35,7 @@ type ONVIFConfig struct {
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
 	EventBus             *event.EventBus
-	AVI                  bool           // when true, JPEG delegate writes AVI single-file
+	AVI                  bool // when true, JPEG delegate writes AVI single-file
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI

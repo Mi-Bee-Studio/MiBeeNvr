@@ -1026,7 +1026,7 @@ func TestReconcileIncrementalCommit(t *testing.T) {
 		camDir := filepath.Join(storeDir, camID)
 		require.NoError(t, os.MkdirAll(camDir, 0o755))
 
-		for fileIdx := 0; fileIdx < fileCount; fileIdx++ {
+		for fileIdx := range fileCount {
 			// Format: cameraID_20260514_120000_<nanotimestamp>.mp4
 			// Use unique timestamps so each file gets a unique ID
 			dateTime := fmt.Sprintf("20260514_%02d%02d%02d", 9+camIdx, 0, fileIdx)
@@ -1078,7 +1078,7 @@ func TestReconcilePerCameraCommit(t *testing.T) {
 		camDir := filepath.Join(storeDir, camID)
 		require.NoError(t, os.MkdirAll(camDir, 0o755))
 
-		for fileIdx := 0; fileIdx < 5; fileIdx++ {
+		for fileIdx := range 5 {
 			dateTime := fmt.Sprintf("20260514_%02d%02d%02d", 9+camIdx, 0, fileIdx)
 			nano := fmt.Sprintf("%019d", int64(camIdx)*1000000000000000000+int64(fileIdx))
 			fileName := fmt.Sprintf("%s_%s_%s.mp4", camID, dateTime, nano)
@@ -1126,7 +1126,7 @@ func TestInsertOrphanRecordingsBatching(t *testing.T) {
 	// Create 1200 orphan recordings (2 full batches of 500 + 1 partial batch of 200)
 	// orphanBatchSize = 500, so: 500 + 500 + 200 = 1200
 	var recs []*model.Recording
-	for i := 0; i < 1200; i++ {
+	for i := range 1200 {
 		recs = append(recs, &model.Recording{
 			ID:         fmt.Sprintf("batch-rec-%d", i),
 			CameraID:   "batch-cam",

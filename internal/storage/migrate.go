@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -189,7 +190,7 @@ func MigrateMJPEGToAVI(ctx context.Context, db *DB, store *Manager, opts Migrate
 	for res := range results {
 		if res.err == nil {
 			migrated++
-		} else if res.err == errSkipped {
+		} else if errors.Is(res.err, errSkipped) {
 			skipped++
 		} else {
 			failed++
@@ -488,7 +489,7 @@ func verifyAVI(path string) error {
 
 	for {
 		ck, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

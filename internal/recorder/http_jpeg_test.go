@@ -52,7 +52,7 @@ func (h *mjpegStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.done.Store(false)
 	defer h.done.Store(true)
 
-	w.Header().Set("Content-Type", fmt.Sprintf("multipart/x-mixed-replace;boundary=%s", h.boundary))
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace;boundary="+h.boundary)
 	w.WriteHeader(http.StatusOK)
 
 	flusher, ok := w.(http.Flusher)
@@ -88,16 +88,12 @@ func (h *mjpegStreamHandler) sendFrame(frame []byte) {
 }
 
 func (h *mjpegStreamHandler) sendFrames(count int, interval time.Duration) {
-	for i := 0; i < count; i++ {
+	for range count {
 		h.sendFrame(generateSmallJPEG())
 		if interval > 0 {
 			time.Sleep(interval)
 		}
 	}
-}
-
-func (h *mjpegStreamHandler) stop() {
-	h.done.Store(true)
 }
 
 func newMJPEGStreamServer() (*httptest.Server, *mjpegStreamHandler) {

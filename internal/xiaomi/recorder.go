@@ -102,12 +102,12 @@ type XiaomiRecorder struct {
 	// Audio state (probed from first audio packet)
 	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
 
-	Hub             *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
-	streamStart     time.Time        // For PTS rebase (used by forwardHLS)
+	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 
 	// Quality auto-fallback state (HD→SD downgrade after repeated no-media failures)
-	currentQuality    string // effective quality for next connectAndRecord attempt
-	noMediaFailCount  int    // consecutive "no media data" failures at current quality
+	currentQuality   string // effective quality for next connectAndRecord attempt
+	noMediaFailCount int    // consecutive "no media data" failures at current quality
 }
 
 // Interface compliance check.

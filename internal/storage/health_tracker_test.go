@@ -57,7 +57,7 @@ func TestPerCameraIsolation(t *testing.T) {
 	}
 
 	// Fail cam-a 3 times.
-	for i := 0; i < maxConsecutiveFailures; i++ {
+	for range maxConsecutiveFailures {
 		m.recordWriteFailure("cam-a")
 	}
 
@@ -158,7 +158,7 @@ func TestStorageFailedLegacy(t *testing.T) {
 	}
 
 	// Fail one camera.
-	for i := 0; i < maxConsecutiveFailures; i++ {
+	for range maxConsecutiveFailures {
 		m.recordWriteFailure("cam-1")
 	}
 

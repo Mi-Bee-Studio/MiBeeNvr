@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,11 @@ import (
 )
 
 func cmdMigrateMJPEG() {
+	exitCode := runMigrateMJPEG()
+	os.Exit(exitCode)
+}
+
+func runMigrateMJPEG() int {
 	var cfgPath string
 	opts := storage.MigrateOptions{
 		Concurrency: 1,
@@ -61,7 +67,7 @@ func cmdMigrateMJPEG() {
 			}
 		case arg == "--help" || arg == "-h":
 			printMigrateMJPEGUsage()
-			os.Exit(0)
+			return 0
 		}
 	}
 
@@ -73,12 +79,12 @@ func cmdMigrateMJPEG() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config %q: %v\n", cfgPath, err)
-		os.Exit(1)
+		return 1
 	}
 
 	if err := config.Validate(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Config validation error: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Initialise DB.
@@ -86,21 +92,21 @@ func cmdMigrateMJPEG() {
 	db, err := storage.New(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database %q: %v\n", dbPath, err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 
 	ctx := context.Background()
 	if err := db.Init(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Error initialising database: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Initialise storage manager.
 	store, err := storage.NewManager(cfg.Storage.RootDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating storage manager: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Set up SIGINT handling.
@@ -124,15 +130,15 @@ func cmdMigrateMJPEG() {
 	}
 
 	if err := storage.MigrateMJPEGToAVI(ctx, db, store, opts); err != nil {
-		if err == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "\nMigration interrupted by signal.")
-			os.Exit(130)
+			return 130
 		}
 		fmt.Fprintf(os.Stderr, "Migration failed: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
-	os.Exit(0)
+	return 0
 }
 
 func printMigrateMJPEGUsage() {
