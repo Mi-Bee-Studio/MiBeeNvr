@@ -130,7 +130,7 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 	bus.Unsubscribe("idem", ch)
 }
 
-	func TestOverflow_DropsOldest(t *testing.T) {
+func TestOverflow_DropsOldest(t *testing.T) {
 	t.Parallel()
 	// Use a very small buffer and don't consume.
 	bus := NewEventBus(3)
@@ -141,7 +141,7 @@ func TestUnsubscribe_Idempotent(t *testing.T) {
 	}
 
 	// Publish 6 events into a buffer of 3 — first 3 should be dropped
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		bus.Publish(context.Background(), "overflow", i)
 	}
 
@@ -183,11 +183,11 @@ func TestConcurrentPublish(t *testing.T) {
 	const writers = 10
 	const eventsPerWriter = 100
 
-	for w := 0; w < writers; w++ {
+	for w := range writers {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < eventsPerWriter; i++ {
+			for i := range eventsPerWriter {
 				bus.Publish(context.Background(), "concurrent", id*1000+i)
 			}
 		}(w)

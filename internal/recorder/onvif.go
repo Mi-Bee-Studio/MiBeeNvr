@@ -35,6 +35,7 @@ type ONVIFConfig struct {
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
 	EventBus             *event.EventBus
+	AVI                  bool // when true, JPEG delegate writes AVI single-file
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -363,8 +364,8 @@ func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
 	// preview onto port 81 to avoid blocking the main HTTP server on port 80.
 	host := onvifURL.Hostname()
 	baseURLs := []string{
-		fmt.Sprintf("http://%s:81", host),
-		fmt.Sprintf("http://%s", onvifURL.Host),
+		"http://" + host + ":81",
+		"http://" + onvifURL.Host,
 	}
 
 	client := &http.Client{
@@ -540,6 +541,7 @@ func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
 		Password:   r.cfg.Password,
 		DB:         r.cfg.DB,
 		EventBus:   r.cfg.EventBus,
+		AVI:        r.cfg.AVI,
 	}
 	rec := NewHTTPJPEGRecorder(cfg, r.store, r.metrics)
 	rec.Hub = r.Hub

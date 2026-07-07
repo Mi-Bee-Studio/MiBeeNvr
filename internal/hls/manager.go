@@ -180,7 +180,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 
 	// Create per-camera directory
 	dirPath := filepath.Join(m.dataDir, cameraID)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return err
 	}
 
@@ -458,7 +458,7 @@ func (m *Manager) readSubStreamH264(ctx context.Context, client *gortsplib.Clien
 
 		aus, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
-			if decErr != rtph264.ErrNonStartingPacketAndNoPrevious && decErr != rtph264.ErrMorePacketsNeeded {
+			if !errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) && !errors.Is(decErr, rtph264.ErrMorePacketsNeeded) {
 				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
 			}
 			return
@@ -508,7 +508,7 @@ func (m *Manager) readSubStreamH265(ctx context.Context, client *gortsplib.Clien
 
 		aus, decErr := rtpDec.Decode(pkt)
 		if decErr != nil {
-			if decErr != rtph265.ErrNonStartingPacketAndNoPrevious && decErr != rtph265.ErrMorePacketsNeeded {
+			if !errors.Is(decErr, rtph265.ErrNonStartingPacketAndNoPrevious) && !errors.Is(decErr, rtph265.ErrMorePacketsNeeded) {
 				hlsLogger.Warn("sub-stream RTP decode error", "camera_id", cameraID, "error", decErr)
 			}
 			return
@@ -546,7 +546,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 			if isIDR {
 				traceID = fmt.Sprintf("%s-%d", cameraID, frame.pts)
 			}
-			slog.Debug("frame_trace",
+			slog.Debug(
+				"frame_trace",
 				"trace_id", traceID,
 				"camera_id", cameraID,
 				"stage", "hls_recv",
@@ -567,7 +568,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				}
 			}
 			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, frame.au, frame.pts, cameraID); err != nil {
-				slog.Warn("frame_trace",
+				slog.Warn(
+					"frame_trace",
 					"trace_id", traceID,
 					"camera_id", cameraID,
 					"stage", "hls_error",
@@ -576,7 +578,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				)
 				m.handleWriteError(ctx, cameraID, entry, err)
 			} else {
-				slog.Debug("frame_trace",
+				slog.Debug(
+					"frame_trace",
 					"trace_id", traceID,
 					"camera_id", cameraID,
 					"stage", "hls_write",
@@ -705,7 +708,8 @@ func (m *Manager) handleWriteError(ctx context.Context, cameraID string, entry *
 	}
 	entry.lastErrorTime = time.Now()
 
-	hlsLogger.Error("HLS write error",
+	hlsLogger.Error(
+		"HLS write error",
 		"camera_id", cameraID,
 		"error", err,
 		"consecutive_errors", entry.consecutiveErrors,
@@ -868,7 +872,8 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", cameraID,
 			"stage", "hls_drop",
@@ -894,7 +899,8 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", cameraID,
 			"stage", "hls_drop",

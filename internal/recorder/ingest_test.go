@@ -168,7 +168,7 @@ func TestIngestRecorder_ConcurrentLockNarrowing(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
+		for i := range 500 {
 			rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, int64(i)*90, true)
 			rec.WriteNALU([][]byte{testPFrame}, int64(i)*90+45, false)
 			time.Sleep(time.Microsecond)
@@ -176,11 +176,11 @@ func TestIngestRecorder_ConcurrentLockNarrowing(t *testing.T) {
 	}()
 
 	// Reader goroutines — call Status(), SPS(), PPS() concurrently.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				_ = rec.Status()
 				_ = rec.SPS()
 				_ = rec.PPS()

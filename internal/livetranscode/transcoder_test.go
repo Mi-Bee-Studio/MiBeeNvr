@@ -84,7 +84,7 @@ func main() {
 	}
 
 	srcPath := filepath.Join(dir, "mockffmpeg_"+mode+".go")
-	err := os.WriteFile(srcPath, []byte(source), 0644)
+	err := os.WriteFile(srcPath, []byte(source), 0o644)
 	require.NoError(t, err)
 
 	binaryPath := filepath.Join(dir, "ffmpeg_"+mode)
@@ -328,7 +328,7 @@ func TestLiveTranscoder_WriteInput_Overflow(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		err := lt.WriteInput(bigAU)
 		if err != nil {
 			t.Logf("write %d: %v (expected after queue full)", i, err)
@@ -477,7 +477,7 @@ func TestLiveTranscoder_ConcurrentWriteInput(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -662,15 +662,19 @@ func TestLiveTranscoder_RealFFmpeg(t *testing.T) {
 	// Write a minimal H.265 AU with valid start codes
 	au := AccessUnit{
 		{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60},
-		{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00,
+		{
+			0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00,
 			0x80, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00,
-			0x78, 0x99, 0x98, 0x09},
+			0x78, 0x99, 0x98, 0x09,
+		},
 		{0x44, 0x01, 0xc1, 0x73, 0x4d, 0x40},
-		{0x26, 0x01, 0xaf, 0x08, 0x40, 0x00, 0x01, 0x50, 0x14,
+		{
+			0x26, 0x01, 0xaf, 0x08, 0x40, 0x00, 0x01, 0x50, 0x14,
 			0x07, 0x38, 0x00, 0x00, 0x7d, 0x00, 0x00, 0x1d, 0x4e,
-			0x00, 0x01},
+			0x00, 0x01,
+		},
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = lt.WriteInput(au)
 		require.NoError(t, err)
 	}

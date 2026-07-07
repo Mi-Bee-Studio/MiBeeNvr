@@ -1,6 +1,7 @@
 package srt
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -8,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/datarhei/gosrt"
+	srt "github.com/datarhei/gosrt"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -112,12 +113,10 @@ func (r *Receiver) Running() bool {
 	return r.running.Load()
 }
 
-
 // getDropCount returns total frames dropped by the hub.
 func (r *Receiver) getDropCount() int64 {
 	return r.dropCount.Load()
 }
-
 
 // readLoop reads MPEG-TS data from the SRT connection, demuxes it,
 // extracts H.264 NALUs, and broadcasts access units to the StreamHub.
@@ -136,7 +135,7 @@ func (r *Receiver) readLoop(conn srt.Conn) {
 			if !r.running.Load() {
 				return // Clean shutdown
 			}
-			if err == io.EOF || err == srt.ErrClientClosed {
+			if errors.Is(err, io.EOF) || errors.Is(err, srt.ErrClientClosed) {
 				logger.Info("SRT connection closed", "camera_id", r.cameraID)
 				return
 			}

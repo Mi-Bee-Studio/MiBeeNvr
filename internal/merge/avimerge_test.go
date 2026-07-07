@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func createTestAVI(t *testing.T, dir, name string, width, height int, numFrames 
 
 	m := avi.NewMuxer(f, width, height, 8000, true) // mu-law audio at 8kHz
 
-	for i := 0; i < numFrames; i++ {
+	for i := range numFrames {
 		// Write a minimal JPEG-like frame (not a real JPEG, just unique data).
 		frame := make([]byte, 64+i*8) // increasing frame size to test maxFrameSize tracking
 		for j := range frame {
@@ -66,7 +67,7 @@ func countAVIFrames(t *testing.T, path string) int {
 	count := 0
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -90,7 +91,7 @@ func countAVIAudio(t *testing.T, path string) int {
 	count := 0
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -513,7 +514,7 @@ func TestAVIMerge_DemuxerRoundTrip(t *testing.T) {
 	var audioChunks [][]byte
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)

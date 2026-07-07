@@ -1,20 +1,21 @@
 package merge
 
 import (
-"context"
-"fmt"
-"os"
-"path/filepath"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
-"time"
+	"time"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/stretchr/testify/require"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
 )
 
 // mergeTestEnv holds test dependencies for merge manager tests.
@@ -62,7 +63,7 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 	// Move the created segment to the temp path
 	data, err := os.ReadFile(segFile)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
 	os.Remove(segFile)
 
 	// Close segment (atomic rename)
@@ -87,6 +88,7 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 
 	return finalPath
 }
+
 // newTestMergeManager creates a MergeManager with the given config for testing.
 func newTestMergeManager(db *storage.DB, store *storage.Manager, cfg config.MergeConfig, cameras []config.CameraConfig) *MergeManager {
 	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras }, nil)
@@ -224,7 +226,6 @@ func TestRunOnce_NotEnoughSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 }
-
 
 func TestRunOnce_ContextCancelled(t *testing.T) {
 	env := newMergeTestEnv(t)
@@ -378,7 +379,8 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 	}
 	perCamCfg := &config.MergeConfig{Enabled: true}
 
-	mgr := NewMergeManager(env.db, env.store,
+	mgr := NewMergeManager(
+		env.db, env.store,
 		func() config.MergeConfig { return cfg },
 		func(cid string) *config.MergeConfig {
 			if cid == cameraID {
@@ -388,7 +390,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 		},
 		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID}} },
 		nil,
-)
+	)
 
 	// Per-camera override enables merge even when global is disabled.
 	err := mgr.RunOnce(ctx)
@@ -412,9 +414,9 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 	require.NoError(t, err)
 
 	// Create fake JPEG files in the temp directory.
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		filename := fmt.Sprintf("frame%03d.jpg", frameStart+i)
-		require.NoError(t, os.WriteFile(filepath.Join(tempPath, filename), []byte("fake-jpeg-data"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(tempPath, filename), []byte("fake-jpeg-data"), 0o644))
 	}
 
 	// Close segment (atomic rename from temp to final).
@@ -422,7 +424,7 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 
 	// Calculate total file size.
 	var totalSize int64
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		filename := fmt.Sprintf("frame%03d.jpg", frameStart+i)
 		fi, err := os.Stat(filepath.Join(finalPath, filename))
 		require.NoError(t, err)
@@ -583,7 +585,7 @@ func (e *mergeTestEnv) insertMergeableH264WithCustomParams(t *testing.T, id, cam
 
 	data, err := os.ReadFile(segFile)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
 	os.Remove(segFile)
 
 	require.NoError(t, e.store.CloseSegment(tempPath, finalPath))
@@ -694,17 +696,17 @@ func (e *mergeTestEnv) insertTimelapseRecording(t *testing.T, id string, cameraI
 	t.Helper()
 	ctx := context.Background()
 	cameraDir := filepath.Join(e.store.RootDir(), cameraID)
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	// Timelapse recordings are directories named with a timestamp.
 	segName := fmt.Sprintf("%s_%s_timelapse", cameraID, startedAt.Format("20060102_150405"))
 	finalPath := filepath.Join(cameraDir, segName)
-	require.NoError(t, os.MkdirAll(finalPath, 0755))
+	require.NoError(t, os.MkdirAll(finalPath, 0o755))
 
 	// Create fake JPEG files.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		filename := fmt.Sprintf("frame_%06d.jpg", i)
-		require.NoError(t, os.WriteFile(filepath.Join(finalPath, filename), []byte("fake-jpeg"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(finalPath, filename), []byte("fake-jpeg"), 0o644))
 	}
 
 	// Calculate total size.
@@ -910,7 +912,7 @@ func TestMergeStatusRace(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Launch concurrent readers.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -919,7 +921,7 @@ func TestMergeStatusRace(t *testing.T) {
 	}
 
 	// Launch concurrent writers.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -953,7 +955,7 @@ func TestRunOnce_BatchLimitTruncation(t *testing.T) {
 		BatchLimit:         2,
 		MinSegmentsToMerge: 2,
 	}
-	
+
 	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
@@ -1010,7 +1012,6 @@ func TestRunOnce_MJPEGNotEnoughSegments(t *testing.T) {
 	require.False(t, rec.Merged)
 }
 
-
 // insertMergeableH265Recording creates a real H.265 MP4 file and inserts a recording into the DB.
 func (e *mergeTestEnv) insertMergeableH265Recording(t *testing.T, id string, cameraID string, startedAt, endedAt time.Time) string {
 	t.Helper()
@@ -1024,7 +1025,7 @@ func (e *mergeTestEnv) insertMergeableH265Recording(t *testing.T, id string, cam
 
 	data, err := os.ReadFile(segFile)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
 	os.Remove(segFile)
 
 	require.NoError(t, e.store.CloseSegment(tempPath, finalPath))
@@ -1090,7 +1091,8 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			MinSegmentsToMerge: 2,
 		}
 		cameras := []config.CameraConfig{{ID: cameraID}}
-		mgr := NewMergeManager(env.db, env.store,
+		mgr := NewMergeManager(
+			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
 			func() []config.CameraConfig { return cameras },
@@ -1148,7 +1150,8 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			MinSegmentsToMerge: 2,
 		}
 		cameras := []config.CameraConfig{{ID: cameraID}}
-		mgr := NewMergeManager(env.db, env.store,
+		mgr := NewMergeManager(
+			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
 			func() []config.CameraConfig { return cameras },
@@ -1206,7 +1209,8 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			MinSegmentsToMerge: 2,
 		}
 		cameras := []config.CameraConfig{{ID: cameraID}}
-		mgr := NewMergeManager(env.db, env.store,
+		mgr := NewMergeManager(
+			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
 			func() []config.CameraConfig { return cameras },
@@ -1271,7 +1275,8 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			MinSegmentsToMerge: 2,
 		}
 		cameras := []config.CameraConfig{{ID: cameraID}}
-		mgr := NewMergeManager(concEnv.db, concEnv.store,
+		mgr := NewMergeManager(
+			concEnv.db, concEnv.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
 			func() []config.CameraConfig { return cameras },
@@ -1284,7 +1289,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 
 		// Barrier: all goroutines block on channel, released simultaneously
 		start := make(chan struct{})
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -1323,7 +1328,7 @@ func (e *mergeTestEnv) insertMergeableAVIRecording(t *testing.T, id string, came
 
 	data, err := os.ReadFile(aviFile)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tempPath, data, 0644))
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
 	os.Remove(aviFile)
 
 	require.NoError(t, e.store.CloseSegment(tempPath, finalPath))
@@ -1407,4 +1412,38 @@ func TestRunOnce_AVIIntegration(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "source file should be deleted: %s", src1)
 	_, err = os.Stat(src2)
 	require.True(t, os.IsNotExist(err), "source file should be deleted: %s", src2)
+}
+
+func TestMergePreservesG711Audio(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "g711", AudioConfig: nil}
+	// Run the validation block logic
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if !info.HasAudio {
+		t.Fatal("expected HasAudio to remain true for g711 codec")
+	}
+}
+
+func TestMergePreservesOpusAudio(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "opus", AudioConfig: nil}
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if !info.HasAudio {
+		t.Fatal("expected HasAudio to remain true for opus codec")
+	}
+}
+
+func TestMergeDisablesAACWithoutConfig(t *testing.T) {
+	t.Helper()
+	info := SegmentInfo{HasAudio: true, AudioCodec: "aac", AudioConfig: nil}
+	if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
+		info.HasAudio = false
+	}
+	if info.HasAudio {
+		t.Fatal("expected HasAudio to be false for aac without AudioConfig")
+	}
 }

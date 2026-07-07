@@ -22,7 +22,7 @@ func TestValidatePath_ValidRelative(t *testing.T) {
 func TestValidatePath_ValidAbsolute(t *testing.T) {
 	tmpDir := t.TempDir()
 	subDir := filepath.Join(tmpDir, "cam01")
-	require.NoError(t, os.MkdirAll(subDir, 0755))
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
 
 	path, err := ValidatePath(tmpDir, subDir)
 	require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestValidatePath_SymlinkNoTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 	realDir := filepath.Join(tmpDir, "real")
 	linkDir := filepath.Join(tmpDir, "link")
-	require.NoError(t, os.MkdirAll(realDir, 0755))
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
 
 	// Create a symlink inside rootDir to another directory inside rootDir
 	require.NoError(t, os.Symlink("real", linkDir))
@@ -112,7 +112,7 @@ func TestValidatePath_SymlinkNoTraversal(t *testing.T) {
 func TestValidatePath_DeepNesting(t *testing.T) {
 	tmpDir := t.TempDir()
 	deepDir := filepath.Join(tmpDir, "a", "b", "c", "d")
-	require.NoError(t, os.MkdirAll(deepDir, 0755))
+	require.NoError(t, os.MkdirAll(deepDir, 0o755))
 
 	path, err := ValidatePath(tmpDir, "a/b/c/d/file.mp4")
 	require.NoError(t, err)
@@ -122,10 +122,10 @@ func TestValidatePath_DeepNesting(t *testing.T) {
 // Test that an actual symlink to outside the root is blocked (if the caller resolves it)
 func TestValidatePath_RelativePathWithDotDot(t *testing.T) {
 	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0o755))
 
 	// Valid path that uses .. within bounds
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sub", "file.txt"), []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sub", "file.txt"), []byte("data"), 0o644))
 	path, err := ValidatePath(tmpDir, "sub/../sub/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(tmpDir, "sub", "file.txt"), path)
@@ -136,12 +136,12 @@ func TestValidatePath_SymlinkTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 	realDir := filepath.Join(tmpDir, "real")
 	outsideDir := filepath.Join(tmpDir, "outside")
-	require.NoError(t, os.MkdirAll(realDir, 0755))
-	require.NoError(t, os.MkdirAll(outsideDir, 0755))
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	require.NoError(t, os.MkdirAll(outsideDir, 0o755))
 
 	// Create a file outside the intended base, then symlink to it from inside
 	outsideFile := filepath.Join(outsideDir, "secret.txt")
-	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0644))
+	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0o644))
 
 	// Create a symlink inside realDir that points to outsideDir
 	linkPath := filepath.Join(realDir, "escape")

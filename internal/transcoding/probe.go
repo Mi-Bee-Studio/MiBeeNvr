@@ -80,9 +80,9 @@ func probeHardware(ffmpegPath string) *HardwareCapabilities {
 		if _, err := os.Stat(ffmpegPath); err == nil {
 			caps.FFmpegAvailable = true
 			caps.FFmpegPath = ffmpegPath
-caps = probeEncoders(ffmpegPath, caps)
-		caps = probeDecoders(ffmpegPath, caps)
-		setResolutionLimits(caps)
+			caps = probeEncoders(ffmpegPath, caps)
+			caps = probeDecoders(ffmpegPath, caps)
+			setResolutionLimits(caps)
 		}
 	}
 
@@ -305,7 +305,8 @@ var smokeTestEncoder = func(ffmpegPath, encoder string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, ffmpegPath,
+	cmd := exec.CommandContext(
+		ctx, ffmpegPath,
 		"-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.1:r=1",
 		"-frames:v", "1",
 		"-c:v", encoder,
@@ -330,7 +331,7 @@ func detectVideoDevices() []string {
 // Extracted for testability.
 func detectVideoDevicesInDir(dir string) []string {
 	var devices []string
-	for i := 0; i <= 32; i++ {
+	for i := range 33 {
 		name := fmt.Sprintf("video%d", i)
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err == nil {

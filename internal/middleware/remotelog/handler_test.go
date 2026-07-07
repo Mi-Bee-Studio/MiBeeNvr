@@ -1,6 +1,7 @@
 package remotelog
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -16,11 +17,10 @@ import (
 
 // testCollector tracks requests received by the test server.
 type testCollector struct {
- Bodies   []string
-	Count    atomic.Int64
-	mu       sync.Mutex // guards Bodies
+	Bodies []string
+	Count  atomic.Int64
+	mu     sync.Mutex // guards Bodies
 }
-
 
 func (tc *testCollector) getBodies() []string {
 	tc.mu.Lock()
@@ -56,13 +56,13 @@ func TestHandler_Enabled(t *testing.T) {
 	h := New("http://localhost/insert/jsonline", "jsonline", slog.LevelInfo, nil)
 	defer h.Close()
 
-	if !h.Enabled(nil, slog.LevelInfo) {
+	if !h.Enabled(context.TODO(), slog.LevelInfo) {
 		t.Fatal("expected INFO level to be enabled")
 	}
-	if !h.Enabled(nil, slog.LevelError) {
+	if !h.Enabled(context.TODO(), slog.LevelError) {
 		t.Fatal("expected ERROR level to be enabled")
 	}
-	if h.Enabled(nil, slog.LevelDebug) {
+	if h.Enabled(context.TODO(), slog.LevelDebug) {
 		t.Fatal("expected DEBUG level to be disabled")
 	}
 }
@@ -76,10 +76,10 @@ func TestHandler_Handle_BatchFlush(t *testing.T) {
 	defer h.Close()
 
 	// Send enough logs to trigger buffer-full flush
-	for i := 0; i < defaultBufferSize; i++ {
+	for i := range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "test message", 0)
 		r.AddAttrs(slog.Int("index", i))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	// Wait for async flush
@@ -119,9 +119,9 @@ func TestHandler_Handle_FailureTolerance(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, m)
 	defer h.Close()
 
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "fail test", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &reqCount, 1, 2*time.Second)
@@ -135,10 +135,10 @@ func TestHandler_Close_FlushesRemaining(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
 
 	// Send fewer than buffer size — won't trigger automatic flush
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "remaining msg", 0)
 		r.AddAttrs(slog.Int("idx", i))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	// Close should flush remaining
@@ -172,9 +172,9 @@ func TestHandler_WithAttrs(t *testing.T) {
 
 	// Create a child handler with attrs
 	child := h.WithAttrs([]slog.Attr{slog.String("component", "test-comp")})
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "attrs test", 0)
-		_ = child.Handle(nil, r)
+		_ = child.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -218,10 +218,10 @@ func TestHandler_WithGroup(t *testing.T) {
 	defer h.Close()
 
 	grouped := h.WithGroup("server")
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "grouped test", 0)
 		r.AddAttrs(slog.String("host", "localhost"))
-		_ = grouped.Handle(nil, r)
+		_ = grouped.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -266,9 +266,9 @@ func TestHandler_NilMetrics(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
 	defer h.Close()
 
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "nil metrics", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -299,7 +299,7 @@ func TestExtractFields(t *testing.T) {
 			name: "camera_id and component",
 			msg:  "ERROR connection error component=xiaomi-recorder camera_id=cam-123 backoff=2s",
 			want: map[string]any{
-				"component":  "xiaomi-recorder",
+				"component": "xiaomi-recorder",
 				"camera_id": "cam-123",
 				"backoff":   "2s",
 			},
@@ -359,9 +359,9 @@ func TestSend_UsesMsgField(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
 	defer h.Close()
 
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "test message content", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -400,9 +400,9 @@ func TestSend_ExtractsFieldsFromMessage(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
 	defer h.Close()
 
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "connection error component=recorder camera_id=cam-abc", 0)
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)
@@ -443,10 +443,10 @@ func TestExtractFields_DoesNotOverwrite(t *testing.T) {
 	defer h.Close()
 
 	// Send with explicit slog attr camera_id=explicit-value
-	for i := 0; i < defaultBufferSize; i++ {
+	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "msg camera_id=extracted-value", 0)
 		r.AddAttrs(slog.String("camera_id", "explicit-value"))
-		_ = h.Handle(nil, r)
+		_ = h.Handle(context.TODO(), r)
 	}
 
 	waitForRequests(t, &tc.Count, 1, 2*time.Second)

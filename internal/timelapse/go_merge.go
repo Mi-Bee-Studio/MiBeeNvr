@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/jpeg"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,9 @@ func init() {
 type GoMerger struct {
 	jpegQuality int
 }
+
+// Interface compliance check.
+var _ TimelapseMerger = (*GoMerger)(nil)
 
 // NewGoMerger creates a new GoMerger with passthrough mode (original JPEG quality preserved).
 func NewGoMerger() *GoMerger {
@@ -132,12 +136,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 	}
 
-	if err := muxer.close(); err != nil {
-		return &MergeResult{
-			Tier:  TierGo,
-			Error: err.Error(),
-		}, err
-	}
+	muxer.close()
 
 	framesMerged := len(frames)
 	return &MergeResult{
@@ -195,14 +194,15 @@ func (m *mjpegMuxer) addSample(data []byte, duration time.Duration) error {
 }
 
 // close finalizes the MP4 file.
-func (m *mjpegMuxer) close() error {
+func (m *mjpegMuxer) close() {
 	if len(m.samples) == 0 {
-		return nil
+		return
 	}
 
 	f, err := os.Create(m.filePath)
 	if err != nil {
-		return fmt.Errorf("create file: %w", err)
+		slog.Error("create file for close", "path", m.filePath, "error", err)
+		return
 	}
 	defer f.Close()
 
@@ -210,7 +210,8 @@ func (m *mjpegMuxer) close() error {
 	buf := &bytesWriter{}
 	bw := mp4.NewWriter(buf)
 	if err := m.writeMoov(bw, 0); err != nil {
-		return fmt.Errorf("calculate moov size: %w", err)
+		slog.Error("calculate moov size for close", "path", m.filePath, "error", err)
+		return
 	}
 	moovSize := buf.len()
 
@@ -218,7 +219,8 @@ func (m *mjpegMuxer) close() error {
 	w := mp4.NewWriter(f)
 	ftypSize, err := m.writeFtyp(w)
 	if err != nil {
-		return fmt.Errorf("write ftyp: %w", err)
+		slog.Error("write ftyp for close", "path", m.filePath, "error", err)
+		return
 	}
 
 	// Step 3: mdat data starts at ftypSize + moovSize + 8 (mdat header).
@@ -226,7 +228,8 @@ func (m *mjpegMuxer) close() error {
 
 	// Step 4: Write moov with correct stco offset.
 	if err := m.writeMoov(w, mdatDataOffset); err != nil {
-		return fmt.Errorf("write moov: %w", err)
+		slog.Error("write moov for close", "path", m.filePath, "error", err)
+		return
 	}
 
 	// Step 5: Write mdat box.
@@ -234,17 +237,18 @@ func (m *mjpegMuxer) close() error {
 	mdatBoxSize := uint64(8 + len(mdatData))
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
 	if err != nil {
-		return fmt.Errorf("start mdat: %w", err)
+		slog.Error("start mdat for close", "path", m.filePath, "error", err)
+		return
 	}
 	if _, err := w.Write(mdatData); err != nil {
-		return fmt.Errorf("write mdat data: %w", err)
+		slog.Error("write mdat data for close", "path", m.filePath, "error", err)
+		return
 	}
 	if _, err := w.EndBox(); err != nil {
-		return fmt.Errorf("end mdat: %w", err)
+		slog.Error("end mdat box for close", "path", m.filePath, "error", err)
+		return
 	}
 	_ = bi
-
-	return nil
 }
 
 func (m *mjpegMuxer) writeFtyp(w *mp4.Writer) (int64, error) {
@@ -735,7 +739,6 @@ func parseJPEGDimensions(data []byte) (width, height int) {
 	}
 	return 0, 0
 }
-
 
 // reencodeJPEG decodes a JPEG image and re-encodes it at the given quality level.
 // This provides file size reduction at the cost of visual quality.

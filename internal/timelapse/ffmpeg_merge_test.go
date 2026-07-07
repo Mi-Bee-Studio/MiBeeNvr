@@ -258,7 +258,7 @@ cat << 'FFPROBE_EOF'
 {"streams":[{"codec_name":"h264","duration":"10.000000","width":640,"height":480}]}
 FFPROBE_EOF
 `
-	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0755); err != nil {
+	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -271,7 +271,7 @@ FFPROBE_EOF
 # Mock FFmpeg: create minimal output file
 touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 `
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,14 +280,14 @@ touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 	}, nil)
 
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create minimal frame files.
 	for i := 1; i <= 3; i++ {
 		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -319,7 +319,7 @@ func TestFFmpegMerge_CodecDetection_FallbackToEmpty(t *testing.T) {
 	ffmpegScript := `#!/bin/sh
 touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 `
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,13 +328,13 @@ touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 	}, nil)
 
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	for i := 1; i <= 2; i++ {
 		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -365,7 +365,7 @@ cat << 'FFPROBE_EOF'
 {"streams":[{"codec_name":"h264","duration":"10.000000","width":640,"height":480}]}
 FFPROBE_EOF
 `
-	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0755); err != nil {
+	if err := os.WriteFile(ffprobePath, []byte(ffprobeScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -379,7 +379,7 @@ if echo "$@" | grep -q "h264_v4l2m2m"; then
 fi
 touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 `
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -397,13 +397,13 @@ touch "$(echo "$@" | grep -oE '/[^ ]+\.mp4' | tail -1)"
 	}
 
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	for i := 1; i <= 3; i++ {
 		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -431,7 +431,7 @@ func TestFFmpegMerge_Fallback_BaseCase(t *testing.T) {
 	ffmpegScript := `#!/bin/sh
 exit 1
 `
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -447,13 +447,13 @@ exit 1
 	}
 
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	for i := 1; i <= 2; i++ {
 		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -473,7 +473,7 @@ func TestFFmpegMerge_Cancel(t *testing.T) {
 # Simulate FFmpeg: sleep long enough to test cancellation
 sleep 10
 `
-	if err := os.WriteFile(ffmpegPath, []byte(script), 0755); err != nil {
+	if err := os.WriteFile(ffmpegPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -485,7 +485,7 @@ sleep 10
 	defer cancel()
 
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
@@ -511,7 +511,7 @@ func TestFFmpegMerge_CountFrames(t *testing.T) {
 
 	for i := 1; i <= 5; i++ {
 		fname := filepath.Join(tmpDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0644); err != nil {
+		if err := os.WriteFile(fname, []byte("fake-jpeg"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -536,7 +536,7 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	framesDir := filepath.Join(tmpDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -553,7 +553,7 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 		0x00, 0x00, // thumbnail
 		0xFF, 0xDB, // DQT
 		0x00, 0x43, // length
-		0x00,                         // precision 0, table 0
+		0x00, // precision 0, table 0
 		0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07,
 		0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14,
 		0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13,
@@ -567,11 +567,11 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 		0x01,       // precision
 		0x00, 0x01, // height
 		0x00, 0x01, // width
-		0x01,       // number of components
+		0x01,             // number of components
 		0x01, 0x11, 0x00, // component 1
 		0xFF, 0xC4, // DHT
 		0x00, 0x1F, // length
-		0x00,                         // table class 0, table id 0
+		0x00, // table class 0, table id 0
 		0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01,
 		0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -588,7 +588,7 @@ func TestFFmpegMerge_Integration(t *testing.T) {
 
 	for i := 1; i <= 3; i++ {
 		fname := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.WriteFile(fname, jpegData, 0644); err != nil {
+		if err := os.WriteFile(fname, jpegData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

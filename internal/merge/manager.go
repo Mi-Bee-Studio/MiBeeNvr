@@ -3,10 +3,12 @@ package merge
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -33,15 +35,15 @@ type mergeLock struct {
 
 // MergeManager handles periodic merging of consecutive MP4 segments.
 type MergeManager struct {
-	mu             sync.RWMutex
-	status         MergeStatus
-	db             *storage.DB
-	store          *storage.Manager
-	getGlobalCfg   func() config.MergeConfig
-	getCameraCfg   func(cameraID string) *config.MergeConfig
-	cameras        func() []config.CameraConfig
-	mergeLocks     sync.Map // map[string]*mergeLock — per-camera merge mutex
-	metrics        *metrics.Metrics
+	mu           sync.RWMutex
+	status       MergeStatus
+	db           *storage.DB
+	store        *storage.Manager
+	getGlobalCfg func() config.MergeConfig
+	getCameraCfg func(cameraID string) *config.MergeConfig
+	cameras      func() []config.CameraConfig
+	mergeLocks   sync.Map // map[string]*mergeLock — per-camera merge mutex
+	metrics      *metrics.Metrics
 }
 
 // NewMergeManager creates a new MergeManager with the given dependencies.
@@ -185,7 +187,8 @@ func (m *MergeManager) RunOnce(ctx context.Context) error {
 	}
 
 	if totalMerged > 0 {
-		logger.Info("merge pass complete",
+		logger.Info(
+			"merge pass complete",
 			"merged_groups", totalMerged,
 			"merged_segments", totalSegments,
 			"freed_bytes", totalFreed,
@@ -346,9 +349,9 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		}
 
 		// Validate audio config consistency.
-		if info.HasAudio && len(info.AudioConfig) == 0 {
+		if info.HasAudio && len(info.AudioConfig) == 0 && info.AudioCodec != "g711" && info.AudioCodec != "opus" {
 			logger.Warn("audio config mismatch: hasAudio=true but audioConfig is empty, disabling audio",
-				"recording_id", rec.ID, "file_path", rec.FilePath)
+				"recording_id", rec.ID, "file_path", rec.FilePath, "audio_codec", info.AudioCodec)
 			info.HasAudio = false
 		}
 
@@ -378,7 +381,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		h.Write(p.spsKey)
 		h.Write(p.ppsKey)
 		h.Write(p.info.VPS)
-		keyStr := fmt.Sprintf("%x", h.Sum(nil))
+		keyStr := hex.EncodeToString(h.Sum(nil))
 		groups[keyStr] = append(groups[keyStr], p)
 	}
 
@@ -463,7 +466,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 
 		// Insert new recording.
 		mergedRec := &model.Recording{
-			ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
+			ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
 			CameraID:   cameraID,
 			FilePath:   finalPath,
 			Format:     model.Format(format),
@@ -500,7 +503,8 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			m.store.DeleteFile(r.FilePath)
 		}
 
-		logger.Info("merged segments",
+		logger.Info(
+			"merged segments",
 			"camera_id", cameraID,
 			"segments", len(recordings),
 			"duration_s", totalDuration,
@@ -601,7 +605,8 @@ func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, rec
 	// Record successful merge metrics.
 	m.metrics.RecordMergeSuccess(time.Since(mergeStart), mergedRec.FileSize)
 
-	logger.Info("merged MJPEG segments",
+	logger.Info(
+		"merged MJPEG segments",
 		"camera_id", cameraID,
 		"segments", len(recs),
 		"duration_s", mergedRec.Duration,
@@ -673,7 +678,8 @@ func (m *MergeManager) mergeAVIGroup(ctx context.Context, cameraID string, recs 
 
 	m.metrics.RecordMergeSuccess(time.Since(mergeStart), mergedRec.FileSize)
 
-	logger.Info("merged AVI segments",
+	logger.Info(
+		"merged AVI segments",
 		"camera_id", cameraID,
 		"segments", len(recs),
 		"duration_s", mergedRec.Duration,

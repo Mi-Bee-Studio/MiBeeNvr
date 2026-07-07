@@ -17,6 +17,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// Pre-compiled regex patterns for validation (avoids SA6000: regexp.MatchString in loop)
+var (
+	rePlatformName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	reResolution   = regexp.MustCompile(`^\d+x\d+$`)
+	reBitrate      = regexp.MustCompile(`^(0|\d+(\.\d+)?[kMG])$`)
+)
+
 type Config struct {
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
@@ -81,6 +88,7 @@ type CameraConfig struct {
 	AudioEnabled         bool                     `yaml:"audio_enabled"`
 	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+	HTTPJPEGAVI          bool                     `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
 
 	// StableID is a hardware-level stable identifier (ONVIF serial number) used to
 	// re-acquire the SAME camera after its IP changes (e.g. after an AP reboot when
@@ -98,6 +106,7 @@ type CameraConfig struct {
 	DID     string `yaml:"did,omitempty"`     // Xiaomi Device ID
 	Vendor  string `yaml:"vendor,omitempty"`  // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality string `yaml:"quality,omitempty"` // Xiaomi stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
 
 	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
 	// For these cameras the publisher connects TO the NVR; the URL field is
@@ -127,8 +136,8 @@ type PushTargetConfig struct {
 	Platform            string                `yaml:"platform,omitempty" json:"platform,omitempty"`                 // preset name (bilibili/douyin/youtube/kuaishou/generic/empty)
 	TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"` // auto/force_sw/off
 	VideoPresetOverride *VideoPresetOverrides `yaml:"video_preset_override,omitempty" json:"video_preset_override,omitempty"`
-	SourceURL          string                `yaml:"source_url,omitempty" json:"source_url,omitempty"` // optional: if set, relay uses FFmpeg to pull from this URL instead of hub
-	UseFFmpeg          bool                  `yaml:"use_ffmpeg,omitempty" json:"use_ffmpeg,omitempty"`                // if true, use FFmpeg subprocess for relay (compatibility mode)
+	SourceURL           string                `yaml:"source_url,omitempty" json:"source_url,omitempty"` // optional: if set, relay uses FFmpeg to pull from this URL instead of hub
+	UseFFmpeg           bool                  `yaml:"use_ffmpeg,omitempty" json:"use_ffmpeg,omitempty"` // if true, use FFmpeg subprocess for relay (compatibility mode)
 }
 
 // VideoPresetOverrides allows overriding individual encoding parameters
@@ -603,7 +612,7 @@ func Validate(cfg *Config) error {
 			}
 			// Validate platform preset name.
 			if pt.Platform != "" {
-				if matched, _ := regexp.MatchString(`^[a-zA-Z0-9_]+$`, pt.Platform); !matched {
+				if !rePlatformName.MatchString(pt.Platform) {
 					return fmt.Errorf("camera[%d].push_targets[%d].platform must be alphanumeric (underscores allowed)", i, j)
 				}
 			}
@@ -618,7 +627,7 @@ func Validate(cfg *Config) error {
 			if pt.VideoPresetOverride != nil {
 				v := pt.VideoPresetOverride
 				if v.Resolution != "" {
-					if matched, _ := regexp.MatchString(`^\d+x\d+$`, v.Resolution); !matched {
+					if !reResolution.MatchString(v.Resolution) {
 						return fmt.Errorf("camera[%d].push_targets[%d].video_preset_override.resolution must be in format WxH (e.g. 1920x1080)", i, j)
 					}
 				}
@@ -760,8 +769,7 @@ func Validate(cfg *Config) error {
 		}
 
 		if cam.Transcoding.Bitrate != "" {
-			matched, err := regexp.MatchString(`^(0|\d+(\.\d+)?[kMG])$`, cam.Transcoding.Bitrate)
-			if err != nil || !matched {
+			if !reBitrate.MatchString(cam.Transcoding.Bitrate) {
 				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
 			}
 		}
@@ -833,7 +841,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("cameras.%s.timelapse.merge_output_fps must be between 1 and 60, got %d", cam.ID, cam.Timelapse.MergeOutputFPS)
 		}
 		if _, err := ParseMergeDuration(cam.Timelapse.MergeDuration); err != nil {
-			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %v", cam.ID, err)
+			return fmt.Errorf("cameras.%s.timelapse.merge_duration invalid: %w", cam.ID, err)
 		}
 	}
 

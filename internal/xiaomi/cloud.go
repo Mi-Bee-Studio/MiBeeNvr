@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,12 +143,31 @@ func SignInWithCaptcha(username, password, region string) (session *CloudSession
 }
 
 // SignInWithToken re-authenticates using a stored passToken.
+
+// sessionCacheTTL is how long a cached cloud session is considered fresh.
+// Ported from go2rtc's pattern of caching LoginWithToken sessions.
+const sessionCacheTTL = 30 * time.Minute
+
+type cachedSession struct {
+	session  *CloudSession
+	cachedAt time.Time
+}
+
+var (
+	sessionCacheMu sync.Mutex
+	sessionCache   = make(map[string]*cachedSession) // key: userID+"|"+region
+)
+
 func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if userID == "" || passToken == "" {
 		return nil, errors.New("xiaomi: user_id and token are required")
 	}
 	if region == "" {
 		region = "cn"
+	}
+	// Check session cache first to avoid redundant cloud auth on reconnects.
+	if cached := getCachedSession(userID, region); cached != nil {
+		return cached, nil
 	}
 
 	c := &Cloud{
@@ -159,16 +179,34 @@ func SignInWithToken(userID, passToken, region string) (*CloudSession, error) {
 	if err := c.LoginWithToken(userID, passToken); err != nil {
 		return nil, err
 	}
-
 	actualUserID, actualPassToken := c.UserToken()
-	return &CloudSession{
+	session := &CloudSession{
 		UserID:    actualUserID,
 		PassToken: actualPassToken,
 		Region:    region,
 		client:    c.client,
 		ssecurity: c.ssecurity,
 		cookies:   c.cookies,
-	}, nil
+	}
+
+	// Cache the session for future reconnects.
+	putCachedSession(actualUserID, region, session)
+	return session, nil
+}
+
+func getCachedSession(userID, region string) *CloudSession {
+	sessionCacheMu.Lock()
+	defer sessionCacheMu.Unlock()
+	if c := sessionCache[userID+"|"+region]; c != nil && time.Since(c.cachedAt) < sessionCacheTTL {
+		return c.session
+	}
+	return nil
+}
+
+func putCachedSession(userID, region string, session *CloudSession) {
+	sessionCacheMu.Lock()
+	defer sessionCacheMu.Unlock()
+	sessionCache[userID+"|"+region] = &cachedSession{session: session, cachedAt: time.Now()}
 }
 
 // CaptchaSessionError wraps a LoginError with a new session ID for continued flow.
@@ -368,8 +406,8 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	q := missURL.Query()
 	q.Set("vendor", vendorName)
 	q.Set("device_public", resp.PublicKey)
-	q.Set("client_private", fmt.Sprintf("%x", clientPrivate))
-	q.Set("client_public", fmt.Sprintf("%x", clientPublic))
+	q.Set("client_private", hex.EncodeToString(clientPrivate))
+	q.Set("client_public", hex.EncodeToString(clientPublic))
 	q.Set("sign", resp.Sign)
 	if model != "" {
 		q.Set("model", model)
@@ -382,6 +420,29 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	cloudLogger.Info("resolved xiaomi MISS URL", "did", did, "ip", deviceIP, "vendor", vendorName, "model", model)
 
 	return missURL.String(), nil
+}
+
+// WakeUpCamera sends a wakeup RPC to a battery-powered Xiaomi camera (cateye/doorbell).
+// These cameras sleep to conserve power and must be woken before P2P connection.
+// Ported from go2rtc internal/xiaomi/xiaomi.go:wakeUpCamera.
+func WakeUpCamera(xiaomiCfg XiaomiCloudConfig, did string) error {
+	session, err := SignInWithToken(xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
+	if err != nil {
+		return fmt.Errorf("xiaomi cloud auth: %w", err)
+	}
+
+	c := &Cloud{
+		client:    session.client,
+		sid:       "xiaomiio",
+		region:    session.Region,
+		ssecurity: session.ssecurity,
+		cookies:   session.cookies,
+		userID:    session.UserID,
+	}
+
+	params := `{"id":1,"method":"wakeup","params":{"video":"1"}}`
+	_, err = c.Request(getAPIBaseURL(session.Region), "/home/rpc/"+did, params, nil)
+	return err
 }
 
 // --- Internal cloud client ---
@@ -405,6 +466,7 @@ func (c *Cloud) Login(username, password string) error {
 	if err != nil {
 		return fmt.Errorf("xiaomi: login step 1: %w", err)
 	}
+	defer res.Body.Close()
 
 	var v1 struct {
 		Qs       string `json:"qs"`
@@ -479,7 +541,7 @@ func (c *Cloud) Login(username, password string) error {
 }
 
 func (c *Cloud) LoginWithToken(userID, passToken string) error {
-	req, err := http.NewRequest("GET", "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid="+c.sid, nil)
+	req, err := http.NewRequest(http.MethodGet, "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid="+c.sid, nil)
 	if err != nil {
 		return err
 	}
@@ -534,7 +596,7 @@ func (c *Cloud) Request(baseURL, apiURL, params string, headers map[string]strin
 	// 4. add nonce
 	form.Set("_nonce", base64.StdEncoding.EncodeToString(nonce))
 
-	req, err := http.NewRequest("POST", baseURL+apiURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequest(http.MethodPost, baseURL+apiURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
@@ -910,6 +972,7 @@ func getAPIBaseURL(region string) string {
 	}
 	return "https://api.io.mi.com/app"
 }
+
 func randString(length int) string {
 	const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	result := make([]byte, length)

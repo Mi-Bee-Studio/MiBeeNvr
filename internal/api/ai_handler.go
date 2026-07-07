@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -16,7 +15,6 @@ type AIHandler struct {
 	manager    *ai.Manager
 	config     *config.Config
 	configPath string
-	mu         sync.Mutex
 }
 
 // NewAIHandler creates a new AIHandler.
@@ -74,7 +72,7 @@ func (h *AIHandler) handleAIUpdateConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -142,12 +140,12 @@ func (h *AIHandler) handleAIZones(w http.ResponseWriter, r *http.Request) {
 func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 	var body zoneRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if body.CameraID == "" || body.Zone.Name == "" {
-		writeError(w, http.StatusBadRequest, "camera_id and zone.name are required")
+		WriteError(w, http.StatusBadRequest, "camera_id and zone.name are required")
 		return
 	}
 
@@ -161,7 +159,7 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 	for _, rois := range cfg.Zones {
 		for _, roi := range rois {
 			if roi.Name == body.Zone.Name {
-				writeError(w, http.StatusConflict, "zone with this name already exists")
+				WriteError(w, http.StatusConflict, "zone with this name already exists")
 				return
 			}
 		}
@@ -190,13 +188,13 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "zone id is required")
+		WriteError(w, http.StatusBadRequest, "zone id is required")
 		return
 	}
 
 	var body zoneRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -211,7 +209,7 @@ func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 					for _, otherROIs := range cfg.Zones {
 						for _, other := range otherROIs {
 							if other.Name == body.Zone.Name {
-								writeError(w, http.StatusConflict, "zone with new name already exists")
+								WriteError(w, http.StatusConflict, "zone with new name already exists")
 								return
 							}
 						}
@@ -231,7 +229,7 @@ func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !found {
-		writeError(w, http.StatusNotFound, "zone not found")
+		WriteError(w, http.StatusNotFound, "zone not found")
 		return
 	}
 
@@ -246,7 +244,7 @@ func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 func (h *AIHandler) handleAIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "zone id is required")
+		WriteError(w, http.StatusBadRequest, "zone id is required")
 		return
 	}
 
@@ -270,7 +268,7 @@ func (h *AIHandler) handleAIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !found {
-		writeError(w, http.StatusNotFound, "zone not found")
+		WriteError(w, http.StatusNotFound, "zone not found")
 		return
 	}
 

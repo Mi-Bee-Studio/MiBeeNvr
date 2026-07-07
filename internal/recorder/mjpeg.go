@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,7 +179,7 @@ func (r *MJPEGRecorder) Start(ctx context.Context) error {
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
@@ -229,7 +230,7 @@ func (r *MJPEGRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(r.store)
+		storageFailed := isStorageFailed(r.store, r.cfg.CameraID)
 		if storageFailed {
 			backoff = StorageBackoffWithJitter()
 		}
@@ -401,7 +402,6 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 }
 
 func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
-
 	defer func() {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
@@ -424,7 +424,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		// Check storage health — if failed, skip recording but keep stream alive.
-		if isStorageFailed(r.store) {
+		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()
 			}
@@ -448,7 +448,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 				if !ok {
 					w, h = 640, 480 // fallback dimensions
 				}
-				f, err := os.OpenFile(tempPath, os.O_RDWR, 0644)
+				f, err := os.OpenFile(tempPath, os.O_RDWR, 0o644)
 				if err != nil {
 					mjpegLogger.Error("failed to open AVI file", "camera_id", r.cfg.CameraID, "error", err)
 					// Clean up the temp path on failure.
@@ -532,7 +532,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinalPath,
 			Format:     segFormat,

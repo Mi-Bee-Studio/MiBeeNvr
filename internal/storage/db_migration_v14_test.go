@@ -70,7 +70,8 @@ func helperV14DB(t *testing.T, ctx context.Context) (*DB, func(t *testing.T)) {
 		{"v14-rec-2", model.MergeStatusMerged},
 		{"v14-rec-3", model.MergeStatusFailed},
 	} {
-		_, err = db.db.ExecContext(ctx,
+		_, err = db.db.ExecContext(
+			ctx,
 			`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,0);`,
 			rec.id, "cam1", "/path/"+rec.id+".mp4", "h264",
 			"2026-06-01 10:00:00", "2026-06-01 10:01:00",
@@ -226,7 +227,7 @@ func TestMergeColumnsExist(t *testing.T) {
 		var version string
 		err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-	require.Equal(t, "22", version)
+		require.Equal(t, "22", version)
 
 		// Data intact
 		var count int

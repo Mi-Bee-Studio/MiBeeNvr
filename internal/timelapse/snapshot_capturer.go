@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,11 +39,11 @@ type SnapshotCapturerConfig struct {
 // interval and writes them as frame sequences in segment directories.
 // Implements model.Recorder.
 type SnapshotCapturer struct {
-	cfg     SnapshotCapturerConfig
-	store   SegmentStore
-	metrics *metrics.Metrics
+	cfg      SnapshotCapturerConfig
+	store    SegmentStore
+	metrics  *metrics.Metrics
 	mergeMgr *RollingMergeManager
-	client  *http.Client
+	client   *http.Client
 
 	mu     sync.Mutex
 	status model.RecorderStatus
@@ -84,7 +85,7 @@ func NewSnapshotCapturer(cfg SnapshotCapturerConfig, store SegmentStore, opts ..
 		metrics:  m,
 		mergeMgr: cfg.MergeMgr,
 		client: &http.Client{
-			Timeout:   30 * time.Second,
+			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				DisableKeepAlives: true,
 			},
@@ -100,7 +101,7 @@ func (r *SnapshotCapturer) Start(ctx context.Context) error {
 	if r.status == model.StatusRecording {
 		return fmt.Errorf("snapshot capturer for %q already running", r.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
@@ -236,7 +237,7 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 
 	frameName := fmt.Sprintf("frame_%06d.jpg", frameCount)
 	jpgPath := filepath.Join(curTempPath, frameName)
-	if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+	if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
 		snapshotCapturerLogger.Error("failed to write snapshot frame",
 			"camera_id", r.cfg.CameraID, "error", err)
 		r.mu.Lock()
@@ -260,7 +261,7 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 // Retries up to 3 times with exponential backoff on transient errors.
 func (r *SnapshotCapturer) fetchSnapshot(ctx context.Context) ([]byte, error) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if attempt > 0 {
 			// Exponential backoff: 200ms, 400ms, 800ms
 			backoff := time.Duration(200<<uint(attempt-1)) * time.Millisecond
@@ -366,7 +367,7 @@ func (r *SnapshotCapturer) closeCurrentSegment() {
 	if r.cfg.DB != nil && finalPath != "" && frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(segStart).Seconds()
-		recordingID = fmt.Sprintf("%d", now.UnixNano())
+		recordingID = strconv.FormatInt(now.UnixNano(), 10)
 		rec := &model.Recording{
 			ID:         recordingID,
 			CameraID:   r.cfg.CameraID,
@@ -400,4 +401,3 @@ func (r *SnapshotCapturer) closeCurrentSegment() {
 		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, finalPath, finalPath+".mp4", recordingID)
 	}
 }
-

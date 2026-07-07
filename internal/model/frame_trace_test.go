@@ -94,7 +94,7 @@ func TestStreamHub_BroadcastLogsFrameTrace(t *testing.T) {
 	hub.Broadcast(200, [][]byte{{0x05}}, true)
 
 	// 3) Fill buffer to force a drop, then broadcast non-IDR (should trigger streamhub_drop)
-	for i := 0; i < hub.consumerBufferSize+3; i++ {
+	for i := range hub.consumerBufferSize + 3 {
 		hub.Broadcast(int64(300+i), [][]byte{{byte(i)}}, false)
 	}
 

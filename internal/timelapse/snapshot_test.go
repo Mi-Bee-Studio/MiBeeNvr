@@ -8,11 +8,11 @@ import (
 
 func TestDeriveSnapshotURL(t *testing.T) {
 	tests := []struct {
-		name       string
-		streamURL  string
-		protocol   string
-		want       string
-		wantEmpty  bool
+		name      string
+		streamURL string
+		protocol  string
+		want      string
+		wantEmpty bool
 	}{
 		// --- RTSP cameras ---
 		{

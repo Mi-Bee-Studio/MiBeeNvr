@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
-	"fmt"
-	"runtime"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -32,8 +32,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
-	"github.com/gorilla/websocket"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/gorilla/websocket"
 )
 
 // --- Shared helpers ---
@@ -81,8 +81,8 @@ func parseJSON(t *testing.T, rr *httptest.ResponseRecorder, v interface{}) {
 // generateTestJPEG creates a valid 16x16 JPEG image for testing.
 func generateTestJPEG() []byte {
 	img := image.NewYCbCr(image.Rect(0, 0, 16, 16), image.YCbCrSubsampleRatio420)
-	for y := 0; y < 16; y++ {
-		for x := 0; x < 16; x++ {
+	for y := range 16 {
+		for x := range 16 {
 			c := color.YCbCr{Y: 128, Cb: 128, Cr: 128}
 			img.Y[img.YOffset(x, y)] = c.Y
 			img.Cb[img.COffset(x, y)] = c.Cb
@@ -101,9 +101,9 @@ func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cam
 	t.Helper()
 	data := []byte("test-data-" + id)
 	cameraDir := filepath.Join(store.RootDir(), cameraID)
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 	filePath := filepath.Join(cameraDir, id+"."+format)
-	require.NoError(t, os.WriteFile(filePath, data, 0644))
+	require.NoError(t, os.WriteFile(filePath, data, 0o644))
 
 	rec := &model.Recording{
 		ID:         id,
@@ -131,17 +131,13 @@ type uploadResponse struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-
 // recordingsResponse mirrors the API response format for GET /api/recordings
 
 type recordingsResponse struct {
+	Recordings []model.Recording `json:"recordings"`
 
-    Recordings []model.Recording `json:"recordings"`
-
-    Total      int                `json:"total"`
-
+	Total int `json:"total"`
 }
-
 
 // =============================================================================
 // Test 1: Full Flow
@@ -221,33 +217,33 @@ func TestCrashRecovery(t *testing.T) {
 
 	// 1. Create completed segments (properly finalized, no .tmp)
 	cameraDir := filepath.Join(store.RootDir(), cameraID)
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	// Completed H.264 segment (file)
 	completedFile := filepath.Join(cameraDir, "completed_segment.mp4")
-	require.NoError(t, os.WriteFile(completedFile, []byte("completed-h264-data"), 0644))
+	require.NoError(t, os.WriteFile(completedFile, []byte("completed-h264-data"), 0o644))
 
 	// Completed MJPEG segment (directory)
 	completedDir := filepath.Join(cameraDir, "completed_mjpeg_segment")
-	require.NoError(t, os.MkdirAll(completedDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(completedDir, "frame001.jpg"), generateTestJPEG(), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(completedDir, "frame002.jpg"), generateTestJPEG(), 0644))
+	require.NoError(t, os.MkdirAll(completedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(completedDir, "frame001.jpg"), generateTestJPEG(), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(completedDir, "frame002.jpg"), generateTestJPEG(), 0o644))
 
 	// 2. Create incomplete segments (simulating crash)
 	// Orphaned .tmp file (H.264 crash)
 	tmpFile := filepath.Join(cameraDir, "crash_orphan.tmp")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("incomplete-h264-data"), 0644))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("incomplete-h264-data"), 0o644))
 
 	// Orphaned .tmp directory (MJPEG crash)
 	tmpDir := filepath.Join(cameraDir, "crash_mjpeg_orphan.tmp")
-	require.NoError(t, os.MkdirAll(tmpDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "partial_frame.jpg"), generateTestJPEG(), 0644))
+	require.NoError(t, os.MkdirAll(tmpDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "partial_frame.jpg"), generateTestJPEG(), 0o644))
 
 	// Another camera's orphaned .tmp
 	otherDir := filepath.Join(store.RootDir(), "cam-other")
-	require.NoError(t, os.MkdirAll(otherDir, 0755))
+	require.NoError(t, os.MkdirAll(otherDir, 0o755))
 	otherTmp := filepath.Join(otherDir, "other_crash.tmp")
-	require.NoError(t, os.WriteFile(otherTmp, []byte("other-crash-data"), 0644))
+	require.NoError(t, os.WriteFile(otherTmp, []byte("other-crash-data"), 0o644))
 
 	// 3. Run cleanup
 	require.NoError(t, store.CleanupTempFiles())
@@ -273,7 +269,7 @@ func TestCrashRecovery(t *testing.T) {
 	// Note: Go's zero time.Time marshals as "0001-01-01T00:00:00Z", not SQL NULL.
 	// We must use raw SQL to insert NULL ended_at to simulate a crash.
 	_, err = db.DB().Exec(
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
 		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, 0,
 	)
 	require.NoError(t, err)
@@ -324,7 +320,7 @@ func TestMultiCameraConcurrent(t *testing.T) {
 			temp, final, err := store.CreateSegment(cid, "mjpeg")
 			require.NoError(t, err)
 
-			for i := 0; i < numFrames; i++ {
+			for range numFrames {
 				_, err := store.WriteFrame(temp, generateTestJPEG())
 				require.NoError(t, err)
 				time.Sleep(10 * time.Millisecond) // ensure unique timestamps
@@ -409,9 +405,9 @@ func TestStorageUnavailable(t *testing.T) {
 
 	// 8. Recreate the directory explicitly for clean state
 	require.NoError(t, os.RemoveAll(dir))
-	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	// 8. Recreate the directory
-	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 
 	// 9. Storage is available again
 	require.True(t, store.IsAvailable())
@@ -504,7 +500,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	// 3. Upload a JPEG frame via upload handler
 	jpegData := generateTestJPEG()
-	req := httptest.NewRequest("POST", "/api/upload/"+cameraID, bytes.NewReader(jpegData))
+	req := httptest.NewRequest(http.MethodPost, "/api/upload/"+cameraID, bytes.NewReader(jpegData))
 	req.Header.Set("Content-Type", "image/jpeg")
 	rr := httptest.NewRecorder()
 	uploadRouter.ServeHTTP(rr, req)
@@ -913,8 +909,6 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	// 5. Stop non-existent stream → 200 (not active)
-	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
-
 	// 5. Stop non-existent stream → 200 (not active)
 	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -996,7 +990,7 @@ func TestONVIFCameraCreation(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0755))
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
 
 	storeMgr, err := storage.NewManager(cfg.Storage.RootDir)
 	require.NoError(t, err)
@@ -1172,7 +1166,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0755))
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
 	storeMgr, err := storage.NewManager(cfg.Storage.RootDir)
 	require.NoError(t, err)
 	camMgr := camera.NewCameraManager(cfg, storeMgr, nil, "")
@@ -1196,7 +1190,7 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 func TestDiskFullScenario(t *testing.T) {
 	// Create a small tmpfs (1MB) to simulate disk full
 	tmpfsDir := filepath.Join(t.TempDir(), "small_disk")
-	require.NoError(t, os.MkdirAll(tmpfsDir, 0755))
+	require.NoError(t, os.MkdirAll(tmpfsDir, 0o755))
 
 	// Mount tmpfs with 1MB size limit
 	err := exec.Command("mount", "-t", "tmpfs", "-o", "size=1M", "tmpfs", tmpfsDir).Run()
@@ -1216,7 +1210,7 @@ func TestDiskFullScenario(t *testing.T) {
 	// Fill the disk with data until writes fail
 	cameraID := "cam-full"
 	cameraDir := filepath.Join(tmpfsDir, cameraID)
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	// Write data until disk is full
 	bigData := make([]byte, 512*1024) // 512KB chunks
@@ -1224,7 +1218,7 @@ func TestDiskFullScenario(t *testing.T) {
 		for j := range bigData {
 			bigData[j] = i
 		}
-		err := os.WriteFile(filepath.Join(cameraDir, fmt.Sprintf("fill_%d.dat", i)), bigData, 0644)
+		err := os.WriteFile(filepath.Join(cameraDir, fmt.Sprintf("fill_%d.dat", i)), bigData, 0o644)
 		if err != nil {
 			break // disk full
 		}
@@ -1254,10 +1248,10 @@ func TestCameraConnectionFailure(t *testing.T) {
 
 	// Create H264 recorder with invalid RTSP URL
 	rec := recorder.NewH264Recorder(recorder.H264Config{
-		CameraID:    "cam-fail",
-		RTSPURL:     "rtsp://127.0.0.1:1/nonexistent", // port 1 = connection refused
-		SegmentDur:  5 * time.Minute,
-		RingBufCap:  100,
+		CameraID:   "cam-fail",
+		RTSPURL:    "rtsp://127.0.0.1:1/nonexistent", // port 1 = connection refused
+		SegmentDur: 5 * time.Minute,
+		RingBufCap: 100,
 	}, store)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1277,6 +1271,7 @@ func TestCameraConnectionFailure(t *testing.T) {
 	require.NoError(t, rec.Stop())
 	require.Equal(t, model.StatusStopped, rec.Status())
 }
+
 // ============================================================================
 // Test 22: Concurrent Recording Stress Test (5 cameras)
 // ============================================================================
@@ -1290,10 +1285,10 @@ func TestConcurrentRecordingStress(t *testing.T) {
 	recorders := make([]*recorder.H264Recorder, len(cameraIDs))
 	for i, id := range cameraIDs {
 		recorders[i] = recorder.NewH264Recorder(recorder.H264Config{
-			CameraID:    id,
-			RTSPURL:     fmt.Sprintf("rtsp://127.0.0.1:1/%s", id),
-			SegmentDur:  5 * time.Minute,
-			RingBufCap:  50,
+			CameraID:   id,
+			RTSPURL:    "rtsp://127.0.0.1:1/" + id,
+			SegmentDur: 5 * time.Minute,
+			RingBufCap: 50,
 		}, store)
 	}
 
@@ -1347,7 +1342,7 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	db, store := setupEnv(t)
 
 	// Seed initial recordings for concurrent reads
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seedRecording(t, db, store, fmt.Sprintf("concurrent-%d", i),
 			"cam-concurrent", "h264", false)
 	}
@@ -1360,11 +1355,11 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	ctx := context.Background()
 
 	// Concurrent readers
-	for g := 0; g < numGoroutines/2; g++ {
+	for g := range numGoroutines / 2 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+			for i := range opsPerGoroutine {
 				recID := fmt.Sprintf("concurrent-%d", (id+i)%10)
 				_, err := db.GetRecording(ctx, recID)
 				if err != nil {
@@ -1375,11 +1370,11 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	}
 
 	// Concurrent writers (insert + delete)
-	for g := 0; g < numGoroutines/2; g++ {
+	for g := range numGoroutines / 2 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+			for i := range opsPerGoroutine {
 				rec := &model.Recording{
 					ID:         fmt.Sprintf("lock-test-%d-%d", id, i),
 					CameraID:   "cam-concurrent",
@@ -1436,7 +1431,6 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 }
-
 
 // ===========================================================================
 // Test 25: WebSocket Stream Integration
@@ -1495,7 +1489,6 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	require.GreaterOrEqual(t, len(msg), 5, "CodecInfo message too short: %d bytes", len(msg))
 	require.Equal(t, wsstream.MsgTypeCodecInfo, msg[0], "first message should be CodecInfo")
 
-
 	// --- Step 7: Broadcast frames via hub and verify VideoFrame messages ---
 	idrNALU := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
 	hub.Broadcast(90000, [][]byte{idrNALU}, false)
@@ -1505,9 +1498,8 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wsstream.MsgTypeVideoFrame, msg[0], "second message should be VideoFrame")
 
-
 	// --- Step 8: Broadcast additional frames and verify delivery ---
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		nalu := []byte{0x41, byte(i), 0x02, 0x03}
 		hub.Broadcast(int64(90000*(i+2)), [][]byte{nalu}, false)
 		time.Sleep(10 * time.Millisecond)
@@ -1548,23 +1540,3 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	t.Logf("final goroutines: %d (baseline: %d)", runtime.NumGoroutine(), baseGoroutines)
 	t.Log("no goroutine leaks detected")
 }
-
-// eventuallyWS polls fn until it returns true or timeout elapses.
-func eventuallyWS(t *testing.T, fn func() bool, timeout, interval time.Duration) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if fn() {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("eventuallyWS: timed out after %v", timeout)
-		case <-ticker.C:
-		}
-	}
-}
-

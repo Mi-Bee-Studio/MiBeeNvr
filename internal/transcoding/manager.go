@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -22,7 +22,6 @@ var (
 	disabledReason   string
 	disabledReasonMu sync.RWMutex
 )
-
 
 // TranscodeManager is the top-level manager for the transcoding subsystem.
 // Follows the MergeManager lifecycle pattern: New → Run(ctx) → Stop.
@@ -44,14 +43,14 @@ type TranscodeManager struct {
 
 // ManagerConfig holds the dependencies for TranscodeManager.
 type ManagerConfig struct {
-	Transcoding    config.TranscodingConfig
-	DataDir        string
-	FFmpegPath     string
-	FFprobePath    string
-	MaxWorkers     int
+	Transcoding     config.TranscodingConfig
+	DataDir         string
+	FFmpegPath      string
+	FFprobePath     string
+	MaxWorkers      int
 	ReplaceOriginal bool
-	EventBus       *event.EventBus
-	Config         *config.Config
+	EventBus        *event.EventBus
+	Config          *config.Config
 }
 
 // NewTranscodeManager probes hardware, validates capabilities, and creates the manager.
@@ -235,7 +234,8 @@ func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, in
 		return fmt.Errorf("enqueue transcode task: %w", err)
 	}
 
-	mgrLogger.Info("enqueued transcode task",
+	mgrLogger.Info(
+		"enqueued transcode task",
 		"camera_id", cameraID,
 		"recording_id", recordingID,
 		"input_format", inputFormat,

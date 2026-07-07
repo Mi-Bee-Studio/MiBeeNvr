@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -154,7 +155,8 @@ func (c *CS2Conn) worker() {
 
 		n, err := c.Conn.Read(buf)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				// TCP: send keepalive ping on each timeout wakeup.
 				if c.isTCP && time.Now().After(keepaliveTS) {
 					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
@@ -183,6 +185,12 @@ func (c *CS2Conn) worker() {
 			channel := c.channels[ch]
 
 			if c.isTCP {
+				// Send PING on data receive, matching official Mi Home app behavior.
+				// Ported from go2rtc: PING sent inside msgDrw handler, throttled to 1s.
+				if now := time.Now(); now.After(keepaliveTS) {
+					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					keepaliveTS = now.Add(pingInterval)
+				}
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int

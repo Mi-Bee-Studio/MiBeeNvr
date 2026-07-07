@@ -48,9 +48,9 @@ type StreamStatsCollector struct {
 	maxIDRInterval         time.Duration
 	windowSize             time.Duration
 
-	mu      sync.Mutex
-	cameras map[string]*cameraStats
-	prevBitrate map[string]float64
+	mu                 sync.Mutex
+	cameras            map[string]*cameraStats
+	prevBitrate        map[string]float64
 	consecutiveAnomaly map[string]map[string]int // cameraID → anomalyKey → count
 
 	// Per-camera threshold overrides
@@ -80,11 +80,11 @@ func NewStreamStatsCollector(
 		minFPS:                 minFPS,
 		maxIDRInterval:         maxIDRInterval,
 		windowSize:             windowSize,
-		cameras:         make(map[string]*cameraStats),
-		prevBitrate:     make(map[string]float64),
-		cameraOverrides: make(map[string]*collectorOverride),
-		consecutiveAnomaly: make(map[string]map[string]int),
-		eventHandler:    handler,
+		cameras:                make(map[string]*cameraStats),
+		prevBitrate:            make(map[string]float64),
+		cameraOverrides:        make(map[string]*collectorOverride),
+		consecutiveAnomaly:     make(map[string]map[string]int),
+		eventHandler:           handler,
 	}
 }
 
@@ -292,11 +292,11 @@ func (s *StreamStatsCollector) CheckAndReset() {
 						})
 					}
 				} else {
-				s.resetAnomalyStreak(cameraID, anomalyKeyIDR)
-			}
-			// Prometheus bridge: expose IDR interval as gauge
-			if s.m != nil {
-				s.m.StreamIDRIntervalSeconds.WithLabelValues(cameraID).Set(time.Since(lastIDR).Seconds())
+					s.resetAnomalyStreak(cameraID, anomalyKeyIDR)
+				}
+				// Prometheus bridge: expose IDR interval as gauge
+				if s.m != nil {
+					s.m.StreamIDRIntervalSeconds.WithLabelValues(cameraID).Set(time.Since(lastIDR).Seconds())
 				}
 			}
 		}

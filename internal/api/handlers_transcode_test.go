@@ -366,6 +366,7 @@ func TestTranscodingStatus_Disabled(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.Equal(t, false, resp["enabled"])
 }
+
 func TestTranscodingStatus_DisabledWithReason(t *testing.T) {
 	transcoding.SetDisabledReason("hardware insufficient: no H.264 encoder")
 	t.Cleanup(func() { transcoding.SetDisabledReason("") })
@@ -597,7 +598,7 @@ func TestTranscodingBackfill_Success(t *testing.T) {
 
 	// Seed recordings without transcode tasks
 	now := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seedRecording(t, db, &model.Recording{
 			ID:        fmt.Sprintf("rec-bf-%d", i),
 			CameraID:  "cam-bf",
@@ -677,6 +678,7 @@ func TestTranscodingBackfill_DisabledCamera(t *testing.T) {
 	rr := doTranscodeRequest(t, h, http.MethodPost, "/api/transcoding/backfill?camera_id=nonexistent")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
 func TestTranscodingBackfill_NoManager(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

@@ -33,7 +33,7 @@ func wrapDump(rw io.ReadWriter) io.ReadWriter {
 	if path == "" {
 		return rw
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		engineLogger.Warn("NVR_RTMP_DEBUG_DUMP: cannot open dump file, disabled", "path", path, "err", err)
 		return rw
@@ -49,7 +49,7 @@ func (d *dumpReadWriter) Write(p []byte) (int, error) {
 	d.mu.Lock()
 	// Hexdump + ASCII, 16 bytes per line, with absolute offset and timestamp.
 	ts := time.Now().Format("15:04:05.000")
-	d.f.WriteString(fmt.Sprintf("\n=== WRITE ts=%s offset=%d len=%d err=%v ===\n", ts, d.written, len(p), err))
+	fmt.Fprintf(d.f, "\n=== WRITE ts=%s offset=%d len=%d err=%v ===\n", ts, d.written, len(p), err)
 	d.f.WriteString(hex.Dump(p[:n]))
 	d.written += int64(n)
 	d.mu.Unlock()

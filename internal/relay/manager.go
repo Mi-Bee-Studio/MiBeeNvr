@@ -42,9 +42,9 @@ type Manager struct {
 	ctx     context.Context
 
 	// Transcode dependencies (optional, wired via setters).
-	presetRegistry *PresetRegistry
-	hardwareCap    *transcoding.HardwareCapabilities
-	ffmpegPath     string
+	presetRegistry    *PresetRegistry
+	hardwareCap       *transcoding.HardwareCapabilities
+	ffmpegPath        string
 	streamURLProvider StreamURLProvider // optional, resolves camera stream URL for FFmpeg relay
 }
 
@@ -81,9 +81,9 @@ func (m *Manager) SetPresetRegistry(r *PresetRegistry) {
 
 // SetHardwareCap wires HardwareCapabilities for transcoder encoder selection.
 // Should be set before Start.
-func (m *Manager) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
+func (m *Manager) SetHardwareCap(hwCap *transcoding.HardwareCapabilities) {
 	m.mu.Lock()
-	m.hardwareCap = cap
+	m.hardwareCap = hwCap
 	m.mu.Unlock()
 }
 
@@ -168,7 +168,7 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 			ID: c.ID, Name: c.Name, Protocol: c.Protocol, URL: c.URL, Enabled: c.Enabled,
 			Platform: c.Platform, TranscodePolicy: c.TranscodePolicy,
 			VideoPresetOverride: vpo, SourceURL: c.SourceURL, UseFFmpeg: c.UseFFmpeg,
-	}
+		}
 	}
 
 	// Index desired targets by their ID.
@@ -256,11 +256,11 @@ func (m *Manager) CameraStatus(cameraID string) []TargetStatus {
 	return out
 }
 
-// CameraStatusJSON returns the camera's target statuses as []interface{} so the
+// CameraStatusJSON returns the camera's target statuses as []any so the
 // camera manager (which can't import relay) can pass them to the JSON API.
-func (m *Manager) CameraStatusJSON(cameraID string) []interface{} {
+func (m *Manager) CameraStatusJSON(cameraID string) []any {
 	statuses := m.CameraStatus(cameraID)
-	out := make([]interface{}, len(statuses))
+	out := make([]any, len(statuses))
 	for i, s := range statuses {
 		out[i] = s
 	}

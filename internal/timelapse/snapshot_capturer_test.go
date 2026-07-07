@@ -28,8 +28,8 @@ import (
 func makeTestJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
 		}
 	}
@@ -355,7 +355,7 @@ func TestSnapshotCapturer_EmptySnapshotURL(t *testing.T) {
 	store := newMockSegmentStore(t)
 
 	cfg := SnapshotCapturerConfig{
-		CameraID:  "test-cam-empty",
+		CameraID:    "test-cam-empty",
 		SnapshotURL: "",
 		Interval:    50 * time.Millisecond,
 		SegmentDur:  time.Hour,
@@ -540,7 +540,7 @@ func TestSnapshotCapturer_ContextCancellation(t *testing.T) {
 		Store:       store,
 	}
 
-capturer := NewSnapshotCapturer(cfg, store)
+	capturer := NewSnapshotCapturer(cfg, store)
 	ctx := context.Background()
 
 	err := capturer.Start(ctx)

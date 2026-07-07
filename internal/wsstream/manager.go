@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/gorilla/websocket"
 )
 
 var wsLogger atomic.Pointer[slog.Logger]
@@ -29,42 +29,41 @@ const (
 
 // Errors returned by the Manager.
 var (
-	ErrStreamExists   = errors.New("wsstream: stream already registered")
+	ErrStreamExists    = errors.New("wsstream: stream already registered")
 	ErrStreamNotActive = errors.New("wsstream: stream not active")
-	ErrMaxViewers     = errors.New("wsstream: max viewers reached")
+	ErrMaxViewers      = errors.New("wsstream: max viewers reached")
 )
-
 
 // viewerConn represents a connected WebSocket client.
 type viewerConn struct {
-	id         int64
-	conn       *websocket.Conn
-	ch         chan []byte // encoded binary messages
-	cancel     context.CancelFunc
-	audioOnly  bool // true = skip video frames, audio only
+	id        int64
+	conn      *websocket.Conn
+	ch        chan []byte // encoded binary messages
+	cancel    context.CancelFunc
+	audioOnly bool // true = skip video frames, audio only
 }
 
 // streamEntry holds per-camera WebSocket streaming state.
 type streamEntry struct {
-	codec      model.Format
-	sps        []byte
-	pps        []byte
-	vps        []byte
-	viewers    map[int64]*viewerConn
-	viewerSeq  atomic.Int64
-	viewerMu   sync.Mutex
-	frameCh    chan model.FrameMsg
-	cancel     context.CancelFunc
-	hub        *model.StreamHub
-	hubSubID   string
-	dropCount  atomic.Int64
+	codec     model.Format
+	sps       []byte
+	pps       []byte
+	vps       []byte
+	viewers   map[int64]*viewerConn
+	viewerSeq atomic.Int64
+	viewerMu  sync.Mutex
+	frameCh   chan model.FrameMsg
+	cancel    context.CancelFunc
+	hub       *model.StreamHub
+	hubSubID  string
+	dropCount atomic.Int64
 
 	// Audio fields (zero-value = no audio)
-	audioCodec      byte              // wire format codec byte
-	audioSampleRate uint32            // sample rate in Hz
-	audioChannels   uint8             // number of channels
+	audioCodec      byte                  // wire format codec byte
+	audioSampleRate uint32                // sample rate in Hz
+	audioChannels   uint8                 // number of channels
 	audioCh         chan model.AudioFrame // audio frame channel, nil if no audio
-	audioSubID      string            // StreamHub audio subscription ID
+	audioSubID      string                // StreamHub audio subscription ID
 }
 
 // upgrader is the WebSocket upgrader used by ServeWS.
@@ -142,15 +141,15 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 
 	ctx, cancel := context.WithCancel(context.Background())
 	entry := &streamEntry{
-		codec:    codec,
-		sps:       sps,
-		pps:       pps,
-		vps:       vps,
-		viewers:   make(map[int64]*viewerConn),
-		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
-		cancel:    cancel,
-		hub:       hub,
-		audioCh:   nil, // lazily allocated in SetAudioInfo
+		codec:   codec,
+		sps:     sps,
+		pps:     pps,
+		vps:     vps,
+		viewers: make(map[int64]*viewerConn),
+		frameCh: make(chan model.FrameMsg, m.writeBufSize),
+		cancel:  cancel,
+		hub:     hub,
+		audioCh: nil, // lazily allocated in SetAudioInfo
 	}
 
 	// Subscribe to recorder's StreamHub for live frames
@@ -280,7 +279,8 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	}
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "ws_recv",
@@ -289,7 +289,8 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	default:
 		// Buffer full, drop frame
 		cnt := entry.dropCount.Add(1)
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "ws_drop",
@@ -357,7 +358,8 @@ func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRat
 		}
 	}
 
-	wsLogger.Load().Info("WebSocket audio configured",
+	wsLogger.Load().Info(
+		"WebSocket audio configured",
 		"camera_id", camID,
 		"codec", codec,
 		"sample_rate", sampleRate,
@@ -426,7 +428,6 @@ func (m *Manager) distributeAudioFrame(entry *streamEntry, camID string, af mode
 	}
 	entry.viewerMu.Unlock()
 }
-
 
 // writeLoop drains frames from the channel and distributes to all viewers.
 func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntry) {
@@ -597,8 +598,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-		}()
-
+	}()
 
 	// Write frames to WebSocket until disconnect
 	for {

@@ -182,8 +182,8 @@ func buildTestPPSWithCABAC() []byte {
 	buf.WriteByte(0x68)
 
 	bw := &testBitWriter{}
-	bw.writeUE(0) // pic_parameter_set_id
-	bw.writeUE(0) // seq_parameter_set_id
+	bw.writeUE(0)  // pic_parameter_set_id
+	bw.writeUE(0)  // seq_parameter_set_id
 	bw.writeBit(1) // entropy_coding_mode_flag = 1 (CABAC)
 	bw.writeBit(0) // pic_order_present_flag
 	bw.writeUE(0)  // num_slice_groups_minus1
@@ -260,7 +260,7 @@ func (w *testBitWriter) writeUE(val uint32) {
 	}
 	codeNum := val + 1
 	leadingZeros := bits.Len32(codeNum) - 1
-	for i := 0; i < leadingZeros; i++ {
+	for range leadingZeros {
 		w.writeBit(0)
 	}
 	w.writeBit(1)
@@ -271,7 +271,7 @@ func (w *testBitWriter) bytes() []byte {
 	// Pad remaining bits with 1s (RBSP stop bit + alignment).
 	if w.pos > 0 && w.pos < 8 {
 		remaining := 8 - w.pos
-		for i := 0; i < remaining; i++ {
+		for range remaining {
 			w.writeBit(1)
 		}
 	}
@@ -286,7 +286,7 @@ func TestH264GoMerger_ValidOutput(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,10 +295,10 @@ func TestH264GoMerger_ValidOutput(t *testing.T) {
 	idr := buildTestIDR()
 
 	// Generate 5 test frame files.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -377,7 +377,7 @@ func TestH264GoMerger_EmptyDir(t *testing.T) {
 	emptyDir := filepath.Join(tmpDir, "empty")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(emptyDir, 0755); err != nil {
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -394,7 +394,7 @@ func TestH264GoMerger_SingleFrame(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -404,7 +404,7 @@ func TestH264GoMerger_SingleFrame(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
 	frameData := buildTestH264Frame(sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -471,7 +471,7 @@ func TestH264GoMerger_ContextCancellation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,10 +480,10 @@ func TestH264GoMerger_ContextCancellation(t *testing.T) {
 	idr := buildTestIDR()
 
 	// Generate 20 frames.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -509,7 +509,7 @@ func TestH264GoMerger_MergeResult(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -517,10 +517,10 @@ func TestH264GoMerger_MergeResult(t *testing.T) {
 	pps := buildTestPPS()
 	idr := buildTestIDR()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.h264", i))
 		frameData := buildTestH264Frame(sps, pps, idr)
-		if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+		if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -557,7 +557,7 @@ func TestH264GoMerger_MissingSPS(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -572,7 +572,7 @@ func TestH264GoMerger_MissingSPS(t *testing.T) {
 	buf.Write(idr)
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
-	if err := os.WriteFile(framePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(framePath, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -589,7 +589,7 @@ func TestH264GoMerger_MissingPPS(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -604,7 +604,7 @@ func TestH264GoMerger_MissingPPS(t *testing.T) {
 	buf.Write(idr)
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
-	if err := os.WriteFile(framePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(framePath, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -621,7 +621,7 @@ func TestH264GoMerger_InvalidFPSEdgeCase(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -631,7 +631,7 @@ func TestH264GoMerger_InvalidFPSEdgeCase(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
 	frameData := buildTestH264Frame(sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -654,7 +654,7 @@ func TestH264GoMerger_HighProfileDimensions(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -665,7 +665,7 @@ func TestH264GoMerger_HighProfileDimensions(t *testing.T) {
 
 	framePath := filepath.Join(framesDir, "frame_000000.h264")
 	frameData := buildTestH264Frame(sps, pps, idr)
-	if err := os.WriteFile(framePath, frameData, 0644); err != nil {
+	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -697,31 +697,31 @@ func TestSplitAnnexB(t *testing.T) {
 	tests := []struct {
 		name     string
 		data     []byte
-		want     int    // number of NALUs
-		wantType []int  // NAL types for first few
+		want     int   // number of NALUs
+		wantType []int // NAL types for first few
 	}{
 		{
 			name: "three NALUs with 4-byte start codes",
 			data: func() []byte {
 				var b bytes.Buffer
 				b.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00}) // SPS
-				b.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x68, 0xEE})        // PPS
-				b.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88})        // IDR
+				b.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x68, 0xEE})       // PPS
+				b.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88})       // IDR
 				return b.Bytes()
 			}(),
 			want:     3,
 			wantType: []int{7, 8, 5},
 		},
 		{
-			name: "single NALU",
-			data: []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E},
-			want: 1,
+			name:     "single NALU",
+			data:     []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E},
+			want:     1,
 			wantType: []int{7},
 		},
 		{
-			name: "3-byte start code",
-			data: []byte{0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x00, 0x00, 0x01, 0x65},
-			want: 2,
+			name:     "3-byte start code",
+			data:     []byte{0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x00, 0x00, 0x01, 0x65},
+			want:     2,
 			wantType: []int{7, 5},
 		},
 		{
@@ -731,9 +731,9 @@ func TestSplitAnnexB(t *testing.T) {
 			wantType: nil,
 		},
 		{
-			name: "no start code (raw NALU)",
-			data: []byte{0x67, 0x42, 0x00},
-			want: 1,
+			name:     "no start code (raw NALU)",
+			data:     []byte{0x67, 0x42, 0x00},
+			want:     1,
 			wantType: []int{7},
 		},
 	}
@@ -883,7 +883,7 @@ func TestListH264FrameFiles(t *testing.T) {
 		"frame_000003.h264",
 	}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(tmpDir, f), []byte("test"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(tmpDir, f), []byte("test"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -174,7 +174,7 @@ func TestStreamRegistry_StreamLimits(t *testing.T) {
 	defer hlsMgr.StopAll()
 
 	// Start 4 streams to fill the limit
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		err := hlsMgr.StartStream(
 			string(rune('a'+i)),
 			[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
@@ -258,9 +258,11 @@ func (s *stubStreamHandler) CanHandle(codec model.Format) bool {
 	}
 	return false
 }
+
 func (s *stubStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
 	return nil
 }
+
 func (s *stubStreamHandler) StopStream(camID string) error {
 	return nil
 }

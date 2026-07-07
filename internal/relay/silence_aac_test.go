@@ -109,7 +109,7 @@ func TestSilenceAAC_SourceActiveReset(t *testing.T) {
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			select {
 			case <-ticker.C:
 				g.SourceActive()

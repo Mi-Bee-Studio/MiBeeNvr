@@ -60,7 +60,7 @@ func deriveSnapshotFromRTSP(rtspURL string) string {
 	// Build the base HTTP URL from the RTSP host:port
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
 
 	// Try common snapshot paths, returning the first that matches common patterns.
@@ -78,7 +78,8 @@ func deriveSnapshotFromRTSP(rtspURL string) string {
 	p := path.Clean(u.Path)
 	if p != "" && p != "/" && p != "." {
 		dir := path.Dir(p)
-		endpoints = append(endpoints,
+		endpoints = append(
+			endpoints,
 			"http://"+host+dir+"/snapshot.jpg",
 			"http://"+host+dir+"/snapshot",
 		)
@@ -118,13 +119,14 @@ func snapshotCandidatesFromRTSP(rtspURL string) []string {
 
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
 
 	var candidates []string
 
 	// Common snapshot endpoints
-	candidates = append(candidates,
+	candidates = append(
+		candidates,
 		"http://"+host+"/cgi-bin/snapshot.cgi",
 		"http://"+host+"/cgi-bin/snapshot",
 		"http://"+host+"/snapshot.jpg",
@@ -136,7 +138,8 @@ func snapshotCandidatesFromRTSP(rtspURL string) []string {
 	p := path.Clean(u.Path)
 	if p != "" && p != "/" && p != "." {
 		dir := path.Dir(p)
-		candidates = append(candidates,
+		candidates = append(
+			candidates,
 			"http://"+host+dir+"/snapshot.jpg",
 			"http://"+host+dir+"/snapshot",
 		)

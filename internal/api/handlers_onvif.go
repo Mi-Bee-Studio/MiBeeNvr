@@ -23,7 +23,7 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
@@ -36,7 +36,7 @@ func (h *Handler) handleONVIFCameraProfiles(w http.ResponseWriter, r *http.Reque
 	profiles, err := client.GetProfiles(r.Context())
 	if err != nil {
 		logger.Error("failed to get profiles", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to get profiles")
+		WriteError(w, http.StatusInternalServerError, "failed to get profiles")
 		return
 	}
 
@@ -57,7 +57,7 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
@@ -95,11 +95,11 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 		req.Timeout = 5
 	}
 	if req.Host == "" {
-		writeError(w, http.StatusBadRequest, "host is required")
+		WriteError(w, http.StatusBadRequest, "host is required")
 		return
 	}
 	if !validateIP(req.Host) {
-		writeError(w, http.StatusBadRequest, "invalid IP address format")
+		WriteError(w, http.StatusBadRequest, "invalid IP address format")
 		return
 	}
 	if req.Port <= 0 {
@@ -109,7 +109,7 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 		req.Timeout = 5
 	}
 	if req.Timeout > 30 {
-		writeError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
+		WriteError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
 		return
 	}
 
@@ -118,7 +118,7 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 
 	device, err := onvif.ProbeDevice(ctx, req.Host, req.Port, time.Duration(req.Timeout)*time.Second)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("probe failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("probe failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -137,7 +137,7 @@ func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 		req.Timeout = 5
 	}
 	if req.Timeout > 30 {
-		writeError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
+		WriteError(w, http.StatusBadRequest, "timeout must be between 1 and 30 seconds")
 		return
 	}
 
@@ -154,22 +154,22 @@ func (h *Handler) handleONVIFDiscover(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	ip := chi.URLParam(r, "ip")
 	if ip == "" {
-		writeError(w, http.StatusBadRequest, "IP address is required")
+		WriteError(w, http.StatusBadRequest, "IP address is required")
 		return
 	}
 	if !validateIP(ip) {
-		writeError(w, http.StatusBadRequest, "invalid IP address format")
+		WriteError(w, http.StatusBadRequest, "invalid IP address format")
 		return
 	}
 	ctx := r.Context()
 	client := onvif.NewClient(fmt.Sprintf("http://%s/onvif/device_service", ip), "", "")
 	if err := client.Connect(ctx); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to device: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to device: %v", err))
 		return
 	}
 	info, err := client.GetDeviceInformation(ctx)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get device info: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to get device info: %v", err))
 		return
 	}
 	profiles, err := client.GetProfiles(ctx)
@@ -184,17 +184,17 @@ func (h *Handler) handleONVIFDeviceDetail(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
 	if h.db == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return false
 	}
 	cameraID := chi.URLParam(r, "id")
 	camera, err := h.db.GetCamera(r.Context(), cameraID)
 	if err != nil || camera == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return false
 	}
 	if camera.Protocol != "onvif" {
-		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF cameras")
+		WriteError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF cameras")
 		return false
 	}
 	return true
@@ -211,18 +211,18 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 		Zoom float64 `json:"zoom"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Mode != "continuous" && req.Mode != "absolute" && req.Mode != "relative" {
-		writeError(w, http.StatusBadRequest, "mode must be continuous, absolute, or relative")
+		WriteError(w, http.StatusBadRequest, "mode must be continuous, absolute, or relative")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -241,7 +241,7 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		logger.Error("PTZ command failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "PTZ command failed")
+		WriteError(w, http.StatusInternalServerError, "PTZ command failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -253,7 +253,7 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -263,7 +263,7 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := ptz.Stop(r.Context(), true, true); err != nil {
 		logger.Error("PTZ stop failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "PTZ stop failed")
+		WriteError(w, http.StatusInternalServerError, "PTZ stop failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
@@ -275,7 +275,7 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -286,7 +286,7 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	pos, moving, err := ptz.GetStatus(r.Context())
 	if err != nil {
 		logger.Error("get PTZ status failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "get PTZ status failed")
+		WriteError(w, http.StatusInternalServerError, "get PTZ status failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -305,7 +305,7 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -324,7 +324,7 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logger.Error("get PTZ presets failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "get PTZ presets failed")
+		WriteError(w, http.StatusInternalServerError, "get PTZ presets failed")
 		return
 	}
 	if presets == nil {
@@ -341,18 +341,18 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -363,7 +363,7 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 	token, err := ptz.SetPreset(r.Context(), req.Name)
 	if err != nil {
 		logger.Error("create PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "create PTZ preset failed")
+		WriteError(w, http.StatusInternalServerError, "create PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
@@ -376,7 +376,7 @@ func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -386,7 +386,7 @@ func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := ptz.GoToPreset(r.Context(), token); err != nil {
 		logger.Error("go to PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "go to PTZ preset failed")
+		WriteError(w, http.StatusInternalServerError, "go to PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -399,7 +399,7 @@ func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	ptz, err := h.camMgr.GetONVIFPTZController(r.Context(), cameraID)
@@ -409,7 +409,7 @@ func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := ptz.RemovePreset(r.Context(), token); err != nil {
 		logger.Error("delete PTZ preset failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "delete PTZ preset failed")
+		WriteError(w, http.StatusInternalServerError, "delete PTZ preset failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -428,7 +428,7 @@ func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 		writeAPIError(w, http.StatusNotFound, err)
 	default:
 		logger.Error("PTZ operation failed", "camera_id", cameraID, "error", err)
-		writeError(w, http.StatusInternalServerError, "PTZ operation failed")
+		WriteError(w, http.StatusInternalServerError, "PTZ operation failed")
 	}
 }
 
@@ -441,7 +441,7 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	provider, err := h.camMgr.GetSnapshotProvider(r.Context(), cameraID)
@@ -455,11 +455,11 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 		msg := err.Error()
 		if strings.Contains(msg, "not supported") || strings.Contains(msg, "<Fault>") {
 			slog.Debug("snapshot URI not supported by device", "camera_id", cameraID, "error", err)
-			writeError(w, http.StatusNotFound, "snapshot not supported by this camera")
+			WriteError(w, http.StatusNotFound, "snapshot not supported by this camera")
 			return
 		}
 		logger.Error("get snapshot URI failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "get snapshot URI failed")
+		WriteError(w, http.StatusInternalServerError, "get snapshot URI failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"uri": uri})
@@ -474,7 +474,7 @@ func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
@@ -484,7 +484,7 @@ func (h *Handler) handleImagingGetSettings(w http.ResponseWriter, r *http.Reques
 	}
 	settings, err := img.GetImagingSettings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging settings failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("get imaging settings failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
@@ -495,14 +495,14 @@ func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Reques
 	cameraID := chi.URLParam(r, "id")
 	var req onvif.ImagingSettings
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
@@ -511,7 +511,7 @@ func (h *Handler) handleImagingSetSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := img.SetImagingSettings(r.Context(), req); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("set imaging settings failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("set imaging settings failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -524,7 +524,7 @@ func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	img, err := h.camMgr.GetImagingController(r.Context(), cameraID)
@@ -534,7 +534,7 @@ func (h *Handler) handleImagingGetOptions(w http.ResponseWriter, r *http.Request
 	}
 	options, err := img.GetImagingOptions(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("get imaging options failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("get imaging options failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, options)
@@ -553,7 +553,7 @@ func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) 
 		writeAPIError(w, http.StatusNotFound, err)
 	default:
 		logger.Error("imaging operation failed", "camera_id", cameraID, "error", err)
-		writeError(w, http.StatusInternalServerError, "imaging operation failed")
+		WriteError(w, http.StatusInternalServerError, "imaging operation failed")
 	}
 }
 
@@ -566,7 +566,7 @@ func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -576,10 +576,10 @@ func (h *Handler) handleONVIFReboot(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := dm.SystemReboot(r.Context()); err != nil {
 		if errors.Is(err, onvif.ErrUnsupported) {
-			writeError(w, http.StatusNotImplemented, "reboot not supported by device")
+			WriteError(w, http.StatusNotImplemented, "reboot not supported by device")
 			return
 		}
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("reboot failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("reboot failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -592,7 +592,7 @@ func (h *Handler) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -602,7 +602,7 @@ func (h *Handler) handleONVIFGetNetwork(w http.ResponseWriter, r *http.Request) 
 	}
 	ifaces, err := dm.GetNetworkInterfaces(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("get network interfaces failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("get network interfaces failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"interfaces": ifaces})
@@ -615,14 +615,14 @@ func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) 
 		Interfaces []onvif.NetworkInterface `json:"interfaces"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -632,10 +632,10 @@ func (h *Handler) handleONVIFSetNetwork(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := dm.SetNetworkInterfaces(r.Context(), req.Interfaces); err != nil {
 		if errors.Is(err, onvif.ErrUnsupported) {
-			writeError(w, http.StatusNotImplemented, "set network interfaces not supported by device")
+			WriteError(w, http.StatusNotImplemented, "set network interfaces not supported by device")
 			return
 		}
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("set network interfaces failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("set network interfaces failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -648,7 +648,7 @@ func (h *Handler) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -658,7 +658,7 @@ func (h *Handler) handleONVIFGetUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := dm.GetUsers(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("get users failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("get users failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"users": users})
@@ -671,14 +671,14 @@ func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request)
 		Users []onvif.ONVIFUser `json:"users"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -687,7 +687,7 @@ func (h *Handler) handleONVIFCreateUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := dm.CreateUsers(r.Context(), req.Users); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("create users failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("create users failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -700,14 +700,14 @@ func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request)
 		Usernames []string `json:"usernames"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -716,7 +716,7 @@ func (h *Handler) handleONVIFDeleteUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := dm.DeleteUsers(r.Context(), req.Usernames); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("delete users failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("delete users failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -730,14 +730,14 @@ func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	dm, err := h.camMgr.GetDeviceManager(r.Context(), cameraID)
@@ -746,7 +746,7 @@ func (h *Handler) handleONVIFSetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := dm.SetUser(r.Context(), username, req.Password); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("set user failed: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("set user failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -763,6 +763,6 @@ func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err erro
 		writeAPIError(w, http.StatusBadGateway, err)
 	default:
 		logger.Error("device management operation failed", "camera_id", cameraID, "error", err)
-		writeError(w, http.StatusInternalServerError, "device management operation failed")
+		WriteError(w, http.StatusInternalServerError, "device management operation failed")
 	}
 }

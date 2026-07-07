@@ -29,7 +29,7 @@ type Client struct {
 
 	cachedCapabilities *DeviceCapabilitiesDetailed
 	capsMu             sync.Mutex
-	}
+}
 
 // NewClient creates a new ONVIF client for a specific device.
 // Call Connect() before using device operations.
@@ -131,7 +131,7 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 	// with some devices. Fallback to raw SOAP request if URI is empty.
 	if strings.TrimSpace(uri.URI) == "" {
 		logger.Warn("onvif-go returned empty URI, trying raw SOAP fallback", "profile_token", profileToken)
-	rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
+		rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
 		if rawErr != nil {
 			logger.Warn("raw SOAP fallback failed", "error", rawErr)
 		} else if strings.TrimSpace(rawURI) != "" {
@@ -184,7 +184,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
   </s:Body>
 </s:Envelope>`, protocol, profileToken)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -206,7 +206,7 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 	var envelope struct {
 		XMLName xml.Name `xml:"Envelope"`
 		Body    struct {
-			XMLName xml.Name `xml:"Body"`
+			XMLName              xml.Name `xml:"Body"`
 			GetStreamURIResponse struct {
 				XMLName  xml.Name `xml:"GetStreamUriResponse"`
 				MediaURI struct {
@@ -331,7 +331,7 @@ func (c *Client) DeviceEndpoint() string {
 // DoRawSOAPNoAuth sends a raw SOAP request without any authentication header.
 // Used as fallback for cameras with buggy per-service WS-Security validation.
 func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -357,7 +357,7 @@ func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string)
 // DoRawSOAPBasicAuth sends a raw SOAP request with HTTP Basic Auth.
 // Used as fallback for cameras that accept BasicAuth but reject WS-Security.
 func (c *Client) DoRawSOAPBasicAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(soapBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -395,7 +395,7 @@ func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBo
 	// Inject WS-Security header before <s:Body>
 	bodyWithAuth := strings.Replace(soapBody, "<s:Body>", c.buildWSSecurityHeader()+"<s:Body>", 1)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(bodyWithAuth))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(bodyWithAuth))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

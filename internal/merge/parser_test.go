@@ -196,7 +196,7 @@ func TestParseSegment_NonExistentFile(t *testing.T) {
 func TestParseSegment_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.mp4")
-	require.NoError(t, os.WriteFile(path, nil, 0644))
+	require.NoError(t, os.WriteFile(path, nil, 0o644))
 
 	_, err := ParseSegment(path)
 	require.Error(t, err)
@@ -205,7 +205,7 @@ func TestParseSegment_EmptyFile(t *testing.T) {
 func TestParseSegment_InvalidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "garbage.mp4")
-	require.NoError(t, os.WriteFile(path, []byte("this is not an mp4 file at all"), 0644))
+	require.NoError(t, os.WriteFile(path, []byte("this is not an mp4 file at all"), 0o644))
 
 	_, err := ParseSegment(path)
 	require.Error(t, err)
@@ -402,7 +402,7 @@ func TestDetectKeyframes_SmallSample(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mp4")
 	data := []byte{0x00, 0x00, 0x00, 0x01}
-	require.NoError(t, os.WriteFile(path, data, 0644))
+	require.NoError(t, os.WriteFile(path, data, 0o644))
 	f, err := os.Open(path)
 	require.NoError(t, err)
 	defer f.Close()
@@ -425,7 +425,7 @@ func TestDetectKeyframes_H264AllTypes(t *testing.T) {
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x07}) // type 7 -> SPS (keyframe)
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x08}) // type 8 -> PPS (keyframe)
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x06}) // type 6 -> SEI (non-keyframe)
-	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0644))
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
 
 	f, err := os.Open(path)
 	require.NoError(t, err)
@@ -459,7 +459,7 @@ func TestDetectKeyframes_H265AllTypes(t *testing.T) {
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x02, 0x21, 0x00}) // type 16 (BLA) <<1|1 = 0x21 -> keyframe
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x02, 0x2B, 0x00}) // type 21 (CRA) <<1|1 = 0x2B -> keyframe
 	buf.Write([]byte{0x00, 0x00, 0x00, 0x02, 0x03, 0x00}) // type 1 (TRAIL_R) -> non-keyframe
-	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0644))
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
 
 	f, err := os.Open(path)
 	require.NoError(t, err)
@@ -485,7 +485,7 @@ func TestDetectKeyframes_ReadError(t *testing.T) {
 	// ReadAt error beyond EOF is handled gracefully (sample skipped).
 	dir := t.TempDir()
 	path := filepath.Join(dir, "small.mp4")
-	require.NoError(t, os.WriteFile(path, []byte{0x00}, 0644))
+	require.NoError(t, os.WriteFile(path, []byte{0x00}, 0o644))
 	f, err := os.Open(path)
 	require.NoError(t, err)
 	defer f.Close()

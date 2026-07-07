@@ -212,7 +212,6 @@ func clientExtractSOAPAction(body string) string {
 	return env.Body.Inner.XMLName.Local
 }
 
-
 // --- Existing tests (updated) ---
 
 func TestNewClient(t *testing.T) {
@@ -631,7 +630,7 @@ func TestConcurrentAccess_NoDataRace(t *testing.T) {
 	require.NoError(t, client.Connect(ctx))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

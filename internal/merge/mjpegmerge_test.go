@@ -22,35 +22,35 @@ func TestMergeMJPEGSegments_MultipleSources(t *testing.T) {
 
 	// Create source segment directories with JPEG files
 	srcDir1 := filepath.Join(storeDir, cameraID, "src1")
-	require.NoError(t, os.MkdirAll(srcDir1, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame002.jpg"), []byte("fake-jpeg-2"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir1, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame002.jpg"), []byte("fake-jpeg-2"), 0o644))
 
 	srcDir2 := filepath.Join(storeDir, cameraID, "src2")
-	require.NoError(t, os.MkdirAll(srcDir2, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir2, "frame003.jpg"), []byte("fake-jpeg-3"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir2, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir2, "frame003.jpg"), []byte("fake-jpeg-3"), 0o644))
 
 	segments := []*model.Recording{
 		{
-			ID:        "seg1",
-			CameraID:  cameraID,
-			FilePath:  srcDir1,
-			Format:    model.FormatMJPEG,
-			StartedAt: time.Now().Add(-2 * time.Hour),
-			EndedAt:   time.Now().Add(-time.Hour),
-			Duration:  3600.0,
-			FileSize:  24,
+			ID:         "seg1",
+			CameraID:   cameraID,
+			FilePath:   srcDir1,
+			Format:     model.FormatMJPEG,
+			StartedAt:  time.Now().Add(-2 * time.Hour),
+			EndedAt:    time.Now().Add(-time.Hour),
+			Duration:   3600.0,
+			FileSize:   24,
 			FrameCount: 2,
 		},
 		{
-			ID:        "seg2",
-			CameraID:  cameraID,
-			FilePath:  srcDir2,
-			Format:    model.FormatMJPEG,
-			StartedAt: time.Now().Add(-time.Hour),
-			EndedAt:   time.Now(),
-			Duration:  3600.0,
-			FileSize:  12,
+			ID:         "seg2",
+			CameraID:   cameraID,
+			FilePath:   srcDir2,
+			Format:     model.FormatMJPEG,
+			StartedAt:  time.Now().Add(-time.Hour),
+			EndedAt:    time.Now(),
+			Duration:   3600.0,
+			FileSize:   12,
 			FrameCount: 1,
 		},
 	}
@@ -97,19 +97,19 @@ func TestMergeMJPEGSegments_SingleSource(t *testing.T) {
 
 	cameraID := "cam1"
 	srcDir := filepath.Join(storeDir, cameraID, "src_single")
-	require.NoError(t, os.MkdirAll(srcDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "frame001.jpg"), []byte("fake-jpeg-data"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "frame001.jpg"), []byte("fake-jpeg-data"), 0o644))
 
 	segments := []*model.Recording{
 		{
-			ID:        "seg1",
-			CameraID:  cameraID,
-			FilePath:  srcDir,
-			Format:    model.FormatMJPEG,
-			StartedAt: time.Now().Add(-time.Hour),
-			EndedAt:   time.Now(),
-			Duration:  3600.0,
-			FileSize:  15,
+			ID:         "seg1",
+			CameraID:   cameraID,
+			FilePath:   srcDir,
+			Format:     model.FormatMJPEG,
+			StartedAt:  time.Now().Add(-time.Hour),
+			EndedAt:    time.Now(),
+			Duration:   3600.0,
+			FileSize:   15,
 			FrameCount: 1,
 		},
 	}
@@ -134,12 +134,12 @@ func TestMergeMJPEGSegments_SourceDirsPersist(t *testing.T) {
 
 	cameraID := "cam1"
 	srcDir1 := filepath.Join(storeDir, cameraID, "src1")
-	require.NoError(t, os.MkdirAll(srcDir1, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir1, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0o644))
 
 	srcDir2 := filepath.Join(storeDir, cameraID, "src2")
-	require.NoError(t, os.MkdirAll(srcDir2, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir2, "frame002.jpg"), []byte("fake-jpeg-2"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir2, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir2, "frame002.jpg"), []byte("fake-jpeg-2"), 0o644))
 
 	segments := []*model.Recording{
 		{
@@ -180,8 +180,8 @@ func TestMergeMJPEGSegments_PartialFailure(t *testing.T) {
 
 	// First segment exists and has files.
 	srcDir1 := filepath.Join(storeDir, cameraID, "src1")
-	require.NoError(t, os.MkdirAll(srcDir1, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0644))
+	require.NoError(t, os.MkdirAll(srcDir1, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir1, "frame001.jpg"), []byte("fake-jpeg-1"), 0o644))
 
 	// Second segment directory does not exist (simulates partial failure).
 	srcDir2 := filepath.Join(storeDir, cameraID, "src2")

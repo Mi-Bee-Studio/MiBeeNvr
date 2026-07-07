@@ -106,5 +106,5 @@ func IsLikelyMP4(path string) bool {
 
 // FormatDuration mirrors time.Duration formatting for logging.
 func (m *MediaInfo) FormatDuration() string {
-	return (time.Duration(m.Duration * float64(time.Second))).Round(time.Millisecond).String()
+	return time.Duration(m.Duration * float64(time.Second)).Round(time.Millisecond).String()
 }

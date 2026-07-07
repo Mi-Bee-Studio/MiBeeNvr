@@ -17,8 +17,8 @@ import (
 // We can't use the real client, so we mock at the method level via a wrapper.
 type mockEventClient struct {
 	createPullPointFn func(ctx context.Context, filter string, terminationTime *time.Duration, subscriptionPolicy string) (*onvifgo.PullPointSubscription, error)
-	pullMessagesFn     func(ctx context.Context, subscriptionReference string, timeout time.Duration, messageLimit int) ([]onvifgo.NotificationMessage, error)
-	unsubscribeFn      func(ctx context.Context, subscriptionReference string) error
+	pullMessagesFn    func(ctx context.Context, subscriptionReference string, timeout time.Duration, messageLimit int) ([]onvifgo.NotificationMessage, error)
+	unsubscribeFn     func(ctx context.Context, subscriptionReference string) error
 	renewFn           func(ctx context.Context, subscriptionReference string, terminationTime time.Duration) (time.Time, time.Time, error)
 
 	subscribeCalls   atomic.Int32
@@ -106,7 +106,8 @@ func TestNewEventSubscriber_WithOptions(t *testing.T) {
 	var called bool
 	cb := func(event ONVIFEvent) { called = true }
 
-	es := helperNewEventSubscriberWithMock(nil,
+	es := helperNewEventSubscriberWithMock(
+		nil,
 		WithEventCallback(cb),
 		withPollInterval(2*time.Second),
 		withPullTimeout(10*time.Second),
@@ -265,7 +266,6 @@ func TestParseNotificationMessage_ZeroTimestamp(t *testing.T) {
 	require.False(t, event.Timestamp.IsZero())
 }
 
-
 func TestEventSubscriberImpl_EventCallbackReceivesEvents(t *testing.T) {
 	t.Helper()
 
@@ -278,11 +278,11 @@ func TestEventSubscriberImpl_EventCallbackReceivesEvents(t *testing.T) {
 		mu.Unlock()
 	}
 
-	es := helperNewEventSubscriberWithMock(nil,
+	es := helperNewEventSubscriberWithMock(
+		nil,
 		WithEventCallback(cb),
 		withPollInterval(50*time.Millisecond),
 	)
-
 
 	es.mu.Lock()
 	es.subscriptions["cam-1"] = &pullPointSubscription{

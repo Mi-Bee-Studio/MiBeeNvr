@@ -35,7 +35,8 @@ func DetectMergeTier(ffmpegPath string, preferFFmpeg ...bool) MergeTier {
 	if !cached {
 		cachedTier = tier
 		cached = true
-		slog.Info("Merge tier detected",
+		slog.Info(
+			"Merge tier detected",
 			"tier", cachedTier,
 			"reason", tierReason(cachedTier, caps),
 		)

@@ -123,7 +123,7 @@ func TestRegistryGather(t *testing.T) {
 	m.CleanupDeleted.WithLabelValues("retention").Inc()
 	m.StorageTotalBytes.Set(2048)
 	m.RecordingCount.Set(3)
-m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
+	m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
 	m.HLSFramesDropped.WithLabelValues("cam1").Inc()
 
 	families, err := m.Registry.Gather()

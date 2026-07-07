@@ -28,16 +28,17 @@ func (h *Handler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	var req telemetryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	if req.Event == "" {
-		writeError(w, http.StatusBadRequest, "event is required")
+		WriteError(w, http.StatusBadRequest, "event is required")
 		return
 	}
 
-	slog.Info("telemetry",
+	slog.Info(
+		"telemetry",
 		"event", req.Event,
 		"camera_id", req.CameraID,
 		"duration_ms", req.DurationMs,

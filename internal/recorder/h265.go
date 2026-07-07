@@ -3,6 +3,7 @@ package recorder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -28,21 +29,22 @@ var h265Logger = slog.Default().With("component", "h265-recorder")
 // H265Config is a type alias for BaseConfig.
 // This allows flat struct literals (e.g., H265Config{CameraID: "..."}) while
 // sharing the common configuration fields across all RTSP recorder types.
-	type H265Config = BaseConfig
-
+type H265Config = BaseConfig
 
 // H265NALDriver implements codecDriver for H.265/HEVC video.
 type H265NALDriver struct{}
 
-func (d H265NALDriver) codecLabel() string                               { return "h265" }
-func (d H265NALDriver) segmentFormat() model.Format                       { return model.FormatH265 }
-func (d H265NALDriver) rtpFormat() format.Format                         { return &format.H265{} }
-func (d H265NALDriver) minNALUDataLen() int                              { return 6 }
-func (d H265NALDriver) naluType(firstByte byte) int                      { return int((firstByte >> 1) & 0x3F) }
-func (d H265NALDriver) isIDR(typ int) bool                               { return typ == 19 || typ == 20 }
-func (d H265NALDriver) isParameterSet(typ int) bool                      { return typ == 32 || typ == 33 || typ == 34 }
-func (d H265NALDriver) isVCL(typ int) bool                               { return typ < 32 }
-func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool              { return b.vps != nil && b.sps != nil && b.pps != nil }
+func (d H265NALDriver) codecLabel() string          { return "h265" }
+func (d H265NALDriver) segmentFormat() model.Format { return model.FormatH265 }
+func (d H265NALDriver) rtpFormat() format.Format    { return &format.H265{} }
+func (d H265NALDriver) minNALUDataLen() int         { return 6 }
+func (d H265NALDriver) naluType(firstByte byte) int { return int((firstByte >> 1) & 0x3F) }
+func (d H265NALDriver) isIDR(typ int) bool          { return typ == 19 || typ == 20 }
+func (d H265NALDriver) isParameterSet(typ int) bool { return typ == 32 || typ == 33 || typ == 34 }
+func (d H265NALDriver) isVCL(typ int) bool          { return typ < 32 }
+func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool {
+	return b.vps != nil && b.sps != nil && b.pps != nil
+}
 
 func (d H265NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
 	switch typ {
@@ -94,8 +96,8 @@ type H265Recorder struct {
 
 // Interface compliance checks.
 var (
-	_ model.Recorder  = (*H265Recorder)(nil)
-	_ rtspConnector   = (*H265Recorder)(nil)
+	_ model.Recorder = (*H265Recorder)(nil)
+	_ rtspConnector  = (*H265Recorder)(nil)
 )
 
 // NewH265Recorder creates a new H265Recorder.
@@ -299,7 +301,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
 		au, err := rtpDec.Decode(pkt)
 		if err != nil {
-			if err != rtph265.ErrNonStartingPacketAndNoPrevious && err != rtph265.ErrMorePacketsNeeded {
+			if !errors.Is(err, rtph265.ErrNonStartingPacketAndNoPrevious) && !errors.Is(err, rtph265.ErrMorePacketsNeeded) {
 				h265Logger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
 			return
@@ -343,7 +345,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		client.OnPacketRTP(audioMedi, audioForma, func(pkt *rtp.Packet) {
 			aus, err := audioDec.Decode(pkt)
 			if err != nil {
-				if err != rtpmpeg4audio.ErrMorePacketsNeeded {
+				if !errors.Is(err, rtpmpeg4audio.ErrMorePacketsNeeded) {
 					h265Logger.Error("audio RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 				}
 				return

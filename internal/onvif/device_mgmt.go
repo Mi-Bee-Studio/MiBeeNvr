@@ -13,18 +13,20 @@ import (
 )
 
 // ErrUnsupported indicates the operation is not supported.
-var ErrUnsupported = errors.New("operation not supported")
-// deviceMgmtLogger is used for device management operations.
-var deviceMgmtLogger = slog.Default().With("component", "onvif-device-mgmt")
+var (
+	ErrUnsupported = errors.New("operation not supported")
+	// deviceMgmtLogger is used for device management operations.
+	deviceMgmtLogger = slog.Default().With("component", "onvif-device-mgmt")
+)
 
 // DeviceManagerImpl implements DeviceManager by delegating to onvif-go's device service.
 type DeviceManagerImpl struct {
-	client  *onvifgo.Client
+	client   *onvifgo.Client
 	endpoint string
 	username string
 	password string
 	rawSOAP  func(ctx context.Context, endpoint, soapBody string) ([]byte, error)
-	mu      sync.Mutex
+	mu       sync.Mutex
 }
 
 // Compile-time interface check.
@@ -34,7 +36,7 @@ var _ DeviceManager = (*DeviceManagerImpl)(nil)
 // with raw SOAP fallback support for cameras that reject WS-Security.
 func NewDeviceManager(client *onvifgo.Client, endpoint, username, password string, rawSOAPFn func(context.Context, string, string) ([]byte, error)) *DeviceManagerImpl {
 	return &DeviceManagerImpl{
-		client:  client,
+		client:   client,
 		endpoint: endpoint,
 		username: username,
 		password: password,
@@ -185,8 +187,8 @@ func formatPrefixMask(prefixLength int) string {
 	if prefixLength <= 0 || prefixLength > 32 {
 		return ""
 	}
-	var mask = net.IPv4Mask(0, 0, 0, 0)
-	for i := 0; i < 4; i++ {
+	mask := net.IPv4Mask(0, 0, 0, 0)
+	for i := range 4 {
 		bits := prefixLength - i*8
 		if bits >= 8 {
 			mask[i] = 0xFF
@@ -233,7 +235,7 @@ type getUsersResponse struct {
 	Body    struct {
 		XMLName          xml.Name `xml:"Body"`
 		GetUsersResponse struct {
-			XMLName xml.Name `xml:"GetUsersResponse"`
+			XMLName xml.Name  `xml:"GetUsersResponse"`
 			User    []rawUser `xml:"User"`
 		} `xml:"GetUsersResponse"`
 	} `xml:"Body"`

@@ -34,12 +34,12 @@ func TestStorageBackoffWithJitter_Range(t *testing.T) {
 	// Storage backoff is the long retry used when the disk is unavailable;
 	// it must stay in [60s, 70s) so recorders don't spam logs.
 	const (
-		min = 60 * time.Second
-		max = 70 * time.Second
+		minBackoff = 60 * time.Second
+		maxBackoff = 70 * time.Second
 	)
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		d := StorageBackoffWithJitter()
-		require.GreaterOrEqual(t, d, min)
-		require.Less(t, d, max)
+		require.GreaterOrEqual(t, d, minBackoff)
+		require.Less(t, d, maxBackoff)
 	}
 }

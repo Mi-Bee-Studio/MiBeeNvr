@@ -80,7 +80,8 @@ func helperV12DB(t *testing.T, ctx context.Context) (*DB, func(t *testing.T)) {
 		{"v12-merged-1", 1},
 		{"v12-merged-2", 1},
 	} {
-		_, err = db.db.ExecContext(ctx,
+		_, err = db.db.ExecContext(
+			ctx,
 			`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, archived) VALUES (?,?,?,?,?,?,?,?,?,?,0);`,
 			rec.id, "cam1", "/path/"+rec.id+".mp4", "h264", "2026-06-01 10:00:00", "2026-06-01 10:01:00", 60.0, 1024, 60, rec.merged,
 		)
@@ -254,16 +255,16 @@ func TestMigrationV13_MergeAndReplaceUsesStatus(t *testing.T) {
 
 	// Merge some recordings
 	merged := &model.Recording{
-		ID:        "merged-v13",
-		CameraID:  "cam1",
-		FilePath:  "/path/merged-v13.mp4",
-		Format:    model.FormatH264,
-		StartedAt: mustParseTime(t, "2026-06-01 10:00:00"),
-		EndedAt:   mustParseTime(t, "2026-06-01 10:03:00"),
-		Duration:  180.0,
-		FileSize:  3072,
+		ID:         "merged-v13",
+		CameraID:   "cam1",
+		FilePath:   "/path/merged-v13.mp4",
+		Format:     model.FormatH264,
+		StartedAt:  mustParseTime(t, "2026-06-01 10:00:00"),
+		EndedAt:    mustParseTime(t, "2026-06-01 10:03:00"),
+		Duration:   180.0,
+		FileSize:   3072,
 		FrameCount: 180,
-		Merged:    true,
+		Merged:     true,
 	}
 	oldIDs := []string{"v12-pending-1", "v12-pending-2"}
 	err = db.MergeAndReplaceRecordings(ctx, merged, oldIDs)

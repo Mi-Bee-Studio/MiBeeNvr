@@ -183,7 +183,7 @@ func TestEncodeDecodeVideoFrame_Keyframe(t *testing.T) {
 		IsKeyframe: true,
 		NALUs: [][]byte{
 			{0x65, 0x88, 0x84, 0x00, 0x01, 0x0f}, // IDR slice
-			{0x61, 0x02, 0x03},                     // non-IDR slice
+			{0x61, 0x02, 0x03},                   // non-IDR slice
 		},
 	}
 

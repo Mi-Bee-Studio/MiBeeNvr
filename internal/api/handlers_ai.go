@@ -25,13 +25,13 @@ func SetAPIMetrics(m *metrics.Metrics) {
 // Requires API Key authentication (Authorization: Bearer mbv_*).
 func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	// Verify API Key authentication
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
-		writeError(w, http.StatusUnauthorized, "API key required for AI event submission")
+		WriteError(w, http.StatusUnauthorized, "API key required for AI event submission")
 		return
 	}
 
@@ -51,12 +51,12 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if body.CameraID == "" || body.EventType == "" {
-		writeError(w, http.StatusBadRequest, "camera_id and event_type are required")
+		WriteError(w, http.StatusBadRequest, "camera_id and event_type are required")
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 			apiMetrics.AIEventsErrorsTotal.Inc()
 		}
 		logger.Error("failed to store AI event", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to store AI event")
+		WriteError(w, http.StatusInternalServerError, "failed to store AI event")
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 // handleListAIEvents returns AI events with optional filtering (GET /api/ai/events).
 func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
@@ -147,7 +147,7 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 	events, total, err := h.db.ListAIEvents(r.Context(), f)
 	if err != nil {
 		logger.Error("failed to list AI events", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to list AI events")
+		WriteError(w, http.StatusInternalServerError, "failed to list AI events")
 		return
 	}
 	if events == nil {
@@ -165,25 +165,25 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 // handleGetAIEvent returns a single AI event by ID (GET /api/ai/events/{id}).
 func (h *Handler) handleGetAIEvent(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid event ID")
+		WriteError(w, http.StatusBadRequest, "invalid event ID")
 		return
 	}
 
 	evt, err := h.db.GetAIEvent(r.Context(), id)
 	if err != nil {
 		logger.Error("failed to get AI event", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to get AI event")
+		WriteError(w, http.StatusInternalServerError, "failed to get AI event")
 		return
 	}
 	if evt == nil {
-		writeError(w, http.StatusNotFound, "AI event not found")
+		WriteError(w, http.StatusNotFound, "AI event not found")
 		return
 	}
 
@@ -193,13 +193,13 @@ func (h *Handler) handleGetAIEvent(w http.ResponseWriter, r *http.Request) {
 // handleGetAIEventStats returns aggregated statistics (GET /api/ai/stats).
 func (h *Handler) handleGetAIEventStats(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
+		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
 	cameraID := r.URL.Query().Get("camera_id")
 	if cameraID == "" {
-		writeError(w, http.StatusBadRequest, "camera_id is required")
+		WriteError(w, http.StatusBadRequest, "camera_id is required")
 		return
 	}
 
@@ -209,7 +209,7 @@ func (h *Handler) handleGetAIEventStats(w http.ResponseWriter, r *http.Request) 
 	stats, err := h.db.GetAIEventStats(r.Context(), cameraID, since)
 	if err != nil {
 		logger.Error("failed to get AI stats", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to get AI stats")
+		WriteError(w, http.StatusInternalServerError, "failed to get AI stats")
 		return
 	}
 	if stats == nil {
@@ -238,54 +238,4 @@ func getDefaultStatsSince(period string) (t time.Time) {
 	default:
 		return now.Add(-24 * time.Hour)
 	}
-}
-
-// handleUpdateRecordingAIStatus updates the AI processing status of a recording
-// (PATCH /api/recordings/{id}/ai-status). Used by MiBeeVision to report
-// processing progress and prevent duplicate processing.
-func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
-		writeError(w, http.StatusInternalServerError, "database not available")
-		return
-	}
-
-	// API Key required
-	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
-		writeError(w, http.StatusUnauthorized, "API key required")
-		return
-	}
-
-	recID := chi.URLParam(r, "id")
-	if recID == "" {
-		writeError(w, http.StatusBadRequest, "recording id is required")
-		return
-	}
-
-	var body struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	validStatuses := map[string]bool{
-		"pending": true, "processing": true, "done": true, "failed": true, "skipped": true,
-	}
-	if !validStatuses[body.Status] {
-		writeError(w, http.StatusBadRequest, "status must be one of: pending, processing, done, failed, skipped")
-		return
-	}
-
-	if err := h.db.UpdateRecordingAIStatus(r.Context(), recID, body.Status, body.Error); err != nil {
-		logger.Error("failed to update AI status", "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to update AI status")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"recording_id": recID,
-		"ai_status":    body.Status,
-	})
 }

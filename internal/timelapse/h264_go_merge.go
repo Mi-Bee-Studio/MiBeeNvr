@@ -692,71 +692,6 @@ func writeH264Mdat(w *mp4.Writer, framePaths []string, ctx context.Context) erro
 	return nil
 }
 
-// writeMdat reads each frame file, converts Annex-B NALUs to length-prefixed
-// format, and writes them as mdat data. Supports context cancellation between frames.
-func writeMdat(w *mp4.Writer, framePaths []string, ctx context.Context) error {
-	// First pass: compute total mdat payload size.
-	var totalPayloadSize uint32
-	for _, path := range framePaths {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read frame %s: %w", path, err)
-		}
-		nalus := splitAnnexB(data)
-		for _, nalu := range nalus {
-			totalPayloadSize += 4 + uint32(len(nalu))
-		}
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	mdatBoxSize := uint64(8 + totalPayloadSize)
-	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
-	if err != nil {
-		return fmt.Errorf("start mdat: %w", err)
-	}
-
-	// Write each frame as length-prefixed NALUs.
-	for _, path := range framePaths {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read frame for mdat %s: %w", path, err)
-		}
-
-		nalus := splitAnnexB(data)
-		for _, nalu := range nalus {
-			lenBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(lenBytes, uint32(len(nalu)))
-			if _, err := w.Write(lenBytes); err != nil {
-				return fmt.Errorf("write NALU length: %w", err)
-			}
-			if _, err := w.Write(nalu); err != nil {
-				return fmt.Errorf("write NALU data: %w", err)
-			}
-		}
-	}
-
-	if _, err := w.EndBox(); err != nil {
-		return fmt.Errorf("end mdat: %w", err)
-	}
-	return nil
-}
-
 // buildAvcC builds the AVCDecoderConfiguration record bytes from raw SPS and PPS
 // NAL units (without start codes). Format per ISO 14496-15.
 func buildAvcC(sps, pps []byte) []byte {
@@ -881,9 +816,9 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 		if chromaFormatIDC == 3 {
 			r.readBit() // separate_colour_plane_flag
 		}
-		r.readUE() // bit_depth_luma_minus8
-		r.readUE() // bit_depth_chroma_minus8
-		r.readBit() // qpprime_y_zero_transform_bypass_flag
+		r.readUE()            // bit_depth_luma_minus8
+		r.readUE()            // bit_depth_chroma_minus8
+		r.readBit()           // qpprime_y_zero_transform_bypass_flag
 		if r.readBit() != 0 { // seq_scaling_matrix_present_flag
 			skipScalingLists(r)
 		}
@@ -900,7 +835,7 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 		r.readBit() // delta_pic_order_always_zero_flag
 		r.readSE()  // offset_for_non_ref_pic
 		numRefFramesInPOC := r.readUE()
-		for i := uint32(0); i < numRefFramesInPOC; i++ {
+		for range numRefFramesInPOC {
 			r.readSE() // offset_for_ref_frame
 		}
 	}
@@ -964,9 +899,9 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 // --- Bit-level reader for H.264 SPS parsing ---
 
 type bitReader struct {
-	data   []byte
-	pos    int // bit position (0-7 in current byte)
-	offset int // byte offset
+	data    []byte
+	pos     int  // bit position (0-7 in current byte)
+	offset  int  // byte offset
 	overran bool // true if we read past the end of data
 }
 
@@ -987,7 +922,7 @@ func (r *bitReader) readBit() uint8 {
 // readBits reads n bits as a uint32 (MSB first).
 func (r *bitReader) readBits(n int) uint32 {
 	var val uint32
-	for i := 0; i < n; i++ {
+	for range n {
 		val = (val << 1) | uint32(r.readBit())
 	}
 	return val
@@ -1029,7 +964,7 @@ func (r *bitReader) readSE() int32 {
 
 // skipScalingLists skips scaling list fields in an SPS.
 func skipScalingLists(r *bitReader) {
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if r.readBit() != 0 {
 			size := 16
 			if i >= 6 {
@@ -1037,7 +972,7 @@ func skipScalingLists(r *bitReader) {
 			}
 			lastScale := int32(8)
 			nextScale := int32(8)
-			for j := 0; j < size; j++ {
+			for range size {
 				if nextScale != 0 {
 					delta := r.readSE()
 					nextScale = (lastScale + delta + 256) % 256
@@ -1060,7 +995,6 @@ func listH264FrameFiles(dir string) ([]string, error) {
 	sort.Strings(matches)
 	return matches, nil
 }
-
 
 // Ensure H264GoMerger satisfies the TimelapseMerger interface.
 var _ TimelapseMerger = (*H264GoMerger)(nil)

@@ -49,7 +49,7 @@ echo "frame=  25 fps= 25 q=28.0 size=    320kB time=00:00:01.00 bitrate= 2621.4k
 echo "test content" > "$output"
 exit 0
 `
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	mockFFprobe := filepath.Join(dir, "ffprobe")
@@ -57,7 +57,7 @@ exit 0
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":1920,"height":1080}]}'
 exit 0
 `
-	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755)
+	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755)
 	require.NoError(t, err)
 
 	caps := &HardwareCapabilities{
@@ -73,9 +73,9 @@ exit 0
 	m := metrics.NewMetrics()
 
 	cfg := QueueConfig{
-		MaxWorkers:   maxWorkers,
-		FFmpegPath:   mockFFmpeg,
-		FFprobePath:  mockFFprobe,
+		MaxWorkers:  maxWorkers,
+		FFmpegPath:  mockFFmpeg,
+		FFprobePath: mockFFprobe,
 	}
 
 	return NewTranscodeQueue(db, caps, nil, cfg, m)
@@ -97,7 +97,7 @@ sleep %s
 echo "test content" > "$output"
 exit 0
 `, sleepDuration)
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	mockFFprobe := filepath.Join(dir, "ffprobe")
@@ -105,7 +105,7 @@ exit 0
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":1920,"height":1080}]}'
 exit 0
 `
-	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755)
+	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755)
 	require.NoError(t, err)
 
 	caps := &HardwareCapabilities{
@@ -134,13 +134,13 @@ func helperInsertTask(t *testing.T, db *storage.DB, inputPath, outputPath string
 	t.Helper()
 	ctx := context.Background()
 	task := &storage.TranscodeTask{
-		CameraID:    "test-cam",
-		RecordingID: "rec-001",
-		InputPath:   inputPath,
-		InputFormat: "h265",
-		OutputPath:  outputPath,
+		CameraID:     "test-cam",
+		RecordingID:  "rec-001",
+		InputPath:    inputPath,
+		InputFormat:  "h265",
+		OutputPath:   outputPath,
 		OutputFormat: "h264",
-		CreatedAt:   time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
+		CreatedAt:    time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
 	}
 	err := db.EnqueueTask(ctx, task)
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestQueueEnqueueAndProcess(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
 	// Create a dummy input file
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -189,7 +189,7 @@ func TestQueueCancelTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -225,10 +225,10 @@ func TestQueueConcurrencyLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	var taskIDs []int64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
-		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 		taskIDs = append(taskIDs, helperInsertTask(t, db, inputPath, outputPath))
 	}
 
@@ -268,7 +268,7 @@ func TestQueueGracefulShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -306,10 +306,10 @@ func TestQueueActiveCount(t *testing.T) {
 	q := newSlowTestQueue(t, db, 2, "5s")
 
 	tmpDir := t.TempDir()
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
-		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 		helperInsertTask(t, db, inputPath, outputPath)
 	}
 
@@ -334,7 +334,7 @@ func TestQueueGetStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 	helperInsertTask(t, db, inputPath, outputPath)
 
 	status := q.GetStatus()
@@ -378,7 +378,7 @@ func TestQueueStopPreventsNewDispatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
 	// Verify task remains pending (queue is stopped, won't dispatch)
@@ -445,7 +445,7 @@ func TestQueueFailedTask(t *testing.T) {
 echo "Error: No such file" >&2
 exit 1
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "amd64",
@@ -501,13 +501,13 @@ func TestQueueEnqueueDirectly(t *testing.T) {
 
 	ctx := context.Background()
 	task := &storage.TranscodeTask{
-		CameraID:    "cam-1",
-		RecordingID: "rec-1",
-		InputPath:   "/input.mp4",
-		InputFormat: "h265",
-		OutputPath:  "/output.mp4",
+		CameraID:     "cam-1",
+		RecordingID:  "rec-1",
+		InputPath:    "/input.mp4",
+		InputFormat:  "h265",
+		OutputPath:   "/output.mp4",
 		OutputFormat: "h264",
-		CreatedAt:   time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
+		CreatedAt:    time.Now().UTC().Format("2006-01-02 15:04:05.999999999"),
 	}
 
 	err := q.Enqueue(ctx, task)
@@ -581,15 +581,15 @@ func TestQueueReplaceOriginal(t *testing.T) {
 	inputPath := filepath.Join(tmpDir, "original.mp4")
 	outputPath := filepath.Join(tmpDir, "transcoded.mp4")
 
-	require.NoError(t, os.WriteFile(inputPath, []byte("original data"), 0644))
-	require.NoError(t, os.WriteFile(outputPath, []byte("transcoded data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("original data"), 0o644))
+	require.NoError(t, os.WriteFile(outputPath, []byte("transcoded data"), 0o644))
 
 	q.config.ReplaceOriginal = true
 
 	task := &storage.TranscodeTask{
-		InputPath:   inputPath,
-		OutputPath:  outputPath,
-		RecordingID: "rec-001",
+		InputPath:    inputPath,
+		OutputPath:   outputPath,
+		RecordingID:  "rec-001",
 		OutputFormat: "h264",
 	}
 	q.replaceOriginal(task)
@@ -627,8 +627,8 @@ func TestReplaceOriginalUpdatesDBFormat(t *testing.T) {
 	// Create files
 	inputPath := filepath.Join(tmpDir, "original.mp4")
 	outputPath := filepath.Join(tmpDir, "transcoded.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("h265 data"), 0644))
-	require.NoError(t, os.WriteFile(outputPath, []byte("h264 data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("h265 data"), 0o644))
+	require.NoError(t, os.WriteFile(outputPath, []byte("h264 data"), 0o644))
 
 	task := &storage.TranscodeTask{
 		InputPath:    inputPath,
@@ -655,8 +655,8 @@ func TestReplaceOriginalCrashSafety(t *testing.T) {
 	// In this case, temp exists but input is still intact
 	inputPath := filepath.Join(tmpDir, "crash1-input.mp4")
 	tmpPath := filepath.Join(tmpDir, ".mibee-replace-tmp-crash1-output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, originalData, 0644))
-	require.NoError(t, os.WriteFile(tmpPath, transcodedData, 0644))
+	require.NoError(t, os.WriteFile(inputPath, originalData, 0o644))
+	require.NoError(t, os.WriteFile(tmpPath, transcodedData, 0o644))
 
 	// Input should still exist
 	data, err := os.ReadFile(inputPath)
@@ -667,8 +667,8 @@ func TestReplaceOriginalCrashSafety(t *testing.T) {
 	// Backup exists, temp exists, input is gone
 	backupPath := filepath.Join(tmpDir, ".mibee-replace-bak-crash2-input.mp4")
 	tmpPath2 := filepath.Join(tmpDir, ".mibee-replace-tmp-crash2-output.mp4")
-	require.NoError(t, os.WriteFile(backupPath, originalData, 0644))
-	require.NoError(t, os.WriteFile(tmpPath2, transcodedData, 0644))
+	require.NoError(t, os.WriteFile(backupPath, originalData, 0o644))
+	require.NoError(t, os.WriteFile(tmpPath2, transcodedData, 0o644))
 
 	// Either backup or temp must exist — data is recoverable
 	backupExists := fileExists(backupPath)
@@ -695,8 +695,8 @@ func TestReplaceOriginalNoRecordingID(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("old"), 0644))
-	require.NoError(t, os.WriteFile(outputPath, []byte("new"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("old"), 0o644))
+	require.NoError(t, os.WriteFile(outputPath, []byte("new"), 0o644))
 
 	task := &storage.TranscodeTask{
 		InputPath:    inputPath,
@@ -752,7 +752,7 @@ func TestRecoverStuckTasks(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 
 	// Insert a pending task
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
@@ -785,7 +785,7 @@ func TestRecoverStuckTasksRecentNotRecovered(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 
 	// Insert two pending tasks
 	recentTaskID := helperInsertTask(t, db, inputPath, outputPath)
@@ -839,7 +839,7 @@ sleep 300
 echo "test content" > "$output"
 exit 0
 `
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	mockFFprobe := filepath.Join(dir, "ffprobe")
@@ -847,7 +847,7 @@ exit 0
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":1920,"height":1080}]}'
 exit 0
 `
-	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755)
+	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755)
 	require.NoError(t, err)
 
 	caps := &HardwareCapabilities{
@@ -880,7 +880,7 @@ func TestJobTimeout(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -912,7 +912,7 @@ func TestJobTimeoutZeroDisabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -944,7 +944,7 @@ echo "partial data" > "$output"
 echo "Error: Encoding failed" >&2
 exit 1
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "amd64",
@@ -968,7 +968,7 @@ exit 1
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -997,7 +997,7 @@ func TestOutputFileCleanupNoFileOnFailure(t *testing.T) {
 echo "Error: No such file" >&2
 exit 1
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "amd64",
@@ -1021,7 +1021,7 @@ exit 1
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -1049,10 +1049,10 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 	const numTasks = 10
 	taskIDs := make([]int64, numTasks)
 	// Rapid sequential enqueue (simulates API calls) — exercises DB contention
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		inputPath := filepath.Join(tmpDir, fmt.Sprintf("input%d.mp4", i))
 		outputPath := filepath.Join(tmpDir, fmt.Sprintf("output%d.mp4", i))
-		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0644))
+		require.NoError(t, os.WriteFile(inputPath, []byte("data"), 0o644))
 		taskIDs[i] = helperInsertTask(t, db, inputPath, outputPath)
 	}
 
@@ -1160,7 +1160,7 @@ func newARMTestQueue(t *testing.T, db *storage.DB, maxWorkers int) *TranscodeQue
 	mockScript := `#!/bin/sh
 exit 0
 `
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	caps := &HardwareCapabilities{
@@ -1195,7 +1195,7 @@ func newARMHardwareQueue(t *testing.T, db *storage.DB, maxWorkers int) *Transcod
 	mockScript := `#!/bin/sh
 exit 0
 `
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	caps := &HardwareCapabilities{
@@ -1315,7 +1315,7 @@ func TestQueueARMH265InputAllowedWithoutDecoder(t *testing.T) {
 	mockScript := `#!/bin/sh
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "arm64",
@@ -1384,7 +1384,7 @@ func TestQueueARMH264InputAllowedWithoutDecoder(t *testing.T) {
 	mockScript := `#!/bin/sh
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "arm64",
@@ -1459,14 +1459,14 @@ func newV4L2M2MTestQueue(t *testing.T, db *storage.DB, maxWorkers int) *Transcod
 	mockScript := `#!/bin/sh
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	mockFFprobe := filepath.Join(dir, "ffprobe")
 	ffprobeScript := `#!/bin/sh
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":2560,"height":1440}]}'
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "arm64",
@@ -1502,14 +1502,14 @@ func newV4L2M2MTestQueueSmall(t *testing.T, db *storage.DB, maxWorkers int) *Tra
 	mockScript := `#!/bin/sh
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 	mockFFprobe := filepath.Join(dir, "ffprobe")
 	ffprobeScript := `#!/bin/sh
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":1280,"height":720}]}'
 exit 0
 `
-	require.NoError(t, os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755))
+	require.NoError(t, os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755))
 
 	caps := &HardwareCapabilities{
 		Arch:            "arm64",
@@ -1543,7 +1543,7 @@ func TestQueueRejectsOversizedResolution(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	ctx := context.Background()
 	task := &storage.TranscodeTask{
@@ -1568,7 +1568,7 @@ func TestQueueAllowsResolutionWithinLimit(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.mp4")
-	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0644))
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	ctx := context.Background()
 	task := &storage.TranscodeTask{

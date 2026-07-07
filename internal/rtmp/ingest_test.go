@@ -185,9 +185,7 @@ func TestH264FrameExtraction(t *testing.T) {
 	err := hub.Subscribe("test", func(pts int64, au [][]byte) {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, nalu := range au {
-			receivedFrames = append(receivedFrames, nalu)
-		}
+		receivedFrames = append(receivedFrames, au...)
 	})
 	require.NoError(t, err)
 
@@ -276,7 +274,6 @@ func TestFrameDistributionToStreamHub(t *testing.T) {
 	require.Equal(t, 1, consumer2Count)
 	mu.Unlock()
 }
-
 
 // TestDisconnectCleanup tests that disconnecting a publisher cleans up resources.
 func TestDisconnectCleanup(t *testing.T) {
@@ -381,7 +378,7 @@ func TestStreamHubBroadcastNonBlocking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			testAU := [][]byte{{0x65, 0x88}}
 			hub.Broadcast(int64(i), testAU, false)
 		}

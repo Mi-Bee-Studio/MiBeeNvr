@@ -31,8 +31,8 @@ func generateTestJPEG(t *testing.T, path string, width, height, quality int) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	// Fill with a natural-image-like pattern (gradient + detail) to test compression.
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			// Colorful gradient with some high-frequency detail.
 			r := uint8((x * 255 / width) * (y * 128 / height) / 255)
 			g := uint8((y * 255 / height) * (255 - x*128/width) / 255)
@@ -50,7 +50,6 @@ func generateTestJPEG(t *testing.T, path string, width, height, quality int) {
 	}
 }
 
-
 // --- Tests ---
 
 // TestEnhancedGoMerge_ValidOutput verifies the enhanced Go merger produces a valid MP4.
@@ -59,12 +58,12 @@ func TestEnhancedGoMerge_ValidOutput(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Generate 5 test frames at Q=85 (typical capture quality).
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -136,7 +135,7 @@ func TestEnhancedGoMerge_ValidOutput(t *testing.T) {
 
 	// Verify output file is smaller than source frames (compression check).
 	sourceTotal := int64(0)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		if fii, err := os.Stat(framePath); err == nil {
 			sourceTotal += fii.Size()
@@ -163,13 +162,13 @@ func TestEnhancedGoMerge_SizeReduction(t *testing.T) {
 	outputPassthrough := filepath.Join(tmpDir, "passthrough.mp4")
 
 	for _, d := range []string{framesDir, passthroughDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Generate frames and copy to both directories.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 320, 240, 85)
 		// Copy to passthrough dir.
@@ -177,7 +176,7 @@ func TestEnhancedGoMerge_SizeReduction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(passthroughDir, fmt.Sprintf("frame_%06d.jpg", i)), src, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(passthroughDir, fmt.Sprintf("frame_%06d.jpg", i)), src, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,7 +218,7 @@ func TestEnhancedGoMerge_SingleFrame(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,12 +266,12 @@ func TestEnhancedGoMerge_QualityLevels(t *testing.T) {
 			framesDir := filepath.Join(tmpDir, "frames")
 			outputPath := filepath.Join(tmpDir, "output.mp4")
 
-			if err := os.MkdirAll(framesDir, 0755); err != nil {
+			if err := os.MkdirAll(framesDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
 
 			// Generate 3 frames.
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 				generateTestJPEG(t, framePath, 320, 240, 85)
 			}
@@ -299,7 +298,7 @@ func TestEnhancedGoMerge_EmptyDir(t *testing.T) {
 	emptyDir := filepath.Join(tmpDir, "empty")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(emptyDir, 0755); err != nil {
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -345,12 +344,12 @@ func TestEnhancedGoMerge_FFprobeValidation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Generate 5 frames with a more natural image pattern.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -362,7 +361,8 @@ func TestEnhancedGoMerge_FFprobeValidation(t *testing.T) {
 	}
 
 	// Run ffprobe to validate the MP4.
-	cmd := exec.Command("ffprobe",
+	cmd := exec.Command(
+		"ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
@@ -399,12 +399,12 @@ func TestEnhancedGoMerge_ContextCancellation(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Generate frames.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -430,11 +430,11 @@ func TestEnhancedGoMerge_MergeResult(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(framesDir, fmt.Sprintf("frame_%06d.jpg", i))
 		generateTestJPEG(t, framePath, 640, 480, 85)
 	}
@@ -468,7 +468,7 @@ func TestEnhancedGoMerge_PassthroughMode(t *testing.T) {
 	framesDir := filepath.Join(tmpDir, "frames")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
 
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 

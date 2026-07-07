@@ -2,6 +2,7 @@ package transcoding
 
 import (
 	"context"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -37,8 +38,8 @@ type HardwareCapabilities struct {
 	H265EncoderType      EncoderType `json:"h265_encoder_type"`      // backend type
 	H264Decoder          string      `json:"h264_decoder"`           // decoder name (e.g. "h264_v4l2m2m", "" means software-only)
 	H265Decoder          string      `json:"h265_decoder"`           // decoder name (e.g. "hevc_v4l2m2m", "" means software-only)
-	H264DecoderType      EncoderType `json:"h264_decoder_type"`     // reuse EncoderType enum for decoders
-	H265DecoderType      EncoderType `json:"h265_decoder_type"`     // reuse EncoderType enum for decoders
+	H264DecoderType      EncoderType `json:"h264_decoder_type"`      // reuse EncoderType enum for decoders
+	H265DecoderType      EncoderType `json:"h265_decoder_type"`      // reuse EncoderType enum for decoders
 	MaxEncodeWidth       int         `json:"max_encode_width"`       // max output width supported by encoder (0 = unlimited)
 	MaxEncodeHeight      int         `json:"max_encode_height"`      // max output height supported by encoder (0 = unlimited)
 	Devices              []string    `json:"devices"`                // /dev/video* paths
@@ -86,12 +87,12 @@ type TranscodeTask struct {
 
 // DownloadStatus represents the FFmpeg download state for the frontend.
 type DownloadStatus struct {
-	Status         string  `json:"status"`          // "not_installed", "downloading", "available", "failed"
-	Progress       float64 `json:"progress"`        // 0.0-1.0
-	Version        string  `json:"version"`
-	Error          string  `json:"error"`
-	TotalBytes     int64   `json:"total_bytes"`     // total size of download in bytes
-	DownloadedBytes int64  `json:"downloaded_bytes"` // bytes downloaded so far
+	Status          string  `json:"status"`   // "not_installed", "downloading", "available", "failed"
+	Progress        float64 `json:"progress"` // 0.0-1.0
+	Version         string  `json:"version"`
+	Error           string  `json:"error"`
+	TotalBytes      int64   `json:"total_bytes"`      // total size of download in bytes
+	DownloadedBytes int64   `json:"downloaded_bytes"` // bytes downloaded so far
 }
 
 // MediaInfo holds the result of an ffprobe invocation.
@@ -111,10 +112,10 @@ type QueueAPI interface {
 
 // ManagerStatus is returned by the API status endpoint.
 type ManagerStatus struct {
-	Enabled         bool                  `json:"enabled"`
-	DisabledReason  string                `json:"disabled_reason"`
-	Hardware        *HardwareCapabilities `json:"hardware"`
-	QueueLength     int                   `json:"queue_length"`
-	ActiveJobs      int                   `json:"active_jobs"`
-	RecentResults   []TranscodeTask       `json:"recent_results"`
+	Enabled        bool                  `json:"enabled"`
+	DisabledReason string                `json:"disabled_reason"`
+	Hardware       *HardwareCapabilities `json:"hardware"`
+	QueueLength    int                   `json:"queue_length"`
+	ActiveJobs     int                   `json:"active_jobs"`
+	RecentResults  []TranscodeTask       `json:"recent_results"`
 }

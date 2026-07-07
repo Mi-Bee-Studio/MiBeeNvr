@@ -88,7 +88,7 @@ func TestDetectMergeTier(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
-		if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\necho fake"), 0755); err != nil {
+		if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\necho fake"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
@@ -105,7 +105,7 @@ func TestDetectMergeTier(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		ffmpegPath := filepath.Join(tmpDir, "ffmpeg")
-		if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\necho fake"), 0755); err != nil {
+		if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\necho fake"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
@@ -218,4 +218,3 @@ func TestDetectMergeTier(t *testing.T) {
 		}
 	})
 }
-

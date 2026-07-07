@@ -34,7 +34,7 @@ func cameraRowForAPI(row *storage.CameraRow) {
 func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	cameras, err := h.db.ListCameras(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list cameras")
+		WriteError(w, http.StatusInternalServerError, "failed to list cameras")
 		return
 	}
 	if cameras == nil {
@@ -173,19 +173,19 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SubnetHints []string `json:"subnet_hints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	if body.Protocol == "" {
-		writeError(w, http.StatusBadRequest, "protocol is required")
+		WriteError(w, http.StatusBadRequest, "protocol is required")
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse", body.Protocol))
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse", body.Protocol))
 		return
 	}
 	// Push/ingest cameras (srt/rtmp): no URL — the publisher connects to us.
@@ -197,7 +197,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			endpoint = body.URL
 		}
 		if endpoint == "" {
-			writeError(w, http.StatusBadRequest, "url or onvif_endpoint is required for ONVIF cameras")
+			WriteError(w, http.StatusBadRequest, "url or onvif_endpoint is required for ONVIF cameras")
 			return
 		}
 		body.ONVIFEndpoint = endpoint
@@ -207,18 +207,18 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			existingCams, _ := h.db.ListCameras(r.Context())
 			for _, ec := range existingCams {
 				if ec.Protocol == "onvif" && ec.ONVIFEndpoint == body.ONVIFEndpoint {
-					writeError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists")
+					WriteError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists")
 					return
 				}
 			}
 		}
 	} else if !isPush && body.URL == "" {
-		writeError(w, http.StatusBadRequest, "url is required")
+		WriteError(w, http.StatusBadRequest, "url is required")
 		return
 	}
 	// Validate URL format for cameras that have one (not ONVIF, not push)
 	if body.Protocol != "onvif" && !isPush && body.URL != "" && !validateURL(body.URL) {
-		writeError(w, http.StatusBadRequest, "invalid URL format")
+		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
 	// Normalize protocol — handle legacy combined formats
@@ -227,7 +227,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(proto, "_") {
 		parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q", proto))
+			WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q", proto))
 			return
 		}
 		proto = parsedProto
@@ -282,7 +282,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	id, err := h.camMgr.AddCamera(r.Context(), cam)
@@ -292,7 +292,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, err)
 		} else {
 			logger.Error("failed to add camera", "camera_id", id, "error", err, "path", r.URL.Path)
-			writeError(w, http.StatusInternalServerError, "failed to add camera")
+			WriteError(w, http.StatusInternalServerError, "failed to add camera")
 		}
 		return
 	}
@@ -316,7 +316,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Return CameraRow with status
-	row, err := h.db.GetCamera(r.Context(), id)
+	row, _ := h.db.GetCamera(r.Context(), id)
 	if row != nil {
 		if h.camMgr != nil {
 			row.Status = h.camMgr.CameraStatus(id)
@@ -338,11 +338,11 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	row, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if row == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 	// Inject recorder status
@@ -394,7 +394,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 // targets (RTMP/RTSP). Used by the camera card/form to show live relay state.
 func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request) {
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -410,7 +410,7 @@ func (h *Handler) handleCameraPushStatus(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -447,7 +447,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SubnetHints *[]string `json:"subnet_hints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -469,7 +469,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
 		if caps.H265EncoderType == transcoding.EncoderSoftware {
-			writeError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
+			WriteError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
 			return
 		}
 	}
@@ -508,7 +508,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if proto != "onvif" && proto != "srt" && proto != "rtmp" {
 			if !validateURL(*body.URL) {
-				writeError(w, http.StatusBadRequest, "invalid URL format")
+				WriteError(w, http.StatusBadRequest, "invalid URL format")
 				return
 			}
 		}
@@ -533,7 +533,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logger.Error("failed to update camera", "camera_id", id, "error", err, "path", r.URL.Path)
-		writeError(w, http.StatusInternalServerError, "failed to update camera")
+		WriteError(w, http.StatusInternalServerError, "failed to update camera")
 		return
 	}
 	// Persist push/ingest fields if any were provided in the update.
@@ -549,7 +549,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// Return updated CameraRow with status
 	row, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if row != nil {
@@ -584,11 +584,11 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	// Verify camera exists in DB
 	cam, err := h.db.GetCamera(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 	// Already archived — idempotent success
@@ -606,7 +606,7 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 			if err := h.camMgr.ArchiveCamera(ctx, id); err != nil {
 				logger.Warn("failed to archive camera via manager, archiving in DB", "camera_id", id, "error", err)
 				if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
-					writeError(w, http.StatusInternalServerError, "failed to archive camera")
+					WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 					return
 				}
 				if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
@@ -617,7 +617,7 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 			// Orphaned camera (not in config) — archive directly in DB, no mutex needed.
 			logger.Info("archiving orphaned camera directly in DB", "camera_id", id)
 			if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to archive camera")
+				WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 				return
 			}
 			if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
@@ -627,7 +627,7 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// No camera manager — mark archived in DB directly
 		if err := h.db.ArchiveCameraDB(ctx, id); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to archive camera")
+			WriteError(w, http.StatusInternalServerError, "failed to archive camera")
 			return
 		}
 		if _, err := h.db.ArchiveAllRecordings(ctx, id); err != nil {
@@ -647,7 +647,7 @@ func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Requ
 	id := chi.URLParam(r, "id")
 	count, totalSize, err := h.db.GetCameraRecordingStats(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera stats")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera stats")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"recording_count": count, "total_size": totalSize})
@@ -656,7 +656,7 @@ func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Requ
 func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.camMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
 	if err := h.camMgr.StartCamera(r.Context(), id); err != nil {
@@ -667,7 +667,7 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, err)
 		default:
 			logger.Error("failed to start camera", "camera_id", id, "error", err, "path", r.URL.Path)
-			writeError(w, http.StatusInternalServerError, "failed to start camera")
+			WriteError(w, http.StatusInternalServerError, "failed to start camera")
 		}
 		return
 	}
@@ -677,7 +677,7 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.camMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
 	if err := h.camMgr.StopCamera(r.Context(), id); err != nil {
@@ -686,7 +686,7 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, err)
 		} else {
 			logger.Error("failed to stop camera", "camera_id", id, "error", err, "path", r.URL.Path)
-			writeError(w, http.StatusInternalServerError, "failed to stop camera")
+			WriteError(w, http.StatusInternalServerError, "failed to stop camera")
 		}
 		return
 	}
@@ -700,7 +700,7 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.camMgr == nil {
-		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
+		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
 	// The unicast scan can take up to MaxDuration (default 30s) on a wide subnet
@@ -716,7 +716,7 @@ func (h *Handler) handleRediscoverCamera(w http.ResponseWriter, r *http.Request)
 			writeAPIError(w, http.StatusNotFound, err)
 		default:
 			logger.Error("rediscover camera failed", "camera_id", id, "error", err, "path", r.URL.Path)
-			writeError(w, http.StatusInternalServerError, "rediscovery failed")
+			WriteError(w, http.StatusInternalServerError, "rediscovery failed")
 		}
 		return
 	}
@@ -747,11 +747,11 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint string `json:"onvif_endpoint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.URL == "" {
-		writeError(w, http.StatusBadRequest, "url is required")
+		WriteError(w, http.StatusBadRequest, "url is required")
 		return
 	}
 

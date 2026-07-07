@@ -26,7 +26,7 @@ func TestAVIDemuxer_RoundTrip(t *testing.T) {
 		makeG711Audio(t, 0x30, 240),
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := m.WriteVideo(videoFrames[i], int64(i)*33333); err != nil {
 			t.Fatalf("WriteVideo %d: %v", i, err)
 		}
@@ -48,7 +48,7 @@ func TestAVIDemuxer_RoundTrip(t *testing.T) {
 	var gotVideo, gotAudio int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -90,7 +90,7 @@ func TestAVIDemuxer_InterleavedOrder(t *testing.T) {
 	m := NewMuxer(&buf, 640, 480, 8000, true)
 
 	// Write interleaved: V, A, V, A, V, A.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := m.WriteVideo(makeJPEGFrame(t, byte(i), 100+i*10), int64(i)*33333); err != nil {
 			t.Fatalf("WriteVideo %d: %v", i, err)
 		}
@@ -112,7 +112,7 @@ func TestAVIDemuxer_InterleavedOrder(t *testing.T) {
 	var idx int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -135,11 +135,11 @@ func TestAVIDemuxer_InterleavedOrder(t *testing.T) {
 // returns an error and does not panic.
 func TestAVIDemuxer_CorruptFile(t *testing.T) {
 	tests := [][]byte{
-		{},                              // empty
-		{0, 0, 0, 0, 0, 0, 0, 0},       // all zeros
+		{},                                 // empty
+		{0, 0, 0, 0, 0, 0, 0, 0},           // all zeros
 		[]byte("RIFF\xff\xff\xff\xffWAVE"), // RIFF but not AVI
-		[]byte("NOTA"),                  // random garbage
-		make([]byte, 100),               // zero-filled
+		[]byte("NOTA"),                     // random garbage
+		make([]byte, 100),                  // zero-filled
 	}
 
 	for i, testData := range tests {
@@ -164,7 +164,7 @@ func TestAVIDemuxer_CorruptFile(t *testing.T) {
 		t.Fatalf("NewDemuxer on truncated: %v", err)
 	}
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF for truncated file, got %v", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestAVIDemuxer_PTSValues(t *testing.T) {
 	var ptsIdx int
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -244,7 +244,7 @@ func TestAVIDemuxer_EmptyMovi(t *testing.T) {
 	}
 
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF for empty AVI, got %v", err)
 	}
 }
@@ -279,7 +279,7 @@ func TestAVIDemuxer_AudioOnly(t *testing.T) {
 	}
 
 	_, err = d.NextChunk()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected EOF, got %v", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestAVIDemuxer_AlawFormat(t *testing.T) {
 	}
 
 	// Verify we can read both chunks without error.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := d.NextChunk()
 		if err != nil {
 			t.Fatalf("NextChunk %d: %v", i, err)
@@ -438,9 +438,9 @@ func TestAVIDemuxer_CloseAfterEOF(t *testing.T) {
 	}
 
 	// Read all chunks.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return
 		}
 		if i == 0 && err != nil {
@@ -455,7 +455,7 @@ func TestAVIDemuxer_SeekConsistency(t *testing.T) {
 	var buf bytes.Buffer
 	m := NewMuxer(&buf, 640, 480, 8000, true)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_ = m.WriteVideo(makeJPEGFrame(t, byte(i), 100), 0)
 	}
 	_ = m.Close()
@@ -463,7 +463,7 @@ func TestAVIDemuxer_SeekConsistency(t *testing.T) {
 	// Create two independent demuxers from the same data.
 	data := buf.Bytes()
 
-	for j := 0; j < 2; j++ {
+	for j := range 2 {
 		r := bytes.NewReader(data)
 		d, err := NewDemuxer(r)
 		if err != nil {
@@ -473,7 +473,7 @@ func TestAVIDemuxer_SeekConsistency(t *testing.T) {
 		count := 0
 		for {
 			_, err := d.NextChunk()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

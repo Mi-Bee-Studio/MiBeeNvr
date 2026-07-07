@@ -238,7 +238,7 @@ For full project details, see [AGENTS.md](AGENTS.md).
 
 ## Contributing
 
-1. Run `make lint` before submitting
+1. Run `make lint` before submitting (golangci-lint v2; run `make lint-install` first)
 2. Add tests for new features
 3. Write clear commit messages
 

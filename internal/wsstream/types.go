@@ -8,8 +8,7 @@ const (
 	MsgTypeKeyframeReq    byte = 0x04 // keyframe_request: client→server
 	MsgTypeAudioCodecInfo byte = 0x05 // audio_codec_info: server→client, sent before audio frames
 	MsgTypeEOS            byte = 0xFF // eos: server→client, camera went offline
-	)
-
+)
 
 // Codec string constants.
 const (
@@ -50,9 +49,9 @@ const (
 // AudioCodecInfo contains audio codec configuration data sent once when
 // audio is available on a stream. Sent after CodecInfo on viewer connect.
 type AudioCodecInfo struct {
-	Codec       byte   // audio codec byte (AudioCodecG711Mu, etc.)
-	SampleRate  uint32 // sample rate in Hz (e.g. 8000, 44100, 48000)
-	Channels    uint8  // number of channels (1=mono, 2=stereo)
+	Codec      byte   // audio codec byte (AudioCodecG711Mu, etc.)
+	SampleRate uint32 // sample rate in Hz (e.g. 8000, 44100, 48000)
+	Channels   uint8  // number of channels (1=mono, 2=stereo)
 }
 
 // AudioFrameData contains a single audio frame's presentation timestamp,

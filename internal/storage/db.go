@@ -36,26 +36,12 @@ func (d *DB) DB() *sql.DB {
 }
 
 func New(dbPath string) (*DB, error) {
-	dsn := dbPath
+	// Use DSN-level _pragma so EVERY connection from the pool has these settings,
+	// not just the one that ran the ExecContext PRAGMA call.
+	// This is critical for busy_timeout to work across goroutines.
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-2000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, err
-	}
-	// Set pragmas on open
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA synchronous=NORMAL;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA cache_size=-2000;"); err != nil {
-		db.Close()
 		return nil, err
 	}
 	return &DB{path: dbPath, db: db}, nil
@@ -103,11 +89,17 @@ func (d *DB) Init(ctx context.Context) error {
 	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
 	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`
 	// idx3 created after migration (merged column may not exist in older DBs)
-	if _, err := d.db.ExecContext(ctx, idx1); err != nil { return err }
-	if _, err := d.db.ExecContext(ctx, idx2); err != nil { return err }
+	if _, err := d.db.ExecContext(ctx, idx1); err != nil {
+		return err
+	}
+	if _, err := d.db.ExecContext(ctx, idx2); err != nil {
+		return err
+	}
 	// schema metadata
 	metaSQL := `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
-	if _, err := d.db.ExecContext(ctx, metaSQL); err != nil { return err }
+	if _, err := d.db.ExecContext(ctx, metaSQL); err != nil {
+		return err
+	}
 	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '2');")
 	// Migration v1 → v2: add camera metadata columns
 	var version string
@@ -145,7 +137,7 @@ func (d *DB) Init(ctx context.Context) error {
 			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN merged INTEGER DEFAULT 0")
 			_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
 		}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='4' WHERE key='schema_version'")
+		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='4' WHERE key='schema_version'")
 	}
 	// Migration v4 → v5: add per-camera merge config columns
 	var mergeColExists int
@@ -198,7 +190,9 @@ func (d *DB) Init(ctx context.Context) error {
 		value BOOLEAN NOT NULL DEFAULT FALSE,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, featSQL); err != nil { return err }
+	if _, err := d.db.ExecContext(ctx, featSQL); err != nil {
+		return err
+	}
 	// Insert default protocol toggles if they don't exist
 	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags (key, value) VALUES
 		('protocol.xiaomi', 1),
@@ -219,7 +213,9 @@ func (d *DB) Init(ctx context.Context) error {
 		metadata TEXT DEFAULT '{}',
 		created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 	);`
-	if _, err := d.db.ExecContext(ctx, healthSQL); err != nil { return err }
+	if _, err := d.db.ExecContext(ctx, healthSQL); err != nil {
+		return err
+	}
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_camera_id ON camera_health_events(camera_id)")
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_created_at ON camera_health_events(created_at)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='10' WHERE key='schema_version'")
@@ -241,7 +237,9 @@ func (d *DB) Init(ctx context.Context) error {
 		completed_at DATETIME,
 		original_deleted BOOLEAN NOT NULL DEFAULT 0
 	);`
-	if _, err := d.db.ExecContext(ctx, transcodeSQL); err != nil { return err }
+	if _, err := d.db.ExecContext(ctx, transcodeSQL); err != nil {
+		return err
+	}
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_tasks(status)")
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_created ON transcoding_tasks(created_at)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='11' WHERE key='schema_version'")
@@ -285,7 +283,7 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT ''`)
 		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT ''`)
 	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'")	// Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'") // Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)")
 
 	// Migration v15 → v16: add merge_tier column to recordings
@@ -367,8 +365,8 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
 
 	return nil
-
 }
+
 func (d *DB) Close() error {
 	if d == nil || d.db == nil {
 		return nil
@@ -377,7 +375,7 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) migrateEncodings() {
-	rows, err := d.db.Query("SELECT id, protocol FROM cameras WHERE encoding = ''")
+	rows, err := d.db.QueryContext(context.Background(), "SELECT id, protocol FROM cameras WHERE encoding = ''")
 	if err != nil {
 		return
 	}
@@ -394,15 +392,15 @@ func (d *DB) migrateEncodings() {
 		}
 		// Only update if protocol actually changed (was a combined format)
 		if proto != protocol {
-			d.db.Exec("UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
-		} else {
-			// Same protocol (onvif or already normalized) — just set encoding if available
-			if enc != "" {
-				d.db.Exec("UPDATE cameras SET encoding = ? WHERE id = ?", enc, id)
-			}
+			d.db.ExecContext(context.Background(), "UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return
+	}
 }
+
+// Backup creates a backup of the database using VACUUM INTO.
 
 // Backup creates a backup of the database using VACUUM INTO.
 func (d *DB) Backup(ctx context.Context, destPath string) error {
@@ -411,12 +409,13 @@ func (d *DB) Backup(ctx context.Context, destPath string) error {
 }
 
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
+// sqliteTimeFormat is the format used to store timestamps in SQLite.
 // Uses UTC without timezone suffix, compatible with SQLite's datetime() for string comparison.
 const sqliteTimeFormat = "2006-01-02 15:04:05.999999999"
 
 // timeToDB converts time.Time to a SQLite-compatible string value.
 // Returns nil for zero time (which SQLite stores as NULL).
-func timeToDB(t time.Time) interface{} {
+func timeToDB(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}

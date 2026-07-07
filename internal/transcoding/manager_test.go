@@ -41,7 +41,7 @@ done
 echo "test content" > "$output"
 exit 0
 `
-	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0755)
+	err := os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755)
 	require.NoError(t, err)
 
 	// Also create mock ffprobe
@@ -50,7 +50,7 @@ exit 0
 echo '{"streams":[{"codec_name":"h264","duration":10.0,"width":1920,"height":1080}]}'
 exit 0
 `
-	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0755)
+	err = os.WriteFile(mockFFprobe, []byte(ffprobeScript), 0o755)
 	require.NoError(t, err)
 
 	return mockFFmpeg
@@ -122,9 +122,9 @@ func TestManager_RunAndStop(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -173,9 +173,9 @@ func TestManager_EnqueueRecording(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -184,7 +184,7 @@ func TestManager_EnqueueRecording(t *testing.T) {
 	// Create a fake input file
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "test-segment.mp4")
-	err = os.WriteFile(inputPath, []byte("fake mp4 data"), 0644)
+	err = os.WriteFile(inputPath, []byte("fake mp4 data"), 0o644)
 	require.NoError(t, err)
 
 	err = mgr.EnqueueRecording("cam-front-door", "rec-123", inputPath, "h265", "h264", "", 0)
@@ -223,9 +223,9 @@ func TestManager_GetStatus(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -267,9 +267,9 @@ func TestManager_HardwareInfo(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -298,9 +298,9 @@ func TestManager_Downloader(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -328,9 +328,9 @@ func TestManager_Queue(t *testing.T) {
 			FFmpegPath: mockFFmpeg,
 			MaxWorkers: 1,
 		},
-		DataDir:        t.TempDir(),
-		FFmpegPath:     mockFFmpeg,
-		MaxWorkers:     1,
+		DataDir:    t.TempDir(),
+		FFmpegPath: mockFFmpeg,
+		MaxWorkers: 1,
 	}
 
 	mgr, err := NewTranscodeManager(db, cfg, m)
@@ -390,7 +390,7 @@ func TestManager_UpdateFFmpegStatus(t *testing.T) {
 				resetProbe()
 				dataDir := t.TempDir()
 				toolsDir := filepath.Join(dataDir, "tools")
-				require.NoError(t, os.MkdirAll(toolsDir, 0755))
+				require.NoError(t, os.MkdirAll(toolsDir, 0o755))
 				mockFFmpeg := filepath.Join(toolsDir, "ffmpeg")
 				mockScript := `#!/bin/sh
 if [ "$1" = "-version" ]; then
@@ -399,7 +399,7 @@ if [ "$1" = "-version" ]; then
 fi
 exit 0
 `
-				require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0755))
+				require.NoError(t, os.WriteFile(mockFFmpeg, []byte(mockScript), 0o755))
 
 				db := newManagerTestDB(t)
 				m := metrics.NewMetrics()
@@ -482,7 +482,7 @@ func TestManager_AutoEnqueueOnSegmentCompleted(t *testing.T) {
 		Config: &config.Config{
 			Transcoding: config.TranscodingConfig{Enabled: true},
 			Cameras: []config.CameraConfig{{
-				ID: "cam-001",
+				ID:          "cam-001",
 				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 			}},
 		},
@@ -546,7 +546,7 @@ func TestManager_AutoEnqueueSkipsDisabledCamera(t *testing.T) {
 		Config: &config.Config{
 			Transcoding: config.TranscodingConfig{Enabled: true},
 			Cameras: []config.CameraConfig{{
-				ID: "cam-disabled",
+				ID:          "cam-disabled",
 				Transcoding: &config.CameraTranscodingConfig{Enabled: false},
 			}},
 		},
@@ -601,7 +601,7 @@ func TestManager_AutoEnqueueSkipsTimelapse(t *testing.T) {
 		Config: &config.Config{
 			Transcoding: config.TranscodingConfig{Enabled: true},
 			Cameras: []config.CameraConfig{{
-				ID: "cam-003",
+				ID:          "cam-003",
 				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 			}},
 		},
@@ -654,7 +654,7 @@ func TestManager_AutoEnqueueSkipsSameFormat(t *testing.T) {
 		Config: &config.Config{
 			Transcoding: config.TranscodingConfig{Enabled: true},
 			Cameras: []config.CameraConfig{{
-				ID: "cam-004",
+				ID:          "cam-004",
 				Transcoding: &config.CameraTranscodingConfig{Enabled: true, TargetCodec: "h264"},
 			}},
 		},

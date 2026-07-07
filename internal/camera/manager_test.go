@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -955,7 +956,7 @@ func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
 	require.NotNil(t, hub)
 
 	// Simulate 500 frames — expect ~5 histogram samples (1/100 sampling)
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, i == 0)
 	}
 
@@ -1679,4 +1680,63 @@ func TestGetCodecInfo_NilRecorder(t *testing.T) {
 	ci := mgr.GetCodecInfo("cam-h264")
 	assert.Nil(t, ci.SPS, "SPS should be nil when no recorders")
 	assert.False(t, ci.IsH264, "IsH264 should be false when no recorders")
+}
+
+// --- Relay manager tests ---
+
+type mockRelayManager struct {
+	mu            sync.Mutex
+	targets       map[string][]config.PushTargetConfig
+	removedCamera string
+}
+
+func (m *mockRelayManager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.targets == nil {
+		m.targets = make(map[string][]config.PushTargetConfig)
+	}
+	m.targets[cameraID] = cfgs
+}
+
+func (m *mockRelayManager) RemoveCamera(cameraID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removedCamera = cameraID
+	delete(m.targets, cameraID)
+}
+
+func TestSetRelayManager(t *testing.T) {
+	cm := NewCameraManager(nil, nil, nil, "")
+	require.Nil(t, cm.relayMgr)
+
+	mockRM := &mockRelayManager{}
+	cm.SetRelayManager(mockRM)
+	require.Equal(t, mockRM, cm.relayMgr)
+}
+
+func TestRelayStatus_NilManager(t *testing.T) {
+	cm := NewCameraManager(nil, nil, nil, "")
+	status := cm.RelayStatus("cam-1")
+	require.Nil(t, status, "should return nil when no relay manager set")
+}
+
+func TestSetCameraTargetsNoDeadlock(t *testing.T) {
+	cm := NewCameraManager(nil, nil, nil, "")
+	mockRM := &mockRelayManager{}
+	cm.SetRelayManager(mockRM)
+
+	targets := []config.PushTargetConfig{{URL: "rtmp://example.com/live/stream"}}
+	done := make(chan struct{})
+	go func() {
+		cm.relayMgr.SetCameraTargets("cam-1", targets)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetCameraTargets did not complete within timeout")
+	}
 }

@@ -202,7 +202,7 @@ func testMergeResultDefaults(t *testing.T) {
 	}
 }
 
-	func testMergeResultSuccess(t *testing.T) {
+func testMergeResultSuccess(t *testing.T) {
 	r := MergeResult{
 		Tier:         TierGo,
 		OutputPath:   "/tmp/merged.mp4",
@@ -287,7 +287,7 @@ func testTimelapseMergerAllTiers(t *testing.T) {
 	for _, tier := range []MergeTier{TierFFmpeg, TierGo, TierJPEG} {
 		m := &mockMerger{canMerge: true, tier: tier}
 		if m.Tier() != tier {
-		t.Errorf("mockMerger with tier %v returned tier %v", tier, m.Tier())
+			t.Errorf("mockMerger with tier %v returned tier %v", tier, m.Tier())
 		}
 	}
 }

@@ -2,9 +2,9 @@ package event
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 
 	pkgeventbus "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/eventbus"
 )
@@ -166,7 +166,7 @@ func TestBusAdapter_ConcurrentSubUnsub(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Concurrent subscribers subscribing and unsubscribing
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -177,7 +177,7 @@ func TestBusAdapter_ConcurrentSubUnsub(t *testing.T) {
 		}()
 	}
 	// Concurrent publishers
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

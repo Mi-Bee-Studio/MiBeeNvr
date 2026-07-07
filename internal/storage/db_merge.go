@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -34,11 +35,17 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 		return err
 	}
 
-	for _, id := range oldIDs {
-		_, err = tx.ExecContext(ctx, `DELETE FROM recordings WHERE id = ?;`, id)
-		if err != nil {
-			return err
-		}
+	// Batch delete old recordings with a single IN clause
+	placeholders := make([]string, len(oldIDs))
+	args := make([]interface{}, len(oldIDs))
+	for i, id := range oldIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	delQ := "DELETE FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	_, err = tx.ExecContext(ctx, delQ, args...)
+	if err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -63,6 +70,9 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 		}
 		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
 		res = append(res, &r)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }

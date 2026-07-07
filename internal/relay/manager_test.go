@@ -25,14 +25,16 @@ func TestTargetConfigEqual(t *testing.T) {
 	require.False(t, targetConfigEqual(base, PushTargetConfig{ID: "a", Name: "n", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true, TranscodePolicy: "force_sw"}))
 
 	// VideoPresetOverride change → not equal.
-	withOverride := PushTargetConfig{ID: "a", Name: "n", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+	withOverride := PushTargetConfig{
+		ID: "a", Name: "n", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
 		VideoPresetOverride: &VideoPresetOverrides{Resolution: "1920x1080", Framerate: 30, VideoBitrateKbps: 4500, GopSeconds: 2, Profile: "high", Bframes: 1},
 	}
 	require.False(t, targetConfigEqual(base, withOverride))
 	require.True(t, targetConfigEqual(withOverride, withOverride))
 
 	// Different VideoPresetOverride field → not equal.
-	withOverrideAlt := PushTargetConfig{ID: "a", Name: "n", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
+	withOverrideAlt := PushTargetConfig{
+		ID: "a", Name: "n", Protocol: "rtmp", URL: "rtmp://h/live/k", Enabled: true,
 		VideoPresetOverride: &VideoPresetOverrides{Resolution: "1280x720"},
 	}
 	require.False(t, targetConfigEqual(withOverride, withOverrideAlt))

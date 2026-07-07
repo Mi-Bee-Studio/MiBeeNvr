@@ -23,7 +23,7 @@ func (r *bitReader) readBit() (int, error) {
 
 func (r *bitReader) readBits(n int) (int, error) {
 	var val int
-	for i := 0; i < n; i++ {
+	for range n {
 		bit, err := r.readBit()
 		if err != nil {
 			return 0, err
@@ -148,7 +148,7 @@ func parseSPSResolution(sps []byte) (width, height int, err error) {
 			if chromaFormatIDC == 3 {
 				count = 12
 			}
-			for i := 0; i < count; i++ {
+			for i := range count {
 				var present int
 				if present, err = r.readBit(); err != nil {
 					return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
@@ -159,7 +159,7 @@ func parseSPSResolution(sps []byte) (width, height int, err error) {
 						size = 64
 					}
 					lastScale := 8
-					for j := 0; j < size; j++ {
+					for range size {
 						var delta int
 						if delta, err = r.readSE(); err != nil {
 							return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
@@ -201,7 +201,7 @@ func parseSPSResolution(sps []byte) (width, height int, err error) {
 		if numRefFrames, err = r.readUE(); err != nil {
 			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 		}
-		for i := 0; i < numRefFrames; i++ {
+		for range numRefFrames {
 			if _, err = r.readSE(); err != nil {
 				return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 			}
@@ -315,13 +315,13 @@ func parseHEVCSPSResolution(sps []byte) (width, height int, err error) {
 	if _, err = r.readBits(8); err != nil { // general_level_idc
 		return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 	}
-	for i := 0; i < maxSubLayersMinus1; i++ {
+	for range maxSubLayersMinus1 {
 		if _, err = r.readBits(2); err != nil {
 			return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 		}
 	}
 	if maxSubLayersMinus1 > 0 {
-		for i := 0; i < maxSubLayersMinus1; i++ {
+		for range maxSubLayersMinus1 {
 			if _, err = r.readBit(); err != nil {
 				return 0, 0, fmt.Errorf("merge: sps parse error: %w", err)
 			}

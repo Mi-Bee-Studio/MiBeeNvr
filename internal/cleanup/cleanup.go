@@ -35,7 +35,7 @@ type CleanupManager struct {
 	healthRetention           time.Duration
 	transcodeOrphanFn         func(ctx context.Context) error
 	transcodeHistoryRetention time.Duration // 0 = disabled
-	ffprobePath               string         // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
+	ffprobePath               string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                  *event.EventBus
 }
 
@@ -79,7 +79,6 @@ func (cm *CleanupManager) SetTranscodeOrphanCleanup(fn func(ctx context.Context)
 func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) {
 	cm.transcodeHistoryRetention = retention
 }
-
 
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
 func (cm *CleanupManager) Run(ctx context.Context) {
@@ -522,7 +521,8 @@ func (cm *CleanupManager) probeDuration(ctx context.Context, filePath string) fl
 	if cm.ffprobePath == "" {
 		return 0
 	}
-	cmd := exec.CommandContext(ctx, cm.ffprobePath,
+	cmd := exec.CommandContext(
+		ctx, cm.ffprobePath,
 		"-v", "quiet",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",

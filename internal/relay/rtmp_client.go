@@ -168,17 +168,20 @@ func (c *rtmpPublishConn) buildFullMetadata(orig amf0.Data) amf0.Data {
 	if c.videoHeight > 0 {
 		meta = append(meta, amf0.ObjectEntry{Key: "height", Value: float64(c.videoHeight)})
 	}
-	meta = append(meta,
+	meta = append(
+		meta,
 		amf0.ObjectEntry{Key: "videodatarate", Value: float64(0)},
 	)
 	if c.videoFPS > 0 {
 		meta = append(meta, amf0.ObjectEntry{Key: "framerate", Value: c.videoFPS})
 	}
-	meta = append(meta,
+	meta = append(
+		meta,
 		amf0.ObjectEntry{Key: "videocodecid", Value: float64(7)}, // H.264
 	)
 	if hasAudio {
-		meta = append(meta,
+		meta = append(
+			meta,
 			amf0.ObjectEntry{Key: "audiodatarate", Value: float64(0)},
 			amf0.ObjectEntry{Key: "audiosamplerate", Value: float64(44100)},
 			amf0.ObjectEntry{Key: "audiosamplesize", Value: float64(16)},
@@ -218,11 +221,11 @@ func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, 
 		buf[5] = byte(bodyLen >> 8)
 		buf[6] = byte(bodyLen)
 		buf[7] = msgType
-		buf[8] = byte(c.streamID >> 24)  // big-endian — matches gortmplib's
-		buf[9] = byte(c.streamID >> 16)  // chunk0.Marshal which strict FMS-
-		buf[10] = byte(c.streamID >> 8)  // compatible receivers (Douyu) expect.
-		buf[11] = byte(c.streamID)       // (RTMP spec says little-endian, but
-		copy(buf[12:], payload)          //  gortmplib/FFmpeg-in-practice use BE.)
+		buf[8] = byte(c.streamID >> 24) // big-endian — matches gortmplib's
+		buf[9] = byte(c.streamID >> 16) // chunk0.Marshal which strict FMS-
+		buf[10] = byte(c.streamID >> 8) // compatible receivers (Douyu) expect.
+		buf[11] = byte(c.streamID)      // (RTMP spec says little-endian, but
+		copy(buf[12:], payload)         //  gortmplib/FFmpeg-in-practice use BE.)
 	} else {
 		// Multi-chunk: Type 0 first chunk + Type 3 continuations
 		numChunks := (bodyLen + cs - 1) / cs
@@ -257,15 +260,14 @@ func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, 
 	return err
 }
 
-func (c *rtmpPublishConn) BytesReceived() uint64           { return c.bc.Reader.Count() }
-func (c *rtmpPublishConn) BytesSent() uint64               { return c.bc.Writer.Count() }
-
+func (c *rtmpPublishConn) BytesReceived() uint64 { return c.bc.Reader.Count() }
+func (c *rtmpPublishConn) BytesSent() uint64     { return c.bc.Writer.Count() }
 
 // RTMP digest-handshake constants (Adobe spec).
 var (
 	rtmpClientKeyC1 = []byte("Genuine Adobe Flash Player 001")
-	rtmpServerKeyS1  = []byte("Genuine Adobe Flash Media Server 001")
-	rtmpClientKeyC2  = append(append([]byte{}, []byte("Genuine Adobe Flash Player 001")...),
+	rtmpServerKeyS1 = []byte("Genuine Adobe Flash Media Server 001")
+	rtmpClientKeyC2 = append(append([]byte{}, []byte("Genuine Adobe Flash Player 001")...),
 		0xf0, 0xee, 0xc2, 0x4a, 0x80, 0x68, 0xbe, 0xe8,
 		0x2e, 0x00, 0xd0, 0xd1, 0x02, 0x9e, 0x7e, 0x57,
 		0x6e, 0xec, 0x5d, 0x2d, 0x29, 0x80, 0x6f, 0xab,
@@ -301,16 +303,16 @@ func buildC1WithDigest() []byte {
 	data := c1[8:] // 1528 bytes
 
 	// Scheme 0: digest position = digestChunkPos1(=4) + sum(Data[0:4]) % 728
-	digestPos := 4 + (int(data[0])+int(data[1])+int(data[2])+int(data[3])) % 728
+	digestPos := 4 + (int(data[0])+int(data[1])+int(data[2])+int(data[3]))%728
 
 	// Build message = C1 with the 32-byte digest region excluded
 	msg := make([]byte, 0, 1536-32)
 	msg = append(msg, c1[:8]...)
-		// Time + Version
+	// Time + Version
 	msg = append(msg, data[:digestPos]...)
 	// Data before digest
 	msg = append(msg, data[digestPos+32:]...)
-// Data after digest
+	// Data after digest
 
 	digest := rtmpHMAC(rtmpClientKeyC1, msg)
 	copy(data[digestPos:digestPos+32], digest)
@@ -323,8 +325,8 @@ func buildC1WithDigest() []byte {
 func detectS1Digest(s1 []byte) ([]byte, bool) {
 	data := s1[8:] // 1528 bytes
 	for _, pos := range []int{
-		4 + (int(data[0])+int(data[1])+int(data[2])+int(data[3])) % 728,
-		768 + (int(data[764])+int(data[765])+int(data[766])+int(data[767])) % 728,
+		4 + (int(data[0])+int(data[1])+int(data[2])+int(data[3]))%728,
+		768 + (int(data[764])+int(data[765])+int(data[766])+int(data[767]))%728,
 	} {
 		if pos+32 > len(data) {
 			continue
@@ -435,7 +437,6 @@ func dialRTMPPublish(ctx context.Context, rawURL string, videoWidth, videoHeight
 		nconn: nconn, mrw: mrw, bc: bc, chunkSize: 4096, streamID: 0x1000000,
 		videoWidth: videoWidth, videoHeight: videoHeight, videoFPS: videoFPS,
 	}
-
 
 	app, streamKey := splitRTMPPath(u)
 	if app == "" || streamKey == "" {

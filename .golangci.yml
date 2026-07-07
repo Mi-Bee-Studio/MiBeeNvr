@@ -1,0 +1,155 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+linters:
+  enable:
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - govet
+    - gocritic
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - nilnil
+    - contextcheck
+    - noctx
+    - gocheckcompilerdirectives
+    - nolintlint
+    - errorlint
+    - misspell
+    - intrange
+    - usestdlibvars
+    - predeclared
+    - nilerr
+    - nilnesserr
+    - wastedassign
+    - fatcontext
+    - perfsprint
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    staticcheck:
+      checks:
+        - all
+        - -QF*
+        - -ST*
+        - -SA1019  # Deprecated API usage (tracked for future migration)
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    perfsprint:
+      errorf: false      # suppress fmt.Errorf -> errors.New (behavior change)
+      err-error: false    # suppress fmt.Sprintf(err) -> err.Error() (panic risk)
+      integer-format: true  # optimize %d
+      hex-format: true     # optimize %x/%X
+      string-format: true  # optimize %s
+      bool-format: true    # optimize %t
+      int-conversion: true # optimize int conversion
+  exclusions:
+    presets:
+      - common-false-positives
+    warn-unused: true
+    paths:
+      - web/
+    rules:
+      # Test files: loose checking
+      - path: _test\.go
+        linters: [errcheck, noctx, gocritic, contextcheck, nilnil, bodyclose]
+      # rationale: Legacy packages with mixed nil patterns — nilnil/ineffassign disabled pending refactor
+      - path: internal/(onvif|upload|merge|storage|ftp|wsstream)/
+        linters: [nilnil, ineffassign]
+      # rationale: Third-party adapted code (go2rtc) — response body handling follows upstream pattern
+      - path: internal/xiaomi/
+        linters: [bodyclose]
+      # rationale: SQLite queries with rows.Close() pattern — DB package manages cleanup
+      - path: internal/storage/
+        linters: [rowserrcheck]
+      # rationale: WalkDir/Walk callback nil returns skip inaccessible entries — standard Go pattern
+      - path: internal/storage/manager\.go
+        linters: [nilerr]
+      # Internal packages: context intentionally omitted (non-blocking I/O)
+      # rationale: Internal packages use non-blocking I/O — context passed explicitly where needed
+      - path: internal/
+        linters: [noctx, contextcheck]
+      # rationale: CLI entry point uses simple error handling — context not needed at startup
+      - path: cmd/
+        linters: [noctx, contextcheck]
+      # errcheck patterns: legitimate cleanup/write patterns
+      # rationale: Defer cleanup — errors already logged by close methods
+      - source: 'defer .+\.Close\(\)'
+        linters: [errcheck]
+      # rationale: Output writes — errors surface at caller or HTTP client level
+      - source: '\.Write\('
+        linters: [errcheck]
+      # rationale: Service shutdown — resources close without re-verification
+      - source: '\.Stop\('
+        linters: [errcheck]
+      # rationale: DB transaction rollback — errors logged, rollback is best-effort
+      - source: '\.Rollback\('
+        linters: [errcheck]
+      # rationale: Buffer flush — errors logged, data loss acceptable for cleanup
+      - source: '\.Flush\('
+        linters: [errcheck]
+      # rationale: Resource close — errors logged, close methods handle cleanup
+      - source: '\.Close\('
+        linters: [errcheck]
+      # rationale: JSON encoding — errors logged, encoding failures non-fatal
+      - source: '\.Encode\('
+        linters: [errcheck]
+      # rationale: Once.Do initialization — errors logged, initialization continues
+      - source: '\.RunOnce\('
+        linters: [errcheck]
+      # rationale: Process wait — errors logged, cleanup status is implicit
+      - source: '\.Wait\('
+        linters: [errcheck]
+      # rationale: String writes — errors logged, write failures non-fatal
+      - source: '\.WriteString\('
+        linters: [errcheck]
+      # rationale: Directory creation — errors logged, creation idempotent
+      - source: 'MkdirAll\('
+        linters: [errcheck]
+      # rationale: Directory cleanup — errors logged, cleanup is best-effort
+      - source: 'RemoveAll\('
+        linters: [errcheck]
+      # rationale: File deletion — errors logged, deletion is best-effort
+      - source: 'DeleteFile\('
+        linters: [errcheck]
+      # rationale: File tree walk — errors logged, walk continues
+      - source: 'filepath\.Walk\('
+        linters: [errcheck]
+      # rationale: File removal — errors logged, removal is best-effort
+      - source: 'os\.(Remove|RemoveAll)\('
+        linters: [errcheck]
+      # rationale: I/O deadline setting — errors logged, timeout is advisory
+      - source: '(SetReadDeadline)\('
+        linters: [errcheck]
+      # rationale: Event subscription — errors logged, subscription is best-effort
+      - source: 'SubscribeByPrefix\('
+        linters: [errcheck]
+      # rationale: Stdlib I/O — alternative error handling exists
+      - source: 'fmt\.Sscanf\('
+        linters: [errcheck]
+      # rationale: Stdlib formatting — alternative error handling exists
+      - source: 'fmt\.Fprintf\('
+        linters: [errcheck]
+      # rationale: DB execution — errors handled by driver/logging mechanism
+      - source: '\.Exec'
+        linters: [errcheck]
+      # gocritic style preferences
+      # rationale: Acceptable style for simple control flow chains
+      - source: 'ifElseChain'
+        linters: [gocritic]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

@@ -31,7 +31,6 @@ const (
 	lowDropRateThreshold  = 0.05 // 5% — restore full frame rate
 )
 
-
 // peerEntry holds a single WHEP peer connection and its metadata.
 type peerEntry struct {
 	mu         sync.Mutex
@@ -106,7 +105,7 @@ func (ct *congestionTracker) dropRateLocked() float64 {
 		return 0
 	}
 	var drops int
-	for i := 0; i < ct.windowCount; i++ {
+	for i := range ct.windowCount {
 		if !ct.window[i] {
 			drops++
 		}
@@ -154,6 +153,7 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 	ct.skipCounter++
 	return ct.skipCounter%2 == 1
 }
+
 // Manager manages WebRTC WHEP sessions for camera streaming.
 // It supports H.264 video only (no audio), with configurable max peers
 // per camera and idle eviction.
@@ -206,7 +206,6 @@ func withFrameBufSize(n int) ManagerOption {
 		}
 	}
 }
-
 
 // WithMetrics sets the Prometheus metrics collector.
 func WithMetrics(m *metrics.Metrics) ManagerOption {
@@ -328,14 +327,16 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 		// Non-blocking send — drop frame if buffer full
 		select {
 		case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-			slog.Debug("frame_trace",
+			slog.Debug(
+				"frame_trace",
 				"trace_id", traceID,
 				"camera_id", camID,
 				"stage", "webrtc_recv",
 				"is_idr", isKeyframe,
 			)
 		default:
-			slog.Debug("frame_trace",
+			slog.Debug(
+				"frame_trace",
 				"trace_id", traceID,
 				"camera_id", camID,
 				"stage", "webrtc_drop",
@@ -560,7 +561,6 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 	logger.Info("WHEP session deleted", "camera_id", entry.camID, "session_id", sessionID)
 	return nil
 }
-
 
 // StopAll closes all active WHEP sessions and releases resources.
 func (m *Manager) StopAll() {

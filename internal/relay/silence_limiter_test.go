@@ -47,7 +47,7 @@ func TestSilenceLimiter_ShouldEmit_HardCap5PerSecond(t *testing.T) {
 	em := NewBufferAwareSilenceEmitter(NewSilenceAACGenerator())
 
 	// First 5 should all pass.
-	for i := 0; i < maxEmitsPerSecond; i++ {
+	for i := range maxEmitsPerSecond {
 		require.True(t, em.ShouldEmit(), "ShouldEmit iteration %d should be true", i)
 	}
 

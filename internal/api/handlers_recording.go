@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,7 +67,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
@@ -93,7 +94,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 // POST /api/recordings  body: {camera_id, file_path, format, started_at, ...}
 func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
-		writeError(w, http.StatusUnauthorized, "API key required")
+		WriteError(w, http.StatusUnauthorized, "API key required")
 		return
 	}
 	var body struct {
@@ -108,11 +109,11 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 		FrameCount int     `json:"frame_count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.CameraID == "" || body.FilePath == "" || body.Format == "" {
-		writeError(w, http.StatusBadRequest, "camera_id, file_path, and format are required")
+		WriteError(w, http.StatusBadRequest, "camera_id, file_path, and format are required")
 		return
 	}
 
@@ -139,7 +140,7 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create recording")
+		WriteError(w, http.StatusInternalServerError, "failed to create recording")
 		return
 	}
 
@@ -152,19 +153,19 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 // PATCH /api/recordings/{id}  body: {file_path?, format?, duration?, ...}
 func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
-		writeError(w, http.StatusUnauthorized, "API key required")
+		WriteError(w, http.StatusUnauthorized, "API key required")
 		return
 	}
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
+		WriteError(w, http.StatusBadRequest, "id is required")
 		return
 	}
 
 	// Fetch existing recording
 	existing, err := h.db.GetRecording(r.Context(), id)
 	if err != nil || existing == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
@@ -177,7 +178,7 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 		FrameCount *int     `json:"frame_count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -202,7 +203,7 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.db.UpdateRecording(r.Context(), existing); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update recording")
+		WriteError(w, http.StatusInternalServerError, "failed to update recording")
 		return
 	}
 
@@ -216,7 +217,7 @@ func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request
 		Type     string `json:"type"` // "segment" | "intra"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	seekType := body.Type
@@ -237,11 +238,11 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
@@ -253,17 +254,17 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 
 	rec, err := h.db.GetRecording(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	// Delete from DB first (authoritative source)
 	if err := h.db.DeleteRecording(ctx, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete recording")
+		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return
 	}
 
@@ -284,15 +285,15 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 		IDs []string `json:"ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if len(body.IDs) == 0 {
-		writeError(w, http.StatusBadRequest, "ids must not be empty")
+		WriteError(w, http.StatusBadRequest, "ids must not be empty")
 		return
 	}
 	if len(body.IDs) > 100 {
-		writeError(w, http.StatusBadRequest, "ids must not exceed 100")
+		WriteError(w, http.StatusBadRequest, "ids must not exceed 100")
 		return
 	}
 	// Fetch file paths before batch delete
@@ -307,7 +308,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	// Delete DB records (transaction)
 	deleted, err := h.db.DeleteRecordingsBatch(ctx, body.IDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to delete recordings")
 		return
 	}
 
@@ -341,21 +342,21 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	// Timelapse recordings are JPEG sequences — cannot be downloaded as a single file.
 	if rec.Format == model.Format("timelapse") {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Timelapse recordings (JPEG sequences) cannot be downloaded as a single file. Use /api/recordings/%s/timelapse-frames to access individual frames.", id))
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("Timelapse recordings (JPEG sequences) cannot be downloaded as a single file. Use /api/recordings/%s/timelapse-frames to access individual frames.", id))
 		return
 	}
 	if rec.FilePath == "" {
-		writeError(w, http.StatusNotFound, "file not available")
+		WriteError(w, http.StatusNotFound, "file not available")
 		return
 	}
 
@@ -396,13 +397,13 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	filePath := validPath
 	info, err := os.Stat(filePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "file not found")
+		WriteError(w, http.StatusNotFound, "file not found")
 		return
 	}
 	if info.IsDir() {
 		entries, err := os.ReadDir(filePath)
 		if err != nil || len(entries) == 0 {
-			writeError(w, http.StatusNotFound, "no files in recording directory")
+			WriteError(w, http.StatusNotFound, "no files in recording directory")
 			return
 		}
 		for _, e := range entries {
@@ -425,33 +426,33 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 
 	if rec.Format != "mjpeg" {
-		writeError(w, http.StatusBadRequest, "not a JPEG recording")
+		WriteError(w, http.StatusBadRequest, "not a JPEG recording")
 		return
 	}
 
 	filePath := rec.FilePath
 	info, err := os.Stat(filePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "recording files not found")
+		WriteError(w, http.StatusNotFound, "recording files not found")
 		return
 	}
 	if !info.IsDir() {
-		writeError(w, http.StatusNotFound, "recording is not a directory")
+		WriteError(w, http.StatusNotFound, "recording is not a directory")
 		return
 	}
 
 	entries, err := os.ReadDir(filePath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read recording directory")
+		WriteError(w, http.StatusInternalServerError, "failed to read recording directory")
 		return
 	}
 
@@ -514,31 +515,31 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	if rec.Format != model.Format("timelapse") {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
 	info, err := os.Stat(rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "timelapse directory not found")
+		WriteError(w, http.StatusNotFound, "timelapse directory not found")
 		return
 	}
 	if !info.IsDir() {
-		writeError(w, http.StatusNotFound, "timelapse recording is not a directory")
+		WriteError(w, http.StatusNotFound, "timelapse recording is not a directory")
 		return
 	}
 
 	entries, err := os.ReadDir(rec.FilePath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read timelapse directory")
+		WriteError(w, http.StatusInternalServerError, "failed to read timelapse directory")
 		return
 	}
 
@@ -590,26 +591,26 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 	// Validate filename — only allow alphanumeric, underscore, dash, dot
 	for _, c := range filename {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
-			writeError(w, http.StatusBadRequest, "invalid filename")
+			WriteError(w, http.StatusBadRequest, "invalid filename")
 			return
 		}
 	}
 	if filename == "" || filename == "." || filename == ".." {
-		writeError(w, http.StatusBadRequest, "invalid filename")
+		WriteError(w, http.StatusBadRequest, "invalid filename")
 		return
 	}
 
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	if rec.Format != model.Format("timelapse") {
-		writeError(w, http.StatusNotFound, "not a timelapse recording")
+		WriteError(w, http.StatusNotFound, "not a timelapse recording")
 		return
 	}
 
@@ -623,15 +624,15 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil {
-		writeError(w, http.StatusNotFound, "recording not found")
+		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	if rec.MergePath == "" {
-		writeError(w, http.StatusNotFound, "merged recording not available")
+		WriteError(w, http.StatusNotFound, "merged recording not available")
 		return
 	}
 	http.ServeFile(w, r, rec.MergePath)
@@ -716,7 +717,7 @@ func extractEXIFDateTime(filePath string) (time.Time, bool) {
 	// EXIF data is typically in the first few KB; read 64KB to be safe
 	buf := make([]byte, 65536)
 	n, err := io.ReadFull(f, buf)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return time.Time{}, false
 	}
 	if n < 4 {
@@ -805,7 +806,7 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 	var exifIFDOffset int
 
 	// Scan IFD0 entries
-	for j := 0; j < numEntries; j++ {
+	for j := range numEntries {
 		entryOff := ifdOffset + 2 + j*12
 		if entryOff+12 > len(data) {
 			break
@@ -835,7 +836,7 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 	// Try EXIF IFD first for DateTimeOriginal
 	if exifIFDOffset > 0 && exifIFDOffset+2 <= len(data) {
 		numExifEntries := int(bo.Uint16(data[exifIFDOffset : exifIFDOffset+2]))
-		for j := 0; j < numExifEntries; j++ {
+		for j := range numExifEntries {
 			entryOff := exifIFDOffset + 2 + j*12
 			if entryOff+12 > len(data) {
 				break

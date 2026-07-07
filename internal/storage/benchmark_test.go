@@ -68,22 +68,22 @@ func BenchmarkListRecordings(b *testing.B) {
 	// Seed with realistic data: 5 cameras, ~60 days, ~48 recordings/day each
 	// Total: 5 * 60 * 48 = 14,400 recordings
 	const (
-		numCameras            = 5
-		numDays               = 60
-		recsPerDayPerCam      = 48 // every 30 minutes
+		numCameras       = 5
+		numDays          = 60
+		recsPerDayPerCam = 48 // every 30 minutes
 	)
 
 	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
 	cameraIDs := make([]string, numCameras)
-	for i := 0; i < numCameras; i++ {
+	for i := range numCameras {
 		cameraIDs[i] = fmt.Sprintf("cam-%d", i+1)
 	}
 
 	seq := 0
 	for _, camID := range cameraIDs {
-		for day := 0; day < numDays; day++ {
+		for day := range numDays {
 			baseTime := now.Add(-time.Duration(numDays-day) * 24 * time.Hour)
-			for slot := 0; slot < recsPerDayPerCam; slot++ {
+			for slot := range recsPerDayPerCam {
 				seq++
 				startedAt := baseTime.Add(time.Duration(slot) * 30 * time.Minute)
 				endedAt := startedAt.Add(30 * time.Minute)
@@ -132,7 +132,7 @@ func BenchmarkListRecordings(b *testing.B) {
 				EndTime:   endTime,
 			}
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				recs, err := db.ListRecordings(ctx, filter)
 				if err != nil {
 					b.Fatal(err)

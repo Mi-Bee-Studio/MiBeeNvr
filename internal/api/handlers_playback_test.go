@@ -46,7 +46,7 @@ func createTestAVIFile(t *testing.T, path string, numFrames int, includeAudio bo
 	var buf bytes.Buffer
 	m := avi.NewMuxer(&buf, 320, 240, 8000, true) // mu-law
 
-	for i := 0; i < numFrames; i++ {
+	for i := range numFrames {
 		frame := makeTestJPEG(t, 0xAA+byte(i), 100+i)
 		require.NoError(t, m.WriteVideo(frame, int64(i*33333)))
 		if includeAudio {
@@ -55,7 +55,7 @@ func createTestAVIFile(t *testing.T, path string, numFrames int, includeAudio bo
 		}
 	}
 	require.NoError(t, m.Close())
-	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0644))
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
 }
 
 // --- Tests ---
@@ -89,15 +89,16 @@ func TestPlaybackWS_BasicFlow(t *testing.T) {
 
 	// Connect WebSocket.
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/playback-test-1/playback"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	defer conn.Close()
 
 	// Read frames — expect at least 5 video frames (audio may vary).
 	var videoCount, audioCount int
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -150,8 +151,9 @@ func TestPlaybackWS_PlayPause(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/playback-test-2/playback"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
+	defer resp.Body.Close()
 	defer conn.Close()
 
 	// Read one frame to confirm streaming.
@@ -182,7 +184,10 @@ func TestPlaybackWS_NotFound(t *testing.T) {
 	// Connect to a non-existent recording — the handler should return an error
 	// before upgrade. Since the WS won't be upgraded, Dial should fail.
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/recordings/non-existent/playback"
-	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad handshake")
 }

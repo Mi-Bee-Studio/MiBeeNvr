@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -23,6 +23,9 @@ type FFmpegMerger struct {
 	caps   *transcoding.HardwareCapabilities
 	config *MergeConfig
 }
+
+// Interface compliance check.
+var _ TimelapseMerger = (*FFmpegMerger)(nil)
 
 // NewFFmpegMerger creates a new FFmpegMerger with the given hardware capabilities
 // and optional merge configuration.
@@ -61,7 +64,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	for _, encoder := range encoders {
 		args := m.buildArgs(framesDir, outputPath, fps, encoder)
 
-		slog.Debug("running ffmpeg merge",
+		slog.Debug(
+			"running ffmpeg merge",
 			"path", m.caps.FFmpegPath,
 			"args", args,
 			"framesDir", framesDir,
@@ -76,7 +80,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 			codec := m.detectCodec(outputPath)
 			framesMerged := countFramesInDir(framesDir)
 
-			slog.Debug("ffmpeg merge completed",
+			slog.Debug(
+				"ffmpeg merge completed",
 				"encoder", encoder,
 				"codec", codec,
 				"frames", framesMerged,
@@ -92,7 +97,8 @@ func (m *FFmpegMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 			}, nil
 		}
 
-		slog.Warn("ffmpeg merge attempt failed, trying next encoder",
+		slog.Warn(
+			"ffmpeg merge attempt failed, trying next encoder",
 			"encoder", encoder,
 			"error", err,
 		)
@@ -159,7 +165,7 @@ func (m *FFmpegMerger) buildArgs(framesDir, outputPath string, fps int, encoder 
 	var args []string
 
 	// Input: image sequence with framerate.
-	args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+	args = append(args, "-framerate", strconv.Itoa(fps))
 	args = append(args, "-i", filepath.Join(framesDir, "frame_%06d.jpg"))
 
 	// Encoder selection.
@@ -186,7 +192,7 @@ func (m *FFmpegMerger) buildArgs(framesDir, outputPath string, fps int, encoder 
 			if m.config != nil && m.config.CRF > 0 {
 				crf = m.config.CRF
 			}
-			args = append(args, "-crf", fmt.Sprintf("%d", crf))
+			args = append(args, "-crf", strconv.Itoa(crf))
 		}
 	}
 
@@ -217,9 +223,6 @@ func selectMergeEncoder(caps *transcoding.HardwareCapabilities) string {
 	}
 	return "libx264"
 }
-
-// mergeProgressRegex matches FFmpeg's standard stderr progress line.
-var mergeProgressRegex = regexp.MustCompile(`time=(\d+):(\d+):(\d+\.\d+)`)
 
 // consumeStderr reads FFmpeg stderr and returns the last meaningful output for diagnostics.
 // It fully consumes stderr to prevent the FFmpeg process from blocking on stderr writes.

@@ -1,0 +1,191 @@
+package camera
+
+import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
+)
+
+// Status returns the status of all managed recorders.
+func (cm *CameraManager) Status() map[string]model.RecorderStatus {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	result := make(map[string]model.RecorderStatus, len(cm.recorders))
+	for id, rec := range cm.recorders {
+		result[id] = rec.Status()
+	}
+	return result
+}
+
+// CameraStatus returns the status of a single camera recorder.
+func (cm *CameraManager) CameraStatus(cameraID string) model.RecorderStatus {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	rec, ok := cm.recorders[cameraID]
+	if !ok {
+		return model.StatusError
+	}
+	return rec.Status()
+}
+
+// SetErrorDetail sets the error detail for a camera. Thread-safe.
+func (cm *CameraManager) SetErrorDetail(cameraID string, detail *model.CameraErrorDetail) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.errorDetails[cameraID] = detail
+}
+
+// GetErrorDetail returns the error detail for a camera, or nil if none. Thread-safe.
+func (cm *CameraManager) GetErrorDetail(cameraID string) *model.CameraErrorDetail {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.errorDetails[cameraID]
+}
+
+// RecorderCount returns the number of managed recorders.
+func (cm *CameraManager) RecorderCount() int {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return len(cm.recorders)
+}
+
+// GetRecorder returns the recorder for the given camera ID, or nil if not found.
+func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.recorders[cameraID]
+}
+
+// GetHub returns the StreamHub registered for the given camera ID, or nil if
+// none exists. This is the read-only lookup consumed by HLS/WebRTC/FLV/WS
+// handlers (they fall back to getRecorderHub, but push-only cameras — srt/rtmp —
+// expose their hub through this registry).
+func (cm *CameraManager) GetHub(cameraID string) *model.StreamHub {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.hubRegistry[cameraID]
+}
+
+// GetSPS returns the source camera's current H.264 SPS/PPS (raw NALUs, no start
+// code) and whether the source is H.264. Used by the relay engine to initialize
+// RTMP/RTSP target tracks. Returns nil when the camera is not yet streaming or
+// is not H.264.
+func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return nil, nil, false
+	}
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		return r.SPS(), r.PPS(), true
+	case *recorder.IngestRecorder:
+		_, s, p, _ := r.CodecParams()
+		if s == nil || p == nil {
+			return nil, nil, true
+		}
+		return s, p, true
+	case *recorder.ONVIFRecorder:
+		if d := r.Delegate(); d != nil {
+			if h264, ok := d.(*recorder.H264Recorder); ok {
+				return h264.SPS(), h264.PPS(), true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+// GetCodecInfo returns the source camera's current video and audio codec
+// parameters as a single CodecInfo struct. Used by the relay engine to
+// initialize target tracks with complete codec information.
+// Returns a zero-value CodecInfo when the camera is not found or not streaming.
+func (cm *CameraManager) GetCodecInfo(cameraID string) model.CodecInfo {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return model.CodecInfo{}
+	}
+
+	// Helper to build CodecInfo from audio-getter interface.
+	type audioInfo interface {
+		AudioCodec() string
+		AudioConfig() []byte
+		AudioSampleRate() int
+		AudioChannels() int
+	}
+
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		ci := model.CodecInfo{
+			SPS:    r.SPS(),
+			PPS:    r.PPS(),
+			IsH264: true,
+		}
+		ci.AudioCodec = r.AudioCodec()
+		ci.AudioConfig = r.AudioConfig()
+		ci.AudioSampleRate = r.AudioSampleRate()
+		ci.AudioChannels = r.AudioChannels()
+		return ci
+	case *recorder.H265Recorder:
+		ci := model.CodecInfo{
+			VPS: r.VPS(),
+			SPS: r.SPS(),
+			PPS: r.PPS(),
+		}
+		ci.AudioCodec = r.AudioCodec()
+		ci.AudioConfig = r.AudioConfig()
+		ci.AudioSampleRate = r.AudioSampleRate()
+		ci.AudioChannels = r.AudioChannels()
+		return ci
+	case *recorder.ONVIFRecorder:
+		if d := r.Delegate(); d != nil {
+			switch delegate := d.(type) {
+			case *recorder.H264Recorder:
+				ci := model.CodecInfo{
+					SPS:    delegate.SPS(),
+					PPS:    delegate.PPS(),
+					IsH264: true,
+				}
+				ci.AudioCodec = delegate.AudioCodec()
+				ci.AudioConfig = delegate.AudioConfig()
+				ci.AudioSampleRate = delegate.AudioSampleRate()
+				ci.AudioChannels = delegate.AudioChannels()
+				return ci
+			case *recorder.H265Recorder:
+				ci := model.CodecInfo{
+					VPS: delegate.VPS(),
+					SPS: delegate.SPS(),
+					PPS: delegate.PPS(),
+				}
+				ci.AudioCodec = delegate.AudioCodec()
+				ci.AudioConfig = delegate.AudioConfig()
+				ci.AudioSampleRate = delegate.AudioSampleRate()
+				ci.AudioChannels = delegate.AudioChannels()
+				return ci
+			}
+		}
+	case *xiaomi.XiaomiRecorder:
+		xc, _, _, _ := r.CodecParams()
+		ci := model.CodecInfo{
+			SPS:    r.SPS(),
+			PPS:    r.PPS(),
+			VPS:    r.VPS(),
+			IsH264: xc != model.FormatH265,
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+	}
+
+	// Fallback: try audioInfo interface on any unknown recorder type.
+	ci := model.CodecInfo{IsH264: true}
+	if ai, ok := rec.(audioInfo); ok {
+		ci.AudioCodec = ai.AudioCodec()
+		ci.AudioConfig = ai.AudioConfig()
+		ci.AudioSampleRate = ai.AudioSampleRate()
+		ci.AudioChannels = ai.AudioChannels()
+	}
+	return ci
+}

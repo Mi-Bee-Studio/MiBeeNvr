@@ -35,6 +35,7 @@ func NewConnectionMonitor(offlineThreshold time.Duration, handler func(string, m
 		eventHandler:     handler,
 	}
 }
+
 // OnStatusChange is called when a camera's recorder status changes.
 func (m *ConnectionMonitor) OnStatusChange(cameraID string, status string) {
 	m.mu.Lock()

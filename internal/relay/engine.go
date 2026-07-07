@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -85,7 +85,6 @@ type PushTarget struct {
 	status RelayStatus
 	errMsg string
 	since  time.Time // status-effective time (connect/stream start)
-	cancel context.CancelFunc
 	done   chan struct{}
 
 	// bitrate accounting (atomic, sampled by status())
@@ -95,9 +94,9 @@ type PushTarget struct {
 	sampleKbps  atomic.Int64
 
 	// Transcode dependencies (optional, nil when transcode path not needed).
-	presetRegistry *PresetRegistry
-	hardwareCap    *transcoding.HardwareCapabilities
-	ffmpegPath     string
+	presetRegistry    *PresetRegistry
+	hardwareCap       *transcoding.HardwareCapabilities
+	ffmpegPath        string
 	streamURLProvider StreamURLProvider
 
 	// Runtime monitoring state (set during connect, cleared on disconnect).
@@ -134,8 +133,8 @@ func (t *PushTarget) SetPresetRegistry(r *PresetRegistry) {
 
 // SetHardwareCap wires hardware capabilities for transcoder encoder selection.
 // Should be set before Run if transcode may be used.
-func (t *PushTarget) SetHardwareCap(cap *transcoding.HardwareCapabilities) {
-	t.hardwareCap = cap
+func (t *PushTarget) SetHardwareCap(hwCap *transcoding.HardwareCapabilities) {
+	t.hardwareCap = hwCap
 }
 
 // SetFFmpegPath sets an explicit FFmpeg binary path for the transcoder.
@@ -440,7 +439,6 @@ func probeSourceVideoFPS(ffmpegPath, sourceURL string) int {
 	}
 	return num / den
 }
-
 
 // --- RTMP target ---
 
@@ -1358,7 +1356,6 @@ func (t *PushTarget) connectRTSPWithTranscode(ctx context.Context) error {
 			audioMedia = desc.Medias[audioMediaIdx]
 		}
 	}
-
 
 	// 11. Audio subscription (if configured).
 	if audioMedia != nil && audioRtpEnc != nil {

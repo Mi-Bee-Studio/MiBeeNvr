@@ -140,7 +140,7 @@ func (r *TimelapseRecorder) Start(ctx context.Context) error {
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
 		return fmt.Errorf("timelapse recorder for %q already running", r.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.watchdogDone = make(chan struct{})
@@ -335,7 +335,7 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 			continue // another goroutine captured first
 		}
 		// Check storage health — if failed, skip recording but keep stream alive.
-		if isStorageFailed(r.store) {
+		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()
 			}
@@ -363,7 +363,7 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		r.frameCount++
 		frameName := fmt.Sprintf("frame_%06d.jpg", r.frameCount)
 		jpgPath := filepath.Join(r.curTempPath, frameName)
-		if err := os.WriteFile(jpgPath, data, 0644); err != nil {
+		if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
 			timelapseLogger.Error("failed to write timelapse frame", "camera_id", r.cfg.CameraID, "error", err)
 			r.frameCount--
 			continue
@@ -391,7 +391,7 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 	var totalSize int64
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
-		recordingID = fmt.Sprintf("%d", now.UnixNano())
+		recordingID = strconv.FormatInt(now.UnixNano(), 10)
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
 			ID:         recordingID,

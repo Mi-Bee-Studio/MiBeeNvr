@@ -13,62 +13,62 @@ import (
 )
 
 func TestValidCredentials(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusOK {
-        t.Fatalf("expected 200, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Basic "+basic("user", "secret"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
 }
 
 func TestInvalidPassword(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Basic "+basic("user", "wrong"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestMissingAuthHeader(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestMalformedAuth(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    req := httptest.NewRequest("GET", "/", nil)
-    req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("not base64")))
-    w := httptest.NewRecorder()
-    handler.ServeHTTP(w, req)
-    if w.Code != http.StatusUnauthorized {
-        t.Fatalf("expected 401, got %d", w.Code)
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("user", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("not base64")))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
 }
 
 func TestEmptyHashReturnsSetupRequired(t *testing.T) {
@@ -76,7 +76,7 @@ func TestEmptyHashReturnsSetupRequired(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, "expected 503 when no password configured")
@@ -86,42 +86,42 @@ func TestEmptyHashReturnsSetupRequired(t *testing.T) {
 }
 
 func TestHashCheckRoundTrip(t *testing.T) {
-    pass := "abc123"
-    hash, _ := HashPassword(pass)
-    if !CheckPassword(pass, hash) {
-        t.Fatalf("hash check failed for valid password")
-    }
+	pass := "abc123"
+	hash, _ := HashPassword(pass)
+	if !CheckPassword(pass, hash) {
+		t.Fatalf("hash check failed for valid password")
+	}
 }
 
 func TestConcurrentAccess(t *testing.T) {
-    hash, _ := HashPassword("secret")
-    mw, _ := NewAuthMiddleware(staticProvider("u", hash), "", AuthRateLimitConfig{})
-    handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-    }))
-    reqs := 50
-    done := make(chan bool)
-    for i := 0; i < reqs; i++ {
-        go func(i int) {
-            req := httptest.NewRequest("GET", "/", nil)
-            req.Header.Set("Authorization", "Basic "+basic("u", "secret"))
-            w := httptest.NewRecorder()
-            handler.ServeHTTP(w, req)
-            if w.Code != http.StatusOK {
-                // non-fatal in goroutine
-            }
-            done <- true
-        }(i)
-    }
-    for i := 0; i < reqs; i++ {
-        <-done
-    }
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("u", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	reqs := 50
+	done := make(chan bool)
+	for i := range reqs {
+		go func(i int) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", "Basic "+basic("u", "secret"))
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				_ = w.Code
+			}
+			done <- true
+		}(i)
+	}
+	for range reqs {
+		<-done
+	}
 }
 
 // helper to build basic auth header quickly
 func basic(user, pass string) string {
-    s := user + ":" + pass
-    return base64.StdEncoding.EncodeToString([]byte(s))
+	s := user + ":" + pass
+	return base64.StdEncoding.EncodeToString([]byte(s))
 }
 
 // staticProvider returns an AuthProvider with fixed values for testing.
@@ -140,7 +140,7 @@ func TestPlaintextPasswordAutoHash(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("admin", "mypassword"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -158,13 +158,13 @@ func TestHashTakesPriorityOverPlaintext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Basic "+basic("admin", "prehashed-pass"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req2.Header.Set("Authorization", "Basic "+basic("admin", "ignored-plaintext"))
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -179,8 +179,8 @@ func TestRateLimiterAllowsUnderLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 5 requests (at the limit) — should all pass
-	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 5 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
@@ -195,15 +195,15 @@ func TestRateLimiterBlocksOverLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	// Send 3 requests (at the limit) — all pass
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 3 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code, "request %d should pass", i+1)
 	}
 
 	// 4th request should be blocked
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusTooManyRequests, w.Code, "request over limit should be 429")
@@ -218,13 +218,13 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	}))
 
 	// First request passes
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// Second request blocked
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusTooManyRequests, w.Code)
@@ -233,14 +233,14 @@ func TestRateLimiterResetsAfterWindow(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 
 	// Should be allowed again
-	req = httptest.NewRequest("GET", "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestSetupUpdatesHashDynamically(t *testing.T) {
-   t.Helper()
+	t.Helper()
 	currentHash := ""
 	currentUsername := "admin"
 	provider := AuthProvider{
@@ -254,7 +254,7 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 	}))
 
 	// Before setup: no hash configured → 503 SETUP_REQUIRED
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
@@ -266,7 +266,7 @@ func TestSetupUpdatesHashDynamically(t *testing.T) {
 	currentHash = hash
 
 	// After setup: middleware picks up the new hash → 200 OK
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req2.Header.Set("Authorization", "Basic "+basic("admin", "newpassword123"))
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -283,8 +283,8 @@ func TestRateLimiterEvictsStaleEntries(t *testing.T) {
 	}))
 
 	// Create entries from 100 different IPs
-	for i := 0; i < 100; i++ {
-		req := httptest.NewRequest("GET", "/", nil)
+	for i := range 100 {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = "192.168.1." + strconv.Itoa(i) + ":12345"
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -309,7 +309,7 @@ func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
 	}))
 
 	// Create an entry
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -322,7 +322,7 @@ func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Rate limiter should still work (no panic, no deadlock)
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	require.Equal(t, http.StatusTooManyRequests, w2.Code, "second request from same IP should be blocked when MaxRequests=1")

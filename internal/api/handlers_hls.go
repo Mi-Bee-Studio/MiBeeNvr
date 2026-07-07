@@ -32,18 +32,18 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	if h.hlsMgr == nil || h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "HLS not available")
+		WriteError(w, http.StatusInternalServerError, "HLS not available")
 		return
 	}
 
 	// Get camera to check protocol
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil {
-		writeError(w, http.StatusNotFound, "camera not found")
+		WriteError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 
@@ -51,7 +51,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	if !h.hlsMgr.IsActive(id) {
 		rec := h.camMgr.GetRecorder(id)
 		if rec == nil {
-			writeError(w, http.StatusBadRequest, "camera recorder not running")
+			WriteError(w, http.StatusBadRequest, "camera recorder not running")
 			return
 		}
 
@@ -67,7 +67,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			sps := h264Rec.SPS()
 			pps := h264Rec.PPS()
 			if sps == nil || pps == nil {
-				writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
+				WriteError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
 				return
 			}
 
@@ -77,7 +77,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
@@ -100,7 +100,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			sps := h265Rec.SPS()
 			pps := h265Rec.PPS()
 			if vps == nil || sps == nil || pps == nil {
-				writeError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
+				WriteError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
 				return
 			}
 
@@ -110,7 +110,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
-					writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
@@ -131,7 +131,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			// ONVIF recorder delegates to H264/H265 internally
 			delegate := onvifRec.Delegate()
 			if delegate == nil {
-				writeError(w, http.StatusServiceUnavailable, "ONVIF recorder delegate not available yet")
+				WriteError(w, http.StatusServiceUnavailable, "ONVIF recorder delegate not available yet")
 				return
 			}
 			// Unwrap the delegate and handle as H264/H265
@@ -139,7 +139,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				sps := h264Rec.SPS()
 				pps := h264Rec.PPS()
 				if sps == nil || pps == nil {
-					writeError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
+					WriteError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
 					return
 				}
 				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
@@ -147,7 +147,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					if errors.Is(err, hls.ErrMaxStreamsReached) {
 						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
 					return
 				}
@@ -157,7 +157,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				sps := h265Rec.SPS()
 				pps := h265Rec.PPS()
 				if vps == nil || sps == nil || pps == nil {
-					writeError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
+					WriteError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
 					return
 				}
 				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
@@ -165,7 +165,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 					if errors.Is(err, hls.ErrMaxStreamsReached) {
 						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
 					return
 				}
@@ -177,7 +177,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		} else if provider, ok := rec.(model.HLSProvider); ok {
 			codec, sps, pps, vps := provider.CodecParams()
 			if sps == nil || pps == nil {
-				writeError(w, http.StatusServiceUnavailable, "codec params not ready yet, waiting for video stream")
+				WriteError(w, http.StatusServiceUnavailable, "codec params not ready yet, waiting for video stream")
 				return
 			}
 			switch codec {
@@ -188,14 +188,14 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
 						logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
 					return
 				}
 				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, false)
 			case model.FormatH265:
 				if vps == nil {
-					writeError(w, http.StatusServiceUnavailable, "VPS not ready yet, waiting for video stream")
+					WriteError(w, http.StatusServiceUnavailable, "VPS not ready yet, waiting for video stream")
 					return
 				}
 				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
@@ -204,7 +204,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 					} else {
 						logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
-						writeError(w, http.StatusInternalServerError, "failed to start HLS stream")
+						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 					}
 					return
 				}
@@ -220,7 +220,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Proxy to muxer handler
 	if !h.hlsMgr.Handle(id, w, r) {
-		writeError(w, http.StatusServiceUnavailable, "HLS stream not available")
+		WriteError(w, http.StatusServiceUnavailable, "HLS stream not available")
 		return
 	}
 }
@@ -229,7 +229,7 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	if h.hlsMgr == nil {
-		writeError(w, http.StatusInternalServerError, "HLS not available")
+		WriteError(w, http.StatusInternalServerError, "HLS not available")
 		return
 	}
 

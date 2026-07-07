@@ -48,11 +48,12 @@ func cmdHealth() {
 		fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		fmt.Fprintf(os.Stderr, "Health check failed: HTTP %d\n", resp.StatusCode)
 		os.Exit(1)
 	}
+	resp.Body.Close()
 	os.Exit(0)
 }
 
@@ -124,7 +125,7 @@ func cmdInit() {
 		fmt.Fprintf(os.Stderr, "Error: config file %s already exists (use --force to overwrite)\n", cfgPath)
 		os.Exit(2)
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
 		os.Exit(1)
 	}
@@ -180,8 +181,7 @@ func cmdHashPassword() {
 func cmdEncryptConfig() {
 	cfgPath := "mibee-nvr.yaml"
 	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--config":
+		if os.Args[i] == "--config" {
 			i++
 			if i < len(os.Args) {
 				cfgPath = os.Args[i]
@@ -215,6 +215,8 @@ func dispatchSubcommand(args []string) {
 		cmdHealth()
 	case "init":
 		cmdInit()
+	case "migrate-mjpeg":
+		cmdMigrateMJPEG()
 	case "hash-password":
 		cmdHashPassword()
 	case "encrypt-config":

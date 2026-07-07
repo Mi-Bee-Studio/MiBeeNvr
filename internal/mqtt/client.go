@@ -17,15 +17,15 @@ type triggerMessage struct {
 
 // aiTriggerMessage is the JSON payload of an AI detection event.
 type aiTriggerMessage struct {
-	CameraID   string          `json:"camera_id"`
-	Event      string          `json:"event"`
-	Timestamp  string          `json:"timestamp"`
+	CameraID   string           `json:"camera_id"`
+	Event      string           `json:"event"`
+	Timestamp  string           `json:"timestamp"`
 	Detections []AiDetectionObj `json:"detections,omitempty"`
 }
 
 type AiDetectionObj struct {
-	Label      string    `json:"label"`
-	Confidence float64   `json:"confidence"`
+	Label      string     `json:"label"`
+	Confidence float64    `json:"confidence"`
 	BBox       [4]float64 `json:"bbox"`
 }
 
@@ -152,6 +152,6 @@ func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event 
 		Detections: detections,
 	}
 
-	topic := fmt.Sprintf("ai/%s", cameraID)
+	topic := "ai/" + cameraID
 	return c.Publish(topic, msg)
 }

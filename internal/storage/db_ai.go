@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,9 +21,9 @@ type AIEvent struct {
 	Confidence     float64 `json:"confidence"`
 	FrameIdx       int     `json:"frame_idx,omitempty"`
 	FrameTimestamp string  `json:"frame_timestamp,omitempty"`
-	BBox           string  `json:"bbox,omitempty"`        // JSON array [x1,y1,x2,y2] normalized
+	BBox           string  `json:"bbox,omitempty"` // JSON array [x1,y1,x2,y2] normalized
 	SnapshotPath   string  `json:"snapshot_path,omitempty"`
-	Metadata       string  `json:"metadata,omitempty"`    // JSON
+	Metadata       string  `json:"metadata,omitempty"` // JSON
 	CreatedAt      string  `json:"created_at"`
 }
 
@@ -30,7 +31,8 @@ type AIEvent struct {
 func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
 	q := `INSERT INTO ai_events (camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
-	result, err := d.db.ExecContext(ctx, q,
+	result, err := d.db.ExecContext(
+		ctx, q,
 		e.CameraID, e.RecordingID, e.EventType, e.Severity,
 		e.ZoneName, e.ClassName, e.Confidence, e.FrameIdx,
 		e.FrameTimestamp, e.BBox, e.SnapshotPath, e.Metadata,
@@ -108,7 +110,9 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		e.BBox = bbox.String
 		e.SnapshotPath = snapshotPath.String
 		e.Metadata = metadata.String
-		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
 	return events, total, nil
 }
@@ -172,23 +176,24 @@ func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Ti
 		}
 		stats = append(stats, s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return stats, nil
 }
 
-// joinStrings is a local helper to avoid importing strings just for Join.
 func joinStrings(ss []string, sep string) string {
-	if len(ss) == 0 {
-		return ""
-	}
-	result := ss[0]
-	for i := 1; i < len(ss); i++ {
-		result += sep + ss[i]
-	}
-	return result
+	return strings.Join(ss, sep)
 }
 
 // MarshalBBox converts a [4]float64 to JSON string for storage.
 func MarshalBBox(bbox [4]float64) string {
-	b, _ := json.Marshal(bbox)
+	b, err := json.Marshal(bbox)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestTranscodeTask_EnqueueDequeue(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -119,7 +118,7 @@ func TestTranscodeTask_GetByStatus(t *testing.T) {
 	ctx := context.Background()
 
 	now := formatTime(time.Now().UTC())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		task := &TranscodeTask{
 			CameraID:     "cam1",
 			RecordingID:  "rec-00%d",
@@ -193,11 +192,11 @@ func TestTranscodeTask_DeleteCompleted(t *testing.T) {
 		CreatedAt:    formatTime(now.Add(-3 * time.Hour)),
 	}
 	require.NoError(t, db.EnqueueTask(ctx, oldTask))
-require.NoError(t, db.UpdateTaskStatus(ctx, oldTask.ID, "completed", 1.0, ""))
-// Set completed_at to the past (2 hours ago) so it's older than the 1h threshold
-pastTime := formatTime(now.Add(-2 * time.Hour))
-_, err := db.db.ExecContext(ctx, "UPDATE transcoding_tasks SET completed_at = ? WHERE id = ?", pastTime, oldTask.ID)
-require.NoError(t, err)
+	require.NoError(t, db.UpdateTaskStatus(ctx, oldTask.ID, "completed", 1.0, ""))
+	// Set completed_at to the past (2 hours ago) so it's older than the 1h threshold
+	pastTime := formatTime(now.Add(-2 * time.Hour))
+	_, err := db.db.ExecContext(ctx, "UPDATE transcoding_tasks SET completed_at = ? WHERE id = ?", pastTime, oldTask.ID)
+	require.NoError(t, err)
 
 	// Recent completed task (completed 5 minutes ago)
 	recentTask := &TranscodeTask{
@@ -251,7 +250,7 @@ func TestTranscodeTask_DequeueOrder(t *testing.T) {
 
 	// Insert 3 tasks with staggered creation times
 	base := time.Now().UTC().Add(-time.Hour)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		createdAt := formatTime(base.Add(time.Duration(i) * 10 * time.Minute))
 		task := &TranscodeTask{
 			CameraID:     "cam1",

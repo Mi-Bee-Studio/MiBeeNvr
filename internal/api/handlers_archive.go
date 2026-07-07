@@ -27,7 +27,7 @@ func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cameras, err := h.db.ListArchivedCameras(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list archived cameras")
+		WriteError(w, http.StatusInternalServerError, "failed to list archived cameras")
 		return
 	}
 	if cameras == nil {
@@ -77,7 +77,7 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 
 	recordings, err := h.db.ListRecordings(ctx, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list archived recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list archived recordings")
 		return
 	}
 	if recordings == nil {
@@ -100,11 +100,11 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	// Verify camera is archived
 	cam, err := h.db.GetCamera(ctx, cameraID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get camera")
+		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil || !cam.Archived {
-		writeError(w, http.StatusNotFound, "archived camera not found")
+		WriteError(w, http.StatusNotFound, "archived camera not found")
 		return
 	}
 
@@ -112,7 +112,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	trueVal := true
 	recordings, err := h.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID, Archived: &trueVal})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list recordings")
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
 	}
 
@@ -123,14 +123,14 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	}
 	if len(ids) > 0 {
 		if _, err := h.db.DeleteRecordingsBatch(ctx, ids); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to delete recordings")
+			WriteError(w, http.StatusInternalServerError, "failed to delete recordings")
 			return
 		}
 	}
 
 	// Delete camera row from DB
 	if err := h.db.DeleteCamera(ctx, cameraID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete camera")
+		WriteError(w, http.StatusInternalServerError, "failed to delete camera")
 		return
 	}
 
@@ -150,11 +150,11 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 	// Get the recording
 	rec, err := h.db.GetRecording(ctx, recordingID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get recording")
+		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
 	}
 	if rec == nil || !rec.Archived || rec.CameraID != cameraID {
-		writeError(w, http.StatusNotFound, "archived recording not found")
+		WriteError(w, http.StatusNotFound, "archived recording not found")
 		return
 	}
 
@@ -167,7 +167,7 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 
 	// Delete recording from DB
 	if err := h.db.DeleteRecording(ctx, recordingID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete recording")
+		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return
 	}
 
@@ -194,16 +194,16 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 		RetentionDays int `json:"retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.RetentionDays < 0 {
-		writeError(w, http.StatusBadRequest, "retention_days must be >= 0")
+		WriteError(w, http.StatusBadRequest, "retention_days must be >= 0")
 		return
 	}
 
 	if err := h.db.SetArchiveRetention(ctx, cameraID, body.RetentionDays); err != nil {
-		writeError(w, http.StatusNotFound, "archived camera not found")
+		WriteError(w, http.StatusNotFound, "archived camera not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

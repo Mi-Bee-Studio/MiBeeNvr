@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/stretchr/testify/assert"
 )
 
 // mockCallback tracks calls to the onAction callback.
@@ -28,13 +28,13 @@ type mockMessage struct {
 	payload []byte
 }
 
-func (m *mockMessage) Duplicate() bool                          { return false }
-func (m *mockMessage) Qos() byte                                { return 1 }
-func (m *mockMessage) Retained() bool                           { return false }
-func (m *mockMessage) Topic() string                            { return m.topic }
-func (m *mockMessage) MessageID() uint16                        { return 0 }
-func (m *mockMessage) Payload() []byte                          { return m.payload }
-func (m *mockMessage) Ack()                                     {}
+func (m *mockMessage) Duplicate() bool   { return false }
+func (m *mockMessage) Qos() byte         { return 1 }
+func (m *mockMessage) Retained() bool    { return false }
+func (m *mockMessage) Topic() string     { return m.topic }
+func (m *mockMessage) MessageID() uint16 { return 0 }
+func (m *mockMessage) Payload() []byte   { return m.payload }
+func (m *mockMessage) Ack()              {}
 
 func TestNewClient(t *testing.T) {
 	t.Helper()
@@ -121,10 +121,10 @@ type mockToken struct {
 	err error
 }
 
-func (t *mockToken) Wait() bool                          { return true }
-func (t *mockToken) WaitTimeout(d time.Duration) bool    { return true }
-func (t *mockToken) Done() <-chan struct{}               { return nil }
-func (t *mockToken) Error() error                        { return t.err }
+func (t *mockToken) Wait() bool                       { return true }
+func (t *mockToken) WaitTimeout(d time.Duration) bool { return true }
+func (t *mockToken) Done() <-chan struct{}            { return nil }
+func (t *mockToken) Error() error                     { return t.err }
 
 // mockPahoClient implements mqtt.Client for testing.
 type mockPahoClient struct {
@@ -132,16 +132,24 @@ type mockPahoClient struct {
 	publishToken mqtt.Token
 }
 
-func (m *mockPahoClient) IsConnected() bool                                              { return m.connected }
-func (m *mockPahoClient) IsConnectionOpen() bool                                         { return m.connected }
-func (m *mockPahoClient) Connect() mqtt.Token                                            { return nil }
-func (m *mockPahoClient) Disconnect(quiesce uint)                                        {}
-func (m *mockPahoClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token { return m.publishToken }
-func (m *mockPahoClient) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token      { return nil }
-func (m *mockPahoClient) SubscribeMultiple(filters map[string]byte, callback mqtt.MessageHandler) mqtt.Token { return nil }
-func (m *mockPahoClient) Unsubscribe(topics ...string) mqtt.Token                       { return nil }
-func (m *mockPahoClient) AddRoute(topic string, callback mqtt.MessageHandler)            {}
-func (m *mockPahoClient) OptionsReader() mqtt.ClientOptionsReader                        { return mqtt.ClientOptionsReader{} }
+func (m *mockPahoClient) IsConnected() bool       { return m.connected }
+func (m *mockPahoClient) IsConnectionOpen() bool  { return m.connected }
+func (m *mockPahoClient) Connect() mqtt.Token     { return nil }
+func (m *mockPahoClient) Disconnect(quiesce uint) {}
+func (m *mockPahoClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
+	return m.publishToken
+}
+
+func (m *mockPahoClient) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
+	return nil
+}
+
+func (m *mockPahoClient) SubscribeMultiple(filters map[string]byte, callback mqtt.MessageHandler) mqtt.Token {
+	return nil
+}
+func (m *mockPahoClient) Unsubscribe(topics ...string) mqtt.Token             { return nil }
+func (m *mockPahoClient) AddRoute(topic string, callback mqtt.MessageHandler) {}
+func (m *mockPahoClient) OptionsReader() mqtt.ClientOptionsReader             { return mqtt.ClientOptionsReader{} }
 
 func TestPublish_NilClient(t *testing.T) {
 	t.Helper()

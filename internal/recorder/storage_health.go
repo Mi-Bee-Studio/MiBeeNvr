@@ -4,20 +4,21 @@ import (
 	"time"
 )
 
-// isStorageFailed checks whether the SegmentStore reports a failed health state.
-// The store may optionally implement StorageFailed() bool (e.g. *storage.Manager);
-// returns false if the store does not expose storage health so behavior is
-// unchanged for stub/test stores.
+// isStorageFailed checks whether the SegmentStore reports a failed health state
+// for a specific camera.
+// The store may optionally implement StorageFailed(cameraID string) bool
+// (e.g. *storage.Manager); returns false if the store does not expose storage
+// health so behavior is unchanged for stub/test stores.
 //
 // NOTE: the optional interface intentionally returns bool rather than an int
 // health enum. Go requires exact return-type matching for interface satisfaction,
 // so a store method returning a named int type (e.g. storage.HealthState) would
 // NOT satisfy an `StorageHealth() int` interface — that was the original bug that
 // silently disabled this guard for every recorder.
-func isStorageFailed(store SegmentStore) bool {
-	type healthHint interface{ StorageFailed() bool }
+func isStorageFailed(store SegmentStore, cameraID string) bool {
+	type healthHint interface{ StorageFailed(cameraID string) bool }
 	if hc, ok := store.(healthHint); ok {
-		return hc.StorageFailed()
+		return hc.StorageFailed(cameraID)
 	}
 	return false
 }

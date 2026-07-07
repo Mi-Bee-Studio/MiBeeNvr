@@ -15,42 +15,42 @@ import (
 // CameraRow adds DB-only fields: Description, Location, Brand, Model, SerialNumber,
 // RetentionDays, Status, LastSeen, HasPassword, merge config, archive fields.
 type CameraRow struct {
-	ID           string               `json:"id"`
-	Name         string               `json:"name"`
-	Protocol     string               `json:"protocol"`
-	Encoding     string               `json:"encoding"`
-	URL          string               `json:"url"`
-	Description  string               `json:"description"`
-	Location     string               `json:"location"`
-	Brand        string               `json:"brand"`
-	Model        string               `json:"model"`
-	SerialNumber string               `json:"serial_number"`
-	RetentionDays int                 `json:"retention_days"`
-	Status       model.RecorderStatus `json:"status"`
-	ErrorType    *string              `json:"error_type"`
-	ErrorDetail  *string              `json:"error_detail"`
-	LastSeen     *time.Time           `json:"last_seen,omitempty"`
-	Username     string               `json:"username"`
-	HasPassword  bool                 `json:"has_password"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	Protocol      string               `json:"protocol"`
+	Encoding      string               `json:"encoding"`
+	URL           string               `json:"url"`
+	Description   string               `json:"description"`
+	Location      string               `json:"location"`
+	Brand         string               `json:"brand"`
+	Model         string               `json:"model"`
+	SerialNumber  string               `json:"serial_number"`
+	RetentionDays int                  `json:"retention_days"`
+	Status        model.RecorderStatus `json:"status"`
+	ErrorType     *string              `json:"error_type"`
+	ErrorDetail   *string              `json:"error_detail"`
+	LastSeen      *time.Time           `json:"last_seen,omitempty"`
+	Username      string               `json:"username"`
+	HasPassword   bool                 `json:"has_password"`
 	// Per-camera merge config (nil = use global)
-	MergeEnabled            *bool   `json:"merge_enabled,omitempty"`
-	MergeCheckInterval      *string `json:"merge_check_interval,omitempty"`
-	MergeWindowSize         *string `json:"merge_window_size,omitempty"`
-	MergeBatchLimit         *int    `json:"merge_batch_limit,omitempty"`
-	MergeMinSegmentAge      *string `json:"merge_min_segment_age,omitempty"`
-	MergeMinSegmentsToMerge *int    `json:"merge_min_segments_to_merge,omitempty"`
-	ONVIFEndpoint           string  `json:"onvif_endpoint"`
-	ProfileToken            string  `json:"profile_token"`
-	StreamEncoding          string  `json:"stream_encoding"`
-	Archived             bool                         `json:"archived"`
-	ArchivedAt           *time.Time                    `json:"archived_at,omitempty"`
-	ArchiveRetentionDays int                           `json:"archive_retention_days"`
+	MergeEnabled            *bool      `json:"merge_enabled,omitempty"`
+	MergeCheckInterval      *string    `json:"merge_check_interval,omitempty"`
+	MergeWindowSize         *string    `json:"merge_window_size,omitempty"`
+	MergeBatchLimit         *int       `json:"merge_batch_limit,omitempty"`
+	MergeMinSegmentAge      *string    `json:"merge_min_segment_age,omitempty"`
+	MergeMinSegmentsToMerge *int       `json:"merge_min_segments_to_merge,omitempty"`
+	ONVIFEndpoint           string     `json:"onvif_endpoint"`
+	ProfileToken            string     `json:"profile_token"`
+	StreamEncoding          string     `json:"stream_encoding"`
+	Archived                bool       `json:"archived"`
+	ArchivedAt              *time.Time `json:"archived_at,omitempty"`
+	ArchiveRetentionDays    int        `json:"archive_retention_days"`
 	// Transcoding config injected from YAML at API response time
-	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
+	Transcoding *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 	// Channel injected from YAML at API response time (Xiaomi dual-lens)
-	Channel              string `json:"channel,omitempty"`
+	Channel string `json:"channel,omitempty"`
 	// AudioEnabled injected from YAML at API response time
-	AudioEnabled         bool `json:"audio_enabled"`
+	AudioEnabled bool `json:"audio_enabled"`
 	// Push/ingest fields injected from YAML at API response time (SRT/RTMP).
 	// Persisted via UpsertCameraIngest (separate from UpsertCamera).
 	StreamKey     string `json:"stream_key,omitempty"`
@@ -99,6 +99,9 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 			c.ArchivedAt = &t
 		}
 		res = append(res, c)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }
@@ -138,13 +141,15 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 			c.ArchivedAt = &t
 		}
 		res = append(res, c)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }
 
 // UpsertCamera inserts or updates a camera record in the database
 func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding string) error {
-
 	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?)
 
 		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
@@ -178,7 +183,8 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
-		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays)
+		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

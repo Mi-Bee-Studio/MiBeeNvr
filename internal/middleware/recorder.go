@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 )
+
 // StatusRecorder wraps http.ResponseWriter to capture status code and response size.
 type StatusRecorder struct {
 	http.ResponseWriter

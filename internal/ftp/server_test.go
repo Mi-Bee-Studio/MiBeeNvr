@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
 // mockClientContext implements ftpserverlib.ClientContext for testing.
@@ -25,23 +25,30 @@ type mockClientContext struct {
 	lastDC  ftpserverlib.DataChannel
 }
 
-func (m *mockClientContext) Path() string                                                  { return m.path }
-func (m *mockClientContext) SetPath(v string)                                               { m.path = v }
-func (m *mockClientContext) SetListPath(v string)                                           {}
-func (m *mockClientContext) SetDebug(d bool)                                                { m.debug = d }
-func (m *mockClientContext) Debug() bool                                                    { return m.debug }
-func (m *mockClientContext) ID() uint32                                                     { return 1 }
-func (m *mockClientContext) RemoteAddr() net.Addr                                           { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345} }
-func (m *mockClientContext) LocalAddr() net.Addr                                            { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2121} }
-func (m *mockClientContext) GetClientVersion() string                                       { return "test-client" }
-func (m *mockClientContext) Close() error                                                   { return nil }
-func (m *mockClientContext) HasTLSForControl() bool                                         { return false }
-func (m *mockClientContext) HasTLSForTransfers() bool                                       { return false }
-func (m *mockClientContext) GetLastCommand() string                                         { return m.lastCmd }
-func (m *mockClientContext) GetLastDataChannel() ftpserverlib.DataChannel                   { return m.lastDC }
-func (m *mockClientContext) SetTLSRequirement(r ftpserverlib.TLSRequirement) error          { return nil }
-func (m *mockClientContext) SetExtra(e any)                                                 { m.extra = e }
-func (m *mockClientContext) Extra() any                                                     { return m.extra }
+func (m *mockClientContext) Path() string         { return m.path }
+func (m *mockClientContext) SetPath(v string)     { m.path = v }
+func (m *mockClientContext) SetListPath(v string) {}
+func (m *mockClientContext) SetDebug(d bool)      { m.debug = d }
+func (m *mockClientContext) Debug() bool          { return m.debug }
+func (m *mockClientContext) ID() uint32           { return 1 }
+func (m *mockClientContext) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+}
+
+func (m *mockClientContext) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2121}
+}
+
+func (m *mockClientContext) GetClientVersion() string { return "test-client" }
+func (m *mockClientContext) Close() error             { return nil }
+func (m *mockClientContext) HasTLSForControl() bool   { return false }
+func (m *mockClientContext) HasTLSForTransfers() bool { return false }
+func (m *mockClientContext) GetLastCommand() string   { return m.lastCmd }
+
+func (m *mockClientContext) GetLastDataChannel() ftpserverlib.DataChannel          { return m.lastDC }
+func (m *mockClientContext) SetTLSRequirement(r ftpserverlib.TLSRequirement) error { return nil }
+func (m *mockClientContext) SetExtra(e any)                                        { m.extra = e }
+func (m *mockClientContext) Extra() any                                            { return m.extra }
 
 // newTestServer creates a Server with a temp storage root and SQLite DB.
 func newTestServer(t *testing.T) (*Server, *storage.DB) {
@@ -152,7 +159,7 @@ func TestFileUpload(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "cam01_") && strings.HasSuffix(e.Name(), ".mp4") {
 			found = true
-		 fullPath := filepath.Join(cameraDir, e.Name())
+			fullPath := filepath.Join(cameraDir, e.Name())
 			content, readErr := os.ReadFile(fullPath)
 			require.NoError(t, readErr)
 			assert.Equal(t, data, content, "file content should match uploaded data")
@@ -178,7 +185,6 @@ func TestFileUpload(t *testing.T) {
 	assert.Greater(t, rec.Duration, 0.0)
 }
 
-
 func TestFileDownload(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cc := &mockClientContext{}
@@ -193,11 +199,11 @@ func TestFileDownload(t *testing.T) {
 
 	// First, create a test file directly in camera directory
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	testFile := filepath.Join(cameraDir, "existing_video.mp4")
 	testContent := []byte("existing video content for download test")
-	require.NoError(t, os.WriteFile(testFile, testContent, 0644))
+	require.NoError(t, os.WriteFile(testFile, testContent, 0o644))
 
 	// Now test downloading the file using O_RDONLY flags
 	ft, err := cd.GetHandle("/cam01/existing_video.mp4", os.O_RDONLY, 0)
@@ -219,4 +225,4 @@ func TestFileDownload(t *testing.T) {
 	postDownloadContent, err := os.ReadFile(testFile)
 	require.NoError(t, err)
 	assert.Equal(t, testContent, postDownloadContent, "original file should remain unchanged")
-	}
+}

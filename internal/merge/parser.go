@@ -2,6 +2,7 @@ package merge
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -285,7 +286,6 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("mdat box at offset %d with size %d exceeds file size %d", mdatOffset, mdatSize, fileSize)
 	}
 
-
 	// Calculate total video duration from stts.
 	totalDur := time.Duration(0)
 	for _, e := range videoTrack.sttsEntries {
@@ -392,7 +392,7 @@ func buildSampleEntries(
 	if len(stts) > 0 {
 		durIdx := 0
 		durRemaining := stts[0].SampleCount
-		for i := 0; i < n; i++ {
+		for i := range n {
 			for durRemaining == 0 && durIdx+1 < len(stts) {
 				durIdx++
 				durRemaining = stts[durIdx].SampleCount
@@ -466,7 +466,7 @@ func detectKeyframes(f *os.File, samples []SampleEntry, codec string) error {
 		}
 
 		n, err := f.ReadAt(buf, samples[i].Offset)
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return fmt.Errorf("read sample %d at offset %d: %w", i, samples[i].Offset, err)
 		}
 		if n < 5 {

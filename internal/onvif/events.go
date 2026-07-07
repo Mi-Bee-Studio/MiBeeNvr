@@ -39,19 +39,19 @@ type EventSubscriberImpl struct {
 
 	mu            sync.Mutex
 	subscriptions map[string]*pullPointSubscription // cameraID → subscription
-	stopCh        map[string]chan struct{}           // cameraID → stop channel
+	stopCh        map[string]chan struct{}          // cameraID → stop channel
 
-	eventCallback EventCallback       // called when events are received
-	pollInterval  time.Duration       // interval between poll cycles
-	pullTimeout   time.Duration       // SOAP timeout for PullMessages
-	messageLimit  int                 // max messages per PullMessages call
-	subDuration   time.Duration       // requested subscription lifetime
+	eventCallback EventCallback // called when events are received
+	pollInterval  time.Duration // interval between poll cycles
+	pullTimeout   time.Duration // SOAP timeout for PullMessages
+	messageLimit  int           // max messages per PullMessages call
+	subDuration   time.Duration // requested subscription lifetime
 }
 
 type pullPointSubscription struct {
 	subscriptionRef string    // PullPoint subscription reference URL
 	terminationTime time.Time // subscription expiry time
-	active         bool      // whether the polling goroutine is running
+	active          bool      // whether the polling goroutine is running
 }
 
 // NewEventSubscriber creates an EventSubscriber backed by an onvif-go client.
@@ -101,7 +101,6 @@ func withSubscriptionDuration(d time.Duration) EventSubscriberOption {
 		es.subDuration = d
 	}
 }
-
 
 // Subscribe creates a PullPoint subscription for the camera and starts
 // background polling. Safe to call multiple times — returns nil if already

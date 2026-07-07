@@ -27,7 +27,7 @@ const (
 
 // Frame type masks.
 const (
-	frameTypeKeyframe  = 0x10
+	frameTypeKeyframe   = 0x10
 	frameTypeInterFrame = 0x20
 )
 
@@ -35,9 +35,9 @@ const (
 // Signature: "FLV", Version: 1, Flags: 0x05 (audio+video), HeaderSize: 9.
 func flvHeader() []byte {
 	return []byte{
-		'F', 'L', 'V',       // signature
-		0x01,                  // version
-		0x05,                  // flags: hasAudio(0x04) + hasVideo(0x01)
+		'F', 'L', 'V', // signature
+		0x01,                   // version
+		0x05,                   // flags: hasAudio(0x04) + hasVideo(0x01)
 		0x00, 0x00, 0x00, 0x09, // header size = 9
 	}
 }
@@ -88,12 +88,12 @@ func flvTag(tagType byte, timestamp int64, data []byte) []byte {
 func h264SequenceHeader(sps, pps []byte) []byte {
 	// AVCDecoderConfigurationRecord
 	config := make([]byte, 0, 64)
-	config = append(config, 0x01)                   // configurationVersion
-	config = append(config, sps[1])                  // AVCProfileIndication
-	config = append(config, sps[2])                  // profile_compatibility
-	config = append(config, sps[3])                  // AVCLevelIndication
-	config = append(config, 0xFF)                    // lengthSizeMinusOne = 3 (4-byte NALU length) + reserved bits
-	config = append(config, 0xE1)                    // numOfSequenceParameterSets = 1 + reserved bits
+	config = append(config, 0x01)   // configurationVersion
+	config = append(config, sps[1]) // AVCProfileIndication
+	config = append(config, sps[2]) // profile_compatibility
+	config = append(config, sps[3]) // AVCLevelIndication
+	config = append(config, 0xFF)   // lengthSizeMinusOne = 3 (4-byte NALU length) + reserved bits
+	config = append(config, 0xE1)   // numOfSequenceParameterSets = 1 + reserved bits
 
 	// SPS with 2-byte length prefix
 	spsLen := uint16(len(sps))
@@ -111,7 +111,7 @@ func h264SequenceHeader(sps, pps []byte) []byte {
 	// Video tag data: FrameType(4) + CodecID(4) + AVCPacketType + CompositionTime(3) + config
 	videoData := make([]byte, 0, 5+len(config))
 	videoData = append(videoData, frameTypeKeyframe|codecIDAVC) // 0x17
-	videoData = append(videoData, avcPacketTypeSequenceHeader)   // 0x00
+	videoData = append(videoData, avcPacketTypeSequenceHeader)  // 0x00
 	videoData = append(videoData, 0x00, 0x00, 0x00)             // composition time offset = 0
 	videoData = append(videoData, config...)
 
@@ -193,7 +193,7 @@ func h265SequenceHeader(vps, sps, pps []byte) []byte {
 	// Video tag data: FrameType(4) + CodecID(4) + HEVCPacketType + CompositionTime(3) + config
 	videoData := make([]byte, 0, 5+len(config))
 	videoData = append(videoData, frameTypeKeyframe|codecIDHEVC) // 0x1C
-	videoData = append(videoData, avcPacketTypeSequenceHeader)    // 0x00
+	videoData = append(videoData, avcPacketTypeSequenceHeader)   // 0x00
 	videoData = append(videoData, 0x00, 0x00, 0x00)              // composition time offset
 	videoData = append(videoData, config...)
 
@@ -213,7 +213,8 @@ func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe boo
 	payload := make([]byte, 0, 1024)
 	for _, nalu := range nalus {
 		naluLen := uint32(len(nalu))
-		payload = append(payload,
+		payload = append(
+			payload,
 			byte(naluLen>>24),
 			byte(naluLen>>16),
 			byte(naluLen>>8),
@@ -241,8 +242,8 @@ func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe boo
 	// Video tag data: frameType+codecID + packetType(NALU=1) + compositionTime(3) + payload
 	videoData := make([]byte, 0, 5+len(payload))
 	videoData = append(videoData, frameTypeAndCodec)
-	videoData = append(videoData, avcPacketTypeNALU)    // 0x01
-	videoData = append(videoData, 0x00, 0x00, 0x00)     // composition time offset
+	videoData = append(videoData, avcPacketTypeNALU) // 0x01
+	videoData = append(videoData, 0x00, 0x00, 0x00)  // composition time offset
 	videoData = append(videoData, payload...)
 
 	return flvTag(tagTypeVideo, tsMs, videoData)

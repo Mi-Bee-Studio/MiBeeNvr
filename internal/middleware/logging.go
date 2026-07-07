@@ -50,7 +50,8 @@ func RequestLogger(logger *slog.Logger, skipPaths ...string) func(next http.Hand
 			start := time.Now()
 			ww := &StatusRecorder{ResponseWriter: w, Status: http.StatusOK}
 			next.ServeHTTP(ww, r.WithContext(ctx))
-			logger.LogAttrs(ctx, slog.LevelInfo, "request",
+			logger.LogAttrs(
+				ctx, slog.LevelInfo, "request",
 				slog.String("trace_id", tid),
 				slog.String("method", r.Method),
 				slog.String("path", normalizePath(r.URL.Path)),

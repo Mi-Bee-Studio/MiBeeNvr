@@ -7,12 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,7 +26,6 @@ func newTestDownloader(t *testing.T) *Downloader {
 	t.Helper()
 	return NewDownloader(t.TempDir(), nil)
 }
-
 
 // mustCreateFakeFFmpeg creates a fake ffmpeg shell script that responds to -version.
 func mustCreateFakeFFmpeg(t *testing.T, dir string) string {
@@ -99,7 +98,7 @@ func createTarGzArchive(t *testing.T, files map[string][]byte) []byte {
 func serveTarGz(t *testing.T, archive []byte) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(archive)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
 		w.Write(archive)
 	}))
 }
@@ -178,8 +177,8 @@ func TestDownload_TarGzExtraction(t *testing.T) {
 	ffprobeContent := []byte("#!/bin/sh\necho 'ffprobe version 7.0-test'\n")
 
 	archive := createTarGzArchive(t, map[string][]byte{
-		"ffmpeg-git-amd64-static/ffmpeg":  ffmpegContent,
-		"ffmpeg-git-amd64-static/ffprobe": ffprobeContent,
+		"ffmpeg-git-amd64-static/ffmpeg":     ffmpegContent,
+		"ffmpeg-git-amd64-static/ffprobe":    ffprobeContent,
 		"ffmpeg-git-amd64-static/readme.txt": []byte("docs"),
 	})
 
@@ -244,7 +243,7 @@ func TestDownload_TarGzCorruptArchive(t *testing.T) {
 	corruptData := []byte("this is not a valid gzip stream at all!")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(corruptData)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(corruptData)))
 		w.Write(corruptData)
 	}))
 	defer srv.Close()
@@ -296,7 +295,7 @@ func TestDownload_TarGzMissingBinaries(t *testing.T) {
 func TestDownload_RawBinary(t *testing.T) {
 	fakeBinary := []byte("#!/bin/sh\necho 'ffmpeg version 7.0-test'\n")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fakeBinary)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(fakeBinary)))
 		w.Write(fakeBinary)
 	}))
 	defer srv.Close()
@@ -371,7 +370,7 @@ func TestDownload_Retry(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fakeBinary)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(fakeBinary)))
 		w.Write(fakeBinary)
 	}))
 	defer srv.Close()
@@ -415,7 +414,7 @@ func TestDownload_ProgressCallback(t *testing.T) {
 
 	var progressCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fakeBinary)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(fakeBinary)))
 		w.Write(fakeBinary)
 	}))
 	defer srv.Close()
@@ -485,7 +484,7 @@ func TestDownload_ConcurrentMutex(t *testing.T) {
 		serveCount.Add(1)
 		// Small delay to make concurrency more likely
 		time.Sleep(50 * time.Millisecond)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(fakeBinary)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(fakeBinary)))
 		w.Write(fakeBinary)
 	}))
 	defer srv.Close()
@@ -497,7 +496,7 @@ func TestDownload_ConcurrentMutex(t *testing.T) {
 	var errs []error
 	var mu sync.Mutex
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -815,7 +814,7 @@ func TestDownload_LargeTarGzProgress(t *testing.T) {
 
 	var progressCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(archive)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
 		// Write in small chunks to trigger multiple progress callbacks
 		chunkSize := 1024
 		for offset := 0; offset < len(archive); offset += chunkSize {

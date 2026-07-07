@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,9 +30,11 @@ func broadcastFrame(t *testing.T, hub *model.StreamHub, pts int64, au [][]byte) 
 	hub.Broadcast(pts, au, false)
 }
 
-var sampleSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
-var samplePPS = []byte{0x68, 0xce, 0x38, 0x80}
-var sampleVPS = []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00}
+var (
+	sampleSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
+	samplePPS = []byte{0x68, 0xce, 0x38, 0x80}
+	sampleVPS = []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00}
+)
 
 func dialWS(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
@@ -306,7 +308,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 	waitForViewer(t, m, "cam1")
 
 	// Send 3 frames
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		nalu := []byte{0x65, byte(i), 0x02, 0x03}
 		broadcastFrame(t, hub, int64(90000*(i+1)), [][]byte{nalu})
 		time.Sleep(10 * time.Millisecond)
@@ -314,7 +316,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 
 	// Read 3 video frames (collect all, then verify order)
 	var receivedPTS []int64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		msg, err := readMessage(t, conn)
 		require.NoError(t, err, "frame %d", i)
 		assert.Equal(t, MsgTypeVideoFrame, msg[0], "frame %d", i)
@@ -433,7 +435,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	if testing.Short() {
 		iterations = 50
 	}
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		nalu := []byte{0x65, byte(i)}
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{nalu}, false)
 	}
@@ -450,6 +452,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	conn.Close()
 	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
 }
+
 func TestFrameDropCounter(t *testing.T) {
 	// Capture log output to verify periodic warnings
 	var logBuf bytes.Buffer
@@ -490,7 +493,7 @@ func TestFrameDropCounter(t *testing.T) {
 	if testing.Short() {
 		iterations = 100
 	}
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		hub.Broadcast(int64(90000*(i+1)), [][]byte{{0x65, byte(i)}}, false)
 	}
 
@@ -617,7 +620,7 @@ func TestGoroutineCleanup(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		conn := dialWS(t, wsURL)
 		_, _ = readMessage(t, conn)
 		conn.Close()
@@ -625,12 +628,12 @@ func TestGoroutineCleanup(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
-
 }
+
 func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
-	baseline := runtime.NumGoroutine()
 	time.Sleep(100 * time.Millisecond) // let GC settle
-	baseline = runtime.NumGoroutine()
+	time.Sleep(100 * time.Millisecond) // let GC settle
+	baseline := runtime.NumGoroutine()
 
 	m := NewManager(WithIdleTimeout(5 * time.Second))
 	hub := newTestHub(t)
@@ -686,7 +689,7 @@ func TestMultipleViewers(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 
 	var conns []*websocket.Conn
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		conn := dialWS(t, wsURL)
 		conns = append(conns, conn)
 	}
@@ -842,7 +845,7 @@ func BenchmarkWriteFrame(b *testing.B) {
 
 	nalu := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		m.writeH264("cam1", int64(90000*(i+1)), [][]byte{nalu})
 	}
 }
@@ -858,7 +861,7 @@ func BenchmarkEncodeVideoFrame(b *testing.B) {
 		NALUs:      [][]byte{nalu, nalu},
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = EncodeVideoFrame(vf)
 	}
 }

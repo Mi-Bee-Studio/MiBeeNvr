@@ -1,12 +1,13 @@
 package srt
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"sync"
 
-	"github.com/datarhei/gosrt"
+	srt "github.com/datarhei/gosrt"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -15,12 +16,12 @@ import (
 // Listener manages an SRT listener that accepts incoming connections,
 // maps them to cameras via streamid, and distributes frames via StreamHub.
 type Listener struct {
-	cfg      config.SRTConfig
-	hubs     map[string]*model.StreamHub // camera_id → StreamHub
-	receivers map[string]*Receiver       // camera_id → active receiver
-	mu       sync.RWMutex
-	server   *srt.Server
-	running  bool
+	cfg       config.SRTConfig
+	hubs      map[string]*model.StreamHub // camera_id → StreamHub
+	receivers map[string]*Receiver        // camera_id → active receiver
+	mu        sync.RWMutex
+	server    *srt.Server
+	running   bool
 
 	// OnConnect is called when a new connection is established.
 	// If nil, the listener auto-creates a StreamHub for unknown cameras.
@@ -47,8 +48,8 @@ type Listener struct {
 // NewListener creates a new SRT listener with the given configuration.
 func NewListener(cfg config.SRTConfig) *Listener {
 	return &Listener{
-		cfg:      cfg,
-		hubs:     make(map[string]*model.StreamHub),
+		cfg:       cfg,
+		hubs:      make(map[string]*model.StreamHub),
 		receivers: make(map[string]*Receiver),
 	}
 }
@@ -90,7 +91,6 @@ func (l *Listener) getHubLocked(cameraID string) *model.StreamHub {
 	return l.hubs[cameraID]
 }
 
-
 // Start begins listening for SRT connections.
 func (l *Listener) Start() error {
 	l.mu.Lock()
@@ -117,7 +117,7 @@ func (l *Listener) Start() error {
 	}
 
 	go func() {
-		if err := l.server.ListenAndServe(); err != nil && err != srt.ErrServerClosed {
+		if err := l.server.ListenAndServe(); err != nil && !errors.Is(err, srt.ErrServerClosed) {
 			logger.Error("SRT server error", "error", err)
 		}
 	}()
@@ -159,7 +159,6 @@ func (l *Listener) receiverCount() int {
 	return len(l.receivers)
 }
 
-
 // StartCallers starts all configured caller-mode streams.
 // Each caller receiver dials the remote SRT address and starts receiving.
 func (l *Listener) StartCallers() error {
@@ -190,7 +189,6 @@ func (l *Listener) StartCallers() error {
 
 	return nil
 }
-
 
 // handleConnect is called for each incoming SRT connection.
 // It parses the streamid, finds the camera, and returns PUBLISH or REJECT.

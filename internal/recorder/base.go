@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -260,7 +261,7 @@ func (b *baseRecorder) start(ctx context.Context) error {
 	if b.status == model.StatusRecording || b.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", b.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	b.cancel = cancel
 	b.done = make(chan struct{})
 	b.status = model.StatusRecording
@@ -330,7 +331,7 @@ func (b *baseRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(b.store)
+		storageFailed := isStorageFailed(b.store, b.cfg.CameraID)
 		if storageFailed {
 			backoff = StorageBackoffWithJitter()
 		}
@@ -395,7 +396,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		}
 
 		// Step 5: Storage health check — skip recording but keep stream alive.
-		if isStorageFailed(b.store) {
+		if isStorageFailed(b.store, b.cfg.CameraID) {
 			b.handleStorageFailure()
 			continue
 		}
@@ -529,7 +530,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 		now := time.Now()
 		duration := now.Sub(b.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   b.cfg.CameraID,
 			FilePath:   b.curFinalPath,
 			Format:     b.driver.segmentFormat(),

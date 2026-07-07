@@ -151,12 +151,12 @@ func TestDeleteHealthEventsByType(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert 3 connection_lost (old), 2 connection_restored (old), 1 stream_anomaly (recent)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		insertHealthEvent(t, db, ctx, model.HealthEvent{
 			CameraID: "cam1", EventType: "connection_lost", Status: "error", Message: "lost", Metadata: "{}", CreatedAt: now.Add(-24 * time.Hour),
 		})
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		insertHealthEvent(t, db, ctx, model.HealthEvent{
 			CameraID: "cam1", EventType: "connection_restored", Status: "ok", Message: "restored", Metadata: "{}", CreatedAt: now.Add(-24 * time.Hour),
 		})
@@ -189,7 +189,7 @@ func TestHealthEventsPagination(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert 5 events
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		insertHealthEvent(t, db, ctx, model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "test",
@@ -220,7 +220,7 @@ func TestHealthEventsDeleteOld(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old events (7 days ago)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		insertHealthEvent(t, db, ctx, model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "test",
@@ -232,7 +232,7 @@ func TestHealthEventsDeleteOld(t *testing.T) {
 	}
 
 	// Insert recent events (1 hour ago)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		insertHealthEvent(t, db, ctx, model.HealthEvent{
 			CameraID:  "cam1",
 			EventType: "test",

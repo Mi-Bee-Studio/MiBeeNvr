@@ -26,8 +26,8 @@ func createTestJPEG(t *testing.T, width, height int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	// Fill with a simple gradient pattern
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			idx := y*img.Stride + x*4
 			img.Pix[idx] = byte(x * 255 / width)                    // R
 			img.Pix[idx+1] = byte(y * 255 / height)                 // G
@@ -49,15 +49,15 @@ func createTestRecording(t *testing.T, db *storage.DB, store *storage.Manager, i
 
 	// Create segment directory
 	segDir := filepath.Join(store.RootDir(), cameraID, id+"-frames")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
 	// Write a few JPEG frames
 	jpegData := createTestJPEG(t, 1920, 1080)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		framePath := filepath.Join(segDir, "frame_00000"+string(rune('0'+i))+".jpg")
-		if err := os.WriteFile(framePath, jpegData, 0644); err != nil {
+		if err := os.WriteFile(framePath, jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
 		}
 	}
@@ -235,13 +235,13 @@ func TestTimelapseThumbnail_AspectRatioPreserved(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-ar", "thumb-ar")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
 	// Create a portrait image (tall, not wide)
 	portraitJPEG := createTestJPEG(t, 480, 800)
-	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), portraitJPEG, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), portraitJPEG, 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestTimelapseThumbnail_EmptyDir(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-empty", "thumb-empty")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
@@ -353,12 +353,12 @@ func TestTimelapseThumbnail_MJPEGFormat(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-mjpeg", "thumb-mjpeg")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
 	jpegData := createTestJPEG(t, 640, 480)
-	if err := os.WriteFile(filepath.Join(segDir, "frame1.jpg"), jpegData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(segDir, "frame1.jpg"), jpegData, 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 
@@ -425,13 +425,13 @@ func TestTimelapseThumbnail_SmallImageNoResize(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-small", "thumb-small")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
 	// Create a small JPEG (100x80) that needs no resizing
 	smallJPEG := createTestJPEG(t, 100, 80)
-	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), smallJPEG, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), smallJPEG, 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 
@@ -544,13 +544,13 @@ func TestMergeProgress_Complete(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		t.Fatalf("failed to create segment dir: %v", err)
 	}
 	// Write some test frames
 	jpegData := createTestJPEG(t, 100, 100)
-	for i := 0; i < 3; i++ {
-		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0644); err != nil {
+	for i := range 3 {
+		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
 		}
 	}
@@ -613,12 +613,12 @@ func TestMergeProgress_Failed(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		t.Fatalf("failed to create segment dir: %v", err)
 	}
 	jpegData := createTestJPEG(t, 100, 100)
-	for i := 0; i < 3; i++ {
-		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0644); err != nil {
+	for i := range 3 {
+		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0o644); err != nil {
 			t.Fatalf("failed to write frame: %v", err)
 		}
 	}
@@ -712,11 +712,11 @@ func TestTimelapseStatus_WithMergeManager(t *testing.T) {
 	// Start an active merge
 	tmpDir := t.TempDir()
 	segmentDir := filepath.Join(tmpDir, "segment")
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		t.Fatalf("failed to create segment dir: %v", err)
 	}
 	jpegData := createTestJPEG(t, 100, 100)
-	if err := os.WriteFile(filepath.Join(segmentDir, "frame_000001.jpg"), jpegData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(segmentDir, "frame_000001.jpg"), jpegData, 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 	outputPath := filepath.Join(tmpDir, "output.mp4")
@@ -819,7 +819,7 @@ func TestTimelapseList_Pagination(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedRecording(t, db, makeRecording("rec-tl-"+strconv.Itoa(i), "cam-1", "timelapse", now.Add(time.Duration(i)*time.Hour), false))
 	}
 
@@ -1121,7 +1121,7 @@ func TestTimelapseGet_Found(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-get")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 	rec := &model.Recording{
@@ -1184,17 +1184,17 @@ func TestTimelapseDelete_Success(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-del")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 	// Create a test frame file
-	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("test"), 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 
 	// Create a merged file
 	mergedPath := filepath.Join(store.RootDir(), "cam-1", "rec-tl-del-merged.mp4")
-	if err := os.WriteFile(mergedPath, []byte("fake-mp4"), 0644); err != nil {
+	if err := os.WriteFile(mergedPath, []byte("fake-mp4"), 0o644); err != nil {
 		t.Fatalf("failed to create merged file: %v", err)
 	}
 
@@ -1277,13 +1277,13 @@ func TestTimelapseDownload_Merged(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-dl")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
 	mergedPath := filepath.Join(store.RootDir(), "cam-1", "rec-tl-dl-merged.mp4")
 	mergeData := []byte("fake-merged-mp4-data")
-	if err := os.WriteFile(mergedPath, mergeData, 0644); err != nil {
+	if err := os.WriteFile(mergedPath, mergeData, 0o644); err != nil {
 		t.Fatalf("failed to create merged file: %v", err)
 	}
 
@@ -1324,7 +1324,7 @@ func TestTimelapseDownload_NotMerged(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-notmerged")
-	if err := os.MkdirAll(segDir, 0755); err != nil {
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
 
@@ -1507,7 +1507,7 @@ func TestTimelapseBatchMerge_TooMany(t *testing.T) {
 	h := TestHandler(db, store)
 
 	cameraIDs := make([]string, 11)
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		cameraIDs[i] = fmt.Sprintf("cam-%d", i)
 	}
 

@@ -47,26 +47,26 @@ type progressEntry struct {
 }
 
 type RollingMergeManager struct {
-	mu                  sync.Mutex
-	merger              TimelapseMerger
-	active              map[string]*activeEntry
-	db                  MergeStatusUpdater
-	fps                 int
-	nextID              uint64
-	deleteOriginal      bool
-	progressMu          sync.Mutex
-	progress            map[string]*progressEntry
+	mu                   sync.Mutex
+	merger               TimelapseMerger
+	active               map[string]*activeEntry
+	db                   MergeStatusUpdater
+	fps                  int
+	nextID               uint64
+	deleteOriginal       bool
+	progressMu           sync.Mutex
+	progress             map[string]*progressEntry
 	progressCleanupDelay time.Duration
 }
 
 func NewRollingMergeManager(merger TimelapseMerger, db MergeStatusUpdater, fps int, deleteOriginal bool) *RollingMergeManager {
 	return &RollingMergeManager{
-		merger:              merger,
-		active:              make(map[string]*activeEntry),
-		db:                  db,
-		fps:                 fps,
-		deleteOriginal:      deleteOriginal,
-		progress:            make(map[string]*progressEntry),
+		merger:               merger,
+		active:               make(map[string]*activeEntry),
+		db:                   db,
+		fps:                  fps,
+		deleteOriginal:       deleteOriginal,
+		progress:             make(map[string]*progressEntry),
 		progressCleanupDelay: defaultProgressCleanupDelay,
 	}
 }
@@ -160,7 +160,8 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 	// Perform the merge.
 	result, err := r.merger.Merge(ctx, segmentDir, outputPath, r.fps)
 	if err != nil {
-		slog.Error("rolling merge: merge failed",
+		slog.Error(
+			"rolling merge: merge failed",
 			"camera_id", cameraID,
 			"segment_dir", segmentDir,
 			"error", err,
@@ -182,7 +183,8 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 		return
 	}
 
-	slog.Info("rolling merge: merge completed",
+	slog.Info(
+		"rolling merge: merge completed",
 		"camera_id", cameraID,
 		"output_path", result.OutputPath,
 		"frames_merged", result.FramesMerged,
@@ -201,13 +203,15 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 	// Delete original source frames if configured.
 	if r.deleteOriginal && result.FramesMerged > 0 {
 		if err := os.RemoveAll(segmentDir); err != nil {
-			slog.Warn("delete_original: failed to remove source frames",
+			slog.Warn(
+				"delete_original: failed to remove source frames",
 				"camera_id", cameraID,
 				"segment_dir", segmentDir,
 				"error", err,
 			)
 		} else {
-			slog.Info("delete_original: removed source frames",
+			slog.Info(
+				"delete_original: removed source frames",
 				"camera_id", cameraID,
 				"path", segmentDir,
 			)

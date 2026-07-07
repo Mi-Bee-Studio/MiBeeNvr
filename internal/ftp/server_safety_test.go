@@ -44,7 +44,6 @@ func TestResolvePathSubdirectory(t *testing.T) {
 	require.Equal(t, filepath.Join(srv.storageMgr.RootDir(), "cam01", "video.mp4"), path)
 }
 
-
 func TestResolvePathEmptyString(t *testing.T) {
 	t.Helper()
 	srv, _ := newTestServer(t)
@@ -251,12 +250,12 @@ func TestReadDirFiltersHiddenFiles(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	// Create visible and hidden files
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("data"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, ".hidden"), []byte("hidden"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "temp.tmp"), []byte("temp"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("data"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, ".hidden"), []byte("hidden"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "temp.tmp"), []byte("temp"), 0o644))
 
 	infos, err := cd.ReadDir("/cam01")
 	require.NoError(t, err)
@@ -281,7 +280,7 @@ func TestReadDirEmpty(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "empty-cam")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 
 	infos, err := cd.ReadDir("/empty-cam")
 	require.NoError(t, err)
@@ -368,8 +367,8 @@ func TestDownloadWithOffset(t *testing.T) {
 
 	// Create test file
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("0123456789abcdef"), 0644))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("0123456789abcdef"), 0o644))
 
 	// Download with offset of 4
 	ft, err := cd.GetHandle("/cam01/video.mp4", os.O_RDONLY, 4)
@@ -401,8 +400,8 @@ func TestStatExistingFile(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("data"), 0o644))
 
 	info, err := cd.Stat("/cam01/video.mp4")
 	require.NoError(t, err)
@@ -426,7 +425,7 @@ func TestMkdir(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cd := &clientDriver{server: srv}
 
-	err := cd.Mkdir("/newcam", 0755)
+	err := cd.Mkdir("/newcam", 0o755)
 	require.NoError(t, err)
 
 	info, err := os.Stat(filepath.Join(srv.storageMgr.RootDir(), "newcam"))
@@ -439,7 +438,7 @@ func TestMkdirAll(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cd := &clientDriver{server: srv}
 
-	err := cd.MkdirAll("/deep/nested/dir", 0755)
+	err := cd.MkdirAll("/deep/nested/dir", 0o755)
 	require.NoError(t, err)
 
 	info, err := os.Stat(filepath.Join(srv.storageMgr.RootDir(), "deep", "nested", "dir"))
@@ -455,7 +454,7 @@ func TestRemove(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	filePath := filepath.Join(srv.storageMgr.RootDir(), "file.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0o644))
 
 	err := cd.Remove("/file.txt")
 	require.NoError(t, err)
@@ -481,7 +480,7 @@ func TestRename(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	oldPath := filepath.Join(srv.storageMgr.RootDir(), "old.txt")
-	require.NoError(t, os.WriteFile(oldPath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(oldPath, []byte("data"), 0o644))
 
 	err := cd.Rename("/old.txt", "/new.txt")
 	require.NoError(t, err)
@@ -531,7 +530,7 @@ func TestOpenFile(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	filePath := filepath.Join(srv.storageMgr.RootDir(), "existing.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o644))
 
 	f, err := cd.Open("/existing.txt")
 	require.NoError(t, err)
@@ -740,7 +739,7 @@ func TestMkdirRelativeTraversalBlocked(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	// Relative path that actually escapes root
-	err := cd.Mkdir("../../evil", 0755)
+	err := cd.Mkdir("../../evil", 0o755)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "access denied")
 }
@@ -923,8 +922,8 @@ func TestDownloadZeroOffset(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("hello"), 0644))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("hello"), 0o644))
 
 	ft, err := cd.GetHandle("/cam01/video.mp4", os.O_RDONLY, 0)
 	require.NoError(t, err)
@@ -945,8 +944,8 @@ func TestDownloadNegativeOffset(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
-	require.NoError(t, os.MkdirAll(cameraDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("0123456789"), 0644))
+	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("0123456789"), 0o644))
 
 	ft, err := cd.GetHandle("/cam01/video.mp4", os.O_RDONLY, -1)
 	require.NoError(t, err)
@@ -967,14 +966,14 @@ func TestChmod(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	filePath := filepath.Join(srv.storageMgr.RootDir(), "chmod-test.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0o644))
 
-	err := cd.Chmod("/chmod-test.txt", 0600)
+	err := cd.Chmod("/chmod-test.txt", 0o600)
 	require.NoError(t, err)
 
 	info, err := os.Stat(filePath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 func TestChtimes(t *testing.T) {
@@ -983,7 +982,7 @@ func TestChtimes(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	filePath := filepath.Join(srv.storageMgr.RootDir(), "chtimes-test.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0o644))
 
 	newTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	err := cd.Chtimes("/chtimes-test.txt", newTime, newTime)
@@ -1002,9 +1001,9 @@ func TestOpenFileReadWrite(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	filePath := filepath.Join(srv.storageMgr.RootDir(), "existing.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o644))
 
-	f, err := cd.OpenFile("/existing.txt", os.O_RDWR, 0644)
+	f, err := cd.OpenFile("/existing.txt", os.O_RDWR, 0o644)
 	require.NoError(t, err)
 	require.NotNil(t, f)
 	require.NoError(t, f.Close())
@@ -1018,8 +1017,8 @@ func TestRemoveAllDeletesTree(t *testing.T) {
 	cd := &clientDriver{server: srv}
 
 	deepDir := filepath.Join(srv.storageMgr.RootDir(), "tree", "a", "b")
-	require.NoError(t, os.MkdirAll(deepDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(deepDir, "file.txt"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(deepDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(deepDir, "file.txt"), []byte("data"), 0o644))
 
 	err := cd.RemoveAll("/tree")
 	require.NoError(t, err)

@@ -144,7 +144,7 @@ func TestDownloadRecording_Success(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	rec := makeRecording("rec-dl", "cam-1", "h264", now, false)
 	rec.FilePath = filepath.Join(store.RootDir(), "rec-dl.mp4")
-	require.NoError(t, os.WriteFile(rec.FilePath, []byte("test-video-data"), 0644))
+	require.NoError(t, os.WriteFile(rec.FilePath, []byte("test-video-data"), 0o644))
 	seedRecording(t, db, rec)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/recordings/rec-dl/download", nil, "", "")
@@ -186,9 +186,9 @@ func TestListFrames_MJPEGDirWithImages(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	dir := filepath.Join(store.RootDir(), "mjpeg-frames")
-	require.NoError(t, os.MkdirAll(dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "frame001.jpg"), []byte("jpg-data"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "frame002.jpg"), []byte("jpg-data"), 0644))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "frame001.jpg"), []byte("jpg-data"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "frame002.jpg"), []byte("jpg-data"), 0o644))
 
 	rec := makeRecording("rec-mjpeg", "cam-1", "mjpeg", now, false)
 	rec.FilePath = dir
@@ -212,7 +212,7 @@ func TestListFrames_MJPEGNotDir(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	filePath := filepath.Join(store.RootDir(), "single.jpg")
-	require.NoError(t, os.WriteFile(filePath, []byte("jpg-data"), 0644))
+	require.NoError(t, os.WriteFile(filePath, []byte("jpg-data"), 0o644))
 
 	rec := makeRecording("rec-single", "cam-1", "mjpeg", now, false)
 	rec.FilePath = filePath
@@ -252,12 +252,12 @@ func TestBatchDeleteRecordings_Success(t *testing.T) {
 	// Create files
 	rec1 := makeRecording("batch-1", "cam-1", "h264", now, false)
 	rec1.FilePath = filepath.Join(store.RootDir(), "batch-1.mp4")
-	require.NoError(t, os.WriteFile(rec1.FilePath, []byte("data1"), 0644))
+	require.NoError(t, os.WriteFile(rec1.FilePath, []byte("data1"), 0o644))
 	seedRecording(t, db, rec1)
 
 	rec2 := makeRecording("batch-2", "cam-1", "h264", now, false)
 	rec2.FilePath = filepath.Join(store.RootDir(), "batch-2.mp4")
-	require.NoError(t, os.WriteFile(rec2.FilePath, []byte("data2"), 0644))
+	require.NoError(t, os.WriteFile(rec2.FilePath, []byte("data2"), 0o644))
 	seedRecording(t, db, rec2)
 
 	body, _ := json.Marshal(map[string][]string{"ids": {"batch-1", "batch-2"}})

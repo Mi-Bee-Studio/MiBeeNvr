@@ -44,11 +44,11 @@ func TestIsKeyframeNALU(t *testing.T) {
 		expected bool
 	}{
 		{"empty", nil, false},
-		{"IDR", []byte{0x65}, true}, // type 5 (0x65 & 0x1F = 5)
+		{"IDR", []byte{0x65}, true},      // type 5 (0x65 & 0x1F = 5)
 		{"non-IDR", []byte{0x41}, false}, // type 1 (0x41 & 0x1F = 1)
-		{"SPS", []byte{0x67}, false}, // type 7
-		{"PPS", []byte{0x68}, false}, // type 8
-		{"SEI", []byte{0x06}, false}, // type 6
+		{"SPS", []byte{0x67}, false},     // type 7
+		{"PPS", []byte{0x68}, false},     // type 8
+		{"SEI", []byte{0x06}, false},     // type 6
 	}
 
 	for _, tt := range tests {
@@ -352,7 +352,7 @@ func buildTSPacketsFromPES(pesData []byte, pid uint16, firstPUSI bool) []byte {
 
 		// PUSI set only on first packet
 		if first {
-			pkt[1] = byte((pid >> 8) & 0x1F) | 0x40 // PUSI + PID high bits
+			pkt[1] = byte((pid>>8)&0x1F) | 0x40 // PUSI + PID high bits
 			first = false
 		} else {
 			pkt[1] = byte((pid >> 8) & 0x1F) // PID high bits

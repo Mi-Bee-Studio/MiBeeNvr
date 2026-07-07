@@ -190,7 +190,7 @@ func extractNalus(buf []byte, codes []startCode, codec Codec) ([]naluInfo, error
 
 	var nalus []naluInfo
 
-	for i := 0; i < len(codes); i++ {
+	for i := range codes {
 		sc := codes[i]
 		naluStart := sc.pos + sc.length
 
@@ -470,7 +470,7 @@ func (sp *AnnexBStreamParser) Feed(chunk []byte) []AccessUnit {
 
 	// Extract complete NALUs (between codes[i] and codes[i+1] for i in [0, N-2])
 	var newNalus []naluInfo
-	for i := 0; i < len(codes)-1; i++ {
+	for i := range len(codes) - 1 {
 		sc := codes[i]
 		naluStart := sc.pos + sc.length
 		nextSC := codes[i+1]
@@ -527,7 +527,7 @@ func (sp *AnnexBStreamParser) Feed(chunk []byte) []AccessUnit {
 
 	// Count NALUs consumed by complete AUs and remove from pending
 	totalConsumed := 0
-	for i := 0; i < len(aus)-1; i++ {
+	for i := range len(aus) - 1 {
 		totalConsumed += len(aus[i])
 	}
 	sp.pending = sp.pending[totalConsumed:]

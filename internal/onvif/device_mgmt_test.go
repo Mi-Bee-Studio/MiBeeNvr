@@ -302,7 +302,7 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
 	done := make(chan struct{})
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			_ = m.SystemReboot(ctx)
@@ -313,7 +313,7 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 
 	// Wait for all goroutines
 	timeout := time.After(500 * time.Millisecond)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		select {
 		case <-done:
 		case <-timeout:
@@ -323,9 +323,7 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 	require.Equal(t, 10, m.SystemRebootCalls)
 	require.Equal(t, 10, m.GetNetworkInterfacesCalls)
 	require.Equal(t, 10, m.GetUsersCalls)
-
 }
-
 
 // --- GetUsers auto-fallback tests ---
 
@@ -343,7 +341,7 @@ func TestMapUsers(t *testing.T) {
 	require.Equal(t, "op", users[1].Username)
 	require.Equal(t, "Operator", users[1].Level)
 	require.Equal(t, "anon", users[2].Username)
-	}
+}
 
 func TestMapUsers_Nil(t *testing.T) {
 	t.Helper()
@@ -361,7 +359,8 @@ func TestRawGetUsers_NilSOAP(t *testing.T) {
 
 func TestRawGetUsers_SOAPError(t *testing.T) {
 	t.Helper()
-	dm := NewDeviceManager(nil, "http://cam/onvif/device_service", "admin", "pass",
+	dm := NewDeviceManager(
+		nil, "http://cam/onvif/device_service", "admin", "pass",
 		func(_ context.Context, _, _ string) ([]byte, error) {
 			return nil, fmt.Errorf("connection refused")
 		},
@@ -373,7 +372,8 @@ func TestRawGetUsers_SOAPError(t *testing.T) {
 
 func TestRawGetUsers_Success(t *testing.T) {
 	t.Helper()
-	dm := NewDeviceManager(nil, "http://cam/onvif/device_service", "admin", "pass",
+	dm := NewDeviceManager(
+		nil, "http://cam/onvif/device_service", "admin", "pass",
 		func(_ context.Context, endpoint, _ string) ([]byte, error) {
 			require.Equal(t, "http://cam/onvif/device_service", endpoint)
 			return []byte(`<?xml version="1.0" encoding="UTF-8"?>` +

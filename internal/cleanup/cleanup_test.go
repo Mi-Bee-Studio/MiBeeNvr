@@ -66,8 +66,8 @@ func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, 
 	require.NoError(t, err)
 
 	// Create the actual file on disk so DeleteFile works
-	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
-	require.NoError(t, os.WriteFile(fullPath, []byte("fake-data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+	require.NoError(t, os.WriteFile(fullPath, []byte("fake-data"), 0o644))
 }
 
 // insertTimelapseRecording inserts a timelapse-format recording with a file on disk
@@ -91,8 +91,8 @@ func (e *testEnv) insertTimelapseRecording(t *testing.T, id string, cameraID str
 	require.NoError(t, err)
 
 	// Create the actual file in camera dir
-	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
-	require.NoError(t, os.WriteFile(fullPath, []byte("fake-timelapse-data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+	require.NoError(t, os.WriteFile(fullPath, []byte("fake-timelapse-data"), 0o644))
 }
 
 // insertRecordingWithNullEnded inserts a recording where ended_at is NULL (still recording).
@@ -100,12 +100,13 @@ func (e *testEnv) insertRecordingWithNullEnded(t *testing.T, id string) {
 	t.Helper()
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), "still_recording.mp4")
-	_, err := e.db.DB().ExecContext(ctx,
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
+	_, err := e.db.DB().ExecContext(
+		ctx,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
 		id, "cam1", fullPath, model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(fullPath, []byte("still-recording-data"), 0644))
+	require.NoError(t, os.WriteFile(fullPath, []byte("still-recording-data"), 0o644))
 }
 
 func defaultCleanupConfig() config.CleanupConfig {
@@ -256,7 +257,7 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 
 	// Set a very low retention so time-based doesn't interfere
 	cfg := defaultCleanupConfig()
-	cfg.RetentionDays = 365 // keep everything by time
+	cfg.RetentionDays = 365      // keep everything by time
 	cfg.DiskThresholdPercent = 0 // trigger disk cleanup at 0% (always)
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
@@ -412,24 +413,24 @@ func TestRunOnce_HealthRetentionCleanup(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old health events (2 hours ago - past retention)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "offline",
-			Status: "critical",
-			Message: "camera disconnected",
+			Status:    "critical",
+			Message:   "camera disconnected",
 			CreatedAt: now.Add(-2 * time.Hour),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
 	}
 
 	// Insert recent health events (30 min ago - within retention)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "online",
-			Status: "ok",
-			Message: "camera reconnected",
+			Status:    "ok",
+			Message:   "camera reconnected",
 			CreatedAt: now.Add(-30 * time.Minute),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
@@ -464,12 +465,12 @@ func TestRunOnce_HealthRetentionCleanup_Disabled(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert old health events
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		event := model.HealthEvent{
-			CameraID: "cam1",
+			CameraID:  "cam1",
 			EventType: "offline",
-			Status: "critical",
-			Message: "camera disconnected",
+			Status:    "critical",
+			Message:   "camera disconnected",
 			CreatedAt: now.Add(-48 * time.Hour),
 		}
 		require.NoError(t, env.db.InsertHealthEvent(ctx, event))
@@ -507,7 +508,7 @@ func TestOrphanCleanup_TimelapseSurvives(t *testing.T) {
 
 	// 2. Create an orphan MP4 file (should be deleted by orphan cleanup)
 	orphanPath := filepath.Join(camDir, "cam1_20260101_130000_orphan.mp4")
-	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan-data"), 0644))
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan-data"), 0o644))
 	// Set mtime > 1 hour ago so it passes the age check
 	require.NoError(t, os.Chtimes(orphanPath, now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
 
@@ -595,23 +596,23 @@ func TestTimeBasedCleanup_TimelapseDirectory(t *testing.T) {
 
 	// Insert as a direct DB recording with directory path.
 	rec := &model.Recording{
-		ID:        "tl-dir",
-		CameraID:  "cam1",
-		FilePath:  segDir,
-		Format:    model.FormatTimelapse,
-		StartedAt: expiredTime.Add(-time.Hour),
-		EndedAt:   expiredTime,
-		Duration:  3600.0,
-		FileSize:  4096,
+		ID:         "tl-dir",
+		CameraID:   "cam1",
+		FilePath:   segDir,
+		Format:     model.FormatTimelapse,
+		StartedAt:  expiredTime.Add(-time.Hour),
+		EndedAt:    expiredTime,
+		Duration:   3600.0,
+		FileSize:   4096,
 		FrameCount: 10,
-		Merged:    false,
+		Merged:     false,
 	}
 	require.NoError(t, env.db.InsertRecording(context.Background(), rec))
 
 	// Create the directory with fake JPEG files.
-	require.NoError(t, os.MkdirAll(segDir, 0755))
-	for i := 0; i < 3; i++ {
-		require.NoError(t, os.WriteFile(filepath.Join(segDir, fmt.Sprintf("frame_%06d.jpg", i)), []byte("fake-jpeg"), 0644))
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	for i := range 3 {
+		require.NoError(t, os.WriteFile(filepath.Join(segDir, fmt.Sprintf("frame_%06d.jpg", i)), []byte("fake-jpeg"), 0o644))
 	}
 
 	cfg := defaultCleanupConfig()

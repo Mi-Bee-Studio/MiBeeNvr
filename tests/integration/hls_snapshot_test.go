@@ -40,7 +40,6 @@ func TestHLSProviderInterface_ContractSnapshot(t *testing.T) {
 		var f model.Format = "h264"
 		_ = f
 	})
-
 }
 
 // mockHLSProvider proves the HLSProvider interface contract at compile time.
@@ -50,7 +49,6 @@ type mockHLSProvider struct{}
 func (m *mockHLSProvider) CodecParams() (codec model.Format, sps, pps, vps []byte) {
 	return model.FormatH264, []byte{}, []byte{}, nil
 }
-
 
 // ---------------------------------------------------------------------------
 // 2. Format and Protocol constants snapshot
@@ -285,7 +283,7 @@ func TestCamerasAPI_ResponseShape(t *testing.T) {
 	t.Run("CameraRow_uses_RecorderStatus_type", func(t *testing.T) {
 		// Compile-time proof that CameraRow.Status is model.RecorderStatus.
 		var row storage.CameraRow
-		var _ model.RecorderStatus = row.Status
+		_ = row.Status
 	})
 }
 

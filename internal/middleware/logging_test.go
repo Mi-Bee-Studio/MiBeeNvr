@@ -23,7 +23,7 @@ func TestRequestLoggerLogsRequest(t *testing.T) {
 
 	handler := RequestLogger(logger)(next)
 
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -46,14 +46,14 @@ func TestRequestLoggerSkipPaths(t *testing.T) {
 	handler := RequestLogger(logger, "/api/health", "/api/readyz")(next)
 
 	// Request to skipped path — no log output
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Empty(t, buf.String(), "skipped path should produce no log output")
 
 	// Request to non-skipped path — should log
-	req = httptest.NewRequest("GET", "/api/recordings", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/recordings", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -73,7 +73,7 @@ func TestRequestLoggerNormalizesPath(t *testing.T) {
 
 	handler := RequestLogger(logger)(next)
 
-	req := httptest.NewRequest("GET", "/api/recordings/123456789", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/123456789", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -123,7 +123,7 @@ func TestRequestLoggerLogsPostRequest(t *testing.T) {
 
 	handler := RequestLogger(logger)(next)
 
-	req := httptest.NewRequest("POST", "/api/cameras", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

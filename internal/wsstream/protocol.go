@@ -89,7 +89,6 @@ func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 		binary.BigEndian.PutUint16(buf[offset:], uint16(len(ci.VPS)))
 		offset += 2
 		copy(buf[offset:], ci.VPS)
-		offset += len(ci.VPS)
 	}
 
 	return buf, nil
@@ -156,7 +155,6 @@ func decodeCodecInfo(data []byte) (*CodecInfo, error) {
 		}
 		ci.VPS = make([]byte, vpsLen)
 		copy(ci.VPS, data[offset:offset+vpsLen])
-		offset += vpsLen
 	}
 
 	return ci, nil
@@ -213,7 +211,6 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 		copy(buf[offset:], nalu)
 		offset += len(nalu)
 	}
-
 	return buf, nil
 }
 
@@ -236,7 +233,7 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 	offset := 12
 
 	vf.NALUs = make([][]byte, 0, naluCount)
-	for i := 0; i < naluCount; i++ {
+	for i := range naluCount {
 		if offset+4 > len(data) {
 			return nil, fmt.Errorf("wsstream: video frame truncated at NALU %d length", i)
 		}

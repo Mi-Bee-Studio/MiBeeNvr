@@ -10,7 +10,6 @@ import (
 	onvifgo "github.com/0x524a/onvif-go"
 )
 
-
 var ptzLogger = slog.Default().With("component", "onvif-ptz")
 
 // PTZControllerImpl implements PTZController by delegating to onvif-go's PTZ service.
@@ -301,9 +300,9 @@ func (p *PTZControllerImpl) rawSetPreset(ctx context.Context, name string) (stri
 type ptzStatusResponse struct {
 	XMLName xml.Name `xml:"Envelope"`
 	Body    struct {
-		XMLName xml.Name `xml:"Body"`
+		XMLName           xml.Name `xml:"Body"`
 		GetStatusResponse struct {
-			XMLName   xml.Name    `xml:"GetStatusResponse"`
+			XMLName   xml.Name      `xml:"GetStatusResponse"`
 			PTZStatus ptzStatusData `xml:"PTZStatus"`
 		} `xml:"GetStatusResponse"`
 	} `xml:"Body"`
@@ -343,7 +342,7 @@ func parseRawGetStatusResponse(body []byte) (PTZVector, bool, error) {
 type setPresetResponse struct {
 	XMLName xml.Name `xml:"Envelope"`
 	Body    struct {
-		XMLName xml.Name `xml:"Body"`
+		XMLName           xml.Name `xml:"Body"`
 		SetPresetResponse struct {
 			XMLName     xml.Name `xml:"SetPresetResponse"`
 			PresetToken string   `xml:"PresetToken"`

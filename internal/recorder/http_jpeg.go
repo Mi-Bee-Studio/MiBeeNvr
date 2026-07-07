@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -33,6 +34,9 @@ type HTTPJPEGConfig struct {
 	Password   string // for basic auth (optional)
 	DB         RecordingDB
 	EventBus   *event.EventBus
+	AVI        bool // when true, write AVI single-file instead of MJPEG directory
+	Width      int  // video width (0 = auto-detect from first frame)
+	Height     int  // video height (0 = auto-detect from first frame)
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -61,6 +65,10 @@ type HTTPJPEGRecorder struct {
 	// Updated on every frame; safe for concurrent reads via LatestFrame().
 	latestFrameMu sync.RWMutex
 	latestFrame   []byte
+
+	// AVI recording fields
+	aviMuxer *avi.Muxer
+	aviFile  *os.File
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -125,6 +133,11 @@ func NewHTTPJPEGRecorder(cfg HTTPJPEGConfig, store SegmentStore, opts ...*metric
 	if len(opts) > 0 {
 		m = opts[0]
 	}
+	if cfg.AVI && cfg.SegmentDur > 30*time.Second {
+		httpJpegLogger.Warn("AVI mode: SegmentDur capped to 30s to prevent OOM",
+			"camera_id", cfg.CameraID, "configured", cfg.SegmentDur)
+		cfg.SegmentDur = 30 * time.Second
+	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
@@ -148,7 +161,7 @@ func (r *HTTPJPEGRecorder) Start(ctx context.Context) error {
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.done = make(chan struct{})
 	r.watchdogDone = make(chan struct{})
@@ -212,7 +225,7 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		}
 		retryCount++
 		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(r.store)
+		storageFailed := isStorageFailed(r.store, r.cfg.CameraID)
 		if storageFailed {
 			backoff = StorageBackoffWithJitter()
 		}
@@ -340,7 +353,7 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		r.latestFrame = data
 		r.latestFrameMu.Unlock()
 
-		if isStorageFailed(r.store) {
+		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
 				r.closeCurrentSegment()
 			}
@@ -355,22 +368,60 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 
 		// Create segment if needed
 		if r.curTempPath == "" {
-			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
-			if err != nil {
-				return fmt.Errorf("create segment: %w", err), true
+			if r.cfg.AVI {
+				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatAVI))
+				if err != nil {
+					return fmt.Errorf("create avi segment: %w", err), true
+				}
+				// Determine video dimensions: config > auto-detect from first frame > fallback
+				w, h := r.cfg.Width, r.cfg.Height
+				if w == 0 || h == 0 {
+					if dw, dh, ok := jpegDimensions(data); ok {
+						w, h = dw, dh
+					} else {
+						w, h = 640, 480 // fallback dimensions
+					}
+				}
+				f, err := os.OpenFile(tempPath, os.O_RDWR, 0o644)
+				if err != nil {
+					os.Remove(tempPath)
+					return fmt.Errorf("open avi temp file: %w", err), true
+				}
+				r.aviFile = f
+				r.aviMuxer = avi.NewVideoOnlyMuxer(f, w, h)
+				r.curTempPath = tempPath
+				r.curFinalPath = finalPath
+				r.segStart = time.Now()
+				r.frameCount = 0
+			} else {
+				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatMJPEG))
+				if err != nil {
+					return fmt.Errorf("create segment: %w", err), true
+				}
+				r.curTempPath = tempPath
+				r.curFinalPath = finalPath
+				r.segStart = time.Now()
+				r.frameCount = 0
 			}
-			r.curTempPath = tempPath
-			r.curFinalPath = finalPath
-			r.segStart = time.Now()
-			r.frameCount = 0
 		}
 
-		n, err := r.store.WriteFrame(r.curTempPath, data)
-		if err != nil {
-			return fmt.Errorf("write frame: %w", err), true
+		if r.cfg.AVI && r.aviMuxer != nil {
+			r.mu.Lock()
+			if err := r.aviMuxer.WriteVideo(data, 0); err != nil {
+				r.mu.Unlock()
+				return fmt.Errorf("write avi frame: %w", err), true
+			}
+			r.mu.Unlock()
+			r.frameCount++
+			r.recordBytes(int64(len(data)))
+		} else {
+			n, err := r.store.WriteFrame(r.curTempPath, data)
+			if err != nil {
+				return fmt.Errorf("write frame: %w", err), true
+			}
+			r.frameCount++
+			r.recordBytes(int64(n))
 		}
-		r.frameCount++
-		r.recordBytes(int64(n))
 		r.lastFrameTime.Store(time.Now().Unix())
 
 		// Check if segment duration elapsed
@@ -384,6 +435,24 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	if r.curTempPath == "" {
 		return
 	}
+	// For AVI mode: close muxer and file before renaming.
+	if r.cfg.AVI {
+		r.mu.Lock()
+		if r.aviMuxer != nil {
+			if err := r.aviMuxer.Close(); err != nil {
+				httpJpegLogger.Error("failed to close AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
+			}
+			r.aviMuxer = nil
+		}
+		if r.aviFile != nil {
+			if err := r.aviFile.Close(); err != nil {
+				httpJpegLogger.Error("failed to close AVI file", "camera_id", r.cfg.CameraID, "error", err)
+			}
+			r.aviFile = nil
+		}
+		r.mu.Unlock()
+	}
+
 	if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
 		httpJpegLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 	}
@@ -391,27 +460,38 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	// Insert recording entry into database
 	var totalSize int64
 	var recordingID string
+	segFormat := model.FormatMJPEG
+	if r.cfg.AVI {
+		segFormat = model.FormatAVI
+	}
 	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
+			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinalPath,
-			Format:     model.FormatMJPEG,
+			Format:     segFormat,
 			StartedAt:  r.segStart,
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: r.frameCount,
 		}
 		recordingID = rec.ID
-		// Get file size from disk (MJPEG segments are directories)
-		filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				totalSize += info.Size()
+		if r.cfg.AVI {
+			// AVI is a single file.
+			if info, err := os.Stat(r.curFinalPath); err == nil {
+				totalSize = info.Size()
 			}
-			return nil
-		})
+		} else {
+			// MJPEG finalPath is a directory; walk to calculate total size.
+			filepath.Walk(r.curFinalPath, func(path string, info os.FileInfo, err error) error {
+				if err == nil && !info.IsDir() {
+					totalSize += info.Size()
+				}
+				return nil
+			})
+		}
 		rec.FileSize = totalSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
@@ -423,7 +503,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
 			CameraID:    r.cfg.CameraID,
 			FilePath:    r.curFinalPath,
-			Format:      string(model.FormatMJPEG),
+			Format:      string(segFormat),
 			Encoding:    string(model.FormatMJPEG),
 			StartedAt:   r.segStart.Format(time.RFC3339Nano),
 			EndedAt:     time.Now().Format(time.RFC3339Nano),

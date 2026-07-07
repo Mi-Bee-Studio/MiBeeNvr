@@ -23,11 +23,11 @@ var webdavLogger = slog.Default().With("component", "webdav")
 
 // Server provides a WebDAV server for browsing and optionally uploading camera recordings.
 type Server struct {
-	store     *storage.Manager
+	store      *storage.Manager
 	pathPrefix string
-	authMW    func(http.Handler) http.Handler
-	db        *storage.DB
-	readWrite bool
+	authMW     func(http.Handler) http.Handler
+	db         *storage.DB
+	readWrite  bool
 }
 
 // NewServer creates a new WebDAV server.
@@ -87,12 +87,12 @@ func (s *Server) Handler() http.Handler {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions, "PROPFIND":
 			davHandler.ServeHTTP(w, r)
-		case "PUT", "MKCOL", "DELETE", "COPY", "MOVE", "LOCK", "UNLOCK":
+		case http.MethodPut, "MKCOL", http.MethodDelete, "COPY", "MOVE", "LOCK", "UNLOCK":
 			if !s.readWrite {
 				http.Error(w, "Forbidden: read-only WebDAV server", http.StatusForbidden)
 				return
 			}
-			if r.Method == "PUT" {
+			if r.Method == http.MethodPut {
 				s.handlePut(w, r, davHandler)
 				return
 			}
@@ -182,7 +182,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 		return
 	}
 
-	webdavLogger.Info("registered uploaded recording",
+	webdavLogger.Info(
+		"registered uploaded recording",
 		"id", recording.ID,
 		"camera_id", cameraID,
 		"path", relPath,

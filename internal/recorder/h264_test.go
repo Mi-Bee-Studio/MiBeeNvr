@@ -102,7 +102,7 @@ func (s *testRTSPServer) sendAU(au [][]byte) {
 }
 
 func (s *testRTSPServer) sendFrames(count int, interval time.Duration) {
-	for i := 0; i < count; i++ {
+	for range count {
 		s.sendAU([][]byte{testSPS, testPPS, testIDR})
 		if interval > 0 {
 			time.Sleep(interval)
@@ -284,7 +284,7 @@ func TestH264Recorder_SPSChangeNewSegment(t *testing.T) {
 	srv.sendFrames(3, 30*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAU([][]byte{testSPS2, testPPS, testIDR})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -394,7 +394,7 @@ func TestH264Recorder_Reconnect(t *testing.T) {
 
 	enc, err := forma.CreateEncoder()
 	require.NoError(t, err)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		pkts, _ := enc.Encode([][]byte{testSPS, testPPS, testIDR})
 		for _, pkt := range pkts {
 			stream.WritePacketRTP(desc.Medias[0], pkt)
@@ -605,14 +605,14 @@ func newAudioCollector(hub *model.StreamHub, id string) *audioCollector {
 	return c
 }
 
-func (c *audioCollector) waitFrames(t *testing.T, min int, timeout time.Duration) {
+func (c *audioCollector) waitFrames(t *testing.T, minFrames int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
 		n := len(c.frames)
 		c.mu.Unlock()
-		if n >= min {
+		if n >= minFrames {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -620,7 +620,7 @@ func (c *audioCollector) waitFrames(t *testing.T, min int, timeout time.Duration
 	c.mu.Lock()
 	n := len(c.frames)
 	c.mu.Unlock()
-	t.Fatalf("timed out waiting for %d audio frames, got %d", min, n)
+	t.Fatalf("timed out waiting for %d audio frames, got %d", minFrames, n)
 }
 
 func (c *audioCollector) count() int {
@@ -666,7 +666,7 @@ func TestH264Recorder_AudioBroadcast(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Send audio frames.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		srv.sendAudioFrame([]byte{0x01, 0x02, 0x03, 0x04})
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -716,7 +716,7 @@ func TestH264Recorder_AudioDisabled_StillRecordsVideo(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Send audio — should be ignored.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		srv.sendAudioFrame([]byte{0xAA, 0xBB})
 		time.Sleep(20 * time.Millisecond)
 	}

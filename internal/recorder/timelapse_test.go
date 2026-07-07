@@ -123,8 +123,8 @@ func makeTestJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	// Fill with non-zero color so it's a real image
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
 		}
 	}
@@ -358,7 +358,7 @@ func TestTimelapseReconnect(t *testing.T) {
 func TestTimelapseInvalidFramesDropped(t *testing.T) {
 	invalidFrames := [][]byte{
 		[]byte("this-is-not-a-jpeg"),
-		[]byte{0xFF, 0x01, 0x02}, // wrong magic after FF
+		{0xFF, 0x01, 0x02}, // wrong magic after FF
 		[]byte("also-not-jpeg-data"),
 	}
 	srv := newTestMJPEGServer(t, invalidFrames)

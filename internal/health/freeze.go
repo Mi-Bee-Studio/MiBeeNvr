@@ -2,6 +2,7 @@ package health
 
 import (
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,11 +21,11 @@ type cameraFreezeState struct {
 // FreezeDetector detects frozen video streams by monitoring frame timestamps.
 // It operates in Layer 2.5 of the health monitoring system.
 type FreezeDetector struct {
-	mu             sync.Mutex
-	freezeTimeout  time.Duration
+	mu              sync.Mutex
+	freezeTimeout   time.Duration
 	cameraOverrides map[string]time.Duration // per-camera freeze timeout overrides
-	cameras        map[string]*cameraFreezeState
-	eventHandler   func(cameraID string, event model.HealthEvent)
+	cameras         map[string]*cameraFreezeState
+	eventHandler    func(cameraID string, event model.HealthEvent)
 }
 
 // NewFreezeDetector creates a new freeze detector.
@@ -97,13 +98,17 @@ func (f *FreezeDetector) Check() {
 		if !state.frozen && elapsed > timeout {
 			state.frozen = true
 			state.freezeSince = lastFrame
-			meta, _ := json.Marshal(map[string]any{"frozen_for": elapsed.String()})
+			metaBytes, err := json.Marshal(map[string]any{"frozen_for": elapsed.String()})
+			if err != nil {
+				slog.Warn("failed to marshal freeze metadata", "error", err)
+			}
+			meta := string(metaBytes)
 			f.eventHandler(cameraID, model.HealthEvent{
 				CameraID:  cameraID,
 				EventType: string(model.HealthEventFreezeDetected),
 				Status:    string(model.HealthStatusError),
 				Message:   "Video freeze detected",
-				Metadata:  string(meta),
+				Metadata:  meta,
 			})
 		}
 	}
@@ -122,13 +127,17 @@ func (f *FreezeDetector) OnFrameReceived(cameraID string) {
 
 	frozenDuration := time.Since(state.freezeSince)
 	state.frozen = false
-	meta, _ := json.Marshal(map[string]any{"frozen_duration": frozenDuration.String()})
+	metaBytes, err := json.Marshal(map[string]any{"frozen_duration": frozenDuration.String()})
+	if err != nil {
+		slog.Warn("failed to marshal freeze metadata", "error", err)
+	}
+	meta := string(metaBytes)
 	f.eventHandler(cameraID, model.HealthEvent{
 		CameraID:  cameraID,
 		EventType: string(model.HealthEventFreezeRecovered),
 		Status:    string(model.HealthStatusHealthy),
 		Message:   "Video recovered from freeze",
-		Metadata:  string(meta),
+		Metadata:  meta,
 	})
 }
 

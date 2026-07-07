@@ -2,6 +2,7 @@ package mibee_nvr_tests
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +52,7 @@ func TestInitRejectsExistingConfig(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "test-config.yaml")
 	dataDir := filepath.Join(tmpDir, "data")
 
-	err := os.WriteFile(configPath, []byte("existing: true"), 0644)
+	err := os.WriteFile(configPath, []byte("existing: true"), 0o644)
 	require.NoError(t, err)
 
 	cmd := exec.Command(binPath, "init", "--password", "testpass123", "--data-dir", dataDir, "--config", configPath)
@@ -59,7 +60,8 @@ func TestInitRejectsExistingConfig(t *testing.T) {
 	require.Error(t, err, "init should fail when config already exists")
 	require.Contains(t, string(output), "already exists")
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		require.Equal(t, 2, exitErr.ExitCode(), "exit code should be 2 for existing config")
 	}
 }
@@ -88,7 +90,8 @@ func TestHealthFailureNoServer(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err, "health should fail when no server is listening: %s", string(output))
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
 		require.Equal(t, 1, exitErr.ExitCode(), "exit code should be 1 for failed health check")
 	}
 }
@@ -102,7 +105,7 @@ func TestHealthAgainstRealHTTPServer(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/health", nil)
 	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)

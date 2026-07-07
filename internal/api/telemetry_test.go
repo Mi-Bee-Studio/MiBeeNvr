@@ -16,14 +16,10 @@ func TestHandleTelemetry_ValidPayload(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
-		GetUsername: func() string { return "admin" },
-		GetHash:     func() string { return "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890" },
-	}, "", middleware.AuthRateLimitConfig{})
 	// Pre-compute a known bcrypt hash for "admin123"
 	validHash, err := middleware.HashPassword("admin123")
 	require.NoError(t, err)
-	authMW, _ = middleware.NewAuthMiddleware(middleware.AuthProvider{
+	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{
 		GetUsername: func() string { return "admin" },
 		GetHash:     func() string { return validHash },
 	}, "", middleware.AuthRateLimitConfig{})
@@ -106,7 +102,7 @@ func TestHandleTelemetry_RateLimiting(t *testing.T) {
 	rl := telemetryRateLimiter()
 
 	body := `{"event":"playback_start","camera_id":"front-door","duration_ms":100}`
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))
 		rr := httptest.NewRecorder()
 		rl(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -248,7 +248,7 @@ func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 	slotsAvailable := q.config.MaxWorkers - activeCount
 	q.mu.Unlock()
 
-	for i := 0; i < slotsAvailable; i++ {
+	for range slotsAvailable {
 		var task *storage.TranscodeTask
 		err := storage.RetryOnBusy(ctx, func() error {
 			var err error
@@ -256,7 +256,7 @@ func (q *TranscodeQueue) dispatchPending(ctx context.Context) {
 			return err
 		})
 		if err != nil {
-			if err != sql.ErrNoRows {
+			if !errors.Is(err, sql.ErrNoRows) {
 				queueLogger.Warn("failed to dequeue task", "error", err)
 			}
 			return // no more pending tasks
@@ -413,7 +413,8 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 	// Success
 	duration := time.Since(startTime)
 	q.finishTask(context.Background(), task, "completed", 1.0, "")
-	queueLogger.Info("task completed",
+	queueLogger.Info(
+		"task completed",
 		"task_id", task.ID,
 		"duration", duration,
 	)
@@ -535,7 +536,9 @@ func (q *TranscodeQueue) parseProgress(ctx context.Context, taskID int64, stderr
 			continue
 		}
 
-		if err := q.store.UpdateTaskStatus(ctx, taskID, "running", progress, ""); err != nil {
+		if err := storage.RetryOnBusy(ctx, func() error {
+			return q.store.UpdateTaskStatus(ctx, taskID, "running", progress, "")
+		}); err != nil {
 			queueLogger.Warn("failed to update progress", "task_id", taskID, "error", err)
 		}
 		lastProgressUpdate = time.Now()

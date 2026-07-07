@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -241,14 +240,16 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	// Non-blocking send
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_recv",
 			"is_idr", isKeyframe,
 		)
 	default:
-		slog.Debug("frame_trace",
+		slog.Debug(
+			"frame_trace",
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_drop",
@@ -451,6 +452,3 @@ func (m *Manager) stopAll() {
 		m.unregisterStream(id)
 	}
 }
-
-// Ensure time package is used
-var _ time.Duration

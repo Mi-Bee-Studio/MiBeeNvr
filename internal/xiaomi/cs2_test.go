@@ -308,7 +308,7 @@ func TestCS2ConnErrorConcurrentAccess(t *testing.T) {
 
 	// Concurrent writers
 	go func() {
-		for i := 0; i < N; i++ {
+		for i := range N {
 			c.setErr(fmt.Errorf("writer error %d", i))
 			time.Sleep(time.Microsecond)
 		}
@@ -317,7 +317,7 @@ func TestCS2ConnErrorConcurrentAccess(t *testing.T) {
 
 	// Concurrent readers
 	go func() {
-		for i := 0; i < N; i++ {
+		for range N {
 			_ = c.getErr()
 			time.Sleep(time.Microsecond)
 		}
@@ -326,7 +326,7 @@ func TestCS2ConnErrorConcurrentAccess(t *testing.T) {
 
 	// Concurrent Error() reader
 	go func() {
-		for i := 0; i < N; i++ {
+		for range N {
 			_ = c.Error()
 			time.Sleep(time.Microsecond)
 		}
@@ -334,7 +334,7 @@ func TestCS2ConnErrorConcurrentAccess(t *testing.T) {
 	}()
 
 	// Wait for all goroutines
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 }

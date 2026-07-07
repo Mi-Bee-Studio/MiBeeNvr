@@ -157,8 +157,10 @@ func TestCleanupIncomplete(t *testing.T) {
 	_ = db.Init(ctx)
 
 	// Insert directly with NULL ended_at to test cleanup (InsertRecording serializes zero time as 0001-01-01, not NULL)
-	_, err := db.db.ExecContext(ctx,
-	`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+	var err error
+	_, _ = db.db.ExecContext(
+		ctx,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
 		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
 	)
 	err = db.CleanupIncomplete(ctx)
@@ -191,9 +193,7 @@ func TestCloseAndReopen(t *testing.T) {
 	require.NoError(t, db2.Close())
 }
 
-
 func TestUpsertCamera(t *testing.T) {
-
 	dir := t.TempDir()
 
 	dbPath := filepath.Join(dir, "test10.db")
@@ -204,15 +204,11 @@ func TestUpsertCamera(t *testing.T) {
 
 	_ = db.Init(ctx)
 
-
-
 	// Test insert new camera
 
 	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was inserted
 
@@ -233,15 +229,11 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "user", cameras[0].Username)
 	require.True(t, cameras[0].HasPassword)
 
-
-
 	// Test update existing camera
 
 	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", "", "", "")
 
 	require.NoError(t, err)
-
-
 
 	// Verify camera was updated
 
@@ -262,10 +254,7 @@ func TestUpsertCamera(t *testing.T) {
 	require.Equal(t, "newuser", cameras2[0].Username)
 	require.True(t, cameras2[0].HasPassword)
 
-
-
 	require.NoError(t, db.Close())
-
 }
 
 func TestGetCamera(t *testing.T) {
@@ -519,6 +508,7 @@ func TestListExpiredRecordings(t *testing.T) {
 	// Both old recordings should be found (merged does NOT protect from cleanup)
 	require.Len(t, expired, 2)
 }
+
 func TestParseTimeLegacyFormat(t *testing.T) {
 	// Verify parseTime handles the old time.Time.String() format with monotonic clock
 	tests := []struct {
@@ -1002,7 +992,7 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 	now := time.Now()
 	// Insert 5 source recordings
 	oldIDs := make([]string, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := fmt.Sprintf("old-%d", i)
 		oldIDs[i] = id
 		rec := &model.Recording{
@@ -1376,4 +1366,66 @@ func TestMergeProgressCRUD(t *testing.T) {
 	require.Equal(t, 0, got3.MergeProgress)
 	require.Equal(t, "failed", got3.MergeStatus)
 	require.Equal(t, "merge failed", got3.MergeError)
+}
+
+// TestDequeueNotBlockedByLongTx verifies that DequeueTask succeeds despite a concurrent
+// write transaction holding the SQLite write lock for 2 seconds.
+// This validates the busy_timeout (15s) and RetryOnBusy mechanisms.
+func TestDequeueNotBlockedByLongTx(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "dequeue_contention.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	// Enqueue a pending task
+	task := &TranscodeTask{
+		CameraID:     "cam-1",
+		RecordingID:  "rec-1",
+		InputPath:    "/input.mp4",
+		InputFormat:  "h264",
+		OutputPath:   "/output.mp4",
+		OutputFormat: "h265",
+		CreatedAt:    time.Now().UTC().Format(sqliteTimeFormat),
+	}
+	require.NoError(t, db.EnqueueTask(ctx, task))
+
+	// Start a goroutine that holds a write transaction for 2 seconds
+	holdDone := make(chan struct{})
+	go func() {
+		defer close(holdDone)
+		holdTx, txErr := db.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			t.Log("hold tx begin failed:", txErr)
+			return
+		}
+		// Write to acquire the RESERVED lock
+		_, txErr = holdTx.ExecContext(ctx, `UPDATE transcoding_tasks SET progress = 0.5 WHERE id = ?`, task.ID)
+		if txErr != nil {
+			holdTx.Rollback()
+			t.Log("hold tx write failed:", txErr)
+			return
+		}
+		// Hold the lock for 2 seconds to simulate a long write
+		time.Sleep(2 * time.Second)
+		holdTx.Commit()
+	}()
+
+	// Give the hold goroutine time to acquire the lock
+	time.Sleep(100 * time.Millisecond)
+
+	// Dequeue should succeed despite concurrent write lock (busy_timeout=15s > 2s hold)
+	dequeueCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	dequeued, err := db.DequeueTask(dequeueCtx)
+	require.NoError(t, err, "dequeue should succeed despite concurrent write lock")
+	require.NotNil(t, dequeued)
+	require.Equal(t, "cam-1", dequeued.CameraID)
+	require.Equal(t, "running", dequeued.Status)
+
+	// Wait for hold goroutine to finish
+	<-holdDone
 }

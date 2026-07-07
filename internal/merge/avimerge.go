@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
@@ -158,7 +159,7 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 		// Stream chunks one at a time.
 		for {
 			chunk, err := demuxer.NextChunk()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -389,7 +390,7 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 
 	// Build merged recording.
 	merged := &model.Recording{
-		ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
 		CameraID:   cameraID,
 		FilePath:   finalPath,
 		Format:     model.FormatAVI,

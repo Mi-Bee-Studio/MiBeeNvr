@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
-	"unsafe"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	onvifgo "github.com/0x524a/onvif-go"
 	"github.com/stretchr/testify/require"
@@ -69,14 +69,19 @@ func soapGetStatusResponse(panTiltStatus, zoomStatus string, panX, panY, zoomX f
 }
 
 // soapGetPresetsResponse returns a GetPresets SOAP response with preset entries.
-func soapGetPresetsResponse(presets []struct{ Token, Name string; PanX, PanY, ZoomX float64 }) string {
-	var presetXML string
+func soapGetPresetsResponse(presets []struct {
+	Token, Name       string
+	PanX, PanY, ZoomX float64
+},
+) string {
+	var b strings.Builder
 	for _, p := range presets {
-		presetXML += fmt.Sprintf(`<Preset token="%s"><Name>%s</Name>`+
+		b.WriteString(fmt.Sprintf(`<Preset token="%s"><Name>%s</Name>`+
 			`<PTZPosition xmlns:tt="http://www.onvif.org/ver10/schema">`+
 			`<tt:PanTilt x="%f" y="%f"/><tt:Zoom x="%f"/>`+
-			`</PTZPosition></Preset>`, p.Token, p.Name, p.PanX, p.PanY, p.ZoomX)
+			`</PTZPosition></Preset>`, p.Token, p.Name, p.PanX, p.PanY, p.ZoomX))
 	}
+	presetXML := b.String()
 	return soapEnvelope(fmt.Sprintf(`<tptz:GetPresetsResponse xmlns:tptz="%s">%s</tptz:GetPresetsResponse>`, soapPTZNamespace, presetXML))
 }
 
@@ -85,6 +90,7 @@ func soapSetPresetResponse(token string) string {
 	return soapEnvelope(fmt.Sprintf(`<tptz:SetPresetResponse xmlns:tptz="%s">`+
 		`<tptz:PresetToken>%s</tptz:PresetToken></tptz:SetPresetResponse>`, soapPTZNamespace, token))
 }
+
 // extractSOAPAction extracts the SOAP action name from a request body.
 func extractSOAPAction(t *testing.T, body []byte) string {
 	t.Helper()
@@ -242,7 +248,7 @@ func TestPTZController_ConcurrentCommands(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -273,7 +279,7 @@ func TestPTZController_ConcurrentCommands(t *testing.T) {
 }
 
 func TestPTZController_Error(t *testing.T) {
-server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
+	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(soapFault("Sender", "Invalid profile token")))
 	})
@@ -282,7 +288,7 @@ server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
 	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", "", "", "", nil)
 	err := ctrl.ContinuousMove(context.Background(), PTZVector{Pan: 0.5})
 	require.Error(t, err)
-require.Contains(t, err.Error(), "ContinuousMove failed")
+	require.Contains(t, err.Error(), "ContinuousMove failed")
 }
 
 // --- Preset tests ---
@@ -290,7 +296,10 @@ require.Contains(t, err.Error(), "ContinuousMove failed")
 func TestPTZController_GetPresets_Success(t *testing.T) {
 	server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
 		require.Equal(t, "GetPresets", action)
-		w.Write([]byte(soapGetPresetsResponse([]struct{ Token, Name string; PanX, PanY, ZoomX float64}{
+		w.Write([]byte(soapGetPresetsResponse([]struct {
+			Token, Name       string
+			PanX, PanY, ZoomX float64
+		}{
 			{Token: "1", Name: "Home", PanX: 0.0, PanY: 0.0, ZoomX: 0.0},
 			{Token: "2", Name: "Gate", PanX: 0.5, PanY: -0.3, ZoomX: 1.0},
 		})))
@@ -381,6 +390,7 @@ func TestPTZController_SetPreset_Error(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SetPreset failed")
 }
+
 func TestPTZController_ImplementsInterface(t *testing.T) {
 	// Compile-time check that PTZControllerImpl satisfies PTZController
 	var _ PTZController = &PTZControllerImpl{}

@@ -15,7 +15,7 @@ import (
 
 func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
-		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 
@@ -25,11 +25,11 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		Region   string `json:"region,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Username == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "username and password are required")
+		WriteError(w, http.StatusBadRequest, "username and password are required")
 		return
 	}
 
@@ -40,7 +40,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 
 	result, verification, err := h.cloudProxy.SignIn(r.Context(), req.Username, req.Password, region)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
+		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
 		return
 	}
 
@@ -60,7 +60,7 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
-		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 
@@ -69,17 +69,17 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		CaptchaCode string `json:"captcha_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.SessionID == "" || req.CaptchaCode == "" {
-		writeError(w, http.StatusBadRequest, "session_id and captcha_code are required")
+		WriteError(w, http.StatusBadRequest, "session_id and captcha_code are required")
 		return
 	}
 
 	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
+		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
 		return
 	}
 
@@ -99,7 +99,7 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
-		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 
@@ -108,17 +108,17 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		Ticket    string `json:"ticket"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.SessionID == "" || req.Ticket == "" {
-		writeError(w, http.StatusBadRequest, "session_id and ticket are required")
+		WriteError(w, http.StatusBadRequest, "session_id and ticket are required")
 		return
 	}
 
 	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
+		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
 		return
 	}
 
@@ -138,7 +138,7 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
-		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 
 	devices, err := h.cloudProxy.ListDevices(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
 	}
 
@@ -167,21 +167,21 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 // and updates name, model, brand, and serial_number (MAC). Returns count of synced cameras.
 func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
-		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		WriteError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
 	}
 	if h.config == nil || h.config.Xiaomi.Token == "" {
-		writeError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
+		WriteError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
 		return
 	}
 	if h.camMgr == nil {
-		writeError(w, http.StatusInternalServerError, "camera manager not available")
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
 
 	devices, err := h.cloudProxy.ListDevices(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("failed to get devices: %v", err))
 		return
 	}
 
@@ -249,7 +249,7 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 
 	did := r.URL.Query().Get("did")
 	if did == "" {
-		writeError(w, http.StatusBadRequest, "did parameter required")
+		WriteError(w, http.StatusBadRequest, "did parameter required")
 		return
 	}
 

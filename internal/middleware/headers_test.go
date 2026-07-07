@@ -16,7 +16,7 @@ func TestCOOPHeaders(t *testing.T) {
 	t.Run("no TLS", func(t *testing.T) {
 		t.Parallel()
 		handler := COOPHeaders(inner)
-		req := httptest.NewRequest("GET", "/", nil) // r.TLS == nil
+		req := httptest.NewRequest(http.MethodGet, "/", nil) // r.TLS == nil
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 

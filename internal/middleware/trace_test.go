@@ -63,7 +63,7 @@ func TestTraceMiddleware(t *testing.T) {
 
 	// No incoming X-Request-Id — middleware should generate one.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	handler.ServeHTTP(rec, req)
 	if capturedTID == "" {
 		t.Error("expected trace ID in context")
@@ -86,7 +86,7 @@ func TestTraceMiddleware_PropagatesIncomingID(t *testing.T) {
 
 	// Incoming request with X-Request-Id — middleware should reuse it.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set(RequestIDHeader, "upstream-id-123")
 	handler.ServeHTTP(rec, req)
 	if capturedTID != "upstream-id-123" {
@@ -107,7 +107,7 @@ func TestRequestLogger_IncludesTraceID(t *testing.T) {
 
 	mw := RequestLogger(ComponentLogger("test"))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 	mw(inner).ServeHTTP(rec, req)
 
 	if capturedTID == "" {

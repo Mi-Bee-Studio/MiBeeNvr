@@ -19,9 +19,7 @@ import (
 // mockTranscoder implements Transcoder for testing. It signals crash via
 // the done channel optionally after a delay.
 type mockTranscoder struct {
-	t       *testing.T
-	startFn func(ctx context.Context) error
-	stopFn  func() error
+	t *testing.T
 
 	mu   sync.Mutex
 	done chan struct{} // closed when the "process" exits
@@ -109,9 +107,9 @@ func setupMockZones(t *testing.T, zones map[string]int) (string, []string) {
 	var paths []string
 	for name, millideg := range zones {
 		zoneDir := filepath.Join(dir, name)
-		require.NoError(t, os.MkdirAll(zoneDir, 0755))
+		require.NoError(t, os.MkdirAll(zoneDir, 0o755))
 		path := filepath.Join(zoneDir, "temp")
-		require.NoError(t, os.WriteFile(path, []byte(formatMillideg(millideg)), 0644))
+		require.NoError(t, os.WriteFile(path, []byte(formatMillideg(millideg)), 0o644))
 		paths = append(paths, path)
 	}
 	return dir, paths
@@ -159,7 +157,7 @@ func TestThermalMonitor_ReadSingleZone(t *testing.T) {
 	}
 
 	// Update the zone to 86°C (above throttle, below shutdown)
-	require.NoError(t, os.WriteFile(paths[0], []byte("86000\n"), 0644))
+	require.NoError(t, os.WriteFile(paths[0], []byte("86000\n"), 0o644))
 
 	// Wait for throttle event
 	select {
@@ -224,9 +222,9 @@ func TestThermalMonitor_NoZones(t *testing.T) {
 		select {
 		case evt, ok := <-ch:
 			if ok {
-			// Real hardware may have thermal zones exceeding the limit (e.g., build server at 88°C).
-			// This is valid behavior — the test's purpose is to verify no crash, not absence of events.
-			t.Logf("unexpected event (real hardware): %+v", evt)
+				// Real hardware may have thermal zones exceeding the limit (e.g., build server at 88°C).
+				// This is valid behavior — the test's purpose is to verify no crash, not absence of events.
+				t.Logf("unexpected event (real hardware): %+v", evt)
 			}
 			// Channel closed (may happen if /sys has zones)
 		case <-time.After(50 * time.Millisecond):
@@ -252,6 +250,7 @@ func TestThermalMonitor_NoZones(t *testing.T) {
 		}
 	})
 }
+
 func TestThermalMonitor_HighestTempWins(t *testing.T) {
 	_, paths := setupMockZones(t, map[string]int{
 		"zone0": 70000, // 70°C

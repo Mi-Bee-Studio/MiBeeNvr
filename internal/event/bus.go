@@ -12,16 +12,14 @@ const (
 	TopicSegmentCompleted     = "segment.completed"
 	TopicSegmentDeleted       = "segment.deleted"
 	TopicStorageHealthChanged = "storage.health.changed"
-	TopicAIDetection         = "ai.detection"
-	TopicAIPerson            = "ai.detection.person"
-	TopicAIVehicle           = "ai.detection.vehicle"
-	TopicAIAnimal            = "ai.detection.animal"
-	TopicAIEventCreated      = "ai.event.created"
+	TopicAIDetection          = "ai.detection"
+	TopicAIPerson             = "ai.detection.person"
+	TopicAIVehicle            = "ai.detection.vehicle"
+	TopicAIAnimal             = "ai.detection.animal"
+	TopicAIEventCreated       = "ai.event.created"
 )
 
-var (
-	ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")
-)
+var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")
 
 // subscriber holds a channel and its mutex.
 type subscriber struct {
@@ -58,10 +56,6 @@ func NewEventBus(bufferSize int) *EventBus {
 // event when the channel is full. The caller is responsible for reading from ch.
 // Returns ErrDuplicateSubscriber if the same channel is already subscribed.
 func (b *EventBus) Subscribe(topic string, ch chan Event, bufferSize int) error {
-	if bufferSize <= 0 {
-		bufferSize = b.bufferSize
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -94,10 +88,6 @@ func (b *EventBus) Unsubscribe(topic string, ch chan Event) {
 // SubscribeByPrefix registers a channel for all topics that start with the given prefix.
 // An empty prefix matches all topics. The caller is responsible for reading from ch.
 func (b *EventBus) SubscribeByPrefix(prefix string, ch chan Event, bufferSize int) error {
-	if bufferSize <= 0 {
-		bufferSize = b.bufferSize
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -125,7 +115,7 @@ func (b *EventBus) UnsubscribeByPrefix(prefix string, ch chan Event) {
 
 // Publish sends an event to all subscribers of the given topic.
 // Respects context cancellation. Never blocks on any single subscriber.
-func (b *EventBus) Publish(ctx context.Context, topic string, data interface{}) {
+func (b *EventBus) Publish(ctx context.Context, topic string, data any) {
 	evt := Event{Topic: topic, Data: data}
 
 	b.mu.RLock()

@@ -146,7 +146,7 @@ func TestImagingController_SetImagingSettings_Success(t *testing.T) {
 			Gain:         0.5,
 		},
 		WhiteBalance: WhiteBalanceSettings{
-			Mode:              "auto",
+			Mode:             "auto",
 			ColorTemperature: 5500,
 		},
 	}
@@ -338,7 +338,7 @@ func TestImagingController_ConcurrentOperations(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 10)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

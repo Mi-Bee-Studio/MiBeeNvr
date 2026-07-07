@@ -483,7 +483,7 @@ func TestManagerOnStatusChangeResetsCollector(t *testing.T) {
 
 	// Simulate frames to set lastIDRTime on the collector
 	cb := m.collector.OnFrame("cam-1")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		au := makeH264Frame(t, 1, 500) // non-IDR
 		cb(int64(i), au)
 	}
