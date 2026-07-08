@@ -11,17 +11,17 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
+    "@eslint/js": "^10.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@tailwindcss/vite": "^4.2.4",
+    "@tailwindcss/vite": "^4.3.2",
     "@testing-library/svelte": "^5.3.1",
-    "eslint": "^9.25.0",
+    "eslint": "^10.6.0",
     "jsdom": "^29.1.1",
-    "prettier": "^3.5.0",
+    "prettier": "^3.9.4",
     "svelte": "^5.55.4",
-    "tailwindcss": "^4.2.4",
+    "tailwindcss": "^4.3.2",
     "vite": "^8.0.10",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@yume-chan/libde265": "^1.0.0",
