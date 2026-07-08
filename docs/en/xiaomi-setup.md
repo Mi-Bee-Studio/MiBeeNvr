@@ -17,19 +17,20 @@ MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS
 - Network access to Xiaomi cloud services (`openapi.io.mi.com`)
 - Working internet connection for NVR system
 
-## Supported Camera Models
-
 | Model | Identifier | Protocol | Support Level | Notes |
 |-------|------------|----------|---------------|-------|
 | **Xiaomi C200** | `chuangmi.camera.046c04` | CS2 P2P | ✅ Full | HD 1080p indoor camera |
 | **Xiaomi C300** | `chuangmi.camera.72ac1` | CS2 P2P | ✅ Full | 2K indoor camera |
-| **Xiaofang** | `isa.camera.isc5c1` | CS2 P2P | ✅ Full | Pan/tilt dome camera |
+| **Xiaofang** | `isa.camera.isc5c1` | TUTK | ✅ Full | Pan/tilt dome camera (legacy) |
+| **Loock V1** | `lumi.camera.v1` | TUTK | ✅ Full | Smart doorbell camera (legacy) |
 | **Loock V2** | `loock.cateye.v02` | CS2 P2P | ✅ Full | Smart doorbell camera |
-| **Dafang** | `isa.camera.df3` | TUTK | ❌ Not Supported | Uses different protocol |
-| **Mijia** | `chuangmi.camera.8ac63a` | CS2 P2P | ✅ Full | Basic indoor camera |
+| **Dafang** | `isa.camera.df3` | TUTK | ✅ Full | Pan/tilt dome camera (legacy) |
+| **Aqara G2** | `isa.camera.g2h` | TUTK | ✅ Full | Indoor cube camera (legacy) |
+| **IMILAB A1** | `isa.camera.a1` | TUTK | ✅ Full | Indoor camera (legacy) |
+| **Xiaobai** | `isa.camera.xf` | TUTK | ✅ Full | Pan/tilt camera (legacy) |
+| **Mijia** | `chuangmi.camera.v2` | TUTK | ✅ Full | Basic indoor camera (legacy) |
 
-**Important**: Only CS2 protocol cameras are supported. Dafang cameras use the TUTK protocol which is not implemented.
-
+**Important**: Both CS2 and TUTK protocol cameras are now supported. TUTK models use the legacy protocol via `internal/tutk/`. Two-way audio is available for CS2 models only.
 ## Configuration
 
 ### Basic Configuration
@@ -253,6 +254,123 @@ curl -X POST -u admin:password \
 ```bash
 curl -u admin:password -o snapshot.jpg \
   http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/snapshot
+```
+
+## Two-Way Audio
+
+Two-way audio allows you to communicate through supported Xiaomi cameras. This feature is available for CS2 models only (TUTK models are blocked due to a protocol limitation).
+
+### Prerequisites
+
+- Browser with AudioWorklet support (Chrome, Firefox, Edge modern versions)
+- Camera with two-way audio capability
+- Network latency under 200ms for best experience
+
+### Configuration
+
+Enable two-way audio in your camera configuration:
+
+```yaml
+cameras:
+  - id: "xiaomi_c200_front"
+    name: "Xiaomi C200 - Front"
+    protocol: "xiaomi"
+    encoding: "h264"
+    did: "device_id_here"
+    vendor: "cs2"
+    enabled: true
+    two_way_audio_enabled: true  # Enable two-way audio
+```
+
+### Usage
+
+1. **Access Live View**: Navigate to the camera's live view page
+2. **Hold to Talk**: Click and hold the microphone button to speak
+3. **Release to Listen**: Release the button to hear audio from the camera
+
+### Technical Details
+
+- Audio codec: G.711 μ-law/A-law (8kHz sample rate)
+- Protocol: MISS protocol via CS2 P2P
+- Latency: ~100-200ms (depends on network)
+- Browser API: AudioContext, AudioWorklet for encoding
+
+### Troubleshooting
+
+- No audio: Check browser permissions for microphone access
+- Echo: Use headphones instead of speakers
+- Latency: Check network connectivity to Xiaomi cloud
+
+## PTZ Control
+
+Pan-tilt-zoom (PTZ) control is available for Xiaomi cameras with motor support. This includes most dome cameras (Xiaofang, Dafang, Xiaobai) and some indoor cameras.
+
+### Supported Actions
+
+- `up`, `down`, `left`, `right` — Directional pan/tilt
+- `zoom_in`, `zoom_out` — Zoom control (if supported)
+- `stop` — Stop movement
+
+### API Usage
+
+**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
+- **Body**: `{action: string, speed: number}`
+- **Actions**: "up", "down", "left", "right", "zoom_in", "zoom_out", "stop"
+- **Speed**: 1-10 (1 = slowest, 10 = fastest)
+
+```bash
+# Move camera up
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "up", "speed": 5}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+
+# Zoom in
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "zoom_in", "speed": 3}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+
+# Stop movement
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "stop", "speed": 0}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+```
+
+### Frontend Integration
+
+The web UI provides on-screen PTZ controls for supported cameras. The controls automatically appear when:
+
+- Camera model is recognized as PTZ-capable
+- Camera reports motor support via GetDeviceInfo
+
+## Device Info
+
+You can query device information including firmware and hardware versions for Xiaomi cameras.
+
+### API Usage
+
+**GET** `/api/xiaomi/cameras/{camera_id}/device-info`
+- **Response**: Device information JSON
+
+```bash
+curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/device-info
+```
+
+**Response Example**:
+
+```json
+{
+  "model": "chuangmi.camera.046c04",
+  "name": "Xiaomi C200",
+  "firmware_version": "4.2.0_20231201",
+  "hardware_version": "2.0",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "ip_address": "192.168.1.100",
+  "online": true,
+  "last_seen": "2024-01-15T10:30:00Z"
+}
 ```
 
 ## Integration Examples

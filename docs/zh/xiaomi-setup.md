@@ -17,19 +17,20 @@ MiBee NVR 通过 CS2 P2P 协议为小米云摄像头提供全面支持。此集�
 - 网络访问小米云服务（`openapi.io.mi.com`）
 - NVR 系统的正常互联网连接
 
-## 支持的摄像头型号
-
 | 型号 | 标识符 | 协议 | 支持级别 | 说明 |
 |------|------------|----------|---------------|-------|
 | **小米 C200** | `chuangmi.camera.046c04` | CS2 P2P | ✅ 完全 | HD 1080p 室内摄像头 |
 | **小米 C300** | `chuangmi.camera.72ac1` | CS2 P2P | ✅ 完全 | 2K 室内摄像头 |
-| **小方** | `isa.camera.isc5c1` | CS2 P2P | ✅ 完全 | 云台球型摄像头 |
+| **小方** | `isa.camera.isc5c1` | TUTK | ✅ 完全 | 云台球型摄像头（旧款） |
+| **鹿客 V1** | `lumi.camera.v1` | TUTK | ✅ 完全 | 智能门铃摄像头（旧款） |
 | **Loock V2** | `loock.cateye.v02` | CS2 P2P | ✅ 完全 | 智能门铃摄像头 |
-| **大方** | `isa.camera.df3` | TUTK | ❌ 不支持 | 使用不同的协议 |
-| **米家** | `chuangmi.camera.8ac63a` | CS2 P2P | ✅ 完全 | 基础室内摄像头 |
+| **大方** | `isa.camera.df3` | TUTK | ✅ 完全 | 云台球型摄像头（旧款） |
+| **Aqara G2** | `isa.camera.g2h` | TUTK | ✅ 完全 | 室内立方摄像头（旧款） |
+| **IMILAB A1** | `isa.camera.a1` | TUTK | ✅ 完全 | 室内摄像头（旧款） |
+| **小白** | `isa.camera.xf` | TUTK | ✅ 完全 | 云台摄像头（旧款） |
+| **米家** | `chuangmi.camera.v2` | TUTK | ✅ 完全 | 基础室内摄像头（旧款） |
 
-**重要提示**：仅支持 CS2 协议摄像头。大方摄像头使用 TUTK 协议，该协议未实现。
-
+**重要提示**：现在同时支持 CS2 和 TUTK 协议摄像头。TUTK 旧款型号通过 `internal/tutk/` 使用旧版协议。双工音频功能仅适用于 CS2 型号。
 ## 配置
 
 ### 基本配置
@@ -253,6 +254,137 @@ curl -X POST -u admin:password \
 ```bash
 curl -u admin:password -o snapshot.jpg \
   http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/snapshot
+```
+
+## 双工音频
+
+双工音频允许您通过支持的小米摄像头进行语音交流。此功能仅适用于 CS2 型号（TUTK 型号由于协议限制不支持）。
+
+### 前置条件
+
+- 浏览器支持 AudioWorklet（Chrome、Firefox、Edge 现代版本）
+- 摄像头具备双工音频能力
+- 网络延迟低于 200ms 以获得最佳体验
+
+### 配置
+
+在摄像头配置中启用双工音频：
+
+```yaml
+cameras:
+  - id: "xiaomi_c200_front"
+    name: "小米 C200 - 前门"
+    protocol: "xiaomi"
+    encoding: "h264"
+    did: "device_id_here"
+    vendor: "cs2"
+    enabled: true
+    two_way_audio_enabled: true  # 启用双工音频
+```
+
+### 使用方法
+
+1. **访问实时视图**：导航到摄像头的实时视图页面
+
+2. **按住说话**：点击并按住麦克风按钮进行说话
+
+3. **松开听音**：松开按钮以收听摄像头的音频
+
+### 技术细节
+
+- 音频编解码器：G.711 μ-law/A-law（8kHz 采样率）
+
+- 协议：通过 CS2 P2P 的 MISS 协议
+
+- 延迟：约 100-200ms（取决于网络）
+
+- 浏览器 API：AudioContext、AudioWorklet 用于编码
+
+### 故障排除
+
+- 无音频：检查浏览器麦克风权限
+
+- 回音：使用耳机而非扬声器
+
+- 延迟：检查到小米云的网络连接
+
+## 云台控制
+
+云台控制（PTZ）适用于支持电机的小米摄像头。这包括大多数球型摄像头（小方、大方、小白）和一些室内摄像头。
+
+### 支持的操作
+
+- `up`, `down`, `left`, `right` — 方向云台控制
+
+- `zoom_in`, `zoom_out` — 变焦控制（如果支持）
+
+- `stop` — 停止移动
+
+### API 使用
+
+**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
+
+- **请求体**：`{action: string, speed: number}`
+
+- **操作**："up", "down", "left", "right", "zoom_in", "zoom_out", "stop"
+
+- **速度**：1-10（1 = 最慢，10 = 最快）
+
+```bash
+# 向上移动摄像头
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "up", "speed": 5}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+
+# 放大
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "zoom_in", "speed": 3}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+
+# 停止移动
+curl -X POST -u admin:password \
+  -H "Content-Type: application/json" \
+  -d '{"action": "stop", "speed": 0}' \
+  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+```
+
+### 前端集成
+
+Web UI 为支持的摄像头提供屏幕云台控制。当满足以下条件时，控制会自动显示：
+
+- 摄像头型号被识别为具备 PTZ 能力
+
+- 摄像头通过 GetDeviceInfo 报告电机支持
+
+## 设备信息
+
+您可以查询小米摄像头的设备信息，包括固件和硬件版本。
+
+### API 使用
+
+**GET** `/api/xiaomi/cameras/{camera_id}/device-info`
+
+- **响应**：设备信息 JSON
+
+```bash
+curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/device-info
+```
+
+**响应示例**：
+
+```json
+{
+  "model": "chuangmi.camera.046c04",
+  "name": "小米 C200",
+  "firmware_version": "4.2.0_20231201",
+  "hardware_version": "2.0",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "ip_address": "192.168.1.100",
+  "online": true,
+  "last_seen": "2024-01-15T10:30:00Z"
+}
 ```
 
 ## 集成示例
