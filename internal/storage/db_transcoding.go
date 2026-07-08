@@ -63,6 +63,37 @@ func (d *DB) EnqueueTask(ctx context.Context, task *TranscodeTask) error {
 	return nil
 }
 
+// EnqueueTasksBatch inserts multiple pending transcoding tasks in a single transaction.
+// Returns nil for empty input (no-op).
+func (d *DB) EnqueueTasksBatch(ctx context.Context, tasks []TranscodeTask) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var sb strings.Builder
+	args := make([]interface{}, 0, len(tasks)*11)
+	for i, task := range tasks {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)")
+		args = append(args, task.CameraID, task.RecordingID, task.InputPath, task.InputFormat, task.OutputPath, task.OutputFormat, task.CreatedAt, task.OriginalDeleted, task.Framerate, task.Bitrate, task.CRF)
+	}
+
+	q := "INSERT INTO transcoding_tasks (camera_id, recording_id, input_path, input_format, output_path, output_format, status, progress, created_at, original_deleted, framerate, bitrate, crf) VALUES " + sb.String()
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 // DequeueTask gets the next pending task ordered by created_at ascending (FIFO),
 // atomically claiming it by setting status to 'running'.
 // Returns sql.ErrNoRows if no pending tasks exist.

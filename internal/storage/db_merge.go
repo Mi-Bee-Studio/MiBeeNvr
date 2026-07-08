@@ -194,21 +194,16 @@ func (d *DB) UpdateMergeProgress(ctx context.Context, id string, progress int) e
 func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string, minAge time.Duration) ([]*model.Recording, error) {
 	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
 	query := `
-		SELECT r.id, r.camera_id, r.file_path, r.format, r.started_at, r.ended_at, r.duration, r.file_size, r.frame_count, r.merged, r.merge_status, r.archived
-		FROM recordings r
-		WHERE r.camera_id = ?
-			AND r.merge_status = 'pending'
-			AND r.ended_at IS NOT NULL
-			AND r.ended_at < ?
-			AND (
-				SELECT COUNT(*)
-				FROM recordings r2
-				WHERE r2.camera_id = r.camera_id
-					AND r2.merge_status = 'pending'
-					AND r2.ended_at IS NOT NULL
-					AND strftime('%Y-%m-%d %H', r2.started_at) = strftime('%Y-%m-%d %H', r.started_at)
-					AND r2.format = r.format
-			) = 1;
+		WITH hour_buckets AS (
+			SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived,
+				COUNT(*) OVER (
+					PARTITION BY camera_id, strftime('%Y-%m-%d %H', started_at), format
+				) as cnt
+			FROM recordings
+			WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ?
+		)
+		SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived
+		FROM hour_buckets WHERE cnt = 1
 		`
 	rows, err := d.db.QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {

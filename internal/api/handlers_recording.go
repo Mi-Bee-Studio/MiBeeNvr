@@ -298,10 +298,14 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 	// Fetch file paths before batch delete
 	filePaths := map[string]string{}
-	for _, id := range body.IDs {
-		rec, err := h.db.GetRecording(ctx, id)
-		if err == nil && rec != nil && rec.FilePath != "" {
-			filePaths[id] = rec.FilePath
+	recordings, err := h.db.GetRecordingsByIDBatch(ctx, body.IDs)
+	if err != nil {
+		logger.Warn("batch delete: failed to fetch recordings", "error", err)
+	} else {
+		for _, rec := range recordings {
+			if rec.FilePath != "" {
+				filePaths[rec.ID] = rec.FilePath
+			}
 		}
 	}
 

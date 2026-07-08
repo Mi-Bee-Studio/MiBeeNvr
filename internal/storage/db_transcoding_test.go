@@ -319,3 +319,123 @@ func TestTranscodeTask_UpdateStatusError(t *testing.T) {
 	require.Equal(t, float64(0.3), got.Progress)
 	require.True(t, got.CompletedAt.Valid, "completed_at should be set for failed status")
 }
+
+func TestTranscodeTask_EnqueueTasksBatch_Empty(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	t.Run("nil slice", func(t *testing.T) {
+		err := db.EnqueueTasksBatch(ctx, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("empty slice", func(t *testing.T) {
+		err := db.EnqueueTasksBatch(ctx, []TranscodeTask{})
+		require.NoError(t, err)
+	})
+}
+
+func TestTranscodeTask_EnqueueTasksBatch_Single(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := formatTime(time.Now().UTC())
+
+	tasks := []TranscodeTask{{
+		CameraID:     "cam1",
+		RecordingID:  "rec-batch-1",
+		InputPath:    "/recordings/cam1/seg1.mp4",
+		InputFormat:  "h264",
+		OutputPath:   "/recordings/cam1/seg1_transcoded.mp4",
+		OutputFormat: "hevc",
+		CreatedAt:    now,
+	}}
+
+	err := db.EnqueueTasksBatch(ctx, tasks)
+	require.NoError(t, err)
+
+	// Verify count
+	var count int
+	require.NoError(t, db.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transcoding_tasks").Scan(&count))
+	require.Equal(t, 1, count)
+
+	// Verify dequeued task matches
+	got, err := db.DequeueTask(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "cam1", got.CameraID)
+	require.Equal(t, "rec-batch-1", got.RecordingID)
+	require.Equal(t, "/recordings/cam1/seg1.mp4", got.InputPath)
+	require.Equal(t, "h264", got.InputFormat)
+	require.Equal(t, "/recordings/cam1/seg1_transcoded.mp4", got.OutputPath)
+	require.Equal(t, "hevc", got.OutputFormat)
+	require.Equal(t, "running", got.Status, "DequeueTask should claim the task")
+	require.False(t, got.OriginalDeleted)
+	require.True(t, got.StartedAt.Valid, "started_at should be set when task is claimed")
+}
+
+func TestTranscodeTask_EnqueueTasksBatch_Multiple(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := formatTime(time.Now().UTC())
+
+	tasks := make([]TranscodeTask, 5)
+	for i := range 5 {
+		tasks[i] = TranscodeTask{
+			CameraID:     "cam1",
+			RecordingID:  fmt.Sprintf("rec-batch-%d", i),
+			InputPath:    "/in.mp4",
+			InputFormat:  "h264",
+			OutputPath:   "/out.mp4",
+			OutputFormat: "hevc",
+			CreatedAt:    now,
+		}
+	}
+
+	err := db.EnqueueTasksBatch(ctx, tasks)
+	require.NoError(t, err)
+
+	// Verify all 5 inserted
+	var count int
+	require.NoError(t, db.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transcoding_tasks").Scan(&count))
+	require.Equal(t, 5, count)
+
+	// Verify all can be dequeued in FIFO order
+	for i := range 5 {
+		got, err := db.DequeueTask(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, fmt.Sprintf("rec-batch-%d", i), got.RecordingID)
+	}
+
+	// No more pending tasks
+	_, err = db.DequeueTask(ctx)
+	require.Error(t, err)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestTranscodeTask_EnqueueTasksBatch_RollbackOnError(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Use a cancelled context to trigger rollback
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	tasks := []TranscodeTask{{
+		CameraID:     "cam1",
+		RecordingID:  "rec-rollback",
+		InputPath:    "/in.mp4",
+		InputFormat:  "h264",
+		OutputPath:   "/out.mp4",
+		OutputFormat: "hevc",
+		CreatedAt:    formatTime(time.Now().UTC()),
+	}}
+
+	err := db.EnqueueTasksBatch(cancelCtx, tasks)
+	require.Error(t, err, "should fail with cancelled context")
+
+	// Verify no rows were inserted (transaction rolled back)
+	var count int
+	require.NoError(t, db.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transcoding_tasks").Scan(&count))
+	require.Zero(t, count, "no rows should remain after rollback")
+}

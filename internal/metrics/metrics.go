@@ -81,6 +81,15 @@ type Metrics struct {
 
 	// Timeline metrics — DVR-style recording browsing (0.8.0 M6)
 	TimelineSeeksTotal *prometheus.CounterVec // labels: camera_id, type (segment/intra)
+
+	// SQLite database health metrics
+	SQLiteWALSizeBytes       prometheus.Gauge
+	SQLiteDBSizeBytes        prometheus.Gauge
+	SQLiteFragmentationRatio prometheus.Gauge
+	SQLiteQueryDurationSeconds *prometheus.HistogramVec // labels: query_name
+	CleanupDurationSeconds prometheus.Histogram
+	SQLiteOpenConnections   prometheus.Gauge
+	SQLiteInUseConnections  prometheus.Gauge
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -386,6 +395,38 @@ func NewMetrics() *Metrics {
 		Help: "Total timeline seek operations, partitioned by camera and seek type.",
 	}, []string{"camera_id", "type"})
 
+	// SQLite database health metrics
+	sqliteWALSizeBytes := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_sqlite_wal_size_bytes",
+		Help: "SQLite WAL file size in bytes.",
+	})
+	sqliteDBSizeBytes := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_sqlite_db_size_bytes",
+		Help: "SQLite database file size in bytes.",
+	})
+	sqliteFragmentationRatio := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_sqlite_fragmentation_ratio",
+		Help: "SQLite fragmentation ratio (freelist_count / page_count).",
+	})
+	sqliteQueryDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_sqlite_query_duration_seconds",
+		Help:    "SQLite query duration in seconds, partitioned by query name.",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	}, []string{"query_name"})
+	cleanupDurationSeconds := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "nvr_cleanup_duration_seconds",
+		Help:    "Cleanup cycle duration in seconds.",
+		Buckets: []float64{1, 5, 10, 30, 60, 300, 600},
+	})
+	sqliteOpenConnections := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_sqlite_open_connections",
+		Help: "SQLite open connections from connection pool.",
+	})
+	sqliteInUseConnections := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_sqlite_in_use_connections",
+		Help: "SQLite in-use connections from connection pool.",
+	})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -448,6 +489,13 @@ func NewMetrics() *Metrics {
 		aiEventsReceivedTotal,
 		aiEventsErrorsTotal,
 		timelineSeeksTotal,
+		sqliteWALSizeBytes,
+		sqliteDBSizeBytes,
+		sqliteFragmentationRatio,
+		sqliteQueryDurationSeconds,
+		cleanupDurationSeconds,
+		sqliteOpenConnections,
+		sqliteInUseConnections,
 	)
 
 	return &Metrics{
@@ -513,6 +561,13 @@ func NewMetrics() *Metrics {
 		AIEventsReceivedTotal:          aiEventsReceivedTotal,
 		AIEventsErrorsTotal:            aiEventsErrorsTotal,
 		TimelineSeeksTotal:             timelineSeeksTotal,
+		SQLiteWALSizeBytes:           sqliteWALSizeBytes,
+		SQLiteDBSizeBytes:            sqliteDBSizeBytes,
+		SQLiteFragmentationRatio:     sqliteFragmentationRatio,
+		SQLiteQueryDurationSeconds:  sqliteQueryDurationSeconds,
+		CleanupDurationSeconds:       cleanupDurationSeconds,
+		SQLiteOpenConnections:        sqliteOpenConnections,
+		SQLiteInUseConnections:       sqliteInUseConnections,
 	}
 }
 

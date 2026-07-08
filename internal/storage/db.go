@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"os"
+
+
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -39,12 +42,42 @@ func New(dbPath string) (*DB, error) {
 	// Use DSN-level _pragma so EVERY connection from the pool has these settings,
 	// not just the one that ran the ExecContext PRAGMA call.
 	// This is critical for busy_timeout to work across goroutines.
-	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-20000)&_pragma=mmap_size(268435456)"
-	db, err := sql.Open("sqlite", dsn)
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-20000)&_pragma=mmap_size(268435456)&_pragma=temp_store(MEMORY)"
+
+	// First, check SQLite version to determine if we can use analysis_limit
+	// modernc.org/sqlite bundles SQLite M-bM-^@M-^T version depends on Go module version
+	tempDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	return &DB{path: dbPath, db: db}, nil
+	defer tempDB.Close()
+
+	var sv string
+	if err := tempDB.QueryRow("SELECT sqlite_version()").Scan(&sv); err == nil {
+		logger.Info("SQLite version", "version", sv)
+		// analysis_limit was added in SQLite 3.46.0
+		// It limits ANALYZE to only scan at most N rows per index, keeping it cheap
+		if sv >= "3.46.0" {
+			dsn += "&_pragma=analysis_limit(1000)"
+			logger.Info("analysis_limit pragma enabled", "limit", 1000)
+		} else {
+			logger.Info("analysis_limit not supported", "version", sv, "minimum_required", "3.46.0")
+		}
+	} else {
+		logger.Warn("failed to check SQLite version, continuing without analysis_limit", "error", err)
+	}
+
+db, err := sql.Open("sqlite", dsn)
+if err != nil {
+return nil, err
+}
+// Tune connection pool for RPi 3B: single connection to avoid write contention
+// and reduce memory pressure. SQLite with WAL mode handles concurrency well.
+db.SetMaxOpenConns(1)
+db.SetMaxIdleConns(1)
+db.SetConnMaxLifetime(0)
+logger.Info("Connection pool configured", "max_open_conns", 1, "max_idle_conns", 1, "conn_max_lifetime", 0)
+return &DB{path: dbPath, db: db}, nil
 }
 
 func (d *DB) Init(ctx context.Context) error {
@@ -364,6 +397,26 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.rtmp', 1)`)
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
 
+	// Migration v22 → v23: enable auto_vacuum = INCREMENTAL for fresh databases.
+	// This pragma only affects new databases. For existing DBs, SQLite ignores it
+	// silently. We do NOT run VACUUM (blocks 24/7 recording inserts).
+	// Also drop redundant indexes that are superseded by optimized compound indexes.
+	var versAfter22 string
+	_ = d.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&versAfter22)
+	if versAfter22 == "22" {
+		_, _ = d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL")
+		// Drop redundant indexes superseded by compound indexes:
+		// - idx_recordings_camera superseded by idx_recordings_camera_time
+		// - idx_recordings_merged superseded by idx_recordings_archived_time
+		// - idx_recordings_archived superseded by idx_recordings_archived_time
+		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_camera")
+		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_merged")
+		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_archived")
+		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='23' WHERE key='schema_version'")
+		logger.Info("Enabled auto_vacuum = INCREMENTAL for new database, dropped redundant indexes (migration v23)")
+	}
+
+
 	// Performance: composite index for the dominant ListRecordings query pattern
 	// (WHERE archived=0 ORDER BY started_at DESC LIMIT n). Without this + ANALYZE stats,
 	// the planner picks idx_recordings_archived (zero selectivity -- archived=0 matches
@@ -420,6 +473,71 @@ func (d *DB) Backup(ctx context.Context, destPath string) error {
 	return err
 }
 
+// Optimize runs PRAGMA optimize to refresh query planner statistics.
+// This performs an incremental ANALYZE only where needed.
+func (d *DB) Optimize(ctx context.Context) error {
+	_, err := d.db.ExecContext(ctx, "PRAGMA optimize")
+	if err != nil {
+		logger.Warn("PRAGMA optimize failed", "error", err)
+		return err
+	}
+	logger.Debug("PRAGMA optimize completed")
+	return nil
+}
+
+// CheckpointWAL performs a WAL checkpoint operation.
+// Mode can be "PASSIVE", "FULL", "RESTART", or "TRUNCATE".
+func (d *DB) CheckpointWAL(ctx context.Context, mode string) (busy int, logFrames int, checkpointedFrames int, err error) {
+	query := fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode)
+	row := d.db.QueryRowContext(ctx, query)
+	err = row.Scan(&busy, &logFrames, &checkpointedFrames)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("wal_checkpoint(%s): %w", mode, err)
+	}
+	logger.Info("WAL checkpoint completed", "mode", mode, "busy", busy, "log_frames", logFrames, "checkpointed_frames", checkpointedFrames)
+	return busy, logFrames, checkpointedFrames, nil
+}
+
+// GetWALSize returns the size of the -wal file in bytes.
+// Returns 0 if the WAL file does not exist.
+func (d *DB) GetWALSize() (int64, error) {
+	walPath := d.path + "-wal"
+	info, err := os.Stat(walPath)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("stat WAL file: %w", err)
+	}
+	return info.Size(), nil
+}
+
+// GetFragmentationRatio returns fragmentation as freelist_count/page_count.
+func (d *DB) GetFragmentationRatio(ctx context.Context) (float64, error) {
+	var pageCount, freelistCount int64
+	err := d.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+	if err != nil {
+		return 0, fmt.Errorf("get page_count: %w", err)
+	}
+	if pageCount == 0 {
+		return 0, nil
+	}
+	err = d.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freelistCount)
+	if err != nil {
+		return 0, fmt.Errorf("get freelist_count: %w", err)
+	}
+	return float64(freelistCount) / float64(pageCount), nil
+}
+
+// IncrementalVacuum reclaims up to N free pages without exclusive lock.
+func (d *DB) IncrementalVacuum(ctx context.Context, n int) error {
+	_, err := d.db.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", n))
+	if err != nil {
+		return fmt.Errorf("incremental_vacuum(%d): %w", n, err)
+	}
+	logger.Info("Incremental vacuum completed", "max_pages", n)
+	return nil
+}
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
 // Uses UTC without timezone suffix, compatible with SQLite's datetime() for string comparison.

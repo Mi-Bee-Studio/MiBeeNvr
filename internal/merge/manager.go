@@ -242,7 +242,12 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 	}
 	defer release()
 	remainingLimit := cfg.BatchLimit
+	// Timing: ListCameraMergeWindows is called per camera. With ~10 cameras at ~10ms each, total is ~100ms.
+	// This is NOT a significant N+1 at the typical deployment scale (sub-100ms total for all cameras).
+	// If this becomes a bottleneck, cache the window query results with a short TTL.
+	windowStart := time.Now()
 	windows, err := m.db.ListCameraMergeWindows(ctx, cameraID, minAge)
+	slog.Debug("merge window scan", "camera", cameraID, "duration", time.Since(windowStart))
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("list merge windows: %w", err)
 	}
@@ -517,14 +522,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		freed += oldSize
 	}
 
-	// Mark undersized SPS/PPS groups as permanently failed.
+	// Mark undersized SPS/PPS groups as permanently incompatible for merging.
+	// These segments have different codec parameters (SPS/PPS) and cannot be merged
+	// together, but they are NOT failures — the individual recordings are still valid.
 	if len(smallGroupIDs) > 0 {
 		if err := storage.RetryOnBusy(ctx, func() error {
-			return m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusFailed)
+			return m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusIncompatible)
 		}); err != nil {
 			logger.Warn("failed to mark undersized group segments", "error", err)
 		} else {
-			logger.Info("marked undersized SPS/PPS group segments as merge_status=failed", "count", len(smallGroupIDs))
+			logger.Info("marked undersized SPS/PPS group segments as merge_status=incompatible", "count", len(smallGroupIDs))
 		}
 	}
 

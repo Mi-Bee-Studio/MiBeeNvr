@@ -238,3 +238,31 @@ func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
 		"pending": counts,
 	})
 }
+
+// handleMergeReclassify converts existing merge_status='failed' recordings with
+// empty merge_error to 'incompatible'. This backfills undersized SPS/PPS groups
+// that were incorrectly classified as failures.
+func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	result, err := h.db.DB().ExecContext(r.Context(), `
+		UPDATE recordings SET merge_status = 'incompatible'
+		WHERE merge_status = 'failed' AND (merge_error IS NULL OR merge_error = '')
+	`)
+	if err != nil {
+		logger.Warn("failed to reclassify failed recordings", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to reclassify recordings")
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	logger.Info("reclassified failed recordings as incompatible", "count", affected)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"reclassified": affected,
+	})
+}

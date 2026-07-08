@@ -279,6 +279,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+			r.Post("/api/merge/reclassify", h.handleMergeReclassify)
 		// Timelapse endpoints
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)

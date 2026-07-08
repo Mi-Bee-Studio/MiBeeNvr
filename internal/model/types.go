@@ -209,7 +209,8 @@ const (
 	MergeStatusPending = "pending"
 	MergeStatusMerged  = "merged"
 	MergeStatusMerging = "merging"
-	MergeStatusFailed  = "failed"
+	MergeStatusFailed       = "failed"
+	MergeStatusIncompatible = "incompatible"
 )
 
 // AudioFrame represents a single audio frame for distribution through StreamHub.

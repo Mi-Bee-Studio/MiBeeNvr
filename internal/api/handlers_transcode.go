@@ -591,12 +591,12 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Enqueue each recording without an existing transcode task
-	enqueued := 0
+	// Collect all recordings without an existing transcode task
+	tasks := make([]storage.TranscodeTask, 0, len(recordings))
 	for _, rec := range recordings {
 		outputPath := rec.FilePath + ".transcoded.mp4"
 		now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
-		task := &storage.TranscodeTask{
+		tasks = append(tasks, storage.TranscodeTask{
 			CameraID:        cameraID,
 			RecordingID:     rec.ID,
 			InputPath:       rec.FilePath,
@@ -606,17 +606,20 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 			OriginalDeleted: true,
 			Framerate:       0,
 			CreatedAt:       now,
-		}
-		if err := h.db.EnqueueTask(r.Context(), task); err != nil {
-			logger.Warn("failed to enqueue backfill task", "error", err, "recording_id", rec.ID)
-		} else {
-			enqueued++
-		}
+		})
 	}
 
+	// Batch enqueue all tasks in a single transaction
+	if err := h.db.EnqueueTasksBatch(r.Context(), tasks); err != nil {
+		logger.Warn("failed to enqueue backfill tasks", "error", err, "camera_id", cameraID, "count", len(tasks))
+		WriteError(w, http.StatusInternalServerError, "failed to enqueue backfill tasks")
+		return
+	}
+	logger.Info("backfill tasks enqueued", "camera_id", cameraID, "count", len(tasks))
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enqueued": enqueued,
-		"skipped":  len(allRecordings) - enqueued,
+		"enqueued": len(tasks),
+		"skipped":  len(allRecordings) - len(tasks),
 		"total":    len(allRecordings),
 	})
 }

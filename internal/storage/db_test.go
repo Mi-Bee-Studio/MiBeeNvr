@@ -881,7 +881,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "22", version)
+	require.Equal(t, "23", version)
 }
 
 func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
@@ -903,7 +903,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "22", version)
+	require.Equal(t, "23", version)
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
@@ -1428,4 +1428,75 @@ func TestDequeueNotBlockedByLongTx(t *testing.T) {
 
 	// Wait for hold goroutine to finish
 	<-holdDone
+}
+
+func TestCheckpointWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_checkpoint.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	busy, logFrames, ckptFrames, err := db.CheckpointWAL(ctx, "PASSIVE")
+	require.NoError(t, err)
+	require.Equal(t, 0, busy, "PASSIVE checkpoint should not be busy on fresh DB")
+	t.Logf("PASSIVE checkpoint: busy=%d logFrames=%d ckptFrames=%d", busy, logFrames, ckptFrames)
+}
+
+func TestCheckpointWALTruncate(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_ckpt_truncate.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	busy, logFrames, ckptFrames, err := db.CheckpointWAL(ctx, "TRUNCATE")
+	require.NoError(t, err)
+	require.Equal(t, 0, busy, "TRUNCATE checkpoint should not be busy on fresh DB")
+	t.Logf("TRUNCATE checkpoint: busy=%d logFrames=%d ckptFrames=%d", busy, logFrames, ckptFrames)
+}
+
+func TestGetWALSize(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_walsize.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	size, err := db.GetWALSize()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, size, int64(0), "WAL size should be >= 0")
+}
+
+func TestGetFragmentationRatio(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_frag.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	frac, err := db.GetFragmentationRatio(ctx)
+	require.NoError(t, err)
+	require.Equal(t, float64(0), frac, "fresh DB should have 0 fragmentation")
+}
+
+func TestIncrementalVacuum(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_vacuum.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	err = db.IncrementalVacuum(ctx, 100)
+	require.NoError(t, err, "incremental_vacuum on fresh DB should not error")
 }

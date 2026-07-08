@@ -109,6 +109,53 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	return &r, nil
 }
 
+func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.Recording, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, archived FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := d.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+		var mergeProgress sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		r.StartedAt = scanTime(startedAtStr)
+		r.EndedAt = scanTime(endedAtStr)
+		if mergePathStr.Valid {
+			r.MergePath = mergePathStr.String
+		}
+		if mergeTierStr.Valid {
+			r.MergeTier = mergeTierStr.String
+		}
+		if mergeProgress.Valid {
+			r.MergeProgress = int(mergeProgress.Int64)
+		}
+		if mergeErrorStr.Valid {
+			r.MergeError = mergeErrorStr.String
+		}
+		if r.MergeStatus == "" {
+			r.MergeStatus = mergeStatusFromBool(r.Merged)
+		}
+		res = append(res, r)
+	}
+	return res, nil
+}
+
+
 func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
 	where := []string{}
 	args := []any{}
@@ -582,4 +629,33 @@ func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg str
 func (d *DB) GetRecordingAIStatus(ctx context.Context, id string) (status string, err error) {
 	err = d.db.QueryRowContext(ctx, `SELECT COALESCE(ai_status, '') FROM recordings WHERE id=?`, id).Scan(&status)
 	return
+}
+
+// BatchGetRecordingAIStatus returns a map of recording ID to AI status for a batch of IDs.
+// Eliminates N+1 by fetching all statuses in a single query.
+func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "SELECT id, COALESCE(ai_status, '') FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := d.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, err
+		}
+		result[id] = status
+	}
+	return result, rows.Err()
 }
