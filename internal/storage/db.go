@@ -39,7 +39,7 @@ func New(dbPath string) (*DB, error) {
 	// Use DSN-level _pragma so EVERY connection from the pool has these settings,
 	// not just the one that ran the ExecContext PRAGMA call.
 	// This is critical for busy_timeout to work across goroutines.
-	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-2000)"
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&_pragma=cache_size(-20000)&_pragma=mmap_size(268435456)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -363,6 +363,18 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.srt', 1)`)
 	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.rtmp', 1)`)
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+
+	// Performance: composite index for the dominant ListRecordings query pattern
+	// (WHERE archived=0 ORDER BY started_at DESC LIMIT n). Without this + ANALYZE stats,
+	// the planner picks idx_recordings_archived (zero selectivity -- archived=0 matches
+	// ALL rows) and does a full scan + temp B-tree sort on every list request.
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived_time ON recordings(archived, started_at DESC)")
+	// Covering index for GetAllLastRecordingTimes: SELECT camera_id, MAX(ended_at) FROM recordings
+	// GROUP BY camera_id. Without this, the 4-column idx_recordings_camera_time is scanned
+	// in full (71K+ entries) on every /api/cameras request -- was the #1 cause of 3s camera list.
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_ended ON recordings(camera_id, ended_at DESC)")
+	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
+	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
 	return nil
 }

@@ -81,6 +81,7 @@
   // ── UI state ──
   let showBackToTop = $state(false);
   let abortController: AbortController | null = null;
+  let listAbortController: AbortController | null = null;
 
   // ── AVI playback modal state ──
   let showAviPlayback = $state(false);
@@ -237,29 +238,20 @@ let batchMerging = $state(false);
       const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
 
       if (formatPill === 'All') {
-        // Fetch both normal and timelapse recordings, merge, sort by started_at DESC
-        const [normalRes, tlRes] = await Promise.all([
-          listRecordings({
-            camera_id: cameraId || undefined,
-            search: searchQuery || undefined,
-            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-            archived: showArchived ? true : undefined,
-            start: calStart.toISOString(),
-            end: calEnd.toISOString(),
-            limit: 1000,
-            signal: abortController.signal,
-          }),
-          listTimelapseRecordings({
-            camera_id: cameraId || undefined,
-            start: calStart.toISOString(),
-            end: calEnd.toISOString(),
-            limit: 1000,
-            signal: abortController.signal,
-          }),
-        ]);
-        const merged = [...normalRes.recordings, ...tlRes.recordings];
-        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
-        recordings = merged;
+        // listRecordings returns ALL formats (h264/h265/mjpeg/timelapse/avi) when no format filter is
+        // set. Do NOT also call listTimelapseRecordings — it returns timelapse+mjpeg, which would
+        // duplicate those recordings in the gallery and double-count them.
+        const response = await listRecordings({
+          camera_id: cameraId || undefined,
+          search: searchQuery || undefined,
+          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+          archived: showArchived ? true : undefined,
+          start: calStart.toISOString(),
+          end: calEnd.toISOString(),
+          limit: 1000,
+          signal: abortController.signal,
+        });
+        recordings = response.recordings;
       } else if (useTimelapseApi) {
         const response = await listTimelapseRecordings({
           camera_id: cameraId || undefined,
@@ -294,37 +286,27 @@ let batchMerging = $state(false);
   }
 
   async function loadListData() {
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
+    if (listAbortController) listAbortController.abort();
+    listAbortController = new AbortController();
     listLoading = true;
 
     try {
       if (formatPill === 'All') {
-        const [normalRes, tlRes] = await Promise.all([
-          listRecordings({
-            camera_id: cameraId || undefined,
-            search: searchQuery || undefined,
-            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-            archived: showArchived ? true : undefined,
-            offset,
-            limit,
-            sort_by: sortBy,
-            order: sortOrder,
-            signal: abortController.signal,
-          }),
-          listTimelapseRecordings({
-            camera_id: cameraId || undefined,
-            offset,
-            limit,
-            sort_by: sortBy,
-            sort_order: sortOrder,
-            signal: abortController.signal,
-          }),
-        ]);
-        const merged = [...normalRes.recordings, ...tlRes.recordings];
-        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
-        listRecordingsData = merged;
-        totalRecordings = (normalRes.total || 0) + (tlRes.total || 0);
+        // listRecordings returns ALL formats when no format filter is set — no need to also call
+        // listTimelapseRecordings (which would duplicate mjpeg/timelapse and break pagination/total).
+        const response = await listRecordings({
+          camera_id: cameraId || undefined,
+          search: searchQuery || undefined,
+          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+          archived: showArchived ? true : undefined,
+          offset,
+          limit,
+          sort_by: sortBy,
+          order: sortOrder,
+          signal: listAbortController.signal,
+        });
+        listRecordingsData = response.recordings;
+        totalRecordings = response.total || 0;
       } else {
         const response = await listRecordings({
           camera_id: cameraId || undefined,
@@ -336,7 +318,7 @@ let batchMerging = $state(false);
           limit,
           sort_by: sortBy,
           order: sortOrder,
-          signal: abortController.signal,
+          signal: listAbortController.signal,
         });
         listRecordingsData = response.recordings;
         totalRecordings = response.total || 0;
