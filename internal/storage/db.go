@@ -38,6 +38,11 @@ func (d *DB) DB() *sql.DB {
 	return d.db
 }
 
+// Path returns the database file path.
+func (d *DB) Path() string {
+	return d.path
+}
+
 func New(dbPath string) (*DB, error) {
 	// Use DSN-level _pragma so EVERY connection from the pool has these settings,
 	// not just the one that ran the ExecContext PRAGMA call.

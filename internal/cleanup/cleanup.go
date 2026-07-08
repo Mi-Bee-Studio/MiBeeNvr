@@ -828,8 +828,8 @@ func (cm *CleanupManager) updateSQLiteMetrics(ctx context.Context) {
 		cm.metrics.SQLiteWALSizeBytes.Set(float64(walSize))
 	}
 
-	// Update DB file size (construct path from store root dir)
-	dbPath := filepath.Join(cm.store.RootDir(), "recordings.db")
+	// Update DB file size (use actual DB path, not hardcoded filename)
+	dbPath := cm.db.Path()
 	if info, err := os.Stat(dbPath); err == nil {
 		cm.metrics.SQLiteDBSizeBytes.Set(float64(info.Size()))
 	}
