@@ -11,9 +11,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -388,7 +390,7 @@ func (c *DTLSConn) WriteAndWait(req []byte, ok func(res []byte) bool) ([]byte, e
 	defer t.Stop()
 
 	_ = c.conn.SetDeadline(time.Now().Add(5 * time.Second))
-	defer c.conn.SetDeadline(time.Time{})
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 
 	buf := make([]byte, 2048)
 	for {
@@ -669,7 +671,8 @@ func (c *DTLSConn) reader() {
 		_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, addr, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) {
 				continue
 			}
 			return
@@ -979,14 +982,18 @@ func hexDump(data []byte) string {
 	}
 
 	var result string
+	var resultSb982 strings.Builder
 	for i := 0; i < len(data); i += 16 {
 		end := min(i+16, len(data))
 		line := fmt.Sprintf("    %04x:", i)
+		var lineSb985 strings.Builder
 		for j := i; j < end; j++ {
-			line += fmt.Sprintf(" %02x", data[j])
+			lineSb985.WriteString(fmt.Sprintf(" %02x", data[j]))
 		}
-		result += line + "\n"
+		line += lineSb985.String()
+		resultSb982.WriteString(line + "\n")
 	}
+	result += resultSb982.String()
 
 	if truncated {
 		result += fmt.Sprintf("    ... (truncated, showing %d of %d bytes)\n", maxBytes, totalLen)

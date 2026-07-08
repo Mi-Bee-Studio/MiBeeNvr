@@ -50,8 +50,8 @@ func (m *mockMISSConn) Protocol() string {
 	return "cs2+udp"
 }
 
-func (m *mockMISSConn) Version() string             { return "CS2" }
-func (m *mockMISSConn) RemoteAddr() net.Addr         { return nil }
+func (m *mockMISSConn) Version() string               { return "CS2" }
+func (m *mockMISSConn) RemoteAddr() net.Addr          { return nil }
 func (m *mockMISSConn) SetDeadline(t time.Time) error { return nil }
 
 func (m *mockMISSConn) Close() error {
@@ -775,7 +775,7 @@ func TestConcurrentWrite(t *testing.T) {
 	client, _ := newTestMISSClient()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

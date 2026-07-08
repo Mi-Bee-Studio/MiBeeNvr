@@ -69,31 +69,32 @@ func pcm16ToMuLaw(sample int16) byte {
 // 3-bit exponent (segment), 4-bit mantissa, then XOR 0x55.
 func pcm16ToALaw(sample int16) byte {
 	var sign byte
-	if sample < 0 {
+	val := int(sample)
+	if val < 0 {
 		sign = 0x80
-		sample = -sample
+		val = -val
 	}
 
-	if sample > 32767 {
-		sample = 32767
+	if val > 32767 {
+		val = 32767
 	}
 
 	var exponent byte
 	var mantissa byte
 
-	if sample >= 256 {
+	if val >= 256 {
 		// Find exponent among bits 14..8
 		for i := 14; i >= 8; i-- {
-			if sample&(1<<i) != 0 {
+			if val&(1<<i) != 0 {
 				exponent = byte(i - 7)
 				break
 			}
 		}
-		mantissa = byte((sample >> (exponent + 3)) & 0x0F)
+		mantissa = byte((val >> (exponent + 3)) & 0x0F)
 	} else {
 		// Small signal: segment 0
 		exponent = 0
-		mantissa = byte(sample >> 4)
+		mantissa = byte(val >> 4)
 	}
 
 	// Build compressed byte and XOR 0x55 (A-law alternate-bit inversion)

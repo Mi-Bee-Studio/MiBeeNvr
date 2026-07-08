@@ -14,20 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildFrameInfo creates a 40-byte FrameInfo buffer positioned at the end of
-// the given totalSize (totalSize must be >= 40).
-func buildFrameInfo(t *testing.T, totalSize int, codec byte, flags byte, timestamp uint32, sessionID uint32, payloadSize uint32, frameNo uint32) []byte {
-	t.Helper()
-	b := make([]byte, 40)
-	b[0] = codec
-	b[2] = flags
-	binary.LittleEndian.PutUint32(b[8:], timestamp)
-	binary.LittleEndian.PutUint32(b[12:], sessionID)
-	binary.LittleEndian.PutUint32(b[16:], payloadSize)
-	binary.LittleEndian.PutUint32(b[20:], frameNo)
-	return b
-}
-
 // buildVideoPacket builds a complete TUTK frame for ChannelIVideo with the given
 // parameters. When frameType is EndSingle/EndMulti/EndExt a 40-byte FrameInfo is
 // appended. For single-packet frames (PktTotal==1) the marker at the pktIdx
@@ -70,7 +56,7 @@ func buildVideoPacket28(t *testing.T, frameType byte, pktTotal uint16, pktIdx ui
 	if hasFI {
 		fi := data[28+len(payload):]
 		fi[0] = CodecH264
-		fi[2] = 0x01 // keyframe
+		fi[2] = 0x01                              // keyframe
 		binary.LittleEndian.PutUint32(fi[8:], 0)  // timestamp (set later if needed)
 		binary.LittleEndian.PutUint32(fi[12:], 1) // SessionID
 		binary.LittleEndian.PutUint32(fi[16:], uint32(len(payload)))
@@ -124,17 +110,17 @@ func setFrameInfoPayloadSize(t *testing.T, data []byte, sz uint32) {
 
 func TestParseFrameInfo(t *testing.T) {
 	data := make([]byte, 40)
-	data[0] = CodecH264       // CodecID
-	data[2] = 0x01            // Flags: keyframe
-	data[3] = 1               // CamIndex
-	data[4] = 2               // OnlineNum
-	data[5] = 30              // FPS
-	data[6] = 4               // ResTier
-	data[7] = 100             // Bitrate
-	binary.LittleEndian.PutUint32(data[8:], 12345)   // Timestamp
-	binary.LittleEndian.PutUint32(data[12:], 42)     // SessionID
-	binary.LittleEndian.PutUint32(data[16:], 64000)  // PayloadSize
-	binary.LittleEndian.PutUint32(data[20:], 7)      // FrameNo
+	data[0] = CodecH264                             // CodecID
+	data[2] = 0x01                                  // Flags: keyframe
+	data[3] = 1                                     // CamIndex
+	data[4] = 2                                     // OnlineNum
+	data[5] = 30                                    // FPS
+	data[6] = 4                                     // ResTier
+	data[7] = 100                                   // Bitrate
+	binary.LittleEndian.PutUint32(data[8:], 12345)  // Timestamp
+	binary.LittleEndian.PutUint32(data[12:], 42)    // SessionID
+	binary.LittleEndian.PutUint32(data[16:], 64000) // PayloadSize
+	binary.LittleEndian.PutUint32(data[20:], 7)     // FrameNo
 
 	fi := ParseFrameInfo(data)
 	require.NotNil(t, fi)
@@ -180,9 +166,9 @@ func TestParseFrameInfo_Empty(t *testing.T) {
 
 func TestFrameInfoIsKeyframe(t *testing.T) {
 	tests := []struct {
-		name   string
-		flags  uint8
-		want   bool
+		name  string
+		flags uint8
+		want  bool
 	}{
 		{name: "flags_0x01_keyframe", flags: 0x01, want: true},
 		{name: "flags_0x00_not_keyframe", flags: 0x00, want: false},
@@ -205,7 +191,7 @@ func TestFrameInfoSampleRate(t *testing.T) {
 		flags uint8
 		want  uint32
 	}{
-		{name: "index_0_8000Hz",  flags: 0x00, want: 8000},
+		{name: "index_0_8000Hz", flags: 0x00, want: 8000},
 		{name: "index_1_11025Hz", flags: 0x04, want: 11025},
 		{name: "index_2_12000Hz", flags: 0x08, want: 12000},
 		{name: "index_3_16000Hz", flags: 0x0C, want: 16000},
@@ -237,7 +223,7 @@ func TestFrameInfoChannels(t *testing.T) {
 		flags uint8
 		want  uint8
 	}{
-		{name: "mono_bit0_0",  flags: 0x00, want: 1},
+		{name: "mono_bit0_0", flags: 0x00, want: 1},
 		{name: "stereo_bit0_1", flags: 0x01, want: 2},
 		{name: "stereo_bit0_1_other_bits_set", flags: 0x0D, want: 2},
 		{name: "mono_bit0_0_other_bits_set", flags: 0x0C, want: 1},
@@ -538,9 +524,9 @@ func TestParseAudioParams_ADTS_44100Hz_Stereo(t *testing.T) {
 	// channels=2 (stereo).
 	payload := make([]byte, 7)
 	payload[0] = 0xFF
-	payload[1] = 0xF0                          // syncword top nibble
-	payload[2] = 0x10 | (4 << 2)               // bits 5-2 = 0100 (sr_index=4)
-	payload[3] = 0x80                           // bits 7-6 = 10 (channels bottom 2 bits)
+	payload[1] = 0xF0            // syncword top nibble
+	payload[2] = 0x10 | (4 << 2) // bits 5-2 = 0100 (sr_index=4)
+	payload[3] = 0x80            // bits 7-6 = 10 (channels bottom 2 bits)
 
 	sr, ch := parseAudioParams(payload, nil)
 	require.Equal(t, uint32(44100), sr)
@@ -552,7 +538,7 @@ func TestParseAudioParams_ADTS_8000Hz_Mono(t *testing.T) {
 	payload[0] = 0xFF
 	payload[1] = 0xF0
 	payload[2] = 0x00 | (11 << 2) // sr_index=11 (8000 Hz)
-	payload[3] = 0x40            // channels: bits 7-6 = 01 (mono)
+	payload[3] = 0x40             // channels: bits 7-6 = 01 (mono)
 
 	sr, ch := parseAudioParams(payload, nil)
 	require.Equal(t, uint32(8000), sr)
@@ -564,7 +550,7 @@ func TestParseAudioParams_ADTS_48000Hz_Stereo(t *testing.T) {
 	payload[0] = 0xFF
 	payload[1] = 0xF0
 	payload[2] = 0x00 | (3 << 2) // sr_index=3 (48000 Hz)
-	payload[3] = 0x80             // channels: bits 7-6 = 10 (stereo)
+	payload[3] = 0x80            // channels: bits 7-6 = 10 (stereo)
 
 	sr, ch := parseAudioParams(payload, nil)
 	require.Equal(t, uint32(48000), sr)
@@ -575,9 +561,9 @@ func TestParseAudioParams_ADTS_WithCRC(t *testing.T) {
 	// protection_absent=0 (CRC present): byte 1 bit 0 = 0.
 	payload := make([]byte, 7)
 	payload[0] = 0xFF
-	payload[1] = 0xF8                           // 0xF0 | (1<<3) | 0 → ID=1, protection_absent=0
-	payload[2] = 0x00 | (4 << 2)                // sr_index=4 (44100 Hz)
-	payload[3] = 0x80                            // channels: bits 7-6 = 10 (stereo)
+	payload[1] = 0xF8            // 0xF0 | (1<<3) | 0 → ID=1, protection_absent=0
+	payload[2] = 0x00 | (4 << 2) // sr_index=4 (44100 Hz)
+	payload[3] = 0x80            // channels: bits 7-6 = 10 (stereo)
 
 	sr, ch := parseAudioParams(payload, nil)
 	require.Equal(t, uint32(44100), sr)
@@ -645,9 +631,9 @@ func TestTsTracker_Monotonic(t *testing.T) {
 
 func TestTsTracker_Accumulates(t *testing.T) {
 	var tr tsTracker
-	tr.update(0)     // first
-	tr.update(1000)  // +1000
-	tr.update(2000)  // +1000
+	tr.update(0)          // first
+	tr.update(1000)       // +1000
+	tr.update(2000)       // +1000
 	ts := tr.update(5000) // +3000
 	require.Equal(t, uint64(5000), ts)
 	require.Equal(t, uint64(5000), tr.accumUS)
@@ -665,15 +651,15 @@ func TestTsTracker_WrapAround(t *testing.T) {
 
 func TestTsTracker_WrapAroundMultiple(t *testing.T) {
 	var tr tsTracker
-	tr.update(999990)             // first
-	tr.update(10)                 // wrap: 20
+	tr.update(999990) // first
+	tr.update(10)     // wrap: 20
 	require.Equal(t, uint64(20), tr.accumUS)
 
-	ts := tr.update(20)           // +10
+	ts := tr.update(20) // +10
 	require.Equal(t, uint64(30), ts)
 	require.Equal(t, uint64(30), tr.accumUS)
 
-	ts = tr.update(30)            // +10
+	ts = tr.update(30) // +10
 	require.Equal(t, uint64(40), ts)
 }
 
@@ -686,7 +672,7 @@ func TestTsTracker_NoWrapWhenRawTSAbovePrevious(t *testing.T) {
 
 func TestTsTracker_ExactWrapPeriod(t *testing.T) {
 	var tr tsTracker
-	tr.update(0)      // first
+	tr.update(0)                // first
 	tr.update(tsWrapPeriod - 1) // delta = 999999
 	require.Equal(t, uint64(999999), tr.accumUS)
 
@@ -770,9 +756,9 @@ func TestFrameHandler_VideoMultiPacketReassembly(t *testing.T) {
 	h := NewFrameHandler(false)
 	frameNo := uint32(42)
 
-	payload1 := []byte{0x00, 0x00, 0x01, 0x67}         // SPS
-	payload2 := []byte{0x00, 0x00, 0x01, 0x68}         // PPS
-	payload3 := []byte{0x00, 0x00, 0x01, 0x65, 0x88}   // IDR slice
+	payload1 := []byte{0x00, 0x00, 0x01, 0x67}       // SPS
+	payload2 := []byte{0x00, 0x00, 0x01, 0x68}       // PPS
+	payload3 := []byte{0x00, 0x00, 0x01, 0x65, 0x88} // IDR slice
 
 	// Packet 1: Start
 	pkt1 := buildVideoPacket(t, FrameTypeStart, 3, 0, frameNo, payload1)
@@ -824,20 +810,20 @@ func TestFrameHandler_AudioSinglePacket(t *testing.T) {
 	data := make([]byte, 28+len(payload)+40)
 	data[0] = ChannelAudio
 	data[1] = FrameTypeEndSingle
-	binary.LittleEndian.PutUint16(data[12:], 1)    // PktTotal
+	binary.LittleEndian.PutUint16(data[12:], 1)      // PktTotal
 	binary.LittleEndian.PutUint16(data[14:], 0x0028) // FrameInfo marker
 	binary.LittleEndian.PutUint16(data[16:], uint16(len(payload)))
-	binary.LittleEndian.PutUint32(data[24:], 5)    // FrameNo
+	binary.LittleEndian.PutUint32(data[24:], 5) // FrameNo
 	copy(data[28:], payload)
 
 	// FrameInfo trailer (last 40 bytes)
 	fi := data[28+len(payload):]
 	fi[0] = CodecPCMU
-	fi[2] = 0x0C // sr_index=3 (16000Hz), mono (bit0=0)
-	binary.LittleEndian.PutUint32(fi[8:], 1000)    // Timestamp
-	binary.LittleEndian.PutUint32(fi[12:], 1)      // SessionID
+	fi[2] = 0x0C                                // sr_index=3 (16000Hz), mono (bit0=0)
+	binary.LittleEndian.PutUint32(fi[8:], 1000) // Timestamp
+	binary.LittleEndian.PutUint32(fi[12:], 1)   // SessionID
 	binary.LittleEndian.PutUint32(fi[16:], uint32(len(payload)))
-	binary.LittleEndian.PutUint32(fi[20:], 5)      // FrameNo
+	binary.LittleEndian.PutUint32(fi[20:], 5) // FrameNo
 
 	h.Handle(data)
 
@@ -868,7 +854,7 @@ func TestFrameHandler_AudioAACADTS(t *testing.T) {
 	adts[0] = 0xFF
 	adts[1] = 0xF0
 	adts[2] = 0x10 | (4 << 2) // sr_index=4 (44100)
-	adts[3] = 0x80             // channels stereo
+	adts[3] = 0x80            // channels stereo
 
 	payload := append(adts, []byte{0xAA, 0xBB, 0xCC}...) // ADTS + raw AAC data
 

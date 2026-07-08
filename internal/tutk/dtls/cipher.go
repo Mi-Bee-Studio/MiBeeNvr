@@ -119,7 +119,7 @@ func (c *ChaCha20Poly1305Cipher) Decrypt(header recordlayer.Header, in []byte) (
 
 	out, err = c.remoteCipher.Open(out[:0], nonce, out, additionalData)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errDecryptPacket, err)
+		return nil, fmt.Errorf("%w: %w", errDecryptPacket, err)
 	}
 
 	return append(in[:header.Size()], out...), nil

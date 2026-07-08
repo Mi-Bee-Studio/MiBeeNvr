@@ -228,4 +228,3 @@ func TestReverseTransCodePartialProducesSameAsTransCodePartialAfterRoundtrip(t *
 		require.Equal(t, src, dec[:size], "failed for size %d", size)
 	}
 }
-

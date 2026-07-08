@@ -137,6 +137,7 @@ func (a *channelAdapter) SetDeadline(t time.Time) error {
 	a.mu.Unlock()
 	return nil
 }
+
 func (a *channelAdapter) SetReadDeadline(t time.Time) error {
 	a.mu.Lock()
 	a.readDeadline = t

@@ -45,7 +45,7 @@ func TestTwoWayAudioWithMockMISS(t *testing.T) {
 	r := &XiaomiRecorder{}
 	client, mock := newTestMISSClient()
 	client.model = "isa.camera.hlc6" // model with PCM speaker codec
-	mock.protocol = "tutk" // non-CS2, gate passes for StartSpeaker
+	mock.protocol = "tutk"           // non-CS2, gate passes for StartSpeaker
 	r.missMu.Lock()
 	r.missClient = client
 	r.missMu.Unlock()

@@ -112,6 +112,7 @@ type XiaomiRecorder struct {
 	missClient *MISSClient
 	missMu     sync.Mutex
 }
+
 // Interface compliance check.
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 

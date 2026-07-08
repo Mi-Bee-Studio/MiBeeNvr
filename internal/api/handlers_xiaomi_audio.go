@@ -14,13 +14,6 @@ import (
 
 var xiaomiAudioLogger = slog.Default().With("component", "xiaomi-audio")
 
-// startTwoWayAudioRequest is the request body for POST /api/cameras/{id}/two-way-audio/start.
-// Reserved for future use (e.g. preferred codec override).
-type startTwoWayAudioRequest struct {
-	// CodecID optionally specifies the preferred speaker codec ID.
-	CodecID *uint32 `json:"codec_id,omitempty"`
-}
-
 // startTwoWayAudioResponse is returned on successful two-way audio start.
 type startTwoWayAudioResponse struct {
 	SpeakerCodec uint32 `json:"speaker_codec"` // MISS codec ID for speaker output

@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -297,7 +298,7 @@ func (h *FrameHandler) extractPayload(data []byte, channel byte) ([]byte, *Frame
 
 	frameType := data[1]
 
-	headerSize := 28
+	var headerSize int
 	fiSize := 0
 
 	switch frameType {
@@ -553,11 +554,13 @@ func dumpHex(fi *FrameInfo) string {
 
 	hexStr := hex.EncodeToString(b)
 	formatted := ""
+	var formattedSb556 strings.Builder
 	for i := 0; i < len(hexStr); i += 2 {
 		if i > 0 {
-			formatted += " "
+			formattedSb556.WriteString(" ")
 		}
-		formatted += hexStr[i : i+2]
+		formattedSb556.WriteString(hexStr[i : i+2])
 	}
+	formatted += formattedSb556.String()
 	return formatted
 }

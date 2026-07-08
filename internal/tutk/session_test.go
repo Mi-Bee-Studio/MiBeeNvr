@@ -245,7 +245,7 @@ func TestSession16_RecvIOCtrl(t *testing.T) {
 		cmd[1] = 0x70
 		copy(cmd[24:], buf)
 		s.SessionRead(0, cmd)
-}()
+	}()
 
 	// Give it time to process
 	time.Sleep(50 * time.Millisecond)
@@ -268,7 +268,7 @@ func TestSession16_RecvFrameData(t *testing.T) {
 	expectedHdr := []byte{0x01, 0x02, 0x03, 0x04}
 	expectedPayload := []byte{0xaa, 0xbb, 0xcc}
 
-go func() {
+	go func() {
 		// Simulate a frame data command (cmd[0]=0x01, cmd[1]=0x04)
 		// cmd must be exactly 24 + hdrSize + payloadSize to avoid extra trailing zeros
 		totalSize := 24 + len(expectedHdr) + len(expectedPayload)
@@ -279,7 +279,7 @@ go func() {
 		copy(cmd[24:], expectedHdr)
 		copy(cmd[24+len(expectedHdr):], expectedPayload)
 		s.SessionRead(0, cmd)
-}()
+	}()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -327,7 +327,7 @@ func TestReorderBuffer_New(t *testing.T) {
 func TestReorderBuffer_InOrder(t *testing.T) {
 	rb := NewReorderBuffer(5)
 
-	for i := uint16(0); i < 5; i++ {
+	for i := range uint16(5) {
 		if !rb.Check(i) {
 			t.Errorf("Check(%d) should be true (in-order)", i)
 		}

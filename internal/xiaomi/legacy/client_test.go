@@ -77,9 +77,9 @@ func (m *mockTUTKConn) Close() error {
 	return nil
 }
 
-func (m *mockTUTKConn) Protocol() string         { return m.protocol }
-func (m *mockTUTKConn) Version() string           { return m.versionStr }
-func (m *mockTUTKConn) RemoteAddr() net.Addr      { return m.remoteAddr }
+func (m *mockTUTKConn) Protocol() string              { return m.protocol }
+func (m *mockTUTKConn) Version() string               { return m.versionStr }
+func (m *mockTUTKConn) RemoteAddr() net.Addr          { return m.remoteAddr }
 func (m *mockTUTKConn) SetDeadline(_ time.Time) error { return nil }
 
 func TestParseLegacyURL(t *testing.T) {
@@ -259,11 +259,11 @@ func TestStartMedia(t *testing.T) {
 	t.Helper()
 
 	tests := []struct {
-		name          string
-		model         string
-		quality       string
-		audioEnabled  bool
-		checkCmds     func(t *testing.T, cmds []writeCmd)
+		name         string
+		model        string
+		quality      string
+		audioEnabled bool
+		checkCmds    func(t *testing.T, cmds []writeCmd)
 	}{
 		{
 			name:    "aqara g2 fhd",
@@ -506,7 +506,6 @@ func TestDecodeVideo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			got, err := DecodeVideo(tt.data, tt.key)
 			if tt.wantErr {
 				if err == nil {

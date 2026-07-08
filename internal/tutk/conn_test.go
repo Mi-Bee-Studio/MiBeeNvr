@@ -215,7 +215,6 @@ func TestSetGetErr(t *testing.T) {
 	}
 }
 
-
 // TestIdleTimeoutBehavior tests that the idle timeout detection logic works
 // correctly by setting lastData far in the past.
 func TestIdleTimeoutBehavior(t *testing.T) {

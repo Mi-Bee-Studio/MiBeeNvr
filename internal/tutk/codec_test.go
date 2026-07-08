@@ -27,9 +27,9 @@ func TestIsVideoCodec(t *testing.T) {
 		{0x51, false}, // just above H265
 		{0x00, false},
 		{0xFF, false},
-		{CodecAACRaw, false},  // audio
-		{CodecPCMU, false},    // audio
-		{CodecOpus, false},    // audio
+		{CodecAACRaw, false}, // audio
+		{CodecPCMU, false},   // audio
+		{CodecOpus, false},   // audio
 	}
 
 	for _, tt := range tests {
@@ -59,8 +59,8 @@ func TestIsAudioCodec(t *testing.T) {
 		{0x85, false}, // just below AACRaw
 		{0x93, false}, // just above Opus
 		{0x00, false},
-		{CodecH264, false},  // video
-		{CodecH265, false},  // video
+		{CodecH264, false}, // video
+		{CodecH265, false}, // video
 	}
 
 	for _, tt := range tests {
@@ -72,7 +72,7 @@ func TestIsAudioCodec(t *testing.T) {
 func TestIsVideoCodecExhaustiveRange(t *testing.T) {
 	t.Helper()
 	// Video codec range: 0x4C (76) to 0x50 (80)
-	for id := 0; id <= 255; id++ {
+	for id := range 256 {
 		b := byte(id)
 		isVideo := IsVideoCodec(b)
 		shouldBeVideo := b >= CodecMPEG4 && b <= CodecH265
@@ -83,7 +83,7 @@ func TestIsVideoCodecExhaustiveRange(t *testing.T) {
 func TestIsAudioCodecExhaustiveRange(t *testing.T) {
 	t.Helper()
 	// Audio codec range: 0x86 (134) to 0x92 (146)
-	for id := 0; id <= 255; id++ {
+	for id := range 256 {
 		b := byte(id)
 		isAudio := IsAudioCodec(b)
 		shouldBeAudio := b >= CodecAACRaw && b <= CodecOpus
