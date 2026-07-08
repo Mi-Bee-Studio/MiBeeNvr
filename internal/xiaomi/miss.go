@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tutk"
 )
 
 // MISS protocol command constants.
@@ -123,11 +125,13 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 
 	model := query.Get("model")
 
-	// 2. Establish transport connection (CS2 only, TUTK removed).
+	// 2. Establish transport connection.
 	var conn MISSConn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
 		conn, err = CS2Dial(u.Host, query.Get("transport"), idleTimeout)
+	case "tutk":
+		conn, err = tutk.Dial(u.Host, query.Get("uid"), "Miss", "client")
 	default:
 		err = fmt.Errorf("miss: unsupported vendor %q", s)
 	}

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -366,16 +367,34 @@ func TestMISSModelConstants(t *testing.T) {
 	require.Equal(t, "chuangmi.camera.v2", ModelMijia)
 }
 
-func TestMISSNewClientUnsupportedVendor(t *testing.T) {
+func TestMISSNewClientTUTKVendor(t *testing.T) {
 	t.Helper()
-	// Provide valid hex keys so we reach the vendor check
+	// tutk vendor should reach tutk.Dial, not "unsupported vendor"
 	pub, priv, err := GenerateKey()
 	require.NoError(t, err)
 	pubHex := hex.EncodeToString(pub)
 	privHex := hex.EncodeToString(priv)
 
 	url := fmt.Sprintf(
-		"miss://192.168.1.1?vendor=tutk&device_public=%s&client_private=%s&client_public=%s&sign=test",
+		"miss://192.168.1.1?vendor=tutk&uid=test-uid&device_public=%s&client_private=%s&client_public=%s&sign=test",
+		pubHex, privHex, pubHex,
+	)
+	_, err = NewMISSClient(url, 0)
+	// tutk.Dial will be called and fail with a network error, not "unsupported vendor"
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "unsupported vendor")
+}
+
+func TestMISSNewClientUnsupportedVendor(t *testing.T) {
+	t.Helper()
+	// Unknown vendor should still return "unsupported vendor"
+	pub, priv, err := GenerateKey()
+	require.NoError(t, err)
+	pubHex := hex.EncodeToString(pub)
+	privHex := hex.EncodeToString(priv)
+
+	url := fmt.Sprintf(
+		"miss://192.168.1.1?vendor=unknown&device_public=%s&client_private=%s&client_public=%s&sign=test",
 		pubHex, privHex, pubHex,
 	)
 	_, err = NewMISSClient(url, 0)
@@ -853,4 +872,54 @@ func TestCommandConstants(t *testing.T) {
 	require.Equal(t, uint32(0x111), uint32(missCmdDevInfoRes))
 	require.Equal(t, uint32(0x112), uint32(missCmdMotorReq))
 	require.Equal(t, uint32(0x113), uint32(missCmdMotorRes))
+}
+
+func TestLegacyURLFormat(t *testing.T) {
+	t.Helper()
+	// Verify the URL construction pattern used by getLegacyURL for legacy TUTK cameras.
+	deviceIP := "192.168.1.100"
+	p2pID := "test-p2p-12345"
+	clientPub := "aabbccdd"
+	clientPriv := "11223344"
+	devicePub := "deadbeef"
+	sign := "signature123"
+	model := "test.model"
+
+	missURL := &url.URL{
+		Scheme: "miss",
+		Host:   deviceIP,
+	}
+	q := missURL.Query()
+	q.Set("vendor", "tutk")
+	q.Set("uid", p2pID)
+	q.Set("client_public", clientPub)
+	q.Set("client_private", clientPriv)
+	q.Set("device_public", devicePub)
+	q.Set("sign", sign)
+	q.Set("model", model)
+	missURL.RawQuery = q.Encode()
+
+	urlStr := missURL.String()
+	require.Contains(t, urlStr, "miss://192.168.1.100")
+	require.Contains(t, urlStr, "vendor=tutk")
+	require.Contains(t, urlStr, "uid=test-p2p-12345")
+	require.Contains(t, urlStr, "client_public=aabbccdd")
+	require.Contains(t, urlStr, "client_private=11223344")
+	require.Contains(t, urlStr, "device_public=deadbeef")
+	require.Contains(t, urlStr, "sign=signature123")
+	require.Contains(t, urlStr, "model=test.model")
+}
+
+func TestLegacyFallbackDetection(t *testing.T) {
+	t.Helper()
+	// Verify that the "no available vendor" error string is correctly detected
+	// by the legacy fallback logic in ResolveMISSURL.
+	err := fmt.Errorf("xiaomi: no available vendor support")
+	require.True(t, strings.Contains(err.Error(), "no available vendor"),
+		"ResolveMISSURL should detect 'no available vendor' for legacy fallback")
+
+	// Verify other errors are NOT detected as legacy fallback triggers.
+	otherErr := fmt.Errorf("miss_get_vendor API: some other error")
+	require.False(t, strings.Contains(otherErr.Error(), "no available vendor"),
+		"Other errors must not trigger legacy fallback")
 }

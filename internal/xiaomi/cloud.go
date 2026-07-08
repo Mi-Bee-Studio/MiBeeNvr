@@ -375,6 +375,13 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		nil,
 	)
 	if err != nil {
+		// Legacy TUTK-only cameras don't support the miss_get_vendor API.
+		// Fall back to the devicepass API for these devices.
+		if strings.Contains(err.Error(), "no available vendor") {
+			cloudLogger.Info("legacy TUTK-only camera detected, using devicepass API",
+				"did", did, "model", model)
+			return getLegacyURL(c, did, model, deviceIP, clientPublic, clientPrivate)
+		}
 		return "", fmt.Errorf("miss_get_vendor API: %w", err)
 	}
 
@@ -419,6 +426,54 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 
 	cloudLogger.Info("resolved xiaomi MISS URL", "did", did, "ip", deviceIP, "vendor", vendorName, "model", model)
 
+	return missURL.String(), nil
+}
+
+// getLegacyURL resolves MISS URL for legacy TUTK-only cameras via the /device/devicepass API.
+// These cameras do not support the modern miss_get_vendor flow and require an alternative
+// endpoint to obtain P2P credentials.
+// Ported from go2rtc internal/xiaomi/xiaomi.go:getLegacyURL.
+func getLegacyURL(c *Cloud, did, model, deviceIP string, clientPublic, clientPrivate []byte) (string, error) {
+	params := fmt.Sprintf(`{"did":"%s","toSignAppData":"%x"}`, did, clientPublic)
+
+	result, err := c.Request(
+		getAPIBaseURL(c.region),
+		"/device/devicepass",
+		params,
+		nil,
+	)
+	if err != nil {
+		return "", fmt.Errorf("devicepass API: %w", err)
+	}
+
+	var resp struct {
+		P2PID     string `json:"p2p_id"`
+		Password  string `json:"password"`
+		PublicKey string `json:"p2p_dev_public_key"`
+		Sign      string `json:"signForAppData"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return "", fmt.Errorf("parse devicepass response: %w", err)
+	}
+
+	// Build MISS URL with TUTK vendor.
+	missURL := &url.URL{
+		Scheme: "miss",
+		Host:   deviceIP,
+	}
+	q := missURL.Query()
+	q.Set("vendor", "tutk")
+	q.Set("uid", resp.P2PID)
+	q.Set("client_public", hex.EncodeToString(clientPublic))
+	q.Set("client_private", hex.EncodeToString(clientPrivate))
+	q.Set("device_public", resp.PublicKey)
+	q.Set("sign", resp.Sign)
+	if model != "" {
+		q.Set("model", model)
+	}
+	missURL.RawQuery = q.Encode()
+
+	cloudLogger.Info("resolved legacy TUTK MISS URL", "did", did, "ip", deviceIP, "p2p_id", resp.P2PID, "model", model)
 	return missURL.String(), nil
 }
 
