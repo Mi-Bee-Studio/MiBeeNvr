@@ -634,6 +634,31 @@ func (m *Manager) StopAll() {
 	}
 }
 
+// AudioUpstream upgrades an HTTP request to a WebSocket connection for receiving
+// upstream binary audio from a browser client. It reads binary messages in a loop
+// and calls handler for each received message. Blocks until the client disconnects
+// or an error occurs.
+// This is used for two-way audio on Xiaomi cameras where the browser sends
+// PCM audio data to be encoded as G.711 and written to the camera.
+func (m *Manager) AudioUpstream(w http.ResponseWriter, r *http.Request, handler func([]byte) error) error {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		if err := handler(msg); err != nil {
+			wsLogger.Load().Warn("audio upstream handler error", "error", err)
+			return err
+		}
+	}
+}
+
 // Ensure Manager satisfies expected interface.
 var _ interface {
 	RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
