@@ -82,6 +82,15 @@ export {
   getTimelapseConfig,
   updateTimelapseConfig,
   getRelayCapabilities,
+  // Xiaomi PTZ
+  xiaomiPtzMove,
+  xiaomiPtzStop,
+  // Two-way audio
+  startTwoWayAudio,
+  stopTwoWayAudio,
+  getAudioUpstreamWS,
+  // Xiaomi device info
+  getXiaomiDeviceInfo,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -127,6 +136,9 @@ export type {
   TimeRange,
   CameraRecordingStats,
   RelayCapabilities,
+  // Xiaomi PTZ
+  XiaomiPtzMoveRequest,
+  XiaomiDeviceInfo,
 } from './cameras';
 // Recordings — list, download, frames, stats, archives
 export {

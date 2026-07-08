@@ -4,6 +4,7 @@
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
+  import TwoWayAudioButton from '../components/TwoWayAudioButton.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
@@ -17,7 +18,6 @@
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-
   let { cameraId = '' }: { cameraId?: string } = $props();
 
   let camera = $state<Camera | null>(null);
@@ -70,6 +70,10 @@
 
   function isOnvifCamera(cam: Camera): boolean {
     return normalizeProtocol(cam.protocol) === 'onvif';
+  }
+
+  function isXiaomiCamera(cam: Camera): boolean {
+    return normalizeProtocol(cam.protocol) === 'xiaomi';
   }
 
   async function loadCapabilities() {
@@ -208,6 +212,15 @@
             <SnapshotButton cameraId={camera.id} />
           {/if}
 
+          <!-- Two-way audio button for Xiaomi cameras with two_way_audio_enabled -->
+          {#if isXiaomiCamera(camera) && camera.two_way_audio_enabled && canStream(camera)}
+            <TwoWayAudioButton
+              cameraId={camera.id}
+              enabled={camera.status === 'recording' || camera.status === 'active'}
+              cameraName={camera.name || camera.id}
+            />
+          {/if}
+
           {#if canStream(camera)}
             <div class="flex-1"></div>
             <!-- Protocol Switcher -->
@@ -319,10 +332,17 @@
           </div>
         {/if}
         
-        <!-- PTZ Control for PTZ-capable cameras -->
+        <!-- PTZ Control for PTZ-capable ONVIF cameras -->
         {#if isPtzSupported(camera) && (deviceCaps?.ptz ?? true)}
           <div class="card">
-            <PtzControl {cameraId} enabled={true} />
+            <PtzControl {cameraId} enabled={true} protocol={camera.protocol} />
+          </div>
+        {/if}
+
+        <!-- Xiaomi PTZ controls (separate from ONVIF) -->
+        {#if isXiaomiCamera(camera)}
+          <div class="card">
+            <PtzControl {cameraId} enabled={true} protocol={camera.protocol} />
           </div>
         {/if}
 

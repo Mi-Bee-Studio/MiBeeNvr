@@ -82,6 +82,8 @@
   let formStreamEncoding = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
+  // Xiaomi two-way audio
+  let formTwoWayAudioEnabled = $state(false);
   // Push/ingest fields (SRT/RTMP)
   let formStreamKey = $state('');
   let formSRTPassphrase = $state('');
@@ -206,6 +208,7 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     formChannel = '';
     formAudioEnabled = false;
+    formTwoWayAudioEnabled = false;
     formStreamKey = '';
     formSRTPassphrase = '';
     formSRTStreamID = '';
@@ -242,6 +245,7 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
     formSRTStreamID = camera.srt_stream_id || '';
@@ -477,6 +481,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -523,6 +528,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -649,6 +655,21 @@ async function performCameraSave() {
         />
         <label for="cam-audio" class="input-label cursor-pointer">
           {t('cameras.audioEnabled')}
+        </label>
+      </div>
+    {/if}
+
+    <!-- Xiaomi two-way audio toggle -->
+    {#if formProtocol === 'xiaomi'}
+      <div class="flex items-center gap-2">
+        <input
+          id="cam-two-way-audio"
+          type="checkbox"
+          class="checkbox"
+          bind:checked={formTwoWayAudioEnabled}
+        />
+        <label for="cam-two-way-audio" class="input-label cursor-pointer">
+          {t('cameras.twoWayAudioEnabled') || 'Two-way audio'}
         </label>
       </div>
     {/if}

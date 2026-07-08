@@ -36,6 +36,8 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  // Xiaomi two-way audio enable flag
+  two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
   stream_key?: string;
   srt_passphrase?: string;
@@ -135,6 +137,8 @@ export interface CreateCameraRequest {
   // Push-out relay
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
+  // Xiaomi two-way audio
+  two_way_audio_enabled?: boolean;
 }
 
 export interface UpdateCameraRequest {
@@ -162,6 +166,8 @@ export interface UpdateCameraRequest {
   // Push-out relay (replace whole list when set)
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
+  // Xiaomi two-way audio
+  two_way_audio_enabled?: boolean;
 }
 
 export interface DiscoveredDevice {
@@ -770,4 +776,77 @@ export async function updateTimelapseConfig(
     body: JSON.stringify(config),
     signal,
   });
+}
+
+// --- Xiaomi PTZ ---
+
+export interface XiaomiPtzMoveRequest {
+  direction: 'left' | 'right' | 'up' | 'down';
+  speed: number;
+}
+
+export async function xiaomiPtzMove(
+  cameraId: string,
+  direction: string,
+  speed: number,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/xiaomi/ptz/move`, {
+    method: 'POST',
+    body: JSON.stringify({ direction, speed }),
+    signal,
+  });
+}
+
+export async function xiaomiPtzStop(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/xiaomi/ptz/stop`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+// --- Xiaomi Device Info ---
+
+export interface XiaomiDeviceInfo {
+  firmware_version?: string;
+  hardware_version?: string;
+  model?: string;
+  serial_number?: string;
+  mac_address?: string;
+  [key: string]: unknown;
+}
+
+export async function getXiaomiDeviceInfo(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<XiaomiDeviceInfo> {
+  return apiRequest<XiaomiDeviceInfo>(`/cameras/${cameraId}/xiaomi/device-info`, { signal });
+}
+
+// --- Two-way Audio ---
+
+export async function startTwoWayAudio(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<{ speaker_codec: number }> {
+  return apiRequest<{ speaker_codec: number }>(`/cameras/${cameraId}/xiaomi/two-way-audio/start`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function stopTwoWayAudio(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/xiaomi/two-way-audio/stop`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+/** Return the WebSocket URL for two-way audio upstream PCM. */
+export function getAudioUpstreamWS(cameraId: string): string {
+  const base = API_BASE.replace(/\/api$/, '');
+  return `${base}/api/ws/camera/${cameraId}/audio-upstream`;
 }

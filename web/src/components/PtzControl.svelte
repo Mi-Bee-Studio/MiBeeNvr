@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset } from '$lib/api';
+  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset, xiaomiPtzMove, xiaomiPtzStop } from '$lib/api';
   import type { PTZPreset } from '$lib/api';
   import { t } from '$lib/i18n';
   import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-svelte';
-
-  let { cameraId, enabled = false }: { cameraId: string; enabled?: boolean } = $props();
+  let { cameraId, enabled = false, protocol = '' }: { cameraId: string; enabled?: boolean; protocol?: string } = $props();
 
   let moving = $state<string | null>(null);
   let error = $state('');
@@ -14,19 +13,27 @@
 
   function onPointerDown(direction: string, speed?: number) {
     moving = direction;
-    ptzMove(cameraId, direction, speed ?? 0.5).catch(() => {});
+    if (protocol === 'xiaomi') {
+      xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(() => {});
+    } else {
+      ptzMove(cameraId, direction, speed ?? 0.5).catch(() => {});
+    }
   }
 
   function onPointerUp() {
     if (!moving) return;
     const dir = moving;
     moving = null;
-    ptzStop(cameraId).catch(() => {});
+    if (protocol === 'xiaomi') {
+      xiaomiPtzStop(cameraId).catch(() => {});
+    } else {
+      ptzStop(cameraId).catch(() => {});
+    }
   }
 
-  // Load presets when enabled
+  // Load presets when enabled (ONVIF only; Xiaomi has no preset support)
   $effect(() => {
-    if (enabled && cameraId) {
+    if (enabled && cameraId && protocol !== 'xiaomi') {
       loadPresets();
     }
   });
@@ -51,6 +58,7 @@
       selectedPreset = '';
     }
   }
+  let isXiaomi = $derived(protocol === 'xiaomi');
 </script>
 
 {#if enabled}
@@ -116,7 +124,8 @@
       <div class="ptz-cell"></div>
     </div>
 
-    <!-- Zoom controls -->
+    <!-- Zoom controls (ONVIF only) -->
+    {#if !isXiaomi}
     <div class="ptz-zoom-row">
       <button
         class="ptz-btn ptz-btn-zoom"
@@ -141,8 +150,9 @@
         <span class="ptz-btn-label">{t('ptz.zoomOut')}</span>
       </button>
     </div>
-    <!-- Preset quick-access -->
-    {#if presets.length > 0}
+    {/if}
+    <!-- Preset quick-access (ONVIF only) -->
+    {#if !isXiaomi && presets.length > 0}
       <div class="ptz-presets">
         <select
           class="ptz-preset-select"
