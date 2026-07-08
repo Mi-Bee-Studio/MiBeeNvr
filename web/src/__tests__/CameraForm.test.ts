@@ -211,7 +211,7 @@ describe('CameraForm - transcode policy', () => {
     await fireEvent.click(addTargetBtn);
 
     const spans = container.querySelectorAll('span');
-    const hintSpan = Array.from(spans).find((s) => s.textContent?.includes('H.264 source'));
+    const hintSpan = Array.from(spans).find((s) => s.textContent?.includes('cameras.pushTranscodeNA'));
     expect(hintSpan).toBeTruthy();
   });
 
