@@ -56,6 +56,14 @@ func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
 	return cm.recorders[cameraID]
 }
 
+// SetTestRecorder sets a recorder for testing purposes only.
+// This allows tests to inject a recorder into the camera manager.
+func (cm *CameraManager) SetTestRecorder(cameraID string, rec model.Recorder) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.recorders[cameraID] = rec
+}
+
 // GetHub returns the StreamHub registered for the given camera ID, or nil if
 // none exists. This is the read-only lookup consumed by HLS/WebRTC/FLV/WS
 // handlers (they fall back to getRecorderHub, but push-only cameras — srt/rtmp —

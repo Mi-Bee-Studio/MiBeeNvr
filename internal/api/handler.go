@@ -246,6 +246,15 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/stop", h.handleStopCamera)
 				// Manually trigger IP self-healing for a camera whose address changed.
 				r.Post("/rediscover", h.handleRediscoverCamera)
+				// Xiaomi-specific PTZ and device info endpoints
+				r.Route("/xiaomi", func(r chi.Router) {
+					r.Post("/ptz/move", h.handleXiaomiPTZMove)
+					r.Post("/ptz/stop", h.handleXiaomiPTZStop)
+					r.Get("/device-info", h.handleXiaomiDeviceInfo)
+					// Xiaomi two-way audio endpoints
+					r.Post("/two-way-audio/start", h.handleStartTwoWayAudio)
+					r.Post("/two-way-audio/stop", h.handleStopTwoWayAudio)
+				})
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -266,6 +275,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
 		r.Post("/api/onvif/probe", h.handleONVIFProbe)
+		// Xiaomi two-way audio upstream WebSocket
+		r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		// Timelapse endpoints

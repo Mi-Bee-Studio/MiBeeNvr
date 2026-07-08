@@ -105,11 +105,13 @@ type XiaomiRecorder struct {
 	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 
-	// Quality auto-fallback state (HD→SD downgrade after repeated no-media failures)
 	currentQuality   string // effective quality for next connectAndRecord attempt
 	noMediaFailCount int    // consecutive "no media data" failures at current quality
-}
 
+	// MISS client reference for external commands (MotorControl, GetDeviceInfo).
+	missClient *MISSClient
+	missMu     sync.Mutex
+}
 // Interface compliance check.
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 
@@ -428,8 +430,17 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err), false
 	}
-	defer client.Conn.Close()
+	defer func() {
+		client.Conn.Close()
+		r.missMu.Lock()
+		r.missClient = nil
+		r.missMu.Unlock()
+	}()
 
+	// Save client reference for external commands.
+	r.missMu.Lock()
+	r.missClient = client
+	r.missMu.Unlock()
 	// Start video stream using current quality (HD default, auto-downgrades to SD).
 	// Channel is used for dual-lens cameras.
 	if err := client.StartMedia(r.cfg.Channel, r.currentQuality, r.cfg.AudioEnabled); err != nil {
@@ -955,4 +966,89 @@ func annexBToAVCC(data []byte) []byte {
 		result = append(result, nalu...)
 	}
 	return result
+}
+
+// MotorControl sends a PTZ motor control command to the Xiaomi camera.
+// direction: "left", "right", "up", "down"; speed: 1-100.
+func (r *XiaomiRecorder) MotorControl(direction string, speed int) error {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return fmt.Errorf("xiaomi recorder not connected")
+	}
+	return client.MotorControl(direction, speed)
+}
+
+// GetDeviceInfo fetches device information from the Xiaomi camera.
+// Returns a map with keys like "firmware_version", "hardware_version", etc.
+func (r *XiaomiRecorder) GetDeviceInfo() (map[string]interface{}, error) {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return nil, fmt.Errorf("xiaomi recorder not connected")
+	}
+	return client.GetDeviceInfo()
+}
+
+// StartTwoWayAudio starts two-way audio on the Xiaomi camera.
+// Returns an error if the recorder is not connected or the camera
+// uses CS2 transport (two-way audio requires TUTK).
+func (r *XiaomiRecorder) StartTwoWayAudio() error {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return fmt.Errorf("xiaomi recorder not connected")
+	}
+	return client.StartSpeaker()
+}
+
+// StopTwoWayAudio stops two-way audio playback.
+func (r *XiaomiRecorder) StopTwoWayAudio() error {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return fmt.Errorf("xiaomi recorder not connected")
+	}
+	return client.wirePacket(missCmdSpeakerStop, nil)
+}
+
+// SpeakerCodec returns the audio codec ID for two-way audio speaker output.
+// Returns 0 if the camera model does not support two-way audio.
+func (r *XiaomiRecorder) SpeakerCodec() uint32 {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return 0
+	}
+	return client.SpeakerCodec()
+}
+
+// WriteAudioToCamera sends an audio payload to the Xiaomi camera
+// for two-way audio playback.
+// codecID is the MISS codec ID for the audio format (e.g. missCodecPCMU).
+func (r *XiaomiRecorder) WriteAudioToCamera(codecID uint32, payload []byte) error {
+	r.missMu.Lock()
+	client := r.missClient
+	r.missMu.Unlock()
+	if client == nil {
+		return fmt.Errorf("xiaomi recorder not connected")
+	}
+	return client.WriteAudio(codecID, payload)
+}
+
+// SetMISSClientForTest sets the MISS client for testing purposes only.
+func (r *XiaomiRecorder) SetMISSClientForTest(c *MISSClient) {
+	r.missMu.Lock()
+	defer r.missMu.Unlock()
+	r.missClient = c
+}
+
+// NewTestMISSClient creates a MISSClient for testing with a dummy 32-byte key.
+func NewTestMISSClient(conn MISSConn) *MISSClient {
+	return &MISSClient{Conn: conn, key: make([]byte, 32)}
 }
