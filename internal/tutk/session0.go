@@ -73,18 +73,27 @@ func (c *Conn) clientStart(username, password string) error {
 }
 
 func writeAndWait(conn net.Conn, ok func(res []byte) bool, req ...[]byte) ([]byte, error) {
-	var t *time.Timer
-	t = time.AfterFunc(time.Nanosecond, func() {
+	// Write all requests immediately in a goroutine to avoid blocking the read loop.
+	// Retry every second until the expected response arrives.
+	stop := make(chan struct{})
+	go func() {
 		for _, b := range req {
-			if _, err := conn.Write(b); err != nil {
+			conn.Write(b)
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				for _, b := range req {
+					conn.Write(b)
+				}
+			case <-stop:
 				return
 			}
 		}
-		if t != nil {
-			t.Reset(time.Second)
-		}
-	})
-	defer t.Stop()
+	}()
+	defer close(stop)
 
 	buf := make([]byte, 1200)
 
