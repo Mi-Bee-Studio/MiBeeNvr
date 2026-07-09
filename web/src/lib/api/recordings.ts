@@ -45,6 +45,16 @@ export interface RecordingListResponse {
   total?: number;
 }
 
+export interface RecordingDaySummary {
+  date: string; // "YYYY-MM-DD" in client local timezone
+  count: number;
+  formats: string[]; // "video" | "timelapse" | "mjpeg"
+}
+
+export interface RecordingDaySummaryResponse {
+  days: RecordingDaySummary[];
+}
+
 export interface StorageStats {
   total_bytes: number;
   used_bytes: number;
@@ -109,6 +119,37 @@ export async function listRecordings(
 
   const { signal } = params;
   return apiRequest<RecordingListResponse>(endpoint, { signal });
+}
+
+export async function getRecordingDailySummary(
+  params: {
+    camera_id?: string;
+    format?: string;
+    formats?: string;
+    merged?: boolean;
+    start?: string;
+    end?: string;
+    search?: string;
+    archived?: boolean;
+    tz_offset?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingDaySummaryResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.camera_id) queryParams.set('camera_id', params.camera_id);
+  if (params.format) queryParams.set('format', params.format);
+  if (params.formats) queryParams.set('formats', params.formats);
+  if (params.merged !== undefined) queryParams.set('merged', String(params.merged));
+  if (params.start) queryParams.set('start', params.start);
+  if (params.end) queryParams.set('end', params.end);
+  if (params.search) queryParams.set('search', params.search);
+  if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
+  if (params.tz_offset !== undefined) queryParams.set('tz_offset', String(params.tz_offset));
+
+  const query = queryParams.toString();
+  const endpoint = query ? `/recordings/daily-summary?${query}` : '/recordings/daily-summary';
+  const { signal } = params;
+  return apiRequest<RecordingDaySummaryResponse>(endpoint, { signal });
 }
 
 export async function listTimelapseRecordings(
