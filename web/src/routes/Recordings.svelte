@@ -8,12 +8,13 @@
     batchDeleteRecordings,
     downloadRecording,
     batchMergeTimelapse,
+    getRecordingDailySummary,
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
-  import type { Recording, Camera } from '$lib/api';
+  import type { Recording, Camera, RecordingDaySummary } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
@@ -52,10 +53,14 @@
   let currentMonth = $state(new Date());
   let selectedDate = $state<string | null>(null);
 
-  // ── Calendar data (always loaded for calendar + gallery) ──
-  let recordings = $state<Recording[]>([]);
-  let loading = $state(false);
-  let error = $state('');
+  // ── Calendar summary (lightweight per-day aggregate, no row limit) ──
+  let calendarSummary = $state<RecordingDaySummary[]>([]);
+  let calLoading = $state(false);
+  let calError = $state('');
+
+  // ── Gallery recordings (selected day only — naturally bounded) ──
+  let galleryRecordings = $state<Recording[]>([]);
+  let galleryLoading = $state(false);
 
   // ── List mode data (paginated) ──
   let listRecordingsData = $state<Recording[]>([]);
@@ -80,7 +85,8 @@
 
   // ── UI state ──
   let showBackToTop = $state(false);
-  let abortController: AbortController | null = null;
+  let calAbortController: AbortController | null = null;
+  let galleryAbortController: AbortController | null = null;
   let listAbortController: AbortController | null = null;
 
   // ── AVI playback modal state ──
@@ -135,7 +141,7 @@ let batchMerging = $state(false);
   let currentPage = $derived(offset > 0 || limit > 0 ? Math.floor(offset / limit) + 1 : 1);
   let totalPages = $derived(totalRecordings > 0 && limit > 0 ? Math.ceil(totalRecordings / limit) : 0);
   let selectedTimelapseRecordings = $derived(
-    recordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
+    galleryRecordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
   );
   let showBatchMergeButton = $derived(selectedTimelapseRecordings.length >= 2);
 
@@ -204,7 +210,7 @@ let batchMerging = $state(false);
     if (!deleteConfirm) return;
     try {
       await deleteRecording(deleteConfirm.id);
-      recordings = recordings.filter(r => r.id !== deleteConfirm.id);
+      galleryRecordings = galleryRecordings.filter(r => r.id !== deleteConfirm.id);
       listRecordingsData = listRecordingsData.filter(r => r.id !== deleteConfirm.id);
       showToast(t('common.recordingDeleted'), 'success');
       deleteConfirm = null;
@@ -219,7 +225,8 @@ let batchMerging = $state(false);
       showToast(t('recordings.batchDeleteSuccess', { count: String(selectedIds.size) }), 'success');
       selectedIds = new Set();
       showBatchDeleteConfirm = false;
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
       if (viewMode === 'list') loadListData();
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
@@ -227,61 +234,87 @@ let batchMerging = $state(false);
   }
 
   // ── Data loading ──
-  async function loadTimelineData() {
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
-    loading = true;
-    error = '';
+
+  // Shared filter params (camera, search, merged, archived).
+  function sharedFilterParams() {
+    return {
+      camera_id: cameraId || undefined,
+      search: searchQuery || undefined,
+      merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+      archived: showArchived ? true : undefined,
+    };
+  }
+
+  // Calendar summary: lightweight per-day aggregate for the whole month.
+  // No row-level limit — the result is bounded by the number of days (max 31).
+  async function loadCalendarSummary() {
+    if (calAbortController) calAbortController.abort();
+    calAbortController = new AbortController();
+    calLoading = true;
+    calError = '';
 
     try {
       const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      if (formatPill === 'All') {
-        // listRecordings returns ALL formats (h264/h265/mjpeg/timelapse/avi) when no format filter is
-        // set. Do NOT also call listTimelapseRecordings — it returns timelapse+mjpeg, which would
-        // duplicate those recordings in the gallery and double-count them.
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          start: calStart.toISOString(),
-          end: calEnd.toISOString(),
-          limit: 1000,
-          signal: abortController.signal,
-        });
-        recordings = response.recordings;
-      } else if (useTimelapseApi) {
-        const response = await listTimelapseRecordings({
-          camera_id: cameraId || undefined,
-          start: calStart.toISOString(),
-          end: calEnd.toISOString(),
-          limit: 1000,
-          signal: abortController.signal,
-        });
-        recordings = response.recordings;
-      } else {
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          format: apiFormat || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          start: calStart.toISOString(),
-          end: calEnd.toISOString(),
-          limit: 1000,
-          signal: abortController.signal,
-        });
-        recordings = response.recordings;
-      }
-      // Detect merge status changes (completed/failed)
-      detectMergeChanges(recordings);
+      const response = await getRecordingDailySummary({
+        ...sharedFilterParams(),
+        start: calStart.toISOString(),
+        end: calEnd.toISOString(),
+        formats: formatPill === 'Timelapse' ? 'timelapse,mjpeg' : undefined,
+        format: formatPill === 'MJPEG' ? 'mjpeg' : (apiFormat || undefined),
+        tz_offset: -new Date().getTimezoneOffset(),
+        signal: calAbortController.signal,
+      });
+      calendarSummary = response.days;
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
-      error = e instanceof Error ? e.message : t('common.failedLoadRecordings');
+      calError = e instanceof Error ? e.message : t('common.failedLoadRecordings');
     } finally {
-      loading = false;
+      calLoading = false;
+    }
+  }
+
+  // Gallery: full recordings for the selected day only (naturally bounded by one day).
+  async function loadGalleryData() {
+    if (!selectedDate) {
+      galleryRecordings = [];
+      return;
+    }
+    if (galleryAbortController) galleryAbortController.abort();
+    galleryAbortController = new AbortController();
+    galleryLoading = true;
+
+    try {
+      const dayStart = new Date(selectedDate + 'T00:00:00');
+      const dayEnd = new Date(selectedDate + 'T23:59:59.999');
+
+      if (useTimelapseApi) {
+        // Timelapse API returns timelapse + mjpeg formats (preserves prior behavior).
+        const response = await listTimelapseRecordings({
+          camera_id: cameraId || undefined,
+          start: dayStart.toISOString(),
+          end: dayEnd.toISOString(),
+          signal: galleryAbortController.signal,
+        });
+        galleryRecordings = response.recordings;
+      } else {
+        const response = await listRecordings({
+          ...sharedFilterParams(),
+          format: apiFormat || undefined,
+          start: dayStart.toISOString(),
+          end: dayEnd.toISOString(),
+          signal: galleryAbortController.signal,
+        });
+        galleryRecordings = response.recordings;
+      }
+      // Detect merge status changes (completed/failed)
+      detectMergeChanges(galleryRecordings);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      // Non-fatal: gallery stays stale on error
+    } finally {
+      galleryLoading = false;
     }
   }
 
@@ -400,7 +433,7 @@ let batchMerging = $state(false);
   }
 
   async function handleBatchTranscode() {
-    const selectedRecordings = recordings.filter(r => selectedIds.has(r.id));
+    const selectedRecordings = galleryRecordings.filter(r => selectedIds.has(r.id));
     if (selectedRecordings.length === 0) return;
     if (!transcodingStatus?.enabled) {
       showToast(t('transcoding.warning_global_disabled'), 'error');
@@ -457,7 +490,8 @@ let batchMerging = $state(false);
   }
 
   // ── Deferred load timers ──
-  let timelineLoadTimeout: number;
+  let calLoadTimeout: number;
+  let galleryLoadTimeout: number;
   let listLoadTimeout: number;
 
   // ── Lifecycle ──
@@ -466,7 +500,8 @@ let batchMerging = $state(false);
     startTranscodingPoll();
 
     refreshInterval = window.setInterval(() => {
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
     }, getRefreshInterval());
 
     const handleScroll = () => {
@@ -483,12 +518,20 @@ let batchMerging = $state(false);
 
   // ── Effects ──
 
-  // Watch timeline-related filters → reload calendar data
+  // Calendar summary: reload when month or filters change (independent of selected date)
   $effect(() => {
-    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth, selectedDate];
-    clearTimeout(timelineLoadTimeout);
-    timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
-    return () => clearTimeout(timelineLoadTimeout);
+    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth];
+    clearTimeout(calLoadTimeout);
+    calLoadTimeout = window.setTimeout(() => loadCalendarSummary(), 100);
+    return () => clearTimeout(calLoadTimeout);
+  });
+
+  // Gallery: reload when selected day or filters change
+  $effect(() => {
+    const _ = [selectedDate, cameraId, formatPill, searchQuery, mergedFilter, showArchived];
+    clearTimeout(galleryLoadTimeout);
+    galleryLoadTimeout = window.setTimeout(() => loadGalleryData(), 100);
+    return () => clearTimeout(galleryLoadTimeout);
   });
 
   // Watch list mode pagination/sort → reload list data
@@ -505,7 +548,8 @@ let batchMerging = $state(false);
   $effect(() => {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = window.setInterval(() => {
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
     }, getRefreshInterval());
     limit = getItemsPerPage();
     return () => {
@@ -603,7 +647,7 @@ let batchMerging = $state(false);
 
 
       <!-- ── Calendar view (always visible) ── -->
-      <CalendarView bind:currentMonth bind:selectedDate {recordings} />
+      <CalendarView bind:currentMonth bind:selectedDate days={calendarSummary} />
 
       <!-- ── View mode tabs ── -->
       <div class="flex items-center gap-2 mb-4 mt-4">
@@ -624,20 +668,20 @@ let batchMerging = $state(false);
       </div>
 
       <!-- ── Error state ── -->
-      {#if error}
+      {#if calError}
         <div class="card border th-border-danger p-8 text-center">
           <div class="flex justify-center mb-4 th-color-danger">
             <AlertCircle size={48} />
           </div>
           <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
-          <p class="th-text-secondary mb-4">{error}</p>
-          <button onclick={loadTimelineData} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+          <p class="th-text-secondary mb-4">{calError}</p>
+          <button onclick={loadCalendarSummary} class="btn btn-primary btn-sm">{t('common.retry')}</button>
         </div>
       {:else if viewMode === 'gallery'}
         <!-- ── Gallery view ── -->
         <GalleryGrid
           bind:selectedDate
-          {recordings}
+          recordings={galleryRecordings}
           {cameras}
           onselectRecording={viewRecording}
           selectedIds={[]}

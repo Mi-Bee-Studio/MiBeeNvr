@@ -1,16 +1,16 @@
 <script lang="ts">
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { t } from '$lib/i18n';
-  import type { Recording } from '$lib/api';
+  import type { RecordingDaySummary } from '$lib/api';
 
   let {
     currentMonth = $bindable(),
     selectedDate = $bindable(),
-    recordings = [],
+    days = [],
   }: {
     currentMonth: Date;
     selectedDate: string | null;
-    recordings: Recording[];
+    days: RecordingDaySummary[];
   } = $props();
 
   function pad(n: number): string {
@@ -65,13 +65,8 @@
 
   let dailyCounts = $derived.by(() => {
     const counts = new Map<string, number>();
-    for (const rec of recordings) {
-      // Parse the UTC timestamp and extract the local date.
-      // This ensures recordings are grouped by the user's local day,
-      // not by the UTC day stored in the database.
-      const d = new Date(rec.started_at);
-      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      counts.set(date, (counts.get(date) || 0) + 1);
+    for (const day of days) {
+      counts.set(day.date, day.count);
     }
     return counts;
   });
@@ -100,12 +95,9 @@
   }
 
   let dailyFormats = $derived.by(() => {
-    const formats = new Map();
-    for (const rec of recordings) {
-      const d = new Date(rec.started_at);
-      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      if (!formats.has(date)) formats.set(date, new Set());
-      formats.get(date).add(rec.format);
+    const formats = new Map<string, Set<string>>();
+    for (const day of days) {
+      formats.set(day.date, new Set(day.formats));
     }
     return formats;
   });
@@ -118,8 +110,8 @@
   let availableYears = $derived.by(() => {
     const years = new Set<number>();
     const now = new Date();
-    for (const rec of recordings) {
-      const year = new Date(rec.started_at).getFullYear();
+    for (const day of days) {
+      const year = parseInt(day.date.slice(0, 4), 10);
       if (!isNaN(year)) years.add(year);
     }
     if (years.size === 0) {
@@ -232,7 +224,7 @@
         <span class="text-sm {day.isToday ? 'font-bold th-text-accent' : ''}">{day.day}</span>
         {#if dailyFormats.has(day.date)}
           <div class="flex gap-0.5 mt-0.5">
-            {#if dailyFormats.get(day.date).has('h264') || dailyFormats.get(day.date).has('h265')}
+            {#if dailyFormats.get(day.date).has('video')}
               <span class="w-1.5 h-1.5 rounded-full bg-blue-500" title="Video"></span>
             {/if}
             {#if dailyFormats.get(day.date).has('timelapse')}
