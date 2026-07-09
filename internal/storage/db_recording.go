@@ -30,6 +30,7 @@ func scanRecording(r *model.Recording, startedAtStr, endedAtStr, mergeStatusStr 
 }
 
 func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
+	defer d.observeQuery("InsertRecording", time.Now())
 	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);`
 	mergeStatus := mergeStatusFromBool(r.Merged)
 	_, err := d.db.ExecContext(ctx, q, r.ID, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.Merged, mergeStatus, r.MergeTier)
@@ -157,6 +158,7 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 
 
 func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
+	defer d.observeQuery("ListRecordings", time.Now())
 	where := []string{}
 	args := []any{}
 	if filter.CameraID != "" {
@@ -257,6 +259,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 }
 
 func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.RecordingFilter) (int, error) {
+	defer d.observeQuery("CountRecordingsWithFilter", time.Now())
 	where := []string{}
 	args := []any{}
 	if filter.CameraID != "" {
@@ -305,6 +308,96 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 	var count int
 	err := d.db.QueryRowContext(ctx, sqlstr, args...).Scan(&count)
 	return count, err
+}
+
+// DailyRecordingSummary returns per-day recording counts and format categories for the
+// given filter, grouped by local date. tzOffsetMinutes is the client's signed UTC offset
+// in minutes (e.g. 480 for UTC+8, -300 for UTC-5); 0 groups by UTC date. The result is
+// bounded by the number of days in the date range (max 31 for a month), so no LIMIT is needed.
+func (d *DB) DailyRecordingSummary(ctx context.Context, filter model.RecordingFilter, tzOffsetMinutes int) ([]model.RecordingDaySummary, error) {
+	// The tz modifier is the first bound parameter (positionally before any WHERE args).
+	modifier := fmt.Sprintf("%d minutes", tzOffsetMinutes)
+	args := []any{modifier}
+	where := []string{}
+	if filter.CameraID != "" {
+		where = append(where, "camera_id=?")
+		args = append(args, filter.CameraID)
+	}
+	if filter.Merged != nil {
+		where = append(where, "merge_status=?")
+		args = append(args, mergeStatusFromBool(*filter.Merged))
+	}
+	if !filter.StartTime.IsZero() {
+		where = append(where, "started_at>=?")
+		args = append(args, formatTime(filter.StartTime))
+	}
+	if !filter.EndTime.IsZero() {
+		where = append(where, "started_at<=?")
+		args = append(args, formatTime(filter.EndTime))
+	}
+	if len(filter.Formats) > 0 {
+		placeholders := make([]string, len(filter.Formats))
+		for i, f := range filter.Formats {
+			placeholders[i] = "?"
+			args = append(args, string(f))
+		}
+		where = append(where, "format IN ("+strings.Join(placeholders, ",")+")")
+	} else if filter.Format != "" {
+		where = append(where, "format=?")
+		args = append(args, filter.Format)
+	}
+	if filter.Search != "" {
+		pattern := "%" + escapeLike(filter.Search) + "%"
+		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
+		args = append(args, pattern, pattern, pattern)
+	}
+	if filter.Archived == nil {
+		where = append(where, "archived=0")
+	} else if *filter.Archived {
+		where = append(where, "archived=1")
+	} else {
+		where = append(where, "archived=0")
+	}
+
+	// Conditional aggregation (version-safe — no GROUP_CONCAT(DISTINCT) dependency).
+	// MAX(expr) over a group returns 1 if any row satisfies the condition, 0 otherwise.
+	sqlstr := `SELECT date(started_at, ?) AS d, COUNT(*) AS cnt, ` +
+		`MAX(format IN ('h264','h265','avi')) AS has_video, ` +
+		`MAX(format='timelapse') AS has_timelapse, ` +
+		`MAX(format='mjpeg') AS has_mjpeg ` +
+		`FROM recordings`
+	if len(where) > 0 {
+		sqlstr += " WHERE " + strings.Join(where, " AND ")
+	}
+	sqlstr += " GROUP BY d ORDER BY d;"
+
+	rows, err := d.db.QueryContext(ctx, sqlstr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var res []model.RecordingDaySummary
+	for rows.Next() {
+		var date string
+		var count int
+		var hasVideo, hasTimelapse, hasMjpeg int
+		if err := rows.Scan(&date, &count, &hasVideo, &hasTimelapse, &hasMjpeg); err != nil {
+			return nil, err
+		}
+		formats := []string{}
+		if hasVideo > 0 {
+			formats = append(formats, "video")
+		}
+		if hasTimelapse > 0 {
+			formats = append(formats, "timelapse")
+		}
+		if hasMjpeg > 0 {
+			formats = append(formats, "mjpeg")
+		}
+		res = append(res, model.RecordingDaySummary{Date: date, Count: count, Formats: formats})
+	}
+	return res, nil
 }
 
 // GetRecordingsByPathSet returns a set of file paths that exist in the recordings table.

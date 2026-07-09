@@ -112,6 +112,15 @@ type DailyStats struct {
 	CameraCounts map[string]int `json:"cameras,omitempty"`
 }
 
+// RecordingDaySummary is a per-day aggregate used by the recordings calendar.
+// Date is in the client's local timezone ("YYYY-MM-DD"). Formats contains
+// category names ("video", "timelapse", "mjpeg") present that day.
+type RecordingDaySummary struct {
+	Date    string   `json:"date"`
+	Count   int      `json:"count"`
+	Formats []string `json:"formats"`
+}
+
 type Protocol string
 
 type Format string
