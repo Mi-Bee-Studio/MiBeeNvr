@@ -86,6 +86,71 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDailyRecordingSummary returns per-day recording counts and format categories for
+// calendar rendering. Unlike handleListRecordings, this is a lightweight GROUP BY query
+// with no row-level limit — the result is bounded by the number of days in the range.
+// GET /api/recordings/daily-summary?start=&end=&camera_id=&format=&formats=&tz_offset=
+func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	filter := model.RecordingFilter{
+		CameraID: r.URL.Query().Get("camera_id"),
+		Format:   model.Format(r.URL.Query().Get("format")),
+	}
+
+	if v := r.URL.Query().Get("merged"); v != "" {
+		merged := v == "true" || v == "1"
+		filter.Merged = &merged
+	}
+	if v := r.URL.Query().Get("start"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.StartTime = t
+		}
+	}
+	if v := r.URL.Query().Get("end"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.EndTime = t
+		}
+	}
+
+	// formats: comma-separated list (e.g. "timelapse,mjpeg")
+	if v := r.URL.Query().Get("formats"); v != "" {
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				filter.Formats = append(filter.Formats, model.Format(f))
+			}
+		}
+	}
+
+	filter.Search = r.URL.Query().Get("search")
+
+	if v := r.URL.Query().Get("archived"); v != "" {
+		archived := v == "true" || v == "1"
+		filter.Archived = &archived
+	}
+
+	// Client timezone offset in minutes (e.g. 480 for UTC+8). Defaults to 0 (UTC).
+	tzOffset := 0
+	if v := r.URL.Query().Get("tz_offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tzOffset = n
+		}
+	}
+
+	summary, err := h.db.DailyRecordingSummary(ctx, filter, tzOffset)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to get daily summary")
+		return
+	}
+
+	if summary == nil {
+		summary = []model.RecordingDaySummary{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days": summary,
+	})
+}
+
 // handleTimelineSeekEvent records a timeline seek for observability (0.8.0 M6).
 // Body: {"camera_id":"front-door","type":"segment"}
 // type is "segment" (cross-recording) or "intra" (within same recording).
