@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight, Video } from 'lucide-svelte';
+  import { ChevronLeft, ChevronRight, Video, ChevronDown } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import type { Recording, Camera } from '$lib/api';
   import RecordingCard from '../library/RecordingCard.svelte';
@@ -35,10 +35,25 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
 
+  // Client-side pagination: render recordings in batches to keep the DOM light.
+  // A single day can have thousands of recordings; rendering all at once freezes the
+  // browser. This does NOT limit data — only how many cards are in the DOM at once.
+  const PAGE_SIZE = 60;
+  let visibleCount = $state(PAGE_SIZE);
+
+  // Reset pagination when the data source changes.
+  $effect(() => {
+    // Track recordings + selectedDate so the effect re-runs on data change.
+    void recordings; void selectedDate;
+    visibleCount = PAGE_SIZE;
+  });
+
   let filteredRecordings = $derived.by(() => {
     if (!selectedDate) return [];
     return recordings.filter((r) => localDateFromISO(r.started_at) === selectedDate);
   });
+
+  let visibleRecordings = $derived(filteredRecordings.slice(0, visibleCount));
 
   function prevDay() {
     if (!selectedDate) return;
@@ -122,7 +137,7 @@
       </div>
     {:else}
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-        {#each filteredRecordings as recording}
+        {#each visibleRecordings as recording}
           <RecordingCard
             {recording}
             {cameras}
@@ -135,6 +150,20 @@
           />
         {/each}
       </div>
+      {#if visibleCount < filteredRecordings.length}
+        <div class="flex flex-col items-center gap-2 mt-6">
+          <span class="text-sm th-text-muted">
+            {visibleRecordings.length} / {filteredRecordings.length}
+          </span>
+          <button
+            onclick={() => visibleCount += PAGE_SIZE}
+            class="btn btn-ghost btn-sm flex items-center gap-1"
+          >
+            <ChevronDown size={16} />
+            {t('common.loadMore')}
+          </button>
+        </div>
+      {/if}
     {/if}
   {:else}
     <div class="card p-12 text-center border th-border">

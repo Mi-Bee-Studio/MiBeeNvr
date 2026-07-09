@@ -170,6 +170,7 @@
   "stats.totalUpload": "Total Upload",
   "stats.totalDownload": "Total Download",
   "common.loading": "Loading...",
+  "common.loadMore": "Load more",
   "common.error": "Error",
   "common.unknownError": "Unknown error",
   "common.invalidCredentials": "Invalid credentials",
