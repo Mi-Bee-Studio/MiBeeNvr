@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
@@ -27,18 +26,18 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db                        *storage.DB
-	store                     *storage.Manager
-	retention                 time.Duration
-	diskThreshold             int // percent
-	interval                  time.Duration
-	metrics                   *metrics.Metrics
-	healthEnabled             bool
-	healthRetention           time.Duration
-	transcodeOrphanFn         func(ctx context.Context) error
-	transcodeHistoryRetention time.Duration // 0 = disabled
-	ffprobePath               string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
-	eventBus                  *event.EventBus
+	db                         *storage.DB
+	store                      *storage.Manager
+	retention                  time.Duration
+	diskThreshold              int // percent
+	interval                   time.Duration
+	metrics                    *metrics.Metrics
+	healthEnabled              bool
+	healthRetention            time.Duration
+	transcodeOrphanFn          func(ctx context.Context) error
+	transcodeHistoryRetention  time.Duration // 0 = disabled
+	ffprobePath                string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
+	eventBus                   *event.EventBus
 	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 }
 
@@ -88,6 +87,13 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
 	defer ticker.Stop()
 
+	// SQLite health metrics (WAL size, DB size, fragmentation, pool stats) are updated
+	// on a faster cadence than the (typically hourly) cleanup cycle so they stay
+	// near-real-time for monitoring. This ticker is cheap: a few PRAGMAs + an os.Stat.
+	const sqliteMetricsInterval = 60 * time.Second
+	metricsTicker := time.NewTicker(sqliteMetricsInterval)
+	defer metricsTicker.Stop()
+
 	// Run once immediately
 	cm.RunOnce(ctx)
 
@@ -97,6 +103,11 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			cm.RunOnce(ctx)
+		case <-metricsTicker.C:
+			// Only update metrics if wired; non-fatal on error.
+			if cm.metrics != nil {
+				cm.updateSQLiteMetrics(ctx)
+			}
 		}
 	}
 }
@@ -839,10 +850,19 @@ func (cm *CleanupManager) updateSQLiteMetrics(ctx context.Context) {
 		cm.metrics.SQLiteFragmentationRatio.Set(frac)
 	}
 
-	// Update connection pool stats
+	// Update connection pool stats (writer pool — the single serialized connection)
 	if db := cm.db.DB(); db != nil {
 		stats := db.Stats()
 		cm.metrics.SQLiteOpenConnections.Set(float64(stats.OpenConnections))
 		cm.metrics.SQLiteInUseConnections.Set(float64(stats.InUse))
+	}
+	// Update read pool stats (separate pool for SELECTs — not visible via DB().Stats()).
+	// WaitCount/WaitDuration reveal whether the pool is undersized: nonzero sustained
+	// growth means callers are blocking for a connection and SetReadPoolSize should rise.
+	if rstats, ok := cm.db.ReadPoolStats(); ok {
+		cm.metrics.SQLiteReadOpenConnections.Set(float64(rstats.OpenConnections))
+		cm.metrics.SQLiteReadInUseConnections.Set(float64(rstats.InUse))
+		cm.metrics.SQLiteReadWaitCount.Add(float64(rstats.WaitCount))
+		cm.metrics.SQLiteReadWaitDuration.Set(rstats.WaitDuration.Seconds())
 	}
 }

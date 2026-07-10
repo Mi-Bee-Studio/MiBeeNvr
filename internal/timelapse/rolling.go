@@ -31,6 +31,7 @@ type MergeStatusUpdater interface {
 	SetMergeResult(ctx context.Context, id string, mergePath, mergeTier string) error
 	SetMergeError(ctx context.Context, ids []string, mergeError string) error
 	UpdateMergeProgress(ctx context.Context, id string, progress int) error
+	UpdateMergeProgressBatch(ctx context.Context, ids []string, progress int) error
 }
 
 // RollingMergeManager tracks active async merges per camera.

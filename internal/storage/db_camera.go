@@ -66,7 +66,7 @@ type CameraRow struct {
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
@@ -108,7 +108,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 
 // ListArchivedCameras returns only cameras marked as archived.
 func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days
@@ -175,7 +175,7 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	var archivedAtStr sql.NullString
-	err := d.db.QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	err := d.readConn().QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days

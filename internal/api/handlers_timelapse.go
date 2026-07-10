@@ -852,15 +852,8 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 		SortOrder: sortOrder,
 	}
 
-	// Get total count for pagination
-	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to count recordings")
-		return
-	}
-
-	// Get paginated results from DB
-	recordings, err := h.db.ListRecordings(ctx, filter)
+	// Get paginated results and total count in a single query.
+	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return

@@ -62,9 +62,11 @@ type HTTPJPEGRecorder struct {
 	lastHealthLogAt time.Time        // throttled log for storage health failures
 
 	// latestFrame caches the most recent JPEG frame for snapshot polling.
-	// Updated on every frame; safe for concurrent reads via LatestFrame().
-	latestFrameMu sync.RWMutex
-	latestFrame   []byte
+	// Stored as an atomic pointer to a freshly-allocated, immutable []byte so concurrent
+	// readers can share the SAME buffer with zero copy/alloc per poll (was a full
+	// make+copy on every LatestFrame() call, multiplied by poll rate × viewer count).
+	// Writers Store a new pointer per frame; readers Load and treat the slice as read-only.
+	latestFrame atomic.Pointer[[]byte]
 
 	// AVI recording fields
 	aviMuxer *avi.Muxer
@@ -77,18 +79,16 @@ func (r *HTTPJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
 // StreamURL returns the MJPEG stream URL.
 func (r *HTTPJPEGRecorder) StreamURL() string { return r.cfg.URL }
 
-// LatestFrame returns a copy of the most recently captured JPEG frame.
-// Returns nil if no frame has been captured yet.
-// Safe for concurrent use.
+// LatestFrame returns the most recently captured JPEG frame WITHOUT copying.
+// The returned slice is shared and must be treated as read-only by callers
+// (the only consumer, handleLatestFrame, only reads it via w.Write). Returns
+// nil if no frame has been captured yet. Safe for concurrent use.
 func (r *HTTPJPEGRecorder) LatestFrame() []byte {
-	r.latestFrameMu.RLock()
-	defer r.latestFrameMu.RUnlock()
-	if r.latestFrame == nil {
+	p := r.latestFrame.Load()
+	if p == nil {
 		return nil
 	}
-	cp := make([]byte, len(r.latestFrame))
-	copy(cp, r.latestFrame)
-	return cp
+	return *p
 }
 
 // incActive increments the active recordings gauge if metrics is available.
@@ -348,10 +348,11 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			continue
 		}
 		// Cache latest frame for snapshot polling (before storage check,
-		// so live preview works even during storage issues).
-		r.latestFrameMu.Lock()
-		r.latestFrame = data
-		r.latestFrameMu.Unlock()
+		// so live preview works even during storage issues). data is freshly allocated
+		// each frame (make or bytes.Buffer), so storing the pointer directly is safe —
+		// readers treat it as immutable.
+		dp := data
+		r.latestFrame.Store(&dp)
 
 		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {

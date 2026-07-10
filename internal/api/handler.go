@@ -138,10 +138,27 @@ type Handler struct {
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
 	relayMgr          *relay.Manager
+	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
+	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
+	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
+	frameListMu    sync.Mutex
+	frameListCache map[string]*frameListEntry
 }
 
+// frameListEntry is a cached sorted listing of a frame directory.
+type frameListEntry struct {
+	names     []string // sorted image filenames
+	dirMtime  int64    // unix mtime of the dir at scan time (for invalidation)
+	scannedAt time.Time
+}
+
+// frameListCacheTTL bounds how long a cached listing is served without re-stat.
+// Timelapse dirs grow while a recording is active, so keep this short enough to
+// pick up new frames promptly but long enough to collapse a burst of requests.
+const frameListCacheTTL = 500 * time.Millisecond
+
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -280,7 +297,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
-			r.Post("/api/merge/reclassify", h.handleMergeReclassify)
+		r.Post("/api/merge/reclassify", h.handleMergeReclassify)
 		// Timelapse endpoints
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)

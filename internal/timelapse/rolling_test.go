@@ -47,6 +47,10 @@ func (m *mockDB) UpdateMergeProgress(_ context.Context, _ string, _ int) error {
 	return nil
 }
 
+func (m *mockDB) UpdateMergeProgressBatch(_ context.Context, _ []string, _ int) error {
+	return nil
+}
+
 // slowMerger is a mock TimelapseMerger that simulates a slow merge.
 type slowMerger struct {
 	delay time.Duration

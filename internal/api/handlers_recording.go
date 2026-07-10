@@ -65,7 +65,10 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	filter.Search = r.URL.Query().Get("search")
 
-	recordings, err := h.db.ListRecordings(ctx, filter)
+	// Single combined query: returns the page of recordings AND the total count in one
+	// pass (COUNT(*) OVER()), replacing the former separate ListRecordings + CountRecordings
+	// which scanned the same predicate set twice per paginated request.
+	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
@@ -73,11 +76,6 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	if recordings == nil {
 		recordings = []model.Recording{}
-	}
-
-	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
-	if err != nil {
-		total = 0 // non-fatal
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -407,6 +405,51 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, result)
 }
 
+// sortedImageFiles returns the sorted list of image filenames in dir, using a short-TTL
+// cache to avoid os.ReadDir + sort on every request. The cache is invalidated when the
+// directory's mtime changes (new frames written) or after frameListCacheTTL. This matters
+// for MJPEG/timelapse frame dirs which can hold thousands of JPEGs; without it each
+// ?frame=N / list-frames request re-scanned and re-sorted the whole directory.
+func (h *Handler) sortedImageFiles(dir string) ([]string, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	mtime := info.ModTime().Unix()
+
+	h.frameListMu.Lock()
+	if h.frameListCache == nil {
+		h.frameListCache = make(map[string]*frameListEntry)
+	}
+	cached, ok := h.frameListCache[dir]
+	if ok && cached.dirMtime == mtime && time.Since(cached.scannedAt) < frameListCacheTTL {
+		names := cached.names
+		h.frameListMu.Unlock()
+		return names, nil
+	}
+	h.frameListMu.Unlock()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if isImageFile(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return names[i] < names[j] })
+
+	h.frameListMu.Lock()
+	h.frameListCache[dir] = &frameListEntry{names: names, dirMtime: mtime, scannedAt: time.Now()}
+	h.frameListMu.Unlock()
+	return names, nil
+}
+
 func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -443,17 +486,10 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	if frameStr != "" && rec.Format == model.FormatMJPEG {
 		frameIndex, err := strconv.Atoi(frameStr)
 		if err == nil {
-			entries, err := os.ReadDir(validPath)
+			jpgFiles, err := h.sortedImageFiles(validPath)
 			if err == nil {
-				jpgFiles := []os.DirEntry{}
-				for _, e := range entries {
-					if !e.IsDir() && isImageFile(e.Name()) {
-						jpgFiles = append(jpgFiles, e)
-					}
-				}
-				sort.Slice(jpgFiles, func(i, j int) bool { return jpgFiles[i].Name() < jpgFiles[j].Name() })
 				if frameIndex >= 0 && frameIndex < len(jpgFiles) {
-					framePath := filepath.Join(validPath, jpgFiles[frameIndex].Name())
+					framePath := filepath.Join(validPath, jpgFiles[frameIndex])
 					http.ServeFile(w, r, framePath)
 					return
 				}

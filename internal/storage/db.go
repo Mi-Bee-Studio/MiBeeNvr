@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"strings"
 	"os"
-
-
+	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -31,11 +30,69 @@ func escapeLike(input string) string {
 type DB struct {
 	path string
 	db   *sql.DB
+	// readDB is an optional separate connection pool for read-only queries (SELECT).
+	// nil in tests / when not configured — readConn() falls back to db. When set,
+	// WAL mode lets these reads proceed concurrently with writes on db, eliminating
+	// the single-connection read-vs-write head-of-line blocking that stalled
+	// InsertRecording during heavy GetRecordingTrends/ListRecordings queries.
+	readDB *sql.DB
+	// queryMetrics optionally records SQLite query latencies. nil = no-op (tests).
+	queryMetrics QueryMetrics
+	// countCache memoizes CountRecordingsWithFilter results per filter signature for a
+	// short TTL. Paginated list requests ask for a page (ListRecordings) plus the total
+	// (Count) — without this, every page navigation re-runs a full COUNT over the
+	// filtered set (86K+ rows → ~tens of ms on SD card, worse at scale). The TTL is short
+	// enough that newly-inserted recordings appear promptly.
+	countMu    sync.Mutex
+	countCache map[string]*countCacheEntry
 }
 
-// DB returns the underlying *sql.DB for advanced queries.
+// countCacheEntry holds a cached COUNT result and its expiry time.
+type countCacheEntry struct {
+	value    int
+	expiryAt time.Time
+}
+
+// countCacheTTL bounds how long a COUNT result is reused. New recordings land in the
+// table continuously (segment close every ~30s), so keep this short enough that the
+// pagination total drifts by at most one segment interval.
+const countCacheTTL = 2 * time.Second
+
+// QueryMetrics is the minimal surface DB needs to record query latencies and busy
+// errors. Implemented by *metrics.Metrics; kept interface-typed so the storage package
+// does not import metrics (avoids cycles and keeps testability).
+type QueryMetrics interface {
+	ObserveQueryDuration(queryName string, seconds float64)
+	IncSQLiteBusyErrors()
+}
+
+// DB returns the underlying write *sql.DB for advanced queries.
 func (d *DB) DB() *sql.DB {
 	return d.db
+}
+
+// readConn returns the read pool if configured, else the write pool. Used by SELECT
+// methods so they do not contend with the single serialized write connection.
+func (d *DB) readConn() *sql.DB {
+	if d.readDB != nil {
+		return d.readDB
+	}
+	return d.db
+}
+
+// SetMetrics wires optional observability hooks (query latency histogram, busy-error
+// counter). Safe to call once at startup; nil disables instrumentation (no-op).
+func (d *DB) SetMetrics(m QueryMetrics) {
+	d.queryMetrics = m
+}
+
+// observeQuery records a query latency if metrics are wired; otherwise no-op.
+// queryName is a short stable label (e.g. "ListRecordings", "InsertRecording").
+func (d *DB) observeQuery(queryName string, start time.Time) {
+	if d.queryMetrics == nil {
+		return
+	}
+	d.queryMetrics.ObserveQueryDuration(queryName, time.Since(start).Seconds())
 }
 
 // Path returns the database file path.
@@ -72,17 +129,58 @@ func New(dbPath string) (*DB, error) {
 		logger.Warn("failed to check SQLite version, continuing without analysis_limit", "error", err)
 	}
 
-db, err := sql.Open("sqlite", dsn)
-if err != nil {
-return nil, err
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Tune connection pool for RPi 3B: single connection to avoid write contention
+	// and reduce memory pressure. SQLite with WAL mode handles concurrency well.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	logger.Info("Connection pool configured", "max_open_conns", 1, "max_idle_conns", 1, "conn_max_lifetime", 0)
+	d := &DB{path: dbPath, db: db, countCache: make(map[string]*countCacheEntry)}
+	// Open a separate read-only pool so heavy SELECTs (ListRecordings, GetRecordingTrends,
+	// CountRecordingsWithFilter) do not block the single write connection (InsertRecording,
+	// cleanup, merge). WAL mode permits concurrent readers + a single writer. Pool size is
+	// conservative for RPi 3B memory; callers can override via SetReadPoolSize.
+	readDB, err := sql.Open("sqlite", dsn+"&_pragma=query_only(1)")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	readDB.SetMaxOpenConns(defaultReadPoolSize)
+	readDB.SetMaxIdleConns(defaultReadPoolSize)
+	readDB.SetConnMaxLifetime(0)
+	d.readDB = readDB
+	logger.Info("Read pool configured", "max_open_conns", defaultReadPoolSize)
+	return d, nil
 }
-// Tune connection pool for RPi 3B: single connection to avoid write contention
-// and reduce memory pressure. SQLite with WAL mode handles concurrency well.
-db.SetMaxOpenConns(1)
-db.SetMaxIdleConns(1)
-db.SetConnMaxLifetime(0)
-logger.Info("Connection pool configured", "max_open_conns", 1, "max_idle_conns", 1, "conn_max_lifetime", 0)
-return &DB{path: dbPath, db: db}, nil
+
+// defaultReadPoolSize is the size of the read-only connection pool. Kept small for
+// RPi 3B (1GB RAM); each connection holds its own page cache (cache_size=-20000 = 20MB),
+// so 3 connections ≈ 60MB of page cache beyond the writer's.
+const defaultReadPoolSize = 3
+
+// SetReadPoolSize adjusts the read-only connection pool size. Use to raise it on
+// hardware with more RAM (e.g. Banana Pi M5 with 4GB) or lower it under memory pressure.
+// Must be called before queries run; no-op if the read pool is disabled.
+func (d *DB) SetReadPoolSize(n int) {
+	if d.readDB == nil || n <= 0 {
+		return
+	}
+	d.readDB.SetMaxOpenConns(n)
+	d.readDB.SetMaxIdleConns(n)
+}
+
+// ReadPoolStats returns the read pool connection statistics, or (zero, false) if the
+// read pool is disabled (e.g. in tests). Used by metrics to expose read-pool utilization
+// separately from the writer pool (DB().Stats() only reports the writer).
+func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
+	if d.readDB == nil {
+		return sql.DBStats{}, false
+	}
+	return d.readDB.Stats(), true
 }
 
 func (d *DB) Init(ctx context.Context) error {
@@ -421,7 +519,6 @@ func (d *DB) Init(ctx context.Context) error {
 		logger.Info("Enabled auto_vacuum = INCREMENTAL for new database, dropped redundant indexes (migration v23)")
 	}
 
-
 	// Performance: composite index for the dominant ListRecordings query pattern
 	// (WHERE archived=0 ORDER BY started_at DESC LIMIT n). Without this + ANALYZE stats,
 	// the planner picks idx_recordings_archived (zero selectivity -- archived=0 matches
@@ -431,6 +528,30 @@ func (d *DB) Init(ctx context.Context) error {
 	// GROUP BY camera_id. Without this, the 4-column idx_recordings_camera_time is scanned
 	// in full (71K+ entries) on every /api/cameras request -- was the #1 cause of 3s camera list.
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_ended ON recordings(camera_id, ended_at DESC)")
+	// Merge candidate lookup: WHERE camera_id=? AND merge_status='pending' AND ended_at IS NOT NULL
+	// AND started_at>=? AND started_at<? (ListMergeableSegments, ListSingletonPendingRecordings).
+	// Column order: camera_id (equality) → merge_status (equality, high selectivity) → started_at (range).
+	// Without this the planner falls back to idx_recordings_camera_time which cannot filter on
+	// merge_status, scanning all of a camera's recordings on every merge-scheduler tick.
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_merge_status ON recordings(camera_id, merge_status, started_at)")
+	// Global retention/expiry scan: WHERE archived=0 AND ended_at IS NOT NULL AND ended_at < ?
+	// ORDER BY ended_at ASC (ListExpiredRecordings, ListOldestRecordings -- non-camera variants).
+	// idx_recordings_archived_time sorts by started_at, not ended_at, so the planner cannot use
+	// it to satisfy the ended_at range/sort and falls back to a full scan + sort at scale.
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived_ended ON recordings(archived, ended_at)")
+
+	// Unconditionally drop redundant single-column indexes that are superseded by the
+	// compound indexes above. The CREATE INDEX IF NOT EXISTS statements scattered through
+	// the migration history (idx_recordings_camera at line ~127, idx_recordings_merged at
+	// line ~197) run on EVERY startup regardless of schema version, but the v22→v23 DROP
+	// block above is gated on schema_version=='22' -- so DBs already at v23+ get these
+	// indexes silently recreated and never dropped again, causing write amplification on
+	// every INSERT (3 extra B-tree updates per row for zero query benefit).
+	// Dropping here is idempotent and makes the final index set deterministic.
+	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_camera")   // superseded by idx_recordings_camera_time
+	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_merged")   // superseded by idx_recordings_archived_time (merged tracked in merge_status)
+	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_archived") // superseded by idx_recordings_archived_time
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
@@ -440,6 +561,11 @@ func (d *DB) Init(ctx context.Context) error {
 func (d *DB) Close() error {
 	if d == nil || d.db == nil {
 		return nil
+	}
+	// Close the read pool first; ignore its error so the write-pool error (the
+	// authoritative one) is still returned.
+	if d.readDB != nil {
+		_ = d.readDB.Close()
 	}
 	return d.db.Close()
 }
@@ -543,6 +669,7 @@ func (d *DB) IncrementalVacuum(ctx context.Context, n int) error {
 	logger.Info("Incremental vacuum completed", "max_pages", n)
 	return nil
 }
+
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
 // sqliteTimeFormat is the format used to store timestamps in SQLite.
 // Uses UTC without timezone suffix, compatible with SQLite's datetime() for string comparison.

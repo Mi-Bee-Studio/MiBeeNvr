@@ -624,20 +624,24 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	return nil
 }
 
-// updateProgressBatch updates merge progress for a batch of segments.
+// updateProgressBatch updates merge progress for a batch of segments in a single
+// chunked UPDATE rather than one statement per segment. This is the hot path during
+// FFmpeg/Go merge progress parsing, previously issuing N statements per progress tick.
 func (m *PeriodicMergeManager) updateProgressBatch(ctx context.Context, segments []model.Recording, progress int) {
-	if m.updater == nil {
+	if m.updater == nil || len(segments) == 0 {
 		return
 	}
-	for _, seg := range segments {
-		if err := m.updater.UpdateMergeProgress(ctx, seg.ID, progress); err != nil {
-			slog.Warn(
-				"periodic merge: failed to update merge progress",
-				"recording_id", seg.ID,
-				"progress", progress,
-				"error", err,
-			)
-		}
+	ids := make([]string, len(segments))
+	for i, seg := range segments {
+		ids[i] = seg.ID
+	}
+	if err := m.updater.UpdateMergeProgressBatch(ctx, ids, progress); err != nil {
+		slog.Warn(
+			"periodic merge: failed to update merge progress (batch)",
+			"segment_count", len(ids),
+			"progress", progress,
+			"error", err,
+		)
 	}
 }
 

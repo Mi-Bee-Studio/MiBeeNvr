@@ -377,6 +377,16 @@ let batchMerging = $state(false);
   async function loadTranscodingStatus() {
     try {
       transcodingStatus = await getTranscodingStatus();
+      // Self-limiting poll: if no transcoding tasks are running or pending, stop the 3s
+      // poll entirely. This avoids a steady request-per-3s against the DB read pool while
+      // the page sits idle. The poll is restarted by handleTranscode() when the user kicks
+      // off a new job, and by the visibilitychange handler when the tab regains focus.
+      const hasActive = transcodingStatus?.recent_results?.some(
+        (t) => t.status === 'running' || t.status === 'pending'
+      );
+      if (!hasActive) {
+        stopTranscodingPoll();
+      }
     } catch {
       // Silently fail
     }
@@ -426,7 +436,9 @@ let batchMerging = $state(false);
         replace_original: true,
       });
       showToast(t('transcoding.recordings.transcodeSuccess', { camera: getCameraName(recording.camera_id) }), 'success');
-      loadTranscodingStatus();
+      // Restart the 3s progress poll now that a task is active (loadTranscodingStatus
+      // self-stops when there's nothing running, so we must re-arm it here).
+      startTranscodingPoll();
     } catch {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
     }
@@ -459,7 +471,8 @@ let batchMerging = $state(false);
     if (queued > 0) {
       showToast(t('transcoding.batch_queued', { count: String(queued) }), 'success');
       selectedIds = new Set();
-      loadTranscodingStatus();
+      // Re-arm the progress poll for the newly-queued tasks (see handleTranscode).
+      startTranscodingPoll();
     }
     if (failed > 0) {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
@@ -495,6 +508,8 @@ let batchMerging = $state(false);
   let listLoadTimeout: number;
 
   // ── Lifecycle ──
+  let visibilityHandler: (() => void) | null = null;
+
   onMount(() => {
     loadCameras();
     startTranscodingPoll();
@@ -509,9 +524,35 @@ let batchMerging = $state(false);
     };
     window.addEventListener('scroll', handleScroll);
 
+    // Pause all polling when the tab is hidden (e.g. backgrounded) to avoid firing DB
+    // queries against the shared read pool while the user isn't looking. Resume on focus.
+    // This is the single biggest lever for reducing idle DB read load at scale.
+    visibilityHandler = () => {
+      if (document.hidden) {
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+          refreshInterval = null;
+        }
+        stopTranscodingPoll();
+      } else if (refreshInterval === null) {
+        // Resumed: restart polling and refresh immediately so data is fresh.
+        refreshInterval = window.setInterval(() => {
+          loadCalendarSummary();
+          loadGalleryData();
+        }, getRefreshInterval());
+        loadCalendarSummary();
+        loadGalleryData();
+        startTranscodingPoll();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
       window.removeEventListener('scroll', handleScroll);
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+      }
       stopTranscodingPoll();
     };
   });

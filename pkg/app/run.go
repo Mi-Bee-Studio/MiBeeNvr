@@ -183,6 +183,10 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// Step 2: Metrics
 	metrics := metrics.NewMetrics()
 
+	// Wire DB observability hooks: query-latency histogram + SQLITE_BUSY counter.
+	db.SetMetrics(metrics)
+	storage.SetBusyErrorHook(metrics.IncSQLiteBusyErrors)
+
 	// Step 2.1: Event bus
 	eventBus := event.NewEventBus(64)
 

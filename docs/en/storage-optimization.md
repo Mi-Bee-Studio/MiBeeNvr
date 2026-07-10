@@ -123,25 +123,26 @@ REINDEX idx_recordings_camera_time;
 REINDEX idx_recordings_archived_time;
 ```
 
-[Pending T4] Migration v23 adds `idx_recordings_camera_merge_status` on `(camera_id, started_at, merge_status)`.
+[Done] `idx_recordings_camera_merge_status` on `(camera_id, merge_status, started_at)` now exists (added post-v23, `db.go` Init). Serves `ListMergeableSegments`/`ListSingletonPendingRecordings` (`WHERE camera_id=? AND merge_status='pending' AND started_at>=?`). Additionally `idx_recordings_archived_ended (archived, ended_at)` serves global retention scans (`ListExpiredRecordings`/`ListOldestRecordings` — formerly full-scan + sort).
 
 ---
 
 ## 4. Query Optimization Guide
 
-### Example 1: ListRecordings (Paginated)
+### Example 1: ListRecordings (Paginated) — list + cached count
 
-Uses `idx_recordings_archived_time` covering index. Dynamic query builder appends filters:
+Uses `idx_recordings_archived_time` covering index (index-sorted by `started_at DESC`, no temp sort). Handlers call `ListRecordingsWithTotal`, which runs the efficient `ListRecordings` for the page plus a **cached** `CountRecordingsWithFilter` for the total:
 
-```go
-func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
-    where, args := []string{}, []any{}
-    if filter.CameraID != "" { where = append(where, "camera_id=?"); args = append(args, filter.CameraID) }
-    if !filter.StartTime.IsZero() { where = append(where, "started_at>=?"); args = append(args, formatTime(filter.StartTime)) }
-    // ... more filters ...
-    sqlstr := "SELECT ... FROM recordings" + buildWhere(where) + " ORDER BY " + sortBy + " " + sortOrder
-}
+```sql
+-- page (uses idx_recordings_archived_time, no sort)
+SELECT id, camera_id, ... FROM recordings WHERE <filters> ORDER BY started_at DESC LIMIT ? OFFSET ?;
+-- total (uses idx_recordings_archived_ended covering index, cached 2s)
+SELECT COUNT(*) FROM recordings WHERE <filters>;
 ```
+
+**Why not `COUNT(*) OVER()` (single query)?** Production profiling on 86K rows proved the window-function approach is a **regression**: SQLite's planner cannot satisfy ORDER BY from the index when `OVER()` materializes the set, so it falls back to a full index scan + TEMP B-TREE FOR ORDER BY — **3.9s** vs **~6ms** for the separated queries. The count cache (2s TTL, keyed by filter signature excluding Limit/Offset/Sort) collapses repeated counts from rapid pagination and concurrent views (gallery + list) so the COUNT typically runs once per filter change, not once per page.
+
+The WHERE-clause builder is shared (`recordingsFilterWhere`) with the standalone `CountRecordingsWithFilter` (used directly by callers that need only a count, no page). The plain `ListRecordings` (no total) remains for callers that don't need pagination totals.
 
 ### Example 2: GetAllLastRecordingTimes — Was #1 Bottleneck
 
@@ -185,16 +186,9 @@ FROM recordings WHERE ended_at IS NOT NULL AND archived = 0
 ORDER BY ended_at ASC;
 ```
 
-### GetRecordingTrends — Future Optimization [Pending T6]
+### GetRecordingTrends — SQL aggregation + timeout [Done]
 
-Push aggregation to SQL to avoid transferring raw rows to Go:
-
-```sql
-SELECT date(r.started_at) as day, COUNT(*) as recordings,
-       SUM(r.file_size) as total_size, r.camera_id
-FROM recordings r WHERE r.started_at >= ?
-GROUP BY date(r.started_at), r.camera_id ORDER BY day;
-```
+Aggregation is pushed to SQL (GROUP BY date/camera in `db_stats.go:44`), so only aggregated rows transfer to Go — not raw recordings. A 10s `heavyQueryTimeout` context bounds the query (caller deadlines take precedence), and it runs on the read pool so it never blocks `InsertRecording`. Further optimization (materialized daily-stats table refreshed by cleanup) remains optional for 500K+ scale.
 
 ---
 
@@ -293,7 +287,7 @@ PRAGMA auto_vacuum = INCREMENTAL;
 PRAGMA incremental_vacuum(256);  -- ~2MB per cycle
 ```
 
-[Pending T9] Cleanup cycle calls `IncrementalVacuum` after batch deletes.
+[Done] `performDatabaseMaintenance` (cleanup.go) calls `IncrementalVacuum(1000)` when fragmentation > 20%, escalating WAL checkpoint from PASSIVE→TRUNCATE after 3 consecutive busy cycles. Full `VACUUM` is never run (blocks 24/7 inserts).
 
 ---
 
@@ -358,13 +352,31 @@ d.db.SetMaxIdleConns(1)    // Keep 1 warm connection
 d.db.SetConnMaxLifetime(0) // SQLite is local, no stale conns
 ```
 
-**Trade-off:** Long queries (GetRecordingTrends) block writes. Mitigations: WAL concurrent reads, low-activity `PRAGMA optimize`, context-cancellable queries.
+**Trade-off:** Long queries (GetRecordingTrends) block writes. Mitigations: WAL concurrent reads, low-activity `PRAGMA optimize`, context-cancellable queries, **separate read pool** (see below).
+
+### Separate Read Pool (read/write isolation)
+
+At 500K+ rows, the single serialized writer connection becomes a bottleneck: a heavy `GetRecordingTrends` or `ListRecordings` SELECT blocks `InsertRecording` (the 24/7 recording hot path). The DB now opens a **second, read-only connection pool** so SELECTs never contend with the writer:
+
+```go
+// Writer pool: single serialized connection for INSERT/UPDATE/DELETE/transactions
+d.db        // SetMaxOpenConns(1)
+
+// Read pool: up to N concurrent connections for SELECT, query_only enforced
+d.readDB    // SetMaxOpenConns(3), _pragma=query_only(1)
+```
+
+All `QueryContext`/`QueryRowContext` calls route through `readConn()` (falls back to `d.db` when `readDB` is nil, e.g. in tests). Transactions and `ExecContext` (writes) stay on `d.db`. WAL mode permits concurrent readers alongside the single writer, so `InsertRecording` is no longer stalled by a slow analytics query.
+
+**Safety:** the read pool sets `query_only(1)` — any write through it is rejected by SQLite, so a misrouted SELECT can never mutate data.
+
+**Tuning:** `SetReadPoolSize(n)` raises the pool on high-RAM hosts (Banana Pi M5). Each connection holds its own ~20MB page cache, so the default 3 connections ≈ 60MB beyond the writer's cache. Lower it under memory pressure.
 
 ### WAL Read Concurrency
 
 ```
 Writer (WAL):  INSERT/UPDATE/DELETE  →  appends to WAL file
-Reader 1/2:    SELECT                →  reads from main DB + WAL index, concurrent
+Reader 1/2/3:  SELECT (read pool)    →  reads from main DB + WAL index, concurrent
 ```
 
 ### temp_store = MEMORY
@@ -401,15 +413,20 @@ All metrics on a **custom registry** (`prometheus.NewRegistry()`), not global de
 | `nvr_merge_size_bytes` | Histogram | — | Output file size |
 | `nvr_merge_pending_segments` | GaugeVec | camera_id | Awaiting merge per camera |
 
-#### Proposed Metrics [Pending T9]
+#### SQLite Health Metrics [Done]
 
-| Metric | Type | Purpose |
-|--------|------|---------|
-| `nvr_db_wal_size_bytes` | Gauge | WAL size — alert >100MB |
-| `nvr_db_fragmentation_ratio` | Gauge | Fragmentation — alert >20% |
-| `nvr_db_query_duration_seconds` | Histogram | Query latency (top-5 patterns) |
-| `nvr_db_connection_busy_errors_total` | Counter | SQLITE_BUSY error rate |
-| `nvr_cleanup_duration_seconds` | Histogram | Time per cleanup cycle |
+All implemented and wired. `nvr_sqlite_*` metrics are updated on a **60-second ticker** (near-real-time, no longer gated to the hourly cleanup cycle) from `cleanup.Run()`.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_sqlite_wal_size_bytes` | Gauge | — | WAL size — alert >100MB |
+| `nvr_sqlite_db_size_bytes` | Gauge | — | DB file size |
+| `nvr_sqlite_fragmentation_ratio` | Gauge | — | freelist_count/page_count — alert >20% |
+| `nvr_sqlite_query_duration_seconds` | Histogram | query_name | Per-query latency (instrumented: `InsertRecording`, `ListRecordings`, `ListRecordingsWithTotal`, `CountRecordingsWithFilter`, `GetRecordingTrends`) |
+| `nvr_sqlite_busy_errors_total` | Counter | — | SQLITE_BUSY retries across all ops (incremented in `RetryOnBusy`) |
+| `nvr_sqlite_open_connections` | Gauge | — | Writer pool open connections (from `db.Stats()`) |
+| `nvr_sqlite_in_use_connections` | Gauge | — | Writer pool in-use connections |
+| `nvr_cleanup_duration_seconds` | Histogram | — | Time per cleanup cycle |
 
 ### Alerting Thresholds
 
@@ -478,14 +495,52 @@ Phase 4 (Future):  ClickHouse for analytics queries (GetRecordingTrends, long-ra
 
 ---
 
+## 11. Storage Overhaul Changelog (2026-07)
+
+A multi-stage optimization targeting 500K–1M `recordings` rows. All changes are backward-compatible (no schema break, no external deps).
+
+### Stage A — Write-path & index hygiene
+- **Redundant-index write amplification fixed** (`db.go` Init): `idx_recordings_merged`, `idx_recordings_archived`, `idx_recordings_camera` are now unconditionally `DROP IF EXISTS`. Previously their `CREATE IF NOT EXISTS` ran every startup but the DROP was gated on `schema_version=='22'`, so fresh installs (v23+) recreated them and never dropped → 3 extra B-tree writes per INSERT.
+- **Batched merge-status updates** (`db_merge.go`): `SetMergeStatus`/`SetMergeError`/`UpdateMergeProgressBatch` use a single chunked `WHERE id IN (...)` (500/chunk) instead of a per-row loop. Timelapse progress writes (N segments × M ticks) collapsed from N×M statements to ⌈N/500⌉ per tick.
+
+### Stage B — Read/write connection isolation
+- **Separate read-only pool** (`db.go`): `readDB` (`query_only(1)`, default 3 conns) serves all SELECTs; the writer stays single-serialized. WAL allows concurrent readers + one writer, so `InsertRecording` is never blocked by a heavy SELECT. `SetReadPoolSize(n)` tunes on high-RAM hosts.
+- **Heavy-query timeout** (`db_stats.go`, `db_recording.go`): `GetRecordingTrends` + `CountRecordingsWithFilter` bounded to 10s (caller deadlines take precedence), protecting the read pool from a single slow query.
+
+### Stage C — Large-table query optimization
+- **New indexes** (`db.go`): `idx_recordings_camera_merge_status(camera_id, merge_status, started_at)` (merge candidate lookup), `idx_recordings_archived_ended(archived, ended_at)` (global retention/expiry scan — formerly full-scan + sort).
+- **Single-query pagination** (`db_recording.go`): `ListRecordingsWithTotal` returns a page (covering index, no sort) plus a **cached** total (2s TTL, keyed by filter signature). The initial attempt used `COUNT(*) OVER()` but production profiling on 86K rows proved it a regression (3.9s — the window function forces a full scan + temp B-tree sort). Reverted to list + cached-count: ~6ms per page, COUNT cached across rapid pagination.
+- **Frontend polling discipline** (`Recordings.svelte`): `visibilitychange` pauses all polling when the tab is hidden; the 3s transcode-status poll self-stops when no task is running/pending and restarts on demand.
+
+### Stage D — Streaming / heavy-IO debouncing
+- **HLS segment scan debounced** (`hls/manager.go`): `observeNewSegments` was an `os.ReadDir` after *every frame write* (~25/s/camera). Now throttled to once per 2s per stream — syscall rate dropped ~50×.
+- **JPEG latest-frame zero-copy** (`recorder/http_jpeg.go`): `LatestFrame()` returns a shared immutable slice via `atomic.Pointer[[]byte]` (was a full `make`+`copy` per poll × viewers).
+- **FLV tag single-allocation** (`flv/writer.go`): `videoFrameTag` precomputes size and allocates the full tag buffer once (was 3 allocations/frame). A `sync.Pool` is intentionally *not* used — the tag buffer is shared across viewer channels and cached in gopCache, so pool reclamation would be unsafe.
+- **Frame-directory listing cache** (`api/handler.go`): `?frame=N` MJPEG downloads memoize the sorted file list (500ms TTL, mtime-invalidated) instead of `os.ReadDir`+sort per request.
+
+### Stage E — Observability
+- **Query-latency histogram activated** (`metrics.go` + `db_*.go`): `nvr_sqlite_query_duration_seconds{query_name}` was defined but never observed; now instrumented on `InsertRecording`, `ListRecordings`, `ListRecordingsWithTotal`, `CountRecordingsWithFilter`, `GetRecordingTrends`.
+- **SQLITE_BUSY counter** (`metrics.go` + `retry.go`): `nvr_sqlite_busy_errors_total` incremented in `RetryOnBusy` via a package hook.
+- **Real-time SQLite metrics** (`cleanup.go`): WAL/DB size, fragmentation, pool stats updated on a 60s ticker (was hourly, gated to the cleanup cycle).
+- **Write-path benchmarks** (`benchmark_write_test.go`): `BenchmarkInsertRecording`, `BenchmarkSetMergeStatus`, `BenchmarkUpdateMergeProgressBatch`, `BenchmarkCountRecordingsWithFilter` for regression detection.
+
+### What was deliberately NOT done
+- **PostgreSQL migration** (Pending T12) — SQLite handles 500K–1M rows with the read pool; migration is reserved for 10GB+ DBs.
+- **Time-based partitioning** (Pending T8) — deferred until 500K+ rows shows measurable degradation in production metrics.
+- **Keyset/cursor pagination** (OFFSET replacement) — OFFSET remains for shallow paging; cursor pagination is a future option if deep-page latency becomes visible.
+- **External caches** (Redis, etc.) — violates the single-static-binary principle; OS page cache + `http.ServeFile` suffice for playback.
+
+---
+
 > **References:**
-> - `internal/storage/db.go` — DSN, Init, migrations, time handling
-> - `internal/storage/db_recording.go` — Recording CRUD, batch operations
-> - `internal/storage/db_stats.go` — CountRecordings, GetRecordingTrends
-> - `internal/storage/db_merge.go` — MergeAndReplaceRecordings, ListMergeableSegments
-> - `internal/storage/retry.go` — RetryOnBusy, IsBusyError
-> - `internal/cleanup/cleanup.go` — CleanupManager, time-based/disk-threshold cleanup
+> - `internal/storage/db.go` — DSN, Init, migrations, read pool, time handling
+> - `internal/storage/db_recording.go` — Recording CRUD, ListRecordingsWithTotal, batch operations
+> - `internal/storage/db_merge.go` — MergeAndReplaceRecordings, batched SetMergeStatus/UpdateMergeProgressBatch, chunkIDs
+> - `internal/storage/db_stats.go` — CountRecordings, GetRecordingTrends, heavyQueryTimeout
+> - `internal/storage/retry.go` — RetryOnBusy (busy-error hook), IsBusyError
+> - `internal/storage/benchmark_write_test.go` — write-path + batch benchmarks
+> - `internal/cleanup/cleanup.go` — CleanupManager, 60s SQLite-metrics ticker, WAL checkpoint escalation
 > - `internal/merge/manager.go` — MergeManager, processCamera, mergeFormatGroup
-> - `internal/metrics/metrics.go` — Merge metrics, storage metrics
+> - `internal/metrics/metrics.go` — Merge/storage/SQLite metrics, ObserveQueryDuration/IncSQLiteBusyErrors
 > - `internal/storage/AGENTS.md` — Storage conventions
 > - `docs/en/metrics.md` — Complete metrics reference

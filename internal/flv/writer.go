@@ -205,24 +205,43 @@ func h265SequenceHeader(vps, sps, pps []byte) []byte {
 // nalus: Access Unit (array of NALUs, already without start codes)
 // pts: presentation timestamp in 90kHz clock
 // isKeyframe: true for IDR frames
+//
+// Allocates the final tag buffer in a single pass (was 3 allocations: payload slice,
+// videoData slice, then the flvTag buffer). The shared buffer is sent to multiple viewers
+// and cached in gopCache, so a sync.Pool is unsafe here — but collapsing the build into
+// one allocation still cuts per-frame GC pressure by ~⅔.
 func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe bool) []byte {
 	// Convert PTS from 90kHz to milliseconds
 	tsMs := pts / 90
 
-	// Build AVCC/HVCC payload: NALU data with 4-byte length prefixes
-	payload := make([]byte, 0, 1024)
+	// Compute the total payload size up front so we allocate the full FLV tag once.
+	// Layout: [tag header 11][frameType+codecID 1][packetType 1][compositionTime 3]
+	//         [for each NALU: 4-byte length + nalu][prevTagSize 4]
+	naluTotal := 0
 	for _, nalu := range nalus {
-		naluLen := uint32(len(nalu))
-		payload = append(
-			payload,
-			byte(naluLen>>24),
-			byte(naluLen>>16),
-			byte(naluLen>>8),
-			byte(naluLen),
-		)
-		payload = append(payload, nalu...)
+		naluTotal += 4 + len(nalu)
 	}
+	const headerAndMeta = 11 + 5 // tag header(11) + frameType(1)+packetType(1)+compTime(3)
+	totalSize := headerAndMeta + naluTotal + 4
 
+	buf := make([]byte, totalSize)
+	// Tag header (11 bytes)
+	buf[0] = tagTypeVideo
+	dataSize := 5 + naluTotal // video tag data size (meta + payload)
+	buf[1] = byte(dataSize >> 16)
+	buf[2] = byte(dataSize >> 8)
+	buf[3] = byte(dataSize)
+	ts := tsMs & 0xFFFFFF
+	buf[4] = byte(ts >> 16)
+	buf[5] = byte(ts >> 8)
+	buf[6] = byte(ts)
+	buf[7] = byte(tsMs >> 24) // timestamp extended
+	// StreamID: always 0
+	buf[8] = 0x00
+	buf[9] = 0x00
+	buf[10] = 0x00
+
+	// Video tag data starting at offset 11: frameType+codecID + packetType + compositionTime
 	var frameTypeAndCodec byte
 	switch codec {
 	case model.FormatH265:
@@ -238,13 +257,26 @@ func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe boo
 			frameTypeAndCodec = frameTypeInterFrame | codecIDAVC // 0x27
 		}
 	}
+	buf[11] = frameTypeAndCodec
+	buf[12] = avcPacketTypeNALU // 0x01
+	buf[13] = 0x00              // composition time offset (3 bytes, 0 for live)
+	buf[14] = 0x00
+	buf[15] = 0x00
 
-	// Video tag data: frameType+codecID + packetType(NALU=1) + compositionTime(3) + payload
-	videoData := make([]byte, 0, 5+len(payload))
-	videoData = append(videoData, frameTypeAndCodec)
-	videoData = append(videoData, avcPacketTypeNALU) // 0x01
-	videoData = append(videoData, 0x00, 0x00, 0x00)  // composition time offset
-	videoData = append(videoData, payload...)
+	// AVCC/HVCC payload: NALU data with 4-byte length prefixes, written directly into buf
+	off := 16
+	for _, nalu := range nalus {
+		naluLen := uint32(len(nalu))
+		buf[off] = byte(naluLen >> 24)
+		buf[off+1] = byte(naluLen >> 16)
+		buf[off+2] = byte(naluLen >> 8)
+		buf[off+3] = byte(naluLen)
+		off += 4
+		copy(buf[off:], nalu)
+		off += len(nalu)
+	}
 
-	return flvTag(tagTypeVideo, tsMs, videoData)
+	// Previous tag size (4 bytes big-endian)
+	binary.BigEndian.PutUint32(buf[off:], uint32(11+dataSize))
+	return buf
 }

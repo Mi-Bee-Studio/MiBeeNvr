@@ -9,7 +9,7 @@ import (
 
 // GetFeatureFlags returns all feature flags as a map.
 func (d *DB) GetFeatureFlags(ctx context.Context) (map[string]bool, error) {
-	rows, err := d.db.QueryContext(ctx, "SELECT key, value FROM feature_flags")
+	rows, err := d.readConn().QueryContext(ctx, "SELECT key, value FROM feature_flags")
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (d *DB) GetFeatureFlags(ctx context.Context) (map[string]bool, error) {
 // Returns the default value if the flag doesn't exist.
 func (d *DB) GetFeatureFlag(ctx context.Context, key string, defaultValue bool) (bool, error) {
 	var value bool
-	err := d.db.QueryRowContext(ctx, "SELECT value FROM feature_flags WHERE key = ?", key).Scan(&value)
+	err := d.readConn().QueryRowContext(ctx, "SELECT value FROM feature_flags WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return defaultValue, nil

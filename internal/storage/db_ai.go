@@ -81,14 +81,14 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 	// Count
 	var total int
 	countQ := `SELECT COUNT(*) FROM ai_events` + whereClause
-	if err := d.db.QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
+	if err := d.readConn().QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	// Data
 	dataQ := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, created_at
 		FROM ai_events` + whereClause + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
-	rows, err := d.db.QueryContext(ctx, dataQ, append(args, f.Limit, f.Offset)...)
+	rows, err := d.readConn().QueryContext(ctx, dataQ, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -121,7 +121,7 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 func (d *DB) GetAIEvent(ctx context.Context, id int64) (*AIEvent, error) {
 	q := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, created_at
 		FROM ai_events WHERE id = ?`
-	row := d.db.QueryRowContext(ctx, q, id)
+	row := d.readConn().QueryRowContext(ctx, q, id)
 	var e AIEvent
 	var recordingID, zoneName, className, frameTS, bbox, snapshotPath, metadata sql.NullString
 	err := row.Scan(&e.ID, &e.CameraID, &recordingID, &e.EventType, &e.Severity,
@@ -162,7 +162,7 @@ type AIEventStats struct {
 // GetAIEventStats returns event type counts for a camera within a time period.
 func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Time) ([]AIEventStats, error) {
 	q := `SELECT event_type, COUNT(*) as cnt FROM ai_events WHERE camera_id = ? AND created_at >= ? GROUP BY event_type ORDER BY cnt DESC`
-	rows, err := d.db.QueryContext(ctx, q, cameraID, since.Format("2006-01-02 15:04:05"))
+	rows, err := d.readConn().QueryContext(ctx, q, cameraID, since.Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return nil, err
 	}
