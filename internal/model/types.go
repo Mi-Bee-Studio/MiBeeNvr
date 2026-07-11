@@ -86,6 +86,13 @@ type RecordingFilter struct {
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
 	Archived  *bool  // nil = all, true = archived only, false = not archived
+	// Cursor enables keyset (seek) pagination for O(1) deep-page performance.
+	// When set AND the sort is the default (started_at DESC), ListRecordings uses
+	// WHERE started_at < cursor instead of OFFSET, avoiding the O(N) scan-skip that
+	// makes OFFSET 10000+ take seconds. The cursor is the started_at of the last row
+	// on the current page (RFC3339 format from the API layer). Ignored for non-default
+	// sort orders (falls back to OFFSET).
+	Cursor string
 }
 
 type RecorderStatus string

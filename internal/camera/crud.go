@@ -326,6 +326,15 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.SubnetHints != nil {
 		cam.SubnetHints = *updates.SubnetHints
 	}
+	if updates.DarkFrameFilterEnabled != nil {
+		cam.DarkFrameFilterEnabled = *updates.DarkFrameFilterEnabled
+	}
+	if updates.DarkFrameThreshold != nil {
+		cam.DarkFrameThreshold = *updates.DarkFrameThreshold
+	}
+	if updates.RecordingSchedule != nil {
+		cam.RecordingSchedule = updates.RecordingSchedule
+	}
 
 	// Persist to database
 	if cm.db != nil {
@@ -404,6 +413,11 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cameraID := cam.ID
 		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
 		go cm.relayMgr.SetCameraTargets(cameraID, targets)
+	}
+
+	// Start or update recording schedule monitor if a schedule is configured.
+	if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
+		cm.startRecordingScheduleMonitor(context.Background(), cam.ID)
 	}
 
 	return cam, nil

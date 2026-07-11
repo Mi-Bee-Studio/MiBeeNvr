@@ -850,9 +850,26 @@ func (cm *CleanupManager) performDatabaseMaintenance(ctx context.Context) {
 	frac, err := cm.db.GetFragmentationRatio(ctx)
 	if err != nil {
 		logger.Warn("DB maintenance: failed to get fragmentation ratio", "error", err)
+	} else if frac > 0.50 {
+		// Severe fragmentation (>50%): incremental_vacuum is too slow (1000 pages/cycle)
+		// and is a no-op on DBs created before auto_vacuum was enabled (auto_vacuum=0).
+		// Do a full online compaction via VACUUM INTO — non-blocking, swaps files atomically.
+		logger.Info("DB maintenance: severe fragmentation, running online compaction", "fragmentation_ratio", fmt.Sprintf("%.1f%%", frac*100))
+		saved, compErr := cm.db.CompactOnline(ctx)
+		if compErr != nil {
+			logger.Warn("DB maintenance: online compaction failed", "error", compErr)
+		} else {
+			logger.Info("DB maintenance: online compaction succeeded", "saved_bytes", saved)
+		}
 	} else if frac > 0.20 {
-		logger.Info("DB maintenance: high fragmentation detected", "fragmentation_ratio", frac)
-		if err := cm.db.IncrementalVacuum(ctx, 1000); err != nil {
+		// Moderate fragmentation (20-50%): reclaim free pages incrementally.
+		// Use a larger batch (5000) when fragmentation is high for faster reclamation.
+		pages := 1000
+		if frac > 0.35 {
+			pages = 5000
+		}
+		logger.Info("DB maintenance: high fragmentation detected", "fragmentation_ratio", fmt.Sprintf("%.1f%%", frac*100), "vacuum_pages", pages)
+		if err := cm.db.IncrementalVacuum(ctx, pages); err != nil {
 			logger.Warn("DB maintenance: incremental vacuum failed", "error", err)
 		}
 	}

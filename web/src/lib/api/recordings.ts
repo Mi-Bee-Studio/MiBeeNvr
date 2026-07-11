@@ -43,6 +43,7 @@ export interface FramesResponse {
 export interface RecordingListResponse {
   recordings: Recording[];
   total?: number;
+  next_cursor?: string; // RFC3339 started_at of last row; pass back as ?cursor= for O(1) deep paging
 }
 
 export interface RecordingDaySummary {
@@ -97,6 +98,7 @@ export async function listRecordings(
     order?: string;
     search?: string;
     archived?: boolean;
+    cursor?: string; // keyset cursor (started_at of last row on prev page) for O(1) deep paging
     signal?: AbortSignal;
   } = {},
 ): Promise<RecordingListResponse> {
@@ -113,6 +115,7 @@ export async function listRecordings(
   if (params.order) queryParams.set('order', params.order);
   if (params.search) queryParams.set('search', params.search);
   if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
+  if (params.cursor) queryParams.set('cursor', params.cursor);
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';

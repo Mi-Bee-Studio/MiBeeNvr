@@ -30,6 +30,9 @@
     totalPages?: number;
     totalRecordings?: number;
     onpagechange?: (page: number) => void;
+    // Sequential cursor-based pagination (O(1) deep pages). Passed to Pagination's arrows.
+    onnext?: () => void;
+    onprev?: () => void;
   }
 
   let {
@@ -51,6 +54,8 @@
     totalPages = 0,
     totalRecordings = 0,
     onpagechange,
+    onnext,
+    onprev,
   }: Props = $props();
 
   // --- Derived ---
@@ -520,6 +525,8 @@
           currentPage={currentPage}
           totalPages={totalPages}
           onPageChange={(page) => onpagechange?.(page)}
+          onNext={onnext}
+          onPrev={onprev}
         />
       </div>
     {/if}

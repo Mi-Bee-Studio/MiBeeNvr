@@ -60,15 +60,18 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Keyset (cursor) pagination: ?cursor=<RFC3339 started_at of last row on prev page>.
+	// When provided with default sort, the DB uses WHERE started_at < cursor (O(1) deep page)
+	// instead of OFFSET (O(N) scan-skip). The frontend sends the last row's started_at.
+	filter.Cursor = r.URL.Query().Get("cursor")
+
 	// Sorting
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
 	filter.Search = r.URL.Query().Get("search")
 
-	// Single combined query: returns the page of recordings AND the total count in one
-	// pass (COUNT(*) OVER()), replacing the former separate ListRecordings + CountRecordings
-	// which scanned the same predicate set twice per paginated request.
+	// List + cached count. Cursor-based requests still get the total from cache.
 	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
@@ -79,9 +82,18 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		recordings = []model.Recording{}
 	}
 
+	// Compute next_cursor for the frontend: the started_at of the last row in this page.
+	// The client passes it back as ?cursor= for O(1) deep pagination. Empty when no more rows.
+	nextCursor := ""
+	if filter.Limit > 0 && len(recordings) == filter.Limit {
+		last := recordings[len(recordings)-1]
+		nextCursor = last.StartedAt.Format(time.RFC3339Nano)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recordings": recordings,
-		"total":      total,
+		"recordings":  recordings,
+		"total":       total,
+		"next_cursor": nextCursor,
 	})
 }
 

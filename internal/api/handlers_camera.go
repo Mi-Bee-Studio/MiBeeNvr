@@ -373,6 +373,9 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				row.PushRetentionDays = cam.PushRetentionDays
 				row.StableID = cam.StableID
 				row.SubnetHints = cam.SubnetHints
+				row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
+				row.DarkFrameThreshold = cam.DarkFrameThreshold
+				row.RecordingSchedule = cam.RecordingSchedule
 				break
 			}
 		}
@@ -435,6 +438,11 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Transcoding    *config.CameraTranscodingConfig `json:"transcoding"`
 		Channel        *string                         `json:"channel"`
 		AudioEnabled   *bool                           `json:"audio_enabled"`
+		// Dark frame filtering
+		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
+		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
+		// Recording schedule
+		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     *string `json:"stream_key"`
 		SRTPassphrase *string `json:"srt_passphrase"`
@@ -493,6 +501,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Transcoding:       body.Transcoding,
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled,
+		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled,
+		DarkFrameThreshold:     body.DarkFrameThreshold,
+		RecordingSchedule:      body.RecordingSchedule,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,

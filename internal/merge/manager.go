@@ -341,12 +341,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 	}
 
 	var parsed []parsedRec
-	var parseFailedIDs []string
+	type parseFailure struct {
+		id    string
+		errMsg string
+	}
+	var parseFailures []parseFailure
 	for _, rec := range recs {
 		info, err := ParseSegment(rec.FilePath)
 		if err != nil {
 			logger.Warn("failed to parse segment, marking as failed", "recording_id", rec.ID, "file_path", rec.FilePath, "error", err)
-			parseFailedIDs = append(parseFailedIDs, rec.ID)
+			parseFailures = append(parseFailures, parseFailure{id: rec.ID, errMsg: err.Error()})
 			continue
 		}
 		if info.Codec != format {
@@ -368,15 +372,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		})
 	}
 
-	// Mark parse-failed recordings permanently.
-	if len(parseFailedIDs) > 0 {
+	// Mark parse-failed recordings permanently with the error reason.
+	for _, pf := range parseFailures {
 		if err := storage.RetryOnBusy(ctx, func() error {
-			return m.db.SetMergeStatus(ctx, parseFailedIDs, model.MergeStatusFailed)
+			return m.db.SetMergeError(ctx, []string{pf.id}, "parse failed: "+pf.errMsg)
 		}); err != nil {
-			logger.Warn("failed to mark parse-failed segments", "error", err)
-		} else {
-			logger.Info("marked parse-failed segments as merge_status=failed", "count", len(parseFailedIDs))
+			logger.Warn("failed to mark parse-failed segment", "recording_id", pf.id, "error", err)
 		}
+	}
+	if len(parseFailures) > 0 {
+		logger.Info("marked parse-failed segments as merge_status=failed", "count", len(parseFailures))
 	}
 
 	// Group by SPS/PPS bytes using SHA-256 hash to avoid null-byte collisions.

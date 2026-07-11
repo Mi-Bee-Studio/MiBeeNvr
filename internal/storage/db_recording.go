@@ -164,6 +164,30 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
 	defer d.observeQuery("ListRecordings", time.Now())
 	where, args := recordingsFilterWhere(filter)
+
+	// Keyset (cursor) pagination: when a cursor is provided and the sort is the default
+	// (started_at DESC), inject "started_at < ?" instead of using OFFSET. This is O(1)
+	// regardless of page depth — OFFSET N must scan+skip N rows, making "page 200" take
+	// seconds at scale. The cursor is the started_at of the last row on the previous page.
+	useKeyset := false
+	if filter.Cursor != "" {
+		// Keyset only applies to the default sort direction. For ASC the seek predicate
+		// is "started_at > ?" (not implemented — DESC is the UI default).
+		sortBy := filter.SortBy
+		if sortBy == "" {
+			sortBy = "started_at"
+		}
+		sortOrder := filter.SortOrder
+		if sortOrder == "" {
+			sortOrder = "desc"
+		}
+		if sortBy == "started_at" && strings.EqualFold(sortOrder, "desc") {
+			where = append(where, "started_at < ?")
+			args = append(args, filter.Cursor)
+			useKeyset = true
+		}
+	}
+
 	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
@@ -172,7 +196,8 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	if filter.Limit > 0 {
 		sqlstr += fmt.Sprintf(" LIMIT %d", filter.Limit)
 	}
-	if filter.Offset > 0 {
+	// OFFSET is only used for legacy (non-cursor) pagination.
+	if !useKeyset && filter.Offset > 0 {
 		sqlstr += fmt.Sprintf(" OFFSET %d", filter.Offset)
 	}
 	sqlstr += ";"

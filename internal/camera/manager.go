@@ -45,6 +45,11 @@ type CameraUpdate struct {
 	Channel        *string
 	Transcoding    *config.CameraTranscodingConfig
 	AudioEnabled   *bool
+	// Dark frame filtering
+	DarkFrameFilterEnabled *bool
+	DarkFrameThreshold     *int
+	// Recording schedule
+	RecordingSchedule *config.ScheduleConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.
 	StreamKey     *string
 	SRTPassphrase *string
@@ -299,6 +304,12 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			} else {
 				logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
 			}
+		}
+	}
+	// Start recording schedule monitors for cameras with a recording_schedule configured.
+	for _, cam := range cm.cfg.Cameras {
+		if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
+			cm.startRecordingScheduleMonitor(ctx, cam.ID)
 		}
 	}
 	// Replay push-out relay targets for cameras loaded from config. Add/Update

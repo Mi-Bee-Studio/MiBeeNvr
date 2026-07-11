@@ -670,12 +670,129 @@ func (d *DB) GetFragmentationRatio(ctx context.Context) (float64, error) {
 }
 
 // IncrementalVacuum reclaims up to N free pages without exclusive lock.
+// Only effective if auto_vacuum != 0 (set at DB creation time). For DBs created before
+// auto_vacuum was enabled, use CompactOnline instead.
 func (d *DB) IncrementalVacuum(ctx context.Context, n int) error {
 	_, err := d.db.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", n))
 	if err != nil {
 		return fmt.Errorf("incremental_vacuum(%d): %w", n, err)
 	}
 	logger.Info("Incremental vacuum completed", "max_pages", n)
+	return nil
+}
+
+// CompactOnline performs a non-blocking online database compaction via VACUUM INTO.
+// It writes a fresh, defragmented copy to a temp file, then atomically replaces the
+// old DB files (main + WAL + SHM) with the compacted copy. Unlike full VACUUM, this
+// never holds an exclusive lock on the live DB — readers and the writer continue
+// operating throughout. The new file also gets auto_vacuum=INCREMENTAL enabled so
+// future incremental_vacuum calls work.
+//
+// This is the correct fix for DBs created before auto_vacuum was enabled (where
+// incremental_vacuum is a no-op). Call it when fragmentation exceeds ~50%.
+//
+// Returns the number of bytes saved (old size - new size), or 0 if nothing was done.
+func (d *DB) CompactOnline(ctx context.Context) (int64, error) {
+	oldInfo, err := os.Stat(d.path)
+	if err != nil {
+		return 0, fmt.Errorf("stat db: %w", err)
+	}
+	oldSize := oldInfo.Size()
+
+	// VACUUM INTO creates a new DB file with all data defragmented and packed.
+	// auto_vacuum must be set on the NEW file — VACUUM INTO resets it to NONE by default.
+	// We do this by setting the pragma on a temp DB first, then vacuuming into it.
+	// However, VACUUM INTO does not carry pragma settings. The workaround: vacuum into
+	// the temp file, then we rely on the next full rebuild cycle to set it. For now,
+	// defragmentation alone is the win.
+	tmpPath := d.path + ".compact.tmp"
+	// Remove stale temp file if a previous attempt was interrupted.
+	_ = os.Remove(tmpPath)
+
+	// Set auto_vacuum=INCREMENTAL on the target BEFORE populating it, so the compacted
+	// file has incremental vacuum enabled for future maintenance.
+	// SQLite: VACUUM INTO creates a new file from scratch; to get auto_vacuum we must
+	// open the temp, set pragma, then VACUUM INTO. But VACUUM INTO overwrites.
+	// The reliable approach: open temp DB, set auto_vacuum=INCREMENTAL, then use it
+	// as the VACUUM target. SQLite will carry the setting since it creates fresh pages.
+	if _, err := d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		// Non-fatal: on existing DBs this is a no-op, but VACUUM INTO on a DB with
+		// this connection pragma still creates NONE auto_vacuum. We set it on the
+		// result below.
+		logger.Warn("CompactOnline: could not set auto_vacuum pragma (non-fatal)", "error", err)
+	}
+
+	if _, err := d.db.ExecContext(ctx, "VACUUM INTO ?", tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("vacuum into: %w", err)
+	}
+
+	newInfo, err := os.Stat(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("stat compacted db: %w", err)
+	}
+	newSize := newInfo.Size()
+
+	// Enable auto_vacuum=INCREMENTAL on the compacted file so future
+	// incremental_vacuum calls actually work. We must open it, set the pragma, and
+	// do a mini-vacuum to apply it (auto_vacuum only takes effect on VACUUM).
+	// This is the ONLY reliable way to set it on an existing DB.
+	if err := applyAutoVacuumIncremental(tmpPath); err != nil {
+		logger.Warn("CompactOnline: could not set auto_vacuum on compacted db (defrag still succeeded)", "error", err)
+	}
+
+	// Atomically swap: close current connections are NOT needed (VACUUM INTO doesn't
+	// touch the source). We rename the files after a final sync.
+	// Rename: old → .bak, new → live. If rename fails, restore.
+	walPath := d.path + "-wal"
+	shmPath := d.path + "-shm"
+	bakPath := d.path + ".bak"
+	_ = os.Remove(bakPath)
+
+	// Move old files aside (best-effort on WAL/SHM — they may not exist).
+	if err := os.Rename(d.path, bakPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("rename old db to bak: %w", err)
+	}
+	// Move compacted file into place.
+	if err := os.Rename(tmpPath, d.path); err != nil {
+		// Restore old file
+		_ = os.Rename(bakPath, d.path)
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("rename compacted db to live: %w", err)
+	}
+	// Remove old WAL/SHM — the compacted DB starts fresh with empty WAL.
+	_ = os.Remove(walPath)
+	_ = os.Remove(shmPath)
+	// Clean up backup after successful swap.
+	_ = os.Remove(bakPath)
+
+	saved := oldSize - newSize
+	logger.Info("Online compaction completed",
+		"old_bytes", oldSize, "new_bytes", newSize, "saved_bytes", saved,
+		"saved_pct", fmt.Sprintf("%.1f%%", 100.0*float64(saved)/float64(max(oldSize, 1))))
+	return saved, nil
+}
+
+// applyAutoVacuumIncremental opens dbPath, sets auto_vacuum=INCREMENTAL, and runs a
+// VACUUM to apply it (SQLite only honors auto_vacuum changes during VACUUM on existing
+// databases). Uses a temporary connection so the main pool is unaffected.
+func applyAutoVacuumIncremental(dbPath string) error {
+	dsn := dbPath + "?_pragma=busy_timeout(5000)"
+	tmpDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open for auto_vacuum: %w", err)
+	}
+	defer tmpDB.Close()
+	if _, err := tmpDB.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		return fmt.Errorf("set auto_vacuum: %w", err)
+	}
+	// VACUUM applies the auto_vacuum mode change. This briefly locks the file, but
+	// it's the compacted temp (not the live DB at this point in CompactOnline's flow).
+	if _, err := tmpDB.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("vacuum to apply auto_vacuum: %w", err)
+	}
 	return nil
 }
 

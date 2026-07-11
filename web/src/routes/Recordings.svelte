@@ -70,6 +70,12 @@
   let limit = $state(getItemsPerPage());
   let sortBy = $state('started_at');
   let sortOrder = $state<'asc' | 'desc'>('desc');
+  // Keyset cursor chain for sequential next/prev navigation (O(1) deep pages vs OFFSET's O(N)).
+  // cursorStack[0] = page 1 (no cursor). cursorStack[i] = cursor to reach page i+1.
+  // When the user clicks next/prev sequentially we use cursors; arbitrary page jumps
+  // (e.g. "go to page 5") fall back to OFFSET via handlePageChange.
+  let cursorStack = $state<string[]>(['']);
+  let currentPageNum = $state(1);
 
   // ── View mode ──
   let viewMode = $state<'gallery' | 'list'>(initialViewMode);
@@ -181,7 +187,34 @@ let batchMerging = $state(false);
   }
 
   function handlePageChange(newPage: number) {
+    // Arbitrary page jump: use OFFSET (O(N) for deep pages, but page jumps are rare).
+    // Reset the cursor chain since we're leaving sequential navigation.
     offset = (newPage - 1) * limit;
+    currentPageNum = newPage;
+    cursorStack = [''];
+    window.scrollTo(0, 0);
+  }
+
+  // Sequential next page via keyset cursor — O(1) regardless of page depth.
+  async function goToNextPage() {
+    const currentCursor = cursorStack[cursorStack.length - 1];
+    const nextCursor = await loadListDataCursor(currentCursor);
+    if (nextCursor !== null) {
+      cursorStack = [...cursorStack, nextCursor];
+      offset += limit;
+      currentPageNum++;
+      window.scrollTo(0, 0);
+    }
+  }
+
+  // Sequential prev page — pop the cursor chain back to the previous page.
+  async function goToPrevPage() {
+    if (cursorStack.length <= 1) return;
+    cursorStack = cursorStack.slice(0, -1);
+    offset = Math.max(0, offset - limit);
+    currentPageNum = Math.max(1, currentPageNum - 1);
+    const prevCursor = cursorStack[cursorStack.length - 1];
+    await loadListDataCursor(prevCursor);
     window.scrollTo(0, 0);
   }
 
@@ -319,47 +352,51 @@ let batchMerging = $state(false);
   }
 
   async function loadListData() {
+    // Standard load (OFFSET-based, triggered by filter/sort changes).
+    // Reset cursor chain on fresh loads.
+    cursorStack = [''];
+    currentPageNum = 1;
+    await loadListDataCursor('');
+  }
+
+  // loadListDataCursor fetches a page using either a cursor (keyset, O(1) deep page)
+  // or OFFSET (when cursor is ''). Returns the next_cursor from the response, or null
+  // if there are no more pages. When cursor is '', uses OFFSET for page 1 / arbitrary jumps.
+  async function loadListDataCursor(cursor: string): Promise<string | null> {
     if (listAbortController) listAbortController.abort();
     listAbortController = new AbortController();
     listLoading = true;
 
     try {
+      const useCursor = cursor !== '';
+      const baseParams = {
+        camera_id: cameraId || undefined,
+        search: searchQuery || undefined,
+        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+        archived: showArchived ? true : undefined,
+        limit,
+        sort_by: sortBy,
+        order: sortOrder,
+        signal: listAbortController.signal,
+      };
+      // Cursor request: pass cursor, omit offset. Offset request: pass offset, omit cursor.
+      const params = useCursor
+        ? { ...baseParams, cursor }
+        : { ...baseParams, offset };
+
+      let response;
       if (formatPill === 'All') {
-        // listRecordings returns ALL formats when no format filter is set — no need to also call
-        // listTimelapseRecordings (which would duplicate mjpeg/timelapse and break pagination/total).
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          offset,
-          limit,
-          sort_by: sortBy,
-          order: sortOrder,
-          signal: listAbortController.signal,
-        });
-        listRecordingsData = response.recordings;
-        totalRecordings = response.total || 0;
+        response = await listRecordings(params);
       } else {
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          format: apiFormat || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          offset,
-          limit,
-          sort_by: sortBy,
-          order: sortOrder,
-          signal: listAbortController.signal,
-        });
-        listRecordingsData = response.recordings;
-        totalRecordings = response.total || 0;
+        response = await listRecordings({ ...params, format: apiFormat || undefined });
       }
-      // Detect merge status changes
+      listRecordingsData = response.recordings;
+      totalRecordings = response.total || 0;
       detectMergeChanges(listRecordingsData);
+      return response.next_cursor || null;
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if (e instanceof DOMException && e.name === 'AbortError') return null;
+      return null;
     } finally {
       listLoading = false;
     }
@@ -748,10 +785,12 @@ let batchMerging = $state(false);
           onsort={handleSort}
           {transcodingStatus}
           loading={listLoading}
-          {currentPage}
+          currentPage={currentPageNum}
           {totalPages}
           totalRecordings={totalRecordings}
           onpagechange={handlePageChange}
+          onnext={goToNextPage}
+          onprev={goToPrevPage}
           onplay={handlePlay}
 
         />

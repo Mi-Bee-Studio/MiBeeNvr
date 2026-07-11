@@ -63,6 +63,11 @@ type CameraRow struct {
 	// ONVIF serial number used to re-acquire the camera after its IP changes.
 	StableID    string   `json:"stable_id,omitempty"`
 	SubnetHints []string `json:"subnet_hints,omitempty"`
+	// Dark frame filtering (injected from YAML at API response time)
+	DarkFrameFilterEnabled bool `json:"dark_frame_filter_enabled"`
+	DarkFrameThreshold     int  `json:"dark_frame_threshold"`
+	// Recording schedule (injected from YAML at API response time)
+	RecordingSchedule *config.ScheduleConfig `json:"recording_schedule,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {

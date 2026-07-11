@@ -6,12 +6,19 @@
     currentPage?: number;
     totalPages?: number;
     onPageChange?: (page: number) => void;
+    // Optional sequential callbacks that use keyset cursor pagination (O(1) deep pages).
+    // When provided, the prev/next arrow buttons call these instead of onPageChange,
+    // avoiding the O(N) OFFSET scan-skip on deep pages.
+    onNext?: () => void;
+    onPrev?: () => void;
   }
 
   let {
     currentPage = 1,
     totalPages = 1,
-    onPageChange = () => {}
+    onPageChange = () => {},
+    onNext,
+    onPrev
   }: Props = $props();
 
   let canGoPrev = $derived(currentPage > 1);
@@ -36,7 +43,7 @@
   </span>
   <div class="flex items-center gap-1">
     <button
-      onclick={() => onPageChange(currentPage - 1)}
+      onclick={() => (onPrev ? onPrev() : onPageChange(currentPage - 1))}
       disabled={!canGoPrev}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
@@ -57,7 +64,7 @@
       {/if}
     {/each}
     <button
-      onclick={() => onPageChange(currentPage + 1)}
+      onclick={() => (onNext ? onNext() : onPageChange(currentPage + 1))}
       disabled={!canGoNext}
       class="px-3 py-1 text-sm rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
     >
