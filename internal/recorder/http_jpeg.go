@@ -499,6 +499,26 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
+
+		// Dark frame detection: check if segment is too dark to be useful.
+		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
+			isDark := false
+			if r.cfg.AVI {
+				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			} else {
+				isDark, _, _ = DetectDarkMJPEGDir(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			}
+			if isDark {
+				_ = r.cfg.DB.SetMergeStatus(context.Background(), []string{recordingID}, model.MergeStatusDark)
+				httpJpegLogger.Info("segment marked as dark (night/no-IR)",
+					"camera_id", r.cfg.CameraID, "recording_id", recordingID)
+				// Skip publishing SegmentCompleted — dark segments should not enter merge.
+				r.curTempPath = ""
+				r.curFinalPath = ""
+				r.frameCount = 0
+				return
+			}
+		}
 	}
 
 	// Publish SegmentCompleted event.
