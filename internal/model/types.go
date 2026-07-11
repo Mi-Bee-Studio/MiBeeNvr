@@ -221,6 +221,7 @@ const (
 	MergeStatusMerging = "merging"
 	MergeStatusFailed       = "failed"
 	MergeStatusIncompatible = "incompatible"
+	MergeStatusDark         = "dark" // segment is too dark to be useful (night, no IR)
 )
 
 // Merge quality constants — describe the continuity of a merged recording.
@@ -228,6 +229,7 @@ const (
 	MergeQualityComplete   = "complete"   // normal merge, no significant gaps
 	MergeQualityFragmented = "fragmented" // has time gaps (ended-started >> duration)
 	MergeQualityShort      = "short"      // merged but below minimum duration threshold
+	MergeQualityDark       = "dark"       // segment classified as dark/night vision
 )
 
 // AudioFrame represents a single audio frame for distribution through StreamHub.

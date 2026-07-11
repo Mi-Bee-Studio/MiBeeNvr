@@ -39,6 +39,10 @@ func (m *mockTimelapseDB) InsertRecordingWithRetry(_ context.Context, r *model.R
 	return m.InsertRecording(context.Background(), r)
 }
 
+func (m *mockTimelapseDB) SetMergeStatus(_ context.Context, _ []string, _ string) error {
+	return nil
+}
+
 func (m *mockTimelapseDB) recordings() []*model.Recording {
 	m.mu.Lock()
 	defer m.mu.Unlock()

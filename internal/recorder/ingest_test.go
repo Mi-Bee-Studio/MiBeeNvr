@@ -29,6 +29,10 @@ func (d *ingestTestDB) InsertRecordingWithRetry(_ context.Context, r *model.Reco
 	return nil
 }
 
+func (d *ingestTestDB) SetMergeStatus(_ context.Context, _ []string, _ string) error {
+	return nil
+}
+
 // newIngestRecorder builds an IngestRecorder backed by a temp-dir storage
 // manager and an in-memory RecordingDB. The hub is wired the way the camera
 // manager wires it (NewStreamHub + SetCameraID).

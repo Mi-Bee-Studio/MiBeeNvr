@@ -61,13 +61,15 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
 			mjpegCfg := recorder.MJPEGConfig{
-				CameraID:       cam.ID,
-				RTSPURL:        cam.URL,
-				SegmentDur:     segDur,
-				SampleInterval: cam.SampleInterval,
-				DB:             cm.db,
-				AudioEnabled:   cam.AudioEnabled,
-				EventBus:       cm.eventBus,
+				CameraID:               cam.ID,
+				RTSPURL:                cam.URL,
+				SegmentDur:             segDur,
+				SampleInterval:         cam.SampleInterval,
+				DB:                     cm.db,
+				AudioEnabled:           cam.AudioEnabled,
+				EventBus:               cm.eventBus,
+				DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
+				DarkFrameThreshold:     cam.DarkFrameThreshold,
 			}
 			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:
@@ -78,13 +80,16 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			return nil
 		}
 		httpJpegCfg := recorder.HTTPJPEGConfig{
-			CameraID:   cam.ID,
-			URL:        cam.URL,
-			SegmentDur: segDur,
-			Username:   cam.Username,
-			Password:   cam.Password,
-			DB:         cm.db,
-			AVI:        cam.HTTPJPEGAVI,
+			CameraID:               cam.ID,
+			URL:                    cam.URL,
+			SegmentDur:             segDur,
+			Username:               cam.Username,
+			Password:               cam.Password,
+			DB:                     cm.db,
+			AVI:                    cam.HTTPJPEGAVI,
+			EventBus:               cm.eventBus,
+			DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
+			DarkFrameThreshold:     cam.DarkFrameThreshold,
 		}
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):

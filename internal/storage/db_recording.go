@@ -836,3 +836,27 @@ func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[s
 	}
 	return result, rows.Err()
 }
+
+// ListDarkRecordings returns recordings with merge_status='dark' older than
+// the given grace period (from ended_at). These are night/no-IR segments
+// excluded from merge and pending cleanup.
+func (d *DB) ListDarkRecordings(ctx context.Context, gracePeriod time.Duration) ([]model.Recording, error) {
+	cutoff := time.Now().Add(-gracePeriod).Format("2006-01-02 15:04:05.999999999")
+	q := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE merge_status = 'dark' AND ended_at IS NOT NULL AND ended_at < ? ORDER BY ended_at ASC LIMIT 500;`
+	rows, err := d.readConn().QueryContext(ctx, q, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, r)
+	}
+	return res, rows.Err()
+}

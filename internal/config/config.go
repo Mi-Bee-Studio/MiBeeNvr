@@ -116,6 +116,18 @@ type CameraConfig struct {
 	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
 	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
 
+	// Dark frame filtering: skip recording segments that are too dark to be useful
+	// (night without IR capability). Only applies to MJPEG/AVI cameras.
+	// When enabled, each segment is brightness-checked at close time; dark segments
+	// are marked merge_status='dark' and excluded from merge + cleaned up early.
+	DarkFrameFilterEnabled bool `yaml:"dark_frame_filter_enabled,omitempty" json:"dark_frame_filter_enabled,omitempty"`
+	DarkFrameThreshold     int  `yaml:"dark_frame_threshold,omitempty" json:"dark_frame_threshold,omitempty"` // 0-255, default 15
+
+	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
+	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
+	// pattern as timelapse scheduling.
+	RecordingSchedule *ScheduleConfig `yaml:"recording_schedule,omitempty" json:"recording_schedule,omitempty"`
+
 	// Push-out targets (relay): forward this camera's live stream to remote
 	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
 	// Applies to ANY camera protocol — the engine subscribes to the camera's

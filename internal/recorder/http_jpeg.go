@@ -37,6 +37,8 @@ type HTTPJPEGConfig struct {
 	AVI        bool // when true, write AVI single-file instead of MJPEG directory
 	Width      int  // video width (0 = auto-detect from first frame)
 	Height     int  // video height (0 = auto-detect from first frame)
+	DarkFrameFilterEnabled bool // skip dark/night segments
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.

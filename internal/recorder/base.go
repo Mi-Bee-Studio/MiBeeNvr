@@ -66,6 +66,8 @@ type BaseConfig struct {
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
 	EventBus             *event.EventBus
+	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the

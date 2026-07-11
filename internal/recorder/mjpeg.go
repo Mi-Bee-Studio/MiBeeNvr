@@ -38,6 +38,8 @@ type MJPEGConfig struct {
 	DB             RecordingDB
 	EventBus       *event.EventBus
 	AudioEnabled   bool
+	DarkFrameFilterEnabled bool // skip dark/night segments
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -578,6 +580,31 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		rec.FileSize = totalSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
+
+		// Dark frame detection: check if segment is too dark to be useful.
+		// Only runs when DarkFrameFilterEnabled is true and threshold > 0.
+		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
+			isDark := false
+			if r.hasAudio {
+				// AVI format: single file with MJPEG video.
+				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			} else {
+				// MJPEG format: directory of JPEG files.
+				isDark, _, _ = DetectDarkMJPEGDir(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			}
+			if isDark {
+				// Mark as dark so merge and cleanup systems can skip/clean it.
+				_ = r.cfg.DB.SetMergeStatus(context.Background(), []string{recordingID}, model.MergeStatusDark)
+				mjpegLogger.Info("segment marked as dark (night/no-IR)",
+					"camera_id", r.cfg.CameraID, "recording_id", recordingID)
+				// Skip publishing SegmentCompleted — dark segments should not
+				// enter the merge pipeline at all.
+				r.curTempPath = ""
+				r.curFinalPath = ""
+				r.frameCount = 0
+				return
+			}
 		}
 	}
 
