@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -17,7 +18,14 @@ import (
 )
 
 // XiaomiPlugin provides Xiaomi camera recorder creation.
-type XiaomiPlugin struct{}
+type XiaomiPlugin struct {
+	eventBus *event.EventBus
+}
+
+// SetEventBus injects the event bus so Xiaomi recorders can publish SegmentCompleted events.
+func (p *XiaomiPlugin) SetEventBus(bus *event.EventBus) {
+	p.eventBus = bus
+}
 
 func (p *XiaomiPlugin) Name() string { return "xiaomi" }
 
@@ -57,6 +65,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		AudioEnabled: cfg.AudioEnabled,
 		Channel:      cfg.Channel,
 		Quality:      cfg.Quality,
+		EventBus:     p.eventBus,
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

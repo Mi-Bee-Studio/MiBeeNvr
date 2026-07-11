@@ -20,7 +20,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	var rec model.Recorder
 	switch cam.Protocol {
 	case "xiaomi":
-		rec = new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
+		plugin := &xiaomi.XiaomiPlugin{}
+		plugin.SetEventBus(cm.eventBus)
+		rec = plugin.NewRecorder(cam, cm.store, cm.db, cm.metrics)
 		// Wire ErrorReporter for TUTK vendor error detection
 		if xr, ok := rec.(*xiaomi.XiaomiRecorder); ok {
 			xr.SetErrorReporter(cm)
@@ -36,6 +38,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:   segDur,
 				DB:           cm.db,
 				AudioEnabled: cam.AudioEnabled,
+				EventBus:     cm.eventBus,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
@@ -50,6 +53,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:   segDur,
 				DB:           cm.db,
 				AudioEnabled: cam.AudioEnabled,
+				EventBus:     cm.eventBus,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
@@ -293,10 +297,29 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 
 	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config
 	if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-		if hub := getRecorderHub(rec); hub != nil {
+		// Runtime override: an ONVIF camera with empty encoding may have resolved
+		// to rtsp_keyframe statically but actually be a JPEG device. Use a frame
+		// poller instead.
+		if isRecorderJPEG(rec) {
+			if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+				logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+			} else if poller != nil {
+				cm.mu.Lock()
+				cm.framePollers[cam.ID] = poller
+				cm.mu.Unlock()
+			}
+		} else if hub := getRecorderHub(rec); hub != nil {
 			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
 				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
 			}
+		}
+	} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+		if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+			logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+		} else if poller != nil {
+			cm.mu.Lock()
+			cm.framePollers[cam.ID] = poller
+			cm.mu.Unlock()
 		}
 	}
 

@@ -594,6 +594,12 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 	// Collect all recordings without an existing transcode task
 	tasks := make([]storage.TranscodeTask, 0, len(recordings))
 	for _, rec := range recordings {
+		// Skip formats that are already browser-playable and don't need transcoding.
+		// Transcoding AVI/MJPEG/JPEG is unnecessary (WebSocket playback handles them)
+		// and harmful (would replace the original and break the playback path).
+		if rec.Format == model.FormatAVI || rec.Format == model.FormatMJPEG || string(rec.Format) == "jpeg" {
+			continue
+		}
 		outputPath := rec.FilePath + ".transcoded.mp4"
 		now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
 		tasks = append(tasks, storage.TranscodeTask{
