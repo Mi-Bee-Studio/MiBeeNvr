@@ -13,6 +13,7 @@
    *   - Hit a gap (no recording) → snap to nearest segment edge + warn
    */
   import { listRecordings, type Recording } from '$lib/api';
+  import { listAIEvents, type AIEvent } from '$lib/api/ai-events';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { findSegmentAt, formatLength as formatLengthUtil, type TimelineSegment } from '$lib/timeline-utils';
@@ -23,15 +24,18 @@
     currentRecording,
     currentVideoTime = 0,
     onseek,
+    showEvents = false,
   }: {
     cameraId: string;
     date: string; // YYYY-MM-DD
     currentRecording: Recording | null;
     currentVideoTime?: number;
     onseek: (recordingId: string, offsetSeconds: number) => void;
+    showEvents?: boolean;
   } = $props();
 
   let segments = $state<Array<{ rec: Recording; startSec: number; endSec: number }>>([]);
+  let aiEvents = $state<AIEvent[]>([]);
   let loading = $state(false);
   let error = $state('');
   let hoverInfo = $state<{ x: number; label: string } | null>(null);
@@ -41,6 +45,28 @@
   const regularSegments = $derived(segments.filter((s) => s.rec.format !== 'timelapse'));
   const timelapseSegments = $derived(segments.filter((s) => s.rec.format === 'timelapse'));
   const hasTimelapse = $derived(timelapseSegments.length > 0);
+
+  // Compute gaps between consecutive segments (>30s = frame drop / 断帧)
+  interface Gap {
+    startSec: number;
+    endSec: number;
+    duration: number;
+  }
+  const gaps = $derived.by(() => {
+    const result: Gap[] = [];
+    const segs = [...regularSegments, ...timelapseSegments].sort((a, b) => a.startSec - b.startSec);
+    for (let i = 1; i < segs.length; i++) {
+      const gapDur = (segs[i].startSec - segs[i - 1].endSec) / 1000;
+      if (gapDur >= 30) {
+        result.push({
+          startSec: segs[i - 1].endSec,
+          endSec: segs[i].startSec,
+          duration: gapDur,
+        });
+      }
+    }
+    return result;
+  });
 
   // Format → color class
   const formatColor: Record<string, string> = {
@@ -81,7 +107,20 @@
     const d = date;
     if (!cid || !d) return;
     void loadSegments(cid, d);
+    if (showEvents) void loadAIEvents(cid, d);
   });
+
+  async function loadAIEvents(cid: string, d: string) {
+    try {
+      const [y, m, dd] = d.split('-').map(Number);
+      const startISO = new Date(Date.UTC(y, m - 1, dd, 0, 0, 0)).toISOString();
+      const endISO = new Date(Date.UTC(y, m - 1, dd, 23, 59, 59)).toISOString();
+      const resp = await listAIEvents({ camera_id: cid, start: startISO, end: endISO, asc: true, limit: 500 });
+      aiEvents = resp.events || [];
+    } catch {
+      aiEvents = []; // silent fail — events are an overlay, not critical
+    }
+  }
 
   async function loadSegments(cid: string, d: string) {
     loading = true;
@@ -261,6 +300,18 @@
     return ((ms - windowStartMs) / (windowEndMs - windowStartMs)) * 100;
   }
 
+  // Event marker color: severity takes priority, then class_name, then default.
+  function eventColor(evt: AIEvent): string {
+    if (evt.severity === 'critical') return '#ef4444'; // red
+    if (evt.severity === 'warning') return '#eab308';  // yellow
+    // Map common class names to colors (matching AiOverlay palette).
+    const cn = (evt.class_name || '').toLowerCase();
+    if (cn === 'person') return '#22c55e';       // green
+    if (['car', 'vehicle', 'truck', 'bus', 'motorcycle', 'bicycle'].includes(cn)) return '#3b82f6'; // blue
+    if (['cat', 'dog', 'animal', 'bird', 'horse'].includes(cn)) return '#f97316'; // orange
+    return '#3b82f6'; // default blue (info)
+  }
+
   function formatLength(sec: number): string {
     return formatLengthUtil(sec);
   }
@@ -284,7 +335,7 @@
       {:else if error}
         <span class="th-color-danger">{error}</span>
       {:else}
-        {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)} · {windowLabel}
+        {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)}{#if gaps.length > 0} · <span class="th-color-danger">⚠ {gaps.length} {t('timeline.frameDrops', { default: '断帧' })}</span>{/if} · {windowLabel}
       {/if}
     </span>
   </div>
@@ -323,6 +374,28 @@
               title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}"
             ></div>
           {/each}
+
+          <!-- Gap markers (断帧 / frame drops) -->
+          {#each gaps as gap, i}
+            <div
+              class="timeline-gap"
+              style="left: {msToPct(gap.startSec)}%; width: {Math.max(0.3, msToPct(gap.endSec) - msToPct(gap.startSec))}%;"
+              title="⚠ {t('timeline.frameDrop', { default: '断帧' })} · {formatLength(gap.duration)}"
+            ></div>
+          {/each}
+
+          <!-- AI event markers -->
+          {#if showEvents}
+            {#each aiEvents as evt}
+              {@const evtMs = Date.parse(evt.created_at)}
+              {@const evtColor = eventColor(evt)}
+              <div
+                class="timeline-event-marker"
+                style="left: {msToPct(evtMs)}%; background-color: {evtColor};"
+                title="{evt.class_name || evt.event_type} · {evt.severity} · {Math.round(evt.confidence * 100)}% · {formatDate(evt.created_at)}"
+              ></div>
+            {/each}
+          {/if}
 
           <!-- Current playback cursor (only on this track if not timelapse) -->
           {#if cursorPct != null && (!currentRecording || currentRecording.format !== 'timelapse')}
@@ -464,6 +537,41 @@
   }
   .timeline-segment:hover {
     opacity: 1;
+  }
+  .timeline-gap {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    min-width: 2px;
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(239, 68, 68, 0.25),
+      rgba(239, 68, 68, 0.25) 3px,
+      rgba(239, 68, 68, 0.08) 3px,
+      rgba(239, 68, 68, 0.08) 6px
+    );
+    border-left: 1px dashed rgba(239, 68, 68, 0.5);
+    border-right: 1px dashed rgba(239, 68, 68, 0.5);
+    z-index: 5;
+    pointer-events: auto;
+    cursor: help;
+  }
+  .timeline-event-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    min-width: 2px;
+    border-radius: 1px;
+    opacity: 0.8;
+    z-index: 8;
+    pointer-events: auto;
+    cursor: help;
+    transition: opacity 0.15s;
+  }
+  .timeline-event-marker:hover {
+    opacity: 1;
+    width: 4px;
   }
   .timeline-cursor {
     position: absolute;

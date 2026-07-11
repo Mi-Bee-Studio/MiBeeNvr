@@ -143,6 +143,20 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 			f.Offset = v
 		}
 	}
+	// Time-range filtering for timeline overlay support.
+	if startStr := r.URL.Query().Get("start"); startStr != "" {
+		if t, err := time.Parse(time.RFC3339Nano, startStr); err == nil {
+			f.StartTime = &t
+		}
+	}
+	if endStr := r.URL.Query().Get("end"); endStr != "" {
+		if t, err := time.Parse(time.RFC3339Nano, endStr); err == nil {
+			f.EndTime = &t
+		}
+	}
+	if r.URL.Query().Get("asc") == "true" {
+		f.AscOrder = true
+	}
 
 	events, total, err := h.db.ListAIEvents(r.Context(), f)
 	if err != nil {

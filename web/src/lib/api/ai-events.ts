@@ -45,6 +45,9 @@ export interface AIEventStatsResponse {
 export interface AIEventFilter {
   camera_id?: string;
   event_type?: string;
+  start?: string;
+  end?: string;
+  asc?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -53,6 +56,9 @@ export async function listAIEvents(filter: AIEventFilter = {}): Promise<AIEventL
   const params = new URLSearchParams();
   if (filter.camera_id) params.set('camera_id', filter.camera_id);
   if (filter.event_type) params.set('event_type', filter.event_type);
+  if (filter.start) params.set('start', filter.start);
+  if (filter.end) params.set('end', filter.end);
+  if (filter.asc) params.set('asc', 'true');
   if (filter.limit) params.set('limit', String(filter.limit));
   if (filter.offset) params.set('offset', String(filter.offset));
   const qs = params.toString();

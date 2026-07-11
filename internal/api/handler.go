@@ -125,6 +125,7 @@ type Handler struct {
 	snapshotMu        sync.RWMutex
 	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr          *merge.MergeManager
+	rollingMergeMgr   *merge.RollingMergeCoordinator
 	healthMgr         HealthManager
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
@@ -133,7 +134,6 @@ type Handler struct {
 	transcodeMgr      TranscodeManagerAPI
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
-	timelapseDailyMgr *timelapse.DailyMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
@@ -298,6 +298,10 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Post("/api/merge/reclassify", h.handleMergeReclassify)
+		r.Post("/api/merge/backfill", h.handleMergeBackfillAll)            // Backfill all cameras
+		r.Post("/api/merge/consolidate", h.handleMergeConsolidate)          // Merge short recordings into longer ones
+		r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
+		r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)      // Recording gaps for timeline
 		// Timelapse endpoints
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
@@ -508,9 +512,9 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 	h.timelapseMergeMgr = mgr
 }
 
-// setTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
-func (h *Handler) setTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
-	h.timelapseDailyMgr = mgr
+// SetRollingMergeMgr sets the recording rolling merge coordinator on the handler.
+func (h *Handler) SetRollingMergeMgr(mgr *merge.RollingMergeCoordinator) {
+	h.rollingMergeMgr = mgr
 }
 
 // SetAIHandler sets the AI handler on the Handler.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1005,4 +1006,108 @@ func readEXIFString(data []byte, entryOff int, bo binary.ByteOrder) string {
 	// Strip null terminator(s)
 	s := string(bytes.TrimRight(strBytes, "\x00"))
 	return strings.TrimSpace(s)
+}
+
+// handleTimelineGaps returns recording gaps (time periods with no recording)
+// for a camera on a specific date. Used by the frontend timeline to render
+// "断帧" (frame drop) markers.
+//
+// Query params:
+//
+//	date=YYYY-MM-DD  — the day to analyze (required)
+//	min_gap=30s      — minimum gap duration to report (default 30s)
+func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		WriteError(w, http.StatusBadRequest, "camera id is required")
+		return
+	}
+
+	dateStr := r.URL.Query().Get("date")
+	if dateStr == "" {
+		WriteError(w, http.StatusBadRequest, "date query param is required (YYYY-MM-DD)")
+		return
+	}
+
+	minGapStr := r.URL.Query().Get("min_gap")
+	if minGapStr == "" {
+		minGapStr = "30s"
+	}
+	minGap, err := time.ParseDuration(minGapStr)
+	if err != nil || minGap <= 0 {
+		minGap = 30 * time.Second
+	}
+
+	// Parse date to UTC start/end.
+	y, m, d, err := parseDateParts(dateStr)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid date format, use YYYY-MM-DD")
+		return
+	}
+	dayStart := time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC)
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	// Fetch all recordings for this camera on this day.
+	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
+		CameraID:  cameraID,
+		StartTime: dayStart,
+		EndTime:   dayEnd,
+		SortBy:    "started_at",
+		SortOrder: "asc",
+		Limit:     1000,
+	})
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings: "+err.Error())
+		return
+	}
+
+	// Compute gaps between consecutive recordings.
+	type Gap struct {
+		Start    string `json:"start"`
+		End      string `json:"end"`
+		Duration float64 `json:"duration"`
+	}
+	var gaps []Gap
+	for i := 1; i < len(recs); i++ {
+		prevEnd := recs[i-1].EndedAt
+		currStart := recs[i].StartedAt
+		if prevEnd.IsZero() || currStart.IsZero() {
+			continue
+		}
+		gapDur := currStart.Sub(prevEnd).Seconds()
+		if gapDur >= minGap.Seconds() {
+			gaps = append(gaps, Gap{
+				Start:    prevEnd.Format(time.RFC3339Nano),
+				End:      currStart.Format(time.RFC3339Nano),
+				Duration: math.Round(gapDur*10) / 10,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"camera_id": cameraID,
+		"date":      dateStr,
+		"gaps":      gaps,
+		"total_gaps": len(gaps),
+	})
+}
+
+// parseDateParts parses a "YYYY-MM-DD" string into year, month, day integers.
+func parseDateParts(s string) (year, month, day int, err error) {
+	parts := strings.Split(s, "-")
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("expected YYYY-MM-DD")
+	}
+	year, err1 := strconv.Atoi(parts[0])
+	month, err2 := strconv.Atoi(parts[1])
+	day, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, fmt.Errorf("invalid date components")
+	}
+	return year, month, day, nil
 }

@@ -52,11 +52,15 @@ func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
 type AIEventFilter struct {
 	CameraID  string
 	EventType string
+	StartTime *time.Time // inclusive lower bound on created_at
+	EndTime   *time.Time // inclusive upper bound on created_at
+	AscOrder  bool       // order by created_at ASC (for timeline overlay)
 	Limit     int
 	Offset    int
 }
 
-// ListAIEvents returns AI events matching the filter, ordered by created_at DESC.
+// ListAIEvents returns AI events matching the filter, ordered by created_at DESC
+// (or ASC if f.AscOrder is true).
 func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50
@@ -72,6 +76,14 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		where = append(where, "event_type = ?")
 		args = append(args, f.EventType)
 	}
+	if f.StartTime != nil {
+		where = append(where, "created_at >= ?")
+		args = append(args, f.StartTime.Format("2006-01-02 15:04:05.999999999"))
+	}
+	if f.EndTime != nil {
+		where = append(where, "created_at <= ?")
+		args = append(args, f.EndTime.Format("2006-01-02 15:04:05.999999999"))
+	}
 
 	whereClause := ""
 	if len(where) > 0 {
@@ -85,9 +97,14 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		return nil, 0, err
 	}
 
+	orderClause := " ORDER BY created_at DESC, id DESC"
+	if f.AscOrder {
+		orderClause = " ORDER BY created_at ASC, id ASC"
+	}
+
 	// Data
 	dataQ := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, created_at
-		FROM ai_events` + whereClause + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+		FROM ai_events` + whereClause + orderClause + ` LIMIT ? OFFSET ?`
 	rows, err := d.readConn().QueryContext(ctx, dataQ, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
