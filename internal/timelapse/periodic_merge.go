@@ -74,12 +74,12 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")
 
-	// 1. Query DB for merged timelapse segments in the date range.
-	merged := true
+	// Query ALL timelapse segments in the date range — both merged (rolling
+	// merge produced .mp4) and unmerged (raw frame directories, when
+	// merge_enabled=false skips rolling merge). The pipeline tiers handle both.
 	recordings, err := m.store.ListRecordings(ctx, model.RecordingFilter{
 		CameraID:  cameraID,
 		Format:    model.FormatTimelapse,
-		Merged:    &merged,
 		StartTime: startTime,
 		EndTime:   endTime,
 	})
@@ -87,7 +87,8 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 		return fmt.Errorf("periodic merge: list recordings: %w", err)
 	}
 
-	// Filter to only include merged or retryable segments.
+	// Filter to only include eligible segments (merged, or unmerged raw dirs,
+	// or retryable failed segments).
 	segments := m.filterEligibleSegments(recordings)
 
 	// 2. Handle no segments.
@@ -115,6 +116,20 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 	}
 	// Set initial merge progress to 0 for all segments.
 	m.updateProgressBatch(ctx, segments, 0)
+
+	// Check if any segment is an unmerged raw frame directory (no .mp4 from
+	// rolling merge). These must go through Go keyframe merge (Tier 4) directly,
+	// since they're directories, not MP4 files.
+	if hasUnmergedRawSegments(segments) {
+		slog.Info("periodic merge: detected unmerged raw segments, using Go keyframe merge")
+		err := m.goMergeSegments(ctx, segments, outputPath)
+		if err != nil {
+			_ = m.markMergeFailed(ctx, segments, err)
+			return fmt.Errorf("periodic merge: Go merge failed: %w", err)
+		}
+		return m.finalizeMerge(ctx, segments, outputPath)
+	}
+
 	// Handle single segment — just copy.
 	if len(segments) == 1 {
 		return m.handleSingleSegment(ctx, segments[0], outputPath)
@@ -652,14 +667,19 @@ func (m *PeriodicMergeManager) filterEligibleSegments(recordings []model.Recordi
 	m.retryMu.Lock()
 	defer m.retryMu.Unlock()
 	for _, r := range recordings {
-		if r.MergeStatus == model.MergeStatusMerged {
+		switch r.MergeStatus {
+		case model.MergeStatusMerged:
+			// Rolling-merged segment (has .mp4 output) — eligible for concat.
 			segments = append(segments, r)
-			continue
-		}
-		if r.MergeStatus == model.MergeStatusFailed {
+		case model.MergeStatusFailed:
+			// Retryable failed segment.
 			if info, ok := m.retryCounts[r.ID]; ok && info.count < 3 {
 				segments = append(segments, r)
 			}
+		case "", model.MergeStatusPending:
+			// Unmerged raw frame directory (merge_enabled=false skipped rolling
+			// merge, or segment just inserted) — eligible for Go keyframe merge (Tier 4).
+			segments = append(segments, r)
 		}
 	}
 
@@ -687,6 +707,19 @@ func filterMergedSegments(recordings []model.Recording) []model.Recording {
 		}
 	}
 	return segments
+}
+
+// hasUnmergedRawSegments returns true if any segment is a directory of raw
+// frames (JPEG/H.264/H.265) rather than a rolling-merged .mp4 file. This
+// happens when merge_enabled=false skips rolling merge — the segments are
+// frame directories that must go through Go keyframe merge (Tier 4) directly.
+func hasUnmergedRawSegments(segments []model.Recording) bool {
+	for _, seg := range segments {
+		if seg.MergeStatus != model.MergeStatusMerged {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSegmentCompatibility checks if all segments have compatible resolution and codec.

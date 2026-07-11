@@ -33,6 +33,14 @@ type SnapshotCapturerConfig struct {
 	MergeMgr    *RollingMergeManager // optional rolling merge manager
 	Protocol    string               // camera protocol for DeriveSnapshotURL fallback
 	StreamURL   string               // camera stream URL for DeriveSnapshotURL fallback
+
+	// FrameProvider, when set, supplies JPEG frames from an in-memory cache
+	// (e.g. HTTPJPEGRecorder.LatestFrame) instead of an HTTP GET. This is used
+	// for dual-mode MJPEG/JPEG timelapse: it reuses the already-running
+	// recorder's latest frame without opening a second network connection
+	// (critical for ESP32 cameras with very limited concurrent HTTP capacity).
+	// When set, SnapshotURL is not required and the HTTP client is unused.
+	FrameProvider func() []byte
 }
 
 // SnapshotCapturer captures JPEG snapshots from an HTTP URL at a configurable
@@ -70,8 +78,8 @@ func NewSnapshotCapturer(cfg SnapshotCapturerConfig, store SegmentStore, opts ..
 	if cfg.SegmentDur < time.Millisecond {
 		cfg.SegmentDur = 10 * time.Minute
 	}
-	// Auto-derive snapshot URL if empty
-	if cfg.SnapshotURL == "" && cfg.StreamURL != "" {
+	// Auto-derive snapshot URL if empty (only needed for HTTP fetch mode)
+	if cfg.FrameProvider == nil && cfg.SnapshotURL == "" && cfg.StreamURL != "" {
 		if derived := DeriveSnapshotURL(cfg.StreamURL, cfg.Protocol); derived != "" {
 			cfg.SnapshotURL = derived
 			snapshotCapturerLogger.Info("auto-derived snapshot URL",
@@ -174,8 +182,8 @@ func (r *SnapshotCapturer) run(ctx context.Context) {
 	defer r.setStatus(model.StatusStopped)
 	defer r.closeCurrentSegment()
 
-	// Validate that we have a URL to work with
-	if r.cfg.SnapshotURL == "" {
+	// Validate that we have a source to work with
+	if r.cfg.FrameProvider == nil && r.cfg.SnapshotURL == "" {
 		snapshotCapturerLogger.Error("no snapshot URL configured and none could be derived",
 			"camera_id", r.cfg.CameraID)
 		return
@@ -196,18 +204,29 @@ func (r *SnapshotCapturer) run(ctx context.Context) {
 
 // captureFrame fetches a single snapshot and writes it to the current segment.
 func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
-	data, err := r.fetchSnapshot(ctx)
-	if err != nil {
-		snapshotCapturerLogger.Warn("failed to fetch snapshot, skipping frame",
-			"camera_id", r.cfg.CameraID,
-			"url", r.cfg.SnapshotURL,
-			"error", err)
-		r.recordError("snapshot_fetch")
-		return
-	}
-	if data == nil {
-		// nil data means skip (e.g., 404 handled gracefully)
-		return
+	var data []byte
+	if r.cfg.FrameProvider != nil {
+		// Dual-mode: pull latest frame from the running recorder's in-memory cache.
+		data = r.cfg.FrameProvider()
+		if len(data) == 0 {
+			// No frame available yet (recorder not connected) — skip silently
+			return
+		}
+	} else {
+		fetched, err := r.fetchSnapshot(ctx)
+		if err != nil {
+			snapshotCapturerLogger.Warn("failed to fetch snapshot, skipping frame",
+				"camera_id", r.cfg.CameraID,
+				"url", r.cfg.SnapshotURL,
+				"error", err)
+			r.recordError("snapshot_fetch")
+			return
+		}
+		if fetched == nil {
+			// nil data means skip (e.g., 404 handled gracefully)
+			return
+		}
+		data = fetched
 	}
 
 	// Create segment if needed

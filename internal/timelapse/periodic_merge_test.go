@@ -22,6 +22,74 @@ func TestNewPeriodicMergeManager(t *testing.T) {
 	}
 }
 
+func TestHasUnmergedRawSegments(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name     string
+		segments []model.Recording
+		want     bool
+	}{
+		{
+			name:     "empty",
+			segments: nil,
+			want:     false,
+		},
+		{
+			name: "all merged",
+			segments: []model.Recording{
+				{ID: "1", MergeStatus: model.MergeStatusMerged},
+				{ID: "2", MergeStatus: model.MergeStatusMerged},
+			},
+			want: false,
+		},
+		{
+			name: "one unmerged (empty status)",
+			segments: []model.Recording{
+				{ID: "1", MergeStatus: model.MergeStatusMerged},
+				{ID: "2", MergeStatus: ""},
+			},
+			want: true,
+		},
+		{
+			name: "one pending",
+			segments: []model.Recording{
+				{ID: "1", MergeStatus: model.MergeStatusPending},
+			},
+			want: true,
+		},
+		{
+			name: "all unmerged",
+			segments: []model.Recording{
+				{ID: "1", MergeStatus: ""},
+				{ID: "2", MergeStatus: ""},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasUnmergedRawSegments(tt.segments)
+			if got != tt.want {
+				t.Fatalf("hasUnmergedRawSegments() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterEligibleSegments_IncludesUnmerged(t *testing.T) {
+	t.Helper()
+	m := NewPeriodicMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test", 24*time.Hour, nil)
+	recordings := []model.Recording{
+		{ID: "merged-1", MergeStatus: model.MergeStatusMerged},
+		{ID: "unmerged-1", MergeStatus: ""}, // raw frame dir, no rolling merge
+		{ID: "pending-1", MergeStatus: model.MergeStatusPending},
+	}
+	segments := m.filterEligibleSegments(recordings)
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 eligible segments (merged + unmerged + pending), got %d", len(segments))
+	}
+}
+
 func TestPeriodicMergeManager_Duration(t *testing.T) {
 	t.Helper()
 	tests := []struct {

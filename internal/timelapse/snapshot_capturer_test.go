@@ -142,6 +142,98 @@ func TestSnapshotCapturer_CaptureJPEGFrame(t *testing.T) {
 }
 
 // ============================================================
+// Test: FrameProvider (dual-mode in-memory frame polling)
+// ============================================================
+
+func TestSnapshotCapturer_FrameProvider(t *testing.T) {
+	jpegData := makeTestJPEG(t, 32, 32)
+
+	// Simulate a recorder's LatestFrame() — returns a frame after the first call
+	var callCount atomic.Int32
+	frameProvider := func() []byte {
+		callCount.Add(1)
+		return jpegData
+	}
+
+	store := newMockSegmentStore(t)
+	db := newMockRecordingDB()
+
+	cfg := SnapshotCapturerConfig{
+		CameraID:      "test-cam",
+		Interval:      50 * time.Millisecond,
+		SegmentDur:    time.Hour, // long enough to avoid rotation
+		Store:         store,
+		DB:            db,
+		FrameProvider: frameProvider,
+	}
+
+	capturer := NewSnapshotCapturer(cfg, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := capturer.Start(ctx)
+	require.NoError(t, err)
+
+	// Let it capture a few frames
+	time.Sleep(200 * time.Millisecond)
+
+	err = capturer.Stop()
+	require.NoError(t, err)
+
+	// FrameProvider should have been called at least twice
+	assert.GreaterOrEqual(t, callCount.Load(), int32(2),
+		"expected FrameProvider to be called at least 2 times")
+
+	// Should NOT need a SnapshotURL (no HTTP fetch at all)
+	assert.Equal(t, "", cfg.SnapshotURL, "SnapshotURL should remain empty in FrameProvider mode")
+
+	// Should have created at least one segment
+	assert.GreaterOrEqual(t, store.segmentCount(), 1,
+		"expected at least 1 segment created")
+}
+
+// TestSnapshotCapturer_FrameProviderNilFrame verifies that when FrameProvider
+// returns nil (no frame available yet), the capturer skips gracefully.
+func TestSnapshotCapturer_FrameProviderNilFrame(t *testing.T) {
+	// FrameProvider returns nil for the first 3 calls, then returns data
+	var callCount atomic.Int32
+	jpegData := makeTestJPEG(t, 16, 16)
+	frameProvider := func() []byte {
+		n := callCount.Add(1)
+		if n < 3 {
+			return nil // simulate recorder not connected yet
+		}
+		return jpegData
+	}
+
+	store := newMockSegmentStore(t)
+	db := newMockRecordingDB()
+
+	cfg := SnapshotCapturerConfig{
+		CameraID:      "test-cam",
+		Interval:      20 * time.Millisecond,
+		SegmentDur:    time.Hour,
+		Store:         store,
+		DB:            db,
+		FrameProvider: frameProvider,
+	}
+
+	capturer := NewSnapshotCapturer(cfg, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := capturer.Start(ctx)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	_ = capturer.Stop()
+
+	// Should have eventually captured frames once FrameProvider started returning data
+	assert.GreaterOrEqual(t, store.segmentCount(), 1,
+		"expected at least 1 segment once frames became available")
+}
+
+// ============================================================
 // Test: 404 handling (skip gracefully)
 // ============================================================
 

@@ -118,10 +118,10 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	// Validate frame_source
 	if body.FrameSource != "" {
 		switch body.FrameSource {
-		case "auto", "snapshot", "rtsp_keyframe", "mjpeg":
+		case "auto", "snapshot", "rtsp_keyframe", "mjpeg", "latest_frame":
 			// valid
 		default:
-			WriteError(w, http.StatusBadRequest, "frame_source must be \"auto\", \"snapshot\", \"rtsp_keyframe\", or \"mjpeg\"")
+			WriteError(w, http.StatusBadRequest, "frame_source must be \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\", or \"latest_frame\"")
 			return
 		}
 	}
@@ -872,7 +872,8 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 // handleTimelapseMerge handles POST /api/timelapse/{id}/merge.
 // Triggers a merge for the specified camera. Accepts optional duration
 // query param (e.g., "8h", "12h", "24h", "natural-day", "7d", "30d")
-// for custom merge windows. Without duration, uses daily merge (backward compat).
+// for custom merge windows. Without duration, defaults to "natural-day"
+// (24h, midnight-aligned in the configured timezone).
 func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
@@ -883,45 +884,13 @@ func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional duration query param for custom merge windows
+	// Parse optional duration query param for custom merge windows.
+	// Default to "natural-day" (24h, midnight-aligned) when not specified.
 	durationStr := r.URL.Query().Get("duration")
-	if durationStr != "" {
-		h.handleTimelapseMergeWithDuration(w, r, cameraID, durationStr)
-		return
+	if durationStr == "" {
+		durationStr = "natural-day"
 	}
-
-	// No duration — use configured DailyMergeManager (backward compat)
-	if h.timelapseDailyMgr == nil {
-		h.activeMerges.Delete(cameraID)
-		WriteError(w, http.StatusServiceUnavailable, "timelapse daily merge manager not available")
-		return
-	}
-
-	date := r.URL.Query().Get("date")
-	if date == "" {
-		// Compute "yesterday" in the configured display timezone
-		loc := time.UTC
-		if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
-			if l, err := time.LoadLocation(h.config.Timezone); err == nil {
-				loc = l
-			}
-		}
-		date = time.Now().In(loc).Add(-24 * time.Hour).Format("2006-01-02")
-	}
-
-	go func() {
-		defer h.activeMerges.Delete(cameraID)
-		ctx := context.Background()
-		if err := h.timelapseDailyMgr.Run(ctx, cameraID, date); err != nil {
-			logger.Warn("timelapse daily merge failed", "camera_id", cameraID, "date", date, "error", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":    "merge_initiated",
-		"camera_id": cameraID,
-		"date":      date,
-	})
+	h.handleTimelapseMergeWithDuration(w, r, cameraID, durationStr)
 }
 
 // handleTimelapseMergeWithDuration handles merge with a custom duration.

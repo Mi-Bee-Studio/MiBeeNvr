@@ -30,7 +30,15 @@ func deriveProtocolForSnapshot(cam config.CameraConfig) string {
 
 // effectiveDualModeFrameSource resolves the effective frame source for dual-mode
 // timelapse (regular recording camera with timelapse enabled alongside).
-// "auto" is resolved to "rtsp_keyframe" for RTSP/ONVIF cameras with h264/h265 encoding.
+// "auto" is resolved to:
+//   - "rtsp_keyframe" for RTSP/ONVIF cameras with h264/h265/empty encoding
+//     (empty may be H.264 or H.265; resolved at runtime; if the recorder turns
+//     out to be JPEG, the caller starts a frame poller instead).
+//   - "latest_frame" for HTTP cameras (always JPEG) and RTSP MJPEG cameras.
+//
+// For ONVIF cameras with empty encoding, this returns "rtsp_keyframe" as the
+// static guess, but the caller must verify at runtime via isRecorderJPEG and
+// fall back to a frame poller if the recorder is actually a JPEG/MJPEG recorder.
 func effectiveDualModeFrameSource(cam config.CameraConfig) string {
 	if cam.Timelapse == nil || !cam.Timelapse.Enabled {
 		return ""
@@ -38,22 +46,47 @@ func effectiveDualModeFrameSource(cam config.CameraConfig) string {
 	fs := cam.Timelapse.FrameSource
 	if fs == "" || fs == "auto" {
 		switch cam.Protocol {
+		case "http":
+			// HTTP protocol cameras are always JPEG — poll LatestFrame().
+			return "latest_frame"
 		case "rtsp", "onvif":
-			if cam.Encoding == "h264" || cam.Encoding == "h265" || cam.Encoding == "" {
+			switch cam.Encoding {
+			case "h264", "h265", "":
 				return "rtsp_keyframe"
+			case "mjpeg", "jpeg":
+				return "latest_frame"
 			}
 		}
 	}
 	return fs
 }
 
-// resolveTimelapseMergeMgr returns the global timelapse merge manager if available,
-// or creates a local one with AutoDetectMerger. This ensures rolling merge works
-// even when the global manager is not set (production mode).
-func (cm *CameraManager) resolveTimelapseMergeMgr(interval time.Duration) *timelapse.RollingMergeManager {
-	if cm.timelapseMergeMgr != nil {
+// resolveTimelapseMergeMgr returns a timelapse rolling merge manager for the
+// given camera, honoring per-camera merge_enabled and delete_original config.
+//
+// Resolution logic:
+//   - If merge_enabled is explicitly false → return nil (skip rolling merge).
+//   - If delete_original is true and differs from the global manager's setting,
+//     create a per-camera manager with deleteOriginal=true.
+//   - Otherwise, reuse the global manager (if set) or create a local fallback.
+func (cm *CameraManager) resolveTimelapseMergeMgr(cam config.CameraConfig, interval time.Duration) *timelapse.RollingMergeManager {
+	// merge_enabled: nil = auto (enabled), false = disabled, true = enabled
+	if cam.Timelapse != nil && cam.Timelapse.MergeEnabled != nil && !*cam.Timelapse.MergeEnabled {
+		return nil
+	}
+
+	deleteOriginal := false
+	if cam.Timelapse != nil && cam.Timelapse.DeleteOriginal {
+		deleteOriginal = true
+	}
+
+	// Reuse the global manager when it matches the desired deleteOriginal setting.
+	// The global manager always has deleteOriginal=false (run.go constructs it that way),
+	// so only reuse it when the camera also wants false.
+	if cm.timelapseMergeMgr != nil && !deleteOriginal {
 		return cm.timelapseMergeMgr
 	}
+
 	fps := 10
 	if interval > 0 {
 		fps = int(time.Second / interval)
@@ -61,7 +94,7 @@ func (cm *CameraManager) resolveTimelapseMergeMgr(interval time.Duration) *timel
 			fps = 1
 		}
 	}
-	return timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, false)
+	return timelapse.NewRollingMergeManager(timelapse.NewAutoDetectMerger(), cm.db, fps, deleteOriginal)
 }
 
 // createTimelapseSnapshotRecorder creates a SnapshotCapturer for snapshot frame source.
@@ -83,7 +116,7 @@ func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig
 		DB:          cm.db,
 		Store:       cm.store,
 		Metrics:     cm.metrics,
-		MergeMgr:    cm.resolveTimelapseMergeMgr(interval),
+		MergeMgr:    cm.resolveTimelapseMergeMgr(cam, interval),
 		Protocol:    deriveProto,
 		StreamURL:   cam.URL,
 	}
@@ -120,7 +153,7 @@ func (cm *CameraManager) createTimelapseMJPEGRecorder(cam config.CameraConfig, s
 			tlCfg.Interval = d
 		}
 	}
-	tlCfg.MergeMgr = cm.resolveTimelapseMergeMgr(tlCfg.Interval)
+	tlCfg.MergeMgr = cm.resolveTimelapseMergeMgr(cam, tlCfg.Interval)
 	logger.Info("creating TimelapseRecorder for timelapse", "camera_id", cam.ID, "url", cam.URL)
 	return recorder.NewTimelapseRecorder(tlCfg, cm.store)
 }
@@ -204,7 +237,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 	// so cam.Encoding may be empty even though the stream is H.265.
 	isH265 := cam.Encoding == "h265" || cam.StreamEncoding == "H265" || isRecorderH265(rec)
 
-	mergeMgr := cm.resolveTimelapseMergeMgr(interval)
+	mergeMgr := cm.resolveTimelapseMergeMgr(cam, interval)
 
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
 		CameraID:   cameraID,
@@ -246,6 +279,21 @@ func (cm *CameraManager) stopTimelapseKeyframeExtractor(cameraID string) {
 	}
 }
 
+// stopTimelapseFramePoller stops and removes the frame poller for the given camera.
+// The caller MUST hold cm.mu.
+func (cm *CameraManager) stopTimelapseFramePoller(cameraID string) {
+	poller, ok := cm.framePollers[cameraID]
+	if ok {
+		delete(cm.framePollers, cameraID)
+	}
+	if ok && poller != nil {
+		if err := poller.Stop(); err != nil {
+			logger.Warn("failed to stop timelapse frame poller", "camera_id", cameraID, "error", err)
+		}
+		logger.Info("stopped timelapse frame poller", "camera_id", cameraID)
+	}
+}
+
 // stopAllTimelapseKeyframeExtractors stops all keyframe extractors (used during manager Stop).
 func (cm *CameraManager) stopAllTimelapseKeyframeExtractors() {
 	cm.mu.Lock()
@@ -259,6 +307,23 @@ func (cm *CameraManager) stopAllTimelapseKeyframeExtractors() {
 	for _, ext := range extractors {
 		if err := ext.Stop(); err != nil {
 			logger.Warn("failed to stop keyframe extractor", "error", err)
+		}
+	}
+}
+
+// stopAllTimelapseFramePollers stops all frame pollers (used during manager Stop).
+func (cm *CameraManager) stopAllTimelapseFramePollers() {
+	cm.mu.Lock()
+	pollers := make([]*timelapse.SnapshotCapturer, 0, len(cm.framePollers))
+	for _, p := range cm.framePollers {
+		pollers = append(pollers, p)
+	}
+	cm.framePollers = make(map[string]*timelapse.SnapshotCapturer)
+	cm.mu.Unlock()
+
+	for _, p := range pollers {
+		if err := p.Stop(); err != nil {
+			logger.Warn("failed to stop timelapse frame poller", "error", err)
 		}
 	}
 }
@@ -361,4 +426,93 @@ func isRecorderH265(rec model.Recorder) bool {
 	// H265Recorder from internal/recorder will match.
 	typeName := fmt.Sprintf("%T", rec)
 	return strings.Contains(typeName, "H265Recorder")
+}
+
+// isRecorderJPEG checks if the given recorder (or its delegate for ONVIF recorders)
+// is a JPEG/MJPEG recorder that can provide frames via a LatestFrame() method.
+// This is the runtime complement to effectiveDualModeFrameSource: an ONVIF camera
+// with empty encoding may statically resolve to "rtsp_keyframe" but actually be a
+// JPEG device (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate).
+func isRecorderJPEG(rec model.Recorder) bool {
+	type delegater interface {
+		Delegate() model.Recorder
+	}
+	if d, ok := rec.(delegater); ok {
+		if delegate := d.Delegate(); delegate != nil {
+			rec = delegate
+		}
+	}
+	typeName := fmt.Sprintf("%T", rec)
+	return strings.Contains(typeName, "HTTPJPEGRecorder") || strings.Contains(typeName, "MJPEGRecorder")
+}
+
+// latestFramer is implemented by recorders that cache the latest JPEG frame.
+// Both HTTPJPEGRecorder and MJPEGRecorder (after the LatestFrame addition) satisfy it.
+type latestFramer interface {
+	LatestFrame() []byte
+}
+
+// resolveLatestFramer extracts a LatestFrame provider from the recorder, following
+// the ONVIF delegate chain. Returns nil if the recorder does not expose frames.
+func resolveLatestFramer(rec model.Recorder) func() []byte {
+	type delegater interface {
+		Delegate() model.Recorder
+	}
+	if d, ok := rec.(delegater); ok {
+		if delegate := d.Delegate(); delegate != nil {
+			rec = delegate
+		}
+	}
+	lr, ok := rec.(latestFramer)
+	if !ok {
+		return nil
+	}
+	return lr.LatestFrame
+}
+
+// startTimelapseFramePoller creates and starts a SnapshotCapturer configured to
+// poll the running recorder's LatestFrame() in-memory cache instead of opening
+// a second HTTP connection. Used for dual-mode MJPEG/JPEG timelapse.
+func (cm *CameraManager) startTimelapseFramePoller(cameraID string, cam config.CameraConfig, rec model.Recorder) (*timelapse.SnapshotCapturer, error) {
+	frameProvider := resolveLatestFramer(rec)
+	if frameProvider == nil {
+		logger.Warn("recorder does not support LatestFrame for timelapse frame polling",
+			"camera_id", cameraID)
+		return nil, nil
+	}
+
+	interval := 30 * time.Second
+	if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d >= time.Millisecond {
+		interval = d
+	}
+
+	segDur := 10 * time.Minute
+	if d, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration); err == nil && d >= time.Minute {
+		segDur = d
+	}
+
+	mergeMgr := cm.resolveTimelapseMergeMgr(cam, interval)
+
+	snapCfg := timelapse.SnapshotCapturerConfig{
+		CameraID:     cameraID,
+		Interval:     interval,
+		SegmentDur:   segDur,
+		DB:           cm.db,
+		Store:        cm.store,
+		Metrics:      cm.metrics,
+		MergeMgr:     mergeMgr,
+		FrameProvider: frameProvider,
+	}
+	capturer := timelapse.NewSnapshotCapturer(snapCfg, cm.store, cm.metrics)
+
+	ctx := context.Background()
+	if err := capturer.Start(ctx); err != nil {
+		return nil, err
+	}
+
+	logger.Info("started timelapse frame poller",
+		"camera_id", cameraID,
+		"interval", interval,
+		"frame_source", "latest_frame")
+	return capturer, nil
 }
