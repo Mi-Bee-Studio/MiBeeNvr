@@ -276,6 +276,25 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		metrics,
 	)
 
+	// Step 5.1: Rolling merge coordinator (quasi-real-time, event-driven).
+	// Subscribes to SegmentCompleted and merges segments into per-camera window
+	// buckets within seconds. Independent of the periodic MergeManager above.
+	recordRollingMergeMgr := merge.NewRollingMergeCoordinator(
+		db, store,
+		func() config.MergeConfig { return cfg.Merge },
+		func(cameraID string) *config.MergeConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Merge
+				}
+			}
+			return nil
+		},
+		func() []config.CameraConfig { return cfg.Cameras },
+		metrics,
+		eventBus,
+	)
+
 	// Step 5.5: Transcode manager (after merge, before camera)
 	var transcodeMgr *transcoding.TranscodeManager
 	if cfg.Transcoding.Enabled {
@@ -370,7 +389,12 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 					)
 				}
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur, appLoc)
+			// Use per-camera MergeOutputFPS (default 30 via ApplyDefaults), fallback to 10.
+			fps := 10
+			if cam.Timelapse.MergeOutputFPS > 0 {
+				fps = cam.Timelapse.MergeOutputFPS
+			}
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(
 				"merge scheduler: configured camera",
@@ -613,6 +637,7 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	if rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(rollingMergeMgr)
 	}
+	handler.SetRollingMergeMgr(recordRollingMergeMgr)
 	// Wire AI handler (config + zones only, no backend inference)
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), eventBus)
 	ah := api.NewAIHandler(aiMgr, cfg, configPath)
@@ -761,6 +786,28 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("register merge: %w", err)
+		}
+	}
+
+	// 4.1. rolling-merge — event-driven quasi-real-time merge
+	{
+		var rollingCancel context.CancelFunc
+		if err := a.Register(&serviceFunc{
+			name: "rolling-merge",
+			startFunc: func(ctx context.Context) error {
+				var runCtx context.Context
+				runCtx, rollingCancel = context.WithCancel(ctx)
+				return recordRollingMergeMgr.Start(runCtx)
+			},
+			stopFunc: func() error {
+				if rollingCancel != nil {
+					rollingCancel()
+				}
+				recordRollingMergeMgr.Stop()
+				return nil
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("register rolling-merge: %w", err)
 		}
 	}
 

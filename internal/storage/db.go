@@ -552,6 +552,15 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_merged")   // superseded by idx_recordings_archived_time (merged tracked in merge_status)
 	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_archived") // superseded by idx_recordings_archived_time
 
+	// Migration v24: add merge_quality column to recordings.
+	// Values: 'complete' (normal), 'fragmented' (has time gaps), 'short' (below min_duration).
+	var mergeQualityColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_quality'`).Scan(&mergeQualityColExists)
+	if mergeQualityColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_quality TEXT DEFAULT 'complete'`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 

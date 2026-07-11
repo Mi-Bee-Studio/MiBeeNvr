@@ -119,7 +119,7 @@ func TestMergeColumnsExist(t *testing.T) {
 		var version string
 		err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "23", version)
+		require.Equal(t, "24", version)
 	})
 
 	// Test 2: Existing DB at v14 — columns added via migration
@@ -227,7 +227,7 @@ func TestMergeColumnsExist(t *testing.T) {
 		var version string
 		err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "23", version)
+		require.Equal(t, "24", version)
 
 		// Data intact
 		var count int

@@ -376,10 +376,18 @@ func TestMergeMP4Segments_AudioConfigMismatch(t *testing.T) {
 	info2, err := ParseSegment(seg2)
 	require.NoError(t, err)
 
+	// When audio configs differ, the merge should SUCCEED but drop audio
+	// (video-only output). This handles camera reconnect scenarios where
+	// audio negotiation changes mid-session.
 	outputPath := filepath.Join(dir, "merged.mp4")
 	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "audio config mismatch")
+	require.NoError(t, err, "merge should succeed with audio dropped")
+
+	// Verify output is video-only (no audio).
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.False(t, merged.HasAudio, "merged output should not have audio")
+	require.Equal(t, 2, merged.SampleCount, "video samples should be preserved")
 }
 
 func TestMergeMP4Segments_MixedAudioPresence(t *testing.T) {
@@ -400,10 +408,18 @@ func TestMergeMP4Segments_MixedAudioPresence(t *testing.T) {
 	info2, err := ParseSegment(seg2)
 	require.NoError(t, err)
 
+	// When audio presence differs, the merge should SUCCEED but drop audio.
+	// This is the real-world scenario: camera reconnected after audio_enabled
+	// was toggled, or G.711 negotiation succeeded/failed mid-session.
 	outputPath := filepath.Join(dir, "merged.mp4")
 	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "audio")
+	require.NoError(t, err, "merge should succeed with audio dropped")
+
+	// Verify output is video-only.
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.False(t, merged.HasAudio, "merged output should not have audio")
+	require.Equal(t, 2, merged.SampleCount, "video samples should be preserved")
 }
 
 func TestMergeMP4Segments_H265WithAudio(t *testing.T) {

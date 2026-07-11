@@ -54,8 +54,8 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	}
 	defer tx.Rollback()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier, merge_progress) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged, merged.MergeTier, 100)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier, merge_progress, merge_quality) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, true, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality)
 	if err != nil {
 		return err
 	}
@@ -71,6 +71,99 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	_, err = tx.ExecContext(ctx, delQ, args...)
 	if err != nil {
 		return err
+	}
+
+	return tx.Commit()
+}
+
+// ListShortMergedRecordings returns merged recordings shorter than minDurationSec
+// for a camera (or all cameras if cameraID is empty). These are candidates for
+// further consolidation — merging with adjacent recordings to reach the minimum
+// duration threshold.
+func (d *DB) ListShortMergedRecordings(ctx context.Context, cameraID string, minDurationSec float64) ([]*model.Recording, error) {
+	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE merge_status='merged' AND merge_quality='short' AND duration < ? AND ended_at IS NOT NULL`
+	args := []interface{}{minDurationSec}
+	if cameraID != "" {
+		query += " AND camera_id = ?"
+		args = append(args, cameraID)
+	}
+	query += " ORDER BY camera_id, started_at ASC;"
+
+	rows, err := d.readConn().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, &r)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+// RollingReplaceRecordings atomically updates or creates a merged recording and
+// deletes the source segment(s) in a single transaction.
+//
+// This is the DB operation backing the RollingMergeCoordinator's quasi-real-time
+// merge pipeline. Two cases:
+//
+//  1. Create (existingMergedID == ""): INSERT the new merged recording + DELETE
+//     the source segment IDs. Used when starting a new merge window bucket.
+//
+//  2. Append (existingMergedID != ""): UPDATE the existing merged recording's
+//     metadata (duration, file_size, frame_count, ended_at) + DELETE the source
+//     segment ID. Used when appending a segment to an existing bucket.
+//
+// The merged recording is marked merge_status='merged' so retention cleanup
+// treats it as a finalized file.
+func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recording, existingMergedID string, sourceIDs []string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if existingMergedID == "" {
+		// Case 1: Create — INSERT new merged recording.
+		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_tier, merge_progress, merge_quality) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+		_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format,
+			timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize,
+			merged.FrameCount, true, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Case 2: Append — UPDATE existing merged recording.
+		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ? WHERE id = ?;`
+		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.EndedAt), merged.Duration,
+			merged.FileSize, merged.FrameCount, merged.MergeQuality, existingMergedID)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Delete source segment IDs.
+	if len(sourceIDs) > 0 {
+		placeholders := make([]string, len(sourceIDs))
+		args := make([]interface{}, len(sourceIDs))
+		for i, id := range sourceIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		delQ := "DELETE FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+		_, err = tx.ExecContext(ctx, delQ, args...)
+		if err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -100,6 +193,68 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 		}
 	}
 	return res, nil
+}
+
+// ListPendingSegmentsForRolling returns all pending recordings for a camera,
+// ordered by started_at ascending. Used by the rolling merge backfill to drain historical
+// backlog on startup or via manual API trigger.
+//
+// All mergeable formats are returned (h264, h265, avi, mjpeg). The timelapse format
+// is excluded — it has its own merge pipeline (timelapse package).
+// If cameraID is empty, returns pending segments for ALL cameras.
+// Optionally reincludes 'failed' segments (for forced backfill via API).
+func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string, includeFailed bool) ([]*model.Recording, error) {
+	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE merge_status = 'pending' AND ended_at IS NOT NULL AND format != 'timelapse'`
+	args := []interface{}{}
+	if includeFailed {
+		query = strings.Replace(query, "merge_status = 'pending'", "merge_status IN ('pending', 'failed')", 1)
+	}
+	if cameraID != "" {
+		query += " AND camera_id = ?"
+		args = append(args, cameraID)
+	}
+	query += " ORDER BY camera_id, started_at ASC;"
+
+	rows, err := d.readConn().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, &r)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+// ResetFailedMergeStatus resets merge_status from 'failed' or 'incompatible' back to 'pending'
+// for the given recording IDs, allowing them to be re-processed by rolling/periodic merge.
+// Returns the number of rows affected.
+func (d *DB) ResetFailedMergeStatus(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "UPDATE recordings SET merge_status = 'pending', merge_error = '' WHERE id IN (" + strings.Join(placeholders, ",") + ") AND merge_status IN ('failed', 'incompatible');"
+	result, err := d.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // ListCameraMergeWindows returns hourly merge windows for a camera with 2+ segments.

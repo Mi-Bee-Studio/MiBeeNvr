@@ -71,6 +71,10 @@ type Metrics struct {
 	MergeSizeBytes       prometheus.Histogram
 	MergePendingSegments *prometheus.GaugeVec // labels: camera_id
 
+	// Rolling merge metrics (quasi-real-time, event-driven)
+	RollingMergeLatencySeconds *prometheus.HistogramVec // labels: camera_id — time from segment close to merge complete
+	RollingMergeBucketSegments *prometheus.GaugeVec     // labels: camera_id — segments in current bucket
+
 	// Auth metrics — track login attempts for security monitoring
 	AuthAttemptsTotal    *prometheus.CounterVec // labels: result (success/failure/no_password)
 	AuthRateLimitedTotal prometheus.Counter     // total requests blocked by rate limiter
@@ -374,6 +378,17 @@ func NewMetrics() *Metrics {
 		Help: "Number of segments pending merge, partitioned by camera.",
 	}, []string{"camera_id"})
 
+	// Rolling merge metrics (quasi-real-time, event-driven)
+	rollingMergeLatencySeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_rolling_merge_latency_seconds",
+		Help:    "Time from segment close to rolling merge completion, partitioned by camera.",
+		Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
+	}, []string{"camera_id"})
+	rollingMergeBucketSegments := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_rolling_merge_bucket_segments",
+		Help: "Number of segments accumulated in the current rolling merge window bucket.",
+	}, []string{"camera_id"})
+
 	// Auth metrics — track login attempts for security monitoring
 	authAttemptsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_auth_attempts_total",
@@ -509,6 +524,8 @@ func NewMetrics() *Metrics {
 		mergeDurationSeconds,
 		mergeSizeBytes,
 		mergePendingSegments,
+		rollingMergeLatencySeconds,
+		rollingMergeBucketSegments,
 		authAttemptsTotal,
 		authRateLimitedTotal,
 		aiEventsReceivedTotal,
@@ -586,6 +603,8 @@ func NewMetrics() *Metrics {
 		MergeDurationSeconds:           mergeDurationSeconds,
 		MergeSizeBytes:                 mergeSizeBytes,
 		MergePendingSegments:           mergePendingSegments,
+		RollingMergeLatencySeconds:     rollingMergeLatencySeconds,
+		RollingMergeBucketSegments:     rollingMergeBucketSegments,
 		AuthAttemptsTotal:              authAttemptsTotal,
 		AuthRateLimitedTotal:           authRateLimitedTotal,
 		AIEventsReceivedTotal:          aiEventsReceivedTotal,
@@ -650,6 +669,24 @@ func (m *Metrics) UpdateMergePending(cameraID string, count float64) {
 		return
 	}
 	m.MergePendingSegments.WithLabelValues(cameraID).Set(count)
+}
+
+// RecordRollingMergeLatency records the end-to-end latency of a rolling merge
+// (segment close → merge complete) for a camera.
+func (m *Metrics) RecordRollingMergeLatency(cameraID string, latency time.Duration) {
+	if m == nil || m.RollingMergeLatencySeconds == nil {
+		return
+	}
+	m.RollingMergeLatencySeconds.WithLabelValues(cameraID).Observe(latency.Seconds())
+}
+
+// UpdateRollingMergeBucketSegments sets the current segment count in a camera's
+// active rolling merge window bucket.
+func (m *Metrics) UpdateRollingMergeBucketSegments(cameraID string, count int) {
+	if m == nil || m.RollingMergeBucketSegments == nil {
+		return
+	}
+	m.RollingMergeBucketSegments.WithLabelValues(cameraID).Set(float64(count))
 }
 
 // IncStorageWriteErrors increments the storage write errors counter.

@@ -174,6 +174,19 @@ type MergeConfig struct {
 	BatchLimit         int    `yaml:"batch_limit"`
 	MinSegmentAge      string `yaml:"min_segment_age"`
 	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
+
+	// Rolling merge (quasi-real-time): event-driven merge on SegmentCompleted.
+	// When enabled, each newly-closed segment is merged into a per-camera window
+	// bucket within seconds (vs the periodic MergeManager's ~1h latency).
+	// Independent of Enabled/CheckInterval — can run alongside the periodic merge.
+	RollingEnabled  bool   `yaml:"rolling_enabled" json:"rolling_enabled"`
+	RollingDebounce string `yaml:"rolling_debounce" json:"rolling_debounce"` // e.g. "500ms", "2s"
+	RollingWindow   string `yaml:"rolling_window" json:"rolling_window"`     // e.g. "1h", "30m"
+
+	// RollingMinDuration is the target minimum duration for merged recordings.
+	// Merged files shorter than this are marked merge_quality='short' and can be
+	// further consolidated via POST /api/merge/consolidate. Default "5m".
+	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
 }
 
 type TranscodingConfig struct {
@@ -795,10 +808,10 @@ func Validate(cfg *Config) error {
 		// Validate frame_source
 		if cam.Timelapse.FrameSource != "" {
 			switch cam.Timelapse.FrameSource {
-			case "auto", "snapshot", "rtsp_keyframe", "mjpeg":
+			case "auto", "snapshot", "rtsp_keyframe", "mjpeg", "latest_frame":
 				// valid
 			default:
-				return fmt.Errorf("cameras.%s.timelapse.frame_source must be one of \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\" (got %q)", cam.ID, cam.Timelapse.FrameSource)
+				return fmt.Errorf("cameras.%s.timelapse.frame_source must be one of \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\", \"latest_frame\" (got %q)", cam.ID, cam.Timelapse.FrameSource)
 			}
 		}
 		// Validate schedule
@@ -1317,6 +1330,19 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	// Rolling merge fields: per-camera overrides only when explicitly set.
+	if perCamera.RollingEnabled {
+		result.RollingEnabled = true
+	}
+	if perCamera.RollingDebounce != "" {
+		result.RollingDebounce = perCamera.RollingDebounce
+	}
+	if perCamera.RollingWindow != "" {
+		result.RollingWindow = perCamera.RollingWindow
+	}
+	if perCamera.RollingMinDuration != "" {
+		result.RollingMinDuration = perCamera.RollingMinDuration
 	}
 	return result
 }

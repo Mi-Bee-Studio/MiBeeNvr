@@ -951,7 +951,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "23", version)
+	require.Equal(t, "24", version)
 }
 
 func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
@@ -973,7 +973,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "23", version)
+	require.Equal(t, "24", version)
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{

@@ -41,9 +41,25 @@ cameras: []
 #     enabled: true
 #     audio_enabled: false          # Enable audio recording (default: false)
 #     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
-#     timelapse:                      # Per-camera timelapse recording
+#     timelapse:                      # Per-camera timelapse recording (see full reference below)
 #       enabled: false               # Enable timelapse (default: false)
-#       interval: "30s"              # Snapshot interval (default: 30s)
+#       interval: "30s"              # Snapshot interval (default: 30s, min 1s)
+#       # frame_source: "auto"       # How frames are captured. auto (default) resolves:
+#                                   #   - rtsp_keyframe: RTSP/ONVIF H.264/H.265 cameras (subscribes to recorder's StreamHub, extracts IDR frames)
+#                                   #   - latest_frame:  HTTP JPEG and RTSP MJPEG cameras (polls recorder's LatestFrame(), no extra connection)
+#                                   #   Explicit values: "auto", "rtsp_keyframe", "latest_frame", "snapshot", "mjpeg"
+#                                   #   snapshot: HTTP GET from snapshot_url (requires snapshot_url)
+#                                   #   mjpeg: independent HTTP MJPEG pull (opens a second connection)
+#       # snapshot_url: ""           # Required when frame_source=snapshot. Auto-derived from stream URL when empty.
+#       # schedule:                  # Time-window recording (default: 24/7)
+#       #   time_ranges: [{start: "06:00", end: "18:00"}]
+#       #   days_of_week: [1,2,3,4,5]  # 0=Sunday … 6=Saturday; empty = all days
+#       # paused: false              # Runtime pause (overrides schedule, set via API)
+#       # merge_enabled: true        # Enable post-merge of timelapse segments into MP4 (default: true)
+#       # merge_mode: "auto"         # auto | mp4 | jpeg (default: auto)
+#       # merge_duration: "natural-day"  # Merge window: 8h, 12h, 24h, natural-day, 7d, 30d (default: natural-day)
+#       # merge_output_fps: 30       # Output video FPS (default: 30, range 1-60)
+#       # delete_original: false     # Delete source frames after merge (default: false)
 #     health_overrides:              # Per-camera health threshold overrides
 #       freeze_timeout: "10s"        # Timeout for detecting frozen stream (default: 10s)
 #   - id: "backyard"
@@ -88,14 +104,27 @@ cleanup:
   disk_threshold_percent: 95       # Start cleanup when disk usage exceeds N% (50-99)
 
 # Segment merging — combine short segments into longer recordings
-# Only active when enabled: true. All duration fields are required when enabled.
+# Two independent systems:
+#   1. Periodic merge (enabled/check_interval): scans every interval, batch-merges
+#      segments older than min_segment_age. Low IO impact, high latency (~1h).
+#   2. Rolling merge (rolling_enabled): event-driven, merges each segment within
+#      seconds of closing. Quasi-real-time (<10s on USB HDD). Higher IO but
+#      eliminates file fragmentation. Can run alongside periodic merge.
 merge:
-  enabled: false                   # Enable segment merging
+  enabled: false                   # Enable periodic segment merging
   check_interval: "1h"             # How often to check for merge candidates
   window_size: "1h"                # Time window for merging segments
   batch_limit: 200                 # Max segments to merge in one batch
   min_segment_age: "10m"           # Minimum age before a segment can be merged
   min_segments_to_merge: 3         # Minimum segments required to trigger a merge
+
+  # Rolling merge (quasi-real-time) — merges segments into per-camera window
+  # buckets on SegmentCompleted event. Achieves <10s latency vs ~1h for periodic.
+  # Recommended for USB HDD storage; test SD card IO before enabling at scale.
+  rolling_enabled: false           # Enable event-driven rolling merge
+  rolling_debounce: "5s"           # Delay after segment close — batches rapid disconnects (default 5s)
+  rolling_window: "1h"             # Bucket size — segments within this window merge into one file
+  rolling_min_duration: "5m"       # Target minimum merged duration; shorter → merge_quality='short'
 
 # FTP server — provides file access over FTP protocol
 # Configurable port and passive port range

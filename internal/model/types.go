@@ -53,6 +53,7 @@ type Recording struct {
 	MergeTier     string    `json:"merge_tier"`
 	MergeProgress int       `json:"merge_progress"`
 	MergeError    string    `json:"merge_error"`
+	MergeQuality  string    `json:"merge_quality"` // complete, fragmented, short
 	RetryCount    int       `json:"retry_count"`
 	Archived      bool      `json:"archived"`
 }
@@ -220,6 +221,13 @@ const (
 	MergeStatusMerging = "merging"
 	MergeStatusFailed       = "failed"
 	MergeStatusIncompatible = "incompatible"
+)
+
+// Merge quality constants — describe the continuity of a merged recording.
+const (
+	MergeQualityComplete   = "complete"   // normal merge, no significant gaps
+	MergeQualityFragmented = "fragmented" // has time gaps (ended-started >> duration)
+	MergeQualityShort      = "short"      // merged but below minimum duration threshold
 )
 
 // AudioFrame represents a single audio frame for distribution through StreamHub.

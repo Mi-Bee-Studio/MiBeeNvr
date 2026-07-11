@@ -80,11 +80,11 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, archived FROM recordings WHERE id=?;`, id)
+	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE id=?;`, id)
 	var r model.Recording
-	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 	var mergeProgress sql.NullInt64
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &r.Archived); err != nil {
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -104,6 +104,11 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	if mergeErrorStr.Valid {
 		r.MergeError = mergeErrorStr.String
 	}
+	if mergeQualityStr.Valid && mergeQualityStr.String != "" {
+		r.MergeQuality = mergeQualityStr.String
+	} else {
+		r.MergeQuality = model.MergeQualityComplete
+	}
 	if r.MergeStatus == "" {
 		r.MergeStatus = mergeStatusFromBool(r.Merged)
 	}
@@ -120,7 +125,7 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, archived FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := d.readConn().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -159,7 +164,7 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
 	defer d.observeQuery("ListRecordings", time.Now())
 	where, args := recordingsFilterWhere(filter)
-	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, archived FROM recordings"
+	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -342,9 +347,9 @@ func scanRecordingRows(rows *sql.Rows) ([]model.Recording, error) {
 	var res []model.Recording
 	for rows.Next() {
 		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+		var startedAtStr, endedAtStr, mergeStatusStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 		var mergeProgress sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &r.Archived); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived); err != nil {
 			return nil, err
 		}
 		r.MergeStatus = mergeStatusFromBool(r.Merged)
@@ -362,6 +367,11 @@ func scanRecordingRows(rows *sql.Rows) ([]model.Recording, error) {
 		}
 		if mergeErrorStr.Valid {
 			r.MergeError = mergeErrorStr.String
+		}
+		if mergeQualityStr.Valid && mergeQualityStr.String != "" {
+			r.MergeQuality = mergeQualityStr.String
+		} else {
+			r.MergeQuality = model.MergeQualityComplete
 		}
 		r.StartedAt = scanTime(startedAtStr)
 		r.EndedAt = scanTime(endedAtStr)
