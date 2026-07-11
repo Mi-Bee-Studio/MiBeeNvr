@@ -439,6 +439,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+			EventBus:             r.cfg.EventBus,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -524,6 +525,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+			EventBus:             r.cfg.EventBus,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub

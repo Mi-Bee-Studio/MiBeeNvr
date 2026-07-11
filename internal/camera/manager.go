@@ -130,6 +130,11 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			eb = v
 		}
 	}
+	if eb == nil {
+		logger.Warn("CameraManager created with nil EventBus — segment events will not be published")
+	} else {
+		logger.Info("CameraManager created with EventBus")
+	}
 	return &CameraManager{
 		cfg:                cfg,
 		store:              store,
@@ -279,6 +284,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 							cm.mu.Unlock()
 						}
 					}
+					// Enforce timelapse schedule for dual-mode cameras (start/stop
+					// the keyframe extractor or frame poller based on time-of-day).
+					cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 				}
 			}
 		case string(model.ProtoONVIF):
@@ -648,6 +656,9 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 	// Stop frame poller if running
 	cm.stopTimelapseFramePoller(cameraID)
 
+	// Stop dual-mode timelapse schedule monitor if running
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+
 	return nil
 }
 
@@ -688,6 +699,8 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 			}
 			// Stop frame poller if running (caller holds cm.mu)
 			cm.stopTimelapseFramePoller(id)
+			// Stop dual-mode timelapse schedule monitor
+			cm.stopDualModeTimelapseScheduleMonitor(id)
 		}
 	}
 }

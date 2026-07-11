@@ -566,6 +566,9 @@ func (b *baseRecorder) closeCurrentSegment() {
 			FileSize:    fileSize,
 			RecordingID: recordingID,
 		})
+	} else if recordingID != "" {
+		b.log.Warn("SegmentCompleted NOT published — EventBus is nil",
+			"camera_id", b.cfg.CameraID, "recording_id", recordingID)
 	}
 
 	// Update metrics for completed segment
