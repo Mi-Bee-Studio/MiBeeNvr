@@ -706,7 +706,6 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Clean up timers.
 			pendingMu.Lock()
 			for _, t := range timers {
 				t.Stop()
