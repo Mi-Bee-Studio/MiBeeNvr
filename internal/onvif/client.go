@@ -297,6 +297,13 @@ func mapProfile(p *onvifgo.Profile) DeviceProfile {
 		Token: p.Token,
 		Name:  p.Name,
 	}
+	// VideoSourceConfiguration.SourceToken is required by the imaging service
+	// (GetImagingSettings/SetImagingSettings/GetOptions take a VideoSourceToken,
+	// NOT a profile token). Many HiSilicon-OEM cameras reject the profile token
+	// here with HTTP 400, so we must surface the real video source token.
+	if p.VideoSourceConfiguration != nil {
+		profile.VideoSourceToken = p.VideoSourceConfiguration.SourceToken
+	}
 	if p.VideoEncoderConfiguration != nil {
 		profile.Encoding = p.VideoEncoderConfiguration.Encoding
 		if p.VideoEncoderConfiguration.Resolution != nil {

@@ -447,3 +447,46 @@ func TestImagingGetOptions_NonONVIFRejected(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// --- Error-classification helpers ---
+
+func TestIsSOAPFaultStatus(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  string
+		want bool
+	}{
+		// Real device responses (captured from 视通 NVR/encoder PTZ GetStatus)
+		{"status400 with SOAP-ENV envelope", `raw GetStatus failed: SOAP request failed with status 400: <?xml version="1.0"?><SOAP-ENV:Envelope`, true},
+		{"status400 with Fault", `SOAP request failed with status 400: <s:Fault><s:Text>no ptz</s:Text>`, true},
+		{"status500 with envelope", `failed with status 500: <Envelope xmlns=`, true},
+		// Not a SOAP fault
+		{"auth 401 no body", `SOAP request failed with status 401`, false},
+		{"network error", `Post "http://x": dial tcp: connection refused`, false},
+		{"plain error", `get PTZ status failed: EOF`, false},
+		{"empty", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isSOAPFaultStatus(tc.err))
+		})
+	}
+}
+
+// TestHandleONVIFSnapshotError_ErrorMessage ensures the snapshot endpoint reports
+// a snapshot-appropriate message (regression: it previously called the PTZ error
+// handler and returned the misleading "PTZ operation failed").
+func TestHandleONVIFSnapshotError_ErrorMessage(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	// A generic error (not a typed sentinel) hits the default branch.
+	handleONVIFSnapshotError(w, "cam-1", errGeneric("boom"))
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.NotContains(t, w.Body.String(), "PTZ", "snapshot error must not say PTZ")
+	require.Contains(t, w.Body.String(), "snapshot")
+}
+
+type errGeneric string
+
+func (e errGeneric) Error() string { return string(e) }

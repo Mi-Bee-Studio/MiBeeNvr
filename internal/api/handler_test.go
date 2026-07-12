@@ -2068,6 +2068,80 @@ func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, rr.Code)
 }
 
+// TestHandleSnapshot_BasicAuth verifies the snapshot fetcher attaches HTTP Basic
+// auth from the camera config. Many ONVIF cameras (whose snapshot URI is
+// auto-populated via GetSnapshotUri) require Basic auth on the snapshot endpoint
+// even when ONVIF itself is unauthenticated.
+func TestHandleSnapshot_BasicAuth(t *testing.T) {
+	t.Parallel()
+	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
+	var gotAuth string
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if gotAuth == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm=""`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpegData)
+	}))
+	defer snapshotServer.Close()
+
+	db, store := setupTestDB(t)
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{
+			{
+				ID:          "cam-auth",
+				Name:        "AuthCam",
+				Protocol:    "onvif",
+				URL:         snapshotServer.URL + "/stream",
+				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
+				Username:    "admin",
+				Password:    "s3cret",
+			},
+		},
+	}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-auth/snapshot", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code, "should succeed when creds are provided")
+	require.Contains(t, gotAuth, "Basic ", "must send Basic auth header")
+	body, err := io.ReadAll(rr.Body)
+	require.NoError(t, err)
+	require.Equal(t, jpegData, body)
+}
+
+// TestHandleSnapshot_Unauthorized covers a camera that requires auth but none is
+// configured (or creds are wrong): the endpoint returns 502, not a silent failure.
+func TestHandleSnapshot_Unauthorized(t *testing.T) {
+	t.Parallel()
+	snapshotServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm=""`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer snapshotServer.Close()
+
+	db, store := setupTestDB(t)
+	// No username/password configured → request goes out without auth → 401.
+	cfg := &config.Config{
+		Cleanup: config.CleanupConfig{RetentionDays: 30},
+		Cameras: []config.CameraConfig{
+			{
+				ID:          "cam-noauth",
+				Name:        "NoAuthCam",
+				Protocol:    "onvif",
+				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
+			},
+		},
+	}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-noauth/snapshot", nil, "", "")
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+}
+
 func TestListRecordings_SearchQuery(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -287,12 +288,14 @@ func getRecorderHub(rec model.Recorder) *model.StreamHub {
 func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
-	// Find camera config to get SnapshotURL
-	var snapshotURL string
+	// Find camera config to get SnapshotURL + credentials
+	var snapshotURL, username, password string
 	if h.config != nil {
 		for _, cam := range h.config.Cameras {
 			if cam.ID == cameraID {
 				snapshotURL = cam.SnapshotURL
+				username = cam.Username
+				password = cam.Password
 				break
 			}
 		}
@@ -315,31 +318,41 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch from camera
+	// Fetch from camera. Many cameras (esp. ONVIF ones whose snapshot URI was
+	// auto-populated via GetSnapshotUri) require HTTP Basic auth on the snapshot
+	// endpoint even when the ONVIF service itself is unauthenticated — so we
+	// attach the camera credentials when present. client.Get cannot set headers,
+	// hence NewRequestWithContext + client.Do.
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(snapshotURL)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, snapshotURL, nil)
 	if err != nil {
-		// Return stale cache if available
-		if ok {
-			w.Header().Set("Content-Type", "image/jpeg")
-			w.Header().Set("X-Cache", "stale")
-			w.Write(cached.data)
-			return
-		}
-		logger.Warn("failed to fetch snapshot", "camera_id", cameraID, "error", err)
-		http.Error(w, "Failed to fetch snapshot", http.StatusBadGateway)
+		serveStaleOrError(w, cached, ok, cameraID, fmt.Errorf("build snapshot request: %w", err))
+		return
+	}
+	if username != "" {
+		req.SetBasicAuth(username, password)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		serveStaleOrError(w, cached, ok, cameraID, err)
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		logger.Warn("snapshot fetch unauthorized — check camera credentials",
+			"camera_id", cameraID, "status", resp.StatusCode)
+		serveStaleOrError(w, cached, ok, cameraID, fmt.Errorf("snapshot unauthorized (check camera username/password)"))
+		return
+	}
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Camera returned error", http.StatusBadGateway)
+		serveStaleOrError(w, cached, ok, cameraID, fmt.Errorf("camera returned status %d", resp.StatusCode))
 		return
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB max
 	if err != nil || len(data) == 0 {
-		http.Error(w, "Failed to read snapshot", http.StatusBadGateway)
+		serveStaleOrError(w, cached, ok, cameraID, fmt.Errorf("read snapshot body"))
 		return
 	}
 
@@ -351,4 +364,18 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "max-age=5")
 	w.Write(data)
+}
+
+// serveStaleOrError returns the stale cached snapshot when available, otherwise
+// responds with the given error as a 502 Bad Gateway. Used by handleSnapshot on
+// any fetch/read failure so a transient camera hiccup doesn't blank the UI.
+func serveStaleOrError(w http.ResponseWriter, cached *snapshotCache, ok bool, cameraID string, err error) {
+	if ok {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("X-Cache", "stale")
+		w.Write(cached.data)
+		return
+	}
+	logger.Warn("failed to fetch snapshot", "camera_id", cameraID, "error", err)
+	http.Error(w, "Failed to fetch snapshot", http.StatusBadGateway)
 }
