@@ -15,6 +15,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/go-chi/chi/v5"
@@ -859,6 +860,12 @@ func stripScheme(rawURL string) string {
 // A bounded timeout is applied so a stuck device (e.g. ESP32 MiBeeCam with very
 // limited concurrent HTTP capacity) cannot block the camera-create request — the
 // caller context may outlive both the user's patience and the frontend fetch timeout.
+// probeONVIFEncoding returns the best-known video encoding ("H264" or "H265") for
+// an ONVIF device. It starts from the ONVIF profile declaration but verifies it
+// against the actual RTSP stream, because some HiSilicon-OEM cameras advertise H264
+// in their ONVIF profile while streaming H.265 (see ONVIFRecorder.detectEncoding).
+// If the RTSP DESCRIBE probe succeeds, its result is authoritative; otherwise the
+// ONVIF-declared encoding is returned as-is.
 func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -871,5 +878,20 @@ func probeONVIFEncoding(ctx context.Context, endpoint, username, password string
 	if err != nil || len(profiles) == 0 {
 		return ""
 	}
-	return profiles[0].Encoding
+	declared := profiles[0].Encoding
+
+	// Verify the declared H264/H265 against the real stream. JPEG profiles are
+	// left to the recorder's runtime resolution (RTSP vs HTTP MJPEG).
+	if declared == "H264" || declared == "H265" {
+		if si, err := client.GetStreamURI(ctx, profiles[0].Token); err == nil && si.URI != "" {
+			if actual := recorder.ProbeRTSPEncoding(si.URI, username, password); actual != "" {
+				if !strings.EqualFold(actual, declared) {
+					logger.Info("ONVIF-declared encoding corrected by RTSP probe",
+						"endpoint", endpoint, "declared", declared, "actual", actual)
+				}
+				return actual
+			}
+		}
+	}
+	return declared
 }

@@ -652,3 +652,69 @@ func TestDeriveRTSPURL(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectEncoding_RTSPAuthoritativeOverLyingConfig covers the regression where a
+// HiSilicon-OEM camera declares H264 in ONVIF (and that lie was persisted to config)
+// while the RTSP stream is actually H.265. The RTSP DESCRIBE result must win.
+func TestDetectEncoding_RTSPAuthoritativeOverLyingConfig(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H264", Width: 2880, Height: 1620},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		// Simulate the persisted lie: config says H264 …
+		or.cfg.StreamEncoding = "H264"
+		// … rtspURL is set (Start resolved it) …
+		or.rtspURL = "rtsp://192.168.63.200:554/11"
+		// … but the real stream is H265.
+		or.probeEncodingFn = func() string { return "H265" }
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H265", enc, "RTSP DESCRIBE must override the lying ONVIF/config value")
+
+	// And createDelegate must produce an H265Recorder, not an H264Recorder.
+	delegate := r.createDelegate(r.rtspURL)
+	require.IsType(t, &H265Recorder{}, delegate)
+}
+
+// TestDetectEncoding_DESCRIBEFails_FallsBackToConfig ensures that when the RTSP
+// probe cannot determine the format (e.g. device requires exotic auth at DESCRIBE
+// time), the explicitly configured encoding is used. No regression for honest
+// cameras behind auth.
+func TestDetectEncoding_DESCRIBEFails_FallsBackToConfig(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H264"},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		or.cfg.StreamEncoding = "H264"
+		or.rtspURL = "rtsp://1.2.3.4/stream"
+		or.probeEncodingFn = func() string { return "" } // DESCRIBE failed
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H264", enc)
+}
+
+// TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF covers the case with no manual
+// config: DESCRIBE fails, so we trust the ONVIF profile declaration. This is the
+// pre-fix behavior for cameras whose RTSP probe is unavailable at add time.
+func TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H265"},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		// No manual override; ONVIF says H265.
+		or.cfg.StreamEncoding = ""
+		or.rtspURL = "rtsp://1.2.3.4/stream"
+		or.probeEncodingFn = func() string { return "" } // DESCRIBE failed
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H265", enc)
+}

@@ -51,6 +51,11 @@ type ONVIFRecorder struct {
 	// Overridable in tests to inject a mock recorder.
 	newRecorder func(rtspURL string) model.Recorder
 
+	// probeEncodingFn probes the RTSP stream for its real video format.
+	// Overridable in tests to avoid a live RTSP round-trip. Defaults to
+	// (*ONVIFRecorder).probeRTSPEncoding.
+	probeEncodingFn func() string
+
 	mu          sync.Mutex
 	status      model.RecorderStatus
 	delegate    model.Recorder
@@ -81,6 +86,7 @@ func NewONVIFRecorder(cfg ONVIFConfig, client onvif.DeviceClient, store SegmentS
 		status:      model.StatusStopped,
 	}
 	r.newRecorder = r.createDelegate
+	r.probeEncodingFn = r.probeRTSPEncoding
 	return r
 }
 
@@ -172,18 +178,55 @@ func (r *ONVIFRecorder) Delegate() model.Recorder {
 }
 
 // detectEncoding determines the stream encoding in priority order:
-// 1. Manual config (StreamEncoding field)
-// 2. ONVIF profile metadata
-// 3. RTSP DESCRIBE probe (most reliable)
-// Falls back to H264 if detection fails.
+//  1. RTSP DESCRIBE probe (authoritative — what the stream actually carries)
+//  2. Manual config (StreamEncoding field) — fallback when DESCRIBE is unavailable
+//  3. ONVIF profile metadata — fallback when DESCRIBE is unavailable
+//  4. H264 default
+//
+// RTSP DESCRIBE must outrank the ONVIF profile and the stored config because some
+// HiSilison-OEM cameras (e.g. IPCAM Model C6F0SoZ0N0PpL2) advertise H264 in their
+// ONVIF GetProfiles response while actually streaming H.265. Trusting the ONVIF
+// declaration creates an H264Recorder that waits forever for an H.264 SPS NAL and
+// never gets a frame. The real stream is the ground truth.
 func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
+	// Gather the "claimed" encoding (config first, then ONVIF) so we can both
+	// fall back to it and log a warning when it disagrees with reality.
+	claimed := r.claimedEncoding(ctx)
+
+	// 1. RTSP DESCRIBE is authoritative. Some ONVIF cameras lie about their codec.
+	if r.rtspURL != "" {
+		if enc := r.probeEncodingFn(); enc != "" {
+			if claimed != "" && !strings.EqualFold(enc, claimed) {
+				onvifRecLogger.Warn("ONVIF-declared encoding disagrees with actual RTSP stream; trusting the stream",
+					"camera_id", r.cfg.CameraID, "declared", claimed, "actual", enc)
+			} else {
+				onvifRecLogger.Info("detected encoding via RTSP DESCRIBE", "camera_id", r.cfg.CameraID, "encoding", enc)
+			}
+			return enc
+		}
+	}
+
+	// 2/3. Fall back to the claimed encoding (config or ONVIF).
+	if claimed != "" {
+		onvifRecLogger.Info("RTSP DESCRIBE unavailable, using claimed encoding", "camera_id", r.cfg.CameraID, "encoding", claimed)
+		return claimed
+	}
+
+	// 4. Default to H264
+	onvifRecLogger.Warn("could not detect encoding, defaulting to H264", "camera_id", r.cfg.CameraID)
+	return "H264"
+}
+
+// claimedEncoding returns the encoding asserted by the config and/or ONVIF profile
+// metadata — i.e. everything EXCEPT the live RTSP stream. Returns "" if nothing is
+// claimed. The JPEG case may overwrite r.rtspURL (see resolveJPEGEncoding).
+func (r *ONVIFRecorder) claimedEncoding(ctx context.Context) string {
 	// 1. Manual override from config
 	if r.cfg.StreamEncoding == "H264" || r.cfg.StreamEncoding == "H265" {
-		onvifRecLogger.Info("using configured stream encoding", "camera_id", r.cfg.CameraID, "encoding", r.cfg.StreamEncoding)
 		return r.cfg.StreamEncoding
 	}
 
-	// 2. Try ONVIF profile metadata
+	// 2. ONVIF profile metadata
 	profiles, err := r.onvifClient.GetProfiles(ctx)
 	if err == nil && len(profiles) > 0 {
 		for _, p := range profiles {
@@ -205,18 +248,7 @@ func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
 			}
 		}
 	}
-
-	// 3. Probe via RTSP DESCRIBE
-	if r.rtspURL != "" {
-		if enc := r.probeRTSPEncoding(); enc != "" {
-			onvifRecLogger.Info("detected encoding via RTSP DESCRIBE", "camera_id", r.cfg.CameraID, "encoding", enc)
-			return enc
-		}
-	}
-
-	// Default to H264
-	onvifRecLogger.Warn("could not detect encoding, defaulting to H264", "camera_id", r.cfg.CameraID)
-	return "H264"
+	return ""
 }
 
 // resolveJPEGEncoding decides how to record a device whose ONVIF profile reports
@@ -283,6 +315,15 @@ func injectRTSPCredentials(rtspURL, username, password string) string {
 // probeRTSPEncoding connects to the cached RTSP stream and checks the media format.
 func (r *ONVIFRecorder) probeRTSPEncoding() string {
 	return probeRTSPEncodingFor(r.rtspURL, r.cfg.Username, r.cfg.Password)
+}
+
+// ProbeRTSPEncoding connects to an RTSP stream and reports its video format.
+// It is the exported wrapper around probeRTSPEncodingFor for callers outside the
+// recorder package (e.g. the add-camera API handler validating an ONVIF camera's
+// declared encoding against the real stream). Returns "H265", "H264", "MJPEG",
+// or "" if the format is unknown or the probe fails.
+func ProbeRTSPEncoding(rtspURL, username, password string) string {
+	return probeRTSPEncodingFor(rtspURL, username, password)
 }
 
 // probeRTSPEncodingFor connects to an RTSP stream and reports its video format.
