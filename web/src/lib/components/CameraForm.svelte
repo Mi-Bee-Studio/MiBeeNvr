@@ -87,6 +87,9 @@
   let formRecordingEnabled = $state(true);
   // Xiaomi two-way audio
   let formTwoWayAudioEnabled = $state(false);
+  // IP self-healing: candidate CIDRs to scan when this camera's IP changes.
+  // One per line in the textarea; backend validates as CIDRs.
+  let formSubnetHints = $state('');
   // Push/ingest fields (SRT/RTMP)
   let formStreamKey = $state('');
   let formSRTPassphrase = $state('');
@@ -195,6 +198,14 @@ let validationErrors = $state<Record<string, string>>({});
     return () => ctrl.abort();
   });
 
+  // Parse the subnet-hints textarea into a clean CIDR list (one per line,
+  // whitespace/comma tolerant, blanks dropped). The backend validates each as a
+  // CIDR; /24-or-smaller only (the rediscovery scanner rejects wider ranges).
+  function parseSubnetHints(text: string): string[] | undefined {
+    const parts = text.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
+    return parts.length > 0 ? parts : undefined;
+  }
+
   function resetFormFields() {
     formName = '';
     formProtocol = 'rtsp';
@@ -219,6 +230,7 @@ let validationErrors = $state<Record<string, string>>({});
     formChannel = '';
     formAudioEnabled = false;
     formTwoWayAudioEnabled = false;
+    formSubnetHints = '';
     formDarkFrameFilterEnabled = false;
     formDarkFrameThreshold = 15;
     formRecordingScheduleEnabled = false;
@@ -272,6 +284,7 @@ let validationErrors = $state<Record<string, string>>({});
     formAudioEnabled = camera.audio_enabled ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
+    formSubnetHints = (camera.subnet_hints ?? []).join('\n');
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
     formSRTStreamID = camera.srt_stream_id || '';
@@ -509,6 +522,7 @@ async function performCameraSave() {
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
+            subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -562,6 +576,7 @@ async function performCameraSave() {
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
+            subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -1213,6 +1228,27 @@ async function performCameraSave() {
 
       <!-- Device Capabilities -->
       <DeviceCapabilities cameraId={editingCamera.id} />
+
+      <!-- IP self-healing: subnet hints (where to look when this camera's IP changes) -->
+      <details class="border th-border rounded-lg">
+        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+          {t('cameras.subnetHintsTitle')}
+        </summary>
+        <div class="px-4 pb-4 space-y-2">
+          <p class="text-xs th-text-muted">{t('cameras.subnetHintsHint')}</p>
+          <textarea
+            bind:value={formSubnetHints}
+            rows="3"
+            class="input font-mono text-xs"
+            placeholder="192.168.1.0/24&#10;10.0.0.0/24"
+          ></textarea>
+          {#if editingCamera.stable_id}
+            <p class="text-xs th-text-muted">{t('cameras.subnetHintsStableId', { id: editingCamera.stable_id })}</p>
+          {:else}
+            <p class="text-xs th-color-warning">{t('cameras.subnetHintsNoStableId')}</p>
+          {/if}
+        </div>
+      </details>
 
       <!-- Imaging Panel (if supported) -->
       {#if deviceCaps?.imaging}
