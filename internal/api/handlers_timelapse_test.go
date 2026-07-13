@@ -477,7 +477,7 @@ type testSlowMerger struct {
 
 func (m *testSlowMerger) CanMerge() bool            { return true }
 func (m *testSlowMerger) Tier() timelapse.MergeTier { return timelapse.TierGo }
-func (m *testSlowMerger) Merge(ctx context.Context, _, _ string, _ int) (*timelapse.MergeResult, error) {
+func (m *testSlowMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*timelapse.MergeResult, error) {
 	select {
 	case <-time.After(m.delay):
 	case <-ctx.Done():
@@ -486,11 +486,18 @@ func (m *testSlowMerger) Merge(ctx context.Context, _, _ string, _ int) (*timela
 	if m.fail {
 		return nil, fmt.Errorf("merge simulated failure")
 	}
+	// Write a dummy output file so RollingMergeManager's post-merge verification
+	// (os.Stat on the real outputPath) passes.
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, []byte("merged"), 0o644); err != nil {
+			return nil, err
+		}
+	}
 	return &timelapse.MergeResult{
 		Tier:         timelapse.TierGo,
 		FramesMerged: 10,
 		Duration:     1.0,
-		OutputPath:   "/tmp/output.mp4",
+		OutputPath:   outputPath,
 	}, nil
 }
 
