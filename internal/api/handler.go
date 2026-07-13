@@ -557,11 +557,15 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
-	// If encoding still unknown (e.g. ONVIF auto-detect), probe the running recorder
-	if encoding == "" && h.camMgr != nil {
+	// Probe the running recorder for the ACTUAL codec — this outranks the stored
+	// encoding/stream_encoding because some ONVIF cameras lie (e.g. report H264
+	// but stream H265). Without this, /protocols would advertise WebRTC for an
+	// H265 camera (WebRTC only supports H264), and the WHEP negotiation would
+	// fail silently. The recorder's detectEncoding already verified the real
+	// codec via RTSP DESCRIBE, so trust it over the stored value.
+	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
-			codec, _, _, _ := getCodecParams(rec)
-			if codec != "" {
+			if codec, _, _, _ := getCodecParams(rec); codec != "" {
 				encoding = string(codec)
 			}
 		}
