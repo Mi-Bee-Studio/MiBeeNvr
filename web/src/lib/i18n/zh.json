@@ -286,6 +286,8 @@
   "cameras.testing": "测试中...",
   "cameras.testSuccess": "连接成功 ({latency}ms)",
   "cameras.testFailed": "连接失败：{error}",
+  "cameras.testCodecCorrected": "检测到实际视频格式：{encoding}（摄像头的 ONVIF 配置不准确，已自动纠正）。",
+  "cameras.testReachableNoStream": "设备已响应，但无法验证直播流。请检查 RTSP 端口和流凭据。",
   "cameras.syncCloud": "从云端同步",
   "cameras.syncedCameras": "已从云端同步 {count} 个小米摄像头",
   "cameras.syncFailed": "云端同步失败",

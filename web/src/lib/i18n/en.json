@@ -284,6 +284,8 @@
   "cameras.testing": "Testing...",
   "cameras.testSuccess": "Connection successful ({latency}ms)",
   "cameras.testFailed": "Connection failed: {error}",
+  "cameras.testCodecCorrected": "Detected actual video format: {encoding} (the camera's ONVIF profile was inaccurate — this has been corrected automatically).",
+  "cameras.testReachableNoStream": "The device responded but the live stream could not be verified. Check the RTSP port and stream credentials.",
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
   "cameras.syncCloud": "Sync from Cloud",

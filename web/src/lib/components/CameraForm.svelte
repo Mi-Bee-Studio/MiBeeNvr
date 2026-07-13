@@ -804,9 +804,14 @@ async function performCameraSave() {
       {#if testResult}
         <p class="text-xs mt-1 {testResult.success ? 'th-color-success' : 'th-color-danger'}">
           {testResult.success
-            ? t('cameras.testSuccess').replace('{latency}', String(testResult.latency_ms))
-            : t('cameras.testFailed').replace('{error}', testResult.message)}
+            ? t('cameras.testSuccess', { latency: String(testResult.latency_ms) })
+            : t('cameras.testFailed', { error: testResult.message })}
         </p>
+        {#if testResult.success && testResult.codec_lie}
+          <p class="text-xs th-text-muted">{t('cameras.testCodecCorrected', { encoding: testResult.encoding || '' })}</p>
+        {:else if testResult.reachable && !testResult.stream_ok}
+          <p class="text-xs th-text-muted">{t('cameras.testReachableNoStream')}</p>
+        {/if}
       {/if}
       {#if validationErrors['url']}
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>

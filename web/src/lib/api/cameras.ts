@@ -384,6 +384,13 @@ export interface TestConnectionResult {
   success: boolean;
   message: string;
   latency_ms: number;
+  // ONVIF structured probe fields (issues #29/#30). Distinguish "device
+  // reachable" from "stream actually playable" so users aren't told success
+  // when only the device_service URL responded.
+  reachable?: boolean;
+  stream_ok?: boolean;
+  encoding?: string;
+  codec_lie?: boolean;
 }
 
 export async function testConnection(data: TestConnectionRequest, signal?: AbortSignal): Promise<TestConnectionResult> {
