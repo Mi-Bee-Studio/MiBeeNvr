@@ -211,6 +211,7 @@ func probeViaGetDeviceInformation(ctx context.Context, endpoint string) (*Discov
 		Manufacturer: info.Manufacturer,
 		Model:        info.Model,
 		Firmware:     info.FirmwareVersion,
+		Serial:       info.SerialNumber,
 	}, nil
 }
 
@@ -263,6 +264,14 @@ func enrichDevices(ctx context.Context, devices []DiscoveredDevice) {
 		}
 		if d.Hardware == "" {
 			d.Hardware = result.info.HardwareId
+		}
+		// Capture the serial so it can be sent as stable_id at add time — this
+		// makes the camera immediately self-healable (IP re-acquisition by ONVIF
+		// serial) without waiting for the async ensureStableID goroutine that
+		// runs after the recorder connects. Previously the serial was fetched
+		// here but discarded (no field on DiscoveredDevice to hold it).
+		if d.Serial == "" {
+			d.Serial = result.info.SerialNumber
 		}
 	}
 }

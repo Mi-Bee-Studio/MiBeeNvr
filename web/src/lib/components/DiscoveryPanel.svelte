@@ -144,11 +144,20 @@
         enabled: true,
         username: onvifUsername || undefined,
         password: onvifPassword || undefined,
+        // Carry the discovery-enriched metadata through to the persisted camera.
+        // Previously these were displayed in the list then discarded on add.
+        brand: device.manufacturer || undefined,
+        model: device.model || undefined,
+        serial_number: device.serial || undefined,
+        // Send the ONVIF serial as stable_id so IP self-healing (re-acquire by
+        // serial after IP change) is active immediately — no waiting for the
+        // async ensureStableID goroutine that runs after the recorder connects.
+        stable_id: device.serial || undefined,
       });
       showToast(t('cameras.cameraAdded'), 'success');
       discoveredDevices = discoveredDevices.filter(d => d.uuid !== device.uuid);
       oncameraadded?.();
-    } catch (e) { console.warn('Failed to add ONVIF device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
+    } catch (e) { console.warn('Failed to add ONVIF device:', e); showToast(friendlyError(e, 'cameras.failedAdd'), 'error'); } finally {
       addingDeviceId = null;
     }
   }
@@ -400,6 +409,9 @@
                   {/if}
                   {#if device.firmware}
                     <span class="text-xs px-1.5 py-0.5 rounded th-bg-tertiary">{device.firmware}</span>
+                  {/if}
+                  {#if device.serial}
+                    <span class="text-xs th-text-muted font-mono" title={t('onvif.serialNumber')}>{device.serial}</span>
                   {/if}
                 </div>
               </div>

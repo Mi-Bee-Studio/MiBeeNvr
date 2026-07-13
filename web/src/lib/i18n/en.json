@@ -432,6 +432,7 @@
   "onvif.discovering": "Scanning...",
   "onvif.noDevices": "No ONVIF devices found",
   "onvif.deviceName": "Device Name",
+  "onvif.serialNumber": "Serial number (used to re-find this camera if its IP changes)",
   "onvif.addCamera": "Add as Camera",
   "onvif.viewDetails": "View Details",
   "onvif.profiles": "Profiles",

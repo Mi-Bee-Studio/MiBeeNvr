@@ -13,6 +13,7 @@ type DiscoveredDevice struct {
 	Manufacturer string   `json:"manufacturer,omitempty"` // Enriched via GetDeviceInformation
 	Model        string   `json:"model,omitempty"`        // Enriched via GetDeviceInformation
 	Firmware     string   `json:"firmware,omitempty"`     // Enriched via GetDeviceInformation
+	Serial       string   `json:"serial,omitempty"`       // Enriched via GetDeviceInformation (ONVIF serial). Sent as stable_id on add so IP self-healing works immediately.
 }
 
 // DiscoveryError represents a categorized error from ONVIF device discovery.

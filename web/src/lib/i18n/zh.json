@@ -432,6 +432,7 @@
   "onvif.discovering": "扫描中...",
   "onvif.noDevices": "未发现 ONVIF 设备",
   "onvif.deviceName": "设备名称",
+  "onvif.serialNumber": "序列号（IP 变化后用于自动找回该摄像头）",
   "onvif.addCamera": "添加为摄像头",
   "onvif.viewDetails": "查看详情",
   "onvif.profiles": "配置文件",

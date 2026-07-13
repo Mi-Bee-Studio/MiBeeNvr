@@ -132,6 +132,8 @@ export interface CreateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Recording gate: false = live-only (no segments written). Omit = record.
+  recording_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -139,6 +141,10 @@ export interface CreateCameraRequest {
   // Push-out relay
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
+  // IP self-healing: ONVIF serial (sent at add time so the camera is immediately
+  // self-healable after IP changes, without waiting for async ensureStableID).
+  stable_id?: string;
+  subnet_hints?: string[];
   // Xiaomi two-way audio
   two_way_audio_enabled?: boolean;
 }
@@ -181,6 +187,16 @@ export interface DiscoveredDevice {
   scopes: string[];
   hardware: string;
   endpoint: string;
+  // Enriched via GetDeviceInformation (backend). Previously these were displayed
+  // in the discovery list but discarded on add — now sent in the create payload
+  // so the camera is added metadata-complete.
+  manufacturer?: string;
+  model?: string;
+  firmware?: string;
+  // ONVIF serial number. Sent as stable_id on add so IP self-healing (re-acquire
+  // by serial after IP change) works immediately, without waiting for the async
+  // ensureStableID goroutine that runs after the recorder connects.
+  serial?: string;
 }
 
 export interface DiscoveryError {

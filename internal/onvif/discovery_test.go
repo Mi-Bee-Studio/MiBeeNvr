@@ -313,6 +313,7 @@ func TestProbeDevice_FallbackToGetDeviceInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, device, "fallback should detect ONVIF device")
 	require.Equal(t, "SN12345", device.UUID)
+	require.Equal(t, "SN12345", device.Serial, "serial should be captured for stable_id at add time")
 	require.Equal(t, "TestManufacturer", device.Name)
 	require.Equal(t, "HW001", device.Hardware)
 	require.Equal(t, []string{fmt.Sprintf("http://%s:%d/onvif/device_service", host, port)}, device.XAddrs)
@@ -329,4 +330,32 @@ func TestProbeDevice_FallbackBothFail_ReturnsNil(t *testing.T) {
 	device, err := ProbeDevice(context.Background(), host, port, 500*time.Millisecond)
 	require.NoError(t, err)
 	require.Nil(t, device, "both strategies failed should return nil")
+}
+
+// --- enrichDevices() serial capture test ---
+
+// TestEnrichDevices_CapturesSerial guards the fix for the discarded-serial bug:
+// enrichDevices fetches GetDeviceInformation (which includes SerialNumber) but
+// previously had no Serial field to write it to, so the serial was lost at
+// discovery time. The serial is what makes a camera immediately self-healable
+// (sent as stable_id at add time). Without this, IP self-healing only activates
+// after the async ensureStableID goroutine runs post-connect.
+func TestEnrichDevices_CapturesSerial(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/soap+xml")
+		fmt.Fprint(w, validGetDeviceInfoResponse)
+	}))
+	defer server.Close()
+
+	host, port := testServerAddr(t, server)
+	endpoint := fmt.Sprintf("http://%s:%d/onvif/device_service", host, port)
+
+	devices := []DiscoveredDevice{{Endpoint: endpoint, Name: "pre-enrich"}}
+	enrichDevices(context.Background(), devices)
+
+	require.Equal(t, "SN12345", devices[0].Serial, "serial must be captured at discovery time")
+	require.Equal(t, "TestManufacturer", devices[0].Manufacturer)
+	require.Equal(t, "TestModel", devices[0].Model)
+	require.Equal(t, "V1.0", devices[0].Firmware)
 }
