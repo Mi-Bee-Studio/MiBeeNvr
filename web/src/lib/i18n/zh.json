@@ -1192,6 +1192,7 @@
   "timelapse.gallery.timeline": "时间线",
   "timelapse.gallery.noData": "此时间段无数据",
   "surveillance.title": "监控大屏",
+  "surveillance.protocolFallback": "为提升稳定性，已自动切换到 {protocol} 播放",
   "dashboard.healthSummary": "摄像头健康",
   "dashboard.tab.storage": "存储趋势",
   "dashboard.tab.health": "健康历史",

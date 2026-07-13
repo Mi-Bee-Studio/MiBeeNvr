@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
-  import type { Camera, ProtocolInfo } from '$lib/api';
+  import { getDashboardCameras, getCredentials, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
+  import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause } from 'lucide-svelte';
@@ -15,7 +15,8 @@
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
-  import { detectMSEH265 } from '$lib/webcodecs-player/capabilities';
+  import { detectMSEH265, detectWebCodecs } from '$lib/webcodecs-player/capabilities';
+  import { pickCameraMode, nextAfter, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -57,8 +58,18 @@
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   const STORAGE_KEY = 'dashboard-selected-cameras';
 
-  // Default streaming protocol from settings
+  // Default streaming protocol from settings — used ONLY as a legacy fallback
+  // when the per-camera /protocols endpoint can't be reached. The primary
+  // selection now comes from the backend's codec-aware per-camera ranking.
   let defaultProtocol = $state<string>('flv');
+
+  // Per-camera protocol responses from GET /api/cameras/{id}/protocols.
+  // Keyed by camera id. Fetched in parallel on mount and whenever the grid
+  // selection changes; null means "not yet fetched or fetch failed" (the
+  // picker then falls back to the legacy global default). This is what lets
+  // the grid auto-select the best protocol PER CAMERA instead of applying
+  // one global protocol to a mixed fleet.
+  let cameraProtocols = $state<Map<string, CameraProtocolsResponse | null>>(new Map());
 
   // H.265/HEVC MSE support — detected once on mount. When the browser's
   // MediaSource cannot decode H.265 (common on Linux desktop, or Windows
@@ -66,6 +77,16 @@
   // a black screen. We use this to auto-degrade H.265 cameras to HLS, which
   // has broader native H.265 support on modern browsers.
   let browserSupportsH265MSE = $state(true);
+
+  // WebCodecs (VideoDecoder) availability — enables the WASM player. Detected
+  // once on mount and fed into pickCameraMode so it can promote/demote wasm.
+  let browserSupportsWebCodecs = $state(false);
+
+  // Snapshot of the browser caps consumed by pickCameraMode. Recomputed from
+  // the two $state flags above so the picker stays a pure function.
+  function browserCaps(): BrowserCaps {
+    return { h265MSE: browserSupportsH265MSE, webCodecs: browserSupportsWebCodecs };
+  }
 
   // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
   let WasmPlayerComponent = $state<any>(null);
@@ -124,7 +145,13 @@
       .map(id => available.get(id))
       .filter((c): c is Camera => c !== undefined);
     cameras = filtered;
+    // Clear per-camera runtime fallbacks when the grid selection changes, so a
+    // camera that was demoted during a previous session starts fresh.
+    runtimeFallback = {};
     configOpen = false;
+    // Fetch per-camera protocol rankings for the newly selected cameras. This
+    // is what drives auto-selection; runs in parallel and never blocks render.
+    void refreshCameraProtocols(filtered.map((c) => c.id));
   }
 
   function getStreamUrl(cameraId: string): string {
@@ -164,43 +191,78 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'mjpeg' | 'snapshot' | 'unsupported';
+  // Per-camera protocol override forced at runtime by a failed-player fallback.
+  // When a player exhausts its reconnect attempts, the grid demotes that camera
+  // to the next available protocol in its backend-provided chain (webrtc→flv→
+  // hls→mjpeg) rather than dropping straight to a static snapshot. Keyed by
+  // camera id; cleared when the grid selection changes.
+  let runtimeFallback = $state<Record<string, CameraMode>>({});
 
+  // The primary per-camera mode resolver. Delegates to the pure pickCameraMode
+  // helper (src/lib/stream-selection.ts), passing the cached backend protocol
+  // ranking + browser caps. Falls back to the legacy global default when the
+  // backend response isn't available (camera still connecting, endpoint down).
   function getCameraMode(camera: Camera): CameraMode {
-    // JPEG / MJPEG cameras (HTTP JPEG recorders, ONVIF JPEG delegates, ESP32 MiBeeCam):
-    // HLS/FLV/WebRTC/WebCodecs all require H.264/H.265 — these cameras can only play
-    // via the dedicated MJPEG live player (polls /api/cameras/{id}/latest-frame at 500ms).
-    // MUST be checked BEFORE the isHlsSupported gate: ONVIF JPEG cameras report
-    // protocol="onvif" (capabilities.hls=true) but their delegate is HTTPJPEGRecorder,
-    // so HLS would connect to a non-existent H.264 stream and render black.
-    const proto = normalizeProtocol(camera.protocol);
-    // Prefer user-configured encoding, fall back to stream_encoding which the backend
-    // probes via RTSP DESCRIBE / ONVIF GetProfiles. Critical for ESP32 MiBeeCam where
-    // the user-configured encoding is empty but the live stream is JPEG.
-    const enc = (camera.encoding || camera.stream_encoding || '').toLowerCase();
-    if (proto === 'http' || enc === 'mjpeg' || enc === 'jpeg') {
-      return 'mjpeg';
+    // A runtime fallback takes precedence over the auto-selected mode — the
+    // camera already proved the primary choice unworkable.
+    if (runtimeFallback[camera.id]) {
+      return runtimeFallback[camera.id];
     }
-    if (!isHlsSupported(camera)) {
-      if (snapshotMgr.isUnsupported(camera.id)) return 'unsupported';
-      return 'snapshot';
+    const resp = cameraProtocols.get(camera.id) ?? null;
+    return pickCameraMode(camera, resp as ProtocolsResponse | null, browserCaps(), {
+      legacyDefault: defaultProtocol,
+      isHlsCapable: isHlsSupported(camera),
+      isUnsupported: snapshotMgr.isUnsupported(camera.id),
+    });
+  }
+
+  // Called by a player when it has exhausted reconnects and would otherwise
+  // fall back to a static snapshot. Instead, demote to the next real-time
+  // protocol in the camera's backend-provided chain; only when the chain is
+  // exhausted do we let the snapshot fallback take over (return false).
+  function handleProtocolFailed(cameraId: string, current: CameraMode): boolean {
+    const resp = cameraProtocols.get(cameraId) ?? null;
+    const next = nextAfter(current, resp as ProtocolsResponse | null);
+    if (next && next !== current) {
+      runtimeFallback = { ...runtimeFallback, [cameraId]: next };
+      showToast(
+        t('surveillance.protocolFallback', { protocol: protocolLabel(next) }),
+        'info',
+      );
+      return true; // tell the player the grid is handling it (don't snapshot yet)
     }
-    if (defaultProtocol === 'wasm') return 'wasm';
-    if (defaultProtocol === 'webrtc') return 'webrtc';
-    // H.265 cameras cannot play via FLV when the browser's MSE lacks an H.265
-    // decoder — mpegts.js connects but the video element stays black. Auto-degrade
-    // to HLS, which modern browsers (Chrome/Edge/Firefox/Safari) play natively
-    // via fMP4. See issue #28.
-    const isH265 = (camera.encoding || '').toLowerCase() === 'h265';
-    if (defaultProtocol === 'flv' && isH265 && !browserSupportsH265MSE) return 'hls';
-    if (defaultProtocol === 'flv') return 'flv';
-    // hls, ll-hls, or default
-    return 'hls';
+    return false; // chain exhausted — player may fall back to snapshot
+  }
+
+  function protocolLabel(mode: CameraMode): string {
+    switch (mode) {
+      case 'wasm': return 'WebCodecs';
+      case 'webrtc': return 'WebRTC';
+      case 'flv': return 'FLV';
+      case 'hls': return 'HLS';
+      case 'mjpeg': return 'MJPEG';
+      default: return mode;
+    }
+  }
+
+  // Fetch per-camera protocol rankings for the given camera ids, in parallel,
+  // and cache them. Best-effort: failures store null so the picker falls back
+  // to the legacy global default rather than blocking the grid.
+  async function refreshCameraProtocols(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const results = await Promise.allSettled(ids.map((id) => getCameraProtocols(id)));
+    const next = new Map(cameraProtocols);
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const r = results[i];
+      next.set(id, r.status === 'fulfilled' ? r.value : null);
+    }
+    cameraProtocols = next;
   }
 
   // Preload WasmPlayer when any camera would use 'wasm' mode
   $effect(() => {
-    if (defaultProtocol === 'wasm' && cameras.some(c => isHlsSupported(c))) {
+    if (cameras.some((c) => getCameraMode(c) === 'wasm')) {
       loadWasmPlayer();
     }
   });
@@ -247,9 +309,10 @@
   // --- Lifecycle ---
 
   onMount(async () => {
-    // Detect H.265 MSE support once — used by getCameraMode to auto-degrade
-    // H.265 cameras from FLV to HLS when the browser can't decode H.265 via MSE.
+    // Detect browser playback capabilities once — fed into pickCameraMode so it
+    // can auto-degrade (H.265 FLV→HLS without MSE) or promote (wasm with WebCodecs).
     browserSupportsH265MSE = detectMSEH265();
+    browserSupportsWebCodecs = detectWebCodecs();
     try {
       const fetched = await getDashboardCameras();
       const activeFetched = fetched;
@@ -267,6 +330,10 @@
         selectedCameraIds = cameras.map(c => c.id);
       }
       pendingCameraIds = [...selectedCameraIds];
+      // Fetch per-camera protocol rankings so the grid can auto-select the best
+      // protocol per camera. Non-blocking: cameras render immediately with the
+      // legacy global default and re-resolve once the responses arrive.
+      void refreshCameraProtocols(cameras.map((c) => c.id));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -527,6 +594,7 @@
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
+                onProtocolFailed={() => handleProtocolFailed(camera.id, 'webrtc')}
               />
 
             {:else if mode === 'flv'}
@@ -536,6 +604,7 @@
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
                 hasAudio={camera.audio_enabled ?? false}
+                onProtocolFailed={() => handleProtocolFailed(camera.id, 'flv')}
               />
 
             {:else if mode === 'mjpeg'}

@@ -1,0 +1,196 @@
+import { describe, it, expect } from 'vitest';
+import {
+  pickCameraMode,
+  fallbackChain,
+  nextAfter,
+  resolveEncoding,
+  isProtocolUsable,
+  EMPTY_CAPS,
+  type ProtocolsResponse,
+} from '$lib/stream-selection';
+import type { Camera } from '$lib/api';
+
+function makeCamera(over: Partial<Camera> = {}): Camera {
+  return { id: 'cam-1', name: 'Test', protocol: 'onvif', ...over } as Camera;
+}
+
+// A typical H.264 RTSP/ONVIF camera: backend offers the full real-time set.
+const H264_RESP: ProtocolsResponse = {
+  encoding: 'h264',
+  default: 'webrtc',
+  protocols: [
+    { Protocol: 'webrtc', Available: true, Reason: '' },
+    { Protocol: 'flv', Available: true, Reason: '' },
+    { Protocol: 'll-hls', Available: true, Reason: '' },
+    { Protocol: 'hls', Available: true, Reason: '' },
+    { Protocol: 'wasm', Available: true, Reason: '' },
+  ],
+};
+
+// H.265 camera: WebRTC/FLV excluded by the backend (can't carry/decode H.265).
+const H265_RESP: ProtocolsResponse = {
+  encoding: 'h265',
+  default: 'hls',
+  protocols: [
+    { Protocol: 'hls', Available: true, Reason: '' },
+    { Protocol: 'll-hls', Available: true, Reason: '' },
+    { Protocol: 'wasm', Available: true, Reason: '' },
+    { Protocol: 'webrtc', Available: false, Reason: 'WebRTC does not support H.265' },
+    { Protocol: 'flv', Available: false, Reason: 'FLV cannot decode H.265 in browser' },
+  ],
+};
+
+const FULL_CAPS = { h265MSE: true, webCodecs: true };
+
+describe('pickCameraMode', () => {
+  it('short-circuits JPEG cameras to mjpeg before any HLS gate', () => {
+    // ESP32 MiBeeCam: protocol=onvif (hls-capable), but encoding=jpeg.
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'jpeg' });
+    const resp: ProtocolsResponse = {
+      encoding: 'jpeg',
+      default: 'mjpeg',
+      protocols: [{ Protocol: 'mjpeg', Available: true, Reason: '' }],
+    };
+    expect(pickCameraMode(cam, resp, FULL_CAPS)).toBe('mjpeg');
+  });
+
+  it('short-circuits MJPEG via stream_encoding when encoding is empty', () => {
+    const cam = makeCamera({ protocol: 'http', encoding: '', stream_encoding: 'mjpeg' });
+    expect(pickCameraMode(cam, null, EMPTY_CAPS)).toBe('mjpeg');
+  });
+
+  it('picks backend default (webrtc) for H.264 with full caps', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    expect(pickCameraMode(cam, H264_RESP, FULL_CAPS)).toBe('webrtc');
+  });
+
+  it('honors a valid per-camera override over the backend default', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    expect(pickCameraMode(cam, H264_RESP, FULL_CAPS, { override: 'flv' })).toBe('flv');
+  });
+
+  it('ignores an override that is unusable for the codec (webrtc on h265)', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    // override=webrtc is invalid for h265 → falls back to backend default (hls).
+    expect(pickCameraMode(cam, H265_RESP, FULL_CAPS, { override: 'webrtc' })).toBe('hls');
+  });
+
+  it('degrades H.265 FLV to HLS when browser lacks H.265 MSE', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    // Backend default forced to flv via override; no MSE → must degrade to hls.
+    const resp: ProtocolsResponse = { ...H265_RESP, default: 'flv' };
+    expect(pickCameraMode(cam, resp, { h265MSE: false, webCodecs: false }, { override: 'flv' })).toBe('hls');
+  });
+
+  it('keeps FLV for H.265 when browser has H.265 MSE', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    const resp: ProtocolsResponse = { ...H265_RESP, default: 'flv' };
+    expect(pickCameraMode(cam, resp, FULL_CAPS, { override: 'flv' })).toBe('flv');
+  });
+
+  it('ignores a wasm override when WebCodecs is unavailable (falls to backend default)', () => {
+    // wasm is unusable without WebCodecs → override rejected → backend default (webrtc).
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    expect(pickCameraMode(cam, H264_RESP, { h265MSE: true, webCodecs: false }, { override: 'wasm' })).toBe('webrtc');
+  });
+
+  it('degrades a wasm backend default to hls when WebCodecs is unavailable', () => {
+    // If the backend somehow defaulted to wasm but WebCodecs is missing → hls.
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const resp: ProtocolsResponse = { ...H264_RESP, default: 'wasm' };
+    expect(pickCameraMode(cam, resp, { h265MSE: true, webCodecs: false })).toBe('hls');
+  });
+
+  it('falls back to legacy global default when backend response is null', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    expect(pickCameraMode(cam, null, EMPTY_CAPS, { legacyDefault: 'flv' })).toBe('flv');
+    expect(pickCameraMode(cam, null, EMPTY_CAPS, { legacyDefault: 'll-hls' })).toBe('hls');
+    expect(pickCameraMode(cam, null, EMPTY_CAPS, { legacyDefault: 'hls' })).toBe('hls');
+  });
+
+  it('returns snapshot when protocol is not HLS-capable (rtmp ingest)', () => {
+    // rtmp/srt ingest cameras have no live preview protocol; they fall to snapshot.
+    const cam = makeCamera({ protocol: 'rtmp', encoding: 'h264' });
+    expect(pickCameraMode(cam, null, EMPTY_CAPS, { isHlsCapable: false })).toBe('snapshot');
+  });
+
+  it('returns unsupported when flagged and not HLS-capable', () => {
+    const cam = makeCamera({ protocol: 'rtmp', encoding: 'h264' });
+    expect(pickCameraMode(cam, null, EMPTY_CAPS, { isHlsCapable: false, isUnsupported: true })).toBe('unsupported');
+  });
+});
+
+describe('fallbackChain', () => {
+  it('orders available protocols by latency (webrtc→flv→hls→mjpeg)', () => {
+    expect(fallbackChain(H264_RESP)).toEqual(['webrtc', 'flv', 'hls']);
+  });
+
+  it('excludes unavailable protocols', () => {
+    // H.265: webrtc/flv unavailable → chain is just hls.
+    expect(fallbackChain(H265_RESP)).toEqual(['hls']);
+  });
+
+  it('returns empty array for null response', () => {
+    expect(fallbackChain(null)).toEqual([]);
+  });
+});
+
+describe('nextAfter', () => {
+  it('returns the next protocol in the chain', () => {
+    expect(nextAfter('webrtc', H264_RESP)).toBe('flv');
+    expect(nextAfter('flv', H264_RESP)).toBe('hls');
+  });
+
+  it('returns null when the chain is exhausted', () => {
+    expect(nextAfter('hls', H264_RESP)).toBeNull();
+  });
+
+  it('starts from chain[0] when current mode is not in the chain', () => {
+    // wasm was forced by legacy default but isn't in the real-time chain.
+    expect(nextAfter('wasm', H264_RESP)).toBe('webrtc');
+  });
+
+  it('returns null when there is no response', () => {
+    expect(nextAfter('flv', null)).toBeNull();
+  });
+});
+
+describe('resolveEncoding', () => {
+  it('prefers backend-probed encoding over stored fields', () => {
+    const cam = makeCamera({ encoding: 'h264', stream_encoding: 'h264' });
+    expect(resolveEncoding(cam, { encoding: 'h265', default: '', protocols: [] } as ProtocolsResponse)).toBe('h265');
+  });
+
+  it('falls back to camera.encoding then stream_encoding', () => {
+    expect(resolveEncoding(makeCamera({ encoding: 'h264' }), null)).toBe('h264');
+    expect(resolveEncoding(makeCamera({ encoding: '', stream_encoding: 'mjpeg' }), null)).toBe('mjpeg');
+  });
+});
+
+describe('isProtocolUsable', () => {
+  const avail = new Set(['webrtc', 'flv', 'hls']);
+
+  it('rejects webrtc for h265', () => {
+    expect(isProtocolUsable('webrtc', 'h265', FULL_CAPS, avail)).toBe(false);
+    expect(isProtocolUsable('webrtc', 'h264', FULL_CAPS, avail)).toBe(true);
+  });
+
+  it('rejects flv for h265 without MSE', () => {
+    expect(isProtocolUsable('flv', 'h265', { h265MSE: false, webCodecs: true }, avail)).toBe(false);
+    expect(isProtocolUsable('flv', 'h265', FULL_CAPS, avail)).toBe(true);
+  });
+
+  it('rejects wasm without WebCodecs', () => {
+    expect(isProtocolUsable('wasm', 'h264', { h265MSE: true, webCodecs: false }, avail)).toBe(false);
+  });
+
+  it('restricts mjpeg to jpeg/mjpeg streams', () => {
+    expect(isProtocolUsable('mjpeg', 'jpeg', EMPTY_CAPS, avail)).toBe(true);
+    expect(isProtocolUsable('mjpeg', 'h264', EMPTY_CAPS, avail)).toBe(false);
+  });
+
+  it('always allows hls/ll-hls', () => {
+    expect(isProtocolUsable('hls', 'h265', EMPTY_CAPS, avail)).toBe(true);
+    expect(isProtocolUsable('ll-hls', 'h264', EMPTY_CAPS, avail)).toBe(true);
+  });
+});

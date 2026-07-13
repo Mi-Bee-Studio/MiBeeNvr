@@ -107,7 +107,6 @@ export interface RelayCapabilities {
   max_targets_per_camera: number;
 }
 
-
 /** Fetch relay system capabilities (FFmpeg availability, limits). */
 export async function getRelayCapabilities(signal?: AbortSignal): Promise<RelayCapabilities> {
   return apiRequest<RelayCapabilities>('/relay/capabilities', { signal });
@@ -333,7 +332,7 @@ export async function stopCamera(id: string, signal?: AbortSignal): Promise<{ st
 // found, reconnects. Returns whether the camera was relocated.
 export async function rediscoverCamera(
   id: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ found: boolean; status?: string; reason?: string }> {
   // The unicast scan can run up to the configured MaxDuration (default 30s) plus
   // restart time, so use a generous client-side timeout rather than the default
@@ -452,10 +451,7 @@ export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSi
   };
 }
 
-export async function getONVIFDeviceDetail(
-  ip: string,
-  signal?: AbortSignal
-): Promise<ONVIFDeviceDetail> {
+export async function getONVIFDeviceDetail(ip: string, signal?: AbortSignal): Promise<ONVIFDeviceDetail> {
   return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
@@ -477,6 +473,33 @@ export async function probeONVIFDevice(
 export async function listProtocols(signal?: AbortSignal): Promise<ProtocolInfo[]> {
   const response = await apiRequest<{ protocols: ProtocolInfo[] }>('/protocols', { signal });
   return response.protocols;
+}
+
+// A single streaming protocol entry as returned by GET /api/cameras/{id}/protocols.
+// `Protocol` is the backend handler name (webrtc/flv/ll-hls/hls/wasm/mjpeg);
+// `Available` is false when the handler recognizes the codec but can't serve it
+// (e.g. WebRTC for H.265) — in which case `Reason` explains why.
+export interface CameraProtocolDetail {
+  Protocol: string;
+  Available: boolean;
+  Reason: string;
+}
+
+// Response of GET /api/cameras/{id}/protocols — codec-aware per-camera protocol
+// ranking. The backend probes the RUNNING recorder for the real codec (correcting
+// ONVIF cameras that lie), then asks each registered stream handler CanHandle(codec).
+// `default` is the latency-optimal available protocol (webrtc→flv→ll-hls→hls→mjpeg).
+export interface CameraProtocolsResponse {
+  protocols: CameraProtocolDetail[];
+  encoding: string;
+  default: string;
+}
+
+// Fetch the available streaming protocols for a specific camera. The grid uses
+// this (instead of the global /protocols list) to pick the best playback mode
+// per camera, accounting for codec and handler availability.
+export async function getCameraProtocols(cameraId: string, signal?: AbortSignal): Promise<CameraProtocolsResponse> {
+  return apiRequest<CameraProtocolsResponse>(`/cameras/${cameraId}/protocols`, { signal });
 }
 
 // Normalize legacy combined protocol names (rtsp_h264, etc.) to base protocol ID
@@ -816,29 +839,20 @@ export interface XiaomiDeviceInfo {
   [key: string]: unknown;
 }
 
-export async function getXiaomiDeviceInfo(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<XiaomiDeviceInfo> {
+export async function getXiaomiDeviceInfo(cameraId: string, signal?: AbortSignal): Promise<XiaomiDeviceInfo> {
   return apiRequest<XiaomiDeviceInfo>(`/cameras/${cameraId}/xiaomi/device-info`, { signal });
 }
 
 // --- Two-way Audio ---
 
-export async function startTwoWayAudio(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<{ speaker_codec: number }> {
+export async function startTwoWayAudio(cameraId: string, signal?: AbortSignal): Promise<{ speaker_codec: number }> {
   return apiRequest<{ speaker_codec: number }>(`/cameras/${cameraId}/xiaomi/two-way-audio/start`, {
     method: 'POST',
     signal,
   });
 }
 
-export async function stopTwoWayAudio(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<{ status: string }> {
+export async function stopTwoWayAudio(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/xiaomi/two-way-audio/stop`, {
     method: 'POST',
     signal,

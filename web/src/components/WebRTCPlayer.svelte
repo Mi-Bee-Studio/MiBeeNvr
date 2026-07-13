@@ -15,11 +15,15 @@
     cameraName,
     expanded = false,
     tabVisible = true,
+    onProtocolFailed,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    /** See FlvPlayer.onProtocolFailed — lets the grid demote to another
+     *  real-time protocol before this player falls back to a snapshot. */
+    onProtocolFailed?: () => boolean;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -171,6 +175,9 @@ let destroyed = false;
 
   function enterSnapshotMode() {
     if (snapshotMode) return;
+    // Ask the grid to demote to the next real-time protocol first (e.g. WebRTC→FLV).
+    // Only when it declines (chain exhausted) do we actually enter snapshot mode.
+    if (onProtocolFailed?.() === true) return;
     console.warn(`WebRTC max retries reached for ${cameraId}, entering snapshot fallback`);
     sendTelemetry('stream_degradation', cameraId, undefined, { protocol: 'webrtc', target: 'snapshot' });
     snapshotMode = true;
