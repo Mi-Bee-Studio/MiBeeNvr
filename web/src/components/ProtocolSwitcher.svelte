@@ -4,6 +4,7 @@
   import { apiRequest } from '$lib/api';
   import { showToast } from '$lib/toast';
   import { detectWebCodecs, getWebCodecsUnavailableReason } from '$lib/webcodecs-player/capabilities';
+  import { getCameraProtocolOverride, setCameraProtocolOverride } from '$lib/preferences';
 
   export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg';
 
@@ -104,8 +105,18 @@
         }
       }
       protocolReasons = reasons;
-      // Auto-select the server's default if different from current selection
-      if (result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
+      // Resolve the protocol to show. Priority:
+      //   1. A stored per-camera override (the user's last manual choice) — but
+      //      only if it's still available for this camera's current codec.
+      //   2. The backend's codec-aware default.
+      // A stored override wins because it represents explicit user intent; the
+      // backend default is only a starting point. We never silently overwrite a
+      // valid override with the backend default.
+      const stored = getCameraProtocolOverride(cameraId);
+      if (stored && stored !== selected && isAvailable(stored as StreamingProtocol)) {
+        onchange?.(stored as StreamingProtocol);
+      } else if (!stored && result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
+        // No override — apply the backend default once.
         onchange?.(result.default as StreamingProtocol);
       }
     } catch (e) {
@@ -151,6 +162,11 @@
       return;
     }
     open = false;
+    // Persist the user's explicit manual choice so it survives navigation and
+    // is honored by the surveillance grid (per-camera override). Note: this is
+    // the ONLY writer — runtime auto-fallbacks must NOT persist, otherwise a
+    // transient failure would permanently pin a worse protocol.
+    setCameraProtocolOverride(cameraId, protocol);
     onchange?.(protocol);
   }
 

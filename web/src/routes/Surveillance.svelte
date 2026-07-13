@@ -17,6 +17,7 @@
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { detectMSEH265, detectWebCodecs } from '$lib/webcodecs-player/capabilities';
   import { pickCameraMode, nextAfter, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
+  import { getCameraProtocolOverride } from '$lib/preferences';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -209,7 +210,11 @@
       return runtimeFallback[camera.id];
     }
     const resp = cameraProtocols.get(camera.id) ?? null;
+    // A per-camera user override (set via the LiveView ProtocolSwitcher) wins
+    // over the backend default, as long as it's still usable for this codec.
+    const override = getCameraProtocolOverride(camera.id);
     return pickCameraMode(camera, resp as ProtocolsResponse | null, browserCaps(), {
+      override,
       legacyDefault: defaultProtocol,
       isHlsCapable: isHlsSupported(camera),
       isUnsupported: snapshotMgr.isUnsupported(camera.id),
