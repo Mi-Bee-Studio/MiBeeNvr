@@ -60,6 +60,17 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen string `yaml:"listen"` // default ":9090"
+	// TLSListen enables a second HTTPS listener alongside the plain-HTTP one.
+	// Required for browser WebRTC (WHEP) which needs a Secure Context, and for
+	// secure WebUI access when not behind a TLS-terminating reverse proxy.
+	// Empty = no HTTPS listener (plain HTTP only). e.g. ":9443".
+	TLSListen string `yaml:"tls_listen"`
+	// CertFile / KeyFile are the TLS certificate and private key paths. Required
+	// when TLSListen is set. For production use a real CA-signed cert (e.g. via
+	// Caddy/Let's Encrypt or an internal CA); for LAN testing a self-signed cert
+	// works (browsers will warn). See deploy/AGENTS.md.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 type StorageConfig struct {
@@ -548,6 +559,12 @@ func Validate(cfg *Config) error {
 	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
 		if _, err := time.LoadLocation(cfg.Timezone); err != nil {
 			return fmt.Errorf("timezone: invalid IANA name %q: %w", cfg.Timezone, err)
+		}
+	}
+	// HTTPS/TLS listener validation
+	if strings.TrimSpace(cfg.Server.TLSListen) != "" {
+		if strings.TrimSpace(cfg.Server.CertFile) == "" || strings.TrimSpace(cfg.Server.KeyFile) == "" {
+			return fmt.Errorf("server.tls_listen %q is set but server.cert_file / server.key_file are missing", cfg.Server.TLSListen)
 		}
 	}
 	// cameras must have id and url
