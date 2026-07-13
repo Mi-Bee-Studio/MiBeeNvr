@@ -158,6 +158,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
 
+	// Wire offline-duration lookup so auto-remediation can gate reconnecting-
+	// triggered restarts on ReconnectingTimeoutMinutes (m.conn is set in the
+	// constructor).
+	if m.autoRemediate != nil && m.conn != nil {
+		m.autoRemediate.SetOfflineDurationFn(m.conn.GetOfflineDuration)
+	}
+
 	go m.run(childCtx)
 	slog.Info("health manager started")
 	return nil

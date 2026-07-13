@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -98,12 +99,14 @@ func TestAutoRemediator_IgnoresStatusReconnecting(t *testing.T) {
 	t.Parallel()
 	r, mock, _ := newTestRemediator(t)
 
+	// Without offlineDurationFn wired, reconnecting is conservatively ignored
+	// (no duration info to gate on).
 	err := r.Check("cam-1", string(model.StatusReconnecting))
 	if err != nil {
 		t.Fatalf("Check() returned error: %v", err)
 	}
 	if got := mock.callCount(t); got != 0 {
-		t.Fatalf("expected 0 restart calls for reconnecting, got %d", got)
+		t.Fatalf("expected 0 restart calls for reconnecting without duration fn, got %d", got)
 	}
 
 	// Also test StatusRecording is ignored.
@@ -113,6 +116,39 @@ func TestAutoRemediator_IgnoresStatusReconnecting(t *testing.T) {
 	}
 	if got := mock.callCount(t); got != 0 {
 		t.Fatalf("expected 0 restart calls for recording, got %d", got)
+	}
+}
+
+// TestAutoRemediator_ReconnectingTimeoutTriggersRestart covers the IP-change
+// scenario: a recorder stuck in reconnecting beyond ReconnectingTimeoutMinutes
+// gets a hard restart (which can then escalate to blacklist + rediscovery).
+// Without this, a camera whose IP changed loops forever in its own reconnect
+// backoff and rediscovery never fires.
+func TestAutoRemediator_ReconnectingTimeoutTriggersRestart(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediator(t)
+	r.SetOfflineDurationFn(func(string) time.Duration { return 15 * time.Minute }) // > 10min default
+
+	err := r.Check("cam-1", string(model.StatusReconnecting))
+	if err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 1 {
+		t.Fatalf("expected 1 restart call after reconnecting timeout, got %d", got)
+	}
+}
+
+func TestAutoRemediator_ReconnectingBelowTimeoutIgnored(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediator(t)
+	r.SetOfflineDurationFn(func(string) time.Duration { return 2 * time.Minute }) // < 10min default
+
+	err := r.Check("cam-1", string(model.StatusReconnecting))
+	if err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 0 {
+		t.Fatalf("expected 0 restart calls for brief reconnecting, got %d", got)
 	}
 }
 

@@ -418,6 +418,13 @@ type HealthAutoRemediationConfig struct {
 	CooldownMinutes    int  `yaml:"cooldown_minutes"`
 	BlacklistHours     int  `yaml:"blacklist_hours"`
 	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
+	// ReconnectingTimeoutMinutes is how long a recorder may stay in the
+	// "reconnecting" state before auto-remediation treats it as a dead-end and
+	// triggers a hard restart (which can then escalate to blacklist + IP
+	// rediscovery). A recorder's own reconnect loop never escalates to
+	// StatusError, so without this gate a camera whose IP changed would loop
+	// forever and rediscovery would never fire. 0 = use default (10 min).
+	ReconnectingTimeoutMinutes int `yaml:"reconnecting_timeout_minutes"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -1216,6 +1223,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
+	}
+	if cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes == 0 {
+		cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes = 10
 	}
 
 	// IP re-discovery (self-healing) defaults. Enabled by default since it only
