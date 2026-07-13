@@ -370,11 +370,19 @@ func buildWhiteBalanceSettingsXML(wb WhiteBalanceSettings) string {
 	if wb.Mode == "manual" {
 		mode = "MANUAL"
 	}
+	// ONVIF SetImagingSettings carries CrGain (red) and CbGain (blue) channel
+	// gains — they are independent values and must not be forced equal. Legacy
+	// callers may have set only ColorTemperature; preserve that behavior by
+	// using it for both gains when the explicit gains are unset.
+	crGain, cbGain := wb.CrGain, wb.CbGain
+	if crGain == 0 && cbGain == 0 {
+		crGain, cbGain = wb.ColorTemperature, wb.ColorTemperature
+	}
 	return fmt.Sprintf(`<tt:WhiteBalance>
   <tt:Mode>%s</tt:Mode>
   <tt:CrGain>%f</tt:CrGain>
   <tt:CbGain>%f</tt:CbGain>
-</tt:WhiteBalance>`, mode, wb.ColorTemperature, wb.ColorTemperature)
+</tt:WhiteBalance>`, mode, crGain, cbGain)
 }
 
 func truncateStr(s string, maxLen int) string {

@@ -557,6 +557,11 @@ func TestMapProfile(t *testing.T) {
 	profile := &onvifgo.Profile{
 		Token: "profile_1",
 		Name:  "HD",
+		VideoSourceConfiguration: &onvifgo.VideoSourceConfiguration{
+			Token:       "vsc_1",
+			Name:        "VideoSrc",
+			SourceToken: "VideoSrcToken_1",
+		},
 		VideoEncoderConfiguration: &onvifgo.VideoEncoderConfiguration{
 			Encoding: "H264",
 			Resolution: &onvifgo.VideoResolution{
@@ -571,6 +576,7 @@ func TestMapProfile(t *testing.T) {
 	require.Equal(t, "H264", result.Encoding)
 	require.Equal(t, 1920, result.Width)
 	require.Equal(t, 1080, result.Height)
+	require.Equal(t, "VideoSrcToken_1", result.VideoSourceToken, "VideoSourceToken must be mapped from VideoSourceConfiguration.SourceToken (imaging service needs it, not the profile token)")
 
 	// Profile without video encoder config
 	profileNoEnc := &onvifgo.Profile{

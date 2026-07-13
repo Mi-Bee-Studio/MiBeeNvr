@@ -65,7 +65,17 @@ type streamEntry struct {
 	lastErrorTime     time.Time
 	backoff           time.Duration
 	observedSegments  map[string]bool
+	// lastSegObserve throttles observeNewSegments: a full os.ReadDir of the segment
+	// directory is only performed at most once per segmentObserveInterval. Without this
+	// the scan ran after EVERY successful frame write (20-30 fps × N cameras = a
+	// persistent directory-scan storm purely to collect segment-size metrics).
+	lastSegObserve time.Time
 }
+
+// segmentObserveInterval is the minimum interval between segment-directory scans for
+// metrics. Set well below a typical segment duration (2-10s) so sizes are still
+// captured promptly, but high enough to eliminate the per-frame syscall storm.
+const segmentObserveInterval = 2 * time.Second
 
 // Manager manages on-demand HLS streams for cameras.
 type Manager struct {
@@ -975,6 +985,16 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// Recover from panics that occur when the HTTP handler context is
+		// cancelled (e.g. client disconnect or timeout) but gohlslib's
+		// mux.Handle goroutine still tries to write to the response writer.
+		// Without this recover, the panic crashes the entire process.
+		defer func() {
+			if rv := recover(); rv != nil {
+				hlsLogger.Warn("HLS Handle recovered from panic",
+					"camera_id", cameraID, "panic", rv)
+			}
+		}()
 		mux.Handle(w, r)
 	}()
 
@@ -1050,10 +1070,17 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 }
 
 // observeNewSegments scans the segment directory for new files and reports sizes.
+// Throttled to at most one os.ReadDir per segmentObserveInterval per stream to avoid
+// a per-frame directory-scan storm (was called after every successful frame write).
 func (m *Manager) observeNewSegments(cameraID string, entry *streamEntry) {
 	if m.metrics == nil {
 		return
 	}
+	now := time.Now()
+	if now.Sub(entry.lastSegObserve) < segmentObserveInterval {
+		return
+	}
+	entry.lastSegObserve = now
 	entries, err := os.ReadDir(entry.dirPath)
 	if err != nil {
 		return

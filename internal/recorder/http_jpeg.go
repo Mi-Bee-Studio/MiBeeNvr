@@ -27,16 +27,18 @@ var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
 
 // HTTPJPEGConfig holds configuration for the HTTP JPEG recorder.
 type HTTPJPEGConfig struct {
-	CameraID   string
-	URL        string
-	SegmentDur time.Duration
-	Username   string // for basic auth (optional)
-	Password   string // for basic auth (optional)
-	DB         RecordingDB
-	EventBus   *event.EventBus
-	AVI        bool // when true, write AVI single-file instead of MJPEG directory
-	Width      int  // video width (0 = auto-detect from first frame)
-	Height     int  // video height (0 = auto-detect from first frame)
+	CameraID               string
+	URL                    string
+	SegmentDur             time.Duration
+	Username               string // for basic auth (optional)
+	Password               string // for basic auth (optional)
+	DB                     RecordingDB
+	EventBus               *event.EventBus
+	AVI                    bool // when true, write AVI single-file instead of MJPEG directory
+	Width                  int  // video width (0 = auto-detect from first frame)
+	Height                 int  // video height (0 = auto-detect from first frame)
+	DarkFrameFilterEnabled bool // skip dark/night segments
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -62,9 +64,11 @@ type HTTPJPEGRecorder struct {
 	lastHealthLogAt time.Time        // throttled log for storage health failures
 
 	// latestFrame caches the most recent JPEG frame for snapshot polling.
-	// Updated on every frame; safe for concurrent reads via LatestFrame().
-	latestFrameMu sync.RWMutex
-	latestFrame   []byte
+	// Stored as an atomic pointer to a freshly-allocated, immutable []byte so concurrent
+	// readers can share the SAME buffer with zero copy/alloc per poll (was a full
+	// make+copy on every LatestFrame() call, multiplied by poll rate × viewer count).
+	// Writers Store a new pointer per frame; readers Load and treat the slice as read-only.
+	latestFrame atomic.Pointer[[]byte]
 
 	// AVI recording fields
 	aviMuxer *avi.Muxer
@@ -77,18 +81,16 @@ func (r *HTTPJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
 // StreamURL returns the MJPEG stream URL.
 func (r *HTTPJPEGRecorder) StreamURL() string { return r.cfg.URL }
 
-// LatestFrame returns a copy of the most recently captured JPEG frame.
-// Returns nil if no frame has been captured yet.
-// Safe for concurrent use.
+// LatestFrame returns the most recently captured JPEG frame WITHOUT copying.
+// The returned slice is shared and must be treated as read-only by callers
+// (the only consumer, handleLatestFrame, only reads it via w.Write). Returns
+// nil if no frame has been captured yet. Safe for concurrent use.
 func (r *HTTPJPEGRecorder) LatestFrame() []byte {
-	r.latestFrameMu.RLock()
-	defer r.latestFrameMu.RUnlock()
-	if r.latestFrame == nil {
+	p := r.latestFrame.Load()
+	if p == nil {
 		return nil
 	}
-	cp := make([]byte, len(r.latestFrame))
-	copy(cp, r.latestFrame)
-	return cp
+	return *p
 }
 
 // incActive increments the active recordings gauge if metrics is available.
@@ -348,10 +350,11 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			continue
 		}
 		// Cache latest frame for snapshot polling (before storage check,
-		// so live preview works even during storage issues).
-		r.latestFrameMu.Lock()
-		r.latestFrame = data
-		r.latestFrameMu.Unlock()
+		// so live preview works even during storage issues). data is freshly allocated
+		// each frame (make or bytes.Buffer), so storing the pointer directly is safe —
+		// readers treat it as immutable.
+		dp := data
+		r.latestFrame.Store(&dp)
 
 		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
@@ -495,6 +498,26 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		rec.FileSize = totalSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
+
+		// Dark frame detection: check if segment is too dark to be useful.
+		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
+			var isDark bool
+			if r.cfg.AVI {
+				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			} else {
+				isDark, _, _ = DetectDarkMJPEGDir(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			}
+			if isDark {
+				_ = r.cfg.DB.SetMergeStatus(context.Background(), []string{recordingID}, model.MergeStatusDark)
+				httpJpegLogger.Info("segment marked as dark (night/no-IR)",
+					"camera_id", r.cfg.CameraID, "recording_id", recordingID)
+				// Skip publishing SegmentCompleted — dark segments should not enter merge.
+				r.curTempPath = ""
+				r.curFinalPath = ""
+				r.frameCount = 0
+				return
+			}
 		}
 	}
 

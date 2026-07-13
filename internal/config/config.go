@@ -60,6 +60,17 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen string `yaml:"listen"` // default ":9090"
+	// TLSListen enables a second HTTPS listener alongside the plain-HTTP one.
+	// Required for browser WebRTC (WHEP) which needs a Secure Context, and for
+	// secure WebUI access when not behind a TLS-terminating reverse proxy.
+	// Empty = no HTTPS listener (plain HTTP only). e.g. ":9443".
+	TLSListen string `yaml:"tls_listen"`
+	// CertFile / KeyFile are the TLS certificate and private key paths. Required
+	// when TLSListen is set. For production use a real CA-signed cert (e.g. via
+	// Caddy/Let's Encrypt or an internal CA); for LAN testing a self-signed cert
+	// works (browsers will warn). See deploy/AGENTS.md.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 type StorageConfig struct {
@@ -115,6 +126,18 @@ type CameraConfig struct {
 	StreamKey     string `yaml:"stream_key,omitempty" json:"stream_key,omitempty"`
 	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
 	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
+
+	// Dark frame filtering: skip recording segments that are too dark to be useful
+	// (night without IR capability). Only applies to MJPEG/AVI cameras.
+	// When enabled, each segment is brightness-checked at close time; dark segments
+	// are marked merge_status='dark' and excluded from merge + cleaned up early.
+	DarkFrameFilterEnabled bool `yaml:"dark_frame_filter_enabled,omitempty" json:"dark_frame_filter_enabled,omitempty"`
+	DarkFrameThreshold     int  `yaml:"dark_frame_threshold,omitempty" json:"dark_frame_threshold,omitempty"` // 0-255, default 15
+
+	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
+	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
+	// pattern as timelapse scheduling.
+	RecordingSchedule *ScheduleConfig `yaml:"recording_schedule,omitempty" json:"recording_schedule,omitempty"`
 
 	// Push-out targets (relay): forward this camera's live stream to remote
 	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
@@ -174,6 +197,19 @@ type MergeConfig struct {
 	BatchLimit         int    `yaml:"batch_limit"`
 	MinSegmentAge      string `yaml:"min_segment_age"`
 	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
+
+	// Rolling merge (quasi-real-time): event-driven merge on SegmentCompleted.
+	// When enabled, each newly-closed segment is merged into a per-camera window
+	// bucket within seconds (vs the periodic MergeManager's ~1h latency).
+	// Independent of Enabled/CheckInterval — can run alongside the periodic merge.
+	RollingEnabled  bool   `yaml:"rolling_enabled" json:"rolling_enabled"`
+	RollingDebounce string `yaml:"rolling_debounce" json:"rolling_debounce"` // e.g. "500ms", "2s"
+	RollingWindow   string `yaml:"rolling_window" json:"rolling_window"`     // e.g. "1h", "30m"
+
+	// RollingMinDuration is the target minimum duration for merged recordings.
+	// Merged files shorter than this are marked merge_quality='short' and can be
+	// further consolidated via POST /api/merge/consolidate. Default "5m".
+	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
 }
 
 type TranscodingConfig struct {
@@ -393,6 +429,13 @@ type HealthAutoRemediationConfig struct {
 	CooldownMinutes    int  `yaml:"cooldown_minutes"`
 	BlacklistHours     int  `yaml:"blacklist_hours"`
 	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
+	// ReconnectingTimeoutMinutes is how long a recorder may stay in the
+	// "reconnecting" state before auto-remediation treats it as a dead-end and
+	// triggers a hard restart (which can then escalate to blacklist + IP
+	// rediscovery). A recorder's own reconnect loop never escalates to
+	// StatusError, so without this gate a camera whose IP changed would loop
+	// forever and rediscovery would never fire. 0 = use default (10 min).
+	ReconnectingTimeoutMinutes int `yaml:"reconnecting_timeout_minutes"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -516,6 +559,12 @@ func Validate(cfg *Config) error {
 	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
 		if _, err := time.LoadLocation(cfg.Timezone); err != nil {
 			return fmt.Errorf("timezone: invalid IANA name %q: %w", cfg.Timezone, err)
+		}
+	}
+	// HTTPS/TLS listener validation
+	if strings.TrimSpace(cfg.Server.TLSListen) != "" {
+		if strings.TrimSpace(cfg.Server.CertFile) == "" || strings.TrimSpace(cfg.Server.KeyFile) == "" {
+			return fmt.Errorf("server.tls_listen %q is set but server.cert_file / server.key_file are missing", cfg.Server.TLSListen)
 		}
 	}
 	// cameras must have id and url
@@ -795,10 +844,10 @@ func Validate(cfg *Config) error {
 		// Validate frame_source
 		if cam.Timelapse.FrameSource != "" {
 			switch cam.Timelapse.FrameSource {
-			case "auto", "snapshot", "rtsp_keyframe", "mjpeg":
+			case "auto", "snapshot", "rtsp_keyframe", "mjpeg", "latest_frame":
 				// valid
 			default:
-				return fmt.Errorf("cameras.%s.timelapse.frame_source must be one of \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\" (got %q)", cam.ID, cam.Timelapse.FrameSource)
+				return fmt.Errorf("cameras.%s.timelapse.frame_source must be one of \"auto\", \"snapshot\", \"rtsp_keyframe\", \"mjpeg\", \"latest_frame\" (got %q)", cam.ID, cam.Timelapse.FrameSource)
 			}
 		}
 		// Validate schedule
@@ -1192,6 +1241,9 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
 	}
+	if cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes == 0 {
+		cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes = 10
+	}
 
 	// IP re-discovery (self-healing) defaults. Enabled by default since it only
 	// activates for ONVIF cameras that have a stable_id AND are blacklisted, so it
@@ -1317,6 +1369,19 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	// Rolling merge fields: per-camera overrides only when explicitly set.
+	if perCamera.RollingEnabled {
+		result.RollingEnabled = true
+	}
+	if perCamera.RollingDebounce != "" {
+		result.RollingDebounce = perCamera.RollingDebounce
+	}
+	if perCamera.RollingWindow != "" {
+		result.RollingWindow = perCamera.RollingWindow
+	}
+	if perCamera.RollingMinDuration != "" {
+		result.RollingMinDuration = perCamera.RollingMinDuration
 	}
 	return result
 }

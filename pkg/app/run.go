@@ -71,6 +71,47 @@ func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
 	}
 }
 
+// validateMergedRecordings scans all recordings marked as 'merged' and resets
+// any whose merged output file is missing on disk. This prevents the playback
+// path from hitting a dead-end 404 when the DB claims a merge succeeded but
+// the file was lost (crash, manual deletion, or corrupt merge that reported
+// success without producing a valid file).
+func validateMergedRecordings(ctx context.Context, db *storage.DB, rootDir string) {
+	recordings, err := db.ListMergedRecordingsForValidation(ctx)
+	if err != nil {
+		slog.Warn("startup: failed to list merged recordings for validation", "error", err)
+		return
+	}
+	if len(recordings) == 0 {
+		return
+	}
+
+	resetCount := 0
+	for _, rec := range recordings {
+		if rec.MergePath == "" {
+			continue
+		}
+		if info, err := os.Stat(rec.MergePath); err != nil || info.Size() == 0 {
+			slog.Warn("startup: resetting stale merge status (file missing or empty)",
+				"recording_id", rec.ID,
+				"camera_id", rec.CameraID,
+				"merge_path", rec.MergePath,
+				"file_path", rec.FilePath)
+			if resetErr := db.ResetMergeStatus(ctx, rec.ID); resetErr != nil {
+				slog.Warn("startup: failed to reset merge status",
+					"recording_id", rec.ID, "error", resetErr)
+			} else {
+				resetCount++
+			}
+		}
+	}
+	if resetCount > 0 {
+		slog.Info("startup: reset stale merge statuses",
+			"reset_count", resetCount,
+			"total_checked", len(recordings))
+	}
+}
+
 // buildRouter constructs the chi HTTP router with all middleware, routes, mounts,
 // and the SPA static file handler. Called by RunFree.
 func buildRouter(
@@ -180,8 +221,19 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("db init: %w", err)
 	}
 
+	// Startup health check: verify that recordings marked as 'merged' still have
+	// their merged output files on disk. Stale entries (from past server crashes,
+	// manual deletion, or merge failures that left the DB in an inconsistent state)
+	// are reset to their unmerged state so playback can fall back to original frames
+	// or segments instead of serving a 404.
+	validateMergedRecordings(ctx, db, cfg.Storage.RootDir)
+
 	// Step 2: Metrics
 	metrics := metrics.NewMetrics()
+
+	// Wire DB observability hooks: query-latency histogram + SQLITE_BUSY counter.
+	db.SetMetrics(metrics)
+	storage.SetBusyErrorHook(metrics.IncSQLiteBusyErrors)
 
 	// Step 2.1: Event bus
 	eventBus := event.NewEventBus(64)
@@ -270,6 +322,25 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		},
 		func() []config.CameraConfig { return cfg.Cameras },
 		metrics,
+	)
+
+	// Step 5.1: Rolling merge coordinator (quasi-real-time, event-driven).
+	// Subscribes to SegmentCompleted and merges segments into per-camera window
+	// buckets within seconds. Independent of the periodic MergeManager above.
+	recordRollingMergeMgr := merge.NewRollingMergeCoordinator(
+		db, store,
+		func() config.MergeConfig { return cfg.Merge },
+		func(cameraID string) *config.MergeConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Merge
+				}
+			}
+			return nil
+		},
+		func() []config.CameraConfig { return cfg.Cameras },
+		metrics,
+		eventBus,
 	)
 
 	// Step 5.5: Transcode manager (after merge, before camera)
@@ -366,7 +437,12 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 					)
 				}
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), 10, periodicMergeDir, dur, appLoc)
+			// Use per-camera MergeOutputFPS (default 30 via ApplyDefaults), fallback to 10.
+			fps := 10
+			if cam.Timelapse.MergeOutputFPS > 0 {
+				fps = cam.Timelapse.MergeOutputFPS
+			}
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(
 				"merge scheduler: configured camera",
@@ -609,6 +685,7 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	if rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(rollingMergeMgr)
 	}
+	handler.SetRollingMergeMgr(recordRollingMergeMgr)
 	// Wire AI handler (config + zones only, no backend inference)
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), eventBus)
 	ah := api.NewAIHandler(aiMgr, cfg, configPath)
@@ -757,6 +834,28 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("register merge: %w", err)
+		}
+	}
+
+	// 4.1. rolling-merge — event-driven quasi-real-time merge
+	{
+		var rollingCancel context.CancelFunc
+		if err := a.Register(&serviceFunc{
+			name: "rolling-merge",
+			startFunc: func(ctx context.Context) error {
+				var runCtx context.Context
+				runCtx, rollingCancel = context.WithCancel(ctx)
+				return recordRollingMergeMgr.Start(runCtx)
+			},
+			stopFunc: func() error {
+				if rollingCancel != nil {
+					rollingCancel()
+				}
+				recordRollingMergeMgr.Stop()
+				return nil
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("register rolling-merge: %w", err)
 		}
 	}
 

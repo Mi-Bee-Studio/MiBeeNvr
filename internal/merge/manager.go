@@ -242,7 +242,12 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 	}
 	defer release()
 	remainingLimit := cfg.BatchLimit
+	// Timing: ListCameraMergeWindows is called per camera. With ~10 cameras at ~10ms each, total is ~100ms.
+	// This is NOT a significant N+1 at the typical deployment scale (sub-100ms total for all cameras).
+	// If this becomes a bottleneck, cache the window query results with a short TTL.
+	windowStart := time.Now()
 	windows, err := m.db.ListCameraMergeWindows(ctx, cameraID, minAge)
+	slog.Debug("merge window scan", "camera", cameraID, "duration", time.Since(windowStart))
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("list merge windows: %w", err)
 	}
@@ -336,12 +341,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 	}
 
 	var parsed []parsedRec
-	var parseFailedIDs []string
+	type parseFailure struct {
+		id     string
+		errMsg string
+	}
+	var parseFailures []parseFailure
 	for _, rec := range recs {
 		info, err := ParseSegment(rec.FilePath)
 		if err != nil {
 			logger.Warn("failed to parse segment, marking as failed", "recording_id", rec.ID, "file_path", rec.FilePath, "error", err)
-			parseFailedIDs = append(parseFailedIDs, rec.ID)
+			parseFailures = append(parseFailures, parseFailure{id: rec.ID, errMsg: err.Error()})
 			continue
 		}
 		if info.Codec != format {
@@ -363,15 +372,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		})
 	}
 
-	// Mark parse-failed recordings permanently.
-	if len(parseFailedIDs) > 0 {
+	// Mark parse-failed recordings permanently with the error reason.
+	for _, pf := range parseFailures {
 		if err := storage.RetryOnBusy(ctx, func() error {
-			return m.db.SetMergeStatus(ctx, parseFailedIDs, model.MergeStatusFailed)
+			return m.db.SetMergeError(ctx, []string{pf.id}, "parse failed: "+pf.errMsg)
 		}); err != nil {
-			logger.Warn("failed to mark parse-failed segments", "error", err)
-		} else {
-			logger.Info("marked parse-failed segments as merge_status=failed", "count", len(parseFailedIDs))
+			logger.Warn("failed to mark parse-failed segment", "recording_id", pf.id, "error", err)
 		}
+	}
+	if len(parseFailures) > 0 {
+		logger.Info("marked parse-failed segments as merge_status=failed", "count", len(parseFailures))
 	}
 
 	// Group by SPS/PPS bytes using SHA-256 hash to avoid null-byte collisions.
@@ -517,14 +527,16 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		freed += oldSize
 	}
 
-	// Mark undersized SPS/PPS groups as permanently failed.
+	// Mark undersized SPS/PPS groups as permanently incompatible for merging.
+	// These segments have different codec parameters (SPS/PPS) and cannot be merged
+	// together, but they are NOT failures — the individual recordings are still valid.
 	if len(smallGroupIDs) > 0 {
 		if err := storage.RetryOnBusy(ctx, func() error {
-			return m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusFailed)
+			return m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusIncompatible)
 		}); err != nil {
 			logger.Warn("failed to mark undersized group segments", "error", err)
 		} else {
-			logger.Info("marked undersized SPS/PPS group segments as merge_status=failed", "count", len(smallGroupIDs))
+			logger.Info("marked undersized SPS/PPS group segments as merge_status=incompatible", "count", len(smallGroupIDs))
 		}
 	}
 

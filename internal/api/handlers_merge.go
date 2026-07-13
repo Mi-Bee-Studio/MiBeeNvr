@@ -238,3 +238,178 @@ func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
 		"pending": counts,
 	})
 }
+
+// handleMergeReclassify converts existing merge_status='failed' recordings with
+// empty merge_error to 'incompatible'. This backfills undersized SPS/PPS groups
+// that were incorrectly classified as failures.
+func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	result, err := h.db.DB().ExecContext(r.Context(), `
+		UPDATE recordings SET merge_status = 'incompatible'
+		WHERE merge_status = 'failed' AND (merge_error IS NULL OR merge_error = '')
+	`)
+	if err != nil {
+		logger.Warn("failed to reclassify failed recordings", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to reclassify recordings")
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	logger.Info("reclassified failed recordings as incompatible", "count", affected)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       "ok",
+		"reclassified": affected,
+	})
+}
+
+// --- Rolling merge backfill endpoints ---
+
+// handleMergeBackfillCamera triggers an immediate rolling merge backfill for a single camera.
+// Processes all pending (and optionally failed) MP4 segments into window buckets.
+//
+// Query params:
+//
+//	include_failed=true  — also re-process previously failed/incompatible segments
+func (h *Handler) handleMergeBackfillCamera(w http.ResponseWriter, r *http.Request) {
+	if h.rollingMergeMgr == nil {
+		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		WriteError(w, http.StatusBadRequest, "camera id is required")
+		return
+	}
+
+	includeFailed := r.URL.Query().Get("include_failed") == "true"
+
+	merged, err := h.rollingMergeMgr.BackfillCamera(r.Context(), cameraID, includeFailed)
+	if err != nil {
+		logger.Warn("backfill failed for camera",
+			"camera_id", cameraID, "error", err, "include_failed", includeFailed)
+		WriteError(w, http.StatusInternalServerError, "backfill failed: "+err.Error())
+		return
+	}
+
+	logger.Info("backfill complete for camera",
+		"camera_id", cameraID, "merged", merged, "include_failed", includeFailed)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":          "ok",
+		"camera_id":       cameraID,
+		"segments_merged": merged,
+		"include_failed":  includeFailed,
+	})
+}
+
+// handleMergeBackfillAll triggers an immediate rolling merge backfill for ALL cameras
+// that have rolling merge enabled.
+//
+// Query params:
+//
+//	include_failed=true  — also re-process previously failed/incompatible segments
+func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request) {
+	if h.rollingMergeMgr == nil {
+		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
+		return
+	}
+
+	includeFailed := r.URL.Query().Get("include_failed") == "true"
+
+	// List all pending segments across all cameras.
+	recs, err := h.db.ListPendingSegmentsForRolling(r.Context(), "", includeFailed)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to list pending segments: "+err.Error())
+		return
+	}
+
+	// Group by camera.
+	byCamera := make(map[string]int)
+	for _, rec := range recs {
+		byCamera[rec.CameraID]++
+	}
+
+	totalMerged := 0
+	for cameraID := range byCamera {
+		merged, err := h.rollingMergeMgr.BackfillCamera(r.Context(), cameraID, includeFailed)
+		if err != nil {
+			logger.Warn("backfill failed for camera during global backfill",
+				"camera_id", cameraID, "error", err)
+			continue
+		}
+		totalMerged += merged
+	}
+
+	logger.Info("global backfill complete", "total_merged", totalMerged, "cameras", len(byCamera))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                "ok",
+		"total_segments_merged": totalMerged,
+		"cameras_processed":     len(byCamera),
+		"include_failed":        includeFailed,
+	})
+}
+
+// handleMergeConsolidate finds merge_quality='short' recordings and attempts to
+// merge them with adjacent recordings of the same format to reach the minimum
+// duration threshold.
+func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request) {
+	if h.rollingMergeMgr == nil {
+		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
+		return
+	}
+
+	// Parse min_duration from query or config.
+	minDurStr := r.URL.Query().Get("min_duration")
+	cfg := h.config.Merge
+	if minDurStr == "" {
+		minDurStr = cfg.RollingMinDuration
+	}
+	if minDurStr == "" {
+		minDurStr = "5m"
+	}
+	minDur, err := time.ParseDuration(minDurStr)
+	if err != nil || minDur <= 0 {
+		WriteError(w, http.StatusBadRequest, "invalid min_duration")
+		return
+	}
+
+	// Find short merged recordings.
+	cameraID := r.URL.Query().Get("camera_id")
+	shortRecs, err := h.db.ListShortMergedRecordings(r.Context(), cameraID, minDur.Seconds())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to list short recordings: "+err.Error())
+		return
+	}
+
+	// Group by camera for processing.
+	cameras := make(map[string]bool)
+	for _, rec := range shortRecs {
+		cameras[rec.CameraID] = true
+	}
+
+	totalConsolidated := 0
+	for cam := range cameras {
+		merged, err := h.rollingMergeMgr.ConsolidateShortRecord(r.Context(), cam, minDur)
+		if err != nil {
+			logger.Warn("consolidate failed for camera", "camera_id", cam, "error", err)
+			continue
+		}
+		totalConsolidated += merged
+	}
+
+	logger.Info("consolidate complete", "total_consolidated", totalConsolidated, "short_recordings", len(shortRecs))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":           "ok",
+		"short_recordings": len(shortRecs),
+		"consolidated":     totalConsolidated,
+		"min_duration":     minDurStr,
+	})
+}

@@ -106,6 +106,76 @@ func TestListRecordingsWithFilter(t *testing.T) {
 	require.Len(t, list2, 0)
 }
 
+func TestDailyRecordingSummary(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_daily_summary.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+
+	// Insert recordings across two different UTC days.
+	// With tz_offset=0 (UTC), they fall on two different dates.
+	day1 := time.Date(2024, 7, 9, 10, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 7, 9, 23, 30, 0, 0, time.UTC) // 23:30 UTC
+
+	for i := range 5 {
+		_ = db.InsertRecording(ctx, &model.Recording{
+			ID: fmt.Sprintf("h264-%d", i), CameraID: "camA", FilePath: "/h.mp4",
+			Format: model.FormatH264, StartedAt: day1,
+		})
+	}
+	// day2: 23:30 UTC. With tz_offset=+60 it becomes 00:30 next day (Jul 10).
+	for i := range 3 {
+		_ = db.InsertRecording(ctx, &model.Recording{
+			ID: fmt.Sprintf("tl-%d", i), CameraID: "camA", FilePath: "/t.mp4",
+			Format: model.FormatTimelapse, StartedAt: day2,
+		})
+	}
+	// One mjpeg recording on day1.
+	_ = db.InsertRecording(ctx, &model.Recording{
+		ID: "mj-0", CameraID: "camA", FilePath: "/m.mp4",
+		Format: model.FormatMJPEG, StartedAt: day1,
+	})
+
+	start := time.Date(2024, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 7, 31, 23, 59, 59, 0, time.UTC)
+	filter := model.RecordingFilter{StartTime: start, EndTime: end}
+
+	// tz_offset=0: day1 recordings (5 h264 + 1 mjpeg) group as Jul 9, day2 (3 timelapse) also Jul 9.
+	summary, err := db.DailyRecordingSummary(ctx, filter, 0)
+	require.NoError(t, err)
+	require.Len(t, summary, 1, "all recordings fall on Jul 9 UTC")
+	require.Equal(t, "2024-07-09", summary[0].Date)
+	require.Equal(t, 9, summary[0].Count) // 5 + 3 + 1
+	require.Contains(t, summary[0].Formats, "video")
+	require.Contains(t, summary[0].Formats, "timelapse")
+	require.Contains(t, summary[0].Formats, "mjpeg")
+
+	// tz_offset=+60: day2 23:30 UTC → 00:30 Jul 10 local. Splits across two days.
+	summary2, err := db.DailyRecordingSummary(ctx, filter, 60)
+	require.NoError(t, err)
+	require.Len(t, summary2, 2)
+	// Jul 9: 5 h264 + 1 mjpeg = 6
+	require.Equal(t, "2024-07-09", summary2[0].Date)
+	require.Equal(t, 6, summary2[0].Count)
+	require.NotContains(t, summary2[0].Formats, "timelapse")
+	// Jul 10: 3 timelapse
+	require.Equal(t, "2024-07-10", summary2[1].Date)
+	require.Equal(t, 3, summary2[1].Count)
+	require.Contains(t, summary2[1].Formats, "timelapse")
+
+	// Camera filter excludes other cameras.
+	_ = db.InsertRecording(ctx, &model.Recording{
+		ID: "other", CameraID: "camB", FilePath: "/o.mp4",
+		Format: model.FormatH264, StartedAt: day1,
+	})
+	camFilter := model.RecordingFilter{CameraID: "camB", StartTime: start, EndTime: end}
+	summary3, err := db.DailyRecordingSummary(ctx, camFilter, 0)
+	require.NoError(t, err)
+	require.Len(t, summary3, 1)
+	require.Equal(t, 1, summary3[0].Count)
+}
+
 func TestDeleteRecording(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test6.db")
@@ -881,7 +951,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "22", version)
+	require.Equal(t, "24", version)
 }
 
 func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
@@ -903,7 +973,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "22", version)
+	require.Equal(t, "24", version)
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
@@ -1428,4 +1498,75 @@ func TestDequeueNotBlockedByLongTx(t *testing.T) {
 
 	// Wait for hold goroutine to finish
 	<-holdDone
+}
+
+func TestCheckpointWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_checkpoint.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	busy, logFrames, ckptFrames, err := db.CheckpointWAL(ctx, "PASSIVE")
+	require.NoError(t, err)
+	require.Equal(t, 0, busy, "PASSIVE checkpoint should not be busy on fresh DB")
+	t.Logf("PASSIVE checkpoint: busy=%d logFrames=%d ckptFrames=%d", busy, logFrames, ckptFrames)
+}
+
+func TestCheckpointWALTruncate(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_ckpt_truncate.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	busy, logFrames, ckptFrames, err := db.CheckpointWAL(ctx, "TRUNCATE")
+	require.NoError(t, err)
+	require.Equal(t, 0, busy, "TRUNCATE checkpoint should not be busy on fresh DB")
+	t.Logf("TRUNCATE checkpoint: busy=%d logFrames=%d ckptFrames=%d", busy, logFrames, ckptFrames)
+}
+
+func TestGetWALSize(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_walsize.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	size, err := db.GetWALSize()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, size, int64(0), "WAL size should be >= 0")
+}
+
+func TestGetFragmentationRatio(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_frag.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	frac, err := db.GetFragmentationRatio(ctx)
+	require.NoError(t, err)
+	require.Equal(t, float64(0), frac, "fresh DB should have 0 fragmentation")
+}
+
+func TestIncrementalVacuum(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_vacuum.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	err = db.IncrementalVacuum(ctx, 100)
+	require.NoError(t, err, "incremental_vacuum on fresh DB should not error")
 }

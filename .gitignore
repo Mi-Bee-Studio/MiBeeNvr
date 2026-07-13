@@ -66,3 +66,4 @@ dist/
 .build-tmp/
 internal/transcoding/-decoders
 internal/transcoding/-encoders
+.zcode/

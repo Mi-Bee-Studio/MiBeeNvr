@@ -170,6 +170,7 @@
   "stats.totalUpload": "总上传",
   "stats.totalDownload": "总下载",
   "common.loading": "加载中...",
+  "common.loadMore": "加载更多",
   "common.error": "错误",
   "common.unknownError": "未知错误",
   "common.invalidCredentials": "无效的凭据",

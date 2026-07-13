@@ -38,6 +38,7 @@ type SegmentStore interface {
 type RecordingDB interface {
 	InsertRecording(ctx context.Context, r *model.Recording) error
 	InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error
+	SetMergeStatus(ctx context.Context, ids []string, status string) error
 }
 
 const (

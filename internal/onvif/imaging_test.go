@@ -415,6 +415,26 @@ func TestBuildWhiteBalanceSettingsXML_ManualMode(t *testing.T) {
 	require.Contains(t, xml, "3200")
 }
 
+// TestBuildWhiteBalanceSettingsXML_IndependentGains ensures CrGain and CbGain are
+// emitted as independent values (the old code forced both to ColorTemperature,
+// which is wrong — red and blue channel gains are distinct).
+func TestBuildWhiteBalanceSettingsXML_IndependentGains(t *testing.T) {
+	t.Helper()
+	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "manual", CrGain: 1.5, CbGain: 2.5})
+	require.Contains(t, xml, "<tt:CrGain>1.500000</tt:CrGain>")
+	require.Contains(t, xml, "<tt:CbGain>2.500000</tt:CbGain>")
+}
+
+// TestBuildWhiteBalanceSettingsXML_ColorTemperatureFallback preserves legacy
+// behavior: when only ColorTemperature is set (CrGain/CbGain both zero), it is
+// used for both gains.
+func TestBuildWhiteBalanceSettingsXML_ColorTemperatureFallback(t *testing.T) {
+	t.Helper()
+	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "auto", ColorTemperature: 5500})
+	require.Contains(t, xml, "<tt:CrGain>5500.000000</tt:CrGain>")
+	require.Contains(t, xml, "<tt:CbGain>5500.000000</tt:CbGain>")
+}
+
 func TestTruncateStr_Short(t *testing.T) {
 	t.Helper()
 	result := truncateStr("hello", 10)

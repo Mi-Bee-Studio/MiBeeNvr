@@ -66,6 +66,7 @@ xiaomi_local.go           # Local Xiaomi auth implementation
 ## CONVENTIONS
 
 - **Chi router**: `chi.NewRouter()` with middleware chain. Public routes: `/api/health`, `/api/metrics`, `/models/{filename}`, `/api/recordings/{id}/download` + `/merged`
+- **Merged-file existence check**: `handleMergedRecording` (`/merged`) and `handleTimelapseDownload` `os.Stat` `rec.MergePath` before serving and return 404 if missing/empty. The frontend `RecordingDetail` treats a merged-timelapse 404/decode error as a signal to fall back to the JPEG frame viewer (`useFrameFallback`) instead of a dead-end error. `handleTimelapseFrames`/`handleTimelapseFrame` accept `timelapse` AND `mjpeg` formats (MJPEG recordings are also JPEG frame sequences).
 - **JSON responses**: `writeJSON(w, status, data)` helper. Errors: `writeError(w, status, message)`
 - **Camera protocol**: Frontend sends `protocol` + `encoding` separately. Backend combines to `rtsp_h264`, `rtsp_h265`, etc. in `camera/manager.go`
 - **Pagination**: Recordings use `offset/limit` query params. Response includes `total` count

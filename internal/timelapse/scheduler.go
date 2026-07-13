@@ -86,6 +86,45 @@ func (s *Scheduler) isRecordingTimeAt(now time.Time, cfg config.CameraTimelapseC
 	return false
 }
 
+// IsScheduleActive checks if the current time falls within the given ScheduleConfig.
+// This is the generic version of IsRecordingTime that works with any ScheduleConfig
+// (not just CameraTimelapseConfig), enabling reuse for recording schedules.
+func (s *Scheduler) IsScheduleActive(schedule *config.ScheduleConfig) bool {
+	now := s.getNow()
+
+	// nil or no time ranges means 24/7 active.
+	if schedule == nil || len(schedule.TimeRanges) == 0 {
+		return true
+	}
+
+	// Check day-of-week restriction.
+	if len(schedule.DaysOfWeek) > 0 {
+		weekday := int(now.Weekday())
+		dayMatch := false
+		for _, d := range schedule.DaysOfWeek {
+			if d == weekday {
+				dayMatch = true
+				break
+			}
+		}
+		if !dayMatch {
+			return false
+		}
+	}
+
+	currentMinutes := now.Hour()*60 + now.Minute()
+	for _, tr := range schedule.TimeRanges {
+		startH, startM := parseHHMM(tr.Start)
+		endH, endM := parseHHMM(tr.End)
+		startMinutes := startH*60 + startM
+		endMinutes := endH*60 + endM
+		if currentMinutes >= startMinutes && currentMinutes < endMinutes {
+			return true
+		}
+	}
+	return false
+}
+
 // NextTransition returns the duration until the next schedule state change
 // (recording ↔ not recording). Returns 0 when:
 //   - The schedule is nil (always recording — no transitions).

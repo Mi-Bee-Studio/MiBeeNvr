@@ -3,6 +3,7 @@ package timelapse
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -31,6 +32,7 @@ type MergeStatusUpdater interface {
 	SetMergeResult(ctx context.Context, id string, mergePath, mergeTier string) error
 	SetMergeError(ctx context.Context, ids []string, mergeError string) error
 	UpdateMergeProgress(ctx context.Context, id string, progress int) error
+	UpdateMergeProgressBatch(ctx context.Context, ids []string, progress int) error
 }
 
 // RollingMergeManager tracks active async merges per camera.
@@ -191,6 +193,32 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 		"duration", result.Duration,
 		"tier", result.Tier,
 	)
+
+	// Post-merge verification: confirm the output MP4 was actually written and
+	// is non-empty. Some mergers report success (via cmd exit code or muxer.close)
+	// even when the output is absent or corrupt. This prevents delete_original
+	// from destroying frames when the MP4 is unusable.
+	if info, err := os.Stat(outputPath); err != nil || info.Size() == 0 {
+		mergeErr := fmt.Errorf("post-merge verification failed: output file missing or empty (path=%s)", outputPath)
+		slog.Error("rolling merge: merge reported success but output file is missing/empty",
+			"camera_id", cameraID,
+			"output_path", outputPath,
+			"stat_error", err,
+		)
+		if r.db != nil && recordingID != "" {
+			if dbErr := r.db.SetMergeError(ctx, []string{recordingID}, mergeErr.Error()); dbErr != nil {
+				slog.Warn("rolling merge: failed to set merge error in DB",
+					"recording_id", recordingID, "error", dbErr)
+			}
+		}
+		r.setProgress(cameraID, MergeProgressInfo{
+			CameraID: cameraID,
+			Progress: 0,
+			Status:   "failed",
+			Error:    mergeErr.Error(),
+		})
+		return
+	}
 
 	// Update DB with successful merge result.
 	if r.db != nil && recordingID != "" {

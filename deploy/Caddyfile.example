@@ -1,9 +1,38 @@
 # MiBee NVR — HTTP/WebUI/API on port 9090
-# Add this to your existing Caddyfile
+#
+# Two TLS options:
+#   A) Let Caddy terminate TLS (recommended for production with a domain name)
+#   B) Use NVR's built-in HTTPS listener (:9443) with your own cert
+#      (good for LAN/IP-only setups without a domain)
 
-:80 {
-    reverse_proxy localhost:9090
-}
+# --- Option A: Caddy terminates TLS (needs a domain name) ---
+# Caddy auto-provisions a Let's Encrypt cert. Browse to https://nvr.example.com
+#
+# nvr.example.com {
+#     reverse_proxy localhost:9090
+# }
 
-# WebDAV is accessible via same port at /dav/
-# FTP runs on port 2121 (cannot be reverse-proxied through Caddy)
+# --- Option B: NVR built-in HTTPS (LAN / IP-only / no domain) ---
+# 1. Generate or obtain a cert (self-signed for testing, CA-signed for production):
+#      openssl req -x509 -newkey rsa:2048 -keyout cert.key -out cert.crt \
+#        -days 3650 -nodes -subj "/CN=mibee-nvr" \
+#        -addext "subjectAltName=IP:192.168.1.30,DNS:localhost"
+# 2. Add to mibee-nvr.yaml:
+#      server:
+#        tls_listen: ":9443"
+#        cert_file: "/path/to/cert.crt"
+#        key_file:  "/path/to/cert.key"
+# 3. Browse to https://192.168.1.30:9443 (browsers will warn on self-signed;
+#    click through for LAN testing, or install the cert into your trust store).
+#
+# WebRTC (WHEP) live preview requires HTTPS — use this option if you don't have
+# a reverse proxy. HTTP (:9090) continues to run alongside for non-browser
+# clients (API keys, ffmpeg, etc).
+
+# --- Plain HTTP (no TLS) — original config, kept for reference ---
+# :80 {
+#     reverse_proxy localhost:9090
+# }
+
+# WebDAV is accessible via same port at /dav/ (on whichever listener you use)
+# FTP runs on port 2121 (cannot be reverse-proxied)

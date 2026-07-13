@@ -36,6 +36,10 @@ func (m *mockMergeStatusUpdater) UpdateMergeProgress(_ context.Context, _ string
 	return nil
 }
 
+func (m *mockMergeStatusUpdater) UpdateMergeProgressBatch(_ context.Context, _ []string, _ int) error {
+	return nil
+}
+
 func TestNewDailyMergeManager(t *testing.T) {
 	t.Helper()
 	m := NewDailyMergeManager(&mockRecordingLister{}, &mockMergeStatusUpdater{}, nil, 10, "/tmp/test-data", nil)
@@ -111,7 +115,7 @@ func (d *trackDB) SetMergeError(_ context.Context, ids []string, mergeError stri
 	return nil
 }
 
-func (d *trackDB) UpdateMergeProgress(_ context.Context, id string, progress int) error {
+func (d *trackDB) UpdateMergeProgress(ctx context.Context, id string, progress int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.progress[id] = progress
@@ -121,6 +125,15 @@ func (d *trackDB) UpdateMergeProgress(_ context.Context, id string, progress int
 		d.statuses[id] = "merging"
 	} else {
 		d.statuses[id] = "pending"
+	}
+	return nil
+}
+
+func (d *trackDB) UpdateMergeProgressBatch(ctx context.Context, ids []string, progress int) error {
+	for _, id := range ids {
+		if err := d.UpdateMergeProgress(ctx, id, progress); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -161,13 +174,17 @@ type successMerger struct{ delay time.Duration }
 
 func (s *successMerger) CanMerge() bool  { return true }
 func (s *successMerger) Tier() MergeTier { return TierGo }
-func (s *successMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
+func (s *successMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*MergeResult, error) {
 	select {
 	case <-time.After(s.delay):
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 5.0, OutputPath: "/tmp/output.mp4"}, nil
+	// Create a dummy output file so post-merge verification passes.
+	if outputPath != "" {
+		os.WriteFile(outputPath, []byte("merged"), 0o644)
+	}
+	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 5.0, OutputPath: outputPath}, nil
 }
 
 func TestDailyWire_DailyMergeRun(t *testing.T) {

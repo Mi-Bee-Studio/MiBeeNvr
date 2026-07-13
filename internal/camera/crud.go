@@ -122,6 +122,12 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 		}
 	}
 
+	// Stop frame poller if running
+	cm.stopTimelapseFramePoller(cameraID)
+
+	// Stop dual-mode timelapse schedule monitor
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
@@ -177,6 +183,12 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
 		}
 	}
+
+	// Stop frame poller if running
+	cm.stopTimelapseFramePoller(cameraID)
+
+	// Stop dual-mode timelapse schedule monitor
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
 
 	// 2. Merge segments (non-blocking — failure is logged but does not stop archival)
 	if cm.mergeMgr != nil {
@@ -320,6 +332,15 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.SubnetHints != nil {
 		cam.SubnetHints = *updates.SubnetHints
 	}
+	if updates.DarkFrameFilterEnabled != nil {
+		cam.DarkFrameFilterEnabled = *updates.DarkFrameFilterEnabled
+	}
+	if updates.DarkFrameThreshold != nil {
+		cam.DarkFrameThreshold = *updates.DarkFrameThreshold
+	}
+	if updates.RecordingSchedule != nil {
+		cam.RecordingSchedule = updates.RecordingSchedule
+	}
 
 	// Persist to database
 	if cm.db != nil {
@@ -360,6 +381,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
 			}
 		}
+		// Stop frame poller if running
+		cm.stopTimelapseFramePoller(cam.ID)
+		// Stop dual-mode timelapse schedule monitor
+		cm.stopDualModeTimelapseScheduleMonitor(cam.ID)
 	}
 
 	// Start recorder if protocol changed to a recordable one
@@ -396,6 +421,11 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cameraID := cam.ID
 		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
 		go cm.relayMgr.SetCameraTargets(cameraID, targets)
+	}
+
+	// Start or update recording schedule monitor if a schedule is configured.
+	if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
+		cm.startRecordingScheduleMonitor(context.Background(), cam.ID)
 	}
 
 	return cam, nil

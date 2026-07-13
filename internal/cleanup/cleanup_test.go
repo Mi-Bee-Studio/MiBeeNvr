@@ -632,3 +632,44 @@ func TestTimeBasedCleanup_TimelapseDirectory(t *testing.T) {
 	_, err = os.Stat(segDir)
 	require.True(t, os.IsNotExist(err), "timelapse directory should be deleted: %v", err)
 }
+
+func TestDatabaseMaintenance(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	// performDatabaseMaintenance should not error on a fresh DB
+	cm.performDatabaseMaintenance(ctx)
+	require.Equal(t, 0, cm.consecutivePassiveFailures, "counter should be 0")
+}
+
+func TestDatabaseMaintenanceEscalation(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	// Insert a recording so the DB has some activity
+	require.NoError(t, env.db.InsertRecording(ctx, &model.Recording{
+		ID: "test-db-1", CameraID: "cam1", FilePath: "/tmp/t1.mp4",
+		Format: model.FormatH264, StartedAt: time.Now(),
+	}))
+
+	// On a fresh DB with minimal data, WAL is small (< 10MB), so no checkpoint runs.
+	// The counter should remain unchanged because the WAL size check gates the logic.
+	cm.consecutivePassiveFailures = 2
+	cm.performDatabaseMaintenance(ctx)
+	require.Equal(t, 2, cm.consecutivePassiveFailures, "no checkpoint if WAL < 10MB")
+
+	// Run without pre-setting counter to verify normal flow doesn't panic
+	cm.consecutivePassiveFailures = 0
+	cm.performDatabaseMaintenance(ctx)
+	require.Equal(t, 0, cm.consecutivePassiveFailures, "counter remains 0")
+}

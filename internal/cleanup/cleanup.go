@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -25,18 +26,19 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db                        *storage.DB
-	store                     *storage.Manager
-	retention                 time.Duration
-	diskThreshold             int // percent
-	interval                  time.Duration
-	metrics                   *metrics.Metrics
-	healthEnabled             bool
-	healthRetention           time.Duration
-	transcodeOrphanFn         func(ctx context.Context) error
-	transcodeHistoryRetention time.Duration // 0 = disabled
-	ffprobePath               string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
-	eventBus                  *event.EventBus
+	db                         *storage.DB
+	store                      *storage.Manager
+	retention                  time.Duration
+	diskThreshold              int // percent
+	interval                   time.Duration
+	metrics                    *metrics.Metrics
+	healthEnabled              bool
+	healthRetention            time.Duration
+	transcodeOrphanFn          func(ctx context.Context) error
+	transcodeHistoryRetention  time.Duration // 0 = disabled
+	ffprobePath                string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
+	eventBus                   *event.EventBus
+	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -85,6 +87,13 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 	ticker := time.NewTicker(cm.interval)
 	defer ticker.Stop()
 
+	// SQLite health metrics (WAL size, DB size, fragmentation, pool stats) are updated
+	// on a faster cadence than the (typically hourly) cleanup cycle so they stay
+	// near-real-time for monitoring. This ticker is cheap: a few PRAGMAs + an os.Stat.
+	const sqliteMetricsInterval = 60 * time.Second
+	metricsTicker := time.NewTicker(sqliteMetricsInterval)
+	defer metricsTicker.Stop()
+
 	// Run once immediately
 	cm.RunOnce(ctx)
 
@@ -94,16 +103,26 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			cm.RunOnce(ctx)
+		case <-metricsTicker.C:
+			// Only update metrics if wired; non-fatal on error.
+			if cm.metrics != nil {
+				cm.updateSQLiteMetrics(ctx)
+			}
 		}
 	}
 }
 
-// RunOnce performs a single cleanup pass: time-based, archived, disk-threshold, then health retention.
+// RunOnce performs a single cleanup pass: time-based, archived, disk-threshold,
+// health retention, orphan files, stale records, zero-duration repair, then database
+// optimize (PRAGMA optimize) and WAL checkpoint.
 func (cm *CleanupManager) RunOnce(ctx context.Context) error {
+	start := time.Now()
+
 	if err := cm.timeBasedCleanup(ctx); err != nil {
 		logger.Error("time-based cleanup error", "error", err)
 	}
 	cm.archivedRetentionCleanup(ctx)
+	cm.darkSegmentCleanup(ctx)
 	if err := cm.diskThresholdCleanup(ctx); err != nil {
 		logger.Error("disk-threshold cleanup error", "error", err)
 	}
@@ -122,41 +141,139 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	cm.orphanFileCleanup(ctx)
 	cm.staleRecordCleanup(ctx)
 	cm.repairZeroDurationRecordings(ctx)
+	// Refresh query planner stats after cleanup. PRAGMA optimize is cheap —
+	// incremental ANALYZE only where needed (tables/indexes that changed
+	// significantly since last ANALYZE). With analysis_limit=1000 pragma,
+	// each ANALYZE scans at most 1000 rows per index.
+	if err := cm.db.Optimize(ctx); err != nil {
+		logger.Warn("database optimize failed", "error", err)
+	}
+	// Database maintenance: WAL checkpoint and incremental vacuum.
+	cm.performDatabaseMaintenance(ctx)
+
+	// Update cleanup duration metric
+	if cm.metrics != nil {
+		cm.metrics.CleanupDurationSeconds.Observe(time.Since(start).Seconds())
+	}
+
+	// Update SQLite database health metrics
+	cm.updateSQLiteMetrics(ctx)
+
 	return nil
 }
 
-// timeBasedCleanup deletes recordings per-camera where:
-// - ended_at < NOW() - retention
-// Each camera uses its own retention_days (0 = fallback to global).
+// darkSegmentCleanup deletes recordings marked merge_status='dark'.
+// These are segments detected as too dark (night without IR) that were
+// excluded from merge. They are cleaned up immediately to save space —
+// keeping them provides no playback value. A short grace period (1h) allows
+// the recording to be visible briefly before deletion.
+func (cm *CleanupManager) darkSegmentCleanup(ctx context.Context) {
+	recordings, err := cm.db.ListDarkRecordings(ctx, time.Hour)
+	if err != nil {
+		logger.Warn("dark segment cleanup: failed to list", "error", err)
+		return
+	}
+	if len(recordings) == 0 {
+		return
+	}
+
+	deleted, err := cm.BatchDeleteRecordingsWithFiles(ctx, recordings, "dark_segment")
+	if err != nil {
+		logger.Error("dark segment cleanup: batch delete failed", "error", err, "count", len(recordings))
+		return
+	}
+
+	var totalSize int64
+	for _, rec := range recordings {
+		totalSize += rec.FileSize
+	}
+	logger.Info("cleaned up dark segments",
+		"count", len(deleted),
+		"freed_bytes", totalSize)
+}
+
+// timeBasedCleanup deletes expired recordings using a single batch query.
+// It fetches all expired recordings with the minimum effective retention, groups by camera,
+// filters by each camera's actual retention_days, and batch-deletes per camera.
+// This eliminates N+1 queries (one per camera) from the original per-camera loop.
 func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
 	globalRetentionDays := int(cm.retention.Hours() / 24)
+	if globalRetentionDays <= 0 {
+		return nil
+	}
 
 	cameras, err := cm.db.ListCameras(ctx)
 	if err != nil {
 		return err
 	}
+	if len(cameras) == 0 {
+		return nil
+	}
 
+	// Build per-camera retention map and compute minimum effective retention
+	// to get the widest superset in a single query.
+	cameraRetention := make(map[string]int, len(cameras))
+	minRetention := globalRetentionDays
 	for _, cam := range cameras {
 		retentionDays := cam.RetentionDays
 		if retentionDays <= 0 {
 			retentionDays = globalRetentionDays
 		}
-		if retentionDays <= 0 {
+		cameraRetention[cam.ID] = retentionDays
+		if retentionDays < minRetention {
+			minRetention = retentionDays
+		}
+	}
+
+	// Single query with minimum retention gets the widest set — recordings that
+	// are expired for ANY camera. Per-camera filtering below narrows it.
+	allExpired, err := cm.db.ListExpiredRecordings(ctx, minRetention)
+	if err != nil {
+		return err
+	}
+	if len(allExpired) == 0 {
+		return nil
+	}
+
+	// Group by camera_id for per-camera filtering
+	byCamera := make(map[string][]model.Recording, len(cameras))
+	for _, rec := range allExpired {
+		byCamera[rec.CameraID] = append(byCamera[rec.CameraID], rec)
+	}
+
+	now := time.Now().UTC()
+	for _, cam := range cameras {
+		recs, ok := byCamera[cam.ID]
+		if !ok {
 			continue
 		}
 
-		recordings, err := cm.db.ListExpiredRecordingsByCamera(ctx, cam.ID, retentionDays)
-		if err != nil {
-			logger.Warn("failed to list expired recordings for camera", "camera_id", cam.ID, "error", err)
-			continue
-		}
+		retentionDays := cameraRetention[cam.ID]
+		retentionDur := time.Duration(retentionDays) * 24 * time.Hour
 
-		for _, rec := range recordings {
-			if err := cm.deleteRecording(ctx, &rec); err != nil {
-				logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
+		// Filter recordings that are actually expired for this camera's retention
+		var expired []model.Recording
+		for _, rec := range recs {
+			if rec.EndedAt.IsZero() {
 				continue
 			}
-			logger.Info("deleted recording (time-based)", "recording_id", rec.ID, "camera_id", cam.ID)
+			if now.Sub(rec.EndedAt) >= retentionDur {
+				expired = append(expired, rec)
+			}
+		}
+
+		if len(expired) == 0 {
+			continue
+		}
+
+		deleted, err := cm.BatchDeleteRecordingsWithFiles(ctx, expired, "retention_expired")
+		if err != nil {
+			logger.Warn("batch delete failed for camera", "camera_id", cam.ID, "count", len(expired), "error", err)
+			continue
+		}
+
+		for range deleted {
+			logger.Info("deleted recording (time-based)", "camera_id", cam.ID)
 			if cm.metrics != nil {
 				cm.metrics.CleanupDeleted.WithLabelValues("retention").Add(1)
 			}
@@ -165,7 +282,7 @@ func (cm *CleanupManager) timeBasedCleanup(ctx context.Context) error {
 	return nil
 }
 
-// diskThresholdCleanup deletes oldest recordings when disk usage exceeds threshold.
+// diskThresholdCleanup deletes oldest recordings in batches when disk usage exceeds threshold.
 func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 	total, used, err := cm.store.GetDiskUsage()
 	if err != nil {
@@ -183,31 +300,28 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 
 	logger.Info("disk usage exceeds threshold, starting cleanup", "usage_percent", usagePercent, "threshold_percent", cm.diskThreshold)
 
-	// Fetch recordings in batches until usage drops below threshold
+	// Fetch recordings in batches of 50 until usage drops below threshold.
+	// Uses BatchDeleteRecordingsWithFiles instead of row-by-row deleteRecording.
 	for {
-		recordings, err := cm.db.ListOldestRecordings(ctx, 50)
+		batch, err := cm.db.ListOldestRecordings(ctx, 50)
 		if err != nil {
 			return err
 		}
-		if len(recordings) == 0 {
+		if len(batch) == 0 {
 			break
 		}
 
-		deleted := false
-		for _, rec := range recordings {
-			if err := cm.deleteRecording(ctx, &rec); err != nil {
-				logger.Warn("failed to delete recording", "recording_id", rec.ID, "error", err)
-				continue
-			}
-			logger.Info("deleted recording (disk-threshold)", "recording_id", rec.ID)
+		deleted, err := cm.BatchDeleteRecordingsWithFiles(ctx, batch, "disk_threshold")
+		if err != nil {
+			logger.Warn("disk threshold batch delete failed", "error", err)
+			continue
+		}
+
+		for range deleted {
+			logger.Info("deleted recording (disk-threshold)")
 			if cm.metrics != nil {
 				cm.metrics.CleanupDeleted.WithLabelValues("disk_threshold").Add(1)
 			}
-			deleted = true
-		}
-
-		if !deleted {
-			break
 		}
 
 		// Recheck disk usage
@@ -232,38 +346,147 @@ func (cm *CleanupManager) SetEventBus(bus *event.EventBus) {
 	cm.eventBus = bus
 }
 
-// deleteRecording deletes the DB record first, then the file from disk.
-// File deletion errors are logged but not returned (orphaned files are acceptable).
-// Publishes a segment.deleted event so MiBeeVision can cancel in-progress processing.
-// Skips deletion if the recording is currently being processed by MiBeeVision
-// (ai_status = "processing") to prevent losing in-flight AI analysis.
-func (cm *CleanupManager) deleteRecording(ctx context.Context, rec *model.Recording) error {
-	// Protect recordings being processed by MiBeeVision
-	if status, err := cm.db.GetRecordingAIStatus(ctx, rec.ID); err == nil && status == "processing" {
-		logger.Debug("skipping deletion of recording being processed by MiBeeVision",
-			"recording_id", rec.ID, "ai_status", status)
-		return nil
+// adaptiveBatchSleep sleeps between batch delete operations, adapting the sleep
+// duration based on the current WAL file size. Larger WAL = longer sleep to give
+// the checkpoint process time to catch up.
+func (cm *CleanupManager) adaptiveBatchSleep(ctx context.Context) {
+	walSize, err := cm.db.GetWALSize()
+	if err != nil {
+		// Cannot determine WAL size - use default minimum sleep
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+		return
 	}
 
-	if err := cm.db.DeleteRecording(ctx, rec.ID); err != nil {
-		return err
+	// sleep = 10ms + max(0, (walSize - 5MB)) / 1MB * 5ms, capped at 200ms
+	extraMs := int64(0)
+	const fiveMB int64 = 5 * 1024 * 1024
+	const oneMB int64 = 1024 * 1024
+	if walSize > fiveMB {
+		extraMs = (walSize - fiveMB) / oneMB * 5
 	}
-	if err := cm.store.DeleteFile(rec.FilePath); err != nil {
-		logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
+	sleepMs := 10 + extraMs
+	if sleepMs > 200 {
+		sleepMs = 200
 	}
-	// Publish segment.deleted event for MiBeeVision cancellation
-	if cm.eventBus != nil {
-		cm.eventBus.Publish(ctx, event.TopicSegmentDeleted, event.SegmentDeleted{
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Duration(sleepMs) * time.Millisecond):
+	}
+}
+
+// BatchDeleteRecordingsWithFiles batch-deletes recordings with a single DB query,
+// then deletes their files and publishes segment.deleted events.
+//
+// Flow: batch-fetch AI status, filter processing, collect event payloads,
+// batch-delete DB in chunks of 200 (with adaptive sleep), delete files, publish events.
+//
+// The reason parameter is used as the event Reason field
+// (e.g. "retention_expired", "disk_threshold").
+// Returns the list of successfully deleted recording IDs.
+func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, recordings []model.Recording, reason string) ([]string, error) {
+	if len(recordings) == 0 {
+		return nil, nil
+	}
+
+	// 1. Batch-fetch AI status (eliminates N+1)
+	ids := make([]string, len(recordings))
+	for i, rec := range recordings {
+		ids[i] = rec.ID
+	}
+
+	aiStatuses, err := cm.db.BatchGetRecordingAIStatus(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("batch get AI status: %w", err)
+	}
+
+	// 2. Filter out recordings being processed by MiBeeVision
+	var toDelete []model.Recording
+	for _, rec := range recordings {
+		if aiStatuses[rec.ID] == "processing" {
+			logger.Debug("skipping deletion of recording being processed by MiBeeVision",
+				"recording_id", rec.ID, "ai_status", "processing")
+			continue
+		}
+		toDelete = append(toDelete, rec)
+	}
+
+	if len(toDelete) == 0 {
+		return nil, nil
+	}
+
+	// 3. Collect event payloads (publish after successful deletion)
+	deleteIDs := make([]string, len(toDelete))
+	events := make([]event.SegmentDeleted, len(toDelete))
+	for i, rec := range toDelete {
+		deleteIDs[i] = rec.ID
+		events[i] = event.SegmentDeleted{
 			RecordingID: rec.ID,
 			CameraID:    rec.CameraID,
 			FilePath:    rec.FilePath,
-			Reason:      "retention_expired",
-		})
+			Reason:      reason,
+		}
 	}
-	return nil
+
+	// 4. Batch-delete DB records in chunks of 200
+	const batchSize = 200
+	var successfullyDeleted []string
+	for i := 0; i < len(deleteIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(deleteIDs) {
+			end = len(deleteIDs)
+		}
+		batch := deleteIDs[i:end]
+		if _, err := cm.db.DeleteRecordingsBatch(ctx, batch); err != nil {
+			logger.Warn("batch delete failed, skipping batch", "count", len(batch), "error", err)
+			continue
+		}
+		successfullyDeleted = append(successfullyDeleted, batch...)
+
+		// Adaptive sleep between batches to let WAL checkpoint catch up
+		if end < len(deleteIDs) {
+			cm.adaptiveBatchSleep(ctx)
+		}
+	}
+
+	if len(successfullyDeleted) == 0 {
+		return nil, nil
+	}
+
+	// Build set of successfully deleted IDs for filtering files and events
+	deletedSet := make(map[string]bool, len(successfullyDeleted))
+	for _, id := range successfullyDeleted {
+		deletedSet[id] = true
+	}
+
+	// 5. Delete files for successfully deleted recordings (best-effort)
+	for _, rec := range toDelete {
+		if !deletedSet[rec.ID] {
+			continue
+		}
+		if err := cm.store.DeleteFile(rec.FilePath); err != nil {
+			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
+		}
+	}
+
+	// 6. Publish segment.deleted events for successfully deleted recordings
+	if cm.eventBus != nil {
+		for _, evt := range events {
+			if deletedSet[evt.RecordingID] {
+				cm.eventBus.Publish(ctx, event.TopicSegmentDeleted, evt)
+			}
+		}
+	}
+
+	return successfullyDeleted, nil
 }
 
 // archivedRetentionCleanup deletes expired archived recordings and cleans up empty archive groups.
+// Uses BatchDeleteRecordingsWithFiles to avoid N+1 delete pattern.
 func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {
 	archivedCameras, err := cm.db.ListArchivedCameras(ctx)
 	if err != nil {
@@ -277,18 +500,24 @@ func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {
 			continue
 		}
 
-		recordings, err := cm.db.ListExpiredArchivedRecordingsByCamera(ctx, cam.ID, cam.ArchiveRetentionDays)
+		batch, err := cm.db.ListExpiredArchivedRecordingsByCamera(ctx, cam.ID, cam.ArchiveRetentionDays)
 		if err != nil {
 			logger.Warn("failed to list expired archived recordings", "camera_id", cam.ID, "error", err)
 			continue
 		}
 
-		for _, rec := range recordings {
-			if err := cm.deleteRecording(ctx, &rec); err != nil {
-				logger.Warn("failed to delete archived recording", "recording_id", rec.ID, "error", err)
-				continue
-			}
-			logger.Info("deleted archived recording (retention)", "recording_id", rec.ID, "camera_id", cam.ID)
+		if len(batch) == 0 {
+			continue
+		}
+
+		deleted, err := cm.BatchDeleteRecordingsWithFiles(ctx, batch, "retention_expired")
+		if err != nil {
+			logger.Warn("batch delete failed for archived recordings", "camera_id", cam.ID, "count", len(batch), "error", err)
+			continue
+		}
+
+		for range deleted {
+			logger.Info("deleted archived recording (retention)", "camera_id", cam.ID)
 			if cm.metrics != nil {
 				cm.metrics.CleanupDeleted.WithLabelValues("archive_retention").Add(1)
 			}
@@ -541,4 +770,116 @@ func (cm *CleanupManager) probeDuration(ctx context.Context, filePath string) fl
 		return 0
 	}
 	return d
+}
+
+// performDatabaseMaintenance handles WAL checkpoint scheduling and incremental vacuum.
+// Called after cleanup + PRAGMA optimize in each RunOnce cycle.
+//
+// WAL checkpoint strategy:
+// - PASSIVE is the default (non-blocking).
+// - If PASSIVE returns busy=1 for 3 consecutive cycles, escalate to TRUNCATE.
+// - TRUNCATE resets the counter.
+//
+// Incremental vacuum:
+// - If fragmentation > 20%, reclaim up to 1000 free pages stepwise.
+// - NOT full VACUUM — does not require exclusive lock.
+
+func (cm *CleanupManager) performDatabaseMaintenance(ctx context.Context) {
+	// Step 1: WAL checkpoint (skip if WAL is under 10MB)
+	walSize, err := cm.db.GetWALSize()
+	if err != nil {
+		logger.Warn("DB maintenance: failed to get WAL size", "error", err)
+	} else if walSize > 10*1024*1024 {
+		logger.Info("DB maintenance: large WAL file, attempting checkpoint", "size_bytes", walSize)
+		busy, _, _, err := cm.db.CheckpointWAL(ctx, "PASSIVE")
+		if err != nil {
+			logger.Warn("DB maintenance: PASSIVE checkpoint failed", "error", err)
+		} else if busy == 1 {
+			cm.consecutivePassiveFailures++
+			logger.Warn("DB maintenance: PASSIVE checkpoint busy",
+				"consecutive_failures", cm.consecutivePassiveFailures)
+			if cm.consecutivePassiveFailures >= 3 {
+				logger.Info("DB maintenance: escalating to TRUNCATE checkpoint")
+				busy2, logFrames, ckptFrames, err2 := cm.db.CheckpointWAL(ctx, "TRUNCATE")
+				if err2 != nil {
+					logger.Warn("DB maintenance: TRUNCATE checkpoint failed", "error", err2)
+				} else {
+					logger.Info("DB maintenance: TRUNCATE checkpoint completed",
+						"busy", busy2, "log_frames", logFrames, "checkpointed_frames", ckptFrames)
+					cm.consecutivePassiveFailures = 0
+				}
+			}
+		} else {
+			// PASSIVE succeeded, reset counter
+			cm.consecutivePassiveFailures = 0
+		}
+	}
+
+	// Step 2: Incremental vacuum (only if fragmentation > 20%)
+	frac, err := cm.db.GetFragmentationRatio(ctx)
+	if err != nil {
+		logger.Warn("DB maintenance: failed to get fragmentation ratio", "error", err)
+	} else if frac > 0.50 {
+		// Severe fragmentation (>50%): incremental_vacuum is too slow (1000 pages/cycle)
+		// and is a no-op on DBs created before auto_vacuum was enabled (auto_vacuum=0).
+		// Do a full online compaction via VACUUM INTO — non-blocking, swaps files atomically.
+		logger.Info("DB maintenance: severe fragmentation, running online compaction", "fragmentation_ratio", fmt.Sprintf("%.1f%%", frac*100))
+		saved, compErr := cm.db.CompactOnline(ctx)
+		if compErr != nil {
+			logger.Warn("DB maintenance: online compaction failed", "error", compErr)
+		} else {
+			logger.Info("DB maintenance: online compaction succeeded", "saved_bytes", saved)
+		}
+	} else if frac > 0.20 {
+		// Moderate fragmentation (20-50%): reclaim free pages incrementally.
+		// Use a larger batch (5000) when fragmentation is high for faster reclamation.
+		pages := 1000
+		if frac > 0.35 {
+			pages = 5000
+		}
+		logger.Info("DB maintenance: high fragmentation detected", "fragmentation_ratio", fmt.Sprintf("%.1f%%", frac*100), "vacuum_pages", pages)
+		if err := cm.db.IncrementalVacuum(ctx, pages); err != nil {
+			logger.Warn("DB maintenance: incremental vacuum failed", "error", err)
+		}
+	}
+}
+
+// updateSQLiteMetrics updates all SQLite database health metrics.
+// Called at the end of each cleanup cycle after performDatabaseMaintenance.
+func (cm *CleanupManager) updateSQLiteMetrics(ctx context.Context) {
+	if cm.metrics == nil {
+		return
+	}
+
+	// Update WAL size
+	if walSize, err := cm.db.GetWALSize(); err == nil {
+		cm.metrics.SQLiteWALSizeBytes.Set(float64(walSize))
+	}
+
+	// Update DB file size (use actual DB path, not hardcoded filename)
+	dbPath := cm.db.Path()
+	if info, err := os.Stat(dbPath); err == nil {
+		cm.metrics.SQLiteDBSizeBytes.Set(float64(info.Size()))
+	}
+
+	// Update fragmentation ratio
+	if frac, err := cm.db.GetFragmentationRatio(ctx); err == nil {
+		cm.metrics.SQLiteFragmentationRatio.Set(frac)
+	}
+
+	// Update connection pool stats (writer pool — the single serialized connection)
+	if db := cm.db.DB(); db != nil {
+		stats := db.Stats()
+		cm.metrics.SQLiteOpenConnections.Set(float64(stats.OpenConnections))
+		cm.metrics.SQLiteInUseConnections.Set(float64(stats.InUse))
+	}
+	// Update read pool stats (separate pool for SELECTs — not visible via DB().Stats()).
+	// WaitCount/WaitDuration reveal whether the pool is undersized: nonzero sustained
+	// growth means callers are blocking for a connection and SetReadPoolSize should rise.
+	if rstats, ok := cm.db.ReadPoolStats(); ok {
+		cm.metrics.SQLiteReadOpenConnections.Set(float64(rstats.OpenConnections))
+		cm.metrics.SQLiteReadInUseConnections.Set(float64(rstats.InUse))
+		cm.metrics.SQLiteReadWaitCount.Add(float64(rstats.WaitCount))
+		cm.metrics.SQLiteReadWaitDuration.Set(rstats.WaitDuration.Seconds())
+	}
 }

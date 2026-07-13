@@ -648,7 +648,7 @@ func TestRunOnce_ParseFailedMarkedAsFailed(t *testing.T) {
 	}
 }
 
-func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
+func TestRunOnce_UndersizedGroupMarkedAsIncompatible(t *testing.T) {
 	env := newMergeTestEnv(t)
 	defer env.close(t)
 
@@ -674,20 +674,20 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 	}
 	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 
-	// First pass: both should be marked failed (undersized SPS/PPS groups).
+	// First pass: both should be marked incompatible (undersized SPS/PPS groups).
 	require.NoError(t, mgr.RunOnce(ctx))
 
 	for _, id := range []string{"rec1", "rec2"} {
 		rec, err := env.db.GetRecording(ctx, id)
 		require.NoError(t, err)
 		require.NotNil(t, rec)
-		require.Equal(t, model.MergeStatusFailed, rec.MergeStatus, "segment %s should be marked failed", id)
+		require.Equal(t, model.MergeStatusIncompatible, rec.MergeStatus, "segment %s should be marked incompatible", id)
 	}
 
 	// Second pass: none should be mergeable.
 	recs, err := env.db.ListMergeableSegments(ctx, cameraID, oldTime.Add(-time.Hour), now.Add(time.Hour))
 	require.NoError(t, err)
-	require.Empty(t, recs, "failed segments should not be mergeable")
+	require.Empty(t, recs, "incompatible segments should not be mergeable")
 }
 
 // insertTimelapseRecording creates a timelapse segment directory with fake JPEG files
@@ -840,9 +840,9 @@ func TestHashGrouping_SPSWithEmbeddedNull(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, recB)
 
-	// They should be marked failed as undersized groups (each group only has 1 segment).
-	require.Equal(t, model.MergeStatusFailed, recA.MergeStatus, "rec-a should be marked failed (undersized SPS group)")
-	require.Equal(t, model.MergeStatusFailed, recB.MergeStatus, "rec-b should be marked failed (undersized SPS group)")
+	// They should be marked incompatible as undersized groups (each group only has 1 segment).
+	require.Equal(t, model.MergeStatusIncompatible, recA.MergeStatus, "rec-a should be marked incompatible (undersized SPS group)")
+	require.Equal(t, model.MergeStatusIncompatible, recB.MergeStatus, "rec-b should be marked incompatible (undersized SPS group)")
 }
 
 func TestMJPEGDeferredDelete_OnDBFailure(t *testing.T) {

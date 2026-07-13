@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"time"
 
 	"github.com/abema/go-mp4"
 )
@@ -16,6 +17,23 @@ import (
 const (
 	mergeBufferSize = 1 << 20 // 1MB buffer for sample data copying
 )
+
+// ComputeMergeQuality determines the quality classification for a merged recording.
+// quality is:
+//   - "fragmented" if wall-clock span (ended-started) exceeds 1.5× actual content duration
+//     (indicates significant time gaps from camera disconnects)
+//   - "short" if the content duration is below the minimum threshold
+//   - "complete" otherwise
+func ComputeMergeQuality(startedAt, endedAt time.Time, durationSec float64, minDurationSec float64) string {
+	wallSpan := endedAt.Sub(startedAt).Seconds()
+	if wallSpan > durationSec*1.5 && durationSec > 0 {
+		return "fragmented"
+	}
+	if minDurationSec > 0 && durationSec < minDurationSec {
+		return "short"
+	}
+	return "complete"
+}
 
 // mergedSample holds a sample's info relative to the merged output file.
 type mergedSample struct {
@@ -51,19 +69,35 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		}
 	}
 
-	// Validate audio consistency.
+	// Validate audio consistency. When segments have mixed audio presence
+	// (some have audio, some don't), we DROP audio from the merged output
+	// rather than failing the merge. This handles camera reconnection scenarios
+	// where audio_enabled was toggled or G.711 negotiation succeeded/failed
+	// mid-session. Video is always preserved; losing audio in merged files is
+	// acceptable — the individual source segments (if still on disk) retain it.
 	hasAudio := false
 	audioConfig := first.AudioConfig
+	audioMixed := false
 	for i, seg := range segments {
 		if i == 0 {
 			hasAudio = seg.HasAudio
 			continue
 		}
 		if seg.HasAudio != hasAudio {
-			return fmt.Errorf("segment %d: audio presence mismatch — cannot merge segments with mixed audio", i)
+			audioMixed = true
 		}
 		if seg.HasAudio && !bytes.Equal(seg.AudioConfig, audioConfig) {
-			return fmt.Errorf("segment %d: audio config mismatch", i)
+			// Different audio codec config — also treat as mixed.
+			audioMixed = true
+		}
+	}
+	if audioMixed {
+		// Drop audio entirely — only merge video tracks.
+		logger.Warn("audio presence/config mismatch across segments, dropping audio from merged output",
+			"segment_count", len(segments))
+		hasAudio = false
+		for _, seg := range segments {
+			seg.HasAudio = false
 		}
 	}
 
@@ -972,6 +1006,16 @@ func buildMergeEsds(audioConfig []byte) *mp4.Esds {
 
 // writeMergeH264SampleEntry writes avc1 + avcC boxes for H.264.
 func writeMergeH264SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
+	// Guard against empty/truncated SPS/PPS — these can occur in corrupted
+	// segments (camera disconnect mid-IDR, incomplete writes). Without this
+	// guard, accessing sps[1] panics and kills the entire process.
+	if len(tr.sps) < 4 {
+		return fmt.Errorf("h264 sample entry: SPS too short (%d bytes, need >=4)", len(tr.sps))
+	}
+	if len(tr.pps) < 1 {
+		return fmt.Errorf("h264 sample entry: PPS too short (%d bytes, need >=1)", len(tr.pps))
+	}
+
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avc1")})
 	if err != nil {
 		return err

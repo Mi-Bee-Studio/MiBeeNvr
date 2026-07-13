@@ -84,9 +84,12 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	}
 	fileSize := fileInfo.Size()
 
-	// Warn if segment was recently modified — may still be actively written.
+	// Log at DEBUG if segment was recently modified — may still be actively written.
+	// This is extremely common (merge scans run frequently) and not actionable; demoted
+	// from WARN to avoid 400+/hour log noise. The parser handles it correctly by reading
+	// what's available.
 	if time.Since(fileInfo.ModTime()) < 2*time.Second {
-		logger.Warn("segment appears to be actively written, parsing may be unsafe",
+		logger.Debug("segment appears to be actively written, parsing may be unsafe",
 			"file_path", filePath, "mod_time", fileInfo.ModTime())
 	}
 

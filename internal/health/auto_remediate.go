@@ -33,8 +33,12 @@ type cameraRestartState struct {
 }
 
 // AutoRemediator decides whether to automatically restart a failed camera recorder.
-// It enforces safety rules: only triggers on StatusError, never on StatusReconnecting,
-// with per-camera rate limiting, cooldown, global rate limiting, and blacklisting.
+// It enforces safety rules: triggers on StatusError immediately, and on
+// StatusReconnecting only after the recorder has been stuck for
+// ReconnectingTimeoutMinutes (a recorder's own reconnect loop never escalates to
+// StatusError, so without this gate a camera whose IP changed would loop forever
+// and IP rediscovery would never fire). Includes per-camera rate limiting,
+// cooldown, global rate limiting, and blacklisting.
 type AutoRemediator struct {
 	cfg         config.HealthAutoRemediationConfig
 	restartFn   RestartRecorderFunc
@@ -43,6 +47,11 @@ type AutoRemediator struct {
 	// failure). Optional: nil = no IP self-healing. The camera manager decides
 	// whether a given camera supports it (ONVIF only, must have a stable_id).
 	rediscoverFn RediscoverFunc
+	// offlineDurationFn returns how long a camera has been in an offline state
+	// (error/reconnecting). Injected so Check can gate reconnecting-triggered
+	// restarts on a minimum offline duration. Nil = treat reconnecting like error
+	// (legacy behavior, but not recommended).
+	offlineDurationFn func(cameraID string) time.Duration
 
 	mu             sync.Mutex
 	cameraStates   map[string]*cameraRestartState
@@ -69,6 +78,16 @@ func (r *AutoRemediator) SetRediscoverer(fn RediscoverFunc) {
 	r.mu.Unlock()
 }
 
+// SetOfflineDurationFn registers a function that returns how long a camera has
+// been offline (error/reconnecting). Used to gate reconnecting-triggered
+// restarts on ReconnectingTimeoutMinutes so brief reconnect blips don't cause a
+// hard restart. Safe to call before or after Start.
+func (r *AutoRemediator) SetOfflineDurationFn(fn func(cameraID string) time.Duration) {
+	r.mu.Lock()
+	r.offlineDurationFn = fn
+	r.mu.Unlock()
+}
+
 // Check evaluates whether a camera should be auto-restarted based on its status.
 // Returns nil if restart was triggered, or an error explaining why it was not.
 func (r *AutoRemediator) Check(cameraID string, status string) error {
@@ -77,8 +96,31 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 		return nil
 	}
 
-	// Safety check 1: only trigger on StatusError.
-	if status != string(model.StatusError) {
+	// Safety check 1: trigger on StatusError immediately, or on StatusReconnecting
+	// only after the recorder has been stuck beyond ReconnectingTimeoutMinutes.
+	// A recorder's own reconnect loop never escalates to StatusError — it loops
+	// forever at "reconnecting" — so without admitting reconnecting (after a
+	// timeout), a camera whose IP changed would never be restarted, never
+	// blacklisted, and IP rediscovery would never fire.
+	if status == string(model.StatusReconnecting) {
+		// Need offline-duration info to gate on a timeout. Without it, be
+		// conservative and don't restart (avoids restarting on every brief
+		// reconnect blip when the manager hasn't wired the lookup).
+		if r.offlineDurationFn == nil {
+			return nil
+		}
+		timeout := time.Duration(r.cfg.ReconnectingTimeoutMinutes) * time.Minute
+		if timeout <= 0 {
+			timeout = 10 * time.Minute
+		}
+		offline := r.offlineDurationFn(cameraID)
+		if offline < timeout {
+			return nil // brief reconnect blip — let the recorder's own backoff handle it
+		}
+		// Stuck in reconnect long enough — fall through to restart logic.
+		slog.Info("auto-remediate: recorder stuck in reconnecting, triggering restart",
+			"camera_id", cameraID, "offline_duration", offline, "threshold", timeout)
+	} else if status != string(model.StatusError) {
 		return nil
 	}
 

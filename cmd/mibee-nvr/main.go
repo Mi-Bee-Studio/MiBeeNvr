@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -184,6 +185,24 @@ func main() {
 		}
 	}()
 
+	// Optional HTTPS listener (for WebRTC WHEP / secure WebUI when not behind a
+	// TLS-terminating reverse proxy). Shares the same handler as plain HTTP.
+	var tlsSrv *http.Server
+	if strings.TrimSpace(cfg.Server.TLSListen) != "" {
+		tlsSrv = &http.Server{
+			Addr:    cfg.Server.TLSListen,
+			Handler: httpSrv.Handler,
+		}
+		go func() {
+			slog.Info("MiBee NVR HTTPS listening", "version", appVersion, "addr", cfg.Server.TLSListen,
+				"cert", cfg.Server.CertFile)
+			if err := tlsSrv.ListenAndServeTLS(cfg.Server.CertFile, cfg.Server.KeyFile); err != nil && err != http.ErrServerClosed {
+				slog.Error("https", "error", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
@@ -191,6 +210,11 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+	if tlsSrv != nil {
+		if err := tlsSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("https shutdown", "error", err)
+		}
+	}
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("http shutdown", "error", err)
 	}

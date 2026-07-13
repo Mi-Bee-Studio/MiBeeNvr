@@ -169,6 +169,7 @@ export {
   retryRecordingMerge,
   fetchTimelapsePreview,
   recordTimelineSeek,
+  getRecordingDailySummary,
 } from './recordings';
 
 export type {
@@ -176,6 +177,8 @@ export type {
   FrameInfo,
   FramesResponse,
   RecordingListResponse,
+  RecordingDaySummaryResponse,
+  RecordingDaySummary,
   StorageStats,
   DailyStats,
   ArchiveGroup,

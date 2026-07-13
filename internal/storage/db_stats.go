@@ -11,20 +11,40 @@ import (
 
 func (d *DB) CountRecordings(ctx context.Context) (int, error) {
 	var count int
-	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM recordings;`).Scan(&count)
+	err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM recordings;`).Scan(&count)
 	return count, err
 }
 
 // CountRecordingsByCamera returns the number of recordings for a specific camera.
 func (d *DB) CountRecordingsByCamera(ctx context.Context, cameraID string) (int, error) {
 	var count int
-	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM recordings WHERE camera_id=?", cameraID).Scan(&count)
+	err := d.readConn().QueryRowContext(ctx, "SELECT COUNT(*) FROM recordings WHERE camera_id=?", cameraID).Scan(&count)
 	return count, err
 }
 
 // GetRecordingTrends returns daily aggregated recording statistics.
 // Days defaults to 7, clamped to [1, 30].
+// heavyQueryTimeout bounds the wall-clock duration of analytic queries that scan
+// large portions of the recordings table (GetRecordingTrends, CountRecordingsWithFilter).
+// It only applies when the caller's context has no deadline, so explicit caller
+// timeouts always take precedence. Protects the (small) read pool from a single slow
+// query monopolizing a connection.
+const heavyQueryTimeout = 10 * time.Second
+
+// withHeavyQueryTimeout returns a context bounded to heavyQueryTimeout unless ctx
+// already has a sooner deadline. The cancel func is always non-nil and safe to defer.
+func withHeavyQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		// Caller already set a deadline; respect it verbatim.
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, heavyQueryTimeout)
+}
+
 func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Location) ([]model.DailyStats, error) {
+	ctx, cancel := withHeavyQueryTimeout(ctx)
+	defer cancel()
+	defer d.observeQuery("GetRecordingTrends", time.Now())
 	if days <= 0 {
 		days = 7
 	}
@@ -36,20 +56,28 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 	}
 	cutoff := time.Now().AddDate(0, 0, -days).UTC()
 
-	// Select raw started_at timestamps and group by local date in Go
-	// to respect the configured display timezone.
-	query := `SELECT r.started_at, r.file_size, r.camera_id, COALESCE(c.name, r.camera_id) as camera_name
-		FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
-		WHERE r.started_at >= ?
-		ORDER BY r.started_at`
+	// Calculate UTC offset in seconds for timezone-aware GROUP BY
+	now := time.Now().In(loc)
+	_, offset := now.Zone()
 
-	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
+	// Group by timezone-correct date in SQL to avoid loading all rows into Go memory
+	query := `SELECT date(datetime(r.started_at, ? || ' seconds')) as d,
+		r.camera_id,
+		COALESCE(c.name, r.camera_id) as camera_name,
+		COUNT(*) as cnt,
+		COALESCE(SUM(r.file_size), 0) as total_size
+	FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
+	WHERE r.started_at >= ?
+	GROUP BY d, r.camera_id
+	ORDER BY d`
+
+	rows, err := d.readConn().QueryContext(ctx, query, offset, formatTime(cutoff))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	// Aggregate into per-date stats using local timezone dates
+	// Aggregate SQL results into per-date stats (merging cameras for the same date)
 	type dailyKey struct {
 		date  string
 		camID string
@@ -57,33 +85,31 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 	agg := make(map[dailyKey]*model.DailyStats)
 
 	for rows.Next() {
-		var startedAtStr sql.NullString
-		var fileSize int64
-		var cameraID, cameraName string
-		if err := rows.Scan(&startedAtStr, &fileSize, &cameraID, &cameraName); err != nil {
+		var dateStr, cameraID, cameraName string
+		var cnt int
+		var totalSize int64
+		if err := rows.Scan(&dateStr, &cameraID, &cameraName, &cnt, &totalSize); err != nil {
 			return nil, err
 		}
-		startedAt := scanTime(startedAtStr)
-		localDate := startedAt.In(loc).Format("2006-01-02")
 
-		key := dailyKey{date: localDate, camID: cameraID}
+		key := dailyKey{date: dateStr, camID: cameraID}
 		entry, ok := agg[key]
 		if !ok {
 			entry = &model.DailyStats{
-				Date:         localDate,
+				Date:         dateStr,
 				CameraCounts: make(map[string]int),
 			}
 			agg[key] = entry
 		}
-		entry.Recordings++
-		entry.TotalSize += fileSize
-		entry.CameraCounts[cameraName]++
+		entry.Recordings += cnt
+		entry.TotalSize += totalSize
+		entry.CameraCounts[cameraName] += cnt
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Sort by date ascending
+	// Sort by date ascending and merge per-camera entries for the same date
 	dates := make(map[string]bool)
 	for _, entry := range agg {
 		dates[entry.Date] = true
@@ -96,7 +122,6 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 
 	result := make([]model.DailyStats, 0, len(sorted))
 	for _, d := range sorted {
-		// Merge per-camera entries for the same date
 		merged := model.DailyStats{
 			Date:         d,
 			CameraCounts: make(map[string]int),
@@ -122,7 +147,7 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 // GetLastRecordingTime returns the most recent ended_at for a camera.
 func (d *DB) GetLastRecordingTime(ctx context.Context, cameraID string) (*time.Time, error) {
 	var endedAtStr sql.NullString
-	err := d.db.QueryRowContext(ctx, "SELECT MAX(ended_at) FROM recordings WHERE camera_id=? AND ended_at IS NOT NULL", cameraID).Scan(&endedAtStr)
+	err := d.readConn().QueryRowContext(ctx, "SELECT MAX(ended_at) FROM recordings WHERE camera_id=? AND ended_at IS NOT NULL", cameraID).Scan(&endedAtStr)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +160,7 @@ func (d *DB) GetLastRecordingTime(ctx context.Context, cameraID string) (*time.T
 
 // GetAllLastRecordingTimes returns the last recording time for each camera.
 func (d *DB) GetAllLastRecordingTimes(ctx context.Context) (map[string]*time.Time, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.readConn().QueryContext(ctx,
 		`SELECT camera_id, MAX(ended_at) as last_ended FROM recordings WHERE ended_at IS NOT NULL GROUP BY camera_id`)
 	if err != nil {
 		return nil, err

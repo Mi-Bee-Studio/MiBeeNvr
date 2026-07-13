@@ -56,16 +56,18 @@ import (
 // recorders. H264Config and H265Config embed BaseConfig to eliminate the
 // duplication of these fields across the H.264 and H.265 recorder configs.
 type BaseConfig struct {
-	CameraID             string
-	RTSPURL              string
-	Username             string
-	Password             string
-	SegmentDur           time.Duration
-	RingBufCap           int
-	DB                   RecordingDB
-	AudioEnabled         bool
-	FrameWatchdogTimeout time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
-	EventBus             *event.EventBus
+	CameraID               string
+	RTSPURL                string
+	Username               string
+	Password               string
+	SegmentDur             time.Duration
+	RingBufCap             int
+	DB                     RecordingDB
+	AudioEnabled           bool
+	FrameWatchdogTimeout   time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
+	EventBus               *event.EventBus
+	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the
@@ -564,6 +566,9 @@ func (b *baseRecorder) closeCurrentSegment() {
 			FileSize:    fileSize,
 			RecordingID: recordingID,
 		})
+	} else if recordingID != "" {
+		b.log.Warn("SegmentCompleted NOT published — EventBus is nil",
+			"camera_id", b.cfg.CameraID, "recording_id", recordingID)
 	}
 
 	// Update metrics for completed segment

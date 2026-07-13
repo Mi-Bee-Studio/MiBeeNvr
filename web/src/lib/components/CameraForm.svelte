@@ -106,6 +106,13 @@
   let formTranscodingPreset = $state('ultrafast');
 let formTranscodingBitrate = $state('2M');
 let formTranscodingCRF = $state(0);
+// Dark frame filtering
+let formDarkFrameFilterEnabled = $state(false);
+let formDarkFrameThreshold = $state(15);
+// Recording schedule
+let formRecordingScheduleEnabled = $state(false);
+let formRecordingScheduleStart = $state('06:00');
+let formRecordingScheduleEnd = $state('22:00');
 let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -209,6 +216,11 @@ let validationErrors = $state<Record<string, string>>({});
     formChannel = '';
     formAudioEnabled = false;
     formTwoWayAudioEnabled = false;
+    formDarkFrameFilterEnabled = false;
+    formDarkFrameThreshold = 15;
+    formRecordingScheduleEnabled = false;
+    formRecordingScheduleStart = '06:00';
+    formRecordingScheduleEnd = '22:00';
     formStreamKey = '';
     formSRTPassphrase = '';
     formSRTStreamID = '';
@@ -243,6 +255,16 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
     formTranscodingCRF = camera.transcoding?.crf || 0;
     validationErrors = {};
+    // Dark frame filtering
+    formDarkFrameFilterEnabled = camera.dark_frame_filter_enabled ?? false;
+    formDarkFrameThreshold = camera.dark_frame_threshold || 15;
+    // Recording schedule
+    const sched = camera.recording_schedule;
+    formRecordingScheduleEnabled = sched && sched.time_ranges && sched.time_ranges.length > 0;
+    if (sched && sched.time_ranges && sched.time_ranges.length > 0) {
+      formRecordingScheduleStart = sched.time_ranges[0].start || '06:00';
+      formRecordingScheduleEnd = sched.time_ranges[0].end || '22:00';
+    }
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
@@ -487,6 +509,11 @@ async function performCameraSave() {
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : [],
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
+            dark_frame_filter_enabled: formDarkFrameFilterEnabled,
+            dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
+            recording_schedule: formRecordingScheduleEnabled ? {
+                time_ranges: [{ start: formRecordingScheduleStart, end: formRecordingScheduleEnd }],
+            } : undefined,
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -534,6 +561,11 @@ async function performCameraSave() {
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : undefined,
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
+            dark_frame_filter_enabled: formDarkFrameFilterEnabled,
+            dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
+            recording_schedule: formRecordingScheduleEnabled ? {
+                time_ranges: [{ start: formRecordingScheduleStart, end: formRecordingScheduleEnd }],
+            } : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -673,6 +705,49 @@ async function performCameraSave() {
         </label>
       </div>
     {/if}
+
+    <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
+    {#if formProtocol === 'rtsp' || formProtocol === 'onvif' || formProtocol === 'http'}
+      <div class="md:col-span-2 space-y-2">
+        <div class="flex items-center gap-2">
+          <input id="cam-dark-frame" type="checkbox" class="checkbox"
+            bind:checked={formDarkFrameFilterEnabled}
+          />
+          <label for="cam-dark-frame" class="input-label cursor-pointer">
+            {t('cameras.darkFrameFilter') || 'Dark frame filter'}
+            <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
+          </label>
+        </div>
+        {#if formDarkFrameFilterEnabled}
+          <div class="flex items-center gap-2 pl-6">
+            <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
+            <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
+            <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Recording schedule -->
+    <div class="md:col-span-2 space-y-2">
+      <div class="flex items-center gap-2">
+        <input id="cam-rec-schedule" type="checkbox" class="checkbox"
+          bind:checked={formRecordingScheduleEnabled}
+        />
+        <label for="cam-rec-schedule" class="input-label cursor-pointer">
+          {t('cameras.recordingSchedule') || 'Recording schedule'}
+          <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
+        </label>
+      </div>
+      {#if formRecordingScheduleEnabled}
+        <div class="flex items-center gap-2 pl-6">
+          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
+          <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
+          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
+          <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+        </div>
+      {/if}
+    </div>
 
     <!-- URL (hidden for push/ingest protocols — publisher connects to us) -->
     {#if formProtocol !== 'srt' && formProtocol !== 'rtmp'}

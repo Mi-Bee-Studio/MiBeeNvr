@@ -8,12 +8,13 @@
     batchDeleteRecordings,
     downloadRecording,
     batchMergeTimelapse,
+    getRecordingDailySummary,
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
-  import type { Recording, Camera } from '$lib/api';
+  import type { Recording, Camera, RecordingDaySummary } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
@@ -52,10 +53,14 @@
   let currentMonth = $state(new Date());
   let selectedDate = $state<string | null>(null);
 
-  // ── Calendar data (always loaded for calendar + gallery) ──
-  let recordings = $state<Recording[]>([]);
-  let loading = $state(false);
-  let error = $state('');
+  // ── Calendar summary (lightweight per-day aggregate, no row limit) ──
+  let calendarSummary = $state<RecordingDaySummary[]>([]);
+  let calLoading = $state(false);
+  let calError = $state('');
+
+  // ── Gallery recordings (selected day only — naturally bounded) ──
+  let galleryRecordings = $state<Recording[]>([]);
+  let galleryLoading = $state(false);
 
   // ── List mode data (paginated) ──
   let listRecordingsData = $state<Recording[]>([]);
@@ -65,6 +70,12 @@
   let limit = $state(getItemsPerPage());
   let sortBy = $state('started_at');
   let sortOrder = $state<'asc' | 'desc'>('desc');
+  // Keyset cursor chain for sequential next/prev navigation (O(1) deep pages vs OFFSET's O(N)).
+  // cursorStack[0] = page 1 (no cursor). cursorStack[i] = cursor to reach page i+1.
+  // When the user clicks next/prev sequentially we use cursors; arbitrary page jumps
+  // (e.g. "go to page 5") fall back to OFFSET via handlePageChange.
+  let cursorStack = $state<string[]>(['']);
+  let currentPageNum = $state(1);
 
   // ── View mode ──
   let viewMode = $state<'gallery' | 'list'>(initialViewMode);
@@ -80,7 +91,9 @@
 
   // ── UI state ──
   let showBackToTop = $state(false);
-  let abortController: AbortController | null = null;
+  let calAbortController: AbortController | null = null;
+  let galleryAbortController: AbortController | null = null;
+  let listAbortController: AbortController | null = null;
 
   // ── AVI playback modal state ──
   let showAviPlayback = $state(false);
@@ -134,7 +147,7 @@ let batchMerging = $state(false);
   let currentPage = $derived(offset > 0 || limit > 0 ? Math.floor(offset / limit) + 1 : 1);
   let totalPages = $derived(totalRecordings > 0 && limit > 0 ? Math.ceil(totalRecordings / limit) : 0);
   let selectedTimelapseRecordings = $derived(
-    recordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
+    galleryRecordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
   );
   let showBatchMergeButton = $derived(selectedTimelapseRecordings.length >= 2);
 
@@ -174,7 +187,34 @@ let batchMerging = $state(false);
   }
 
   function handlePageChange(newPage: number) {
+    // Arbitrary page jump: use OFFSET (O(N) for deep pages, but page jumps are rare).
+    // Reset the cursor chain since we're leaving sequential navigation.
     offset = (newPage - 1) * limit;
+    currentPageNum = newPage;
+    cursorStack = [''];
+    window.scrollTo(0, 0);
+  }
+
+  // Sequential next page via keyset cursor — O(1) regardless of page depth.
+  async function goToNextPage() {
+    const currentCursor = cursorStack[cursorStack.length - 1];
+    const nextCursor = await loadListDataCursor(currentCursor);
+    if (nextCursor !== null) {
+      cursorStack = [...cursorStack, nextCursor];
+      offset += limit;
+      currentPageNum++;
+      window.scrollTo(0, 0);
+    }
+  }
+
+  // Sequential prev page — pop the cursor chain back to the previous page.
+  async function goToPrevPage() {
+    if (cursorStack.length <= 1) return;
+    cursorStack = cursorStack.slice(0, -1);
+    offset = Math.max(0, offset - limit);
+    currentPageNum = Math.max(1, currentPageNum - 1);
+    const prevCursor = cursorStack[cursorStack.length - 1];
+    await loadListDataCursor(prevCursor);
     window.scrollTo(0, 0);
   }
 
@@ -203,7 +243,7 @@ let batchMerging = $state(false);
     if (!deleteConfirm) return;
     try {
       await deleteRecording(deleteConfirm.id);
-      recordings = recordings.filter(r => r.id !== deleteConfirm.id);
+      galleryRecordings = galleryRecordings.filter(r => r.id !== deleteConfirm.id);
       listRecordingsData = listRecordingsData.filter(r => r.id !== deleteConfirm.id);
       showToast(t('common.recordingDeleted'), 'success');
       deleteConfirm = null;
@@ -218,7 +258,8 @@ let batchMerging = $state(false);
       showToast(t('recordings.batchDeleteSuccess', { count: String(selectedIds.size) }), 'success');
       selectedIds = new Set();
       showBatchDeleteConfirm = false;
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
       if (viewMode === 'list') loadListData();
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
@@ -226,125 +267,136 @@ let batchMerging = $state(false);
   }
 
   // ── Data loading ──
-  async function loadTimelineData() {
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
-    loading = true;
-    error = '';
+
+  // Shared filter params (camera, search, merged, archived).
+  function sharedFilterParams() {
+    return {
+      camera_id: cameraId || undefined,
+      search: searchQuery || undefined,
+      merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+      archived: showArchived ? true : undefined,
+    };
+  }
+
+  // Calendar summary: lightweight per-day aggregate for the whole month.
+  // No row-level limit — the result is bounded by the number of days (max 31).
+  async function loadCalendarSummary() {
+    if (calAbortController) calAbortController.abort();
+    calAbortController = new AbortController();
+    calLoading = true;
+    calError = '';
 
     try {
       const calStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const calEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      if (formatPill === 'All') {
-        // Fetch both normal and timelapse recordings, merge, sort by started_at DESC
-        const [normalRes, tlRes] = await Promise.all([
-          listRecordings({
-            camera_id: cameraId || undefined,
-            search: searchQuery || undefined,
-            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-            archived: showArchived ? true : undefined,
-            start: calStart.toISOString(),
-            end: calEnd.toISOString(),
-            limit: 1000,
-            signal: abortController.signal,
-          }),
-          listTimelapseRecordings({
-            camera_id: cameraId || undefined,
-            start: calStart.toISOString(),
-            end: calEnd.toISOString(),
-            limit: 1000,
-            signal: abortController.signal,
-          }),
-        ]);
-        const merged = [...normalRes.recordings, ...tlRes.recordings];
-        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
-        recordings = merged;
-      } else if (useTimelapseApi) {
-        const response = await listTimelapseRecordings({
-          camera_id: cameraId || undefined,
-          start: calStart.toISOString(),
-          end: calEnd.toISOString(),
-          limit: 1000,
-          signal: abortController.signal,
-        });
-        recordings = response.recordings;
-      } else {
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          format: apiFormat || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          start: calStart.toISOString(),
-          end: calEnd.toISOString(),
-          limit: 1000,
-          signal: abortController.signal,
-        });
-        recordings = response.recordings;
-      }
-      // Detect merge status changes (completed/failed)
-      detectMergeChanges(recordings);
+      const response = await getRecordingDailySummary({
+        ...sharedFilterParams(),
+        start: calStart.toISOString(),
+        end: calEnd.toISOString(),
+        formats: formatPill === 'Timelapse' ? 'timelapse,mjpeg' : undefined,
+        format: formatPill === 'MJPEG' ? 'mjpeg' : (apiFormat || undefined),
+        tz_offset: -new Date().getTimezoneOffset(),
+        signal: calAbortController.signal,
+      });
+      calendarSummary = response.days;
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
-      error = e instanceof Error ? e.message : t('common.failedLoadRecordings');
+      calError = e instanceof Error ? e.message : t('common.failedLoadRecordings');
     } finally {
-      loading = false;
+      calLoading = false;
+    }
+  }
+
+  // Gallery: full recordings for the selected day only (naturally bounded by one day).
+  async function loadGalleryData() {
+    if (!selectedDate) {
+      galleryRecordings = [];
+      return;
+    }
+    if (galleryAbortController) galleryAbortController.abort();
+    galleryAbortController = new AbortController();
+    galleryLoading = true;
+
+    try {
+      const dayStart = new Date(selectedDate + 'T00:00:00');
+      const dayEnd = new Date(selectedDate + 'T23:59:59.999');
+
+      if (useTimelapseApi) {
+        // Timelapse API returns timelapse + mjpeg formats (preserves prior behavior).
+        const response = await listTimelapseRecordings({
+          camera_id: cameraId || undefined,
+          start: dayStart.toISOString(),
+          end: dayEnd.toISOString(),
+          signal: galleryAbortController.signal,
+        });
+        galleryRecordings = response.recordings;
+      } else {
+        const response = await listRecordings({
+          ...sharedFilterParams(),
+          format: apiFormat || undefined,
+          start: dayStart.toISOString(),
+          end: dayEnd.toISOString(),
+          signal: galleryAbortController.signal,
+        });
+        galleryRecordings = response.recordings;
+      }
+      // Detect merge status changes (completed/failed)
+      detectMergeChanges(galleryRecordings);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      // Non-fatal: gallery stays stale on error
+    } finally {
+      galleryLoading = false;
     }
   }
 
   async function loadListData() {
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
+    // Standard load (OFFSET-based, triggered by filter/sort changes).
+    // Reset cursor chain on fresh loads.
+    cursorStack = [''];
+    currentPageNum = 1;
+    await loadListDataCursor('');
+  }
+
+  // loadListDataCursor fetches a page using either a cursor (keyset, O(1) deep page)
+  // or OFFSET (when cursor is ''). Returns the next_cursor from the response, or null
+  // if there are no more pages. When cursor is '', uses OFFSET for page 1 / arbitrary jumps.
+  async function loadListDataCursor(cursor: string): Promise<string | null> {
+    if (listAbortController) listAbortController.abort();
+    listAbortController = new AbortController();
     listLoading = true;
 
     try {
+      const useCursor = cursor !== '';
+      const baseParams = {
+        camera_id: cameraId || undefined,
+        search: searchQuery || undefined,
+        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
+        archived: showArchived ? true : undefined,
+        limit,
+        sort_by: sortBy,
+        order: sortOrder,
+        signal: listAbortController.signal,
+      };
+      // Cursor request: pass cursor, omit offset. Offset request: pass offset, omit cursor.
+      const params = useCursor
+        ? { ...baseParams, cursor }
+        : { ...baseParams, offset };
+
+      let response;
       if (formatPill === 'All') {
-        const [normalRes, tlRes] = await Promise.all([
-          listRecordings({
-            camera_id: cameraId || undefined,
-            search: searchQuery || undefined,
-            merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-            archived: showArchived ? true : undefined,
-            offset,
-            limit,
-            sort_by: sortBy,
-            order: sortOrder,
-            signal: abortController.signal,
-          }),
-          listTimelapseRecordings({
-            camera_id: cameraId || undefined,
-            offset,
-            limit,
-            sort_by: sortBy,
-            sort_order: sortOrder,
-            signal: abortController.signal,
-          }),
-        ]);
-        const merged = [...normalRes.recordings, ...tlRes.recordings];
-        merged.sort((a, b) => b.started_at.localeCompare(a.started_at));
-        listRecordingsData = merged;
-        totalRecordings = (normalRes.total || 0) + (tlRes.total || 0);
+        response = await listRecordings(params);
       } else {
-        const response = await listRecordings({
-          camera_id: cameraId || undefined,
-          format: apiFormat || undefined,
-          search: searchQuery || undefined,
-          merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-          archived: showArchived ? true : undefined,
-          offset,
-          limit,
-          sort_by: sortBy,
-          order: sortOrder,
-          signal: abortController.signal,
-        });
-        listRecordingsData = response.recordings;
-        totalRecordings = response.total || 0;
+        response = await listRecordings({ ...params, format: apiFormat || undefined });
       }
-      // Detect merge status changes
+      listRecordingsData = response.recordings;
+      totalRecordings = response.total || 0;
       detectMergeChanges(listRecordingsData);
+      return response.next_cursor || null;
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if (e instanceof DOMException && e.name === 'AbortError') return null;
+      return null;
     } finally {
       listLoading = false;
     }
@@ -362,6 +414,16 @@ let batchMerging = $state(false);
   async function loadTranscodingStatus() {
     try {
       transcodingStatus = await getTranscodingStatus();
+      // Self-limiting poll: if no transcoding tasks are running or pending, stop the 3s
+      // poll entirely. This avoids a steady request-per-3s against the DB read pool while
+      // the page sits idle. The poll is restarted by handleTranscode() when the user kicks
+      // off a new job, and by the visibilitychange handler when the tab regains focus.
+      const hasActive = transcodingStatus?.recent_results?.some(
+        (t) => t.status === 'running' || t.status === 'pending'
+      );
+      if (!hasActive) {
+        stopTranscodingPoll();
+      }
     } catch {
       // Silently fail
     }
@@ -411,14 +473,16 @@ let batchMerging = $state(false);
         replace_original: true,
       });
       showToast(t('transcoding.recordings.transcodeSuccess', { camera: getCameraName(recording.camera_id) }), 'success');
-      loadTranscodingStatus();
+      // Restart the 3s progress poll now that a task is active (loadTranscodingStatus
+      // self-stops when there's nothing running, so we must re-arm it here).
+      startTranscodingPoll();
     } catch {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
     }
   }
 
   async function handleBatchTranscode() {
-    const selectedRecordings = recordings.filter(r => selectedIds.has(r.id));
+    const selectedRecordings = galleryRecordings.filter(r => selectedIds.has(r.id));
     if (selectedRecordings.length === 0) return;
     if (!transcodingStatus?.enabled) {
       showToast(t('transcoding.warning_global_disabled'), 'error');
@@ -444,7 +508,8 @@ let batchMerging = $state(false);
     if (queued > 0) {
       showToast(t('transcoding.batch_queued', { count: String(queued) }), 'success');
       selectedIds = new Set();
-      loadTranscodingStatus();
+      // Re-arm the progress poll for the newly-queued tasks (see handleTranscode).
+      startTranscodingPoll();
     }
     if (failed > 0) {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
@@ -475,16 +540,20 @@ let batchMerging = $state(false);
   }
 
   // ── Deferred load timers ──
-  let timelineLoadTimeout: number;
+  let calLoadTimeout: number;
+  let galleryLoadTimeout: number;
   let listLoadTimeout: number;
 
   // ── Lifecycle ──
+  let visibilityHandler: (() => void) | null = null;
+
   onMount(() => {
     loadCameras();
     startTranscodingPoll();
 
     refreshInterval = window.setInterval(() => {
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
     }, getRefreshInterval());
 
     const handleScroll = () => {
@@ -492,21 +561,55 @@ let batchMerging = $state(false);
     };
     window.addEventListener('scroll', handleScroll);
 
+    // Pause all polling when the tab is hidden (e.g. backgrounded) to avoid firing DB
+    // queries against the shared read pool while the user isn't looking. Resume on focus.
+    // This is the single biggest lever for reducing idle DB read load at scale.
+    visibilityHandler = () => {
+      if (document.hidden) {
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+          refreshInterval = null;
+        }
+        stopTranscodingPoll();
+      } else if (refreshInterval === null) {
+        // Resumed: restart polling and refresh immediately so data is fresh.
+        refreshInterval = window.setInterval(() => {
+          loadCalendarSummary();
+          loadGalleryData();
+        }, getRefreshInterval());
+        loadCalendarSummary();
+        loadGalleryData();
+        startTranscodingPoll();
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
       window.removeEventListener('scroll', handleScroll);
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+      }
       stopTranscodingPoll();
     };
   });
 
   // ── Effects ──
 
-  // Watch timeline-related filters → reload calendar data
+  // Calendar summary: reload when month or filters change (independent of selected date)
   $effect(() => {
-    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth, selectedDate];
-    clearTimeout(timelineLoadTimeout);
-    timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
-    return () => clearTimeout(timelineLoadTimeout);
+    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth];
+    clearTimeout(calLoadTimeout);
+    calLoadTimeout = window.setTimeout(() => loadCalendarSummary(), 100);
+    return () => clearTimeout(calLoadTimeout);
+  });
+
+  // Gallery: reload when selected day or filters change
+  $effect(() => {
+    const _ = [selectedDate, cameraId, formatPill, searchQuery, mergedFilter, showArchived];
+    clearTimeout(galleryLoadTimeout);
+    galleryLoadTimeout = window.setTimeout(() => loadGalleryData(), 100);
+    return () => clearTimeout(galleryLoadTimeout);
   });
 
   // Watch list mode pagination/sort → reload list data
@@ -523,7 +626,8 @@ let batchMerging = $state(false);
   $effect(() => {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = window.setInterval(() => {
-      loadTimelineData();
+      loadCalendarSummary();
+      loadGalleryData();
     }, getRefreshInterval());
     limit = getItemsPerPage();
     return () => {
@@ -621,7 +725,7 @@ let batchMerging = $state(false);
 
 
       <!-- ── Calendar view (always visible) ── -->
-      <CalendarView bind:currentMonth bind:selectedDate {recordings} />
+      <CalendarView bind:currentMonth bind:selectedDate days={calendarSummary} />
 
       <!-- ── View mode tabs ── -->
       <div class="flex items-center gap-2 mb-4 mt-4">
@@ -642,20 +746,20 @@ let batchMerging = $state(false);
       </div>
 
       <!-- ── Error state ── -->
-      {#if error}
+      {#if calError}
         <div class="card border th-border-danger p-8 text-center">
           <div class="flex justify-center mb-4 th-color-danger">
             <AlertCircle size={48} />
           </div>
           <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
-          <p class="th-text-secondary mb-4">{error}</p>
-          <button onclick={loadTimelineData} class="btn btn-primary btn-sm">{t('common.retry')}</button>
+          <p class="th-text-secondary mb-4">{calError}</p>
+          <button onclick={loadCalendarSummary} class="btn btn-primary btn-sm">{t('common.retry')}</button>
         </div>
       {:else if viewMode === 'gallery'}
         <!-- ── Gallery view ── -->
         <GalleryGrid
           bind:selectedDate
-          {recordings}
+          recordings={galleryRecordings}
           {cameras}
           onselectRecording={viewRecording}
           selectedIds={[]}
@@ -681,10 +785,12 @@ let batchMerging = $state(false);
           onsort={handleSort}
           {transcodingStatus}
           loading={listLoading}
-          {currentPage}
+          currentPage={currentPageNum}
           {totalPages}
           totalRecordings={totalRecordings}
           onpagechange={handlePageChange}
+          onnext={goToNextPage}
+          onprev={goToPrevPage}
           onplay={handlePlay}
 
         />

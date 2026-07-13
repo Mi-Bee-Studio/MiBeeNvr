@@ -31,13 +31,15 @@ var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
 type MJPEGConfig struct {
-	CameraID       string
-	RTSPURL        string
-	SegmentDur     time.Duration
-	SampleInterval int // if >1, only save every Nth frame
-	DB             RecordingDB
-	EventBus       *event.EventBus
-	AudioEnabled   bool
+	CameraID               string
+	RTSPURL                string
+	SegmentDur             time.Duration
+	SampleInterval         int // if >1, only save every Nth frame
+	DB                     RecordingDB
+	EventBus               *event.EventBus
+	AudioEnabled           bool
+	DarkFrameFilterEnabled bool // skip dark/night segments
+	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -62,8 +64,9 @@ type MJPEGRecorder struct {
 
 	frameCh         chan []byte
 	dropped         atomic.Int64
-	Hub             *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
-	lastHealthLogAt time.Time        // throttled log for storage health failures
+	latestFrame     atomic.Pointer[[]byte] // cached latest JPEG frame for zero-copy polling
+	Hub             *model.StreamHub       // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time              // throttled log for storage health failures
 
 	// Audio/AVI fields
 	hasAudio       bool
@@ -123,6 +126,19 @@ func jpegDimensions(data []byte) (width, height int, ok bool) {
 
 // GetHub returns the StreamHub for frame fan-out.
 func (r *MJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
+
+// LatestFrame returns the most recently decoded JPEG frame WITHOUT copying.
+// The returned slice is shared and must be treated as read-only by callers.
+// Returns nil if no frame has been decoded yet. Safe for concurrent use.
+// Used by dual-mode timelapse frame polling (LatestFrame()) and the MJPEG
+// snapshot endpoint.
+func (r *MJPEGRecorder) LatestFrame() []byte {
+	p := r.latestFrame.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 
 // incActive increments the active recordings gauge if metrics is available.
 func (r *MJPEGRecorder) incActive() {
@@ -339,6 +355,10 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 			}
 			return
 		}
+		// Cache latest frame for timelapse frame polling (LatestFrame). The decoder
+		// returns a freshly allocated slice, so storing the pointer is safe.
+		dp := jpeg
+		r.latestFrame.Store(&dp)
 		select {
 		case r.frameCh <- jpeg:
 		default:
@@ -560,6 +580,31 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		rec.FileSize = totalSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
+		}
+
+		// Dark frame detection: check if segment is too dark to be useful.
+		// Only runs when DarkFrameFilterEnabled is true and threshold > 0.
+		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
+			var isDark bool
+			if r.hasAudio {
+				// AVI format: single file with MJPEG video.
+				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			} else {
+				// MJPEG format: directory of JPEG files.
+				isDark, _, _ = DetectDarkMJPEGDir(r.curFinalPath, r.cfg.DarkFrameThreshold)
+			}
+			if isDark {
+				// Mark as dark so merge and cleanup systems can skip/clean it.
+				_ = r.cfg.DB.SetMergeStatus(context.Background(), []string{recordingID}, model.MergeStatusDark)
+				mjpegLogger.Info("segment marked as dark (night/no-IR)",
+					"camera_id", r.cfg.CameraID, "recording_id", recordingID)
+				// Skip publishing SegmentCompleted — dark segments should not
+				// enter the merge pipeline at all.
+				r.curTempPath = ""
+				r.curFinalPath = ""
+				r.frameCount = 0
+				return
+			}
 		}
 	}
 

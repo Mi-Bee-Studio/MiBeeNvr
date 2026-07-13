@@ -27,7 +27,7 @@ func (d *DB) ArchiveAllRecordings(ctx context.Context, cameraID string) (int64, 
 
 // GetArchiveGroupStats returns recording count and total file size for an archived camera.
 func (d *DB) GetArchiveGroupStats(ctx context.Context, cameraID string) (count int, totalSize int64, err error) {
-	err = d.db.QueryRowContext(ctx,
+	err = d.readConn().QueryRowContext(ctx,
 		"SELECT COUNT(*), COALESCE(SUM(file_size),0) FROM recordings WHERE camera_id=? AND archived=1",
 		cameraID).Scan(&count, &totalSize)
 	return
@@ -35,7 +35,7 @@ func (d *DB) GetArchiveGroupStats(ctx context.Context, cameraID string) (count i
 
 // GetCameraRecordingStats returns recording count and total file size for a non-archived camera.
 func (d *DB) GetCameraRecordingStats(ctx context.Context, cameraID string) (count int, totalSize int64, err error) {
-	err = d.db.QueryRowContext(ctx,
+	err = d.readConn().QueryRowContext(ctx,
 		"SELECT COUNT(*), COALESCE(SUM(file_size),0) FROM recordings WHERE camera_id=? AND archived=0",
 		cameraID).Scan(&count, &totalSize)
 	return

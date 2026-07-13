@@ -53,6 +53,7 @@ type Recording struct {
 	MergeTier     string    `json:"merge_tier"`
 	MergeProgress int       `json:"merge_progress"`
 	MergeError    string    `json:"merge_error"`
+	MergeQuality  string    `json:"merge_quality"` // complete, fragmented, short
 	RetryCount    int       `json:"retry_count"`
 	Archived      bool      `json:"archived"`
 }
@@ -85,6 +86,13 @@ type RecordingFilter struct {
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
 	Archived  *bool  // nil = all, true = archived only, false = not archived
+	// Cursor enables keyset (seek) pagination for O(1) deep-page performance.
+	// When set AND the sort is the default (started_at DESC), ListRecordings uses
+	// WHERE started_at < cursor instead of OFFSET, avoiding the O(N) scan-skip that
+	// makes OFFSET 10000+ take seconds. The cursor is the started_at of the last row
+	// on the current page (RFC3339 format from the API layer). Ignored for non-default
+	// sort orders (falls back to OFFSET).
+	Cursor string
 }
 
 type RecorderStatus string
@@ -110,6 +118,15 @@ type DailyStats struct {
 	Recordings   int            `json:"recordings"`
 	TotalSize    int64          `json:"total_size"`
 	CameraCounts map[string]int `json:"cameras,omitempty"`
+}
+
+// RecordingDaySummary is a per-day aggregate used by the recordings calendar.
+// Date is in the client's local timezone ("YYYY-MM-DD"). Formats contains
+// category names ("video", "timelapse", "mjpeg") present that day.
+type RecordingDaySummary struct {
+	Date    string   `json:"date"`
+	Count   int      `json:"count"`
+	Formats []string `json:"formats"`
 }
 
 type Protocol string
@@ -206,10 +223,20 @@ const (
 
 // Merge status constants.
 const (
-	MergeStatusPending = "pending"
-	MergeStatusMerged  = "merged"
-	MergeStatusMerging = "merging"
-	MergeStatusFailed  = "failed"
+	MergeStatusPending      = "pending"
+	MergeStatusMerged       = "merged"
+	MergeStatusMerging      = "merging"
+	MergeStatusFailed       = "failed"
+	MergeStatusIncompatible = "incompatible"
+	MergeStatusDark         = "dark" // segment is too dark to be useful (night, no IR)
+)
+
+// Merge quality constants — describe the continuity of a merged recording.
+const (
+	MergeQualityComplete   = "complete"   // normal merge, no significant gaps
+	MergeQualityFragmented = "fragmented" // has time gaps (ended-started >> duration)
+	MergeQualityShort      = "short"      // merged but below minimum duration threshold
+	MergeQualityDark       = "dark"       // segment classified as dark/night vision
 )
 
 // AudioFrame represents a single audio frame for distribution through StreamHub.

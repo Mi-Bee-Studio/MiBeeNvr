@@ -155,9 +155,10 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	t.Logf("service count = %d", len(svcs))
 
 	// With all optionals disabled, expected core services:
-	// db, camera, health, merge, mergeScheduler, cleanup, ws, hls
+	// db, camera, health, merge, rolling-merge, mergeScheduler, cleanup, ws, hls
 	// (health is always created even when Health.Enabled=false)
-	expected := []string{"db", "camera", "health", "merge", "mergeScheduler", "cleanup", "ws", "hls"}
+	// (rolling-merge is always registered but only does work when Merge.RollingEnabled=true)
+	expected := []string{"db", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "ws", "hls"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}

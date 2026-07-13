@@ -31,11 +31,12 @@ type DiscoveryResult struct {
 
 // DeviceProfile represents a media profile from an ONVIF device.
 type DeviceProfile struct {
-	Token    string `json:"token"`
-	Name     string `json:"name"`
-	Encoding string `json:"encoding"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
+	Token            string `json:"token"`
+	Name             string `json:"name"`
+	Encoding         string `json:"encoding"`
+	Width            int    `json:"width"`
+	Height           int    `json:"height"`
+	VideoSourceToken string `json:"video_source_token"`
 }
 
 // DeviceInfo holds basic device information.
@@ -89,6 +90,11 @@ type ExposureSettings struct {
 type WhiteBalanceSettings struct {
 	Mode             string  `json:"mode"` // "auto" or "manual"
 	ColorTemperature float64 `json:"color_temperature"`
+	// CrGain/CbGain are the red/blue channel gains the ONVIF
+	// SetImagingSettings request actually carries. ColorTemperature is kept for
+	// API compatibility and used as a fallback when both gains are unset.
+	CrGain float64 `json:"cr_gain"`
+	CbGain float64 `json:"cb_gain"`
 }
 
 // ImagingOptions represents supported ranges for imaging parameters.

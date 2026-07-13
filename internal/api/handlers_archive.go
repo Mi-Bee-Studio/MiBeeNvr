@@ -75,17 +75,13 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
-	recordings, err := h.db.ListRecordings(ctx, filter)
+	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list archived recordings")
 		return
 	}
 	if recordings == nil {
 		recordings = []model.Recording{}
-	}
-	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
-	if err != nil {
-		total = 0
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"recordings": recordings,

@@ -147,6 +147,15 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 						if seg.Format == "timelapse" {
 							continue
 						}
+						// Skip formats that are already browser-playable and don't need
+						// transcoding. Transcoding is only meaningful for H.265→H.264
+						// (browsers can't play H.265 in MP4). AVI/MJPEG/JPEG are already
+						// playable via WebSocket + pure-Go demuxer, and transcoding them
+						// would destroy the playback path (the output MP4 replaces the
+						// original file). See AGENTS.md "FFmpeg is OPTIONAL".
+						if seg.Format == "avi" || seg.Format == "mjpeg" || seg.Format == "jpeg" {
+							continue
+						}
 						// Check if camera has transcoding enabled
 						camConfig := m.cfg.ResolveTranscodingConfig(seg.CameraID)
 						if !camConfig.Enabled {

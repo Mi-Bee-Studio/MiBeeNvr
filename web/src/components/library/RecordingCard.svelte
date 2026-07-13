@@ -105,8 +105,9 @@
     if (thumbnailLoaded || thumbnailError) return;
     thumbnailLoaded = true;
 
-    // H.264/H.265 recordings don't have thumbnail support
-    if (!isTimelapse && !isJPEG && !isAVI) {
+    // Only timelapse and MJPEG recordings have frame-based thumbnails.
+    // AVI/H.264/H.265 are single video files — backend has no pure-Go frame extractor, returns 404.
+    if (!isTimelapse && !isJPEG) {
       thumbnailError = true;
       return;
     }

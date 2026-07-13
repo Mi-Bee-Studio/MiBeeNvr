@@ -55,6 +55,9 @@ let videoRetryCount = $state(0);
 let videoStalled = $state(false);
 let videoStallTimeout: ReturnType<typeof setTimeout> | null = null;
 const MAX_VIDEO_RETRIES = 3;
+// When true, the merged MP4 failed to load (network error / missing file) and
+// we fall back to the JPEG frame viewer for timelapse/MJPEG recordings.
+let useFrameFallback = $state(false);
 let loadErrorType = $state<'generic' | 'not_found'>('generic');
   let downloadProgress = $state(0);
   let isDownloading = $state(false);
@@ -278,15 +281,16 @@ function startMergeSse(cameraId: string, recordingId: string) {
       if (recording) {
         // Restore merge state from DB if merge is in progress
         restoreMergeState(recording);
+        useFrameFallback = false; // Reset fallback on each recording load
 
-        if (recording.format === 'timelapse' || recording.format === 'mjpeg') {
-          // initPlayer called reactively via $effect when mjpegPlayer ref is set
-          if (recording.merge_status === 'merged') {
-            initVideoPlayer();
-          } else {
-            initTimelapsePlayer();
-            loadTimelapsePreview();
-          }
+        if (recording.format === 'mjpeg' || recording.format === 'timelapse') {
+          // MJPEG and timelapse recordings are JPEG frame sequences. The merged
+          // MP4 (if any) uses MJPEG-in-MP4 (mjpa codec) which browsers cannot
+          // play in a <video> element — only H.264/H.265 work there. So always
+          // use the frame viewer for playback. The merged MP4 is still available
+          // for download via the timelapse download button.
+          initTimelapsePlayer();
+          loadTimelapsePreview();
         } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
         }
@@ -430,8 +434,9 @@ function startMergeSse(cameraId: string, recordingId: string) {
 function initVideoPlayer() {
   videoSpeed = 1;
   videoLoading = true;
-  // Merged timelapse/MJPEG uses /merged endpoint; regular video uses /download
-  if (recording && (recording.format === 'timelapse' || recording.format === 'mjpeg')) {
+  // Merged timelapse uses /merged endpoint; regular video uses /download.
+  // (MJPEG never reaches here — it always uses the frame viewer.)
+  if (recording && recording.format === 'timelapse') {
     videoUrl = getMergedRecordingUrl(currentId);
   } else {
     videoUrl = getRecordingVideoUrl(currentId);
@@ -531,6 +536,21 @@ function handleVideoError(e: Event) {
   if (code === MediaError.MEDIA_ERR_ABORTED) return;
 
   videoLoading = false;
+
+  // For merged timelapse recordings, a network or decode error likely means
+  // the merged MP4 is missing or corrupt. Fall back to the JPEG frame viewer
+  // instead of showing a dead-end error overlay.
+  if (recording && recording.format === 'timelapse'
+      && recording.merge_status === 'merged' && !useFrameFallback
+      && (code === MediaError.MEDIA_ERR_NETWORK || code === MediaError.MEDIA_ERR_DECODE)) {
+    console.warn('Merged MP4 playback failed, falling back to frame viewer', { format: recording.format, errorCode: code });
+    useFrameFallback = true;
+    videoError = null;
+    videoErrorMsg = '';
+    initTimelapsePlayer();
+    loadTimelapsePreview();
+    return;
+  }
 
   if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
     videoError = 'src_not_supported';
@@ -1130,7 +1150,7 @@ $effect(() => {
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-          {#if recording.format === 'h264' || recording.format === 'h265' || (recording.format === 'timelapse' && recording.merge_status === 'merged')}
+          {#if recording.format === 'h264' || recording.format === 'h265'}
             <div role="presentation"
               class="video-container relative max-w-full bg-black rounded-t-[var(--radius-md)]"
               onmouseenter={handleVideoContainerMouseEnter}
@@ -1226,6 +1246,7 @@ $effect(() => {
                 currentRecording={recording}
                 currentVideoTime={videoCurrentTime}
                 onseek={handleTimelineSeek}
+                showEvents={true}
               />
             {/if}
             <div class="flex items-center justify-between px-4 py-2 th-bg-secondary border-t th-border">
@@ -1235,8 +1256,8 @@ $effect(() => {
               </button>
             </div>
           {/if}
-          {#if recording.format === 'timelapse' && recording.merge_status !== 'merged'}
-            <!-- Timelapse JPEG sequence player -->
+          {#if recording.format === 'timelapse'}
+            <!-- Timelapse JPEG sequence player (always used — MJPEG-in-MP4 can't play in <video>) -->
             {#if tlLoading}
               <div class="flex items-center justify-center h-64 bg-black">
                 <div class="spinner spinner-lg"></div>

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,13 +60,19 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Keyset (cursor) pagination: ?cursor=<RFC3339 started_at of last row on prev page>.
+	// When provided with default sort, the DB uses WHERE started_at < cursor (O(1) deep page)
+	// instead of OFFSET (O(N) scan-skip). The frontend sends the last row's started_at.
+	filter.Cursor = r.URL.Query().Get("cursor")
+
 	// Sorting
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
 	filter.Search = r.URL.Query().Get("search")
 
-	recordings, err := h.db.ListRecordings(ctx, filter)
+	// List + cached count. Cursor-based requests still get the total from cache.
+	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
@@ -75,14 +82,83 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		recordings = []model.Recording{}
 	}
 
-	total, err := h.db.CountRecordingsWithFilter(ctx, filter)
-	if err != nil {
-		total = 0 // non-fatal
+	// Compute next_cursor for the frontend: the started_at of the last row in this page.
+	// The client passes it back as ?cursor= for O(1) deep pagination. Empty when no more rows.
+	nextCursor := ""
+	if filter.Limit > 0 && len(recordings) == filter.Limit {
+		last := recordings[len(recordings)-1]
+		nextCursor = last.StartedAt.Format(time.RFC3339Nano)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recordings": recordings,
-		"total":      total,
+		"recordings":  recordings,
+		"total":       total,
+		"next_cursor": nextCursor,
+	})
+}
+
+// handleDailyRecordingSummary returns per-day recording counts and format categories for
+// calendar rendering. Unlike handleListRecordings, this is a lightweight GROUP BY query
+// with no row-level limit — the result is bounded by the number of days in the range.
+// GET /api/recordings/daily-summary?start=&end=&camera_id=&format=&formats=&tz_offset=
+func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	filter := model.RecordingFilter{
+		CameraID: r.URL.Query().Get("camera_id"),
+		Format:   model.Format(r.URL.Query().Get("format")),
+	}
+
+	if v := r.URL.Query().Get("merged"); v != "" {
+		merged := v == "true" || v == "1"
+		filter.Merged = &merged
+	}
+	if v := r.URL.Query().Get("start"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.StartTime = t
+		}
+	}
+	if v := r.URL.Query().Get("end"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.EndTime = t
+		}
+	}
+
+	// formats: comma-separated list (e.g. "timelapse,mjpeg")
+	if v := r.URL.Query().Get("formats"); v != "" {
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				filter.Formats = append(filter.Formats, model.Format(f))
+			}
+		}
+	}
+
+	filter.Search = r.URL.Query().Get("search")
+
+	if v := r.URL.Query().Get("archived"); v != "" {
+		archived := v == "true" || v == "1"
+		filter.Archived = &archived
+	}
+
+	// Client timezone offset in minutes (e.g. 480 for UTC+8). Defaults to 0 (UTC).
+	tzOffset := 0
+	if v := r.URL.Query().Get("tz_offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tzOffset = n
+		}
+	}
+
+	summary, err := h.db.DailyRecordingSummary(ctx, filter, tzOffset)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to get daily summary")
+		return
+	}
+
+	if summary == nil {
+		summary = []model.RecordingDaySummary{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days": summary,
 	})
 }
 
@@ -298,10 +374,14 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 	// Fetch file paths before batch delete
 	filePaths := map[string]string{}
-	for _, id := range body.IDs {
-		rec, err := h.db.GetRecording(ctx, id)
-		if err == nil && rec != nil && rec.FilePath != "" {
-			filePaths[id] = rec.FilePath
+	recordings, err := h.db.GetRecordingsByIDBatch(ctx, body.IDs)
+	if err != nil {
+		logger.Warn("batch delete: failed to fetch recordings", "error", err)
+	} else {
+		for _, rec := range recordings {
+			if rec.FilePath != "" {
+				filePaths[rec.ID] = rec.FilePath
+			}
 		}
 	}
 
@@ -336,6 +416,51 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 		result["failed"] = []string{}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// sortedImageFiles returns the sorted list of image filenames in dir, using a short-TTL
+// cache to avoid os.ReadDir + sort on every request. The cache is invalidated when the
+// directory's mtime changes (new frames written) or after frameListCacheTTL. This matters
+// for MJPEG/timelapse frame dirs which can hold thousands of JPEGs; without it each
+// ?frame=N / list-frames request re-scanned and re-sorted the whole directory.
+func (h *Handler) sortedImageFiles(dir string) ([]string, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	mtime := info.ModTime().Unix()
+
+	h.frameListMu.Lock()
+	if h.frameListCache == nil {
+		h.frameListCache = make(map[string]*frameListEntry)
+	}
+	cached, ok := h.frameListCache[dir]
+	if ok && cached.dirMtime == mtime && time.Since(cached.scannedAt) < frameListCacheTTL {
+		names := cached.names
+		h.frameListMu.Unlock()
+		return names, nil
+	}
+	h.frameListMu.Unlock()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if isImageFile(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return names[i] < names[j] })
+
+	h.frameListMu.Lock()
+	h.frameListCache[dir] = &frameListEntry{names: names, dirMtime: mtime, scannedAt: time.Now()}
+	h.frameListMu.Unlock()
+	return names, nil
 }
 
 func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
@@ -374,17 +499,10 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	if frameStr != "" && rec.Format == model.FormatMJPEG {
 		frameIndex, err := strconv.Atoi(frameStr)
 		if err == nil {
-			entries, err := os.ReadDir(validPath)
+			jpgFiles, err := h.sortedImageFiles(validPath)
 			if err == nil {
-				jpgFiles := []os.DirEntry{}
-				for _, e := range entries {
-					if !e.IsDir() && isImageFile(e.Name()) {
-						jpgFiles = append(jpgFiles, e)
-					}
-				}
-				sort.Slice(jpgFiles, func(i, j int) bool { return jpgFiles[i].Name() < jpgFiles[j].Name() })
 				if frameIndex >= 0 && frameIndex < len(jpgFiles) {
-					framePath := filepath.Join(validPath, jpgFiles[frameIndex].Name())
+					framePath := filepath.Join(validPath, jpgFiles[frameIndex])
 					http.ServeFile(w, r, framePath)
 					return
 				}
@@ -522,8 +640,8 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	if rec.Format != model.Format("timelapse") {
-		WriteError(w, http.StatusNotFound, "not a timelapse recording")
+	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {
+		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 		return
 	}
 
@@ -609,8 +727,8 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	if rec.Format != model.Format("timelapse") {
-		WriteError(w, http.StatusNotFound, "not a timelapse recording")
+	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {
+		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 		return
 	}
 
@@ -620,6 +738,8 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 
 // handleMergedRecording handles GET /api/recordings/{id}/merged.
 // Serves the merged MP4 file for a timelapse recording if it has been merged.
+// Returns 404 if the merged MP4 is not available — the frontend falls back to
+// the JPEG frame viewer on this 404 (via MEDIA_ERR_NETWORK in handleVideoError).
 func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -633,6 +753,13 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	}
 	if rec.MergePath == "" {
 		WriteError(w, http.StatusNotFound, "merged recording not available")
+		return
+	}
+	// Verify the merged MP4 actually exists on disk
+	if _, err := os.Stat(rec.MergePath); err != nil {
+		logger.Warn("merged recording file missing on disk",
+			"recording_id", id, "merge_path", rec.MergePath, "error", err)
+		WriteError(w, http.StatusNotFound, "merged recording file not available")
 		return
 	}
 	http.ServeFile(w, r, rec.MergePath)
@@ -900,4 +1027,108 @@ func readEXIFString(data []byte, entryOff int, bo binary.ByteOrder) string {
 	// Strip null terminator(s)
 	s := string(bytes.TrimRight(strBytes, "\x00"))
 	return strings.TrimSpace(s)
+}
+
+// handleTimelineGaps returns recording gaps (time periods with no recording)
+// for a camera on a specific date. Used by the frontend timeline to render
+// "断帧" (frame drop) markers.
+//
+// Query params:
+//
+//	date=YYYY-MM-DD  — the day to analyze (required)
+//	min_gap=30s      — minimum gap duration to report (default 30s)
+func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		WriteError(w, http.StatusBadRequest, "camera id is required")
+		return
+	}
+
+	dateStr := r.URL.Query().Get("date")
+	if dateStr == "" {
+		WriteError(w, http.StatusBadRequest, "date query param is required (YYYY-MM-DD)")
+		return
+	}
+
+	minGapStr := r.URL.Query().Get("min_gap")
+	if minGapStr == "" {
+		minGapStr = "30s"
+	}
+	minGap, err := time.ParseDuration(minGapStr)
+	if err != nil || minGap <= 0 {
+		minGap = 30 * time.Second
+	}
+
+	// Parse date to UTC start/end.
+	y, m, d, err := parseDateParts(dateStr)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid date format, use YYYY-MM-DD")
+		return
+	}
+	dayStart := time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC)
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	// Fetch all recordings for this camera on this day.
+	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
+		CameraID:  cameraID,
+		StartTime: dayStart,
+		EndTime:   dayEnd,
+		SortBy:    "started_at",
+		SortOrder: "asc",
+		Limit:     1000,
+	})
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to list recordings: "+err.Error())
+		return
+	}
+
+	// Compute gaps between consecutive recordings.
+	type Gap struct {
+		Start    string  `json:"start"`
+		End      string  `json:"end"`
+		Duration float64 `json:"duration"`
+	}
+	var gaps []Gap
+	for i := 1; i < len(recs); i++ {
+		prevEnd := recs[i-1].EndedAt
+		currStart := recs[i].StartedAt
+		if prevEnd.IsZero() || currStart.IsZero() {
+			continue
+		}
+		gapDur := currStart.Sub(prevEnd).Seconds()
+		if gapDur >= minGap.Seconds() {
+			gaps = append(gaps, Gap{
+				Start:    prevEnd.Format(time.RFC3339Nano),
+				End:      currStart.Format(time.RFC3339Nano),
+				Duration: math.Round(gapDur*10) / 10,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"camera_id":  cameraID,
+		"date":       dateStr,
+		"gaps":       gaps,
+		"total_gaps": len(gaps),
+	})
+}
+
+// parseDateParts parses a "YYYY-MM-DD" string into year, month, day integers.
+func parseDateParts(s string) (year, month, day int, err error) {
+	parts := strings.Split(s, "-")
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("expected YYYY-MM-DD")
+	}
+	year, err1 := strconv.Atoi(parts[0])
+	month, err2 := strconv.Atoi(parts[1])
+	day, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, fmt.Errorf("invalid date components")
+	}
+	return year, month, day, nil
 }

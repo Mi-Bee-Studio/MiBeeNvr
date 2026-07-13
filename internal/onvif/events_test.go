@@ -2,6 +2,7 @@ package onvif
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -202,6 +203,35 @@ func TestEventSubscriberImpl_StopAll(t *testing.T) {
 
 	require.False(t, es.IsSubscribed("cam-1"))
 	require.False(t, es.IsSubscribed("cam-2"))
+}
+
+func TestIsEventsNotSupportedError(t *testing.T) {
+	t.Helper()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"action not implemented", fmt.Errorf("SOAP request failed: Action Not Implemented"), true},
+		{"actionnotsupported", fmt.Errorf("ter:ActionNotSupported"), true},
+		{"notimplemented lower", fmt.Errorf("soap fault: notimplemented"), true},
+		{"auth error", fmt.Errorf("NotAuthorized"), false},
+		{"network error", fmt.Errorf("connection refused"), false},
+		{"empty", fmt.Errorf(""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isEventsNotSupportedError(tc.err))
+		})
+	}
+}
+
+func TestErrEventsNotSupportedIsSentinel(t *testing.T) {
+	t.Helper()
+	// The sentinel must be usable with errors.Is after wrapping.
+	wrapped := fmt.Errorf("%w: details", ErrEventsNotSupported)
+	require.ErrorIs(t, wrapped, ErrEventsNotSupported)
 }
 
 func TestParseNotificationMessage(t *testing.T) {

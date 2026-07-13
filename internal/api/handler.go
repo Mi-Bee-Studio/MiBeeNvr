@@ -125,6 +125,7 @@ type Handler struct {
 	snapshotMu        sync.RWMutex
 	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
 	mergeMgr          *merge.MergeManager
+	rollingMergeMgr   *merge.RollingMergeCoordinator
 	healthMgr         HealthManager
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
@@ -133,15 +134,31 @@ type Handler struct {
 	transcodeMgr      TranscodeManagerAPI
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
-	timelapseDailyMgr *timelapse.DailyMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
 	aiHandler         *AIHandler
 	relayMgr          *relay.Manager
+	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
+	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
+	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
+	frameListMu    sync.Mutex
+	frameListCache map[string]*frameListEntry
 }
 
+// frameListEntry is a cached sorted listing of a frame directory.
+type frameListEntry struct {
+	names     []string // sorted image filenames
+	dirMtime  int64    // unix mtime of the dir at scan time (for invalidation)
+	scannedAt time.Time
+}
+
+// frameListCacheTTL bounds how long a cached listing is served without re-stat.
+// Timelapse dirs grow while a recording is active, so keep this short enough to
+// pick up new frames promptly but long enough to collapse a burst of requests.
+const frameListCacheTTL = 500 * time.Millisecond
+
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -176,6 +193,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
+			r.Get("/daily-summary", h.handleDailyRecordingSummary)
 			r.Post("/", h.handleCreateRecording)
 			r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
 			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
@@ -279,6 +297,11 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
+		r.Post("/api/merge/reclassify", h.handleMergeReclassify)
+		r.Post("/api/merge/backfill", h.handleMergeBackfillAll)                 // Backfill all cameras
+		r.Post("/api/merge/consolidate", h.handleMergeConsolidate)              // Merge short recordings into longer ones
+		r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
+		r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)          // Recording gaps for timeline
 		// Timelapse endpoints
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
@@ -489,9 +512,9 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 	h.timelapseMergeMgr = mgr
 }
 
-// setTimelapseDailyMgr sets the timelapse daily merge manager on the handler.
-func (h *Handler) setTimelapseDailyMgr(mgr *timelapse.DailyMergeManager) {
-	h.timelapseDailyMgr = mgr
+// SetRollingMergeMgr sets the recording rolling merge coordinator on the handler.
+func (h *Handler) SetRollingMergeMgr(mgr *merge.RollingMergeCoordinator) {
+	h.rollingMergeMgr = mgr
 }
 
 // SetAIHandler sets the AI handler on the Handler.
@@ -534,11 +557,15 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
-	// If encoding still unknown (e.g. ONVIF auto-detect), probe the running recorder
-	if encoding == "" && h.camMgr != nil {
+	// Probe the running recorder for the ACTUAL codec — this outranks the stored
+	// encoding/stream_encoding because some ONVIF cameras lie (e.g. report H264
+	// but stream H265). Without this, /protocols would advertise WebRTC for an
+	// H265 camera (WebRTC only supports H264), and the WHEP negotiation would
+	// fail silently. The recorder's detectEncoding already verified the real
+	// codec via RTSP DESCRIBE, so trust it over the stored value.
+	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
-			codec, _, _, _ := getCodecParams(rec)
-			if codec != "" {
+			if codec, _, _, _ := getCodecParams(rec); codec != "" {
 				encoding = string(codec)
 			}
 		}

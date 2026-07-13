@@ -2,8 +2,10 @@ package onvif
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +13,27 @@ import (
 )
 
 var eventLogger = slog.Default().With("component", "onvif-events")
+
+// ErrEventsNotSupported indicates the device does not implement the ONVIF event
+// PullPoint subscription (some cameras advertise the event service in
+// GetCapabilities but return "Action Not Implemented" on
+// CreatePullPointSubscription). Callers can cache this result to avoid
+// repeatedly attempting a subscription that will never succeed.
+var ErrEventsNotSupported = errors.New("onvif: device does not support event pull-point subscription")
+
+// isEventsNotSupportedError reports whether err represents the device rejecting
+// event subscription as unimplemented. Devices phrase this variously:
+// "Action Not Implemented", "ActionNotSupported", "NotImplemented", etc.
+func isEventsNotSupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not implemented") ||
+		strings.Contains(msg, "notimplemented") ||
+		strings.Contains(msg, "action not supported") ||
+		strings.Contains(msg, "actionnotsupported")
+}
 
 // DefaultPollInterval is the interval between PullMessages calls when no events are pending.
 const DefaultPollInterval = 5 * time.Second
@@ -116,6 +139,14 @@ func (e *EventSubscriberImpl) Subscribe(ctx context.Context, cameraID string) er
 	// Create PullPoint subscription via onvif-go
 	sub, err := e.client.CreatePullPointSubscription(ctx, "", &e.subDuration, "")
 	if err != nil {
+		// Some cameras advertise the event service in GetCapabilities but reject
+		// the actual subscription as unimplemented. Surface a sentinel so callers
+		// can cache the negative result rather than retrying forever.
+		if isEventsNotSupportedError(err) {
+			eventLogger.Info("device does not support ONVIF events; skipping subscription",
+				"camera_id", cameraID, "error", err)
+			return fmt.Errorf("%w (camera %q): %w", ErrEventsNotSupported, cameraID, err)
+		}
 		return fmt.Errorf("onvif: create PullPoint subscription for camera %q: %w", cameraID, err)
 	}
 

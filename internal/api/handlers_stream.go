@@ -372,7 +372,12 @@ type FLVStreamHandler struct{}
 func (h *FLVStreamHandler) Name() string { return "flv" }
 
 func (h *FLVStreamHandler) CanHandle(codec model.Format) bool {
-	return codec == model.FormatH264 || codec == model.FormatH265
+	// The Go backend CAN mux H.265 into an FLV container, but the browser-side
+	// player (mpegts.js) relies on Media Source Extensions, and Chrome/Firefox
+	// MSE does not decode H.265/HEVC. Only Safari (macOS) supports it. Reporting
+	// FLV as available for H.265 would let the user pick it and see a black
+	// screen. Use the WASM player (WebCodecs + WASM H.265 decoder) for H.265.
+	return codec == model.FormatH264
 }
 
 func (h *FLVStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {

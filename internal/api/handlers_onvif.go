@@ -285,6 +285,21 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	pos, moving, err := ptz.GetStatus(r.Context())
 	if err != nil {
+		// Some devices (NVR/encoders, fixed-lens cameras) advertise PTZ in
+		// GetCapabilities but have no PTZ node — GetStatus returns a SOAP Fault
+		// (HTTP 400 + Envelope) or "not supported". Return a default idle status
+		// instead of 500 so the UI doesn't error out; the PTZ panel is already
+		// gated by capabilities upstream.
+		msg := err.Error()
+		if strings.Contains(msg, "not supported") || strings.Contains(msg, "<Fault>") ||
+			strings.Contains(msg, "Fault>") || isSOAPFaultStatus(msg) {
+			slog.Debug("PTZ GetStatus rejected by device, returning default status",
+				"camera_id", cameraID, "error", err)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"pan": 0.0, "tilt": 0.0, "zoom": 0.0, "moving": false,
+			})
+			return
+		}
 		logger.Error("get PTZ status failed", "camera_id", cameraID, "error", err, "path", r.URL.Path)
 		WriteError(w, http.StatusInternalServerError, "get PTZ status failed")
 		return
@@ -415,6 +430,22 @@ func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// isSOAPFaultStatus reports whether err represents a SOAP Fault returned with an
+// HTTP error status (400/500/501). Such responses indicate the device received
+// the request but rejected the operation (e.g. a PTZ GetStatus on a device that
+// advertises PTZ in capabilities but has no PTZ node). Distinguished from
+// isAuthError (which also matches status 400) by requiring a SOAP envelope/Fault
+// body — pure auth rejections carry no envelope.
+func isSOAPFaultStatus(errStr string) bool {
+	hasStatus := strings.Contains(errStr, "status 400") ||
+		strings.Contains(errStr, "status 500") ||
+		strings.Contains(errStr, "status 501")
+	hasBody := strings.Contains(errStr, "Envelope") ||
+		strings.Contains(errStr, "Fault") ||
+		strings.Contains(errStr, "SOAP-ENV")
+	return hasStatus && hasBody
+}
+
 // handleONVIFPTZError maps ONVIF PTZ controller errors to appropriate HTTP responses.
 func handleONVIFPTZError(w http.ResponseWriter, cameraID string, err error) {
 	switch {
@@ -446,7 +477,7 @@ func (h *Handler) handleSnapshotGetUri(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, err := h.camMgr.GetSnapshotProvider(r.Context(), cameraID)
 	if err != nil {
-		handleONVIFPTZError(w, cameraID, err)
+		handleONVIFSnapshotError(w, cameraID, err)
 		return
 	}
 	uri, err := provider.GetSnapshotUri(r.Context())
@@ -554,6 +585,25 @@ func handleONVIFImagingError(w http.ResponseWriter, cameraID string, err error) 
 	default:
 		logger.Error("imaging operation failed", "camera_id", cameraID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "imaging operation failed")
+	}
+}
+
+// handleONVIFSnapshotError maps ONVIF snapshot provider errors to appropriate HTTP responses.
+// Mirrors handleONVIFPTZError/handleONVIFImagingError but reports "snapshot operation failed"
+// (not the misleading "PTZ operation failed") so the client sees an accurate context.
+func handleONVIFSnapshotError(w http.ResponseWriter, cameraID string, err error) {
+	switch {
+	case errors.As(err, new(*model.CameraNotFoundError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, new(*model.ONVIFNotCameraError)):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, new(*model.ONVIFConnectionError)):
+		writeAPIError(w, http.StatusBadGateway, err)
+	case errors.As(err, new(*model.ONVIFNoProfilesError)):
+		writeAPIError(w, http.StatusNotFound, err)
+	default:
+		logger.Error("snapshot operation failed", "camera_id", cameraID, "error", err)
+		WriteError(w, http.StatusInternalServerError, "snapshot operation failed")
 	}
 }
 

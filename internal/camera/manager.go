@@ -45,6 +45,11 @@ type CameraUpdate struct {
 	Channel        *string
 	Transcoding    *config.CameraTranscodingConfig
 	AudioEnabled   *bool
+	// Dark frame filtering
+	DarkFrameFilterEnabled *bool
+	DarkFrameThreshold     *int
+	// Recording schedule
+	RecordingSchedule *config.ScheduleConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.
 	StreamKey     *string
 	SRTPassphrase *string
@@ -71,7 +76,8 @@ type CameraManager struct {
 	healthMgr          *health.Manager                         // health monitoring (nil when disabled)
 	scheduler          *timelapse.Scheduler                    // timelapse schedule evaluator
 	scheduleMonitors   map[string]context.CancelFunc           // camera_id -> cancel func for schedule monitor
-	keyframeExtractors map[string]*timelapse.KeyframeExtractor // camera_id -> keyframe extractor
+	keyframeExtractors map[string]*timelapse.KeyframeExtractor // camera_id -> keyframe extractor (H.264/H.265)
+	framePollers       map[string]*timelapse.SnapshotCapturer  // camera_id -> frame poller (MJPEG/JPEG latest_frame)
 	mu                 sync.RWMutex
 	onvifClients       map[string]*onvif.Client            // camera_id → cached ONVIF client
 	onvifMu            sync.Mutex                          // protects onvifClients
@@ -124,6 +130,11 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 			eb = v
 		}
 	}
+	if eb == nil {
+		logger.Warn("CameraManager created with nil EventBus — segment events will not be published")
+	} else {
+		logger.Info("CameraManager created with EventBus")
+	}
 	return &CameraManager{
 		cfg:                cfg,
 		store:              store,
@@ -137,6 +148,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		scheduler:          timelapse.NewScheduler(appLoc),
 		scheduleMonitors:   make(map[string]context.CancelFunc),
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
+		framePollers:       make(map[string]*timelapse.SnapshotCapturer),
 		errorDetails:       make(map[string]*model.CameraErrorDetail),
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
@@ -246,12 +258,35 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
 					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
 					if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-						if hub := getRecorderHub(rec); hub != nil {
+						// Runtime override: an ONVIF camera with empty encoding may have
+						// resolved to rtsp_keyframe statically but actually be a JPEG device
+						// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
+						// case, use a frame poller instead.
+						if isRecorderJPEG(rec) {
+							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+							} else if poller != nil {
+								cm.mu.Lock()
+								cm.framePollers[cam.ID] = poller
+								cm.mu.Unlock()
+							}
+						} else if hub := getRecorderHub(rec); hub != nil {
 							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
 								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
 							}
 						}
+					} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+						if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+							logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+						} else if poller != nil {
+							cm.mu.Lock()
+							cm.framePollers[cam.ID] = poller
+							cm.mu.Unlock()
+						}
 					}
+					// Enforce timelapse schedule for dual-mode cameras (start/stop
+					// the keyframe extractor or frame poller based on time-of-day).
+					cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 				}
 			}
 		case string(model.ProtoONVIF):
@@ -277,6 +312,12 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			} else {
 				logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
 			}
+		}
+	}
+	// Start recording schedule monitors for cameras with a recording_schedule configured.
+	for _, cam := range cm.cfg.Cameras {
+		if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
+			cm.startRecordingScheduleMonitor(ctx, cam.ID)
 		}
 	}
 	// Replay push-out relay targets for cameras loaded from config. Add/Update
@@ -329,6 +370,9 @@ func (cm *CameraManager) Stop() error {
 
 	// Stop all timelapse keyframe extractors
 	cm.stopAllTimelapseKeyframeExtractors()
+
+	// Stop all timelapse frame pollers
+	cm.stopAllTimelapseFramePollers()
 
 	return nil
 }
@@ -507,7 +551,6 @@ func (cm *CameraManager) GetStreamURL(cameraID string) string {
 // The camera must be enabled.
 func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Find camera config
 	var cam *config.CameraConfig
@@ -518,6 +561,7 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 	}
 	if cam == nil {
+		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
@@ -533,18 +577,21 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
 	}
 
-	// Create and start new recorder
+	// Snapshot the config + segDur so we can start WITHOUT holding cm.mu.
+	// startRecorder's timelapse sub-helpers (startTimelapseKeyframeExtractor etc.)
+	// acquire cm.mu themselves, so re-entering under a held Lock would self-deadlock.
+	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, *cam, segDur)
+	return cm.startRecorder(ctx, camCopy, segDur)
 }
 
 // StartCamera manually starts the recorder for the given camera.
 func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Find camera config
 	var cam *config.CameraConfig
@@ -555,6 +602,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 	if cam == nil {
+		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
@@ -562,6 +610,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	if rec, ok := cm.recorders[cameraID]; ok {
 		status := rec.Status()
 		if status == model.StatusRecording || status == model.StatusReconnecting {
+			cm.mu.Unlock()
 			return &model.CameraAlreadyRunningError{CameraID: cameraID}
 		}
 		// Stale recorder — stop and remove so we can start fresh
@@ -574,11 +623,16 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 
+	// Snapshot config + segDur, then release the lock before startRecorder
+	// (its timelapse sub-helpers acquire cm.mu themselves — re-entering under a
+	// held Lock would self-deadlock).
+	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, *cam, segDur)
+	return cm.startRecorder(ctx, camCopy, segDur)
 }
 
 // StopCamera manually stops the recorder for the given camera.
@@ -608,6 +662,12 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
 		}
 	}
+
+	// Stop frame poller if running
+	cm.stopTimelapseFramePoller(cameraID)
+
+	// Stop dual-mode timelapse schedule monitor if running
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
 
 	return nil
 }
@@ -647,6 +707,10 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 					logger.Warn("failed to stop keyframe extractor", "camera_id", id, "error", err)
 				}
 			}
+			// Stop frame poller if running (caller holds cm.mu)
+			cm.stopTimelapseFramePoller(id)
+			// Stop dual-mode timelapse schedule monitor
+			cm.stopDualModeTimelapseScheduleMonitor(id)
 		}
 	}
 }

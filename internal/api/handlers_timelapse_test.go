@@ -477,7 +477,7 @@ type testSlowMerger struct {
 
 func (m *testSlowMerger) CanMerge() bool            { return true }
 func (m *testSlowMerger) Tier() timelapse.MergeTier { return timelapse.TierGo }
-func (m *testSlowMerger) Merge(ctx context.Context, _, _ string, _ int) (*timelapse.MergeResult, error) {
+func (m *testSlowMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*timelapse.MergeResult, error) {
 	select {
 	case <-time.After(m.delay):
 	case <-ctx.Done():
@@ -486,11 +486,18 @@ func (m *testSlowMerger) Merge(ctx context.Context, _, _ string, _ int) (*timela
 	if m.fail {
 		return nil, fmt.Errorf("merge simulated failure")
 	}
+	// Write a dummy output file so RollingMergeManager's post-merge verification
+	// (os.Stat on the real outputPath) passes.
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, []byte("merged"), 0o644); err != nil {
+			return nil, err
+		}
+	}
 	return &timelapse.MergeResult{
 		Tier:         timelapse.TierGo,
 		FramesMerged: 10,
 		Duration:     1.0,
-		OutputPath:   "/tmp/output.mp4",
+		OutputPath:   outputPath,
 	}, nil
 }
 
@@ -839,15 +846,25 @@ func TestTimelapseList_Pagination(t *testing.T) {
 
 // --- Timelapse Merge tests ---
 
-func TestTimelapseMerge_NoManager(t *testing.T) {
+func TestTimelapseMerge_DefaultNaturalDay(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
-	h := TestHandler(db, store) // No daily or rolling merge manager
+	h := TestHandler(db, store)
+	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
+	// No duration param — defaults to "natural-day" (24h). Should be accepted.
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge", nil, "", "")
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	parseJSON(t, rr, &resp)
+	if resp["status"] != "merge_initiated" {
+		t.Fatalf("expected status=merge_initiated, got %s", resp["status"])
+	}
+	if resp["duration"] != "natural-day" {
+		t.Fatalf("expected duration=natural-day, got %s", resp["duration"])
 	}
 }
 
@@ -856,13 +873,8 @@ func TestTimelapseMerge_Accepted(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	// Set up a real daily merge manager with test DB as RecordingLister
-	merger := &testSlowMerger{}
-	dataDir := t.TempDir()
-	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
-
 	h := TestHandler(db, store)
-	h.setTimelapseDailyMgr(dailyMgr)
+	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?date=2026-06-06", nil, "", "")
 	if rr.Code != http.StatusAccepted {
@@ -880,14 +892,10 @@ func TestTimelapseMerge_DefaultDate(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	merger := &testSlowMerger{}
-	dataDir := t.TempDir()
-	dailyMgr := timelapse.NewDailyMergeManager(db, nil, merger, 10, dataDir, nil)
-
 	h := TestHandler(db, store)
-	h.setTimelapseDailyMgr(dailyMgr)
+	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
-	// No date param — should default to yesterday
+	// No date param — should default to today in the configured timezone
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge", nil, "", "")
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
@@ -911,20 +919,20 @@ func TestTimelapseMerge_DurationInvalid(t *testing.T) {
 func TestTimelapseMerge_ErrorPathCleansActiveMerges(t *testing.T) {
 	t.Parallel()
 	{
-		// Sub-test: no daily manager (nil timelapseDailyMgr)
+		// Sub-test: nil config — default natural-day path needs config
 		db, store := setupTestDB(t)
 		defer db.Close()
-		h := TestHandler(db, store) // No daily merge manager
+		h := TestHandler(db, store) // no config set
 
 		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-stuck/merge", nil, "", "")
-		if rr1.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503, got %d", rr1.Code)
+		if rr1.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d", rr1.Code)
 		}
 
 		// Retry should NOT get 409 Conflict — activeMerges must be cleaned up
 		rr2 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-stuck/merge", nil, "", "")
-		if rr2.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503 (not 409), got %d: %s", rr2.Code, rr2.Body.String())
+		if rr2.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 (not 409), got %d: %s", rr2.Code, rr2.Body.String())
 		}
 	}
 	{

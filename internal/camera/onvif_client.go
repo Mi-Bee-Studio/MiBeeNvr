@@ -159,7 +159,17 @@ func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID stri
 	if len(profiles) == 0 {
 		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
-	ctrl := client.NewImagingController(profiles[0].Token)
+	// Imaging operations (GetImagingSettings/SetImagingSettings/GetOptions) require
+	// a VideoSourceToken, NOT the profile token. The two differ on most cameras
+	// (e.g. profile token "MainStreamProfileToken" vs video source token
+	// "VideoIPCameraSourceToken"); passing the profile token yields HTTP 400.
+	// Fall back to the profile token only when the video source token wasn't
+	// parsed (older devices / minimal profiles without VideoSourceConfiguration).
+	sourceToken := profiles[0].VideoSourceToken
+	if sourceToken == "" {
+		sourceToken = profiles[0].Token
+	}
+	ctrl := client.NewImagingController(sourceToken)
 	if ctrl == nil {
 		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)
 	}

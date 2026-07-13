@@ -69,6 +69,9 @@ func (b *EventBus) Subscribe(topic string, ch chan Event, bufferSize int) error 
 }
 
 // Unsubscribe removes all subscribers for the given topic and marks them closed.
+// Unsubscribe removes the given channel from the topic's subscriber list
+// and marks it as closed. Only the specific channel is removed — other
+// subscribers on the same topic are NOT affected.
 // It does NOT close the caller's channel — the caller owns it.
 func (b *EventBus) Unsubscribe(topic string, ch chan Event) {
 	b.mu.Lock()
@@ -76,13 +79,22 @@ func (b *EventBus) Unsubscribe(topic string, ch chan Event) {
 
 	subs := b.subscribers[topic]
 	for _, s := range subs {
-		s.mu.Lock()
-		if !s.closed {
-			s.closed = true
+		if s.ch == ch {
+			s.mu.Lock()
+			if !s.closed {
+				s.closed = true
+			}
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
-	delete(b.subscribers, topic)
+	// Remove only the matching subscriber from the slice, NOT the whole topic.
+	filtered := subs[:0]
+	for _, s := range subs {
+		if s.ch != ch {
+			filtered = append(filtered, s)
+		}
+	}
+	b.subscribers[topic] = filtered
 }
 
 // SubscribeByPrefix registers a channel for all topics that start with the given prefix.
@@ -96,21 +108,26 @@ func (b *EventBus) SubscribeByPrefix(prefix string, ch chan Event, bufferSize in
 	return nil
 }
 
-// UnsubscribeByPrefix marks all subscribers for the given prefix as closed and removes them.
-// It does NOT close the caller's channel — the caller owns it.
+// UnsubscribeByPrefix removes the given channel from the prefix's subscriber
+// list and marks it as closed. Only the specific channel is removed.
 func (b *EventBus) UnsubscribeByPrefix(prefix string, ch chan Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	subs := b.prefixSubscribers[prefix]
+	filtered := subs[:0]
 	for _, s := range subs {
-		s.mu.Lock()
-		if !s.closed {
-			s.closed = true
+		if s.ch == ch {
+			s.mu.Lock()
+			if !s.closed {
+				s.closed = true
+			}
+			s.mu.Unlock()
+		} else {
+			filtered = append(filtered, s)
 		}
-		s.mu.Unlock()
 	}
-	delete(b.prefixSubscribers, prefix)
+	b.prefixSubscribers[prefix] = filtered
 }
 
 // Publish sends an event to all subscribers of the given topic.

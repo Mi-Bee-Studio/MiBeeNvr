@@ -652,3 +652,111 @@ func TestDeriveRTSPURL(t *testing.T) {
 		})
 	}
 }
+
+func TestRewriteStaleStreamHost(t *testing.T) {
+	tests := []struct {
+		name, rtspURL, onvifEndpoint, want string
+	}{
+		{
+			name:          "stale host rewritten (DHCP reassignment)",
+			rtspURL:       "rtsp://192.168.63.200:554/11",
+			onvifEndpoint: "http://192.168.63.199:8080/onvif/device_service",
+			want:          "rtsp://192.168.63.199:554/11",
+		},
+		{
+			name:          "hosts agree → unchanged",
+			rtspURL:       "rtsp://192.168.1.10:554/stream",
+			onvifEndpoint: "http://192.168.1.10:80/onvif/device_service",
+			want:          "rtsp://192.168.1.10:554/stream",
+		},
+		{
+			name:          "stale host, RTSP default port preserved",
+			rtspURL:       "rtsp://10.0.0.5/stream",
+			onvifEndpoint: "http://10.0.0.9:8080/onvif/device_service",
+			want:          "rtsp://10.0.0.9/stream",
+		},
+		{
+			name:          "empty rtspURL → unchanged",
+			rtspURL:       "",
+			onvifEndpoint: "http://1.2.3.4/onvif/device_service",
+			want:          "",
+		},
+		{
+			name:          "garbage rtspURL → unchanged",
+			rtspURL:       "://not-a-url",
+			onvifEndpoint: "http://1.2.3.4/onvif/device_service",
+			want:          "://not-a-url",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, rewriteStaleStreamHost(tc.rtspURL, tc.onvifEndpoint))
+		})
+	}
+}
+
+// TestDetectEncoding_RTSPAuthoritativeOverLyingConfig covers the regression where a
+// HiSilicon-OEM camera declares H264 in ONVIF (and that lie was persisted to config)
+// while the RTSP stream is actually H.265. The RTSP DESCRIBE result must win.
+func TestDetectEncoding_RTSPAuthoritativeOverLyingConfig(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H264", Width: 2880, Height: 1620},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		// Simulate the persisted lie: config says H264 …
+		or.cfg.StreamEncoding = "H264"
+		// … rtspURL is set (Start resolved it) …
+		or.rtspURL = "rtsp://192.168.63.200:554/11"
+		// … but the real stream is H265.
+		or.probeEncodingFn = func() string { return "H265" }
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H265", enc, "RTSP DESCRIBE must override the lying ONVIF/config value")
+
+	// And createDelegate must produce an H265Recorder, not an H264Recorder.
+	delegate := r.createDelegate(r.rtspURL)
+	require.IsType(t, &H265Recorder{}, delegate)
+}
+
+// TestDetectEncoding_DESCRIBEFails_FallsBackToConfig ensures that when the RTSP
+// probe cannot determine the format (e.g. device requires exotic auth at DESCRIBE
+// time), the explicitly configured encoding is used. No regression for honest
+// cameras behind auth.
+func TestDetectEncoding_DESCRIBEFails_FallsBackToConfig(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H264"},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		or.cfg.StreamEncoding = "H264"
+		or.rtspURL = "rtsp://1.2.3.4/stream"
+		or.probeEncodingFn = func() string { return "" } // DESCRIBE failed
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H264", enc)
+}
+
+// TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF covers the case with no manual
+// config: DESCRIBE fails, so we trust the ONVIF profile declaration. This is the
+// pre-fix behavior for cameras whose RTSP probe is unavailable at add time.
+func TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H265"},
+		},
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		// No manual override; ONVIF says H265.
+		or.cfg.StreamEncoding = ""
+		or.rtspURL = "rtsp://1.2.3.4/stream"
+		or.probeEncodingFn = func() string { return "" } // DESCRIBE failed
+	})
+
+	enc := r.detectEncoding(context.Background())
+	require.Equal(t, "H265", enc)
+}
