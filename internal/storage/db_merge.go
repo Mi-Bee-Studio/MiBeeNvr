@@ -342,6 +342,36 @@ func (d *DB) SetMergeResult(ctx context.Context, id string, mergePath, mergeTier
 	return err
 }
 
+// ListMergedRecordingsForValidation returns all recordings that have a non-empty
+// merge_path and merge_status='merged'. Used at startup to verify that the merged
+// output files actually exist on disk — stale DB entries from deleted/missing files
+// are reset so playback can fall back to original frames.
+func (d *DB) ListMergedRecordingsForValidation(ctx context.Context) ([]*model.Recording, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, file_path, merge_path FROM recordings WHERE merge_status='merged' AND merge_path != '' AND merge_path IS NOT NULL;`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.MergePath); err != nil {
+			return nil, err
+		}
+		result = append(result, &r)
+	}
+	return result, rows.Err()
+}
+
+// ResetMergeStatus clears merge_status and merge_path for a recording, reverting
+// it to its unmerged state so playback falls back to original frames.
+func (d *DB) ResetMergeStatus(ctx context.Context, id string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET merge_status='', merge_path='', merge_tier='', merge_progress=0 WHERE id=?;`, id)
+	return err
+}
+
 // SetMergeError updates merge_status to 'failed' and sets merge_error for the given IDs
 // in a single batched UPDATE (chunked to stay under SQLite's variable limit). Empty ids is a no-op.
 func (d *DB) SetMergeError(ctx context.Context, ids []string, mergeError string) error {

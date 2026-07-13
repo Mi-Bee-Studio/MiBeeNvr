@@ -58,11 +58,15 @@ type slowMerger struct {
 
 func (s *slowMerger) CanMerge() bool  { return true }
 func (s *slowMerger) Tier() MergeTier { return TierGo }
-func (s *slowMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
+func (s *slowMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*MergeResult, error) {
 	select {
 	case <-time.After(s.delay):
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	// Create a dummy output file so post-merge verification (os.Stat) passes.
+	if outputPath != "" {
+		os.WriteFile(outputPath, []byte("merged"), 0o644)
 	}
 	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 1.0}, nil
 }
@@ -246,11 +250,16 @@ type zeroFrameMerger struct {
 
 func (z *zeroFrameMerger) CanMerge() bool  { return true }
 func (z *zeroFrameMerger) Tier() MergeTier { return TierGo }
-func (z *zeroFrameMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
+func (z *zeroFrameMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*MergeResult, error) {
 	select {
 	case <-time.After(z.delay):
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	// Create a dummy output file so post-merge verification passes (but
+	// FramesMerged=0 so delete_original is still skipped).
+	if outputPath != "" {
+		os.WriteFile(outputPath, []byte("empty"), 0o644)
 	}
 	return &MergeResult{Tier: TierGo, FramesMerged: 0, Duration: 0}, nil
 }

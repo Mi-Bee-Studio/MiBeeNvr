@@ -42,6 +42,15 @@ type KeyframeExtractorConfig struct {
 	Store    SegmentStore         // required
 	DB       RecordingDB          // optional — enables DB recording entries
 	MergeMgr *RollingMergeManager // optional — enables rolling merge on segment close
+
+	// CodecParamsProvider returns the recorder's codec parameter sets (SPS/PPS for
+	// H.264, VPS/SPS/PPS for H.265). Used as a FALLBACK when parameter sets are not
+	// found inline in the frame AU — this happens when the camera sends them
+	// out-of-band (in the RTSP DESCRIBE SDP or MP4 moov box) rather than inline
+	// with each IDR. Without this fallback, every captured frame file lacks SPS/PPS,
+	// and the H264GoMerger/H265GoMerger permanently fails with "frames missing SPS".
+	// Optional — when nil, only inline parameter sets are used.
+	CodecParamsProvider func() (sps, pps, vps []byte)
 }
 
 // KeyframeExtractor subscribes to a recorder's StreamHub and captures
@@ -83,6 +92,10 @@ type KeyframeExtractor struct {
 	cachedParamSets   [][]byte
 	cachedParamSetsMu sync.Mutex
 
+	// codecParamsProvider fetches SPS/PPS/VPS from the recorder when inline
+	// parameter sets are missing from frame AUs (out-of-band codec config).
+	codecParamsProvider func() (sps, pps, vps []byte)
+
 	// Segment state.
 	curTempPath  string
 	curFinalPath string
@@ -110,14 +123,15 @@ func NewKeyframeExtractor(cfg KeyframeExtractorConfig) *KeyframeExtractor {
 		cfg.SegmentDur = 10 * time.Minute
 	}
 	return &KeyframeExtractor{
-		cameraID:   cfg.CameraID,
-		interval:   cfg.Interval,
-		segmentDur: cfg.SegmentDur,
-		isH265:     cfg.IsH265,
-		store:      cfg.Store,
-		db:         cfg.DB,
-		mergeMgr:   cfg.MergeMgr,
-		consumerID: "keyframe-extractor-" + cfg.CameraID,
+		cameraID:            cfg.CameraID,
+		interval:            cfg.Interval,
+		segmentDur:          cfg.SegmentDur,
+		isH265:              cfg.IsH265,
+		store:               cfg.Store,
+		db:                  cfg.DB,
+		mergeMgr:            cfg.MergeMgr,
+		codecParamsProvider: cfg.CodecParamsProvider,
+		consumerID:          "keyframe-extractor-" + cfg.CameraID,
 	}
 }
 
@@ -317,6 +331,38 @@ func (k *KeyframeExtractor) captureFrame() {
 	k.cachedParamSetsMu.Lock()
 	paramSets := k.cachedParamSets
 	k.cachedParamSetsMu.Unlock()
+
+	// Fallback: if no inline parameter sets were cached (camera sends them
+	// out-of-band), fetch from the recorder's codec params. This prevents
+	// "frames missing SPS" merge failures on cameras like Xiaomi H.265 that
+	// only send VPS/SPS/PPS in the SDP/moov, not inline with frames.
+	if len(paramSets) == 0 && k.codecParamsProvider != nil {
+		sps, pps, vps := k.codecParamsProvider()
+		if k.isH265 {
+			if vps != nil {
+				paramSets = append(paramSets, vps)
+			}
+			if sps != nil {
+				paramSets = append(paramSets, sps)
+			}
+			if pps != nil {
+				paramSets = append(paramSets, pps)
+			}
+		} else {
+			if sps != nil {
+				paramSets = append(paramSets, sps)
+			}
+			if pps != nil {
+				paramSets = append(paramSets, pps)
+			}
+		}
+		// Persist into the cache so subsequent frames don't re-query the provider.
+		if len(paramSets) > 0 {
+			k.cachedParamSetsMu.Lock()
+			k.cachedParamSets = paramSets
+			k.cachedParamSetsMu.Unlock()
+		}
+	}
 
 	// Concatenate parameter sets + frame NALUs with Annex B start codes.
 	var data []byte

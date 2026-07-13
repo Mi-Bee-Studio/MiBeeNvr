@@ -328,6 +328,9 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		}
 	}
 
+	// Enforce timelapse schedule for dual-mode cameras.
+	cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
+
 	cm.errorDetails[cam.ID] = nil
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()

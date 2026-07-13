@@ -71,6 +71,47 @@ func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
 	}
 }
 
+// validateMergedRecordings scans all recordings marked as 'merged' and resets
+// any whose merged output file is missing on disk. This prevents the playback
+// path from hitting a dead-end 404 when the DB claims a merge succeeded but
+// the file was lost (crash, manual deletion, or corrupt merge that reported
+// success without producing a valid file).
+func validateMergedRecordings(ctx context.Context, db *storage.DB, rootDir string) {
+	recordings, err := db.ListMergedRecordingsForValidation(ctx)
+	if err != nil {
+		slog.Warn("startup: failed to list merged recordings for validation", "error", err)
+		return
+	}
+	if len(recordings) == 0 {
+		return
+	}
+
+	resetCount := 0
+	for _, rec := range recordings {
+		if rec.MergePath == "" {
+			continue
+		}
+		if info, err := os.Stat(rec.MergePath); err != nil || info.Size() == 0 {
+			slog.Warn("startup: resetting stale merge status (file missing or empty)",
+				"recording_id", rec.ID,
+				"camera_id", rec.CameraID,
+				"merge_path", rec.MergePath,
+				"file_path", rec.FilePath)
+			if resetErr := db.ResetMergeStatus(ctx, rec.ID); resetErr != nil {
+				slog.Warn("startup: failed to reset merge status",
+					"recording_id", rec.ID, "error", resetErr)
+			} else {
+				resetCount++
+			}
+		}
+	}
+	if resetCount > 0 {
+		slog.Info("startup: reset stale merge statuses",
+			"reset_count", resetCount,
+			"total_checked", len(recordings))
+	}
+}
+
 // buildRouter constructs the chi HTTP router with all middleware, routes, mounts,
 // and the SPA static file handler. Called by RunFree.
 func buildRouter(
@@ -179,6 +220,13 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("db init: %w", err)
 	}
+
+	// Startup health check: verify that recordings marked as 'merged' still have
+	// their merged output files on disk. Stale entries (from past server crashes,
+	// manual deletion, or merge failures that left the DB in an inconsistent state)
+	// are reset to their unmerged state so playback can fall back to original frames
+	// or segments instead of serving a 404.
+	validateMergedRecordings(ctx, db, cfg.Storage.RootDir)
 
 	// Step 2: Metrics
 	metrics := metrics.NewMetrics()

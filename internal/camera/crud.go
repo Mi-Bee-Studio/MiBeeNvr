@@ -125,6 +125,9 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	// Stop frame poller if running
 	cm.stopTimelapseFramePoller(cameraID)
 
+	// Stop dual-mode timelapse schedule monitor
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+
 	// Remove from config slice
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 
@@ -183,6 +186,9 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 
 	// Stop frame poller if running
 	cm.stopTimelapseFramePoller(cameraID)
+
+	// Stop dual-mode timelapse schedule monitor
+	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
 
 	// 2. Merge segments (non-blocking — failure is logged but does not stop archival)
 	if cm.mergeMgr != nil {
@@ -377,6 +383,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		// Stop frame poller if running
 		cm.stopTimelapseFramePoller(cam.ID)
+		// Stop dual-mode timelapse schedule monitor
+		cm.stopDualModeTimelapseScheduleMonitor(cam.ID)
 	}
 
 	// Start recorder if protocol changed to a recordable one

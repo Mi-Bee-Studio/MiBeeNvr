@@ -308,7 +308,7 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
 
 **端点：** `GET /api/recordings/{id}/merged`
 
-下载延时摄影录制的合并 MP4 文件。通过 `http.ServeFile()` 提供服务，支持范围请求。
+下载延时摄影录制的合并 MP4 文件。通过 `http.ServeFile()` 提供服务，支持范围请求。在提供服务前，处理器会校验合并文件在磁盘上确实存在且非空；即便数据库记录显示 `merge_status=merged`，若文件缺失或为空也会返回 404（这样前端可回退到 JPEG 帧查看器，而不是陷入死胡同报错）。启动时还会有一次合并完整性扫描，主动重置过期的数据库记录。
 
 **请求：**
 ```bash
@@ -316,7 +316,7 @@ curl -u username:password \
   "http://localhost:9090/api/recordings/1704123456789012345/merged"
 ```
 
-**响应：** 二进制 MP4 文件内容。若无可用合并录制则返回 404。
+**响应：** 二进制 MP4 文件内容。若录制无合并结果，或合并文件在磁盘上缺失/为空，则返回 404。
 
 ## 查询延时摄影帧列表
 

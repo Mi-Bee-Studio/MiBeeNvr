@@ -640,8 +640,8 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	if rec.Format != model.Format("timelapse") {
-		WriteError(w, http.StatusNotFound, "not a timelapse recording")
+	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {
+		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 		return
 	}
 
@@ -727,8 +727,8 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
-	if rec.Format != model.Format("timelapse") {
-		WriteError(w, http.StatusNotFound, "not a timelapse recording")
+	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {
+		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 		return
 	}
 
@@ -738,6 +738,8 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 
 // handleMergedRecording handles GET /api/recordings/{id}/merged.
 // Serves the merged MP4 file for a timelapse recording if it has been merged.
+// Returns 404 if the merged MP4 is not available — the frontend falls back to
+// the JPEG frame viewer on this 404 (via MEDIA_ERR_NETWORK in handleVideoError).
 func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -751,6 +753,13 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	}
 	if rec.MergePath == "" {
 		WriteError(w, http.StatusNotFound, "merged recording not available")
+		return
+	}
+	// Verify the merged MP4 actually exists on disk
+	if _, err := os.Stat(rec.MergePath); err != nil {
+		logger.Warn("merged recording file missing on disk",
+			"recording_id", id, "merge_path", rec.MergePath, "error", err)
+		WriteError(w, http.StatusNotFound, "merged recording file not available")
 		return
 	}
 	http.ServeFile(w, r, rec.MergePath)

@@ -985,6 +985,16 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// Recover from panics that occur when the HTTP handler context is
+		// cancelled (e.g. client disconnect or timeout) but gohlslib's
+		// mux.Handle goroutine still tries to write to the response writer.
+		// Without this recover, the panic crashes the entire process.
+		defer func() {
+			if rv := recover(); rv != nil {
+				hlsLogger.Warn("HLS Handle recovered from panic",
+					"camera_id", cameraID, "panic", rv)
+			}
+		}()
 		mux.Handle(w, r)
 	}()
 

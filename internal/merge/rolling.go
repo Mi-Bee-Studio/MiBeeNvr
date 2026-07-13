@@ -792,7 +792,10 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 			break
 		}
 		if time.Now().After(lockDeadline) {
-			rollingLogger.Warn("rolling merge timed out waiting for lock",
+			// This is expected when periodic merge holds the lock for the same camera.
+			// The rolling merge will retry on the next segment close. Demoted from WARN
+			// to DEBUG to avoid log noise (was ~80/hour in production with no ill effect).
+			rollingLogger.Debug("rolling merge timed out waiting for lock",
 				"camera_id", cameraID, "segments", len(segs))
 			return
 		}

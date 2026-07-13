@@ -10,7 +10,7 @@ SQLite metadata (DB) + file operations (Manager). All recording/camera CRUD, UTC
 db.go                # DB struct — SQLite WAL, read+write pools, Init() migrations, time format, PRAGMA setup
 db_test.go           # DB tests — time parsing, CRUD operations, query builder
 db_recording.go      # Recording CRUD, ListRecordings/ListRecordingsWithTotal, batch ops, filter builders
-db_merge.go          # Merge ops — MergeAndReplaceRecordings, batched SetMergeStatus/UpdateMergeProgressBatch, chunkIDs
+db_merge.go          # Merge ops — MergeAndReplaceRecordings, batched SetMergeStatus/UpdateMergeProgressBatch, chunkIDs, ListMergedRecordingsForValidation/ResetMergeStatus (startup integrity)
 db_stats.go          # CountRecordings, GetRecordingTrends, heavyQueryTimeout
 db_archive.go        # Archive camera + recordings
 db_camera.go         # Camera CRUD + ONVIF/ingest columns
@@ -34,6 +34,7 @@ retry.go             # RetryOnBusy + SetBusyErrorHook (SQLITE_BUSY retry, increm
 | Query recordings (paginated) | `ListRecordingsWithTotal()` | Page via `ListRecordings` (covering index) + cached count (2s TTL). Do NOT use `COUNT(*) OVER()` — it's a proven regression (full scan + temp sort). |
 | Query recordings (count only) | `CountRecordingsWithFilter()` | Shares `recordingsFilterWhere` with List methods; cached when called via ListRecordingsWithTotal |
 | Batch merge-status update | `SetMergeStatus`/`SetMergeError`/`UpdateMergeProgressBatch` | Chunked `WHERE id IN (...)` via `chunkIDs(ids, 500)` |
+| Startup merge integrity | `ListMergedRecordingsForValidation()` / `ResetMergeStatus()` | Startup scan: list rows where `merge_status='merged'`; caller `os.Stat`s each `merge_path` and resets any that are missing/empty so playback falls back to frames. Called from `pkg/app/run.go:validateMergedRecordings` |
 | Route a new SELECT | use `d.readConn()` (read pool) | Writes/transactions stay on `d.db` (single serialized writer) |
 | Tune read pool | `SetReadPoolSize(n)` | Default 3 conns (~60MB page cache); raise on high-RAM hosts |
 | Read pool metrics | `ReadPoolStats()` | Returns read-pool `sql.DBStats` (open/in-use/wait); used by cleanup's 60s metrics ticker |

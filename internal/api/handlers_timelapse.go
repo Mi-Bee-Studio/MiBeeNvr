@@ -1157,6 +1157,14 @@ func (h *Handler) handleTimelapseDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Verify the merged MP4 exists on disk before serving
+	if _, err := os.Stat(rec.MergePath); err != nil {
+		logger.Warn("timelapse download: merged MP4 missing on disk",
+			"recording_id", id, "merge_path", rec.MergePath, "error", err)
+		WriteError(w, http.StatusNotFound, "merged recording file not available")
+		return
+	}
+
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(rec.MergePath)))
 	http.ServeFile(w, r, rec.MergePath)
 }

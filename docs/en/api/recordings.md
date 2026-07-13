@@ -308,7 +308,7 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
 
 **Endpoint:** `GET /api/recordings/{id}/merged`
 
-Download the merged MP4 file for a timelapse recording. Serves the file via `http.ServeFile()` with range support.
+Download the merged MP4 file for a timelapse recording. Serves the file via `http.ServeFile()` with range support. Before serving, the handler verifies the merged file exists on disk and is non-empty; a missing/empty file returns 404 even when the DB row reports `merge_status=merged` (this lets the frontend fall back to the JPEG frame viewer instead of a dead-end error). Stale DB entries are also proactively reset at startup by a merge-integrity scan.
 
 **Request:**
 ```bash
@@ -316,7 +316,7 @@ curl -u username:password \
   "http://localhost:9090/api/recordings/1704123456789012345/merged"
 ```
 
-**Response:** Binary MP4 file content. Returns 404 if no merged recording is available.
+**Response:** Binary MP4 file content. Returns 404 if the recording has no merge result, or if the merged file is missing/empty on disk.
 
 ## List Timelapse Frames
 

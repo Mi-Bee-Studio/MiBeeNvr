@@ -174,13 +174,17 @@ type successMerger struct{ delay time.Duration }
 
 func (s *successMerger) CanMerge() bool  { return true }
 func (s *successMerger) Tier() MergeTier { return TierGo }
-func (s *successMerger) Merge(ctx context.Context, _, _ string, _ int) (*MergeResult, error) {
+func (s *successMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*MergeResult, error) {
 	select {
 	case <-time.After(s.delay):
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 5.0, OutputPath: "/tmp/output.mp4"}, nil
+	// Create a dummy output file so post-merge verification passes.
+	if outputPath != "" {
+		os.WriteFile(outputPath, []byte("merged"), 0o644)
+	}
+	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 5.0, OutputPath: outputPath}, nil
 }
 
 func TestDailyWire_DailyMergeRun(t *testing.T) {

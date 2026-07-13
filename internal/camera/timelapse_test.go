@@ -1209,6 +1209,51 @@ func TestEffectiveDualModeFrameSource_ExplicitLatestFrame(t *testing.T) {
 	assert.Equal(t, "latest_frame", result, "explicit latest_frame should return latest_frame")
 }
 
+func TestEffectiveDualModeFrameSource_AutoXiaomiH264(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: "xiaomi",
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + xiaomi + h264 should resolve to rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_AutoSRT(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: string(model.ProtoSRT),
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + srt + h264 should resolve to rtsp_keyframe")
+}
+
+func TestEffectiveDualModeFrameSource_AutoRTMP(t *testing.T) {
+	t.Helper()
+	trueVal := true
+	cam := config.CameraConfig{
+		Protocol: string(model.ProtoRTMP),
+		Encoding: "h264",
+		Timelapse: &config.CameraTimelapseConfig{
+			Enabled:     trueVal,
+			FrameSource: "auto",
+		},
+	}
+	result := effectiveDualModeFrameSource(cam)
+	assert.Equal(t, "rtsp_keyframe", result, "auto + rtmp + h264 should resolve to rtsp_keyframe")
+}
+
 // --- resolveTimelapseMergeMgr: merge_enabled and delete_original wiring ---
 
 func TestResolveTimelapseMergeMgr_MergeDisabled(t *testing.T) {

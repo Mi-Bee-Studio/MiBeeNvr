@@ -56,6 +56,13 @@ func effectiveDualModeFrameSource(cam config.CameraConfig) string {
 			case "mjpeg", "jpeg":
 				return "latest_frame"
 			}
+		case "xiaomi", string(model.ProtoSRT), string(model.ProtoRTMP):
+			// Xiaomi (P2P H.264), SRT, and RTMP ingest cameras all broadcast
+			// H.264 NALUs to their StreamHub (via Hub.Broadcast). The keyframe
+			// extractor subscribes to the same hub. These protocols don't
+			// support LatestFrame() (no JPEG frame cache), so rtsp_keyframe
+			// is the only viable path.
+			return "rtsp_keyframe"
 		}
 	}
 	return fs
@@ -220,6 +227,132 @@ func (cm *CameraManager) stopTimelapseScheduleMonitor(cameraID string) {
 	}
 }
 
+// stopDualModeTimelapseScheduleMonitor cancels the dual-mode schedule monitor
+// goroutine for the given camera (keyed as "tl-"+cameraID).
+// The caller MUST hold cm.mu.
+func (cm *CameraManager) stopDualModeTimelapseScheduleMonitor(cameraID string) {
+	if cancel, ok := cm.scheduleMonitors["tl-"+cameraID]; ok {
+		cancel()
+		delete(cm.scheduleMonitors, "tl-"+cameraID)
+	}
+}
+
+// startDualModeTimelapseScheduleMonitor starts a goroutine that enforces the
+// timelapse schedule for dual-mode cameras (regular recording + timelapse).
+// Unlike the dedicated timelapse recorder schedule monitor (which stops the
+// entire recorder), this only starts/stops the keyframe extractor or frame
+// poller while keeping the regular recorder running.
+//
+// If no schedule is configured (nil), the extractor/poller runs 24/7 and no
+// monitor goroutine is started.
+func (cm *CameraManager) startDualModeTimelapseScheduleMonitor(
+	ctx context.Context,
+	cameraID string,
+	cam config.CameraConfig,
+	startFn func(),
+	stopFn func(),
+) {
+	// No schedule = 24/7, no monitor needed.
+	if cam.Timelapse == nil || cam.Timelapse.Schedule == nil || cam.Timelapse.Paused {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	cm.mu.Lock()
+	if existing, ok := cm.scheduleMonitors["tl-"+cameraID]; ok {
+		existing()
+	}
+	cm.scheduleMonitors["tl-"+cameraID] = cancel
+	cm.mu.Unlock()
+
+	go func() {
+		defer func() {
+			cm.mu.Lock()
+			delete(cm.scheduleMonitors, "tl-"+cameraID)
+			cm.mu.Unlock()
+		}()
+
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		isActive := cm.scheduler.IsRecordingTime(*cam.Timelapse)
+		// Initial state: if not recording time, stop immediately.
+		if !isActive {
+			logger.Info("dual-mode timelapse schedule: outside recording hours, stopping timelapse component",
+				"camera_id", cameraID)
+			stopFn()
+		}
+
+		wasActive := isActive
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				isActive := cm.scheduler.IsRecordingTime(*cam.Timelapse)
+				if isActive && !wasActive {
+					logger.Info("dual-mode timelapse schedule: entering recording hours, starting timelapse component",
+						"camera_id", cameraID)
+					startFn()
+				} else if !isActive && wasActive {
+					logger.Info("dual-mode timelapse schedule: leaving recording hours, stopping timelapse component",
+						"camera_id", cameraID)
+					stopFn()
+				}
+				wasActive = isActive
+			}
+		}
+	}()
+}
+
+// startDualModeTimelapseScheduleMonitorForCamera is a convenience wrapper that
+// determines whether the camera uses a keyframe extractor or frame poller, then
+// starts the dual-mode schedule monitor with the appropriate start/stop callbacks.
+// The callbacks reference the camera config and recorder to re-create the
+// extractor/poller when entering recording hours.
+func (cm *CameraManager) startDualModeTimelapseScheduleMonitorForCamera(
+	ctx context.Context,
+	cameraID string,
+	cam config.CameraConfig,
+	rec model.Recorder,
+) {
+	if cam.Timelapse == nil || cam.Timelapse.Schedule == nil || cam.Timelapse.Paused {
+		return
+	}
+
+	isJPEG := isRecorderJPEG(rec)
+	usesKeyframe := effectiveDualModeFrameSource(cam) == "rtsp_keyframe" && !isJPEG
+
+	startFn := func() {
+		if usesKeyframe {
+			if hub := getRecorderHub(cm.recorders[cameraID]); hub != nil {
+				if err := cm.startTimelapseKeyframeExtractor(cameraID, cam, hub, cm.recorders[cameraID]); err != nil {
+					logger.Warn("dual-mode schedule: failed to start keyframe extractor", "camera_id", cameraID, "error", err)
+				}
+			}
+		} else {
+			if rec, ok := cm.recorders[cameraID]; ok {
+				if poller, err := cm.startTimelapseFramePoller(cameraID, cam, rec); err != nil {
+					logger.Warn("dual-mode schedule: failed to start frame poller", "camera_id", cameraID, "error", err)
+				} else if poller != nil {
+					cm.mu.Lock()
+					cm.framePollers[cameraID] = poller
+					cm.mu.Unlock()
+				}
+			}
+		}
+	}
+	stopFn := func() {
+		if usesKeyframe {
+			cm.stopTimelapseKeyframeExtractor(cameraID)
+		} else {
+			cm.stopTimelapseFramePoller(cameraID)
+		}
+	}
+
+	cm.startDualModeTimelapseScheduleMonitor(ctx, cameraID, cam, startFn, stopFn)
+}
+
 // startRecordingScheduleMonitor starts a goroutine that starts/stops a camera's
 // recorder based on its recording_schedule config (e.g. daytime-only recording).
 // This reuses the timelapse scheduler's IsScheduleActive for time-range evaluation.
@@ -311,14 +444,26 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 
 	mergeMgr := cm.resolveTimelapseMergeMgr(cam, interval)
 
+	// CodecParamsProvider: fetches SPS/PPS/VPS from the live recorder. Used as a
+	// fallback when the camera sends parameter sets out-of-band (not inline with
+	// frame AUs) — prevents "frames missing SPS" merge failures.
+	var codecProvider func() (sps, pps, vps []byte)
+	if hlsProv, ok := rec.(model.HLSProvider); ok {
+		codecProvider = func() ([]byte, []byte, []byte) {
+			_, sps, pps, vps := hlsProv.CodecParams()
+			return sps, pps, vps
+		}
+	}
+
 	extractor := timelapse.NewKeyframeExtractor(timelapse.KeyframeExtractorConfig{
-		CameraID:   cameraID,
-		Interval:   interval,
-		SegmentDur: 10 * time.Minute,
-		IsH265:     isH265,
-		Store:      cm.store,
-		DB:         cm.db,
-		MergeMgr:   mergeMgr,
+		CameraID:            cameraID,
+		Interval:            interval,
+		SegmentDur:          10 * time.Minute,
+		IsH265:              isH265,
+		Store:               cm.store,
+		DB:                  cm.db,
+		MergeMgr:            mergeMgr,
+		CodecParamsProvider: codecProvider,
 	})
 
 	ctx := context.Background()
