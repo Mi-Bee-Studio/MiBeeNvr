@@ -3,7 +3,7 @@ module github.com/Mi-Bee-Studio/MiBeeNvr
 go 1.26.2
 
 require (
-	github.com/0x524a/onvif-go v1.1.4
+	github.com/0x524a/onvif-go v1.1.5
 	github.com/Eyevinn/hi264 v0.10.0
 	github.com/abema/go-mp4 v1.7.1
 	github.com/bluenviron/gohlslib/v2 v2.4.0
@@ -69,3 +69,10 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// Use our Mi-Bee-Studio fork of onvif-go, which extends fixLocalhostURL to also
+// rewrite stale service XAddrs after a camera IP change (DHCP reassignment).
+// Upstream only fixes loopback addresses; without this, rediscovery finds the
+// camera at its new IP but every service call (GetProfiles/GetStreamURI/PTZ)
+// still hits the old, unreachable IP advertised in GetCapabilities.
+replace github.com/0x524a/onvif-go => github.com/Mi-Bee-Studio/onvif-go v1.1.5

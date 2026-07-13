@@ -653,6 +653,48 @@ func TestDeriveRTSPURL(t *testing.T) {
 	}
 }
 
+func TestRewriteStaleStreamHost(t *testing.T) {
+	tests := []struct {
+		name, rtspURL, onvifEndpoint, want string
+	}{
+		{
+			name:          "stale host rewritten (DHCP reassignment)",
+			rtspURL:       "rtsp://192.168.63.200:554/11",
+			onvifEndpoint: "http://192.168.63.199:8080/onvif/device_service",
+			want:          "rtsp://192.168.63.199:554/11",
+		},
+		{
+			name:          "hosts agree → unchanged",
+			rtspURL:       "rtsp://192.168.1.10:554/stream",
+			onvifEndpoint: "http://192.168.1.10:80/onvif/device_service",
+			want:          "rtsp://192.168.1.10:554/stream",
+		},
+		{
+			name:          "stale host, RTSP default port preserved",
+			rtspURL:       "rtsp://10.0.0.5/stream",
+			onvifEndpoint: "http://10.0.0.9:8080/onvif/device_service",
+			want:          "rtsp://10.0.0.9/stream",
+		},
+		{
+			name:          "empty rtspURL → unchanged",
+			rtspURL:       "",
+			onvifEndpoint: "http://1.2.3.4/onvif/device_service",
+			want:          "",
+		},
+		{
+			name:          "garbage rtspURL → unchanged",
+			rtspURL:       "://not-a-url",
+			onvifEndpoint: "http://1.2.3.4/onvif/device_service",
+			want:          "://not-a-url",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, rewriteStaleStreamHost(tc.rtspURL, tc.onvifEndpoint))
+		})
+	}
+}
+
 // TestDetectEncoding_RTSPAuthoritativeOverLyingConfig covers the regression where a
 // HiSilicon-OEM camera declares H264 in ONVIF (and that lie was persisted to config)
 // while the RTSP stream is actually H.265. The RTSP DESCRIBE result must win.

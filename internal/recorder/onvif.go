@@ -129,6 +129,14 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	if r.rtspURL == "" {
 		return fmt.Errorf("onvif device returned empty stream URI — check device credentials")
 	}
+	// The stream URI's host may lag behind the ONVIF endpoint after a DHCP
+	// reassignment (device still advertises its old IP). Rewrite it to the
+	// known-good endpoint host so the RTSP dial reaches the right address.
+	if fixed := rewriteStaleStreamHost(r.rtspURL, r.cfg.ONVIFEndpoint); fixed != r.rtspURL {
+		onvifRecLogger.Info("rewrote stale stream URI host to match ONVIF endpoint",
+			"camera_id", r.cfg.CameraID, "old", r.rtspURL, "new", fixed)
+		r.rtspURL = fixed
+	}
 	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", r.rtspURL)
 
 	// 3. Create delegate recorder based on encoding
@@ -292,6 +300,40 @@ func deriveRTSPURL(httpURL string) string {
 	u.User = nil
 	u.Host = u.Hostname() + ":554"
 	return u.String()
+}
+
+// rewriteStaleStreamHost fixes a GetStreamUri response whose host lags behind
+// the ONVIF endpoint we are actually connected to. After a DHCP reassignment the
+// camera's GetStreamUri often still returns the OLD IP (e.g. rtsp://192.168.63.200
+// while the ONVIF service is reachable at .199). The library's fixLocalhostURL
+// corrects capability XAddrs but NOT values inside SOAP bodies like the stream
+// URI, so we rewrite the host here using the known-good ONVIF endpoint.
+// Port is preserved from the stream URI (RTSP commonly lives on 554, distinct
+// from the ONVIF port). Returns rtspURL unchanged if either URL fails to parse
+// or the hosts already agree.
+func rewriteStaleStreamHost(rtspURL, onvifEndpoint string) string {
+	if rtspURL == "" || onvifEndpoint == "" {
+		return rtspURL
+	}
+	stream, err := url.Parse(rtspURL)
+	if err != nil {
+		return rtspURL
+	}
+	ep, err := url.Parse(onvifEndpoint)
+	if err != nil {
+		return rtspURL
+	}
+	if stream.Hostname() == ep.Hostname() {
+		return rtspURL // already consistent
+	}
+	// Replace only the host; keep the stream's own port.
+	streamHost := ep.Hostname()
+	if port := stream.Port(); port != "" {
+		stream.Host = streamHost + ":" + port
+	} else {
+		stream.Host = streamHost
+	}
+	return stream.String()
 }
 
 // injectRTSPCredentials embeds userinfo into an rtsp:// URL when none is present.
