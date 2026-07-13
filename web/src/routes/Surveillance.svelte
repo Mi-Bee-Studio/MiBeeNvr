@@ -16,7 +16,7 @@
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { detectMSEH265, detectWebCodecs } from '$lib/webcodecs-player/capabilities';
-  import { pickCameraMode, nextAfter, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
+  import { pickCameraMode, nextAfter, isAudioCapable, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
 
   let cameras = $state<Camera[]>([]);
@@ -591,6 +591,7 @@
                 protocol={defaultProtocol}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
+                hasAudio={isAudioCapable(camera)}
               />
 
             {:else if mode === 'webrtc'}
@@ -599,6 +600,7 @@
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
+                hasAudio={isAudioCapable(camera)}
                 onProtocolFailed={() => handleProtocolFailed(camera.id, 'webrtc')}
               />
 
@@ -608,7 +610,7 @@
                 cameraName={camera.name || camera.id}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
-                hasAudio={camera.audio_enabled ?? false}
+                hasAudio={isAudioCapable(camera)}
                 onProtocolFailed={() => handleProtocolFailed(camera.id, 'flv')}
               />
 

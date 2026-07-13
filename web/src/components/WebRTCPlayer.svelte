@@ -16,6 +16,7 @@
     expanded = false,
     tabVisible = true,
     onProtocolFailed,
+    hasAudio = false,
   }: {
     cameraId: string;
     cameraName: string;
@@ -24,6 +25,9 @@
     /** See FlvPlayer.onProtocolFailed — lets the grid demote to another
      *  real-time protocol before this player falls back to a snapshot. */
     onProtocolFailed?: () => boolean;
+    /** Whether this camera can produce an audio track. When false the audio
+     *  button is hidden (MJPEG/JPEG cameras are video-only; audio_enabled off). */
+    hasAudio?: boolean;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -596,8 +600,10 @@ let destroyed = false;
     </div>
   </div>
 
-  <!-- Audio button (top-right, before expand) -->
-  <CameraAudioButton {cameraId} />
+  <!-- Audio button (top-right, before expand) — hidden for video-only cameras -->
+  {#if hasAudio}
+    <CameraAudioButton {cameraId} />
+  {/if}
 
   <!-- Expand/Shrink -->
   {#if expanded}

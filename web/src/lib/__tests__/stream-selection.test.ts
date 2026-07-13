@@ -5,6 +5,7 @@ import {
   nextAfter,
   resolveEncoding,
   isProtocolUsable,
+  isAudioCapable,
   EMPTY_CAPS,
   type ProtocolsResponse,
 } from '$lib/stream-selection';
@@ -192,5 +193,24 @@ describe('isProtocolUsable', () => {
   it('always allows hls/ll-hls', () => {
     expect(isProtocolUsable('hls', 'h265', EMPTY_CAPS, avail)).toBe(true);
     expect(isProtocolUsable('ll-hls', 'h264', EMPTY_CAPS, avail)).toBe(true);
+  });
+});
+
+describe('isAudioCapable', () => {
+  it('returns false for MJPEG/JPEG cameras (video-only)', () => {
+    expect(isAudioCapable(makeCamera({ encoding: 'mjpeg', audio_enabled: true }))).toBe(false);
+    expect(isAudioCapable(makeCamera({ encoding: 'jpeg', audio_enabled: true }))).toBe(false);
+    // stream_encoding fallback (ESP32 MiBeeCam).
+    expect(isAudioCapable(makeCamera({ encoding: '', stream_encoding: 'jpeg', audio_enabled: true }))).toBe(false);
+  });
+
+  it('returns false when audio_enabled is not explicitly true', () => {
+    expect(isAudioCapable(makeCamera({ encoding: 'h264', audio_enabled: false }))).toBe(false);
+    expect(isAudioCapable(makeCamera({ encoding: 'h264' }))).toBe(false); // undefined -> false
+  });
+
+  it('returns true for H.264/H.265 cameras with audio_enabled', () => {
+    expect(isAudioCapable(makeCamera({ encoding: 'h264', audio_enabled: true }))).toBe(true);
+    expect(isAudioCapable(makeCamera({ encoding: 'h265', audio_enabled: true }))).toBe(true);
   });
 });

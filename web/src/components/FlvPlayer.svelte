@@ -541,8 +541,10 @@ let videoEventAc: AbortController | null = null;
     </div>
   </div>
 
-  <!-- Audio button (top-right, before expand) -->
-  <CameraAudioButton {cameraId} />
+  <!-- Audio button (top-right, before expand) — hidden for video-only cameras -->
+  {#if hasAudio}
+    <CameraAudioButton {cameraId} />
+  {/if}
 
   <!-- Expand/Shrink -->
   {#if expanded}

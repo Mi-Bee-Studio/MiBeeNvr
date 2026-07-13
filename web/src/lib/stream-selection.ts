@@ -18,6 +18,19 @@ import type { Camera } from '$lib/api';
 /** The concrete playback mode the grid renders for a cell. */
 export type CameraMode = 'wasm' | 'webrtc' | 'flv' | 'hls' | 'mjpeg' | 'snapshot' | 'unsupported';
 
+/**
+ * Whether a camera can plausibly produce an audio track for live preview.
+ * MJPEG/JPEG cameras (HTTP JPEG recorders, ESP32 MiBeeCam) are video-only —
+ * the audio WebSocket never sends AudioCodecInfo for them, so rendering the
+ * speaker button is misleading (clicking it silently does nothing).
+ * Also gated on the per-camera `audio_enabled` flag (default false).
+ */
+export function isAudioCapable(camera: Camera): boolean {
+  const enc = (camera.encoding || camera.stream_encoding || '').toLowerCase();
+  if (enc === 'mjpeg' || enc === 'jpeg') return false;
+  return camera.audio_enabled === true;
+}
+
 /** Mirrors the backend `cameraProtocolsResponse` (internal/api/handler.go:533). */
 export interface ProtocolDetail {
   Protocol: string;

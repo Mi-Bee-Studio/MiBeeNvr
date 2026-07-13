@@ -23,6 +23,7 @@
     expanded = false,
     protocol = 'hls',
     tabVisible = true,
+    hasAudio = false,
   }: {
     cameraId: string;
     cameraName: string;
@@ -31,6 +32,9 @@
     expanded?: boolean;
     protocol?: string;
     tabVisible?: boolean;
+    /** Whether this camera can produce an audio track. When false the audio
+     *  button is hidden (MJPEG/JPEG cameras are video-only; audio_enabled off). */
+    hasAudio?: boolean;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -411,8 +415,10 @@ streamState = 'error';
     </div>
   </div>
 
-  <!-- Audio button (top-right, before expand) -->
-  <CameraAudioButton {cameraId} />
+  <!-- Audio button (top-right, before expand) — hidden for video-only cameras -->
+  {#if hasAudio}
+    <CameraAudioButton {cameraId} />
+  {/if}
 
   <!-- Expand/Shrink button (top-right) -->
   {#if expanded}
