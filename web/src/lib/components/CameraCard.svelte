@@ -283,8 +283,8 @@ let healthShowWarningIcon = $derived(
         <button
           class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
           onclick={() => onRetryMerge(camera)}
-          title={'Retry merge'}
-          aria-label="Retry merge"
+          title={t('merge.retryMerge')}
+          aria-label={t('merge.retryMerge')}
         >
           <RefreshCw size={14} />
         </button>

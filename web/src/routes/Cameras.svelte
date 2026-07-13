@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, ApiRequestError, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { friendlyError } from '$lib/errors';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
   import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
@@ -77,15 +78,6 @@
     { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.length },
     { id: 'archived', label: t('cameras.tab.archived'), icon: ArchiveIcon, count: archives.length },
   ]);
-
-  function friendlyError(e: unknown, fallback: string): string {
-    if (e instanceof ApiRequestError && e.code) {
-      const keyed = t(`errors.${e.code}`);
-      if (keyed !== `errors.${e.code}`) return keyed;
-    }
-    if (e instanceof Error) return e.message || fallback;
-    return fallback;
-  }
 
   async function loadArchives() {
     try {
@@ -266,7 +258,7 @@
         showToast(tutkCameras.length + ' ' + t('cameras.tutkToastTitle'), 'warning');
       }
     } catch (e) {
-      error = friendlyError(e, t('cameras.failedLoad'));
+      error = friendlyError(e, 'cameras.failedLoad');
     } finally {
       loading = false;
       if (!loading && cameras.length === 0 && !sessionStorage.getItem('mibee_nvr_onboarding_dismissed')) {
@@ -345,7 +337,7 @@
           await stopCamera(camera.id);
           showToast(t('cameras.stopped'), 'success');
           await loadCameras();
-        } catch (e: any) { showToast(e.message || t('cameras.failedStop'), 'error'); }
+        } catch (e: any) { showToast(friendlyError(e, 'cameras.failedStop'), 'error'); }
         break;
       case 'restart':
         try {
@@ -353,7 +345,7 @@
           await startCamera(camera.id);
           showToast(t('cameras.cameraUpdated'), 'success');
           await loadCameras();
-        } catch (e: any) { showToast(e.message || t('cameras.failedStart'), 'error'); }
+        } catch (e: any) { showToast(friendlyError(e, 'cameras.failedStart'), 'error'); }
         break;
     }
   }
@@ -364,7 +356,7 @@
       showToast(t('cameras.started'), 'success');
       await loadCameras();
     } catch (e: any) {
-      showToast(e.message || t('cameras.failedStart'), 'error');
+      showToast(friendlyError(e, 'cameras.failedStart'), 'error');
     }
   }
 
@@ -392,7 +384,7 @@
       }
       await loadCameras();
     } catch (e: any) {
-      showToast(e.message || t('cameras.action.rediscoverFailed'), 'error');
+      showToast(friendlyError(e, 'cameras.action.rediscoverFailed'), 'error');
     } finally {
       const next = new Set(rediscovering);
       next.delete(camera.id);

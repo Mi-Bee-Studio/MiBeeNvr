@@ -181,7 +181,7 @@
           onchange={handleGoToPreset}
           disabled={goingToPreset}
         >
-          <option value="">Go to preset...</option>
+          <option value="">{t('ptz.selectPreset')}</option>
           {#each presets as preset (preset.token)}
             <option value={preset.token}>{preset.name}</option>
           {/each}

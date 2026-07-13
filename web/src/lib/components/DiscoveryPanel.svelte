@@ -14,6 +14,7 @@
   import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
   import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { friendlyError } from '$lib/errors';
 
   interface Props {
     protocol: string;
@@ -165,7 +166,7 @@
       const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword);
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
     } finally {
       xiaomiLoading = false;
     }
@@ -210,7 +211,7 @@
       const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
       xiaomiCaptchaCode = '';
     } finally {
       xiaomiLoading = false;
@@ -225,7 +226,7 @@
       const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
       xiaomiVerifyTicket = '';
     } finally {
       xiaomiLoading = false;
@@ -295,7 +296,7 @@
       showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
       await refreshXiaomiDevices();
     } catch (e: any) {
-      showToast(e.message || t('cameras.syncFailed'), 'error');
+      showToast(friendlyError(e, 'cameras.syncFailed'), 'error');
     } finally {
       syncing = false;
     }

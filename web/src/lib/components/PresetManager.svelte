@@ -3,6 +3,7 @@
   import type { PTZPreset } from '$lib/api';
   import { showToast } from '$lib/toast';
   import { t } from '$lib/i18n';
+  import { friendlyError } from '$lib/errors';
   let { cameraId }: { cameraId: string } = $props();
 
   let presets = $state<PTZPreset[]>([]);
@@ -40,7 +41,7 @@
       await loadPresets();
       showToast(t('onvif.presets.created'), 'success');
     } catch (e: any) {
-      showToast(e.message || t('onvif.presets.failed'), 'error');
+      showToast(friendlyError(e, 'onvif.presets.failed'), 'error');
     } finally {
       adding = false;
     }
@@ -51,7 +52,7 @@
     try {
       await goToPTZPreset(cameraId, token);
     } catch (e: any) {
-      showToast(e.message || 'Failed to go to preset', 'error');
+      showToast(friendlyError(e, 'onvif.presets.failed'), 'error');
     } finally {
       goingTo = null;
     }
@@ -65,7 +66,7 @@
       await loadPresets();
       showToast(t('onvif.presets.deleted'), 'success');
     } catch (e: any) {
-      showToast(e.message || 'Failed to delete preset', 'error');
+      showToast(friendlyError(e, 'onvif.presets.failed'), 'error');
     } finally {
       deleting = null;
     }
