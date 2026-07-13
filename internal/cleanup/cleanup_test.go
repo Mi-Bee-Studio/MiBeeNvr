@@ -647,7 +647,7 @@ func TestDatabaseMaintenance(t *testing.T) {
 	require.Equal(t, 0, cm.consecutivePassiveFailures, "counter should be 0")
 }
 
-	func TestDatabaseMaintenanceEscalation(t *testing.T) {
+func TestDatabaseMaintenanceEscalation(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 	defer env.close(t)

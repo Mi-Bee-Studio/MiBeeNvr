@@ -17,8 +17,10 @@ import (
 // architectural decisions based on these numbers.
 
 // Valid H.264 Baseline SPS/PPS (CIF-ish, level 1.0) — reused from mp4merge_test.go.
-var benchSPS = []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
-var benchPPS = []byte{0x68, 0xce, 0x38, 0x80}
+var (
+	benchSPS = []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	benchPPS = []byte{0x68, 0xce, 0x38, 0x80}
+)
 
 // benchIDRNAL is a small IDR slice NAL — real segments have larger NALs but
 // the merge cost is dominated by I/O (seek+read+write), not NAL content.
@@ -56,7 +58,7 @@ func createBenchSegment(b *testing.B, dir, name string, frameRate int, duration 
 		totalFrames = 1
 	}
 
-	for i := 0; i < totalFrames; i++ {
+	for i := range totalFrames {
 		var nalu []byte
 		if i%frameRate == 0 {
 			nalu = benchIDRNAL // IDR once per second
@@ -220,7 +222,7 @@ func BenchmarkMergeMP4Segments_LargeNALs(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			for j := 0; j < totalFrames; j++ {
+			for j := range totalFrames {
 				nalu := largeP
 				if j%frameRate == 0 {
 					nalu = largeIDR

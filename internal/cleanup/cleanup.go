@@ -485,37 +485,6 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 	return successfullyDeleted, nil
 }
 
-// deleteRecording deletes the DB record first, then the file from disk.
-// File deletion errors are logged but not returned (orphaned files are acceptable).
-// Publishes a segment.deleted event so MiBeeVision can cancel in-progress processing.
-// Skips deletion if the recording is currently being processed by MiBeeVision
-// (ai_status = "processing") to prevent losing in-flight AI analysis.
-func (cm *CleanupManager) deleteRecording(ctx context.Context, rec *model.Recording) error {
-	// Protect recordings being processed by MiBeeVision
-	if status, err := cm.db.GetRecordingAIStatus(ctx, rec.ID); err == nil && status == "processing" {
-		logger.Debug("skipping deletion of recording being processed by MiBeeVision",
-			"recording_id", rec.ID, "ai_status", status)
-		return nil
-	}
-
-	if err := cm.db.DeleteRecording(ctx, rec.ID); err != nil {
-		return err
-	}
-	if err := cm.store.DeleteFile(rec.FilePath); err != nil {
-		logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
-	}
-	// Publish segment.deleted event for MiBeeVision cancellation
-	if cm.eventBus != nil {
-		cm.eventBus.Publish(ctx, event.TopicSegmentDeleted, event.SegmentDeleted{
-			RecordingID: rec.ID,
-			CameraID:    rec.CameraID,
-			FilePath:    rec.FilePath,
-			Reason:      "retention_expired",
-		})
-	}
-	return nil
-}
-
 // archivedRetentionCleanup deletes expired archived recordings and cleans up empty archive groups.
 // Uses BatchDeleteRecordingsWithFiles to avoid N+1 delete pattern.
 func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {

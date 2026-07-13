@@ -223,9 +223,9 @@ const (
 
 // Merge status constants.
 const (
-	MergeStatusPending = "pending"
-	MergeStatusMerged  = "merged"
-	MergeStatusMerging = "merging"
+	MergeStatusPending      = "pending"
+	MergeStatusMerged       = "merged"
+	MergeStatusMerging      = "merging"
 	MergeStatusFailed       = "failed"
 	MergeStatusIncompatible = "incompatible"
 	MergeStatusDark         = "dark" // segment is too dark to be useful (night, no IR)

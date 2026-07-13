@@ -27,16 +27,16 @@ var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
 
 // HTTPJPEGConfig holds configuration for the HTTP JPEG recorder.
 type HTTPJPEGConfig struct {
-	CameraID   string
-	URL        string
-	SegmentDur time.Duration
-	Username   string // for basic auth (optional)
-	Password   string // for basic auth (optional)
-	DB         RecordingDB
-	EventBus   *event.EventBus
-	AVI        bool // when true, write AVI single-file instead of MJPEG directory
-	Width      int  // video width (0 = auto-detect from first frame)
-	Height     int  // video height (0 = auto-detect from first frame)
+	CameraID               string
+	URL                    string
+	SegmentDur             time.Duration
+	Username               string // for basic auth (optional)
+	Password               string // for basic auth (optional)
+	DB                     RecordingDB
+	EventBus               *event.EventBus
+	AVI                    bool // when true, write AVI single-file instead of MJPEG directory
+	Width                  int  // video width (0 = auto-detect from first frame)
+	Height                 int  // video height (0 = auto-detect from first frame)
 	DarkFrameFilterEnabled bool // skip dark/night segments
 	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
@@ -502,7 +502,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 
 		// Dark frame detection: check if segment is too dark to be useful.
 		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
-			isDark := false
+			var isDark bool
 			if r.cfg.AVI {
 				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
 			} else {

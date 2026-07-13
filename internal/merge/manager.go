@@ -342,7 +342,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 
 	var parsed []parsedRec
 	type parseFailure struct {
-		id    string
+		id     string
 		errMsg string
 	}
 	var parseFailures []parseFailure

@@ -16,8 +16,10 @@ import (
 // 2. How long does Close() take (ftyp + moov sizing + mdat write)?
 // 3. Does Close() scale linearly with sample count?
 
-var benchTestSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xc8}
-var benchTestPPS = []byte{0x68, 0xce, 0x38, 0x80}
+var (
+	benchTestSPS = []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xc8}
+	benchTestPPS = []byte{0x68, 0xce, 0x38, 0x80}
+)
 
 // benchNAL4K is a ~4KB IDR NAL — realistic for a CIF/SD keyframe.
 var benchNAL4K = make([]byte, 4096)
@@ -43,7 +45,7 @@ func writeBenchSamples(b *testing.B, m *MP4Muxer, trackID int, frameRate int, du
 	if totalFrames < 1 {
 		totalFrames = 1
 	}
-	for i := 0; i < totalFrames; i++ {
+	for i := range totalFrames {
 		nalu := benchNAL512
 		if i%frameRate == 0 {
 			nalu = benchNAL4K

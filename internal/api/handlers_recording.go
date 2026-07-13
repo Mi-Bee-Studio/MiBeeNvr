@@ -1089,8 +1089,8 @@ func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
 
 	// Compute gaps between consecutive recordings.
 	type Gap struct {
-		Start    string `json:"start"`
-		End      string `json:"end"`
+		Start    string  `json:"start"`
+		End      string  `json:"end"`
 		Duration float64 `json:"duration"`
 	}
 	var gaps []Gap
@@ -1111,9 +1111,9 @@ func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"camera_id": cameraID,
-		"date":      dateStr,
-		"gaps":      gaps,
+		"camera_id":  cameraID,
+		"date":       dateStr,
+		"gaps":       gaps,
 		"total_gaps": len(gaps),
 	})
 }

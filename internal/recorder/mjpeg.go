@@ -31,13 +31,13 @@ var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
 type MJPEGConfig struct {
-	CameraID       string
-	RTSPURL        string
-	SegmentDur     time.Duration
-	SampleInterval int // if >1, only save every Nth frame
-	DB             RecordingDB
-	EventBus       *event.EventBus
-	AudioEnabled   bool
+	CameraID               string
+	RTSPURL                string
+	SegmentDur             time.Duration
+	SampleInterval         int // if >1, only save every Nth frame
+	DB                     RecordingDB
+	EventBus               *event.EventBus
+	AudioEnabled           bool
 	DarkFrameFilterEnabled bool // skip dark/night segments
 	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
 }
@@ -65,8 +65,8 @@ type MJPEGRecorder struct {
 	frameCh         chan []byte
 	dropped         atomic.Int64
 	latestFrame     atomic.Pointer[[]byte] // cached latest JPEG frame for zero-copy polling
-	Hub             *model.StreamHub // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
-	lastHealthLogAt time.Time        // throttled log for storage health failures
+	Hub             *model.StreamHub       // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	lastHealthLogAt time.Time              // throttled log for storage health failures
 
 	// Audio/AVI fields
 	hasAudio       bool
@@ -343,23 +343,23 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	writerDone := make(chan struct{})
 	go r.writeFrames(writerDone)
 
-		client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
-			jpeg, err := rtpDec.Decode(pkt)
-			if err != nil {
-				// "need more packets" is the normal multi-packet-frame accumulation
-				// signal (returned for every non-final fragment). ESP32 RTSP-AVI firmware
-				// sends large JPEGs fragmented across many RTP packets, so this fires
-				// dozens of times per frame — down-rate it to avoid flooding the log.
-				if !errors.Is(err, rtpmjpeg.ErrMorePacketsNeeded) {
-					mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
-				}
-				return
+	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
+		jpeg, err := rtpDec.Decode(pkt)
+		if err != nil {
+			// "need more packets" is the normal multi-packet-frame accumulation
+			// signal (returned for every non-final fragment). ESP32 RTSP-AVI firmware
+			// sends large JPEGs fragmented across many RTP packets, so this fires
+			// dozens of times per frame — down-rate it to avoid flooding the log.
+			if !errors.Is(err, rtpmjpeg.ErrMorePacketsNeeded) {
+				mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			}
-			// Cache latest frame for timelapse frame polling (LatestFrame). The decoder
-			// returns a freshly allocated slice, so storing the pointer is safe.
-			dp := jpeg
-			r.latestFrame.Store(&dp)
-			select {
+			return
+		}
+		// Cache latest frame for timelapse frame polling (LatestFrame). The decoder
+		// returns a freshly allocated slice, so storing the pointer is safe.
+		dp := jpeg
+		r.latestFrame.Store(&dp)
+		select {
 		case r.frameCh <- jpeg:
 		default:
 			d := r.dropped.Add(1)
@@ -585,7 +585,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		// Dark frame detection: check if segment is too dark to be useful.
 		// Only runs when DarkFrameFilterEnabled is true and threshold > 0.
 		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
-			isDark := false
+			var isDark bool
 			if r.hasAudio {
 				// AVI format: single file with MJPEG video.
 				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)

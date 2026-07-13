@@ -225,7 +225,7 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 		if dbErr := r.db.SetMergeResult(ctx, recordingID, outputPath, string(result.Tier)); dbErr != nil {
 			slog.Warn("rolling merge: failed to set merge result in DB",
 				"recording_id", recordingID, "error", dbErr)
-			}
+		}
 	}
 
 	// Delete original source frames if configured.

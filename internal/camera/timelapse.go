@@ -695,7 +695,7 @@ func (cm *CameraManager) startTimelapseFramePoller(cameraID string, cam config.C
 	if frameProvider == nil {
 		logger.Warn("recorder does not support LatestFrame for timelapse frame polling",
 			"camera_id", cameraID)
-		return nil, nil
+		return nil, nil //nolint:nilnil // TODO(#storage-overhaul): callers check for nil poller to skip dual-mode frame polling.
 	}
 
 	interval := 30 * time.Second
@@ -711,13 +711,13 @@ func (cm *CameraManager) startTimelapseFramePoller(cameraID string, cam config.C
 	mergeMgr := cm.resolveTimelapseMergeMgr(cam, interval)
 
 	snapCfg := timelapse.SnapshotCapturerConfig{
-		CameraID:     cameraID,
-		Interval:     interval,
-		SegmentDur:   segDur,
-		DB:           cm.db,
-		Store:        cm.store,
-		Metrics:      cm.metrics,
-		MergeMgr:     mergeMgr,
+		CameraID:      cameraID,
+		Interval:      interval,
+		SegmentDur:    segDur,
+		DB:            cm.db,
+		Store:         cm.store,
+		Metrics:       cm.metrics,
+		MergeMgr:      mergeMgr,
 		FrameProvider: frameProvider,
 	}
 	capturer := timelapse.NewSnapshotCapturer(snapCfg, cm.store, cm.metrics)

@@ -298,10 +298,10 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/merge/status", h.handleMergeStatus)
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Post("/api/merge/reclassify", h.handleMergeReclassify)
-		r.Post("/api/merge/backfill", h.handleMergeBackfillAll)            // Backfill all cameras
-		r.Post("/api/merge/consolidate", h.handleMergeConsolidate)          // Merge short recordings into longer ones
+		r.Post("/api/merge/backfill", h.handleMergeBackfillAll)                 // Backfill all cameras
+		r.Post("/api/merge/consolidate", h.handleMergeConsolidate)              // Merge short recordings into longer ones
 		r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
-		r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)      // Recording gaps for timeline
+		r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)          // Recording gaps for timeline
 		// Timelapse endpoints
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)

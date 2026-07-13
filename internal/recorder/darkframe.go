@@ -181,7 +181,7 @@ func findMoviList(f *os.File, fileSize int64) (int64, int32, error) {
 		if err != nil || n < 12 {
 			break
 		}
-		for i := 0; i < n-12; i++ {
+		for i := range n - 12 {
 			if buf[i] == 'L' && buf[i+1] == 'I' && buf[i+2] == 'S' && buf[i+3] == 'T' {
 				size := int32(binary.LittleEndian.Uint32(buf[i+4 : i+8]))
 				if buf[i+8] == 'm' && buf[i+9] == 'o' && buf[i+10] == 'v' && buf[i+11] == 'i' {

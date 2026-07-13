@@ -51,7 +51,6 @@ type RollingMergeConfig struct {
 //   - USB HDD throughput: 67-230 MB/s depending on NAL sizes.
 //   - Target <10s latency: comfortably achievable.
 type RollingMergeCoordinator struct {
-	mu           sync.RWMutex
 	db           *storage.DB
 	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
@@ -436,7 +435,7 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 			}
 		}
 	}
-	return merged, nil
+	return merged, nil //nolint:nilerr // TODO(#storage-overhaul): intentional — report partial merge count on ctx cancellation rather than failing the whole backfill.
 }
 
 // mergeBatchMP4 merges a batch of MP4 segments into a single output file.
@@ -612,7 +611,7 @@ func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, camer
 		case <-ctx.Done():
 		}
 	}
-	return merged, nil
+	return merged, nil //nolint:nilerr // TODO(#storage-overhaul): intentional — report partial merge count on ctx cancellation rather than failing the whole backfill.
 }
 
 // mergeBatchSegments delegates to the format-specific batch merge function and

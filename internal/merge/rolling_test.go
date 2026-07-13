@@ -177,7 +177,7 @@ func TestRollingMerge_AppendMultiple(t *testing.T) {
 	baseTime := time.Now().UTC().Truncate(time.Hour).Add(10 * time.Minute)
 
 	// Create and publish 3 segments within the same hour window.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		recID := "rec-" + string(rune('a'+i))
 		startedAt := baseTime.Add(time.Duration(i) * 30 * time.Second)
 		filePath := createAndInsertSegment(t, env, recID, cameraID, startedAt)
@@ -339,7 +339,7 @@ func TestBackfillCamera_HistoricalSegments(t *testing.T) {
 	// Create 3 historical segments WITHOUT publishing SegmentCompleted events
 	// (simulating recordings that existed before rolling merge was enabled).
 	baseTime := time.Now().UTC().Truncate(time.Hour).Add(15 * time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		recID := "hist-" + string(rune('a'+i))
 		startedAt := baseTime.Add(time.Duration(i) * 30 * time.Second)
 		createAndInsertSegment(t, env, recID, cameraID, startedAt)
@@ -409,11 +409,11 @@ func TestBackfillCamera_MultipleWindows(t *testing.T) {
 	hour2Base := time.Now().UTC().Truncate(time.Hour).Add(-1 * time.Hour).Add(10 * time.Minute)
 
 	// 2 segments in hour 1.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		createAndInsertSegment(t, env, "h1-"+string(rune('a'+i)), cameraID, hour1Base.Add(time.Duration(i)*30*time.Second))
 	}
 	// 2 segments in hour 2.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		createAndInsertSegment(t, env, "h2-"+string(rune('a'+i)), cameraID, hour2Base.Add(time.Duration(i)*30*time.Second))
 	}
 
@@ -552,7 +552,7 @@ func TestListPendingSegmentsForRolling(t *testing.T) {
 
 	// Create 2 H.264 segments + 1 MJPEG + 1 timelapse (timelapse should be excluded).
 	now := time.Now().UTC().Truncate(time.Hour).Add(30 * time.Minute)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		createAndInsertSegment(t, env, "list-"+string(rune('a'+i)), cameraID, now.Add(time.Duration(i)*30*time.Second))
 	}
 	// Insert a MJPEG recording (should be returned — all formats except timelapse).

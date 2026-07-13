@@ -147,7 +147,7 @@ func TestGetRecordingTrends_MultipleCameras(t *testing.T) {
 	baseTime := now.Truncate(24 * time.Hour).Add(12 * time.Hour)
 
 	// Insert recordings for both cameras on the same day
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		recTime := baseTime.Add(time.Duration(i) * time.Hour)
 		_, err := db.db.ExecContext(ctx,
 			`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
@@ -157,7 +157,7 @@ func TestGetRecordingTrends_MultipleCameras(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		recTime := baseTime.Add(time.Duration(i) * time.Hour)
 		_, err := db.db.ExecContext(ctx,
 			`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
@@ -184,7 +184,7 @@ func TestGetRecordingTrends_MultipleCameras(t *testing.T) {
 	require.NotNil(t, todayTrend)
 
 	// Verify total counts
-	require.Equal(t, 5, todayTrend.Recordings) // 3 + 2 recordings
+	require.Equal(t, 5, todayTrend.Recordings)           // 3 + 2 recordings
 	require.Equal(t, int64(12288), todayTrend.TotalSize) // cam1: 1024+2048+3072=6144, cam2: 2048+4096=6144
 	require.Len(t, todayTrend.CameraCounts, 2)
 	require.Equal(t, 3, todayTrend.CameraCounts["Front Door"])

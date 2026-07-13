@@ -145,7 +145,7 @@ func (e *EventSubscriberImpl) Subscribe(ctx context.Context, cameraID string) er
 		if isEventsNotSupportedError(err) {
 			eventLogger.Info("device does not support ONVIF events; skipping subscription",
 				"camera_id", cameraID, "error", err)
-			return fmt.Errorf("%w (camera %q): %v", ErrEventsNotSupported, cameraID, err)
+			return fmt.Errorf("%w (camera %q): %w", ErrEventsNotSupported, cameraID, err)
 		}
 		return fmt.Errorf("onvif: create PullPoint subscription for camera %q: %w", cameraID, err)
 	}

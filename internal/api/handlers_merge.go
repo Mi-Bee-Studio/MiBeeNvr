@@ -262,7 +262,7 @@ func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) 
 	logger.Info("reclassified failed recordings as incompatible", "count", affected)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
+		"status":       "ok",
 		"reclassified": affected,
 	})
 }
@@ -349,7 +349,7 @@ func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request)
 	logger.Info("global backfill complete", "total_merged", totalMerged, "cameras", len(byCamera))
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":              "ok",
+		"status":                "ok",
 		"total_segments_merged": totalMerged,
 		"cameras_processed":     len(byCamera),
 		"include_failed":        includeFailed,
@@ -407,9 +407,9 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 	logger.Info("consolidate complete", "total_consolidated", totalConsolidated, "short_recordings", len(shortRecs))
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":             "ok",
-		"short_recordings":    len(shortRecs),
-		"consolidated":        totalConsolidated,
-		"min_duration":        minDurStr,
+		"status":           "ok",
+		"short_recordings": len(shortRecs),
+		"consolidated":     totalConsolidated,
+		"min_duration":     minDurStr,
 	})
 }
