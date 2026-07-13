@@ -354,7 +354,7 @@ func splitByFormat(recs []*model.Recording) (mp4, avi, mjpeg []*model.Recording)
 //
 // Uses the per-batch lock release pattern to avoid blocking live events.
 func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
-	const backfillBatchSize = 50
+	const backfillBatchSize = 20 // small batches to yield lock to real-time events
 	const backfillBatchPause = 200 * time.Millisecond
 
 	// Group recordings by natural-hour window for batch merging.
@@ -550,7 +550,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 // functions (MergeAVISegments / MergeMJPEGSegments) which merge all segments in a
 // window at once. This is simpler and avoids format-specific append complexities.
 func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, cameraID string, recs []*model.Recording, format string) (int, error) {
-	const batchBatchSize = 50
+	const batchBatchSize = 20 // small batches to yield lock to real-time events
 	const batchPause = 200 * time.Millisecond
 
 	merged := 0
@@ -779,36 +779,28 @@ type pendingSegmentInfo struct {
 // It acquires a per-camera non-blocking lock; if a merge is already in progress,
 // the segments are left for the next periodic merge pass (MergeManager) as a fallback.
 func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID string, segs []pendingSegmentInfo) {
-	// Retry lock acquisition with backoff — the lock may be held briefly by
-	// backfill or periodic merge. We retry up to 3 times (total ~600ms) before
-	// giving up. This ensures real-time segments get merged even when backfill
-	// is actively processing the same camera.
-	const maxRetries = 3
-	const retryInterval = 200 * time.Millisecond
-
+	// For real-time events, use BLOCKING lock acquisition instead of try-lock.
+	// The backfill path uses try-lock (skips if busy), so real-time events
+	// will eventually get the lock. We wait with a timeout (2 min) to avoid
+	// infinite blocking if something goes wrong.
+	lockDeadline := time.Now().Add(2 * time.Minute)
 	var release func()
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for {
 		var ok bool
 		release, ok = r.acquireMergeLock(cameraID)
 		if ok {
 			break
 		}
-		if attempt == 0 {
-			rollingLogger.Info("rolling merge waiting for lock",
+		if time.Now().After(lockDeadline) {
+			rollingLogger.Warn("rolling merge timed out waiting for lock",
 				"camera_id", cameraID, "segments", len(segs))
+			return
 		}
 		select {
-		case <-time.After(retryInterval):
+		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 			return
 		}
-		release = nil
-	}
-	if release == nil {
-		// Still locked after retries — leave for periodic merge fallback.
-		rollingLogger.Warn("rolling merge skipped after retries, lock busy",
-			"camera_id", cameraID, "segments", len(segs))
-		return
 	}
 	defer release()
 
