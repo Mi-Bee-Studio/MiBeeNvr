@@ -16,7 +16,19 @@
     if (protocol === 'xiaomi') {
       xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(() => {});
     } else {
-      ptzMove(cameraId, direction, speed ?? 0.5).catch(() => {});
+      // Map direction to ONVIF ContinuousMove velocity vector.
+      // ONVIF PanTilt: x=pan (right+), y=tilt (up+); Zoom: x=zoom (in+).
+      const s = speed ?? 0.5;
+      let pan = 0, tilt = 0, zoom = 0;
+      switch (direction) {
+        case 'up':    tilt =  s; break;
+        case 'down':  tilt = -s; break;
+        case 'left':  pan  = -s; break;
+        case 'right': pan  =  s; break;
+        case 'zoom_in':  zoom =  s; break;
+        case 'zoom_out': zoom = -s; break;
+      }
+      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }).catch(() => {});
     }
   }
 
@@ -75,7 +87,7 @@
       <button
         class="ptz-btn"
         class:ptz-btn-active={moving === 'up'}
-        onpointerdown={onPointerDown('up')}
+        onpointerdown={() => onPointerDown('up')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.up')}
@@ -87,7 +99,7 @@
       <button
         class="ptz-btn"
         class:ptz-btn-active={moving === 'left'}
-        onpointerdown={onPointerDown('left')}
+        onpointerdown={() => onPointerDown('left')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.left')}
@@ -102,7 +114,7 @@
       <button
         class="ptz-btn"
         class:ptz-btn-active={moving === 'right'}
-        onpointerdown={onPointerDown('right')}
+        onpointerdown={() => onPointerDown('right')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.right')}
@@ -114,7 +126,7 @@
       <button
         class="ptz-btn"
         class:ptz-btn-active={moving === 'down'}
-        onpointerdown={onPointerDown('down')}
+        onpointerdown={() => onPointerDown('down')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.down')}
@@ -130,7 +142,7 @@
       <button
         class="ptz-btn ptz-btn-zoom"
         class:ptz-btn-active={moving === 'zoom_in'}
-        onpointerdown={onPointerDown('zoom_in', 0.5)}
+        onpointerdown={() => onPointerDown('zoom_in', 0.5)}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.zoomIn')}
@@ -141,7 +153,7 @@
       <button
         class="ptz-btn ptz-btn-zoom"
         class:ptz-btn-active={moving === 'zoom_out'}
-        onpointerdown={onPointerDown('zoom_out', 0.5)}
+        onpointerdown={() => onPointerDown('zoom_out', 0.5)}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
         aria-label={t('ptz.zoomOut')}
