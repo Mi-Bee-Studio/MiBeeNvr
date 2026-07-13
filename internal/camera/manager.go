@@ -551,7 +551,6 @@ func (cm *CameraManager) GetStreamURL(cameraID string) string {
 // The camera must be enabled.
 func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Find camera config
 	var cam *config.CameraConfig
@@ -562,6 +561,7 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 	}
 	if cam == nil {
+		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
@@ -577,18 +577,21 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
 	}
 
-	// Create and start new recorder
+	// Snapshot the config + segDur so we can start WITHOUT holding cm.mu.
+	// startRecorder's timelapse sub-helpers (startTimelapseKeyframeExtractor etc.)
+	// acquire cm.mu themselves, so re-entering under a held Lock would self-deadlock.
+	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, *cam, segDur)
+	return cm.startRecorder(ctx, camCopy, segDur)
 }
 
 // StartCamera manually starts the recorder for the given camera.
 func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Find camera config
 	var cam *config.CameraConfig
@@ -599,6 +602,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 	if cam == nil {
+		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
@@ -606,6 +610,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	if rec, ok := cm.recorders[cameraID]; ok {
 		status := rec.Status()
 		if status == model.StatusRecording || status == model.StatusReconnecting {
+			cm.mu.Unlock()
 			return &model.CameraAlreadyRunningError{CameraID: cameraID}
 		}
 		// Stale recorder — stop and remove so we can start fresh
@@ -618,11 +623,16 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		}
 	}
 
+	// Snapshot config + segDur, then release the lock before startRecorder
+	// (its timelapse sub-helpers acquire cm.mu themselves — re-entering under a
+	// held Lock would self-deadlock).
+	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
+	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, *cam, segDur)
+	return cm.startRecorder(ctx, camCopy, segDur)
 }
 
 // StopCamera manually stops the recorder for the given camera.
