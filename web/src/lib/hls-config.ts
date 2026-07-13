@@ -15,20 +15,22 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
     progressive: true,
     maxLiveSyncPlaybackRate: 1.0,
     lowLatencyMode: true,
-    // Fragment retry: exponential backoff up to 64s for unstable networks
+    // Fragment retry: more retries with shorter initial delay so transient
+    // network blips recover fast without escalating to fatal MEDIA_ERROR
+    // (which rebuilds MediaSource and causes black flashing).
     fragLoadPolicy: {
       default: {
         maxTimeToFirstByteMs: 10_000,
         maxLoadTimeMs: 120_000,
         timeoutRetry: {
-          maxNumRetry: 6,
-          retryDelayMs: 1000,
-          maxRetryDelayMs: 64_000,
+          maxNumRetry: 10,
+          retryDelayMs: 500,
+          maxRetryDelayMs: 16_000,
         },
         errorRetry: {
-          maxNumRetry: 6,
-          retryDelayMs: 1000,
-          maxRetryDelayMs: 64_000,
+          maxNumRetry: 10,
+          retryDelayMs: 500,
+          maxRetryDelayMs: 16_000,
         },
       },
     },

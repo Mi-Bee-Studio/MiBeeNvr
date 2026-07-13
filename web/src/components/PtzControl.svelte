@@ -10,9 +10,17 @@
   let presets = $state<PTZPreset[]>([]);
   let selectedPreset = $state('');
   let goingToPreset = $state(false);
+  // AbortController for the in-flight move request: if the user taps very
+  // quickly (pointerdown → pointerup in <120ms), the move request may still be
+  // in flight when stop is sent. Aborting the move prevents the camera from
+  // receiving a late move AFTER stop (which would leave it turning forever).
+  let moveAbort: AbortController | null = null;
 
   function onPointerDown(direction: string, speed?: number) {
     moving = direction;
+    // Cancel any previous in-flight move/stop so rapid taps don't interleave.
+    if (moveAbort) { moveAbort.abort(); }
+    moveAbort = new AbortController();
     if (protocol === 'xiaomi') {
       xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(() => {});
     } else {
@@ -28,14 +36,15 @@
         case 'zoom_in':  zoom =  s; break;
         case 'zoom_out': zoom = -s; break;
       }
-      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }).catch(() => {});
+      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }, moveAbort.signal).catch(() => {});
     }
   }
 
   function onPointerUp() {
     if (!moving) return;
-    const dir = moving;
     moving = null;
+    // Abort the in-flight move so it can't arrive after stop.
+    if (moveAbort) { moveAbort.abort(); moveAbort = null; }
     if (protocol === 'xiaomi') {
       xiaomiPtzStop(cameraId).catch(() => {});
     } else {

@@ -3,8 +3,8 @@
  * destroy+recreate capability, and visibility-based stream rebuild.
  *
  * Core fix for black flashing in multi-camera dashboard:
- * - Non-fatal MEDIA_ERROR: 500ms debounce with swapAudioCodec + recoverMediaError()
- * - Recovery escalation: 3+ recoveries in 5s → destroy+recreate
+ * - Non-fatal MEDIA_ERROR: 1000ms debounce with swapAudioCodec + recoverMediaError()
+ * - Recovery escalation: 5+ recoveries in 10s → destroy+recreate
  * - Buffer stall recovery: seek to live edge on bufferStalledError
  * - Zombie detection: readyState and FRAG_LOADED health checks
  * - Tab background/foreground recovery via visibilitychange
@@ -13,9 +13,12 @@
 import { createHlsConfig } from './hls-config';
 
 // Error recovery thresholds (exported for testability)
-export const RECOVERY_DEBOUNCE_MS = 500;
-export const ESCALATION_WINDOW_MS = 5_000;
-export const ESCALATION_THRESHOLD = 3;
+// Debounce increased to 1s: brief network hiccups (common on LL-HLS with
+// authenticated segment fetches) should not trigger MediaSource rebuilds,
+// which cause visible black-flashing. Only persistent media errors recover.
+export const RECOVERY_DEBOUNCE_MS = 1_000;
+export const ESCALATION_WINDOW_MS = 10_000;
+export const ESCALATION_THRESHOLD = 5;
 export const ZOMBIE_READYSTATE_DURATION_MS = 20_000;
 export const ZOMBIE_FRAG_GAP_MS = 60_000;
 export const ZOMBIE_CHECK_INTERVAL_MS = 5_000;
