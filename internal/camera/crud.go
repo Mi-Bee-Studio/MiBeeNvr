@@ -338,6 +338,16 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.DarkFrameThreshold != nil {
 		cam.DarkFrameThreshold = *updates.DarkFrameThreshold
 	}
+	if updates.RecordingEnabled != nil {
+		// Toggling live-only mode requires a recorder restart to take effect
+		// (the writeFrames loop reads RecordEnabled once at Start).
+		old := cam.RecordingEnabled
+		new := *updates.RecordingEnabled
+		if (old == nil) != !new || (old != nil && *old != new) {
+			needsRestart = true
+		}
+		cam.RecordingEnabled = updates.RecordingEnabled
+	}
 	if updates.RecordingSchedule != nil {
 		cam.RecordingSchedule = updates.RecordingSchedule
 	}

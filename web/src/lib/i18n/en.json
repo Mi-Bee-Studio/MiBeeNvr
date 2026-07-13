@@ -530,6 +530,8 @@
   "cameras.channelMain": "Main Lens",
   "cameras.channelSecondary": "Secondary Lens",
   "cameras.audioEnabled": "Record Audio",
+  "cameras.recordingEnabled": "Record video to disk",
+  "cameras.recordingDisabledHint": "Live-only mode: the camera stays connected for live preview and relay, but no recordings are saved (saves SD-card wear).",
   "cameras.notSet": "Not set",
   "cameras.onvifEndpoint": "(ONVIF Endpoint)",
   "cameras.streamKey": "Stream Key",

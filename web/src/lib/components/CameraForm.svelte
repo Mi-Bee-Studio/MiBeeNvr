@@ -82,6 +82,9 @@
   let formStreamEncoding = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
+  // Recording gate — when off, the recorder stays connected for live preview
+  // and relay but writes NO segments to disk (live-only / stream-forward mode).
+  let formRecordingEnabled = $state(true);
   // Xiaomi two-way audio
   let formTwoWayAudioEnabled = $state(false);
   // Push/ingest fields (SRT/RTMP)
@@ -267,6 +270,7 @@ let validationErrors = $state<Record<string, string>>({});
     }
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formRecordingEnabled = camera.recording_enabled ?? true;
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
@@ -503,6 +507,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
@@ -555,6 +560,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
@@ -674,6 +680,22 @@ async function performCameraSave() {
         </select>
         <p class="text-xs th-text-muted mt-1">{t('cameras.pushRetentionHint')}</p>
       </div>
+    {/if}
+
+    <!-- Recording toggle: when off, the camera is live-only (no segments on disk) -->
+    <div class="flex items-center gap-2">
+      <input
+        id="cam-recording"
+        type="checkbox"
+        class="checkbox"
+        bind:checked={formRecordingEnabled}
+      />
+      <label for="cam-recording" class="input-label cursor-pointer">
+        {t('cameras.recordingEnabled')}
+      </label>
+    </div>
+    {#if !formRecordingEnabled}
+      <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
     {/if}
 
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->

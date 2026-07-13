@@ -36,6 +36,9 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  // Recording gate: false = live-only (no segments written to disk; the recorder
+  // stays connected for live preview + relay + health). undefined = record.
+  recording_enabled?: boolean | null;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -158,6 +161,8 @@ export interface UpdateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Recording gate: false = live-only (no segments written). Omit = unchanged.
+  recording_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;

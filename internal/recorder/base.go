@@ -68,6 +68,13 @@ type BaseConfig struct {
 	EventBus               *event.EventBus
 	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
 	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
+	// RecordEnabled gates whether segments are written to disk. When false the
+	// recorder stays connected and keeps feeding the StreamHub (so live preview,
+	// relay, and health all work) but writes nothing — a "live-only" / stream-
+	// forward-only mode. Driven by per-camera recording_enabled (issue #36:
+	// users running the NVR purely as a live/relay gateway, no SD-card writes).
+	// Defaults to true (nil => record); set to a pointer to false to opt out.
+	RecordEnabled *bool
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the
@@ -378,6 +385,14 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	defer close(done)
 
 	for data := range b.frameCh {
+		// Live-only mode: drain the frame channel (so the RTP callback's
+		// non-blocking send never blocks) but perform no segment I/O at all.
+		// The StreamHub fan-out already happened in the RTP callback before the
+		// send to frameCh, so live preview, relay, and health keep working.
+		// nil => recording enabled (default); pointer to false => live-only.
+		if b.cfg.RecordEnabled != nil && !*b.cfg.RecordEnabled {
+			continue
+		}
 		if len(data) < b.driver.minNALUDataLen() {
 			continue
 		}

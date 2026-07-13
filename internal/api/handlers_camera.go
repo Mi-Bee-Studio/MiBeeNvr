@@ -90,6 +90,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					cameras[i].PushRetentionDays = cam.PushRetentionDays
 					cameras[i].StableID = cam.StableID
 					cameras[i].SubnetHints = cam.SubnetHints
+					cameras[i].RecordingEnabled = cam.RecordingEnabled
 					break
 				}
 			}
@@ -162,6 +163,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string                        `json:"channel"`
 		AudioEnabled   *bool                         `json:"audio_enabled"`
+		// Recording gate: false = live-only (no segments written). nil = record.
+		RecordingEnabled *bool `json:"recording_enabled"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -273,6 +276,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse:         body.Timelapse,
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
+		RecordingEnabled:  body.RecordingEnabled,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,
@@ -376,6 +380,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				row.SubnetHints = cam.SubnetHints
 				row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
 				row.DarkFrameThreshold = cam.DarkFrameThreshold
+				row.RecordingEnabled = cam.RecordingEnabled
 				row.RecordingSchedule = cam.RecordingSchedule
 				break
 			}
@@ -442,6 +447,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Dark frame filtering
 		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
 		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
+		// Recording gate: false = live-only (no segments written). nil = unchanged.
+		RecordingEnabled *bool `json:"recording_enabled"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Push/ingest fields (SRT/RTMP)
@@ -504,6 +511,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioEnabled:           body.AudioEnabled,
 		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled,
 		DarkFrameThreshold:     body.DarkFrameThreshold,
+		RecordingEnabled:       body.RecordingEnabled,
 		RecordingSchedule:      body.RecordingSchedule,
 		StreamKey:              body.StreamKey,
 		SRTPassphrase:          body.SRTPassphrase,

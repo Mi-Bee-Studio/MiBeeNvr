@@ -48,6 +48,8 @@ type CameraUpdate struct {
 	// Dark frame filtering
 	DarkFrameFilterEnabled *bool
 	DarkFrameThreshold     *int
+	// RecordingEnabled gates segment writes (false = live-only). nil = unchanged.
+	RecordingEnabled *bool
 	// Recording schedule
 	RecordingSchedule *config.ScheduleConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.

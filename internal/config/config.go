@@ -134,6 +134,14 @@ type CameraConfig struct {
 	DarkFrameFilterEnabled bool `yaml:"dark_frame_filter_enabled,omitempty" json:"dark_frame_filter_enabled,omitempty"`
 	DarkFrameThreshold     int  `yaml:"dark_frame_threshold,omitempty" json:"dark_frame_threshold,omitempty"` // 0-255, default 15
 
+	// RecordingEnabled gates whether this camera writes segments to disk.
+	// nil or true (default) = record normally. false = "live-only" mode: the
+	// recorder stays connected and feeds the StreamHub (live preview, relay,
+	// health all work) but writes NO segments — useful when the NVR is used
+	// purely as a live/relay gateway and SD-card writes must be avoided.
+	// Issue #36.
+	RecordingEnabled *bool `yaml:"recording_enabled,omitempty" json:"recording_enabled,omitempty"`
+
 	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
 	// pattern as timelapse scheduling.

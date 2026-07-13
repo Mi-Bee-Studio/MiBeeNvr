@@ -530,6 +530,8 @@
   "cameras.channelMain": "主镜头",
   "cameras.channelSecondary": "副镜头",
   "cameras.audioEnabled": "录制声音",
+  "cameras.recordingEnabled": "录制视频到磁盘",
+  "cameras.recordingDisabledHint": "仅直播模式：摄像头保持连接用于实时预览和转发，但不保存录像（减少 SD 卡损耗）。",
   "cameras.notSet": "未设置",
   "cameras.onvifEndpoint": "(ONVIF 端点)",
   "cameras.streamKey": "推流密钥 (Stream Key)",
