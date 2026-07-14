@@ -172,8 +172,13 @@ func probeViaWSDiscovery(ctx context.Context, endpoint string) (*DiscoveredDevic
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Debug("WS-Discovery probe returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
-		return nil, nil // TODO(#51): probe failed with non-200 status, skip device
+		// Non-200 on a WS-Discovery Probe is common (some cameras reject Probe over
+		// HTTP). Log the response snippet for diagnosability, then return nil so the
+		// caller falls through to the GetDeviceInformation strategy.
+		snippet := readSnippet(resp.Body, 256)
+		logger.Debug("WS-Discovery probe returned non-200, will try GetDeviceInformation fallback",
+			"endpoint", endpoint, "status", resp.StatusCode, "body_snippet", snippet)
+		return nil, nil
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
@@ -193,7 +198,9 @@ func probeViaGetDeviceInformation(ctx context.Context, endpoint string) (*Discov
 		return nil, err
 	}
 	if info == nil {
-		return nil, nil // TODO(#51): device info is nil, skip device
+		// fetchDeviceInformation returns nil when the device didn't respond with
+		// parseable data — not an error, just "not an ONVIF device" or offline.
+		return nil, nil
 	}
 
 	name := info.Manufacturer
@@ -302,8 +309,10 @@ func fetchDeviceInformation(ctx context.Context, endpoint string) (*deviceInfoFi
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Debug("GetDeviceInformation returned non-200", "endpoint", endpoint, "status", resp.StatusCode)
-		return nil, nil // TODO(#51): GetDeviceInformation failed with non-200 status, skip device
+		snippet := readSnippet(resp.Body, 256)
+		logger.Debug("GetDeviceInformation returned non-200, device may not be ONVIF or may require auth",
+			"endpoint", endpoint, "status", resp.StatusCode, "body_snippet", snippet)
+		return nil, nil
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -419,4 +428,31 @@ func categorizeDiscoveryError(ctx context.Context, err error) *DiscoveryError {
 
 	// Default to PARSE_ERROR for unexpected errors
 	return &DiscoveryError{Category: "PARSE_ERROR", Message: msg}
+}
+
+// readSnippet reads up to maxLen bytes from r for diagnostic logging. Best-effort:
+// errors are ignored (returns "" on failure). Used to surface a response body
+// fragment when a probe returns a non-200 status, so logs explain WHY a device
+// was skipped (e.g. a SOAP Fault, a redirect, an auth challenge).
+func readSnippet(r io.Reader, maxLen int) string {
+	if r == nil {
+		return ""
+	}
+	buf := make([]byte, maxLen)
+	n, _ := io.ReadFull(r, buf)
+	if n <= 0 {
+		return ""
+	}
+	// io.ReadFull returns ErrUnexpectedEOF when fewer than len(buf) bytes exist;
+	// trim to what we actually got.
+	if n < len(buf) {
+		buf = buf[:n]
+	}
+	// Collapse whitespace for compact log lines.
+	s := strings.TrimSpace(string(buf))
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+	return s
 }

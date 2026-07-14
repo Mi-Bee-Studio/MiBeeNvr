@@ -3,6 +3,7 @@ package onvif
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -358,4 +359,41 @@ func TestEnrichDevices_CapturesSerial(t *testing.T) {
 	require.Equal(t, "TestManufacturer", devices[0].Manufacturer)
 	require.Equal(t, "TestModel", devices[0].Model)
 	require.Equal(t, "V1.0", devices[0].Firmware)
+}
+
+// --- readSnippet tests ---
+
+func TestReadSnippet(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name string
+		r    io.Reader
+		want string
+	}{
+		{"short body", strings.NewReader("hello"), "hello"},
+		{"truncated to maxLen", strings.NewReader("0123456789ABCDEF"), "012345"}, // maxLen=6 below
+		{"nil reader", nil, ""},
+		{"empty reader", strings.NewReader(""), ""},
+		{"whitespace collapsed", strings.NewReader("  line1\nline2  "), "line1 line2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Helper()
+			// Use maxLen=6 for the truncated case, 256 otherwise.
+			maxLen := 256
+			if tc.name == "truncated to maxLen" {
+				maxLen = 6
+			}
+			got := readSnippet(tc.r, maxLen)
+			if tc.name == "truncated to maxLen" {
+				if len(got) > 6 {
+					t.Errorf("readSnippet returned %d chars, want <= 6", len(got))
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("readSnippet() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
