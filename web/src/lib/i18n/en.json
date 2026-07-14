@@ -539,6 +539,7 @@
   "cameras.audioEnabled": "Record Audio",
   "cameras.recordingEnabled": "Record video to disk",
   "cameras.recordingDisabledHint": "Live-only mode: the camera stays connected for live preview and relay, but no recordings are saved (saves SD-card wear).",
+  "cameras.advancedRecording": "Advanced recording options",
   "cameras.subnetHintsTitle": "IP self-healing subnets",
   "cameras.subnetHintsHint": "When this camera's IP changes (AP reboot, roaming), the NVR scans these subnets to re-find it by its serial number. One CIDR per line (/24 or smaller). Leave empty to scan only the local subnet.",
   "cameras.subnetHintsStableId": "Identity: {id} (ONVIF serial — used to match the camera after an IP change).",

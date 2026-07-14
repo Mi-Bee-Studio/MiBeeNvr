@@ -539,6 +539,7 @@
   "cameras.audioEnabled": "录制声音",
   "cameras.recordingEnabled": "录制视频到磁盘",
   "cameras.recordingDisabledHint": "仅直播模式：摄像头保持连接用于实时预览和转发，但不保存录像（减少 SD 卡损耗）。",
+  "cameras.advancedRecording": "高级录像选项",
   "cameras.subnetHintsTitle": "IP 自愈子网",
   "cameras.subnetHintsHint": "当此摄像头 IP 变化（AP 重启、漫游）时，NVR 会扫描这些子网，按序列号重新找到它。每行一个 CIDR（/24 或更小）。留空则仅扫描本地子网。",
   "cameras.subnetHintsStableId": "身份标识：{id}（ONVIF 序列号，IP 变化后用于匹配此摄像头）。",

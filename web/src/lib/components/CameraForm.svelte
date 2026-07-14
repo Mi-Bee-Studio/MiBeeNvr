@@ -743,48 +743,57 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
+    <!-- Advanced recording options (dark-frame filter + schedule) — collapsed by
+         default to reduce clutter; auto-opens when either option is already on. -->
     {#if formProtocol === 'rtsp' || formProtocol === 'onvif' || formProtocol === 'http'}
-      <div class="md:col-span-2 space-y-2">
-        <div class="flex items-center gap-2">
-          <input id="cam-dark-frame" type="checkbox" class="checkbox"
-            bind:checked={formDarkFrameFilterEnabled}
-          />
-          <label for="cam-dark-frame" class="input-label cursor-pointer">
-            {t('cameras.darkFrameFilter') || 'Dark frame filter'}
-            <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
-          </label>
-        </div>
-        {#if formDarkFrameFilterEnabled}
-          <div class="flex items-center gap-2 pl-6">
-            <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
-            <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
-            <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
+    <details class="md:col-span-2 border th-border rounded-lg" open={formDarkFrameFilterEnabled || formRecordingScheduleEnabled ? true : undefined}>
+      <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+        {t('cameras.advancedRecording')}
+      </summary>
+      <div class="px-4 pb-4 space-y-4">
+        <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input id="cam-dark-frame" type="checkbox" class="checkbox"
+              bind:checked={formDarkFrameFilterEnabled}
+            />
+            <label for="cam-dark-frame" class="input-label cursor-pointer">
+              {t('cameras.darkFrameFilter') || 'Dark frame filter'}
+              <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
+            </label>
           </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Recording schedule -->
-    <div class="md:col-span-2 space-y-2">
-      <div class="flex items-center gap-2">
-        <input id="cam-rec-schedule" type="checkbox" class="checkbox"
-          bind:checked={formRecordingScheduleEnabled}
-        />
-        <label for="cam-rec-schedule" class="input-label cursor-pointer">
-          {t('cameras.recordingSchedule') || 'Recording schedule'}
-          <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
-        </label>
-      </div>
-      {#if formRecordingScheduleEnabled}
-        <div class="flex items-center gap-2 pl-6">
-          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
-          <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
-          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
-          <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+          {#if formDarkFrameFilterEnabled}
+            <div class="flex items-center gap-2 pl-6">
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
+              <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
+              <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
+            </div>
+          {/if}
         </div>
-      {/if}
-    </div>
+
+        <!-- Recording schedule -->
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input id="cam-rec-schedule" type="checkbox" class="checkbox"
+              bind:checked={formRecordingScheduleEnabled}
+            />
+            <label for="cam-rec-schedule" class="input-label cursor-pointer">
+              {t('cameras.recordingSchedule') || 'Recording schedule'}
+              <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
+            </label>
+          </div>
+          {#if formRecordingScheduleEnabled}
+            <div class="flex items-center gap-2 pl-6">
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
+              <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
+              <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+            </div>
+          {/if}
+        </div>
+      </div>
+    </details>
+    {/if}
 
     <!-- URL (hidden for push/ingest protocols — publisher connects to us) -->
     {#if formProtocol !== 'srt' && formProtocol !== 'rtmp'}
