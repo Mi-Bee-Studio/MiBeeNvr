@@ -32,7 +32,6 @@
   let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
   let streamingDefaultProtocol = $state('hls');
-  let expandedProtocolDoc = $state<string | null>(null);
 
   // Disk info from stats API
   let diskInfo = $state<StorageStats | null>(null);
@@ -360,58 +359,25 @@
     </div>
   </div>
 
-  <!-- Default Protocol Selector -->
+  <!-- Fallback Protocol Selector.
+       The surveillance grid now auto-selects the best protocol per camera
+       (codec-aware), so this is only a fallback used when the per-camera
+       /protocols endpoint can't be reached. It's no longer the primary choice. -->
   <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming.defaultProtocol')}</h3>
-    <p class="text-sm th-text-tertiary mb-8">{t('settings.streaming.defaultProtocolHint')}</p>
+    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming.fallbackProtocol')}</h3>
+    <p class="text-sm th-text-tertiary mb-8">{t('settings.streaming.fallbackProtocolHint')}</p>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       <div>
-        <label for="defaultProtocol" class="input-label">{t('settings.streaming.defaultProtocol')}</label>
+        <label for="defaultProtocol" class="input-label">{t('settings.streaming.fallbackProtocol')}</label>
         <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
           <option value="webrtc">WebRTC</option>
           <option value="flv">HTTP-FLV</option>
           <option value="hls">HLS</option>
           <option value="ll-hls">LL-HLS</option>
         </select>
-        <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.defaultProtocolHint')}</p>
+        <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.fallbackProtocolHint')}</p>
       </div>
-    </div>
-  </div>
-
-  <!-- Protocol Guide -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.protocolDocs')}</h3>
-    <p class="text-sm th-text-tertiary mb-6">{t('settings.protocolDocsDesc')}</p>
-
-    <div class="space-y-3">
-      {#each ['webrtc', 'flv', 'hls', 'llHls'] as docKey (docKey)}
-        {@const isExpanded = expandedProtocolDoc === docKey}
-        <div class="border th-border rounded-lg overflow-hidden">
-          <button
-            onclick={() => { expandedProtocolDoc = isExpanded ? null : docKey; }}
-            class="w-full px-4 py-3 text-left flex items-center justify-between hover:th-bg-hover transition-colors"
-          >
-            <span class="font-medium th-text-primary">{t(`settings.protocolDocs.${docKey}.title`)}</span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {isExpanded ? 'rotate-180' : ''} th-text-tertiary"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
-          {#if isExpanded}
-            <div class="px-4 pb-4 pt-0 space-y-3">
-              <p class="text-sm th-text-secondary">{t(`settings.protocolDocs.${docKey}.desc`)}</p>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div class="p-3 rounded-md bg-[var(--color-success)]/5 border border-[var(--color-success)]/20">
-                  <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-success)] mb-1">Pros</div>
-                  <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.pros`)}</p>
-                </div>
-                <div class="p-3 rounded-md bg-[var(--color-danger)]/5 border border-[var(--color-danger)]/20">
-                  <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-danger)] mb-1">Cons</div>
-                  <p class="text-xs th-text-secondary">{t(`settings.protocolDocs.${docKey}.cons`)}</p>
-                </div>
-              </div>
-            </div>
-          {/if}
-        </div>
-      {/each}
     </div>
   </div>
 

@@ -771,6 +771,8 @@
   "settings.streamingDesc": "Configure live streaming protocols and default behavior.",
   "settings.streaming.defaultProtocol": "Default Protocol",
   "settings.streaming.defaultProtocolHint": "Used when opening live view for the first time.",
+  "settings.streaming.fallbackProtocol": "Fallback streaming protocol",
+  "settings.streaming.fallbackProtocolHint": "The surveillance grid auto-selects the best protocol per camera. This is used only as a fallback when the camera's capabilities can't be queried.",
   "settings.streaming.webrtc": "WebRTC",
   "settings.streaming.webrtcDesc": "Ultra-low latency peer-to-peer streaming.",
   "settings.streaming.webrtc.maxViewers": "Max Viewers",
