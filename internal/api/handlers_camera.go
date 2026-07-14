@@ -906,6 +906,21 @@ type onvifStreamProbe struct {
 	Reason    string // human-readable explanation when Reachable/StreamOK is false
 }
 
+// onvifLooksLikeAuthError reports whether an ONVIF error smells like a
+// WS-Security rejection (the trigger for running the time-skew diagnosis).
+// Mirrors the onvif package's internal isAuthError but lives here to avoid
+// widening the onvif package's API surface.
+func onvifLooksLikeAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "NotAuthorized") ||
+		strings.Contains(s, "status 401") ||
+		strings.Contains(s, "status 403") ||
+		strings.Contains(s, "status 400")
+}
+
 // reasonOrOK returns the failure reason, or a success message when the stream
 // is healthy (used by the test-connection response so the frontend always has a
 // sensible message to show).
@@ -929,13 +944,28 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 
 	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {
-		return onvifStreamProbe{Reason: fmt.Sprintf("could not connect to ONVIF service: %v", err)}
+		reason := fmt.Sprintf("could not connect to ONVIF service: %v", err)
+		// If it looks like an auth rejection, run the time-skew diagnosis so the
+		// user gets an actionable "sync the camera's clock" hint instead of a
+		// generic failure (Hikvision cameras reject digest auth on clock skew).
+		if onvifLooksLikeAuthError(err) {
+			if diag := client.DiagnoseAuth(ctx); diag.SkewDetected {
+				reason = diag.Diagnosis
+			}
+		}
+		return onvifStreamProbe{Reason: reason}
 	}
 	profiles, err := client.GetProfiles(ctx)
 	if err != nil {
+		reason := fmt.Sprintf("device responded but GetProfiles failed (credentials may be wrong, or ONVIF may be limited): %v", err)
+		if onvifLooksLikeAuthError(err) {
+			if diag := client.DiagnoseAuth(ctx); diag.SkewDetected {
+				reason = diag.Diagnosis
+			}
+		}
 		return onvifStreamProbe{
 			Reachable: true,
-			Reason:    fmt.Sprintf("device responded but GetProfiles failed (credentials may be wrong, or ONVIF may be limited): %v", err),
+			Reason:    reason,
 		}
 	}
 	if len(profiles) == 0 {

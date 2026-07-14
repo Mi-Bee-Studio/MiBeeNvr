@@ -185,3 +185,60 @@ func (c *Client) doRawSOAPDigestDeviceTime(ctx context.Context, endpoint, soapBo
 	}
 	return body, nil
 }
+
+// AuthDiagnosis is the result of probing why an ONVIF device rejects credentials.
+// It distinguishes the three common root causes that all look like "auth failed"
+// to the user: a clock skew (digest replay-window violation), wrong credentials,
+// or the device not speaking ONVIF auth at all.
+type AuthDiagnosis struct {
+	SkewDetected bool    // a significant clock skew was measured
+	SkewSeconds  float64 // deviceTime - localTime, in seconds (signed)
+	DigestOK     bool    // the device-time digest SOAP call succeeded
+	Diagnosis    string  // human-readable explanation + suggested fix
+}
+
+// skewThreshold is the magnitude beyond which clock skew likely causes digest
+// rejection. ONVIF replay windows are commonly ±5 min; we flag anything over 2
+// min so the user gets a heads-up before hitting the device's tighter limit.
+const skewThreshold = 2 * time.Minute
+
+// DiagnoseAuth runs the time-skew diagnosis: measure the device's clock skew,
+// then attempt an authenticated GetDeviceInformation using a device-time-adjusted
+// digest. When DigestOK is true despite the standard (local-time) auth having
+// failed, the root cause is confirmed as clock skew — the caller can surface a
+// targeted "sync your camera's clock" message instead of a generic auth error.
+//
+// Best-effort and non-fatal: any network/parse failure returns a zeroed
+// diagnosis (SkewDetected=false), so callers fall back to their existing error.
+func (c *Client) DiagnoseAuth(ctx context.Context) AuthDiagnosis {
+	skew := c.measureClockSkew(ctx, c.endpoint)
+	out := AuthDiagnosis{SkewSeconds: skew.Seconds()}
+	if absDuration(skew) < skewThreshold {
+		out.Diagnosis = "no significant clock skew detected"
+		return out
+	}
+	out.SkewDetected = true
+	// Retry GetDeviceInformation with the device's clock. If it succeeds, skew
+	// is confirmed as the auth-failure root cause.
+	soapBody := `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <s:Body>
+    <tds:GetDeviceInformation/>
+  </s:Body>
+</s:Envelope>`
+	if _, err := c.doRawSOAPDigestDeviceTime(ctx, c.endpoint, soapBody); err != nil {
+		out.Diagnosis = fmt.Sprintf("clock skew of %.0f min detected but device-time digest still failed: %v — credentials may ALSO be wrong", skew.Minutes(), err)
+		return out
+	}
+	out.DigestOK = true
+	out.Diagnosis = fmt.Sprintf("clock skew of %.0f min detected — the camera's clock differs from the NVR's, which breaks digest auth. Sync the camera's time (NTP) or set it manually. A device-time-adjusted request succeeded, confirming skew is the root cause.", skew.Minutes())
+	return out
+}
+
+// absDuration returns the absolute value of a time.Duration.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}

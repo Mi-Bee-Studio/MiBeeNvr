@@ -1,6 +1,7 @@
 package onvif
 
 import (
+	"context"
 	"crypto/sha1" //nolint:gosec // SHA1 mandated by the ONVIF UsernameToken profile
 	"encoding/base64"
 	"strings"
@@ -108,4 +109,29 @@ func extractDigest(t *testing.T, header string) string {
 		t.Fatalf("no closing Password tag: %s", header)
 	}
 	return rest[:end]
+}
+
+// TestDiagnoseAuth_UnreachableReturnsNoSkew verifies DiagnoseAuth is best-effort:
+// an unreachable device returns a zeroed diagnosis (SkewDetected=false) rather
+// than erroring, so callers fall back gracefully.
+func TestDiagnoseAuth_UnreachableReturnsNoSkew(t *testing.T) {
+	t.Helper()
+	c := &Client{endpoint: "http://127.0.0.1:1/onvif/device_service"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	diag := c.DiagnoseAuth(ctx)
+	if diag.SkewDetected {
+		t.Errorf("expected no skew detected for unreachable device, got %+v", diag)
+	}
+}
+
+// TestAbsDuration covers the skew-threshold comparison helper.
+func TestAbsDuration(t *testing.T) {
+	t.Helper()
+	if got := absDuration(-5 * time.Minute); got != 5*time.Minute {
+		t.Errorf("absDuration(-5m) = %v, want 5m", got)
+	}
+	if got := absDuration(3 * time.Minute); got != 3*time.Minute {
+		t.Errorf("absDuration(3m) = %v, want 3m", got)
+	}
 }
