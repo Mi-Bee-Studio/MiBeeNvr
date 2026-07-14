@@ -648,8 +648,8 @@ ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
 ### 网络要求
 
 **必需的访问**：
-- `openapi.io.mi.com:443` - 小米云 API
-- `globalmiot.cn:443` - 小米设备管理
+- `api.io.mi.com:443` - 小米云 API（设备列表、MISS URL 解析）
+- `openapi.io.mi.com:443` - 小米云 API（备用端点）
 - `https://xiaomioa.com` - 小米身份验证
 
 **网络故障排除**：
@@ -791,7 +791,7 @@ curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/
 ```bash
 # 测试到小米服务的网络连接
 ping openapi.io.mi.com
-curl -v https://globalmiot.cn
+curl -v https://api.io.mi.com
 
 # 检查令牌有效性
 curl -u admin:password http://localhost:9090/api/xiaomi/auth

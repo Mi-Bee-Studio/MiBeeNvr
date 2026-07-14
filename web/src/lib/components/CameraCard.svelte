@@ -186,6 +186,11 @@ let healthShowWarningIcon = $derived(
           {t('cameras.tutkCardBadge')}
         </span>
    {/if}
+   {#if camera.error_type === 'connect_failed'}
+     <span class="badge badge-error" title={camera.error_detail || ''}>
+       {t('cameras.connectFailedBadge')}
+     </span>
+   {/if}
    <!-- Merge status badge -->
    {#if mergeStatus === 'merging'}
      <span class="badge badge-info flex items-center gap-1" title={mergeProgress + '%'} >

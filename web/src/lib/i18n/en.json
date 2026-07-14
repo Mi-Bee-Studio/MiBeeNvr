@@ -647,6 +647,7 @@
   "cameras.tutkInterceptMessage": "The camera '{name}' uses the unsupported TUTK protocol. It can be added but will not be able to record.",
   "cameras.continueAnyway": "Continue Anyway",
   "cameras.tutkCardBadge": "TUTK Incompatible",
+  "cameras.connectFailedBadge": "Unreachable",
   "cameras.tutkToastTitle": "Camera Incompatible",
   "xiaomi.title": "Xiaomi Device Discovery",
   "xiaomi.signInHint": "Sign in with your Xiaomi account to discover cameras.",

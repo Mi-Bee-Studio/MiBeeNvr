@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -107,6 +108,8 @@ type XiaomiRecorder struct {
 
 	currentQuality   string // effective quality for next connectAndRecord attempt
 	noMediaFailCount int    // consecutive "no media data" failures at current quality
+	connectFailCount int    // consecutive connect/handshake failures (miss connect i/o timeout etc.)
+	lastMissURL      string // last resolved MISS URL (for error messages naming the unreachable host)
 
 	// MISS client reference for external commands (MotorControl, GetDeviceInfo).
 	missClient *MISSClient
@@ -324,6 +327,52 @@ func (r *XiaomiRecorder) reportVendorError(err error) {
 	})
 }
 
+// reportConnectError surfaces an actionable CameraErrorDetail when the recorder
+// repeatedly fails to reach the camera (e.g. UDP handshake timeout to the LAN IP,
+// which looks like "miss connect: read udp i/o timeout"). Without this, the user
+// sees "reconnecting" forever with no hint that the camera is unreachable on the
+// network — issue #48. After connectFailThreshold consecutive failures, we set a
+// "connect_failed" detail so the frontend can show guidance ("check the camera is
+// online and on the same network") instead of a bare spinner.
+const connectFailThreshold = 5
+
+func (r *XiaomiRecorder) reportConnectError(err error) {
+	if r.cfg.ErrReporter == nil || err == nil {
+		return
+	}
+	r.connectFailCount++
+	if r.connectFailCount < connectFailThreshold {
+		return
+	}
+	// Extract the host being dialed from the MISS URL for the message.
+	host := r.cfg.DID
+	if u, perr := url.Parse(r.lastMissURL); perr == nil && u.Host != "" {
+		host = u.Host
+	}
+	msg := fmt.Sprintf(
+		"Cannot reach the camera at %s after %d connection attempts. "+
+			"Check that the camera is powered on, connected to the same network as the NVR, "+
+			"and not blocked by a firewall. (Last error: %s)",
+		host, r.connectFailCount, err.Error(),
+	)
+	r.cfg.ErrReporter.SetErrorDetail(r.cfg.CameraID, &model.CameraErrorDetail{
+		Type:       "connect_failed",
+		Message:    msg,
+		DetectedAt: time.Now(),
+	})
+}
+
+// clearConnectError resets the connect-failure counter and clears any
+// "connect_failed" error detail when the recorder successfully connects.
+func (r *XiaomiRecorder) clearConnectError() {
+	if r.connectFailCount > 0 {
+		r.connectFailCount = 0
+	}
+	if r.cfg.ErrReporter != nil {
+		r.cfg.ErrReporter.SetErrorDetail(r.cfg.CameraID, nil)
+	}
+}
+
 // extractQuotedValue extracts the content between the first pair of double quotes in s.
 // Returns empty string if no quotes are found.
 func extractQuotedValue(s string) string {
@@ -389,12 +438,14 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			continue
 		}
 
+		r.lastMissURL = missURL
 		err, connected := r.connectAndRecord(ctx, missURL)
 		if ctx.Err() != nil {
 			return
 		}
 		if connected {
 			retryCount = 0
+			r.connectFailCount = 0
 			r.recordXiaomiReconnect()
 		}
 
@@ -412,8 +463,16 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			r.noMediaFailCount = 0
 		}
 		retryCount++
+		// Track persistent connect failures and surface an actionable error to
+		// the user after the threshold (issue #48: "reconnecting" forever with no
+		// hint the camera is unreachable). Also lengthen the backoff once the
+		// failure is clearly persistent, to calm the retry storm.
+		r.reportConnectError(err)
 		backoff := recorder.TieredBackoffWithJitter(retryCount)
-		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
+		if r.connectFailCount >= connectFailThreshold {
+			backoff = recorder.StorageBackoffWithJitter() // ~60s — the camera isn't coming back soon
+		}
+		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount, "connect_failures", r.connectFailCount)
 		r.recordError("connection")
 		r.recordXiaomiDisconnect(classifyDisconnectReason(err))
 		r.setStatus(model.StatusReconnecting)
@@ -452,6 +511,8 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	}()
 
 	r.setStatus(model.StatusRecording)
+	// Clear any previously-reported connect-failure detail now that we're live.
+	r.clearConnectError()
 
 	// Reset codec probe state for each new connection.
 	r.codecOK = false

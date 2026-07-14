@@ -647,6 +647,7 @@
   "cameras.tutkInterceptMessage": "摄像头 '{name}' 使用不支持的 TUTK 协议，可以添加但无法录像。",
   "cameras.continueAnyway": "仍然继续",
   "cameras.tutkCardBadge": "TUTK 不兼容",
+  "cameras.connectFailedBadge": "无法连接",
   "cameras.tutkToastTitle": "摄像头不兼容",
   "xiaomi.title": "小米设备发现",
   "xiaomi.signInHint": "登录小米账号以发现摄像头。",

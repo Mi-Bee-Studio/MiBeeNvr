@@ -631,8 +631,8 @@ ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
 ### Network Requirements
 
 **Required Access**:
-- `openapi.io.mi.com:443` - Xiaomi cloud API
-- `globalmiot.cn:443` - Xiaomi device management
+- `api.io.mi.com:443` - Xiaomi cloud API (device list, MISS URL resolution)
+- `openapi.io.mi.com:443` - Xiaomi cloud API (alternate endpoint)
 - `https://xiaomioa.com` - Xiaomi authentication
 
 **Network Troubleshooting**:
@@ -762,7 +762,7 @@ ERROR: xiaomi recording failed: device offline
 ```bash
 # Test network connectivity to Xiaomi services
 ping openapi.io.mi.com
-curl -v https://globalmiot.cn
+curl -v https://api.io.mi.com
 
 # Check token validity
 curl -u admin:password http://localhost:9090/api/xiaomi/auth

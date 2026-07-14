@@ -849,3 +849,58 @@ func TestXiaomiMetricsNilSafe(t *testing.T) {
 	r.recordXiaomiDisconnect("network")
 	r.recordXiaomiReconnect()
 }
+
+// --- connect-error reporting tests (issue #48) ---
+
+// mockErrReporter captures the last SetErrorDetail call for assertion.
+type mockErrReporter struct {
+	lastDetail *model.CameraErrorDetail
+	lastCamID  string
+}
+
+func (m *mockErrReporter) SetErrorDetail(cameraID string, detail *model.CameraErrorDetail) {
+	m.lastCamID = cameraID
+	m.lastDetail = detail
+}
+
+// TestReportConnectError_BelowThreshold verifies no error detail is set before
+// the connectFailThreshold consecutive failures are reached.
+func TestReportConnectError_BelowThreshold(t *testing.T) {
+	t.Helper()
+	reporter := &mockErrReporter{}
+	r := &XiaomiRecorder{cfg: XiaomiRecorderConfig{CameraID: "cam-test", ErrReporter: reporter}}
+	for i := 0; i < connectFailThreshold-1; i++ {
+		r.reportConnectError(fmt.Errorf("miss connect: read udp i/o timeout"))
+	}
+	require.Nil(t, reporter.lastDetail, "no error detail should be set before threshold")
+	require.Equal(t, connectFailThreshold-1, r.connectFailCount)
+}
+
+// TestReportConnectError_AtThreshold verifies the error detail is set once the
+// threshold is crossed, with an actionable message naming the camera host.
+func TestReportConnectError_AtThreshold(t *testing.T) {
+	t.Helper()
+	reporter := &mockErrReporter{}
+	r := &XiaomiRecorder{
+		cfg:         XiaomiRecorderConfig{CameraID: "cam-test", ErrReporter: reporter},
+		lastMissURL: "miss://192.168.31.251:1234",
+	}
+	for i := 0; i < connectFailThreshold; i++ {
+		r.reportConnectError(fmt.Errorf("miss connect: read udp i/o timeout"))
+	}
+	require.NotNil(t, reporter.lastDetail, "error detail should be set at threshold")
+	require.Equal(t, "connect_failed", reporter.lastDetail.Type)
+	require.Contains(t, reporter.lastDetail.Message, "192.168.31.251")
+	require.Contains(t, reporter.lastDetail.Message, "Cannot reach the camera")
+}
+
+// TestClearConnectError verifies the counter resets and detail clears on success.
+func TestClearConnectError(t *testing.T) {
+	t.Helper()
+	reporter := &mockErrReporter{}
+	r := &XiaomiRecorder{cfg: XiaomiRecorderConfig{CameraID: "cam-test", ErrReporter: reporter}}
+	r.connectFailCount = connectFailThreshold + 5
+	r.clearConnectError()
+	require.Equal(t, 0, r.connectFailCount)
+	require.Nil(t, reporter.lastDetail, "error detail should be cleared")
+}
