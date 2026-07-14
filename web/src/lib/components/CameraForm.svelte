@@ -1,5 +1,6 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
+    import { friendlyError } from '$lib/errors';
     import {
         createCamera,
         updateCamera,
@@ -442,7 +443,7 @@ let validationErrors = $state<Record<string, string>>({});
         onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
       });
     } catch (e: any) {
-      testResult = { success: false, message: e.message || t('cameras.testFailed', { error: '' }), latency_ms: 0 };
+      testResult = { success: false, message: friendlyError(e, 'cameras.testFailed'), latency_ms: 0 };
     } finally {
       testing = false;
     }
@@ -829,7 +830,7 @@ async function performCameraSave() {
         <p class="text-xs mt-1 {testResult.success ? 'th-color-success' : 'th-color-danger'}">
           {testResult.success
             ? t('cameras.testSuccess', { latency: String(testResult.latency_ms) })
-            : t('cameras.testFailed', { error: testResult.message })}
+            : testResult.message}
         </p>
         {#if testResult.success && testResult.codec_lie}
           <p class="text-xs th-text-muted">{t('cameras.testCodecCorrected', { encoding: testResult.encoding || '' })}</p>
