@@ -1114,6 +1114,22 @@ $effect(() => {
   onMount(() => {
     startTranscodingPoll();
     window.addEventListener('keydown', handleKeydown);
+
+    // Deep-link seek offset: when arriving from the DayTimeline (hash includes
+    // ?t=N), read the offset and set it as the pending seek so handleVideoLoadedMetadata
+    // applies it once the video element is ready. This reuses the exact same
+    // mechanism the in-page TimelineBar cross-segment seek uses.
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const tParam = params.get('t');
+      if (tParam !== null) {
+        const off = Number(tParam);
+        if (Number.isFinite(off) && off >= 0) {
+          pendingTimelineSeekOffset = off;
+        }
+      }
+    } catch {}
+
     return () => {
       window.removeEventListener('keydown', handleKeydown);
       stopTranscodingPoll();
