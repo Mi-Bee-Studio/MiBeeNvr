@@ -354,6 +354,11 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.StableID) == "" {
 		go cm.ensureStableID(cam.ID)
 	}
+	// For ONVIF cameras without a profile_token, persist the auto-selected one
+	// after Start resolves it — avoids re-running GetProfiles on every restart.
+	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.ProfileToken) == "" {
+		go cm.ensureProfileToken(cam.ID)
+	}
 	return nil
 }
 

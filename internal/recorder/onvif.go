@@ -180,6 +180,16 @@ func (r *ONVIFRecorder) RTSPURL() string {
 	return r.rtspURL
 }
 
+// ResolvedProfileToken returns the profile token resolved during Start (either
+// from config or auto-selected via SelectMainProfile). Empty if Start hasn't
+// run yet or the token was never resolved. Used by the camera manager to
+// persist the auto-selected token so GetProfiles isn't re-run on every restart.
+func (r *ONVIFRecorder) ResolvedProfileToken() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cfg.ProfileToken
+}
+
 // Delegate returns the internal H264/H265 recorder delegate.
 // Returns nil if the recorder hasn't been started yet.
 // This is used by the HLS handler to access SPS/PPS and subscribe to StreamHub for HLS streaming.
