@@ -72,6 +72,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				EventBus:               cm.eventBus,
 				DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 				DarkFrameThreshold:     cam.DarkFrameThreshold,
+				RecordEnabled:          cam.RecordingEnabled,
 			}
 			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:
@@ -92,6 +93,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			EventBus:               cm.eventBus,
 			DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 			DarkFrameThreshold:     cam.DarkFrameThreshold,
+			RecordEnabled:          cam.RecordingEnabled,
 		}
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):

@@ -39,6 +39,9 @@ type HTTPJPEGConfig struct {
 	Height                 int  // video height (0 = auto-detect from first frame)
 	DarkFrameFilterEnabled bool // skip dark/night segments
 	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
+	// RecordEnabled gates segment writes (nil => record; ptr-to-false => live-only).
+	// See BaseConfig.RecordEnabled for details.
+	RecordEnabled *bool
 }
 
 // HTTPJPEGRecorder captures JPEG frames from a continuous MJPEG stream over HTTP.
@@ -355,6 +358,12 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		// readers treat it as immutable.
 		dp := data
 		r.latestFrame.Store(&dp)
+
+		// Live-only mode: keep the latest-frame cache (so MJPEG live preview via
+		// /latest-frame polling works) but skip all segment I/O.
+		if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
+			continue
+		}
 
 		if isStorageFailed(r.store, r.cfg.CameraID) {
 			if r.curTempPath != "" {
