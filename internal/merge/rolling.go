@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -21,6 +22,36 @@ import (
 
 // rollingLogger is the slog handle for the rolling merge coordinator.
 var rollingLogger = slog.Default().With("component", "rolling-merge")
+
+// backfillBatchPauseForArch returns the inter-batch pause for backfill merges.
+// On ARM (RPi 3B: 4× Cortex-A53 @ 1.2GHz, USB-bound IO) we slow down to avoid
+// contending with the recorder hot path; on faster hosts the default 200ms is fine.
+func backfillBatchPauseForArch() time.Duration {
+	if runtime.GOARCH == "arm" || runtime.GOARCH == "arm64" {
+		return 500 * time.Millisecond
+	}
+	return 200 * time.Millisecond
+}
+
+// checkDiskSpaceForMerge returns true if there is at least 1.1× required bytes free
+// on the storage volume. Mirrors the admission check in MergeManager.processCamera
+// (manager.go) so backfill cannot fill the disk. required is the estimated merged
+// output size (sum of source segment sizes).
+func checkDiskSpaceForMerge(store *storage.Manager, required int64) bool {
+	total, used, err := store.GetDiskUsage()
+	if err != nil {
+		rollingLogger.Warn("backfill: cannot determine disk usage, proceeding cautiously", "error", err)
+		return true
+	}
+	freeSpace := total - used
+	need := required * 11 / 10 // 1.1× safety margin
+	if freeSpace < need {
+		rollingLogger.Warn("backfill: insufficient disk space, deferring batch",
+			"needed", need, "free", freeSpace)
+		return false
+	}
+	return true
+}
 
 // RollingMergeConfig holds the effective rolling merge configuration for a camera.
 type RollingMergeConfig struct {
@@ -110,7 +141,7 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	effective := config.ResolveMergeConfig(global, perCamera)
 
 	cfg := RollingMergeConfig{
-		Enabled:  effective.RollingEnabled,
+		Enabled:  effective.RollingEnabledValue(),
 		Debounce: 5 * time.Second, // default: batches frequent disconnect segments
 		Window:   time.Hour,       // default: natural-hour bucket
 	}
@@ -171,19 +202,51 @@ func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
 		return
 	}
 
-	// Query all pending MP4 segments (all cameras — filtering by rolling_enabled
-	// happens per-camera inside the loop below).
-	recs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false)
+	// Resolve startup backfill throttling from the global config. This bounds
+	// the first-boot merge workload so an upgrade to default-on rolling merge
+	// cannot trigger an IO storm on RPi 3B. Older segments beyond maxAge are
+	// left for the periodic MergeManager to digest gradually.
+	global := r.getGlobalCfg()
+	limit := global.RollingBackfillMaxSegments
+	var since time.Time
+	if global.RollingBackfillMaxAge != "" {
+		if d, err := time.ParseDuration(global.RollingBackfillMaxAge); err == nil && d > 0 {
+			since = time.Now().UTC().Add(-d)
+		}
+	}
+
+	// First, count the true total (unthrottled) for an accurate log message.
+	totalRecs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false, 0, time.Time{})
+	if err != nil {
+		rollingLogger.Warn("backfill: failed to count pending segments", "error", err)
+		return
+	}
+	totalPending := len(totalRecs)
+	if totalPending == 0 {
+		return
+	}
+
+	// Query pending segments, now with throttling applied.
+	recs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false, limit, since)
 	if err != nil {
 		rollingLogger.Warn("backfill: failed to list pending segments", "error", err)
 		return
 	}
 	if len(recs) == 0 {
+		rollingLogger.Info("backfill: pending segments exist but all exceed max_age; left for periodic merge",
+			"total_pending", totalPending, "max_age", global.RollingBackfillMaxAge)
 		return
 	}
 
-	rollingLogger.Info("backfill: startup scan found pending segments",
-		"total", len(recs))
+	if throttled := totalPending - len(recs); throttled > 0 {
+		rollingLogger.Info("backfill: startup scan throttled to protect disk IO",
+			"processing", len(recs), "total_pending", totalPending, "deferred", throttled,
+			"max_segments", limit, "max_age", global.RollingBackfillMaxAge,
+			"note", "deferred segments will be merged by the periodic MergeManager")
+	} else {
+		rollingLogger.Info("backfill: startup scan found pending segments",
+			"total", len(recs))
+	}
 
 	// Group by camera.
 	byCamera := make(map[string][]*model.Recording)
@@ -223,7 +286,8 @@ func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
 //
 // Returns the number of segments successfully merged.
 func (r *RollingMergeCoordinator) BackfillCamera(ctx context.Context, cameraID string, includeFailed bool) (int, error) {
-	recs, err := r.db.ListPendingSegmentsForRolling(ctx, cameraID, includeFailed)
+	// Manual API trigger — no throttling (the user explicitly asked for it).
+	recs, err := r.db.ListPendingSegmentsForRolling(ctx, cameraID, includeFailed, 0, time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("list pending segments: %w", err)
 	}
@@ -354,7 +418,7 @@ func splitByFormat(recs []*model.Recording) (mp4, avi, mjpeg []*model.Recording)
 // Uses the per-batch lock release pattern to avoid blocking live events.
 func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	const backfillBatchSize = 20 // small batches to yield lock to real-time events
-	const backfillBatchPause = 200 * time.Millisecond
+	batchPause := backfillBatchPauseForArch()
 
 	// Group recordings by natural-hour window for batch merging.
 	// Segments in different hours go into separate merge batches.
@@ -412,10 +476,24 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 			release, ok := r.acquireMergeLock(cameraID)
 			if !ok {
 				select {
-				case <-time.After(backfillBatchPause):
+				case <-time.After(batchPause):
 				case <-ctx.Done():
 				}
 				continue
+			}
+
+			// Disk-space admission: abort this batch (leave segments pending) if
+			// there isn't room for ~1.1× the source size. Prevents backfill from
+			// filling the disk on RPi 3B.
+			var estSize int64
+			for _, rec := range valid {
+				estSize += rec.FileSize
+			}
+			if !checkDiskSpaceForMerge(r.store, estSize) {
+				release()
+				rollingLogger.Warn("backfill MP4: disk full, deferring remaining segments",
+					"camera_id", cameraID, "processed", merged, "remaining", len(recs)-merged)
+				return merged, nil
 			}
 
 			n, err := r.mergeBatchMP4(ctx, cameraID, valid)
@@ -430,7 +508,7 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				"camera_id", cameraID, "merged", merged, "total", len(recs),
 				"percent", merged*100/len(recs))
 			select {
-			case <-time.After(backfillBatchPause):
+			case <-time.After(batchPause):
 			case <-ctx.Done():
 			}
 		}
@@ -550,7 +628,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 // window at once. This is simpler and avoids format-specific append complexities.
 func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, cameraID string, recs []*model.Recording, format string) (int, error) {
 	const batchBatchSize = 20 // small batches to yield lock to real-time events
-	const batchPause = 200 * time.Millisecond
+	batchPause := backfillBatchPauseForArch()
 
 	merged := 0
 	for startIdx := 0; startIdx < len(recs); startIdx += batchBatchSize {
@@ -592,6 +670,18 @@ func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, camer
 			case <-ctx.Done():
 			}
 			continue
+		}
+
+		// Disk-space admission (same rationale as backfillMP4).
+		var estSize int64
+		for _, rec := range valid {
+			estSize += rec.FileSize
+		}
+		if !checkDiskSpaceForMerge(r.store, estSize) {
+			release()
+			rollingLogger.Warn("backfill batch: disk full, deferring remaining segments",
+				"camera_id", cameraID, "format", format, "processed", merged, "remaining", len(recs)-merged)
+			return merged, nil
 		}
 
 		n, err := r.mergeBatchSegments(ctx, cameraID, valid, format)

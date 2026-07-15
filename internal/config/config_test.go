@@ -278,6 +278,84 @@ func TestResolveMergeConfig_AllFieldsOverridden(t *testing.T) {
 	require.Equal(t, 2, result.MinSegmentsToMerge)
 }
 
+// TestResolveMergeConfig_RollingPerCameraDisable verifies the C1 blocker fix:
+// when the global rolling merge is ON (default), a per-camera explicit
+// rolling_enabled: false MUST override it to false. With the old bare-bool
+// implementation this was impossible — `if perCamera.RollingEnabled` was a
+// one-way true switch with no way to express "off". The *bool change makes
+// explicit false win.
+func TestResolveMergeConfig_RollingPerCameraDisable(t *testing.T) {
+	tr := true
+	global := MergeConfig{RollingEnabled: &tr} // global default-on
+
+	t.Run("per_camera_explicit_false_disables", func(t *testing.T) {
+		fl := false
+		perCamera := &MergeConfig{RollingEnabled: &fl}
+		result := ResolveMergeConfig(global, perCamera)
+		require.NotNil(t, result.RollingEnabled)
+		require.False(t, result.RollingEnabledValue(), "per-camera explicit false must disable rolling merge")
+	})
+
+	t.Run("per_camera_explicit_true_keeps_enabled", func(t *testing.T) {
+		perCameraTrue := &MergeConfig{RollingEnabled: &tr}
+		result := ResolveMergeConfig(global, perCameraTrue)
+		require.True(t, result.RollingEnabledValue())
+	})
+
+	t.Run("per_camera_nil_keeps_global", func(t *testing.T) {
+		// Per-camera unset (nil pointer) inherits global.
+		perCameraNil := &MergeConfig{} // RollingEnabled is nil here
+		result := ResolveMergeConfig(global, perCameraNil)
+		require.True(t, result.RollingEnabledValue(), "unset per-camera inherits global true")
+	})
+
+	t.Run("per_camera_backfill_overrides", func(t *testing.T) {
+		globalBF := MergeConfig{RollingEnabled: &tr, RollingBackfillMaxSegments: 500, RollingBackfillMaxAge: "72h"}
+		perCamera := &MergeConfig{RollingBackfillMaxSegments: 100, RollingBackfillMaxAge: "24h"}
+		result := ResolveMergeConfig(globalBF, perCamera)
+		require.Equal(t, 100, result.RollingBackfillMaxSegments)
+		require.Equal(t, "24h", result.RollingBackfillMaxAge)
+	})
+}
+
+// TestValidate_RollingEnabledByDefault confirms Validate exercises the rolling
+// duration fields when rolling is on by default (regression guard for the guard
+// at config.go that previously only ran when Enabled=true).
+func TestValidate_RollingEnabledByDefault(t *testing.T) {
+	t.Run("valid_rolling_durations_pass", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		require.NoError(t, Validate(cfg))
+	})
+
+	t.Run("invalid_rolling_debounce_rejected", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Merge.RollingDebounce = "not-a-duration"
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rolling_debounce")
+	})
+
+	t.Run("invalid_rolling_backfill_age_rejected", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Merge.RollingBackfillMaxAge = "xyz"
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rolling_backfill_max_age")
+	})
+
+	t.Run("rolling_disabled_skips_validation", func(t *testing.T) {
+		// When rolling is explicitly off, invalid durations are tolerated
+		// (the values are never used).
+		fl := false
+		cfg := &Config{Merge: MergeConfig{RollingEnabled: &fl, RollingDebounce: "garbage"}}
+		cfg.ApplyDefaults()
+		require.NoError(t, Validate(cfg))
+	})
+}
+
 func TestHLSSegmentCountDefault(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
@@ -673,6 +751,39 @@ func TestApplyDefaultsMergeFields(t *testing.T) {
 	require.Equal(t, "1h", cfg.Merge.WindowSize)
 	require.Equal(t, "10m", cfg.Merge.MinSegmentAge)
 	require.Equal(t, 3, cfg.Merge.MinSegmentsToMerge)
+
+	// Rolling merge defaults to ON. ApplyDefaults sets the pointer to true
+	// when the user left it unset, so an explicit *bool (not bare bool) is set.
+	require.NotNil(t, cfg.Merge.RollingEnabled, "RollingEnabled pointer should be set by ApplyDefaults")
+	require.True(t, cfg.Merge.RollingEnabledValue(), "rolling merge should default to enabled")
+	// Backfill throttling defaults.
+	require.Equal(t, 500, cfg.Merge.RollingBackfillMaxSegments)
+	require.Equal(t, "72h", cfg.Merge.RollingBackfillMaxAge)
+}
+
+func TestApplyDefaultsRollingEnabledExplicitFalse(t *testing.T) {
+	// When the user explicitly sets rolling_enabled: false, ApplyDefaults must
+	// NOT override it to true. This is the per-camera-disable guarantee.
+	f := false
+	cfg := &Config{Merge: MergeConfig{RollingEnabled: &f}}
+	cfg.ApplyDefaults()
+	require.False(t, cfg.Merge.RollingEnabledValue(), "explicit false must be preserved")
+}
+
+func TestRollingEnabledValue(t *testing.T) {
+	// nil → true (default-on).
+	var m MergeConfig
+	require.True(t, m.RollingEnabledValue())
+
+	// explicit true → true.
+	tr := true
+	m.RollingEnabled = &tr
+	require.True(t, m.RollingEnabledValue())
+
+	// explicit false → false.
+	fl := false
+	m.RollingEnabled = &fl
+	require.False(t, m.RollingEnabledValue())
 }
 
 func TestApplyDefaultsObservability(t *testing.T) {

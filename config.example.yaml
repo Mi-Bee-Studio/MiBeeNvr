@@ -109,7 +109,7 @@ cleanup:
 #      segments older than min_segment_age. Low IO impact, high latency (~1h).
 #   2. Rolling merge (rolling_enabled): event-driven, merges each segment within
 #      seconds of closing. Quasi-real-time (<10s on USB HDD). Higher IO but
-#      eliminates file fragmentation. Can run alongside periodic merge.
+#      eliminates file fragmentation. DEFAULTS TO ON. Can run alongside periodic merge.
 merge:
   enabled: false                   # Enable periodic segment merging
   check_interval: "1h"             # How often to check for merge candidates
@@ -120,11 +120,18 @@ merge:
 
   # Rolling merge (quasi-real-time) — merges segments into per-camera window
   # buckets on SegmentCompleted event. Achieves <10s latency vs ~1h for periodic.
-  # Recommended for USB HDD storage; test SD card IO before enabling at scale.
-  rolling_enabled: false           # Enable event-driven rolling merge
+  # DEFAULTS TO ON: continuous 24/7 recording otherwise produces thousands of
+  # ~30s fragments per camera per day, making the recordings gallery unusable.
+  # Set to false (globally or per-camera) to disable, e.g. for SD-card cameras
+  # where you want to avoid the extra write amplification.
+  rolling_enabled: true            # Event-driven rolling merge (default true)
   rolling_debounce: "5s"           # Delay after segment close — batches rapid disconnects (default 5s)
   rolling_window: "1h"             # Bucket size — segments within this window merge into one file
   rolling_min_duration: "5m"       # Target minimum merged duration; shorter → merge_quality='short'
+  # Startup backfill throttling — caps the first-boot merge workload so an
+  # upgrade to default-on rolling merge cannot trigger an IO storm on RPi 3B.
+  rolling_backfill_max_segments: 500  # Max segments merged at startup (0=unlimited)
+  rolling_backfill_max_age: "72h"     # Only backfill segments newer than this; older → periodic merge
 
 # FTP server — provides file access over FTP protocol
 # Configurable port and passive port range

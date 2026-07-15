@@ -210,7 +210,14 @@ type MergeConfig struct {
 	// When enabled, each newly-closed segment is merged into a per-camera window
 	// bucket within seconds (vs the periodic MergeManager's ~1h latency).
 	// Independent of Enabled/CheckInterval — can run alongside the periodic merge.
-	RollingEnabled  bool   `yaml:"rolling_enabled" json:"rolling_enabled"`
+	//
+	// RollingEnabled is a *bool so rolling merge defaults to ON when unset
+	// (continuous 24/7 recording otherwise produces thousands of 30s fragments
+	// per camera per day), but can be explicitly turned OFF — globally via
+	// `merge: { rolling_enabled: false }` or per-camera — to avoid write
+	// amplification (e.g. SD-card cameras). Use RollingEnabledValue() to read
+	// the effective value; never dereference the pointer directly.
+	RollingEnabled  *bool  `yaml:"rolling_enabled" json:"rolling_enabled"`
 	RollingDebounce string `yaml:"rolling_debounce" json:"rolling_debounce"` // e.g. "500ms", "2s"
 	RollingWindow   string `yaml:"rolling_window" json:"rolling_window"`     // e.g. "1h", "30m"
 
@@ -218,6 +225,25 @@ type MergeConfig struct {
 	// Merged files shorter than this are marked merge_quality='short' and can be
 	// further consolidated via POST /api/merge/consolidate. Default "5m".
 	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
+
+	// RollingBackfill caps the startup backfill so a first boot after enabling
+	// rolling merge cannot trigger an IO storm on resource-constrained hosts
+	// (RPi 3B). MaxSegments=0 means unlimited (not recommended on RPi).
+	// MaxAge bounds backfill to segments newer than this age; older segments are
+	// left for the periodic MergeManager to digest gradually.
+	RollingBackfillMaxSegments int    `yaml:"rolling_backfill_max_segments" json:"rolling_backfill_max_segments"`
+	RollingBackfillMaxAge      string `yaml:"rolling_backfill_max_age" json:"rolling_backfill_max_age"`
+}
+
+// RollingEnabledValue reports the effective rolling-merge enabled state,
+// defaulting to true when the pointer is nil (user did not explicitly set it).
+// This is the only correct way to read RollingEnabled — it preserves the
+// "unset → on" / "explicitly false → off" distinction that a bare bool cannot.
+func (m MergeConfig) RollingEnabledValue() bool {
+	if m.RollingEnabled == nil {
+		return true
+	}
+	return *m.RollingEnabled
 }
 
 type TranscodingConfig struct {
@@ -788,6 +814,35 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
 		}
 	}
+	// Validate rolling merge config when enabled (it defaults ON, so this runs
+	// for typical deployments). Mirrors the best-effort parse logic in
+	// rolling.resolveRollingConfig but fails fast at config load instead of
+	// silently falling back.
+	if cfg.Merge.RollingEnabledValue() {
+		if cfg.Merge.RollingDebounce != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingDebounce); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_debounce %q: must be a positive duration", cfg.Merge.RollingDebounce)
+			}
+		}
+		if cfg.Merge.RollingWindow != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingWindow); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_window %q: must be a positive duration", cfg.Merge.RollingWindow)
+			}
+		}
+		if cfg.Merge.RollingMinDuration != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingMinDuration); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_min_duration %q: must be a positive duration", cfg.Merge.RollingMinDuration)
+			}
+		}
+		if cfg.Merge.RollingBackfillMaxAge != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingBackfillMaxAge); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_backfill_max_age %q: must be a positive duration", cfg.Merge.RollingBackfillMaxAge)
+			}
+		}
+		if cfg.Merge.RollingBackfillMaxSegments < 0 {
+			return fmt.Errorf("merge.rolling_backfill_max_segments must be >= 0, got %d", cfg.Merge.RollingBackfillMaxSegments)
+		}
+	}
 	// Validate transcoding configuration
 	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {
 		return fmt.Errorf("transcoding.max_workers must be between 1 and 4, got %d", cfg.Transcoding.MaxWorkers)
@@ -1172,6 +1227,24 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
+	// Rolling merge defaults to ON (nil → true via RollingEnabledValue()).
+	// Only set the pointer here if the user left it unset; an explicit
+	// rolling_enabled: false must be honored.
+	if cfg.Merge.RollingEnabled == nil {
+		t := true
+		cfg.Merge.RollingEnabled = &t
+	}
+	// Backfill throttling — protects RPi 3B from an IO storm on the first boot
+	// after upgrading to a default-on rolling merge. MaxSegments caps the total
+	// rows loaded/merged at startup; MaxAge bounds it to recent segments so
+	// months of historical fragments are digested gradually by the periodic
+	// MergeManager instead of all at once.
+	if cfg.Merge.RollingBackfillMaxSegments == 0 {
+		cfg.Merge.RollingBackfillMaxSegments = 500
+	}
+	if cfg.Merge.RollingBackfillMaxAge == "" {
+		cfg.Merge.RollingBackfillMaxAge = "72h"
+	}
 	// Transcoding defaults
 	if cfg.Transcoding.MaxWorkers == 0 {
 		cfg.Transcoding.MaxWorkers = 1
@@ -1379,8 +1452,11 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
 	}
 	// Rolling merge fields: per-camera overrides only when explicitly set.
-	if perCamera.RollingEnabled {
-		result.RollingEnabled = true
+	// RollingEnabled is a *bool — a non-nil per-camera value (true OR false)
+	// overrides the global so users can disable rolling merge per-camera even
+	// when the global default is on.
+	if perCamera.RollingEnabled != nil {
+		result.RollingEnabled = perCamera.RollingEnabled
 	}
 	if perCamera.RollingDebounce != "" {
 		result.RollingDebounce = perCamera.RollingDebounce
@@ -1390,6 +1466,12 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.RollingMinDuration != "" {
 		result.RollingMinDuration = perCamera.RollingMinDuration
+	}
+	if perCamera.RollingBackfillMaxSegments > 0 {
+		result.RollingBackfillMaxSegments = perCamera.RollingBackfillMaxSegments
+	}
+	if perCamera.RollingBackfillMaxAge != "" {
+		result.RollingBackfillMaxAge = perCamera.RollingBackfillMaxAge
 	}
 	return result
 }

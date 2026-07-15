@@ -25,6 +25,9 @@ func newTestRollingCoordinator(env *mergeTestEnv, cfg config.MergeConfig, bus *e
 	)
 }
 
+// boolPtr is a test helper for setting *bool config fields (RollingEnabled).
+func boolPtr(b bool) *bool { return &b }
+
 // newTestRollingCoordinatorWithCameras creates a coordinator with a camera list
 // (needed for backfill tests that rely on the cameras() callback).
 func newTestRollingCoordinatorWithCameras(env *mergeTestEnv, cfg config.MergeConfig, bus *event.EventBus, cameras []config.CameraConfig) *RollingMergeCoordinator {
@@ -120,7 +123,7 @@ func TestRollingMerge_SingleSegment(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -165,7 +168,7 @@ func TestRollingMerge_AppendMultiple(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -211,7 +214,7 @@ func TestRollingMerge_DisabledByDefault(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: false, // disabled
+		RollingEnabled: boolPtr(false), // disabled
 	}
 	r := newTestRollingCoordinator(env, cfg, bus)
 	require.NoError(t, r.Start(context.Background()))
@@ -247,7 +250,7 @@ func TestRollingMerge_NonMP4FormatIgnored(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 	}
 	r := newTestRollingCoordinator(env, cfg, bus)
@@ -328,7 +331,7 @@ func TestBackfillCamera_HistoricalSegments(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -376,7 +379,7 @@ func TestBackfillCamera_NoPendingSegments(t *testing.T) {
 	defer env.close(t)
 
 	bus := event.NewEventBus(16)
-	cfg := config.MergeConfig{RollingEnabled: true}
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
 	cameras := []config.CameraConfig{{ID: "empty-cam"}}
 	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
 
@@ -396,7 +399,7 @@ func TestBackfillCamera_MultipleWindows(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -446,7 +449,7 @@ func TestBackfillCamera_IncludeFailed(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  true,
+		RollingEnabled: boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -462,12 +465,12 @@ func TestBackfillCamera_IncludeFailed(t *testing.T) {
 	require.NoError(t, env.db.SetMergeStatus(context.Background(), []string{"failed-rec"}, model.MergeStatusFailed))
 
 	// Verify it's not returned by normal pending query.
-	pending, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, false)
+	pending, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, false, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, pending, 0, "failed segment should not be in pending list")
 
 	// But it IS returned with includeFailed=true.
-	withFailed, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, true)
+	withFailed, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, true, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, withFailed, 1, "failed segment should be included with includeFailed=true")
 
@@ -493,7 +496,7 @@ func TestBackfillCamera_MissingFileSkipped(t *testing.T) {
 	defer env.close(t)
 
 	bus := event.NewEventBus(16)
-	cfg := config.MergeConfig{RollingEnabled: true, RollingWindow: "1h"}
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
 	cameraID := "missing-cam"
 	cameras := []config.CameraConfig{{ID: cameraID}}
 	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
@@ -567,7 +570,7 @@ func TestListPendingSegmentsForRolling(t *testing.T) {
 	}))
 
 	// Query all cameras — should return 3 (2 H.264 + 1 MJPEG), NOT timelapse.
-	all, err := env.db.ListPendingSegmentsForRolling(ctx, "", false)
+	all, err := env.db.ListPendingSegmentsForRolling(ctx, "", false, 0, time.Time{})
 	require.NoError(t, err)
 	count := 0
 	for _, rec := range all {
@@ -580,17 +583,17 @@ func TestListPendingSegmentsForRolling(t *testing.T) {
 	require.Equal(t, 3, count, "should return 2 H.264 + 1 MJPEG, not timelapse")
 
 	// Query single camera.
-	single, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false)
+	single, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, single, 3)
 
 	// Mark one as failed, verify includeFailed behavior.
 	require.NoError(t, env.db.SetMergeStatus(ctx, []string{"list-a"}, model.MergeStatusFailed))
-	normalPending, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false)
+	normalPending, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, normalPending, 2, "should not include failed in normal query (1 H.264 + 1 MJPEG)")
 
-	withFailed, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, true)
+	withFailed, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, true, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, withFailed, 3, "should include failed with includeFailed=true")
 
@@ -598,7 +601,69 @@ func TestListPendingSegmentsForRolling(t *testing.T) {
 	affected, err := env.db.ResetFailedMergeStatus(ctx, []string{"list-a"})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), affected, "should reset 1 failed segment")
-	afterReset, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false)
+	afterReset, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, afterReset, 3, "all 3 segments should be pending after reset")
+}
+
+// TestListPendingSegmentsForRolling_Limit verifies the startup-backfill LIMIT
+// parameter caps the number of rows returned. This is the RPi-3B IO-storm guard.
+func TestListPendingSegmentsForRolling_Limit(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	ctx := context.Background()
+	cameraID := "limit-cam"
+	now := time.Now().UTC().Truncate(time.Hour)
+
+	// Create 5 segments.
+	for i := range 5 {
+		createAndInsertSegment(t, env, "lim-"+string(rune('a'+i)), cameraID, now.Add(time.Duration(i)*30*time.Second))
+	}
+
+	// limit=0 → all 5.
+	all, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, all, 5)
+
+	// limit=3 → only 3, and they are the oldest (ORDER BY started_at ASC).
+	limited, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 3, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, limited, 3, "LIMIT should cap rows")
+	require.Equal(t, "lim-a", limited[0].ID, "oldest first (ASC)")
+	require.Equal(t, "lim-c", limited[2].ID)
+}
+
+// TestListPendingSegmentsForRolling_AgeFilter verifies the since parameter
+// excludes segments older than the cutoff. This bounds startup backfill to
+// recent segments so months of historical fragments go to the periodic merger.
+func TestListPendingSegmentsForRolling_AgeFilter(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	ctx := context.Background()
+	cameraID := "age-cam"
+	now := time.Now().UTC().Truncate(time.Hour)
+
+	// Create one recent segment and one old (5 days ago) segment.
+	createAndInsertSegment(t, env, "age-recent", cameraID, now.Add(-10*time.Minute))
+	createAndInsertSegment(t, env, "age-old", cameraID, now.Add(5*24*time.Hour*-1))
+
+	// since = 1h ago → only the recent segment.
+	cutoff := now.Add(-1 * time.Hour)
+	recent, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, cutoff)
+	require.NoError(t, err)
+	require.Len(t, recent, 1, "age filter should exclude old segments")
+	require.Equal(t, "age-recent", recent[0].ID)
+
+	// since = 7 days ago → both.
+	weekAgo := now.Add(-7 * 24 * time.Hour)
+	both, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 0, weekAgo)
+	require.NoError(t, err)
+	require.Len(t, both, 2, "wide age filter includes all")
+
+	// Combine limit + age: since=1h, limit=10 → 1 (recent only).
+	combined, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 10, cutoff)
+	require.NoError(t, err)
+	require.Len(t, combined, 1)
 }

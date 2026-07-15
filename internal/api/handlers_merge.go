@@ -322,8 +322,9 @@ func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request)
 
 	includeFailed := r.URL.Query().Get("include_failed") == "true"
 
-	// List all pending segments across all cameras.
-	recs, err := h.db.ListPendingSegmentsForRolling(r.Context(), "", includeFailed)
+	// List all pending segments across all cameras. This is a status/inspection
+	// endpoint — no throttling (needs the true total).
+	recs, err := h.db.ListPendingSegmentsForRolling(r.Context(), "", includeFailed, 0, time.Time{})
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list pending segments: "+err.Error())
 		return
