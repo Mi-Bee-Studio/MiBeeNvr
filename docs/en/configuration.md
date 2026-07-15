@@ -93,7 +93,7 @@ observability:
   log_format: "text"             # Log format: json or text
   enable_pprof: false            # Enable pprof debug endpoints
 streaming:
-  default_protocol: "hls"        # Default live view protocol (hls/ll-hls/webrtc/flv)
+  default_protocol: "hls"        # Fallback protocol when per-camera auto-selection is unavailable (hls/ll-hls/webrtc/flv)
   webrtc:
     enabled: true
     max_viewers: 2               # Range: 1-10
@@ -714,7 +714,7 @@ cameras:
 - **Type**: string
 - **Default**: `"hls"`
 - **Options**: `"hls"`, `"ll-hls"`, `"webrtc"`, `"flv"`
-- **Description**: Default streaming protocol for live view in the web UI
+- **Description**: Fallback streaming protocol. The surveillance grid auto-selects the best protocol per camera (codec-aware, via `GET /api/cameras/{id}/protocols`). This value is used only when per-camera capabilities can't be queried (e.g. camera still connecting, endpoint unreachable). Users can also override the protocol per camera via the LiveView protocol switcher.
 - **Example**: `"hls"`, `"webrtc"`, `"flv"`
 
 ### `streaming.webrtc.enabled`

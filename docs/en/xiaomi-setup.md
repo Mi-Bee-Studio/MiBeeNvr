@@ -14,7 +14,7 @@ MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS
 
 - Xiaomi account with registered cameras
 - Cameras bound to your Xiaomi account in Mi Home app
-- Network access to Xiaomi cloud services (`openapi.io.mi.com`)
+- Network access to Xiaomi cloud services (`api.io.mi.com`)
 - Working internet connection for NVR system
 
 | Model | Identifier | Protocol | Support Level | Notes |
@@ -622,7 +622,7 @@ chown nvr:nvr mibee-nvr.yaml
 **Firewall Configuration**:
 ```bash
 # Allow access to Xiaomi cloud services
-ufw allow to openapi.io.mi.com port 443 proto tcp
+ufw allow to api.io.mi.com port 443 proto tcp
 
 # Restrict NVR access
 ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
@@ -631,17 +631,16 @@ ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
 ### Network Requirements
 
 **Required Access**:
-- `api.io.mi.com:443` - Xiaomi cloud API (device list, MISS URL resolution)
-- `openapi.io.mi.com:443` - Xiaomi cloud API (alternate endpoint)
-- `https://xiaomioa.com` - Xiaomi authentication
+- `api.io.mi.com:443` - Xiaomi cloud API (device list, MISS URL resolution; regional variants `<region>.api.io.mi.com`)
+- `account.xiaomi.com:443` - Xiaomi authentication
 
 **Network Troubleshooting**:
 ```bash
 # Test connectivity to Xiaomi services
-curl -v https://openapi.io.mi.com
+curl -v https://api.io.mi.com
 
 # Test DNS resolution
-nslookup openapi.io.mi.com
+nslookup api.io.mi.com
 ```
 
 ## Performance Optimization
@@ -716,7 +715,7 @@ ERROR: xiaomi authentication failed: invalid credentials
 **Solutions**:
 ```bash
 # Test Xiaomi credentials manually
-curl -X POST https://openapi.io.mi.com/login \
+curl -X POST https://api.io.mi.com/login \
   -H "Content-Type: application/json" \
   -d '{"username": "user@example.com", "password": "password"}'
 
@@ -761,7 +760,7 @@ ERROR: xiaomi recording failed: device offline
 **Solutions**:
 ```bash
 # Test network connectivity to Xiaomi services
-ping openapi.io.mi.com
+ping api.io.mi.com
 curl -v https://api.io.mi.com
 
 # Check token validity

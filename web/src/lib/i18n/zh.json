@@ -770,8 +770,6 @@
   "login.setupRequired": "需要初始化设置。请在配置文件中设置密码，或使用 NVR_PASSWORD 环境变量。",
   "settings.streaming": "流媒体协议",
   "settings.streamingDesc": "配置实时流媒体协议和默认行为。",
-  "settings.streaming.defaultProtocol": "默认协议",
-  "settings.streaming.defaultProtocolHint": "首次打开实时查看时使用。",
   "settings.streaming.fallbackProtocol": "备用直播协议",
   "settings.streaming.fallbackProtocolHint": "监控大屏会按摄像头自动选择最佳协议。此项仅在无法查询摄像头能力时作为备用。",
   "settings.streaming.webrtc": "WebRTC",
