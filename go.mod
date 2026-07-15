@@ -70,9 +70,12 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// Use our Mi-Bee-Studio fork of onvif-go, which extends fixLocalhostURL to also
-// rewrite stale service XAddrs after a camera IP change (DHCP reassignment).
-// Upstream only fixes loopback addresses; without this, rediscovery finds the
-// camera at its new IP but every service call (GetProfiles/GetStreamURI/PTZ)
-// still hits the old, unreachable IP advertised in GetCapabilities.
-replace github.com/0x524a/onvif-go => github.com/Mi-Bee-Studio/onvif-go v1.1.5
+// Use our Mi-Bee-Studio fork of onvif-go, which:
+// 1. Extends fixLocalhostURL to also rewrite stale service XAddrs after a camera
+//    IP change (DHCP reassignment). Upstream only fixes loopback addresses;
+//    without this, rediscovery finds the camera at its new IP but every service
+//    call still hits the old, unreachable IP advertised in GetCapabilities.
+// 2. Adds clock-skew-aware WS-Security digest (v1.1.6): SetClockSkew on the
+//    Client applies the device's time offset to the UsernameToken digest's
+//    Created timestamp, fixing Hikvision auth failures caused by clock divergence.
+replace github.com/0x524a/onvif-go => github.com/Mi-Bee-Studio/onvif-go v1.1.6
