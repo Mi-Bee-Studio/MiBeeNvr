@@ -470,6 +470,13 @@ type HealthAutoRemediationConfig struct {
 	// StatusError, so without this gate a camera whose IP changed would loop
 	// forever and rediscovery would never fire. 0 = use default (10 min).
 	ReconnectingTimeoutMinutes int `yaml:"reconnecting_timeout_minutes"`
+	// RediscoveryRescanMinutes is how often to re-attempt IP rediscovery for a
+	// blacklisted camera while the blacklist is still active. Without this, a
+	// camera that comes back online during the blacklist window (e.g. power
+	// restored) is not recovered until the full BlacklistHours elapses, because
+	// rediscovery only scans once at the moment of blacklisting. 0 = disabled
+	// (legacy behavior: scan only once at blacklisting). Default 5 min.
+	RediscoveryRescanMinutes int `yaml:"rediscovery_rescan_minutes"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -1324,6 +1331,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes == 0 {
 		cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes = 10
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanMinutes == 0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanMinutes = 5
 	}
 
 	// IP re-discovery (self-healing) defaults. Enabled by default since it only

@@ -411,9 +411,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		// (cameras that roam across per-subnet-DHCP APs get new IPs). The manager
 		// decides per-camera whether rediscovery applies (ONVIF + has stable_id).
 		if cfg.Health.Rediscovery.RediscoveryEnabled() {
-			healthMgr.SetRediscoverer(func(ctx context.Context, cameraID string) error {
-				_, err := camMgr.RediscoverAndReconnect(ctx, cameraID)
-				return err
+			healthMgr.SetRediscoverer(func(ctx context.Context, cameraID string) (bool, error) {
+				return camMgr.RediscoverAndReconnect(ctx, cameraID)
 			})
 		}
 	}

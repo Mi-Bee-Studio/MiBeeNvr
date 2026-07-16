@@ -20,16 +20,22 @@ type IsCameraEnabledFunc func(cameraID string) bool
 
 // RediscoverFunc re-discovers a camera by its stable hardware identifier and
 // reconnects it. Injected (not imported) to avoid a circular dependency on
-// internal/camera. It is invoked once when a camera is blacklisted — i.e. after
+// internal/camera. It is invoked when a camera is blacklisted — i.e. after
 // persistent reconnection failure — which is the signal that the camera's IP has
-// likely changed and the recorder cannot recover on its own. Returning nil does
-// not necessarily mean the camera was found; it means the attempt was dispatched.
-type RediscoverFunc func(ctx context.Context, cameraID string) error
+// likely changed and the recorder cannot recover on its own.
+//
+// Returns found=true when the camera was located at a new address AND its
+// recorder was successfully restarted. found=false with a nil error means the
+// scan completed but the device was not on the candidate subnets (the camera is
+// genuinely offline or on an unrouted network). A non-nil error means the
+// attempt itself failed (e.g. context cancelled, DB error).
+type RediscoverFunc func(ctx context.Context, cameraID string) (found bool, err error)
 
 // cameraRestartState tracks per-camera restart history and blacklist status.
 type cameraRestartState struct {
-	attempts         []time.Time
-	blacklistedSince time.Time
+	attempts            []time.Time
+	blacklistedSince    time.Time
+	lastRediscoveryScan time.Time // last time a periodic blacklist rescan was dispatched
 }
 
 // AutoRemediator decides whether to automatically restart a failed camera recorder.
@@ -140,6 +146,38 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 	if !state.blacklistedSince.IsZero() {
 		blacklistExpiry := state.blacklistedSince.Add(time.Duration(r.cfg.BlacklistHours) * time.Hour)
 		if now.Before(blacklistExpiry) {
+			// While blacklisted, periodically re-attempt IP rediscovery so a camera
+			// that comes back online (e.g. power restored) is recovered within
+			// RediscoveryRescanMinutes instead of waiting the full BlacklistHours.
+			// This does NOT restart the recorder directly — rediscovery's own
+			// startRecorder runs on success, and we clear the blacklist so the next
+			// Check cycle resumes normal remediation. 0 = disabled (legacy: scan
+			// only once at the moment of blacklisting).
+			rescanInterval := time.Duration(r.cfg.RediscoveryRescanMinutes) * time.Minute
+			if rescanInterval > 0 && r.rediscoverFn != nil && now.Sub(state.lastRediscoveryScan) >= rescanInterval {
+				state.lastRediscoveryScan = now
+				cameraIDLocal := cameraID
+				rediscoverFnLocal := r.rediscoverFn
+				r.mu.Unlock()
+				go func() {
+					found, rerr := rediscoverFnLocal(context.Background(), cameraIDLocal)
+					if rerr != nil {
+						slog.Warn("blacklist rescan: rediscovery error", "camera_id", cameraIDLocal, "error", rerr)
+						return
+					}
+					if found {
+						slog.Info("blacklist rescan: camera relocated, clearing blacklist",
+							"camera_id", cameraIDLocal)
+						r.mu.Lock()
+						if st := r.cameraStates[cameraIDLocal]; st != nil {
+							st.blacklistedSince = time.Time{}
+							st.attempts = nil
+						}
+						r.mu.Unlock()
+					}
+				}()
+				r.mu.Lock()
+			}
 			return fmt.Errorf("camera %s is blacklisted until %s", cameraID, blacklistExpiry.Format(time.RFC3339))
 		}
 		// Blacklist expired — reset state.
@@ -192,10 +230,30 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 	// — this is the moment to attempt IP re-discovery (the camera likely roamed to
 	// a new address). Run it asynchronously so it never blocks the heal loop; it
 	// only affects this one camera and a restart will follow if it succeeds.
+	// Also record the scan timestamp so the periodic blacklist rescan (above)
+	// counts this initial attempt and waits RediscoveryRescanMinutes before the
+	// next one.
 	if justBlacklisted && rediscoverFn != nil {
+		// Set lastRediscoveryScan while we still hold the lock (deferred unlock
+		// hasn't run yet, so this is safe — no re-entrancy).
+		if st := r.cameraStates[cameraID]; st != nil {
+			st.lastRediscoveryScan = time.Now()
+		}
 		go func() {
-			if rerr := rediscoverFn(context.Background(), cameraID); rerr != nil {
+			found, rerr := rediscoverFn(context.Background(), cameraID)
+			if rerr != nil {
 				slog.Warn("rediscovery failed for blacklisted camera", "camera_id", cameraID, "error", rerr)
+				return
+			}
+			if found {
+				slog.Info("rediscovery located camera at blacklist moment, clearing blacklist",
+					"camera_id", cameraID)
+				r.mu.Lock()
+				if st := r.cameraStates[cameraID]; st != nil {
+					st.blacklistedSince = time.Time{}
+					st.attempts = nil
+				}
+				r.mu.Unlock()
 			}
 		}()
 	}
