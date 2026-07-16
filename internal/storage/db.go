@@ -177,10 +177,13 @@ func New(dbPath string) (*DB, error) {
 	return d, nil
 }
 
-// defaultReadPoolSize is the size of the read-only connection pool. Kept small for
-// RPi 3B (1GB RAM); each connection holds its own page cache (cache_size=-20000 = 20MB),
-// so 3 connections ≈ 60MB of page cache beyond the writer's.
-const defaultReadPoolSize = 3
+// defaultReadPoolSize is the size of the read-only connection pool. Each connection
+// holds its own page cache (cache_size=-20000 = 20MB), so 5 connections ≈ 100MB.
+// Raised from 3 to 5: the Dashboard fires 4 concurrent reads on mount + every 30s,
+// and 3 connections caused head-of-line blocking when heavy queries (COUNT, GROUP BY)
+// monopolized a slot. 5 is safe on RPi 3B (1GB RAM) — the pool is mostly idle and
+// SQLite idle connections release their page cache under memory pressure.
+const defaultReadPoolSize = 5
 
 // SetReadPoolSize adjusts the read-only connection pool size. Use to raise it on
 // hardware with more RAM (e.g. Banana Pi M5 with 4GB) or lower it under memory pressure.

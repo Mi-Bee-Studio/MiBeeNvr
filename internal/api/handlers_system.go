@@ -284,17 +284,25 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cameras, err := h.db.ListCameras(ctx)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to count cameras")
-		return
+	// Camera count from the in-memory config (O(1)) — avoids a redundant
+	// ListCameras DB round-trip on every 30s Dashboard poll.
+	cameraCount := 0
+	if h.camMgr != nil {
+		cameraCount = h.camMgr.CameraCount()
+	} else {
+		cameras, err := h.db.ListCameras(ctx)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "failed to count cameras")
+			return
+		}
+		cameraCount = len(cameras)
 	}
 
 	stats := model.StorageStats{
 		TotalBytes:     total,
 		UsedBytes:      used,
 		RecordingCount: count,
-		CameraCount:    len(cameras),
+		CameraCount:    cameraCount,
 	}
 	writeJSON(w, http.StatusOK, stats)
 }

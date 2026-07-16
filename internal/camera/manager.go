@@ -91,12 +91,12 @@ type CameraManager struct {
 	// loop → never auto-remediated → never rediscovered. statusFunc exposes them
 	// as StatusError so the existing CheckAll→restart→blacklist→rediscovery chain
 	// can self-heal them. Cleared on successful (re)start.
-	failedStartCameras map[string]error // cameraID → startup failure reason
-	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
-	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
-	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
-	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
-	eventBus           *event.EventBus                     // event bus for publishing segment events
+	failedStartCameras map[string]error                 // cameraID → startup failure reason
+	eventSubscribers   map[string]onvif.EventSubscriber // camera_id → event subscriber
+	deviceInfoCache    map[string]*onvif.DeviceInfo     // camera_id → cached device info
+	deviceInfoMu       sync.RWMutex                     // protects deviceInfoCache
+	frameSampleCounter uint64                           // atomic: 1/100 sampling for frame processing duration
+	eventBus           *event.EventBus                  // event bus for publishing segment events
 	// hubRegistry is the central map of camera_id → StreamHub. It is the single
 	// source of truth for hubs so that pull recorders (RTSP/ONVIF/...) and push
 	// ingest servers (SRT listener / RTMP server) share the SAME hub object for
@@ -171,6 +171,15 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 
 // SetHealthManager sets the health manager for camera health monitoring.
 // Can be called with nil to disable health monitoring.
+// CameraCount returns the number of configured cameras (O(1), no DB query).
+// Used by stats endpoints that only need the count, avoiding a redundant
+// ListCameras DB round-trip per request.
+func (cm *CameraManager) CameraCount() int {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return len(cm.cfg.Cameras)
+}
+
 func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 	cm.healthMgr = m
 	if m != nil {
