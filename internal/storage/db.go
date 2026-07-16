@@ -45,11 +45,31 @@ type DB struct {
 	// enough that newly-inserted recordings appear promptly.
 	countMu    sync.Mutex
 	countCache map[string]*countCacheEntry
+
+	// totalRecordingsCache memoizes COUNT(*) FROM recordings (a full table scan in
+	// SQLite) with a short TTL. The Dashboard polls /api/stats every 30s; without
+	// this, each poll re-scans the entire recordings table. The count drifts by at
+	// most one segment interval during the TTL, which is imperceptible to the user.
+	totalRecordingsMu       sync.RWMutex
+	totalRecordingsCached   int
+	totalRecordingsCachedAt time.Time
+
+	// trendsCache memoizes GetRecordingTrends results per (days) key with a longer
+	// TTL — daily aggregates change at most once per day, so a 2-minute cache is
+	// effectively always fresh while eliminating the GROUP BY scan on every poll.
+	trendsMu    sync.Mutex
+	trendsCache map[string]*trendsCacheEntry
 }
 
 // countCacheEntry holds a cached COUNT result and its expiry time.
 type countCacheEntry struct {
 	value    int
+	expiryAt time.Time
+}
+
+// trendsCacheEntry holds a cached GetRecordingTrends result and its expiry time.
+type trendsCacheEntry struct {
+	value    []model.DailyStats
 	expiryAt time.Time
 }
 
