@@ -296,6 +296,11 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		if cm.metrics != nil {
 			cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
 		}
+		// Track this camera as failed-to-start so the health manager's status
+		// loop can see it (it's no longer in cm.recorders) and drive the
+		// auto-remediation → IP rediscovery self-healing chain. Without this,
+		// a camera whose IP changed would be silently stuck forever.
+		cm.markStartFailed(cam.ID, err)
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
 
@@ -336,6 +341,10 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 
 	cm.errorDetails[cam.ID] = nil
+	// The recorder started successfully — clear any prior failed-start tracking
+	// so statusFunc stops reporting it as StatusError (it now has a real recorder
+	// whose status is the source of truth). This closes the self-healing loop.
+	cm.clearStartFailed(cam.ID)
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
 	}

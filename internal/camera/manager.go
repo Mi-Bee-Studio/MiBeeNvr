@@ -84,6 +84,14 @@ type CameraManager struct {
 	onvifClients       map[string]*onvif.Client            // camera_id → cached ONVIF client
 	onvifMu            sync.Mutex                          // protects onvifClients
 	errorDetails       map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	// failedStartCameras tracks cameras whose recorder failed to start (e.g. the
+	// camera's IP changed and the configured endpoint is unreachable). These
+	// cameras are NOT in cm.recorders (startRecorder deletes them on failure), so
+	// without this tracking they would be invisible to the health manager's status
+	// loop → never auto-remediated → never rediscovered. statusFunc exposes them
+	// as StatusError so the existing CheckAll→restart→blacklist→rediscovery chain
+	// can self-heal them. Cleared on successful (re)start.
+	failedStartCameras map[string]error // cameraID → startup failure reason
 	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
 	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
 	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
@@ -152,6 +160,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
 		framePollers:       make(map[string]*timelapse.SnapshotCapturer),
 		errorDetails:       make(map[string]*model.CameraErrorDetail),
+		failedStartCameras: make(map[string]error),
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
@@ -165,16 +174,55 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 	cm.healthMgr = m
 	if m != nil {
-		m.SetStatusFunc(func() map[string]string {
-			cm.mu.RLock()
-			defer cm.mu.RUnlock()
-			result := make(map[string]string, len(cm.recorders))
-			for id, rec := range cm.recorders {
-				result[id] = string(rec.Status())
-			}
-			return result
-		})
+		m.SetStatusFunc(cm.statusSnapshot)
 	}
+}
+
+// statusSnapshot returns the current status of every camera the manager knows
+// about, for consumption by the health manager's periodic loop. It merges two
+// sources:
+//   - cm.recorders: active recorders report their real Status().
+//   - cm.failedStartCameras: cameras whose recorder failed to start (e.g. ONVIF
+//     endpoint unreachable after an IP change). These are NOT in cm.recorders
+//     (startRecorder deletes them on failure), so without surfacing them here
+//     they would be invisible to the health loop → never auto-remediated → never
+//     rediscovered. They are reported as StatusError so the existing
+//     CheckAll → restart → blacklist → rediscovery chain can self-heal them.
+//
+// A camera present in BOTH maps (stale failed-start entry + live recorder) is
+// dominated by its real recorder status.
+func (cm *CameraManager) statusSnapshot() map[string]string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	result := make(map[string]string, len(cm.recorders)+len(cm.failedStartCameras))
+	for id, rec := range cm.recorders {
+		result[id] = string(rec.Status())
+	}
+	for id := range cm.failedStartCameras {
+		if _, exists := result[id]; !exists {
+			result[id] = string(model.StatusError)
+		}
+	}
+	return result
+}
+
+// markStartFailed records a camera whose recorder failed to start, so that
+// statusFunc can surface it to the health manager as StatusError. This is the
+// entry point that connects startup failures to the auto-remediation → IP
+// rediscovery self-healing chain. Caller must NOT hold cm.mu.
+func (cm *CameraManager) markStartFailed(cameraID string, err error) {
+	cm.mu.Lock()
+	cm.failedStartCameras[cameraID] = err
+	cm.mu.Unlock()
+}
+
+// clearStartFailed removes a camera from the failed-start tracking. Called on
+// successful (re)start so the camera transitions to normal health monitoring.
+// Caller must NOT hold cm.mu.
+func (cm *CameraManager) clearStartFailed(cameraID string) {
+	cm.mu.Lock()
+	delete(cm.failedStartCameras, cameraID)
+	cm.mu.Unlock()
 }
 
 // SetTranscodeManager sets the transcoding manager for post-recording enqueue.
