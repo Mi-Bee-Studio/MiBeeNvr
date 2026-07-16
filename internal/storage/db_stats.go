@@ -161,12 +161,14 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 			entry = &model.DailyStats{
 				Date:         dateStr,
 				CameraCounts: make(map[string]int),
+				CameraSizes:  make(map[string]int64),
 			}
 			agg[key] = entry
 		}
 		entry.Recordings += cnt
 		entry.TotalSize += totalSize
 		entry.CameraCounts[cameraName] += cnt
+		entry.CameraSizes[cameraName] += totalSize
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -188,6 +190,7 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 		merged := model.DailyStats{
 			Date:         d,
 			CameraCounts: make(map[string]int),
+			CameraSizes:  make(map[string]int64),
 		}
 		for _, entry := range agg {
 			if entry.Date == d {
@@ -195,6 +198,9 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 				merged.TotalSize += entry.TotalSize
 				for camName, count := range entry.CameraCounts {
 					merged.CameraCounts[camName] += count
+				}
+				for camName, size := range entry.CameraSizes {
+					merged.CameraSizes[camName] += size
 				}
 			}
 		}

@@ -205,10 +205,10 @@
     }
   }
 
-  // Trend chart loading
+  // Trend chart loading — 14 days for a meaningful trend (was 7).
   async function loadTrends() {
     try {
-      const trends = await getStatsTrends(7);
+      const trends = await getStatsTrends(14);
       if (trends && trends.length > 0) {
         if (!ChartJs) ChartJs = await loadChart();
         createChart(trends);
@@ -218,7 +218,7 @@
     }
   }
 
-  function createChart(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
+  function createChart(trends: { date: string; total_size: number; camera_sizes?: Record<string, number> }[]) {
     lastTrends = trends;
     if (trendChart) { trendChart.destroy(); trendChart = null; }
     const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
@@ -460,7 +460,8 @@
           </div>
         {:else if lastTrends}
           <div class="card p-5 border th-border">
-            <div class="h-56 sm:h-64">
+            <p class="text-xs th-text-muted mb-3">{t('stats.recordingGrowthHint')}</p>
+            <div class="h-64 sm:h-72">
               <canvas id="dashboardTrendChart"></canvas>
             </div>
           </div>

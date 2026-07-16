@@ -72,48 +72,66 @@ export function getChartThemeColors() {
 }
 
 /**
- * Create the storage trend line chart.
+ * Create a per-camera stacked bar chart showing daily recording growth (bytes
+ * written per camera per day). Each bar is one day, split by camera — the user
+ * sees at a glance which cameras consume the most storage.
+ *
  * @param {import('chart.js')} Chart - Chart constructor
  * @param {HTMLCanvasElement} canvas
- * @param {{ date: string; total_size: number }[]} trends
+ * @param {{ date: string; total_size: number; camera_sizes?: Record<string, number> }[]} trends
  * @returns {import('chart.js').Chart | null}
  */
 export function createTrendChart(Chart, canvas, trends) {
   if (!canvas) return null;
 
-  const { gridColor, textColor, accentColor, accentFill } = getChartThemeColors();
-  const labels = trends.map((d) => d.date.slice(5));
-  const rawSizes = trends.map((d) => d.total_size);
-  const chartUnit = getChartUnit(rawSizes);
-  const sizes = rawSizes.map((s) => +(s / chartUnit.divisor).toFixed(1));
+  const { gridColor, textColor } = getChartThemeColors();
+  const labels = trends.map((d) => d.date.slice(5)); // MM-DD
+
+  // Collect all camera names across all days (for stable legend order).
+  const cameraNames = [...new Set(trends.flatMap((d) => Object.keys(d.camera_sizes || {})))];
+  // Determine unit from the max single-day total.
+  const maxDay = Math.max(...trends.map((d) => d.total_size), 0);
+  const chartUnit = getChartUnit([maxDay]);
+
+  // Build one dataset per camera (stacked).
+  const datasets = cameraNames.map((cam, i) => ({
+    label: cam,
+    data: trends.map((d) => +(((d.camera_sizes || {})[cam] || 0) / chartUnit.divisor).toFixed(2)),
+    backgroundColor: BAR_COLORS[i % BAR_COLORS.length],
+    borderColor: BAR_COLORS[i % BAR_COLORS.length].replace('0.7', '0.9'),
+    borderWidth: 1,
+  }));
 
   return new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: `Storage (${chartUnit.unit})`,
-          data: sizes,
-          borderColor: accentColor,
-          backgroundColor: accentFill,
-          fill: true,
-          tension: 0.3,
-          pointRadius: 4,
-          pointBackgroundColor: accentColor,
-        },
-      ],
-    },
+    type: 'bar',
+    data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { labels: { color: textColor } },
-        tooltip: { mode: 'index', intersect: false },
+        legend: {
+          labels: { color: textColor, boxWidth: 12, font: { size: 10 } },
+          position: 'bottom',
+          // Hide legend if there are too many cameras (chart gets cluttered).
+          display: cameraNames.length <= 8,
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y} ${chartUnit.unit}`,
+          },
+        },
       },
       scales: {
-        x: { grid: { color: gridColor }, ticks: { color: textColor } },
-        y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true },
+        x: { stacked: true, grid: { color: gridColor }, ticks: { color: textColor } },
+        y: {
+          stacked: true,
+          grid: { color: gridColor },
+          ticks: { color: textColor },
+          beginAtZero: true,
+          title: { display: true, text: `${chartUnit.unit}/day`, color: textColor },
+        },
       },
     },
   });
