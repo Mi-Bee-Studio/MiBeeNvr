@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -211,16 +211,20 @@
       const trends = await getStatsTrends(14);
       if (trends && trends.length > 0) {
         if (!ChartJs) ChartJs = await loadChart();
-        createChart(trends);
+        await createChart(trends);
       }
     } catch (e) {
       console.error('Failed to load trends:', e);
     }
   }
 
-  function createChart(trends: { date: string; total_size: number; camera_sizes?: Record<string, number> }[]) {
+  async function createChart(trends: { date: string; total_size: number; camera_sizes?: Record<string, number> }[]) {
     lastTrends = trends;
     if (trendChart) { trendChart.destroy(); trendChart = null; }
+    // Wait for Svelte to flush the DOM — lastTrends was just set, so the canvas
+    // may not exist yet (the {:else if lastTrends} branch hasn't rendered). Without
+    // this, getElementById returns null and the chart never appears.
+    await tick();
     const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
     if (ctx) {
       trendChart = createTrendChart(ChartJs, ctx, trends);
@@ -267,7 +271,7 @@
     // The old code called loadTrends() (a full DB scan) just to change colors.
     const observer = new MutationObserver(() => {
       if (trendChart && lastTrends) {
-        createChart(lastTrends);
+        void createChart(lastTrends); // canvas already in DOM; just re-render colors
       }
     });
     observer.observe(document.documentElement, {

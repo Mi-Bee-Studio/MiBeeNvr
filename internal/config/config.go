@@ -477,6 +477,23 @@ type HealthAutoRemediationConfig struct {
 	// rediscovery only scans once at the moment of blacklisting. 0 = disabled
 	// (legacy behavior: scan only once at blacklisting). Default 5 min.
 	RediscoveryRescanMinutes int `yaml:"rediscovery_rescan_minutes"`
+	// RediscoveryRescanMaxMinutes caps the exponential backoff interval for
+	// periodic blacklist rescans. After each consecutive "device not found"
+	// result, the rescan interval is multiplied by RediscoveryRescanBackoff
+	// until it hits this ceiling. 0 = use default (60 min). This prevents
+	// permanently-dead cameras from sustaining a full-/24 scan every 5 min
+	// indefinitely, which hammered disk IO on RPi-class hosts.
+	RediscoveryRescanMaxMinutes int `yaml:"rediscovery_rescan_max_minutes"`
+	// RediscoveryRescanBackoff is the exponential multiplier applied to the
+	// rescan interval after each consecutive miss. Default 2.0 →
+	// 5min→10min→20min→40min→60min(cap). Must be >= 1.0.
+	RediscoveryRescanBackoff float64 `yaml:"rediscovery_rescan_backoff"`
+	// RediscoveryMaxScanMisses, when > 0, stops periodic rescans entirely
+	// after this many consecutive "not found" results — the camera is
+	// assumed permanently offline and must be recovered via manual
+	// POST /api/cameras/{id}/rediscover. 0 = unlimited (backoff caps at
+	// RediscoveryRescanMaxMinutes). Default 0.
+	RediscoveryMaxScanMisses int `yaml:"rediscovery_max_scan_misses"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -1334,6 +1351,12 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.RediscoveryRescanMinutes == 0 {
 		cfg.Health.AutoRemediation.RediscoveryRescanMinutes = 5
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanMaxMinutes == 0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanMaxMinutes = 60
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanBackoff < 1.0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanBackoff = 2.0
 	}
 
 	// IP re-discovery (self-healing) defaults. Enabled by default since it only

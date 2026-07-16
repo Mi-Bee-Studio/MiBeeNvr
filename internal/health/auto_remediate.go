@@ -36,6 +36,11 @@ type cameraRestartState struct {
 	attempts            []time.Time
 	blacklistedSince    time.Time
 	lastRediscoveryScan time.Time // last time a periodic blacklist rescan was dispatched
+	// consecutiveScanMisses counts consecutive "device not found" results
+	// from periodic blacklist rescans. Each miss increases the rescan interval
+	// (exponential backoff), so permanently-dead cameras stop hammering the
+	// disk/network with a full-/24 scan every few minutes.
+	consecutiveScanMisses int
 }
 
 // AutoRemediator decides whether to automatically restart a failed camera recorder.
@@ -92,6 +97,32 @@ func (r *AutoRemediator) SetOfflineDurationFn(fn func(cameraID string) time.Dura
 	r.mu.Lock()
 	r.offlineDurationFn = fn
 	r.mu.Unlock()
+}
+
+// rescanInterval computes the exponential-backoff interval for periodic
+// blacklist rescans. The base interval is RediscoveryRescanMinutes; after
+// each consecutive "device not found" miss it is multiplied by
+// RediscoveryRescanBackoff, capped at RediscoveryRescanMaxMinutes.
+// This prevents permanently-dead cameras from sustaining a full-/24 scan
+// every few minutes indefinitely (the root cause of the production IO
+// storm: 3 dead cameras × 5-min fixed rescan = continuous subnet scanning).
+func (r *AutoRemediator) rescanInterval(st *cameraRestartState) time.Duration {
+	base := time.Duration(r.cfg.RediscoveryRescanMinutes) * time.Minute
+	if base <= 0 || st == nil {
+		return base
+	}
+	backoff := r.cfg.RediscoveryRescanBackoff
+	if backoff < 1.0 {
+		backoff = 1.0
+	}
+	interval := float64(base)
+	for i := 0; i < st.consecutiveScanMisses; i++ {
+		interval *= backoff
+	}
+	if maxM := time.Duration(r.cfg.RediscoveryRescanMaxMinutes) * time.Minute; maxM > 0 && time.Duration(interval) > maxM {
+		return maxM
+	}
+	return time.Duration(interval)
 }
 
 // Check evaluates whether a camera should be auto-restarted based on its status.
@@ -153,8 +184,16 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 			// startRecorder runs on success, and we clear the blacklist so the next
 			// Check cycle resumes normal remediation. 0 = disabled (legacy: scan
 			// only once at the moment of blacklisting).
-			rescanInterval := time.Duration(r.cfg.RediscoveryRescanMinutes) * time.Minute
-			if rescanInterval > 0 && r.rediscoverFn != nil && now.Sub(state.lastRediscoveryScan) >= rescanInterval {
+			rescanInterval := r.rescanInterval(state)
+			maxMisses := r.cfg.RediscoveryMaxScanMisses
+			// Determine whether to dispatch a periodic rescan. Three conditions:
+			//   1. Interval is positive and a rediscoverer is wired.
+			//   2. Enough time has elapsed since the last scan.
+			//   3. We haven't exceeded the hard-stop miss limit (0 = unlimited).
+			shouldRescan := rescanInterval > 0 && r.rediscoverFn != nil &&
+				now.Sub(state.lastRediscoveryScan) >= rescanInterval &&
+				(maxMisses <= 0 || state.consecutiveScanMisses < maxMisses)
+			if shouldRescan {
 				state.lastRediscoveryScan = now
 				cameraIDLocal := cameraID
 				rediscoverFnLocal := r.rediscoverFn
@@ -163,18 +202,21 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 					found, rerr := rediscoverFnLocal(context.Background(), cameraIDLocal)
 					if rerr != nil {
 						slog.Warn("blacklist rescan: rediscovery error", "camera_id", cameraIDLocal, "error", rerr)
-						return
+						return // transient failure — don't increment miss counter
 					}
-					if found {
-						slog.Info("blacklist rescan: camera relocated, clearing blacklist",
-							"camera_id", cameraIDLocal)
-						r.mu.Lock()
-						if st := r.cameraStates[cameraIDLocal]; st != nil {
+					r.mu.Lock()
+					st := r.cameraStates[cameraIDLocal]
+					if st != nil {
+						if found {
+							slog.Info("blacklist rescan: camera relocated, clearing blacklist", "camera_id", cameraIDLocal)
 							st.blacklistedSince = time.Time{}
 							st.attempts = nil
+							st.consecutiveScanMisses = 0
+						} else {
+							st.consecutiveScanMisses++ // genuinely offline → back off
 						}
-						r.mu.Unlock()
 					}
+					r.mu.Unlock()
 				}()
 				r.mu.Lock()
 			}
@@ -183,6 +225,7 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 		// Blacklist expired — reset state.
 		state.blacklistedSince = time.Time{}
 		state.attempts = nil
+		state.consecutiveScanMisses = 0
 	}
 
 	// Safety check 4: per-camera rate limit (count attempts in last hour).
