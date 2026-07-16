@@ -30,6 +30,12 @@
     activeTab = tabId;
     const hash = tabId === 'storage' ? '#/dashboard' : `#/dashboard/${tabId}`;
     window.location.hash = hash;
+    // Lazy-load trends only when the storage tab is opened, not on every 30s
+    // poll. Daily aggregates change at most once per day — no need to fetch
+    // them unless the user is actually looking at the chart.
+    if (tabId === 'storage' && !lastTrends) {
+      loadTrends();
+    }
   }
 
   // System resource state
@@ -231,26 +237,37 @@
       loadSystemStats(),
       loadHealth(),
       loadHealthCameras(),
-      loadTrends(),
     ]).finally(() => { loading = false; });
+
+    // Lazy-load trends after core data — storage is the default tab, so the chart
+    // needs data, but we don't block the initial render on the (potentially slow)
+    // GROUP BY scan. The backend cache (2min TTL) makes this near-instant after
+    // the first load.
+    if (activeTab === 'storage') {
+      void loadTrends();
+    }
 
     // Quick second sample after 2s so CPU/network show without waiting 30s
     const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
 
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 30 seconds — only the lightweight, frequently-changing
+    // data. Trends are NOT polled (they change once/day; backend caches 2min;
+    // loaded lazily on tab open). loadHealth is dropped from the poll — the
+    // Dashboard's health card derives from healthCameras (lighter, per-camera
+    // detail), and the top-level /api/health is only needed once on mount for
+    // the overall status badge.
     refreshInterval = window.setInterval(() => {
       loadStats();
       loadCameras();
       loadSystemStats();
-      loadHealth();
       loadHealthCameras();
-      loadTrends();
     }, 30000);
 
-    // Re-create charts when theme changes
+    // Re-color existing chart on theme change WITHOUT refetching data.
+    // The old code called loadTrends() (a full DB scan) just to change colors.
     const observer = new MutationObserver(() => {
-      if (trendChart) {
-        loadTrends();
+      if (trendChart && lastTrends) {
+        createChart(lastTrends);
       }
     });
     observer.observe(document.documentElement, {
