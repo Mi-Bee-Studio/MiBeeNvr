@@ -221,8 +221,15 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 	if perr != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	rerr = cm.startRecorder(ctx, cm.cfg.Cameras[idx], segDur)
+	// Snapshot config + segDur, then release the lock before startRecorder.
+	// startRecorder's sub-helpers (timelapse extractor, markStartFailed, etc.)
+	// acquire cm.mu themselves — re-entering under a held Lock self-deadlocks
+	// (Go's RWMutex is non-reentrant). This is the same pattern as
+	// RestartRecorder and StartCamera. Holding the lock here previously caused
+	// a permanent cm.mu deadlock that blocked every camera API endpoint.
+	camCopy := cm.cfg.Cameras[idx]
 	cm.mu.Unlock()
+	rerr = cm.startRecorder(ctx, camCopy, segDur)
 	if rerr != nil {
 		return false, fmt.Errorf("rediscovery: failed to restart recorder: %w", rerr)
 	}

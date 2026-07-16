@@ -268,7 +268,11 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 }
 
 // startRecorder creates and starts a recorder for the given camera config.
-// The caller must hold cm.mu (or at least a write lock) if cm.recorders is being modified.
+// The caller must NOT hold cm.mu — startRecorder's sub-helpers (timelapse
+// extractor, markStartFailed, framePollers) acquire cm.mu themselves, so
+// re-entering under a held Lock self-deadlocks. Callers snapshot the config
+// under the lock, Unlock, then call startRecorder (see RestartRecorder,
+// StartCamera, RediscoverAndReconnect).
 // If the recorder is created, it will be registered in cm.recorders.
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
