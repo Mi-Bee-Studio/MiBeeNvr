@@ -1,6 +1,5 @@
 <script lang="ts">
   import { setupApi, storeCredentials } from '$lib/api';
-  import { setProtocolPreference } from '$lib/preferences';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
@@ -108,9 +107,6 @@
       const decoded = atob(res.token);
       const [user, pass] = decoded.split(':');
       storeCredentials(user, pass);
-
-      // Store detected protocol preference
-      setProtocolPreference(bestProtocol);
 
       // Show completion toast
       const protocolLabel = bestProtocol === 'llhls' ? 'LL-HLS'

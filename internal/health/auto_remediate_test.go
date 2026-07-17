@@ -350,3 +350,180 @@ func TestAutoRemediator_DisabledConfig(t *testing.T) {
 		t.Fatalf("expected 0 restart calls when disabled, got %d", got)
 	}
 }
+
+// --- Blacklist periodic rediscovery rescan tests ---
+
+// mockRediscoverFn tracks rediscovery calls and controls the (found, err) result.
+type mockRediscoverFn struct {
+	mu       sync.Mutex
+	calls    []string
+	found    bool // result to return
+	err      error
+	delay    time.Duration // simulate scan duration
+	callDone chan struct{} // closed when a call completes (for synchronization)
+}
+
+func (m *mockRediscoverFn) call(_ context.Context, cameraID string) (bool, error) {
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
+	m.mu.Lock()
+	m.calls = append(m.calls, cameraID)
+	m.mu.Unlock()
+	if m.callDone != nil {
+		close(m.callDone)
+		m.callDone = nil // only close once
+	}
+	return m.found, m.err
+}
+
+func (m *mockRediscoverFn) callCount(t *testing.T) int {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.calls)
+}
+
+// blacklistCamera exhausts MaxRestartsPerHour to put a camera into blacklist.
+func blacklistCamera(t *testing.T, r *AutoRemediator, cameraID string) {
+	t.Helper()
+	for range r.cfg.MaxRestartsPerHour {
+		_ = r.Check(cameraID, string(model.StatusError))
+	}
+	if !r.IsBlacklisted(cameraID) {
+		t.Fatal("expected camera to be blacklisted")
+	}
+}
+
+// TestBlacklistRescan_PeriodicRediscovery verifies that while a camera is
+// blacklisted, Check periodically re-triggers IP rediscovery (every
+// RediscoveryRescanMinutes) instead of dead-waiting for BlacklistHours to elapse.
+func TestBlacklistRescan_PeriodicRediscovery(t *testing.T) {
+	cfg := config.HealthAutoRemediationConfig{
+		Enabled:                  true,
+		MaxRestartsPerHour:       3,
+		CooldownMinutes:          0,
+		BlacklistHours:           1,
+		GlobalMaxPerMin:          100,
+		RediscoveryRescanMinutes: 1,
+	}
+	r, _, _ := newTestRemediatorWithConfig(t, cfg)
+
+	rd := &mockRediscoverFn{found: false}
+	r.SetRediscoverer(rd.call)
+
+	// Wait for the justBlacklisted scan deterministically via callDone.
+	rd.callDone = make(chan struct{})
+	blacklistCamera(t, r, "cam-1")
+	select {
+	case <-rd.callDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blacklist-moment scan")
+	}
+	initialScans := rd.callCount(t)
+
+	// Backdate lastRediscoveryScan so the next Check triggers a periodic rescan.
+	r.mu.Lock()
+	if st := r.cameraStates["cam-1"]; st != nil {
+		st.lastRediscoveryScan = time.Now().Add(-2 * time.Minute) // expired
+	}
+	r.mu.Unlock()
+
+	rd.callDone = make(chan struct{})
+	_ = r.Check("cam-1", string(model.StatusError)) // blacklisted → should dispatch rescan
+	select {
+	case <-rd.callDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for periodic rescan")
+	}
+
+	if got := rd.callCount(t); got <= initialScans {
+		t.Fatalf("expected rescan to increment call count, got %d (was %d)", got, initialScans)
+	}
+}
+
+// TestBlacklistRescan_FoundClearsBlacklist verifies that when a periodic
+// rescan's rediscovery returns found=true, the blacklist is cleared so the
+// camera re-enters normal remediation on the next cycle.
+func TestBlacklistRescan_FoundClearsBlacklist(t *testing.T) {
+	cfg := config.HealthAutoRemediationConfig{
+		Enabled:                  true,
+		MaxRestartsPerHour:       3,
+		CooldownMinutes:          0,
+		BlacklistHours:           1,
+		GlobalMaxPerMin:          100,
+		RediscoveryRescanMinutes: 1,
+	}
+	r, _, _ := newTestRemediatorWithConfig(t, cfg)
+
+	// found=true: rediscovery successfully relocated + restarted the camera.
+	rd := &mockRediscoverFn{found: true}
+	r.SetRediscoverer(rd.call)
+
+	blacklistCamera(t, r, "cam-1")
+
+	// The justBlacklisted scan returns found=true → should clear blacklist async.
+	time.Sleep(200 * time.Millisecond)
+	if r.IsBlacklisted("cam-1") {
+		t.Fatal("expected blacklist cleared after rediscovery found=true at blacklist moment")
+	}
+}
+
+// TestBlacklistRescan_NotFoundKeepsBlacklist verifies that found=false does NOT
+// clear the blacklist — the camera stays blacklisted and waits for the next rescan.
+func TestBlacklistRescan_NotFoundKeepsBlacklist(t *testing.T) {
+	cfg := config.HealthAutoRemediationConfig{
+		Enabled:                  true,
+		MaxRestartsPerHour:       3,
+		CooldownMinutes:          0,
+		BlacklistHours:           1,
+		GlobalMaxPerMin:          100,
+		RediscoveryRescanMinutes: 1,
+	}
+	r, _, _ := newTestRemediatorWithConfig(t, cfg)
+
+	rd := &mockRediscoverFn{found: false}
+	r.SetRediscoverer(rd.call)
+
+	blacklistCamera(t, r, "cam-1")
+	time.Sleep(200 * time.Millisecond) // let the blacklist-moment scan finish
+
+	if !r.IsBlacklisted("cam-1") {
+		t.Fatal("expected camera to REMAIN blacklisted when rediscovery found=false")
+	}
+}
+
+// TestBlacklistRescan_DisabledByZero verifies RediscoveryRescanMinutes=0 disables
+// periodic rescans (legacy behavior: scan only once at the blacklist moment).
+func TestBlacklistRescan_DisabledByZero(t *testing.T) {
+	cfg := config.HealthAutoRemediationConfig{
+		Enabled:                  true,
+		MaxRestartsPerHour:       3,
+		CooldownMinutes:          0,
+		BlacklistHours:           1,
+		GlobalMaxPerMin:          100,
+		RediscoveryRescanMinutes: 0, // disabled
+	}
+	r, _, _ := newTestRemediatorWithConfig(t, cfg)
+
+	rd := &mockRediscoverFn{found: false}
+	r.SetRediscoverer(rd.call)
+
+	blacklistCamera(t, r, "cam-1")
+	time.Sleep(100 * time.Millisecond)
+	afterBlacklist := rd.callCount(t)
+
+	// Backdate lastRediscoveryScan and call Check again — should NOT trigger a rescan.
+	r.mu.Lock()
+	if st := r.cameraStates["cam-1"]; st != nil {
+		st.lastRediscoveryScan = time.Time{} // zero = long ago
+	}
+	r.mu.Unlock()
+
+	_ = r.Check("cam-1", string(model.StatusError))
+	time.Sleep(100 * time.Millisecond)
+
+	if got := rd.callCount(t); got != afterBlacklist {
+		t.Fatalf("with rescan disabled, expected %d scans (no periodic), got %d", afterBlacklist, got)
+	}
+}

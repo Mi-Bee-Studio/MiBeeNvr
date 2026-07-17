@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import { Volume2, VolumeX } from 'lucide-svelte';
   import { getAuthHeader } from '$lib/api';
+  import { t } from '$lib/i18n';
   import { AudioPlayer } from '$lib/audio-player';
   import {
     MsgType,
@@ -119,7 +120,7 @@
 <button
   onclick={toggleMute}
   class="absolute top-2 right-10 p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10 {className}"
-  title={muted ? '取消静音' : '静音'}
+  title={muted ? t('live.unmute') : t('live.mute')}
 >
   {#if muted}
     <VolumeX size={16} />

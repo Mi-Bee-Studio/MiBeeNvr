@@ -90,6 +90,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 					cameras[i].PushRetentionDays = cam.PushRetentionDays
 					cameras[i].StableID = cam.StableID
 					cameras[i].SubnetHints = cam.SubnetHints
+					cameras[i].RecordingEnabled = cam.RecordingEnabled
 					break
 				}
 			}
@@ -162,6 +163,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string                        `json:"channel"`
 		AudioEnabled   *bool                         `json:"audio_enabled"`
+		// Recording gate: false = live-only (no segments written). nil = record.
+		RecordingEnabled *bool `json:"recording_enabled"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -273,6 +276,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse:         body.Timelapse,
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
+		RecordingEnabled:  body.RecordingEnabled,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,
@@ -376,6 +380,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 				row.SubnetHints = cam.SubnetHints
 				row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
 				row.DarkFrameThreshold = cam.DarkFrameThreshold
+				row.RecordingEnabled = cam.RecordingEnabled
 				row.RecordingSchedule = cam.RecordingSchedule
 				break
 			}
@@ -442,6 +447,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Dark frame filtering
 		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
 		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
+		// Recording gate: false = live-only (no segments written). nil = unchanged.
+		RecordingEnabled *bool `json:"recording_enabled"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Push/ingest fields (SRT/RTMP)
@@ -504,6 +511,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioEnabled:           body.AudioEnabled,
 		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled,
 		DarkFrameThreshold:     body.DarkFrameThreshold,
+		RecordingEnabled:       body.RecordingEnabled,
 		RecordingSchedule:      body.RecordingSchedule,
 		StreamKey:              body.StreamKey,
 		SRTPassphrase:          body.SRTPassphrase,
@@ -762,7 +770,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.URL == "" {
+	if body.URL == "" && body.ONVIFEndpoint == "" {
 		WriteError(w, http.StatusBadRequest, "url is required")
 		return
 	}
@@ -773,6 +781,24 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startTime := time.Now()
+
+	// ONVIF cameras get a real stream-access probe: the old HTTP-HEAD check could
+	// report success while the RTSP stream was unreachable or credentials were
+	// wrong for GetStreamUri — the root of the "test passes but no image" reports
+	// (issues #29/#30). The probe distinguishes reachable / stream-ok / codec-lie.
+	if body.Protocol == "onvif" {
+		probe := probeONVIFStream(r.Context(), target, body.Username, body.Password)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":    probe.StreamOK,
+			"reachable":  probe.Reachable,
+			"stream_ok":  probe.StreamOK,
+			"encoding":   probe.Encoding,
+			"codec_lie":  probe.CodecLie,
+			"message":    probe.reasonOrOK(),
+			"latency_ms": time.Since(startTime).Milliseconds(),
+		})
+		return
+	}
 
 	switch {
 	case strings.HasPrefix(target, "rtsp://"):
@@ -866,32 +892,124 @@ func stripScheme(rawURL string) string {
 // in their ONVIF profile while streaming H.265 (see ONVIFRecorder.detectEncoding).
 // If the RTSP DESCRIBE probe succeeds, its result is authoritative; otherwise the
 // ONVIF-declared encoding is returned as-is.
-func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
+// onvifStreamProbe is the structured result of probing an ONVIF device for real
+// stream access. It distinguishes "device reachable" from "stream actually
+// playable" — the old test-connection endpoint conflated the two (an HTTP HEAD
+// to the device_service URL can return 200 while the RTSP stream is unreachable
+// or the credentials are wrong for GetStreamUri), producing the "test passes but
+// no image" reports in issues #29/#30.
+type onvifStreamProbe struct {
+	Reachable bool   // ONVIF device_service responded to GetDeviceInformation/GetProfiles
+	StreamOK  bool   // an RTSP stream URI was resolved AND a DESCRIBE succeeded
+	Encoding  string // the REAL codec (RTSP DESCRIBE is authoritative; may differ from declared)
+	CodecLie  bool   // the ONVIF-declared codec disagrees with the real stream
+	Reason    string // human-readable explanation when Reachable/StreamOK is false
+}
+
+// onvifLooksLikeAuthError reports whether an ONVIF error smells like a
+// WS-Security rejection (the trigger for running the time-skew diagnosis).
+// Mirrors the onvif package's internal isAuthError but lives here to avoid
+// widening the onvif package's API surface.
+func onvifLooksLikeAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "NotAuthorized") ||
+		strings.Contains(s, "status 401") ||
+		strings.Contains(s, "status 403") ||
+		strings.Contains(s, "status 400")
+}
+
+// reasonOrOK returns the failure reason, or a success message when the stream
+// is healthy (used by the test-connection response so the frontend always has a
+// sensible message to show).
+func (p onvifStreamProbe) reasonOrOK() string {
+	if p.StreamOK {
+		if p.CodecLie {
+			return "stream accessible (declared codec corrected by RTSP probe)"
+		}
+		return "connection successful"
+	}
+	return p.Reason
+}
+
+// probeONVIFStream connects to an ONVIF device, resolves the stream URI, and
+// verifies the stream actually plays via an RTSP DESCRIBE. This is the
+// "does it really work?" check that the test-connection flow needs. It is also
+// the engine behind probeONVIFEncoding (which discards everything but encoding).
+func probeONVIFStream(ctx context.Context, endpoint, username, password string) onvifStreamProbe {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
 	client := onvif.NewClient(endpoint, username, password)
 	if err := client.Connect(ctx); err != nil {
-		return ""
+		reason := fmt.Sprintf("could not connect to ONVIF service: %v", err)
+		// If it looks like an auth rejection, run the time-skew diagnosis so the
+		// user gets an actionable "sync the camera's clock" hint instead of a
+		// generic failure (Hikvision cameras reject digest auth on clock skew).
+		if onvifLooksLikeAuthError(err) {
+			if diag := client.DiagnoseAuth(ctx); diag.SkewDetected {
+				reason = diag.Diagnosis
+			}
+		}
+		return onvifStreamProbe{Reason: reason}
 	}
 	profiles, err := client.GetProfiles(ctx)
-	if err != nil || len(profiles) == 0 {
-		return ""
+	if err != nil {
+		reason := fmt.Sprintf("device responded but GetProfiles failed (credentials may be wrong, or ONVIF may be limited): %v", err)
+		if onvifLooksLikeAuthError(err) {
+			if diag := client.DiagnoseAuth(ctx); diag.SkewDetected {
+				reason = diag.Diagnosis
+			}
+		}
+		return onvifStreamProbe{
+			Reachable: true,
+			Reason:    reason,
+		}
+	}
+	if len(profiles) == 0 {
+		return onvifStreamProbe{
+			Reachable: true,
+			Reason:    "device responded but exposed no media profiles — check the camera's ONVIF/stream configuration",
+		}
 	}
 	declared := profiles[0].Encoding
 
-	// Verify the declared H264/H265 against the real stream. JPEG profiles are
-	// left to the recorder's runtime resolution (RTSP vs HTTP MJPEG).
-	if declared == "H264" || declared == "H265" {
-		if si, err := client.GetStreamURI(ctx, profiles[0].Token); err == nil && si.URI != "" {
-			if actual := recorder.ProbeRTSPEncoding(si.URI, username, password); actual != "" {
-				if !strings.EqualFold(actual, declared) {
-					logger.Info("ONVIF-declared encoding corrected by RTSP probe",
-						"endpoint", endpoint, "declared", declared, "actual", actual)
-				}
-				return actual
-			}
+	si, err := client.GetStreamURI(ctx, profiles[0].Token)
+	if err != nil || si.URI == "" {
+		return onvifStreamProbe{
+			Reachable: true,
+			Reason:    "device responded but GetStreamUri failed — credentials may lack stream access, or the camera does not expose RTSP",
 		}
 	}
-	return declared
+
+	// RTSP DESCRIBE is authoritative for the codec (corrects cameras that lie —
+	// e.g. HiSilicon OEMs advertising H264 while streaming H265) AND confirms the
+	// stream is actually playable with the supplied credentials.
+	actual := recorder.ProbeRTSPEncoding(si.URI, username, password)
+	if actual == "" {
+		return onvifStreamProbe{
+			Reachable: true,
+			Reason:    "stream URI resolved but RTSP DESCRIBE failed — check that the RTSP port is reachable and credentials are correct",
+		}
+	}
+	codecLie := declared != "" && !strings.EqualFold(actual, declared)
+	if codecLie {
+		logger.Info("ONVIF-declared encoding corrected by RTSP probe",
+			"endpoint", endpoint, "declared", declared, "actual", actual)
+	}
+	return onvifStreamProbe{
+		Reachable: true,
+		StreamOK:  true,
+		Encoding:  actual,
+		CodecLie:  codecLie,
+	}
+}
+
+// probeONVIFEncoding returns just the resolved encoding (empty on failure),
+// preserving the original contract of the create-camera path. It now delegates
+// to probeONVIFStream so both paths share one probing implementation.
+func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
+	return probeONVIFStream(ctx, endpoint, username, password).Encoding
 }

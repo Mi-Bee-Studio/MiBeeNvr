@@ -18,7 +18,7 @@
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Search, ChevronUp, LayoutGrid, Table2, ArrowUp, AlertCircle, Trash2 } from 'lucide-svelte';
+  import { Search, ChevronUp, LayoutGrid, Table2, ArrowUp, AlertCircle, Trash2, Clock } from 'lucide-svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
@@ -26,15 +26,19 @@
   import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
   import AviPlayback from '../components/AviPlayback.svelte';
+  import DayTimeline from '../lib/components/DayTimeline.svelte';
 
   // ── URL params initialization ──
-  let initialViewMode: 'gallery' | 'list' = 'gallery';
+  // Timeline is the default view for continuous 24/7 recording (the natural
+  // interaction model). Gallery/list fall back to per-segment cards, which suit
+  // sparse event clips but not thousands of 30s fragments.
+  let initialViewMode: 'timeline' | 'gallery' | 'list' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'list') initialViewMode = v;
+    if (v === 'gallery' || v === 'list' || v === 'timeline') initialViewMode = v;
     const f = params.get('format');
     if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
     const c = params.get('camera');
@@ -78,7 +82,12 @@
   let currentPageNum = $state(1);
 
   // ── View mode ──
-  let viewMode = $state<'gallery' | 'list'>(initialViewMode);
+  let viewMode = $state<'timeline' | 'gallery' | 'list'>(initialViewMode);
+
+  // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
+  let timelineRecordings = $state<Recording[]>([]);
+  let timelineLoading = $state(false);
+  let timelineAbortController: AbortController | null = null;
 
   // ── Selection ──
   let selectedIds = $state<Set<string>>(new Set());
@@ -351,6 +360,45 @@ let batchMerging = $state(false);
     }
   }
 
+  // Timeline data: fetch all recordings for the selected day (no camera filter —
+  // the component groups by camera itself). With rolling merge consolidating
+  // 30s fragments into ~hourly segments, a full day is a few hundred rows max.
+  // If a camera still has heavy fragmentation (rolling merge disabled / failed),
+  // the limit bounds the query; the timeline renders whatever it gets.
+  async function loadTimelineData() {
+    if (!selectedDate) {
+      timelineRecordings = [];
+      return;
+    }
+    if (timelineAbortController) timelineAbortController.abort();
+    timelineAbortController = new AbortController();
+    timelineLoading = true;
+    try {
+      const dayStart = new Date(selectedDate + 'T00:00:00');
+      const dayEnd = new Date(selectedDate + 'T23:59:59.999');
+      const response = await listRecordings({
+        start: dayStart.toISOString(),
+        end: dayEnd.toISOString(),
+        sort_by: 'started_at',
+        order: 'asc',
+        limit: 2000,
+        signal: timelineAbortController.signal,
+      });
+      timelineRecordings = response.recordings;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      // Non-fatal: timeline stays stale on error
+    } finally {
+      timelineLoading = false;
+    }
+  }
+
+  // Seek from the timeline → navigate to the recording detail with the clicked
+  // offset as a query param (?t=N). The detail page reads ?t on mount and seeks.
+  function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
+    window.location.hash = `#/recordings/${recordingId}?t=${Math.floor(offsetSeconds)}`;
+  }
+
   async function loadListData() {
     // Standard load (OFFSET-based, triggered by filter/sort changes).
     // Reset cursor chain on fresh loads.
@@ -554,6 +602,7 @@ let batchMerging = $state(false);
     refreshInterval = window.setInterval(() => {
       loadCalendarSummary();
       loadGalleryData();
+      loadTimelineData();
     }, getRefreshInterval());
 
     const handleScroll = () => {
@@ -576,9 +625,11 @@ let batchMerging = $state(false);
         refreshInterval = window.setInterval(() => {
           loadCalendarSummary();
           loadGalleryData();
+          loadTimelineData();
         }, getRefreshInterval());
         loadCalendarSummary();
         loadGalleryData();
+        loadTimelineData();
         startTranscodingPoll();
       }
     };
@@ -622,6 +673,20 @@ let batchMerging = $state(false);
     }
   });
 
+  // Timeline: reload when the selected day changes (camera/format filters don't
+  // apply here — the timeline shows all cameras for the whole day; the coverage
+  // bands are colored by format). viewMode gating avoids fetching when the tab
+  // isn't visible (same lazy pattern as gallery/list).
+  let timelineLoadTimeout: number;
+  $effect(() => {
+    if (viewMode === 'timeline') {
+      const _ = selectedDate;
+      clearTimeout(timelineLoadTimeout);
+      timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
+      return () => clearTimeout(timelineLoadTimeout);
+    }
+  });
+
   // Handle preference changes (refresh interval, items per page)
   $effect(() => {
     if (refreshInterval) clearInterval(refreshInterval);
@@ -659,7 +724,7 @@ let batchMerging = $state(false);
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'gallery' || v === 'list') viewMode = v;
+        if (v === 'timeline' || v === 'gallery' || v === 'list') viewMode = v;
         const f = params.get('format');
         if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
         const c = params.get('camera');
@@ -670,9 +735,9 @@ let batchMerging = $state(false);
     return () => window.removeEventListener('hashchange', handler);
   });
 
-  // Auto-select today's date when in gallery mode and no date selected
+  // Auto-select today's date when in gallery/timeline mode and no date selected
   $effect(() => {
-    if (viewMode === 'gallery' && !selectedDate) {
+    if ((viewMode === 'gallery' || viewMode === 'timeline') && !selectedDate) {
       const today = new Date();
       const y = today.getFullYear();
       const m = String(today.getMonth() + 1).padStart(2, '0');
@@ -730,6 +795,13 @@ let batchMerging = $state(false);
       <!-- ── View mode tabs ── -->
       <div class="flex items-center gap-2 mb-4 mt-4">
         <button
+          class="btn btn-sm {viewMode === 'timeline' ? 'btn-primary' : 'btn-ghost'}"
+          onclick={() => viewMode = 'timeline'}
+        >
+          <Clock size={16} class="mr-1" />
+          {t('library.viewTimeline')}
+        </button>
+        <button
           class="btn btn-sm {viewMode === 'gallery' ? 'btn-primary' : 'btn-ghost'}"
           onclick={() => viewMode = 'gallery'}
         >
@@ -755,6 +827,25 @@ let batchMerging = $state(false);
           <p class="th-text-secondary mb-4">{calError}</p>
           <button onclick={loadCalendarSummary} class="btn btn-primary btn-sm">{t('common.retry')}</button>
         </div>
+      {:else if viewMode === 'timeline'}
+        <!-- ── Timeline view (default for continuous 24/7 recording) ── -->
+        {#if timelineLoading && timelineRecordings.length === 0}
+          <div class="card p-12 text-center border th-border">
+            <div class="flex justify-center mb-4 th-text-tertiary">
+              <Clock size={48} class="animate-pulse" />
+            </div>
+            <p class="th-text-secondary">{t('common.loading')}</p>
+          </div>
+        {:else}
+          <div class="card p-4 border th-border">
+            <DayTimeline
+              {cameras}
+              recordings={timelineRecordings}
+              selectedDate={selectedDate || ''}
+              onseek={handleTimelineSeek}
+            />
+          </div>
+        {/if}
       {:else if viewMode === 'gallery'}
         <!-- ── Gallery view ── -->
         <GalleryGrid
@@ -769,7 +860,7 @@ let batchMerging = $state(false);
           onplay={handlePlay}
 
         />
-      {:else}
+      {:else if viewMode === 'list'}
         <!-- ── List view ── -->
         <CompactList
           recordings={listRecordingsData}

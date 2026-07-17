@@ -79,14 +79,24 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		return "", "", err
 	}
 
-	cameraDir := filepath.Join(m.rootDir, cameraID)
-	now := time.Now().Format("20060102_150405")
-	uuid := strconv.FormatInt(time.Now().UnixNano(), 10)
+	now := time.Now()
+	// Time-bucketed layout: cameraID/YYYYMM/DD/HH/segment.mp4
+	// Reduces per-directory file count from thousands (flat layout) to
+	// ~120/hour, dramatically improving ext4 readdir/stat performance on
+	// slow USB HDD storage. Old flat-layout files coexist until naturally
+	// aged out by retention.
+	hourDir := filepath.Join(m.rootDir, cameraID, now.Format("200601"), now.Format("02"), now.Format("15"))
+	if err := os.MkdirAll(hourDir, 0o755); err != nil {
+		m.recordWriteFailure(cameraID)
+		return "", "", fmt.Errorf("storage: failed to create hour bucket dir: %w", err)
+	}
+	ts := now.Format("20060102_150405")
+	uuid := strconv.FormatInt(now.UnixNano(), 10)
 
 	switch strings.ToLower(format) {
 	case "h264", "h265":
-		tempPath = filepath.Join(cameraDir, uuid+".tmp")
-		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, now, uuid))
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, ts, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
@@ -95,8 +105,8 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		f.Close()
 
 	case "mjpeg", "timelapse":
-		tempPath = filepath.Join(cameraDir, uuid+".tmp")
-		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s", cameraID, now, uuid))
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s", cameraID, ts, uuid))
 
 		if err := os.MkdirAll(tempPath, 0o755); err != nil {
 			m.recordWriteFailure(cameraID)
@@ -104,8 +114,8 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		}
 
 	case "avi":
-		tempPath = filepath.Join(cameraDir, uuid+".tmp")
-		finalPath = filepath.Join(cameraDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, now, uuid))
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, ts, uuid))
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
@@ -238,19 +248,30 @@ func (m *Manager) unregisterTempPath(tempPath string) {
 func (m *Manager) ListFiles(cameraID string) ([]string, error) {
 	cameraDir := filepath.Join(m.rootDir, cameraID)
 
-	entries, err := os.ReadDir(cameraDir)
-	if err != nil {
-		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, err)
+	// Return an explicit error for a nonexistent camera directory —
+	// filepath.WalkDir would otherwise silently return an empty result.
+	if _, statErr := os.Stat(cameraDir); statErr != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, statErr)
 	}
 
 	var files []string
-	for _, entry := range entries {
-		name := entry.Name()
+	err := filepath.WalkDir(cameraDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible entries
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
 		// Skip temp files and hidden files
 		if strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".") {
-			continue
+			return nil
 		}
-		files = append(files, filepath.Join(cameraDir, name))
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot walk camera dir %q: %w", cameraDir, err)
 	}
 	return files, nil
 }

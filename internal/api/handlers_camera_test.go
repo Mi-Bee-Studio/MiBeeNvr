@@ -163,6 +163,30 @@ func TestTestConnection_InvalidURLFormat(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 }
 
+// TestTestConnection_ONVIFUnreachable verifies the ONVIF branch returns the
+// structured probe result (reachable/stream_ok/reason) rather than the old
+// HTTP-HEAD pass/fail. An unreachable endpoint must report success=false with a
+// non-empty reason — this is the "does it really work?" check that fixes the
+// "test passes but no image" reports (issues #29/#30).
+func TestTestConnection_ONVIFUnreachable(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	body := `{"protocol":"onvif","onvif_endpoint":"http://127.0.0.1:1/onvif/device_service","username":"admin","password":"pass"}`
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-connection", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]interface{}
+	parseJSON(t, rr, &resp)
+	require.Equal(t, false, resp["success"], "unreachable ONVIF device must not report success")
+	require.Equal(t, false, resp["reachable"])
+	require.Equal(t, false, resp["stream_ok"])
+	require.NotEmpty(t, resp["message"], "a reason must explain why the probe failed")
+}
+
 // --- handleCreateCamera validation tests ---
 
 func TestCreateCamera_MissingName(t *testing.T) {

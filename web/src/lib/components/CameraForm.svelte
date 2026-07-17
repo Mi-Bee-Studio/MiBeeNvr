@@ -1,5 +1,6 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
+    import { friendlyError } from '$lib/errors';
     import {
         createCamera,
         updateCamera,
@@ -82,8 +83,14 @@
   let formStreamEncoding = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
+  // Recording gate — when off, the recorder stays connected for live preview
+  // and relay but writes NO segments to disk (live-only / stream-forward mode).
+  let formRecordingEnabled = $state(true);
   // Xiaomi two-way audio
   let formTwoWayAudioEnabled = $state(false);
+  // IP self-healing: candidate CIDRs to scan when this camera's IP changes.
+  // One per line in the textarea; backend validates as CIDRs.
+  let formSubnetHints = $state('');
   // Push/ingest fields (SRT/RTMP)
   let formStreamKey = $state('');
   let formSRTPassphrase = $state('');
@@ -192,6 +199,14 @@ let validationErrors = $state<Record<string, string>>({});
     return () => ctrl.abort();
   });
 
+  // Parse the subnet-hints textarea into a clean CIDR list (one per line,
+  // whitespace/comma tolerant, blanks dropped). The backend validates each as a
+  // CIDR; /24-or-smaller only (the rediscovery scanner rejects wider ranges).
+  function parseSubnetHints(text: string): string[] | undefined {
+    const parts = text.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
+    return parts.length > 0 ? parts : undefined;
+  }
+
   function resetFormFields() {
     formName = '';
     formProtocol = 'rtsp';
@@ -216,6 +231,7 @@ let validationErrors = $state<Record<string, string>>({});
     formChannel = '';
     formAudioEnabled = false;
     formTwoWayAudioEnabled = false;
+    formSubnetHints = '';
     formDarkFrameFilterEnabled = false;
     formDarkFrameThreshold = 15;
     formRecordingScheduleEnabled = false;
@@ -267,7 +283,9 @@ let validationErrors = $state<Record<string, string>>({});
     }
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formRecordingEnabled = camera.recording_enabled ?? true;
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
+    formSubnetHints = (camera.subnet_hints ?? []).join('\n');
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
     formSRTStreamID = camera.srt_stream_id || '';
@@ -425,7 +443,7 @@ let validationErrors = $state<Record<string, string>>({});
         onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
       });
     } catch (e: any) {
-      testResult = { success: false, message: e.message || t('cameras.testFailed', { error: '' }), latency_ms: 0 };
+      testResult = { success: false, message: friendlyError(e, 'cameras.testFailed'), latency_ms: 0 };
     } finally {
       testing = false;
     }
@@ -503,7 +521,9 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
+            subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -555,7 +575,9 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
+            subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
@@ -676,6 +698,22 @@ async function performCameraSave() {
       </div>
     {/if}
 
+    <!-- Recording toggle: when off, the camera is live-only (no segments on disk) -->
+    <div class="flex items-center gap-2">
+      <input
+        id="cam-recording"
+        type="checkbox"
+        class="checkbox"
+        bind:checked={formRecordingEnabled}
+      />
+      <label for="cam-recording" class="input-label cursor-pointer">
+        {t('cameras.recordingEnabled')}
+      </label>
+    </div>
+    {#if !formRecordingEnabled}
+      <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
+    {/if}
+
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
     {#if formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
       <div class="flex items-center gap-2">
@@ -706,48 +744,57 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
+    <!-- Advanced recording options (dark-frame filter + schedule) — collapsed by
+         default to reduce clutter; auto-opens when either option is already on. -->
     {#if formProtocol === 'rtsp' || formProtocol === 'onvif' || formProtocol === 'http'}
-      <div class="md:col-span-2 space-y-2">
-        <div class="flex items-center gap-2">
-          <input id="cam-dark-frame" type="checkbox" class="checkbox"
-            bind:checked={formDarkFrameFilterEnabled}
-          />
-          <label for="cam-dark-frame" class="input-label cursor-pointer">
-            {t('cameras.darkFrameFilter') || 'Dark frame filter'}
-            <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
-          </label>
-        </div>
-        {#if formDarkFrameFilterEnabled}
-          <div class="flex items-center gap-2 pl-6">
-            <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
-            <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
-            <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
+    <details class="md:col-span-2 border th-border rounded-lg" open={formDarkFrameFilterEnabled || formRecordingScheduleEnabled ? true : undefined}>
+      <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+        {t('cameras.advancedRecording')}
+      </summary>
+      <div class="px-4 pb-4 space-y-4">
+        <!-- Dark frame filtering (MJPEG/AVI cameras only) -->
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input id="cam-dark-frame" type="checkbox" class="checkbox"
+              bind:checked={formDarkFrameFilterEnabled}
+            />
+            <label for="cam-dark-frame" class="input-label cursor-pointer">
+              {t('cameras.darkFrameFilter') || 'Dark frame filter'}
+              <span class="text-xs th-text-muted ml-1">({t('cameras.darkFrameFilterHint') || 'skip night/dark segments'})</span>
+            </label>
           </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Recording schedule -->
-    <div class="md:col-span-2 space-y-2">
-      <div class="flex items-center gap-2">
-        <input id="cam-rec-schedule" type="checkbox" class="checkbox"
-          bind:checked={formRecordingScheduleEnabled}
-        />
-        <label for="cam-rec-schedule" class="input-label cursor-pointer">
-          {t('cameras.recordingSchedule') || 'Recording schedule'}
-          <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
-        </label>
-      </div>
-      {#if formRecordingScheduleEnabled}
-        <div class="flex items-center gap-2 pl-6">
-          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
-          <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
-          <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
-          <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+          {#if formDarkFrameFilterEnabled}
+            <div class="flex items-center gap-2 pl-6">
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.brightnessThreshold') || 'Brightness threshold'}</label>
+              <input type="range" min="5" max="50" bind:value={formDarkFrameThreshold} class="range range-sm w-32" />
+              <span class="text-sm font-mono w-8">{formDarkFrameThreshold}</span>
+            </div>
+          {/if}
         </div>
-      {/if}
-    </div>
+
+        <!-- Recording schedule -->
+        <div class="space-y-2">
+          <div class="flex items-center gap-2">
+            <input id="cam-rec-schedule" type="checkbox" class="checkbox"
+              bind:checked={formRecordingScheduleEnabled}
+            />
+            <label for="cam-rec-schedule" class="input-label cursor-pointer">
+              {t('cameras.recordingSchedule') || 'Recording schedule'}
+              <span class="text-xs th-text-muted ml-1">({t('cameras.recordingScheduleHint') || 'time-based recording'})</span>
+            </label>
+          </div>
+          {#if formRecordingScheduleEnabled}
+            <div class="flex items-center gap-2 pl-6">
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
+              <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
+              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
+              <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+            </div>
+          {/if}
+        </div>
+      </div>
+    </details>
+    {/if}
 
     <!-- URL (hidden for push/ingest protocols — publisher connects to us) -->
     {#if formProtocol !== 'srt' && formProtocol !== 'rtmp'}
@@ -782,9 +829,14 @@ async function performCameraSave() {
       {#if testResult}
         <p class="text-xs mt-1 {testResult.success ? 'th-color-success' : 'th-color-danger'}">
           {testResult.success
-            ? t('cameras.testSuccess').replace('{latency}', String(testResult.latency_ms))
-            : t('cameras.testFailed').replace('{error}', testResult.message)}
+            ? t('cameras.testSuccess', { latency: String(testResult.latency_ms) })
+            : testResult.message}
         </p>
+        {#if testResult.success && testResult.codec_lie}
+          <p class="text-xs th-text-muted">{t('cameras.testCodecCorrected', { encoding: testResult.encoding || '' })}</p>
+        {:else if testResult.reachable && !testResult.stream_ok}
+          <p class="text-xs th-text-muted">{t('cameras.testReachableNoStream')}</p>
+        {/if}
       {/if}
       {#if validationErrors['url']}
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
@@ -1186,6 +1238,27 @@ async function performCameraSave() {
 
       <!-- Device Capabilities -->
       <DeviceCapabilities cameraId={editingCamera.id} />
+
+      <!-- IP self-healing: subnet hints (where to look when this camera's IP changes) -->
+      <details class="border th-border rounded-lg">
+        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
+          {t('cameras.subnetHintsTitle')}
+        </summary>
+        <div class="px-4 pb-4 space-y-2">
+          <p class="text-xs th-text-muted">{t('cameras.subnetHintsHint')}</p>
+          <textarea
+            bind:value={formSubnetHints}
+            rows="3"
+            class="input font-mono text-xs"
+            placeholder="192.168.1.0/24&#10;10.0.0.0/24"
+          ></textarea>
+          {#if editingCamera.stable_id}
+            <p class="text-xs th-text-muted">{t('cameras.subnetHintsStableId', { id: editingCamera.stable_id })}</p>
+          {:else}
+            <p class="text-xs th-color-warning">{t('cameras.subnetHintsNoStableId')}</p>
+          {/if}
+        </div>
+      </details>
 
       <!-- Imaging Panel (if supported) -->
       {#if deviceCaps?.imaging}

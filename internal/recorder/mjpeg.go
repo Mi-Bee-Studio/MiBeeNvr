@@ -40,6 +40,9 @@ type MJPEGConfig struct {
 	AudioEnabled           bool
 	DarkFrameFilterEnabled bool // skip dark/night segments
 	DarkFrameThreshold     int  // luminance threshold 0-255 (default 15)
+	// RecordEnabled gates segment writes (nil => record; ptr-to-false => live-only).
+	// See BaseConfig.RecordEnabled for details.
+	RecordEnabled *bool
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -433,6 +436,12 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 	defer close(done)
 
 	for data := range r.frameCh {
+		// Live-only mode: drain the channel (so the RTP callback's non-blocking
+		// send never blocks) but perform no segment I/O. The StreamHub fan-out
+		// already happened in the RTP callback, so live preview keeps working.
+		if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
+			continue
+		}
 		if len(data) == 0 {
 			continue
 		}

@@ -36,6 +36,9 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  // Recording gate: false = live-only (no segments written to disk; the recorder
+  // stays connected for live preview + relay + health). undefined = record.
+  recording_enabled?: boolean | null;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -107,7 +110,6 @@ export interface RelayCapabilities {
   max_targets_per_camera: number;
 }
 
-
 /** Fetch relay system capabilities (FFmpeg availability, limits). */
 export async function getRelayCapabilities(signal?: AbortSignal): Promise<RelayCapabilities> {
   return apiRequest<RelayCapabilities>('/relay/capabilities', { signal });
@@ -130,6 +132,8 @@ export interface CreateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Recording gate: false = live-only (no segments written). Omit = record.
+  recording_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -137,6 +141,10 @@ export interface CreateCameraRequest {
   // Push-out relay
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
+  // IP self-healing: ONVIF serial (sent at add time so the camera is immediately
+  // self-healable after IP changes, without waiting for async ensureStableID).
+  stable_id?: string;
+  subnet_hints?: string[];
   // Xiaomi two-way audio
   two_way_audio_enabled?: boolean;
 }
@@ -159,6 +167,8 @@ export interface UpdateCameraRequest {
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   channel?: string;
+  // Recording gate: false = live-only (no segments written). Omit = unchanged.
+  recording_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -177,6 +187,16 @@ export interface DiscoveredDevice {
   scopes: string[];
   hardware: string;
   endpoint: string;
+  // Enriched via GetDeviceInformation (backend). Previously these were displayed
+  // in the discovery list but discarded on add — now sent in the create payload
+  // so the camera is added metadata-complete.
+  manufacturer?: string;
+  model?: string;
+  firmware?: string;
+  // ONVIF serial number. Sent as stable_id on add so IP self-healing (re-acquire
+  // by serial after IP change) works immediately, without waiting for the async
+  // ensureStableID goroutine that runs after the recorder connects.
+  serial?: string;
 }
 
 export interface DiscoveryError {
@@ -333,7 +353,7 @@ export async function stopCamera(id: string, signal?: AbortSignal): Promise<{ st
 // found, reconnects. Returns whether the camera was relocated.
 export async function rediscoverCamera(
   id: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ found: boolean; status?: string; reason?: string }> {
   // The unicast scan can run up to the configured MaxDuration (default 30s) plus
   // restart time, so use a generous client-side timeout rather than the default
@@ -364,6 +384,13 @@ export interface TestConnectionResult {
   success: boolean;
   message: string;
   latency_ms: number;
+  // ONVIF structured probe fields (issues #29/#30). Distinguish "device
+  // reachable" from "stream actually playable" so users aren't told success
+  // when only the device_service URL responded.
+  reachable?: boolean;
+  stream_ok?: boolean;
+  encoding?: string;
+  codec_lie?: boolean;
 }
 
 export async function testConnection(data: TestConnectionRequest, signal?: AbortSignal): Promise<TestConnectionResult> {
@@ -452,10 +479,7 @@ export async function discoverONVIFDevices(timeout: number = 5, signal?: AbortSi
   };
 }
 
-export async function getONVIFDeviceDetail(
-  ip: string,
-  signal?: AbortSignal
-): Promise<ONVIFDeviceDetail> {
+export async function getONVIFDeviceDetail(ip: string, signal?: AbortSignal): Promise<ONVIFDeviceDetail> {
   return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
@@ -477,6 +501,33 @@ export async function probeONVIFDevice(
 export async function listProtocols(signal?: AbortSignal): Promise<ProtocolInfo[]> {
   const response = await apiRequest<{ protocols: ProtocolInfo[] }>('/protocols', { signal });
   return response.protocols;
+}
+
+// A single streaming protocol entry as returned by GET /api/cameras/{id}/protocols.
+// `Protocol` is the backend handler name (webrtc/flv/ll-hls/hls/wasm/mjpeg);
+// `Available` is false when the handler recognizes the codec but can't serve it
+// (e.g. WebRTC for H.265) — in which case `Reason` explains why.
+export interface CameraProtocolDetail {
+  Protocol: string;
+  Available: boolean;
+  Reason: string;
+}
+
+// Response of GET /api/cameras/{id}/protocols — codec-aware per-camera protocol
+// ranking. The backend probes the RUNNING recorder for the real codec (correcting
+// ONVIF cameras that lie), then asks each registered stream handler CanHandle(codec).
+// `default` is the latency-optimal available protocol (webrtc→flv→ll-hls→hls→mjpeg).
+export interface CameraProtocolsResponse {
+  protocols: CameraProtocolDetail[];
+  encoding: string;
+  default: string;
+}
+
+// Fetch the available streaming protocols for a specific camera. The grid uses
+// this (instead of the global /protocols list) to pick the best playback mode
+// per camera, accounting for codec and handler availability.
+export async function getCameraProtocols(cameraId: string, signal?: AbortSignal): Promise<CameraProtocolsResponse> {
+  return apiRequest<CameraProtocolsResponse>(`/cameras/${cameraId}/protocols`, { signal });
 }
 
 // Normalize legacy combined protocol names (rtsp_h264, etc.) to base protocol ID
@@ -816,29 +867,20 @@ export interface XiaomiDeviceInfo {
   [key: string]: unknown;
 }
 
-export async function getXiaomiDeviceInfo(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<XiaomiDeviceInfo> {
+export async function getXiaomiDeviceInfo(cameraId: string, signal?: AbortSignal): Promise<XiaomiDeviceInfo> {
   return apiRequest<XiaomiDeviceInfo>(`/cameras/${cameraId}/xiaomi/device-info`, { signal });
 }
 
 // --- Two-way Audio ---
 
-export async function startTwoWayAudio(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<{ speaker_codec: number }> {
+export async function startTwoWayAudio(cameraId: string, signal?: AbortSignal): Promise<{ speaker_codec: number }> {
   return apiRequest<{ speaker_codec: number }>(`/cameras/${cameraId}/xiaomi/two-way-audio/start`, {
     method: 'POST',
     signal,
   });
 }
 
-export async function stopTwoWayAudio(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<{ status: string }> {
+export async function stopTwoWayAudio(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/xiaomi/two-way-audio/stop`, {
     method: 'POST',
     signal,

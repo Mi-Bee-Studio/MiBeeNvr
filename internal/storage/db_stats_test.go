@@ -77,13 +77,14 @@ func TestGetRecordingTrends_Timezone(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Helper()
 
 			// Clear recordings table
 			_, err := db.db.ExecContext(ctx, "DELETE FROM recordings")
 			require.NoError(t, err)
+			db.InvalidateStatsCache() // raw SQL bypasses the cache; clear it so the next query re-fetches
 
 			// Insert test recordings
 			for i, recTime := range tc.recTimes {
@@ -95,8 +96,10 @@ func TestGetRecordingTrends_Timezone(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// Get trends with 7 days to capture our test data
-			trends, err := db.GetRecordingTrends(ctx, 7, tc.loc)
+			// Get trends — use a distinct days value per case so the cache key
+			// (days:tzOffset) doesn't collide between cases with the same timezone.
+			queryDays := 7 + i
+			trends, err := db.GetRecordingTrends(ctx, queryDays, tc.loc)
 			require.NoError(t, err)
 			require.NotEmpty(t, trends)
 
@@ -357,4 +360,45 @@ func TestGetRecordingTrends_CrossDate(t *testing.T) {
 		require.Equal(t, int64(1024), trend.TotalSize)
 		require.Equal(t, 1, trend.CameraCounts["Front Door"])
 	}
+}
+
+// TestCountRecordings_Cache verifies the 15s TTL cache: a second call within
+// the TTL returns the cached value without hitting the DB (the count reflects
+// the first call, not a concurrent insert).
+func TestCountRecordings_Cache(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	err = db.Init(ctx)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Insert one recording.
+	_, err = db.db.ExecContext(ctx,
+		`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rec-cache-1", "cam1", "/test.mp4", "h264",
+		formatTime(time.Now()), formatTime(time.Now().Add(60*time.Second)), 60.0, 1024, 60)
+	require.NoError(t, err)
+
+	// First call — populates cache.
+	count1, err := db.CountRecordings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count1)
+
+	// Insert another recording — the cache should NOT reflect it yet (TTL not expired).
+	_, err = db.db.ExecContext(ctx,
+		`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rec-cache-2", "cam1", "/test.mp4", "h264",
+		formatTime(time.Now()), formatTime(time.Now().Add(60*time.Second)), 60.0, 1024, 60)
+	require.NoError(t, err)
+
+	// Second call — should return cached value (1), not the actual DB count (2).
+	count2, err := db.CountRecordings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count2, "cached count should not reflect insert within TTL")
 }

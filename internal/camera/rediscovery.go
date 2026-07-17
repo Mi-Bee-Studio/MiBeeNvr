@@ -59,6 +59,74 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 	}
 }
 
+// ensureProfileToken persists the profile token that the ONVIF recorder
+// auto-selected during Start (via onvif.SelectMainProfile). Without this, every
+// NVR restart re-runs GetProfiles to re-select — a redundant round-trip that
+// strains the ESP32 MiBeeCam's limited HTTP connection pool.
+//
+// Best-effort and non-blocking: waits up to 15s for the recorder to come online
+// (Start is async), reads the resolved token, and persists it to config if the
+// camera didn't already have one. No-op if the token is already set or can't be
+// resolved.
+func (cm *CameraManager) ensureProfileToken(cameraID string) {
+	// Wait for the recorder to come online so ProfileToken is resolved.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return // recorder didn't come online in time — skip silently
+		case <-ticker.C:
+		}
+		rec := cm.GetRecorder(cameraID)
+		if rec == nil {
+			continue
+		}
+		if rec.Status() != model.StatusRecording {
+			continue // still connecting
+		}
+		onvifRec, ok := rec.(*recorder.ONVIFRecorder)
+		if !ok {
+			return // not an ONVIF recorder
+		}
+		token := onvifRec.ResolvedProfileToken()
+		if token == "" {
+			return // nothing resolved
+		}
+		// Check if the config already has this token — avoid unnecessary writes.
+		cm.mu.Lock()
+		alreadySet := false
+		for i := range cm.cfg.Cameras {
+			if cm.cfg.Cameras[i].ID == cameraID {
+				if cm.cfg.Cameras[i].ProfileToken == token {
+					alreadySet = true
+				}
+				break
+			}
+		}
+		if alreadySet {
+			cm.mu.Unlock()
+			return
+		}
+		// Persist the resolved token.
+		for i := range cm.cfg.Cameras {
+			if cm.cfg.Cameras[i].ID == cameraID {
+				cm.cfg.Cameras[i].ProfileToken = token
+				break
+			}
+		}
+		cm.mu.Unlock()
+		if err := cm.persistConfig(); err != nil {
+			logger.Warn("failed to persist auto-selected profile_token", "camera_id", cameraID, "error", err)
+		} else {
+			logger.Info("auto-persisted profile_token for camera", "camera_id", cameraID, "profile_token", token)
+		}
+		return
+	}
+}
+
 // RediscoverAndReconnect attempts to relocate a camera whose IP has changed by
 // scanning candidate subnets for a device whose ONVIF serial number matches the
 // camera's StableID, then updates the config and restarts the recorder.
@@ -153,8 +221,15 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 	if perr != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	rerr = cm.startRecorder(ctx, cm.cfg.Cameras[idx], segDur)
+	// Snapshot config + segDur, then release the lock before startRecorder.
+	// startRecorder's sub-helpers (timelapse extractor, markStartFailed, etc.)
+	// acquire cm.mu themselves — re-entering under a held Lock self-deadlocks
+	// (Go's RWMutex is non-reentrant). This is the same pattern as
+	// RestartRecorder and StartCamera. Holding the lock here previously caused
+	// a permanent cm.mu deadlock that blocked every camera API endpoint.
+	camCopy := cm.cfg.Cameras[idx]
 	cm.mu.Unlock()
+	rerr = cm.startRecorder(ctx, camCopy, segDur)
 	if rerr != nil {
 		return false, fmt.Errorf("rediscovery: failed to restart recorder: %w", rerr)
 	}

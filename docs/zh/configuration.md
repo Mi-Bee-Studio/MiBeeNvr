@@ -70,7 +70,7 @@ hls:
   low_latency: false             # 启用低延迟 HLS (LL-HLS)
   part_min_duration: "200ms"     # LL-HLS 分片时长 (范围: 100ms-1s)
 streaming:
-  default_protocol: "hls"        # 默认直播协议 (webrtc/flv/hls/ll-hls)
+  default_protocol: "hls"        # 备用协议：当按摄像头自动选择不可用时使用 (webrtc/flv/hls/ll-hls)
   webrtc:
     enabled: true                  # 启用 WebRTC WHEP 直播
     max_viewers: 2                # 最大并发 WebRTC 观众数 (范围: 1-10)
@@ -572,7 +572,7 @@ cameras:
 - **类型**: string
 - **默认**: `"hls"`
 - **选项**: `"webrtc"`, `"flv"`, `"hls"`, `"ll-hls"`
-- **描述**: 默认直播协议。控制新观看者首次连接时使用的流媒体协议
+- **描述**: 备用直播协议。监控大屏会按摄像头自动选择最佳协议（基于编码，通过 `GET /api/cameras/{id}/protocols`）。此值仅在无法查询摄像头能力时（如摄像头正在连接、端点不可达）作为备用。用户也可在 LiveView 的协议切换器中按摄像头手动覆盖。
 - **示例**: `"hls"`, `"webrtc"`, `"flv"`, `"ll-hls"`
 
 ### `streaming.webrtc.enabled`

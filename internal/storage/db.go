@@ -45,11 +45,31 @@ type DB struct {
 	// enough that newly-inserted recordings appear promptly.
 	countMu    sync.Mutex
 	countCache map[string]*countCacheEntry
+
+	// totalRecordingsCache memoizes COUNT(*) FROM recordings (a full table scan in
+	// SQLite) with a short TTL. The Dashboard polls /api/stats every 30s; without
+	// this, each poll re-scans the entire recordings table. The count drifts by at
+	// most one segment interval during the TTL, which is imperceptible to the user.
+	totalRecordingsMu       sync.RWMutex
+	totalRecordingsCached   int
+	totalRecordingsCachedAt time.Time
+
+	// trendsCache memoizes GetRecordingTrends results per (days) key with a longer
+	// TTL — daily aggregates change at most once per day, so a 2-minute cache is
+	// effectively always fresh while eliminating the GROUP BY scan on every poll.
+	trendsMu    sync.Mutex
+	trendsCache map[string]*trendsCacheEntry
 }
 
 // countCacheEntry holds a cached COUNT result and its expiry time.
 type countCacheEntry struct {
 	value    int
+	expiryAt time.Time
+}
+
+// trendsCacheEntry holds a cached GetRecordingTrends result and its expiry time.
+type trendsCacheEntry struct {
+	value    []model.DailyStats
 	expiryAt time.Time
 }
 
@@ -157,10 +177,13 @@ func New(dbPath string) (*DB, error) {
 	return d, nil
 }
 
-// defaultReadPoolSize is the size of the read-only connection pool. Kept small for
-// RPi 3B (1GB RAM); each connection holds its own page cache (cache_size=-20000 = 20MB),
-// so 3 connections ≈ 60MB of page cache beyond the writer's.
-const defaultReadPoolSize = 3
+// defaultReadPoolSize is the size of the read-only connection pool. Each connection
+// holds its own page cache (cache_size=-20000 = 20MB), so 5 connections ≈ 100MB.
+// Raised from 3 to 5: the Dashboard fires 4 concurrent reads on mount + every 30s,
+// and 3 connections caused head-of-line blocking when heavy queries (COUNT, GROUP BY)
+// monopolized a slot. 5 is safe on RPi 3B (1GB RAM) — the pool is mostly idle and
+// SQLite idle connections release their page cache under memory pressure.
+const defaultReadPoolSize = 5
 
 // SetReadPoolSize adjusts the read-only connection pool size. Use to raise it on
 // hardware with more RAM (e.g. Banana Pi M5 with 4GB) or lower it under memory pressure.

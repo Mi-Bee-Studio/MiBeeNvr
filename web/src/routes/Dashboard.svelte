@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -30,6 +30,12 @@
     activeTab = tabId;
     const hash = tabId === 'storage' ? '#/dashboard' : `#/dashboard/${tabId}`;
     window.location.hash = hash;
+    // Lazy-load trends only when the storage tab is opened, not on every 30s
+    // poll. Daily aggregates change at most once per day — no need to fetch
+    // them unless the user is actually looking at the chart.
+    if (tabId === 'storage' && !lastTrends) {
+      loadTrends();
+    }
   }
 
   // System resource state
@@ -199,22 +205,26 @@
     }
   }
 
-  // Trend chart loading
+  // Trend chart loading — 14 days for a meaningful trend (was 7).
   async function loadTrends() {
     try {
-      const trends = await getStatsTrends(7);
+      const trends = await getStatsTrends(14);
       if (trends && trends.length > 0) {
         if (!ChartJs) ChartJs = await loadChart();
-        createChart(trends);
+        await createChart(trends);
       }
     } catch (e) {
       console.error('Failed to load trends:', e);
     }
   }
 
-  function createChart(trends: { date: string; total_size: number; cameras?: Record<string, number> }[]) {
+  async function createChart(trends: { date: string; total_size: number; camera_sizes?: Record<string, number> }[]) {
     lastTrends = trends;
     if (trendChart) { trendChart.destroy(); trendChart = null; }
+    // Wait for Svelte to flush the DOM — lastTrends was just set, so the canvas
+    // may not exist yet (the {:else if lastTrends} branch hasn't rendered). Without
+    // this, getElementById returns null and the chart never appears.
+    await tick();
     const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
     if (ctx) {
       trendChart = createTrendChart(ChartJs, ctx, trends);
@@ -231,26 +241,37 @@
       loadSystemStats(),
       loadHealth(),
       loadHealthCameras(),
-      loadTrends(),
     ]).finally(() => { loading = false; });
+
+    // Lazy-load trends after core data — storage is the default tab, so the chart
+    // needs data, but we don't block the initial render on the (potentially slow)
+    // GROUP BY scan. The backend cache (2min TTL) makes this near-instant after
+    // the first load.
+    if (activeTab === 'storage') {
+      void loadTrends();
+    }
 
     // Quick second sample after 2s so CPU/network show without waiting 30s
     const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
 
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 30 seconds — only the lightweight, frequently-changing
+    // data. Trends are NOT polled (they change once/day; backend caches 2min;
+    // loaded lazily on tab open). loadHealth is dropped from the poll — the
+    // Dashboard's health card derives from healthCameras (lighter, per-camera
+    // detail), and the top-level /api/health is only needed once on mount for
+    // the overall status badge.
     refreshInterval = window.setInterval(() => {
       loadStats();
       loadCameras();
       loadSystemStats();
-      loadHealth();
       loadHealthCameras();
-      loadTrends();
     }, 30000);
 
-    // Re-create charts when theme changes
+    // Re-color existing chart on theme change WITHOUT refetching data.
+    // The old code called loadTrends() (a full DB scan) just to change colors.
     const observer = new MutationObserver(() => {
-      if (trendChart) {
-        loadTrends();
+      if (trendChart && lastTrends) {
+        void createChart(lastTrends); // canvas already in DOM; just re-render colors
       }
     });
     observer.observe(document.documentElement, {
@@ -443,7 +464,8 @@
           </div>
         {:else if lastTrends}
           <div class="card p-5 border th-border">
-            <div class="h-56 sm:h-64">
+            <p class="text-xs th-text-muted mb-3">{t('stats.recordingGrowthHint')}</p>
+            <div class="h-64 sm:h-72">
               <canvas id="dashboardTrendChart"></canvas>
             </div>
           </div>

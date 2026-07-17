@@ -16,12 +16,17 @@
     expanded = false,
     tabVisible = true,
     hasAudio = false,
+    onProtocolFailed,
   }: {
     cameraId: string;
     cameraName: string;
     expanded?: boolean;
     tabVisible?: boolean;
     hasAudio?: boolean;
+    /** Called when the player exhausts reconnects. Return true if the parent
+     *  is demoting to another real-time protocol (it will remount this player);
+     *  return false (or omit) to let this player fall back to a snapshot. */
+    onProtocolFailed?: () => boolean;
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -145,6 +150,9 @@ let videoEventAc: AbortController | null = null;
 
   function enterSnapshotMode() {
     if (snapshotMode) return;
+    // Ask the grid to demote to the next real-time protocol first (e.g. FLV→HLS).
+    // Only when it declines (chain exhausted) do we actually enter snapshot mode.
+    if (onProtocolFailed?.() === true) return;
     console.warn(`FLV max retries reached for ${cameraId}, entering snapshot fallback`);
     sendTelemetry('stream_degradation', cameraId, undefined, { protocol: 'flv', target: 'snapshot' });
     snapshotMode = true;
@@ -533,8 +541,10 @@ let videoEventAc: AbortController | null = null;
     </div>
   </div>
 
-  <!-- Audio button (top-right, before expand) -->
-  <CameraAudioButton {cameraId} />
+  <!-- Audio button (top-right, before expand) — hidden for video-only cameras -->
+  {#if hasAudio}
+    <CameraAudioButton {cameraId} />
+  {/if}
 
   <!-- Expand/Shrink -->
   {#if expanded}

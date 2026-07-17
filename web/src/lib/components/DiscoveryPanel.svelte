@@ -14,6 +14,7 @@
   import type { DiscoveredDevice, XiaomiDevice, XiaomiAuthResponse, Camera } from '$lib/api';
   import { RefreshCw, WifiOff, Clock, AlertTriangle, Search } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { friendlyError } from '$lib/errors';
 
   interface Props {
     protocol: string;
@@ -143,13 +144,66 @@
         enabled: true,
         username: onvifUsername || undefined,
         password: onvifPassword || undefined,
+        // Carry the discovery-enriched metadata through to the persisted camera.
+        // Previously these were displayed in the list then discarded on add.
+        brand: device.manufacturer || undefined,
+        model: device.model || undefined,
+        serial_number: device.serial || undefined,
+        // Send the ONVIF serial as stable_id so IP self-healing (re-acquire by
+        // serial after IP change) is active immediately — no waiting for the
+        // async ensureStableID goroutine that runs after the recorder connects.
+        stable_id: device.serial || undefined,
       });
       showToast(t('cameras.cameraAdded'), 'success');
       discoveredDevices = discoveredDevices.filter(d => d.uuid !== device.uuid);
       oncameraadded?.();
-    } catch (e) { console.warn('Failed to add ONVIF device:', e); showToast(t('cameras.failedAdd'), 'error'); } finally {
+    } catch (e) { console.warn('Failed to add ONVIF device:', e); showToast(friendlyError(e, 'cameras.failedAdd'), 'error'); } finally {
       addingDeviceId = null;
     }
+  }
+
+  // Add ALL discovered devices in sequence, reusing the panel's credentials.
+  // Avoids the click-per-device tedium when setting up several cameras at once.
+  // Each device gets its own error handling so one failure doesn't abort the rest.
+  let addingAll = $state(false);
+  async function addAllDiscovered() {
+    if (addingAll || discoveredDevices.length === 0) return;
+    addingAll = true;
+    let added = 0;
+    let failed = 0;
+    for (const device of [...discoveredDevices]) {
+      addingDeviceId = device.uuid;
+      try {
+        await createCamera({
+          name: device.name || t('onvif.deviceName'),
+          protocol: 'onvif',
+          url: device.endpoint || (device.xaddrs.length > 0 ? device.xaddrs[0] : ''),
+          enabled: true,
+          username: onvifUsername || undefined,
+          password: onvifPassword || undefined,
+          brand: device.manufacturer || undefined,
+          model: device.model || undefined,
+          serial_number: device.serial || undefined,
+          stable_id: device.serial || undefined,
+        });
+        discoveredDevices = discoveredDevices.filter(d => d.uuid !== device.uuid);
+        added++;
+      } catch (e) {
+        console.warn('Failed to add ONVIF device:', device.uuid, e);
+        failed++;
+      } finally {
+        addingDeviceId = null;
+      }
+    }
+    if (added > 0) oncameraadded?.();
+    if (added > 0 && failed === 0) {
+      showToast(t('onvif.addAllSuccess', { count: added }), 'success');
+    } else if (added > 0 && failed > 0) {
+      showToast(t('onvif.addAllPartial', { added, failed }), 'warning');
+    } else if (failed > 0) {
+      showToast(t('onvif.addAllFailed'), 'error');
+    }
+    addingAll = false;
   }
 
   // Xiaomi handlers
@@ -165,7 +219,7 @@
       const result = await xiaomiAuth(xiaomiUsername, xiaomiPassword);
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
     } finally {
       xiaomiLoading = false;
     }
@@ -210,7 +264,7 @@
       const result = await xiaomiCaptcha(xiaomiCaptchaSessionId, xiaomiCaptchaCode.trim());
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
       xiaomiCaptchaCode = '';
     } finally {
       xiaomiLoading = false;
@@ -225,7 +279,7 @@
       const result = await xiaomiVerify(xiaomiVerifySessionId, xiaomiVerifyTicket.trim());
       await handleAuthResult(result);
     } catch (e: any) {
-      xiaomiError = e.message || t('xiaomi.authFailed');
+      xiaomiError = friendlyError(e, 'xiaomi.authFailed');
       xiaomiVerifyTicket = '';
     } finally {
       xiaomiLoading = false;
@@ -295,7 +349,7 @@
       showToast(t('cameras.syncedCameras').replace('{count}', String(result.synced)), 'success');
       await refreshXiaomiDevices();
     } catch (e: any) {
-      showToast(e.message || t('cameras.syncFailed'), 'error');
+      showToast(friendlyError(e, 'cameras.syncFailed'), 'error');
     } finally {
       syncing = false;
     }
@@ -380,6 +434,20 @@
         <p class="th-text-secondary text-sm py-2">{t('onvif.noDevices')}</p>
       {:else}
         <div class="space-y-3">
+          {#if discoveredDevices.length > 1}
+            <div class="flex justify-end">
+              <button
+                onclick={addAllDiscovered}
+                class="btn btn-ghost btn-sm text-xs"
+                disabled={addingAll}
+              >
+                {#if addingAll}
+                  <span class="spinner w-3 h-3 mr-1"></span>
+                {/if}
+                {t('onvif.addAll', { count: discoveredDevices.length })}
+              </button>
+            </div>
+          {/if}
           {#each discoveredDevices as device (device.uuid)}
             <div class="flex items-center justify-between p-4 rounded-md th-bg-hover border th-border">
               <div class="min-w-0 flex-1 mr-4">
@@ -399,6 +467,9 @@
                   {/if}
                   {#if device.firmware}
                     <span class="text-xs px-1.5 py-0.5 rounded th-bg-tertiary">{device.firmware}</span>
+                  {/if}
+                  {#if device.serial}
+                    <span class="text-xs th-text-muted font-mono" title={t('onvif.serialNumber')}>{device.serial}</span>
                   {/if}
                 </div>
               </div>

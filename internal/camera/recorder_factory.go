@@ -31,14 +31,15 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		switch cam.Encoding {
 		case string(model.FormatH264):
 			h264Cfg := recorder.H264Config{
-				CameraID:     cam.ID,
-				RTSPURL:      cam.URL,
-				Username:     cam.Username,
-				Password:     cam.Password,
-				SegmentDur:   segDur,
-				DB:           cm.db,
-				AudioEnabled: cam.AudioEnabled,
-				EventBus:     cm.eventBus,
+				CameraID:      cam.ID,
+				RTSPURL:       cam.URL,
+				Username:      cam.Username,
+				Password:      cam.Password,
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+				RecordEnabled: cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
@@ -46,14 +47,15 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
-				CameraID:     cam.ID,
-				RTSPURL:      cam.URL,
-				Username:     cam.Username,
-				Password:     cam.Password,
-				SegmentDur:   segDur,
-				DB:           cm.db,
-				AudioEnabled: cam.AudioEnabled,
-				EventBus:     cm.eventBus,
+				CameraID:      cam.ID,
+				RTSPURL:       cam.URL,
+				Username:      cam.Username,
+				Password:      cam.Password,
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+				RecordEnabled: cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
@@ -70,6 +72,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				EventBus:               cm.eventBus,
 				DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 				DarkFrameThreshold:     cam.DarkFrameThreshold,
+				RecordEnabled:          cam.RecordingEnabled,
 			}
 			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:
@@ -90,6 +93,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			EventBus:               cm.eventBus,
 			DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 			DarkFrameThreshold:     cam.DarkFrameThreshold,
+			RecordEnabled:          cam.RecordingEnabled,
 		}
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):
@@ -264,7 +268,11 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 }
 
 // startRecorder creates and starts a recorder for the given camera config.
-// The caller must hold cm.mu (or at least a write lock) if cm.recorders is being modified.
+// The caller must NOT hold cm.mu — startRecorder's sub-helpers (timelapse
+// extractor, markStartFailed, framePollers) acquire cm.mu themselves, so
+// re-entering under a held Lock self-deadlocks. Callers snapshot the config
+// under the lock, Unlock, then call startRecorder (see RestartRecorder,
+// StartCamera, RediscoverAndReconnect).
 // If the recorder is created, it will be registered in cm.recorders.
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
@@ -292,6 +300,11 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		if cm.metrics != nil {
 			cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
 		}
+		// Track this camera as failed-to-start so the health manager's status
+		// loop can see it (it's no longer in cm.recorders) and drive the
+		// auto-remediation → IP rediscovery self-healing chain. Without this,
+		// a camera whose IP changed would be silently stuck forever.
+		cm.markStartFailed(cam.ID, err)
 		return fmt.Errorf("camera %q: failed to start recorder: %w", cam.ID, err)
 	}
 
@@ -332,6 +345,10 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 
 	cm.errorDetails[cam.ID] = nil
+	// The recorder started successfully — clear any prior failed-start tracking
+	// so statusFunc stops reporting it as StatusError (it now has a real recorder
+	// whose status is the source of truth). This closes the self-healing loop.
+	cm.clearStartFailed(cam.ID)
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Inc()
 	}
@@ -349,6 +366,11 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	// This is best-effort and non-blocking: failures are logged and ignored.
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.StableID) == "" {
 		go cm.ensureStableID(cam.ID)
+	}
+	// For ONVIF cameras without a profile_token, persist the auto-selected one
+	// after Start resolves it — avoids re-running GetProfiles on every restart.
+	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.ProfileToken) == "" {
+		go cm.ensureProfileToken(cam.ID)
 	}
 	return nil
 }

@@ -68,6 +68,7 @@ export interface DailyStats {
   recordings: number;
   total_size: number;
   cameras?: Record<string, number>;
+  camera_sizes?: Record<string, number>;
 }
 
 export interface ArchiveGroup {

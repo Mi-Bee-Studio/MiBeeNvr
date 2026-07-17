@@ -324,7 +324,7 @@
             <h3 class="text-lg font-medium th-text-primary mb-2">{t('live.notSupported')}</h3>
             <p class="th-text-secondary text-sm mb-4">
               {t('live.notSupportedDesc')}
-              <span class="font-mono th-text-primary">{camera.protocol}</span>.
+              <span class="font-mono th-text-primary">{protocolsMap.get(normalizeProtocol(camera.protocol))?.label || camera.protocol}</span>.
             </p>
             <button onclick={goBack} class="btn btn-secondary btn-sm">
               {t('live.backToCameras')}
@@ -332,8 +332,10 @@
           </div>
         {/if}
         
-        <!-- PTZ Control for PTZ-capable ONVIF cameras -->
-        {#if isPtzSupported(camera) && (deviceCaps?.ptz ?? true)}
+        <!-- PTZ Control for PTZ-capable ONVIF cameras. Default to hidden until
+             capabilities confirm PTZ support — otherwise a fixed (non-PTZ) bullet
+             camera shows a dead PTZ pad while caps are still loading. -->
+        {#if isPtzSupported(camera) && (deviceCaps?.ptz ?? false)}
           <div class="card">
             <PtzControl {cameraId} enabled={true} protocol={camera.protocol} />
           </div>

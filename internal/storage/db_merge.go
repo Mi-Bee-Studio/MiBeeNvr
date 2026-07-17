@@ -195,15 +195,21 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 	return res, nil
 }
 
-// ListPendingSegmentsForRolling returns all pending recordings for a camera,
-// ordered by started_at ascending. Used by the rolling merge backfill to drain historical
+// ListPendingSegmentsForRolling returns pending recordings for a camera, ordered
+// by started_at ascending. Used by the rolling merge backfill to drain historical
 // backlog on startup or via manual API trigger.
 //
 // All mergeable formats are returned (h264, h265, avi, mjpeg). The timelapse format
 // is excluded — it has its own merge pipeline (timelapse package).
 // If cameraID is empty, returns pending segments for ALL cameras.
 // Optionally reincludes 'failed' segments (for forced backfill via API).
-func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string, includeFailed bool) ([]*model.Recording, error) {
+//
+// limit caps the number of rows returned (0 = unlimited). since, when non-zero,
+// filters to segments whose started_at >= since — this bounds startup backfill to
+// recent segments on resource-constrained hosts (RPi 3B) so months of historical
+// fragments are left for the periodic MergeManager to digest gradually instead of
+// triggering an IO storm on the first boot after enabling rolling merge.
+func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string, includeFailed bool, limit int, since time.Time) ([]*model.Recording, error) {
 	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE merge_status = 'pending' AND ended_at IS NOT NULL AND format != 'timelapse'`
 	args := []interface{}{}
 	if includeFailed {
@@ -213,7 +219,16 @@ func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string,
 		query += " AND camera_id = ?"
 		args = append(args, cameraID)
 	}
-	query += " ORDER BY camera_id, started_at ASC;"
+	if !since.IsZero() {
+		query += " AND started_at >= ?"
+		args = append(args, since.UTC().Format("2006-01-02 15:04:05.999999999"))
+	}
+	query += " ORDER BY camera_id, started_at ASC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	query += ";"
 
 	rows, err := d.readConn().QueryContext(ctx, query, args...)
 	if err != nil {

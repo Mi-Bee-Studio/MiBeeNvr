@@ -26,17 +26,25 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db                         *storage.DB
-	store                      *storage.Manager
-	retention                  time.Duration
-	diskThreshold              int // percent
-	interval                   time.Duration
-	metrics                    *metrics.Metrics
-	healthEnabled              bool
-	healthRetention            time.Duration
-	transcodeOrphanFn          func(ctx context.Context) error
-	transcodeHistoryRetention  time.Duration // 0 = disabled
-	ffprobePath                string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
+	db                        *storage.DB
+	store                     *storage.Manager
+	retention                 time.Duration
+	diskThreshold             int // percent
+	interval                  time.Duration
+	metrics                   *metrics.Metrics
+	healthEnabled             bool
+	healthRetention           time.Duration
+	transcodeOrphanFn         func(ctx context.Context) error
+	transcodeHistoryRetention time.Duration // 0 = disabled
+	// activeCameraProvider returns the live set of cameras the user has
+	// configured (cfg.Cameras, the yaml source of truth). When set,
+	// directory-scanning cleanup (orphanFileCleanup, staleRecordCleanup)
+	// iterates only these IDs, skipping orphan dirs from cameras removed
+	// from yaml but still present on disk / in the DB cache. nil = legacy
+	// behaviour (fall back to db.ListCameras). Injected from pkg/app/run.go
+	// — mirrors the provider pattern used by the merge coordinators.
+	activeCameraProvider       func() []config.CameraConfig
+	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus
 	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 }
@@ -80,6 +88,52 @@ func (cm *CleanupManager) SetTranscodeOrphanCleanup(fn func(ctx context.Context)
 // SetTranscodeHistoryRetention sets the retention period for completed transcode task history.
 func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) {
 	cm.transcodeHistoryRetention = retention
+}
+
+// SetActiveCameraProvider registers a function returning the currently
+// configured cameras (yaml cfg.Cameras). When set, orphanFileCleanup and
+// staleRecordCleanup iterate only these camera IDs, avoiding O(N) stat
+// scans over directories belonging to cameras that have been removed from
+// the config but whose rows/files remain. nil provider = fall back to
+// db.ListCameras() (legacy behaviour). Mirrors the provider injection
+// pattern already used by the merge coordinators (see pkg/app/run.go).
+func (cm *CleanupManager) SetActiveCameraProvider(fn func() []config.CameraConfig) {
+	if cm == nil {
+		return
+	}
+	cm.activeCameraProvider = fn
+}
+
+// activeCameraIDs returns the set of camera IDs that periodic
+// directory-scanning cleanup should visit. When an active-camera provider
+// is wired (yaml cfg.Cameras), it is the source of truth — the DB cameras
+// table can desync from yaml (a removed camera's rows may linger), which
+// previously caused orphan dirs to be stat-scanned every cycle. When no
+// provider is set, fall back to db.ListCameras() for backward
+// compatibility. timeBasedCleanup / diskThresholdCleanup intentionally do
+// NOT use this — they must keep cleaning up recordings of removed cameras
+// via SQL, which does no per-file stat.
+func (cm *CleanupManager) activeCameraIDs(ctx context.Context) ([]string, error) {
+	if cm.activeCameraProvider != nil {
+		cams := cm.activeCameraProvider()
+		ids := make([]string, 0, len(cams))
+		for i := range cams {
+			if id := strings.TrimSpace(cams[i].ID); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids, nil
+	}
+	// Legacy fallback for unwired callers / tests.
+	cams, err := cm.db.ListCameras(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(cams))
+	for _, c := range cams {
+		ids = append(ids, c.ID)
+	}
+	return ids, nil
 }
 
 // Run starts the periodic cleanup loop. It blocks until ctx is cancelled.
@@ -579,14 +633,14 @@ func (cm *CleanupManager) transcodeHistoryCleanup(ctx context.Context) {
 // orphanFileCleanup scans camera directories for files/directories not tracked
 // in the recordings table and removes them.
 func (cm *CleanupManager) orphanFileCleanup(ctx context.Context) {
-	cameras, err := cm.db.ListCameras(ctx)
+	cameras, err := cm.activeCameraIDs(ctx)
 	if err != nil {
 		logger.Warn("orphan cleanup: failed to list cameras", "error", err)
 		return
 	}
 	var totalDeleted int
 	for _, cam := range cameras {
-		totalDeleted += cm.cleanOrphansForCamera(ctx, cam.ID)
+		totalDeleted += cm.cleanOrphansForCamera(ctx, cam)
 	}
 	if totalDeleted > 0 {
 		logger.Info("orphan files cleaned up", "deleted", totalDeleted)
@@ -651,14 +705,14 @@ func (cm *CleanupManager) cleanOrphansForCamera(ctx context.Context, cameraID st
 // staleRecordCleanup scans DB for MJPEG recordings with merge_status='pending'
 // whose directory on disk no longer exists, and marks them as merge_status='failed'.
 func (cm *CleanupManager) staleRecordCleanup(ctx context.Context) {
-	cameras, err := cm.db.ListCameras(ctx)
+	cameras, err := cm.activeCameraIDs(ctx)
 	if err != nil {
 		logger.Warn("stale record cleanup: failed to list cameras", "error", err)
 		return
 	}
 	var totalFixed int
 	for _, cam := range cameras {
-		totalFixed += cm.fixStaleMJPEGRecords(ctx, cam.ID)
+		totalFixed += cm.fixStaleMJPEGRecords(ctx, cam)
 	}
 	if totalFixed > 0 {
 		logger.Info("stale MJPEG records marked as failed", "fixed", totalFixed)

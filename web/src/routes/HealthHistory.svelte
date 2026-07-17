@@ -168,9 +168,12 @@
 
   let healthTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Load health on mount; poll at 60s (not 30s) to avoid stacking with the
+  // Dashboard's own 30s /api/health/cameras poll when this tab is active.
+  // Health scores change slowly; 60s is sufficient for the detail view.
   $effect(() => {
     loadHealth();
-    healthTimer = setInterval(loadHealth, 30000);
+    healthTimer = setInterval(loadHealth, 60000);
     return () => {
       if (healthTimer) clearInterval(healthTimer);
     };

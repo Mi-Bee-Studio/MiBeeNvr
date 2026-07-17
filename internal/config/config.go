@@ -134,6 +134,14 @@ type CameraConfig struct {
 	DarkFrameFilterEnabled bool `yaml:"dark_frame_filter_enabled,omitempty" json:"dark_frame_filter_enabled,omitempty"`
 	DarkFrameThreshold     int  `yaml:"dark_frame_threshold,omitempty" json:"dark_frame_threshold,omitempty"` // 0-255, default 15
 
+	// RecordingEnabled gates whether this camera writes segments to disk.
+	// nil or true (default) = record normally. false = "live-only" mode: the
+	// recorder stays connected and feeds the StreamHub (live preview, relay,
+	// health all work) but writes NO segments — useful when the NVR is used
+	// purely as a live/relay gateway and SD-card writes must be avoided.
+	// Issue #36.
+	RecordingEnabled *bool `yaml:"recording_enabled,omitempty" json:"recording_enabled,omitempty"`
+
 	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
 	// pattern as timelapse scheduling.
@@ -202,7 +210,14 @@ type MergeConfig struct {
 	// When enabled, each newly-closed segment is merged into a per-camera window
 	// bucket within seconds (vs the periodic MergeManager's ~1h latency).
 	// Independent of Enabled/CheckInterval — can run alongside the periodic merge.
-	RollingEnabled  bool   `yaml:"rolling_enabled" json:"rolling_enabled"`
+	//
+	// RollingEnabled is a *bool so rolling merge defaults to ON when unset
+	// (continuous 24/7 recording otherwise produces thousands of 30s fragments
+	// per camera per day), but can be explicitly turned OFF — globally via
+	// `merge: { rolling_enabled: false }` or per-camera — to avoid write
+	// amplification (e.g. SD-card cameras). Use RollingEnabledValue() to read
+	// the effective value; never dereference the pointer directly.
+	RollingEnabled  *bool  `yaml:"rolling_enabled" json:"rolling_enabled"`
 	RollingDebounce string `yaml:"rolling_debounce" json:"rolling_debounce"` // e.g. "500ms", "2s"
 	RollingWindow   string `yaml:"rolling_window" json:"rolling_window"`     // e.g. "1h", "30m"
 
@@ -210,6 +225,25 @@ type MergeConfig struct {
 	// Merged files shorter than this are marked merge_quality='short' and can be
 	// further consolidated via POST /api/merge/consolidate. Default "5m".
 	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
+
+	// RollingBackfill caps the startup backfill so a first boot after enabling
+	// rolling merge cannot trigger an IO storm on resource-constrained hosts
+	// (RPi 3B). MaxSegments=0 means unlimited (not recommended on RPi).
+	// MaxAge bounds backfill to segments newer than this age; older segments are
+	// left for the periodic MergeManager to digest gradually.
+	RollingBackfillMaxSegments int    `yaml:"rolling_backfill_max_segments" json:"rolling_backfill_max_segments"`
+	RollingBackfillMaxAge      string `yaml:"rolling_backfill_max_age" json:"rolling_backfill_max_age"`
+}
+
+// RollingEnabledValue reports the effective rolling-merge enabled state,
+// defaulting to true when the pointer is nil (user did not explicitly set it).
+// This is the only correct way to read RollingEnabled — it preserves the
+// "unset → on" / "explicitly false → off" distinction that a bare bool cannot.
+func (m MergeConfig) RollingEnabledValue() bool {
+	if m.RollingEnabled == nil {
+		return true
+	}
+	return *m.RollingEnabled
 }
 
 type TranscodingConfig struct {
@@ -436,6 +470,30 @@ type HealthAutoRemediationConfig struct {
 	// StatusError, so without this gate a camera whose IP changed would loop
 	// forever and rediscovery would never fire. 0 = use default (10 min).
 	ReconnectingTimeoutMinutes int `yaml:"reconnecting_timeout_minutes"`
+	// RediscoveryRescanMinutes is how often to re-attempt IP rediscovery for a
+	// blacklisted camera while the blacklist is still active. Without this, a
+	// camera that comes back online during the blacklist window (e.g. power
+	// restored) is not recovered until the full BlacklistHours elapses, because
+	// rediscovery only scans once at the moment of blacklisting. 0 = disabled
+	// (legacy behavior: scan only once at blacklisting). Default 5 min.
+	RediscoveryRescanMinutes int `yaml:"rediscovery_rescan_minutes"`
+	// RediscoveryRescanMaxMinutes caps the exponential backoff interval for
+	// periodic blacklist rescans. After each consecutive "device not found"
+	// result, the rescan interval is multiplied by RediscoveryRescanBackoff
+	// until it hits this ceiling. 0 = use default (60 min). This prevents
+	// permanently-dead cameras from sustaining a full-/24 scan every 5 min
+	// indefinitely, which hammered disk IO on RPi-class hosts.
+	RediscoveryRescanMaxMinutes int `yaml:"rediscovery_rescan_max_minutes"`
+	// RediscoveryRescanBackoff is the exponential multiplier applied to the
+	// rescan interval after each consecutive miss. Default 2.0 →
+	// 5min→10min→20min→40min→60min(cap). Must be >= 1.0.
+	RediscoveryRescanBackoff float64 `yaml:"rediscovery_rescan_backoff"`
+	// RediscoveryMaxScanMisses, when > 0, stops periodic rescans entirely
+	// after this many consecutive "not found" results — the camera is
+	// assumed permanently offline and must be recovered via manual
+	// POST /api/cameras/{id}/rediscover. 0 = unlimited (backoff caps at
+	// RediscoveryRescanMaxMinutes). Default 0.
+	RediscoveryMaxScanMisses int `yaml:"rediscovery_max_scan_misses"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -778,6 +836,35 @@ func Validate(cfg *Config) error {
 		}
 		if cfg.Merge.MinSegmentsToMerge < 2 {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
+		}
+	}
+	// Validate rolling merge config when enabled (it defaults ON, so this runs
+	// for typical deployments). Mirrors the best-effort parse logic in
+	// rolling.resolveRollingConfig but fails fast at config load instead of
+	// silently falling back.
+	if cfg.Merge.RollingEnabledValue() {
+		if cfg.Merge.RollingDebounce != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingDebounce); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_debounce %q: must be a positive duration", cfg.Merge.RollingDebounce)
+			}
+		}
+		if cfg.Merge.RollingWindow != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingWindow); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_window %q: must be a positive duration", cfg.Merge.RollingWindow)
+			}
+		}
+		if cfg.Merge.RollingMinDuration != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingMinDuration); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_min_duration %q: must be a positive duration", cfg.Merge.RollingMinDuration)
+			}
+		}
+		if cfg.Merge.RollingBackfillMaxAge != "" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingBackfillMaxAge); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_backfill_max_age %q: must be a positive duration", cfg.Merge.RollingBackfillMaxAge)
+			}
+		}
+		if cfg.Merge.RollingBackfillMaxSegments < 0 {
+			return fmt.Errorf("merge.rolling_backfill_max_segments must be >= 0, got %d", cfg.Merge.RollingBackfillMaxSegments)
 		}
 	}
 	// Validate transcoding configuration
@@ -1164,6 +1251,24 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
+	// Rolling merge defaults to ON (nil → true via RollingEnabledValue()).
+	// Only set the pointer here if the user left it unset; an explicit
+	// rolling_enabled: false must be honored.
+	if cfg.Merge.RollingEnabled == nil {
+		t := true
+		cfg.Merge.RollingEnabled = &t
+	}
+	// Backfill throttling — protects RPi 3B from an IO storm on the first boot
+	// after upgrading to a default-on rolling merge. MaxSegments caps the total
+	// rows loaded/merged at startup; MaxAge bounds it to recent segments so
+	// months of historical fragments are digested gradually by the periodic
+	// MergeManager instead of all at once.
+	if cfg.Merge.RollingBackfillMaxSegments == 0 {
+		cfg.Merge.RollingBackfillMaxSegments = 500
+	}
+	if cfg.Merge.RollingBackfillMaxAge == "" {
+		cfg.Merge.RollingBackfillMaxAge = "72h"
+	}
 	// Transcoding defaults
 	if cfg.Transcoding.MaxWorkers == 0 {
 		cfg.Transcoding.MaxWorkers = 1
@@ -1243,6 +1348,15 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes == 0 {
 		cfg.Health.AutoRemediation.ReconnectingTimeoutMinutes = 10
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanMinutes == 0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanMinutes = 5
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanMaxMinutes == 0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanMaxMinutes = 60
+	}
+	if cfg.Health.AutoRemediation.RediscoveryRescanBackoff < 1.0 {
+		cfg.Health.AutoRemediation.RediscoveryRescanBackoff = 2.0
 	}
 
 	// IP re-discovery (self-healing) defaults. Enabled by default since it only
@@ -1371,8 +1485,11 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
 	}
 	// Rolling merge fields: per-camera overrides only when explicitly set.
-	if perCamera.RollingEnabled {
-		result.RollingEnabled = true
+	// RollingEnabled is a *bool — a non-nil per-camera value (true OR false)
+	// overrides the global so users can disable rolling merge per-camera even
+	// when the global default is on.
+	if perCamera.RollingEnabled != nil {
+		result.RollingEnabled = perCamera.RollingEnabled
 	}
 	if perCamera.RollingDebounce != "" {
 		result.RollingDebounce = perCamera.RollingDebounce
@@ -1382,6 +1499,12 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.RollingMinDuration != "" {
 		result.RollingMinDuration = perCamera.RollingMinDuration
+	}
+	if perCamera.RollingBackfillMaxSegments > 0 {
+		result.RollingBackfillMaxSegments = perCamera.RollingBackfillMaxSegments
+	}
+	if perCamera.RollingBackfillMaxAge != "" {
+		result.RollingBackfillMaxAge = perCamera.RollingBackfillMaxAge
 	}
 	return result
 }

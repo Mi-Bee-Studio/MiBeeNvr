@@ -64,6 +64,19 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("initialize ONVIF client: %w", err)
 	}
 
+	// Measure the device's clock skew and apply it to the SOAP client so all
+	// subsequent WS-Security digest auth uses the device's view of "now".
+	// This fixes Hikvision cameras that reject digests when the NVR's clock
+	// diverges from the camera's by more than the replay window (~5 min).
+	// Best-effort: if the skew can't be measured (device doesn't respond to
+	// GetSystemDateAndTime), the client falls back to local time (legacy behavior).
+	skew := c.measureClockSkew(ctx, c.endpoint)
+	if skew != 0 {
+		onvifClient.SetClockSkew(skew)
+		logger.Info("applied clock skew correction for ONVIF digest auth",
+			"endpoint", c.endpoint, "skew_seconds", skew.Seconds())
+	}
+
 	c.client = onvifClient
 	c.ready = true
 	logger.Info("connected to ONVIF device", "endpoint", c.endpoint)

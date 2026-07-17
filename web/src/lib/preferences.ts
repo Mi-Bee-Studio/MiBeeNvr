@@ -91,27 +91,27 @@ export function getEffectiveTheme(): 'dark' | 'light' {
 // Utility functions
 export function parseRefreshInterval(str: string): number {
   const clean = str.toLowerCase().trim();
-  
+
   if (clean === 'off') return 0;
-  
+
   const match = clean.match(/^(\d+)s$/);
   if (match) {
     const seconds = parseInt(match[1], 10);
     return seconds * 1000; // Convert to milliseconds
   }
-  
+
   console.warn(`Invalid refresh interval format: ${str}`);
   return 0;
 }
 
 export function formatRefreshInterval(ms: number): string {
   if (ms === 0) return 'off';
-  
+
   const seconds = Math.round(ms / 1000);
   if (seconds >= 10 && seconds <= 60 && seconds % 10 === 0) {
     return `${seconds}s`;
   }
-  
+
   console.warn(`Cannot format ${ms}ms to standard interval`);
   return `${ms}ms`;
 }
@@ -123,21 +123,57 @@ export function resetPreferences(): void {
   });
 }
 
-// Protocol preference (separate key for easy access from setup & live view)
-const PROTOCOL_KEY = 'mibee_nvr_protocol_pref';
-
-export function getProtocolPreference(): string {
+// Clear every per-camera protocol override (mibee_nvr_prefs_proto_*). Used by
+// "reset preferences" flows — overrides are keyed by camera id so they can't
+// be enumerated via DEFAULT_PREFERENCES; we sweep localStorage by prefix.
+export function clearAllCameraProtocolOverrides(): void {
   try {
-    return localStorage.getItem(PROTOCOL_KEY) || 'hls';
+    const toRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(PROTOCOL_OVERRIDE_PREFIX)) toRemove.push(key);
+    }
+    for (const key of toRemove) localStorage.removeItem(key);
   } catch {
-    return 'hls';
+    /* ignore */
   }
 }
 
-export function setProtocolPreference(protocol: string): void {
+// Per-camera protocol override.
+//
+// Lets a user pin a specific streaming protocol to one camera (via the
+// ProtocolSwitcher on the LiveView page) that differs from the backend's
+// auto-selected default. Stored in localStorage keyed by camera id — this is
+// intentionally NOT a server-side setting: the backend already computes the
+// best default per camera (codec-aware), so an override is only ever a manual
+// nudge and doesn't need to sync across devices.
+//
+// NOTE: only a USER's explicit manual selection should be written here. The
+// runtime auto-fallback (Surveillance demoting webrtc->flv->hls on failure)
+// must NOT write an override, or a transient failure would permanently pin a
+// worse protocol.
+const PROTOCOL_OVERRIDE_PREFIX = `${PREFIX}proto_`;
+
+export function getCameraProtocolOverride(cameraId: string): string | null {
   try {
-    localStorage.setItem(PROTOCOL_KEY, protocol);
+    return localStorage.getItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`);
+  } catch {
+    return null;
+  }
+}
+
+export function setCameraProtocolOverride(cameraId: string, protocol: string): void {
+  try {
+    localStorage.setItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`, protocol);
   } catch (error) {
-    console.error('Failed to set protocol preference:', error);
+    console.error('Failed to set protocol override:', error);
+  }
+}
+
+export function clearCameraProtocolOverride(cameraId: string): void {
+  try {
+    localStorage.removeItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`);
+  } catch {
+    /* ignore */
   }
 }

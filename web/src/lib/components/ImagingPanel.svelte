@@ -3,6 +3,7 @@
   import type { ImagingSettings, ImagingOptions } from '$lib/api';
   import { showToast } from '$lib/toast';
   import { t } from '$lib/i18n';
+  import { friendlyError } from '$lib/errors';
   let { cameraId }: { cameraId: string } = $props();
 
   let settings = $state<ImagingSettings | null>(null);
@@ -42,7 +43,7 @@
       options = o;
       populateLocal(s);
     } catch (e: any) {
-      error = e.message || 'Failed to load imaging settings';
+      error = friendlyError(e, 'onvif.imaging.loadError');
     } finally {
       loading = false;
     }
@@ -87,7 +88,7 @@
       await setImagingSettings(cameraId, payload);
       settings = { ...settings, ...payload } as ImagingSettings;
     } catch (e: any) {
-      showToast(e.message || 'Failed to save imaging settings', 'error');
+      showToast(friendlyError(e, 'onvif.imaging.saveError'), 'error');
     } finally {
       saving = false;
     }

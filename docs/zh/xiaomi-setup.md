@@ -14,7 +14,7 @@ MiBee NVR 通过 CS2 P2P 协议为小米云摄像头提供全面支持。此集�
 
 - 小米账户，已注册摄像头
 - 摄像头已绑定到您的小米账户（米家应用）
-- 网络访问小米云服务（`openapi.io.mi.com`）
+- 网络访问小米云服务（`api.io.mi.com`）
 - NVR 系统的正常互联网连接
 
 | 型号 | 标识符 | 协议 | 支持级别 | 说明 |
@@ -639,7 +639,7 @@ chown nvr:nvr mibee-nvr.yaml
 
 ```bash
 # 允许访问小米云服务
-ufw allow to openapi.io.mi.com port 443 proto tcp
+ufw allow to api.io.mi.com port 443 proto tcp
 
 # 限制 NVR 访问
 ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
@@ -648,18 +648,17 @@ ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
 ### 网络要求
 
 **必需的访问**：
-- `openapi.io.mi.com:443` - 小米云 API
-- `globalmiot.cn:443` - 小米设备管理
-- `https://xiaomioa.com` - 小米身份验证
+- `api.io.mi.com:443` - 小米云 API（设备列表、MISS URL 解析；区域变体 `<region>.api.io.mi.com`）
+- `account.xiaomi.com:443` - 小米身份验证
 
 **网络故障排除**：
 
 ```bash
 # 测试到小米服务的连接性
-curl -v https://openapi.io.mi.com
+curl -v https://api.io.mi.com
 
 # 测试 DNS 解析
-nslookup openapi.io.mi.com
+nslookup api.io.mi.com
 ```
 
 ## 性能优化
@@ -739,7 +738,7 @@ xiaomi:
 
 ```bash
 # 手动测试小米凭据
-curl -X POST https://openapi.io.mi.com/login \
+curl -X POST https://api.io.mi.com/login \
   -H "Content-Type: application/json" \
   -d '{"username": "user@example.com", "password": "password"}'
 
@@ -790,8 +789,8 @@ curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/
 
 ```bash
 # 测试到小米服务的网络连接
-ping openapi.io.mi.com
-curl -v https://globalmiot.cn
+ping api.io.mi.com
+curl -v https://api.io.mi.com
 
 # 检查令牌有效性
 curl -u admin:password http://localhost:9090/api/xiaomi/auth

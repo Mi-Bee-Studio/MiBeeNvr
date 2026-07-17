@@ -411,9 +411,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		// (cameras that roam across per-subnet-DHCP APs get new IPs). The manager
 		// decides per-camera whether rediscovery applies (ONVIF + has stable_id).
 		if cfg.Health.Rediscovery.RediscoveryEnabled() {
-			healthMgr.SetRediscoverer(func(ctx context.Context, cameraID string) error {
-				_, err := camMgr.RediscoverAndReconnect(ctx, cameraID)
-				return err
+			healthMgr.SetRediscoverer(func(ctx context.Context, cameraID string) (bool, error) {
+				return camMgr.RediscoverAndReconnect(ctx, cameraID)
 			})
 		}
 	}
@@ -629,6 +628,14 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("cleanup: %w", err)
 	}
 	cleanupMgr.SetEventBus(eventBus)
+	// Wire the live yaml camera set so directory-scanning cleanup (orphan /
+	// stale-record) skips dirs belonging to cameras that were removed from
+	// the config but whose rows/files linger — avoids recurring O(N) stat
+	// scans over orphan dirs on slow USB HDD storage. Retention/disk-threshold
+	// cleanup intentionally stays DB-driven so recordings of removed cameras
+	// still age out via SQL. Mirrors the provider pattern used by the merge
+	// coordinators above.
+	cleanupMgr.SetActiveCameraProvider(func() []config.CameraConfig { return cfg.Cameras })
 	if cfg.Health.Enabled {
 		healthRetention, err := time.ParseDuration(cfg.Health.EventsRetention)
 		if err != nil {

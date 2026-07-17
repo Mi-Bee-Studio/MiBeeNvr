@@ -15,10 +15,14 @@ export function showToast(message: string, type: 'success' | 'error' | 'info' | 
 
   toasts.update((current) => [...current, { id, message, type }]);
 
-  // Auto-dismiss after 3 seconds
+  // Auto-dismiss timing scales with severity: errors/warnings carry diagnostic
+  // detail the user needs to read and act on, so they persist longer than the
+  // transient success/info toasts. A fixed 3s for everything meant errors often
+  // vanished before the user finished reading them.
+  const duration = type === 'error' || type === 'warning' ? 6000 : 3000;
   setTimeout(() => {
     toasts.update((current) => current.filter((toast) => toast.id !== id));
-  }, 3000);
+  }, duration);
 }
 
 export function dismissToast(id: string) {

@@ -115,9 +115,13 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 		if len(profiles) == 0 {
 			return fmt.Errorf("onvif device has no media profiles")
 		}
-		profileToken = profiles[0].Token
+		// Pick the main (highest-resolution) profile rather than blindly taking
+		// profiles[0] — some cameras order the low-res sub-stream first, which
+		// silently recorded at the wrong resolution. See onvif.SelectMainProfile.
+		profileToken = onvif.SelectMainProfile(profiles)
 		r.cfg.ProfileToken = profileToken // cache so resolveProfileToken skips a redundant GetProfiles (ESP32 connection-pool exhaustion)
-		onvifRecLogger.Info("auto-selected ONVIF profile", "camera_id", r.cfg.CameraID, "profile_token", profileToken, "encoding", profiles[0].Encoding)
+		selected := profileByToken(profiles, profileToken)
+		onvifRecLogger.Info("auto-selected ONVIF profile", "camera_id", r.cfg.CameraID, "profile_token", profileToken, "encoding", selected.Encoding, "resolution", formatRes(selected))
 	}
 
 	// 3. Get stream URI
@@ -174,6 +178,16 @@ func (r *ONVIFRecorder) RTSPURL() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.rtspURL
+}
+
+// ResolvedProfileToken returns the profile token resolved during Start (either
+// from config or auto-selected via SelectMainProfile). Empty if Start hasn't
+// run yet or the token was never resolved. Used by the camera manager to
+// persist the auto-selected token so GetProfiles isn't re-run on every restart.
+func (r *ONVIFRecorder) ResolvedProfileToken() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cfg.ProfileToken
 }
 
 // Delegate returns the internal H264/H265 recorder delegate.
@@ -633,8 +647,8 @@ func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
 	return rec
 }
 
-// resolveProfileToken returns the configured profile token or auto-selects
-// the first available profile from the ONVIF device.
+// resolveProfileToken returns the configured profile token or auto-selects the
+// best (highest-resolution) profile from the ONVIF device.
 func (r *ONVIFRecorder) resolveProfileToken() string {
 	if r.cfg.ProfileToken != "" {
 		return r.cfg.ProfileToken
@@ -643,5 +657,26 @@ func (r *ONVIFRecorder) resolveProfileToken() string {
 	if err != nil || len(profiles) == 0 {
 		return ""
 	}
-	return profiles[0].Token
+	return onvif.SelectMainProfile(profiles)
+}
+
+// profileByToken returns the profile matching token, or the zero value.
+func profileByToken(profiles []onvif.DeviceProfile, token string) onvif.DeviceProfile {
+	for _, p := range profiles {
+		if p.Token == token {
+			return p
+		}
+	}
+	if len(profiles) > 0 {
+		return profiles[0]
+	}
+	return onvif.DeviceProfile{}
+}
+
+// formatRes renders "WxH" for a profile (or "" when unset).
+func formatRes(p onvif.DeviceProfile) string {
+	if p.Width <= 0 || p.Height <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", p.Width, p.Height)
 }
