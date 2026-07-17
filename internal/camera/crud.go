@@ -201,7 +201,6 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 // Merge failure is non-blocking (logged but continues).
 func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Verify camera exists in config
 	idx := -1
@@ -212,6 +211,7 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		}
 	}
 	if idx == -1 {
+		cm.mu.Unlock()
 		return fmt.Errorf("camera %q not found", cameraID)
 	}
 	savedCam := cm.cfg.Cameras[idx]
@@ -244,19 +244,20 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	// Stop dual-mode timelapse schedule monitor
 	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
 
-	// 2. Merge segments (non-blocking — failure is logged but does not stop archival)
-	if cm.mergeMgr != nil {
-		if err := cm.mergeMgr.MergeCamera(ctx, cameraID); err != nil {
-			logger.Warn("merge before archive failed", "camera_id", cameraID, "error", err)
-		}
-	}
-
-	// 3. Mark camera archived in DB
+	// 2. Mark camera archived in DB + archive recordings.
+	//    IMPORTANT: this no longer calls MergeCamera synchronously. A camera
+	//    accumulated thousands of unmerged segments over days of recording, and
+	//    merging them inline made ArchiveCamera take minutes — long enough that
+	//    the browser/proxy timed out the DELETE request (~2 min), canceling the
+	//    HTTP context. That cancellation propagated into MergeCamera AND
+	//    ArchiveCameraDB (both used the request ctx), so the camera was left
+	//    un-archived while the UI spun forever ("loading"). The merge now runs
+	//    asynchronously AFTER the archival completes (see goroutine below),
+	//    using a detached context so it survives the request lifetime.
 	if err := cm.db.ArchiveCameraDB(ctx, cameraID); err != nil {
+		cm.mu.Unlock()
 		return fmt.Errorf("failed to archive camera in DB: %w", err)
 	}
-
-	// 4. Mark all recordings archived in DB
 	affected, err := cm.db.ArchiveAllRecordings(ctx, cameraID)
 	if err != nil {
 		logger.Warn("failed to archive recordings", "camera_id", cameraID, "error", err)
@@ -264,12 +265,37 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 		logger.Info("archived recordings", "camera_id", cameraID, "count", affected)
 	}
 
-	// 5. Remove from in-memory config slice and persist
+	// 3. Remove from in-memory config slice and persist
 	cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], cm.cfg.Cameras[idx+1:]...)
 	if err := cm.persistConfig(); err != nil {
 		// Rollback: re-insert camera at original position
 		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
+		cm.mu.Unlock()
 		return fmt.Errorf("failed to persist config: %w", err)
+	}
+
+	// Snapshot whether a merge is wanted before unlocking (mergeMgr won't change).
+	mergeMgr := cm.mergeMgr
+	cm.mu.Unlock()
+
+	// 4. Merge segments asynchronously. Uses a detached context (not the request
+	//    ctx) so the merge survives the HTTP request completing — this is the
+	//    whole point of moving it out of the synchronous path. MergeCamera keys
+	//    off cameraID in the recordings table, not the in-memory config, so it
+	//    works correctly after the camera is removed from the active set. Failure
+	//    is logged (merge is best-effort consolidation, not a prerequisite for
+	//    archival — the segments are already marked archived and will be retained).
+	if mergeMgr != nil {
+		go func() {
+			mergeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			start := time.Now()
+			if err := mergeMgr.MergeCamera(mergeCtx, cameraID); err != nil {
+				logger.Warn("async merge after archive failed", "camera_id", cameraID, "error", err, "duration", time.Since(start))
+			} else {
+				logger.Info("async merge after archive completed", "camera_id", cameraID, "duration", time.Since(start))
+			}
+		}()
 	}
 
 	logger.Info("archived camera", "camera_id", cameraID)
