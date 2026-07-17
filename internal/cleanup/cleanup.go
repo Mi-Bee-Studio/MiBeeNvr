@@ -26,16 +26,16 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db                         *storage.DB
-	store                      *storage.Manager
-	retention                  time.Duration
-	diskThreshold              int // percent
-	interval                   time.Duration
-	metrics                    *metrics.Metrics
-	healthEnabled              bool
-	healthRetention            time.Duration
-	transcodeOrphanFn          func(ctx context.Context) error
-	transcodeHistoryRetention  time.Duration // 0 = disabled
+	db                        *storage.DB
+	store                     *storage.Manager
+	retention                 time.Duration
+	diskThreshold             int // percent
+	interval                  time.Duration
+	metrics                   *metrics.Metrics
+	healthEnabled             bool
+	healthRetention           time.Duration
+	transcodeOrphanFn         func(ctx context.Context) error
+	transcodeHistoryRetention time.Duration // 0 = disabled
 	// activeCameraProvider returns the live set of cameras the user has
 	// configured (cfg.Cameras, the yaml source of truth). When set,
 	// directory-scanning cleanup (orphanFileCleanup, staleRecordCleanup)
@@ -43,8 +43,8 @@ type CleanupManager struct {
 	// from yaml but still present on disk / in the DB cache. nil = legacy
 	// behaviour (fall back to db.ListCameras). Injected from pkg/app/run.go
 	// — mirrors the provider pattern used by the merge coordinators.
-	activeCameraProvider func() []config.CameraConfig
-	ffprobePath                string        // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
+	activeCameraProvider       func() []config.CameraConfig
+	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus
 	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 }

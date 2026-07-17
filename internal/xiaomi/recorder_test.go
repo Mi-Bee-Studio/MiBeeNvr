@@ -869,7 +869,7 @@ func TestReportConnectError_BelowThreshold(t *testing.T) {
 	t.Helper()
 	reporter := &mockErrReporter{}
 	r := &XiaomiRecorder{cfg: XiaomiRecorderConfig{CameraID: "cam-test", ErrReporter: reporter}}
-	for i := 0; i < connectFailThreshold-1; i++ {
+	for range connectFailThreshold - 1 {
 		r.reportConnectError(fmt.Errorf("miss connect: read udp i/o timeout"))
 	}
 	require.Nil(t, reporter.lastDetail, "no error detail should be set before threshold")
@@ -885,7 +885,7 @@ func TestReportConnectError_AtThreshold(t *testing.T) {
 		cfg:         XiaomiRecorderConfig{CameraID: "cam-test", ErrReporter: reporter},
 		lastMissURL: "miss://192.168.31.251:1234",
 	}
-	for i := 0; i < connectFailThreshold; i++ {
+	for range connectFailThreshold {
 		r.reportConnectError(fmt.Errorf("miss connect: read udp i/o timeout"))
 	}
 	require.NotNil(t, reporter.lastDetail, "error detail should be set at threshold")

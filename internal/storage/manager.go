@@ -254,7 +254,6 @@ func (m *Manager) ListFiles(cameraID string) ([]string, error) {
 		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, statErr)
 	}
 
-
 	var files []string
 	err := filepath.WalkDir(cameraDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {

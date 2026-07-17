@@ -123,7 +123,7 @@ func TestRollingMerge_SingleSegment(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -168,7 +168,7 @@ func TestRollingMerge_AppendMultiple(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -250,7 +250,7 @@ func TestRollingMerge_NonMP4FormatIgnored(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 	}
 	r := newTestRollingCoordinator(env, cfg, bus)
@@ -331,7 +331,7 @@ func TestBackfillCamera_HistoricalSegments(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -399,7 +399,7 @@ func TestBackfillCamera_MultipleWindows(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -449,7 +449,7 @@ func TestBackfillCamera_IncludeFailed(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled: boolPtr(true),
+		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}

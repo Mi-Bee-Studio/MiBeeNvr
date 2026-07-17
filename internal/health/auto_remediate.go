@@ -116,7 +116,7 @@ func (r *AutoRemediator) rescanInterval(st *cameraRestartState) time.Duration {
 		backoff = 1.0
 	}
 	interval := float64(base)
-	for i := 0; i < st.consecutiveScanMisses; i++ {
+	for range st.consecutiveScanMisses {
 		interval *= backoff
 	}
 	if maxM := time.Duration(r.cfg.RediscoveryRescanMaxMinutes) * time.Minute; maxM > 0 && time.Duration(interval) > maxM {
