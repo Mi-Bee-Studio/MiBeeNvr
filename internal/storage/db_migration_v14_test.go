@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -115,11 +116,14 @@ func TestMergeColumnsExist(t *testing.T) {
 		_ = db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_status'`).Scan(&colExists)
 		require.Equal(t, 1, colExists, "merge_status column should still exist")
 
-		// Verify schema version is 23 (after migration v23)
+		// Verify schema version advanced past v14 (use >= to stay robust to
+		// future migrations — see TestMigrationV13_AddMergeStatusColumn).
 		var version string
 		err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "24", version)
+		n, err := strconv.Atoi(version)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, n, 14)
 	})
 
 	// Test 2: Existing DB at v14 — columns added via migration
@@ -223,11 +227,14 @@ func TestMergeColumnsExist(t *testing.T) {
 		require.NoError(t, db.Init(ctx))
 		require.NoError(t, db.Init(ctx))
 
-		// Verify schema version is 23 (after migration v23)
+		// Verify schema version advanced past v14 (use >= to stay robust to
+		// future migrations — see TestMigrationV13_AddMergeStatusColumn).
 		var version string
 		err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 		require.NoError(t, err)
-		require.Equal(t, "24", version)
+		n, err := strconv.Atoi(version)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, n, 14)
 
 		// Data intact
 		var count int

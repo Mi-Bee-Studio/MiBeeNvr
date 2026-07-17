@@ -82,9 +82,9 @@ func TestParseWSDMessage_GarbageReturnsNil(t *testing.T) {
 func TestExtractScopeInfo(t *testing.T) {
 	t.Helper()
 	cases := []struct {
-		scopes         string
-		wantName       string
-		wantHardware   string
+		scopes       string
+		wantName     string
+		wantHardware string
 	}{
 		{
 			scopes:       "onvif://www.onvif.org/name/MiBeeCam onvif://www.onvif.org/hardware/MiBeeCam",

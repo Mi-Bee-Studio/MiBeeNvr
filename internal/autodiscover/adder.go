@@ -72,7 +72,7 @@ func NewAdder(cfg *config.AutoDiscoverConfig, camMgr *camera.CameraManager, db *
 		db:     db,
 		cfg:    cfg,
 		bus:    bus,
-		dedup:   make(map[string]time.Time),
+		dedup:  make(map[string]time.Time),
 	}
 }
 

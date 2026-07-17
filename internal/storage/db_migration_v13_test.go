@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -112,11 +113,16 @@ func TestMigrationV13_AddMergeStatusColumn(t *testing.T) {
 	_ = db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_status'`).Scan(&colExists)
 	require.Equal(t, 1, colExists, "merge_status column should exist after migration")
 
-	// Verify schema version is now 13
+	// Verify schema version advanced past the v13 migration. We use >= rather
+	// than a hardcoded number so this test doesn't break every time a new
+	// migration is added (the assertion only cares that v13 ran, not the exact
+	// current top-of-tree version).
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "24", version)
+	n, err := strconv.Atoi(version)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, 13)
 }
 
 func TestMigrationV13_BackfillFromMerged(t *testing.T) {
@@ -293,11 +299,14 @@ func TestMigrationV13_Idempotent(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	require.NoError(t, db.Init(ctx))
 
-	// Verify schema version
+	// Verify schema version advanced past v13 (use >= to stay robust to future
+	// migrations — see TestMigrationV13_AddMergeStatusColumn for rationale).
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "24", version)
+	n, err := strconv.Atoi(version)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, 13)
 
 	// Data should be intact
 	var count int
