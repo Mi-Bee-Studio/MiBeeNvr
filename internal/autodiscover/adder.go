@@ -168,43 +168,27 @@ func (a *Adder) enrich(ctx context.Context, dev *onvif.DiscoveredDevice, endpoin
 // existsInDB reports whether a camera already persists with the given endpoint
 // or serial. A nil DB disables persisted dedup (returns false).
 //
+// The query covers ALL camera rows — including ARCHIVED ones — via
+// CameraExistsByOnvifEndpoint. This matters because ListCameras only returns
+// archived=0 rows; without the archived-inclusive lookup, archiving a camera
+// would make it invisible to dedup and auto-discover would immediately
+// re-enroll the same physical device the user just archived (verified in
+// production: archiving .224, then auto-discover re-added it within 60s).
+//
 // Endpoint dedup is protocol-agnostic: a camera manually added as protocol=http
 // (direct MJPEG) still carries the device's onvif_endpoint (backfilled at add
 // time), so an ONVIF device discovered later must NOT be re-enrolled under a
-// second protocol=onvif row. Restricting dedup to protocol=onvif only caused
-// exactly this duplicate (e.g. ESP32 MiBeeCam added manually as http, then
-// auto-discovered again as onvif — two rows, one of them broken). Matching
-// onvif_endpoint across ALL protocols fixes this.
-//
-// Serial dedup stays ONVIF-scoped: the serial_number column has ONVIF-specific
-// meaning and a non-ONVIF camera's serial (if any) is not a reliable same-device
-// signal.
+// second protocol=onvif row. Serial is ONVIF-specific (serial_number column).
 func (a *Adder) existsInDB(ctx context.Context, endpoint, serial string) bool {
 	if a.db == nil {
 		return false
 	}
-	existing, err := a.db.ListCameras(ctx)
+	exists, err := a.db.CameraExistsByOnvifEndpoint(ctx, endpoint, serial)
 	if err != nil {
-		logger.Warn("dedup: ListCameras failed, skipping dedup this cycle", "error", err)
+		logger.Warn("dedup: CameraExistsByOnvifEndpoint failed, skipping dedup this cycle", "error", err)
 		return false
 	}
-	for _, c := range existing {
-		// Endpoint dedup: any protocol. A manually-added http/rtsp camera whose
-		// onvif_endpoint matches the discovered device is the SAME physical device.
-		if endpoint != "" && c.ONVIFEndpoint == endpoint {
-			return true
-		}
-		// Serial-level dedup: ONVIF-scoped. The stable_id/serial_number is the
-		// ONVIF serial — only meaningful for onvif-protocol cameras. This catches
-		// the same physical ONVIF camera after an IP change (new endpoint string,
-		// same serial) — preventing duplicate enrollments.
-		if serial != "" && c.Protocol == "onvif" {
-			if c.SerialNumber == serial {
-				return true
-			}
-		}
-	}
-	return false
+	return exists
 }
 
 // classify decides the activation state for a new device:

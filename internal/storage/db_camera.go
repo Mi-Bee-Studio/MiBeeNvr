@@ -196,6 +196,41 @@ func (d *DB) UpdateCameraActivationState(ctx context.Context, cameraID, state st
 	return err
 }
 
+// CameraExistsByOnvifEndpoint reports whether ANY camera row — including
+// ARCHIVED ones — already references the given onvif_endpoint or serial_number.
+// Used by auto-discover dedup: ListCameras (the usual dedup source) only
+// returns archived=0 rows, so without this an archived camera would be
+// invisible to dedup and auto-discover would immediately re-enroll the same
+// physical device the user just archived. Querying the whole table (no archived
+// filter) closes that gap.
+//
+// serial is matched only against serial_number (not stable_id, which is a
+// YAML-only field not stored in this DB column set) and is ONVIF-specific.
+func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, serial string) (bool, error) {
+	if onvifEndpoint == "" && serial == "" {
+		return false, nil
+	}
+	if onvifEndpoint != "" {
+		var c int
+		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE onvif_endpoint=? LIMIT 1`, onvifEndpoint).Scan(&c); err != nil {
+			return false, err
+		}
+		if c > 0 {
+			return true, nil
+		}
+	}
+	if serial != "" {
+		var c int
+		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE serial_number=? LIMIT 1`, serial).Scan(&c); err != nil {
+			return false, err
+		}
+		if c > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
 	var mergeEnabled sql.NullBool
