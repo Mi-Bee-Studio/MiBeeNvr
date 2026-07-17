@@ -262,6 +262,9 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/events", h.handleCameraEvents)
 				r.Post("/start", h.handleStartCamera)
 				r.Post("/stop", h.handleStopCamera)
+				// Activate a pending_activation camera: supply credentials and start
+				// its recorder. Used by the auto-discover flow.
+				r.Post("/activate", h.handleActivateCamera)
 				// Manually trigger IP self-healing for a camera whose address changed.
 				r.Post("/rediscover", h.handleRediscoverCamera)
 				// Xiaomi-specific PTZ and device info endpoints

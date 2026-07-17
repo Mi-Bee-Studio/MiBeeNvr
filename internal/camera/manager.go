@@ -63,6 +63,10 @@ type CameraUpdate struct {
 	// nil = unchanged. Empty string/nil slice = clear.
 	StableID    *string
 	SubnetHints *[]string
+	// ActivationState gates recorder startup: "active" (default) or
+	// "pending_activation". Set to "active" by ActivateCamera to flip a
+	// pending camera live. nil = unchanged. See CameraConfig.ActivationState.
+	ActivationState *string
 }
 
 type CameraManager struct {

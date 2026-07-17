@@ -694,6 +694,38 @@ func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
+// handleActivateCamera transitions a pending_activation camera to active by
+// applying credentials and starting the recorder. Used by the auto-discover
+// flow: an authenticated ONVIF device discovered without valid credentials is
+// persisted as pending_activation; the user supplies credentials via this
+// endpoint to bring it live.
+func (h *Handler) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if h.camMgr == nil {
+		WriteError(w, http.StatusServiceUnavailable, "camera manager not available")
+		return
+	}
+	if err := h.camMgr.ActivateCamera(r.Context(), id, body.Username, body.Password); err != nil {
+		switch {
+		case errors.As(err, new(*model.CameraNotFoundError)):
+			writeAPIError(w, http.StatusNotFound, err)
+		default:
+			logger.Error("failed to activate camera", "camera_id", id, "error", err, "path", r.URL.Path)
+			WriteError(w, http.StatusInternalServerError, "failed to activate camera")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "activated"})
+}
+
 func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.camMgr == nil {

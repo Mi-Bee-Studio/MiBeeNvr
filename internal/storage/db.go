@@ -584,6 +584,45 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
 
+	// Migration v24 → v25: repair recordings.archived column + index.
+	//
+	// Background: migration v7→v8 (the original "add archive columns" block above)
+	// gates the ENTIRE archive-column addition — for BOTH the cameras and recordings
+	// tables — on a single check: `pragma_table_info('cameras') WHERE name='archived'`.
+	// If cameras.archived already exists (e.g. a DB restored from a backup that
+	// pre-dated the split, or an earlier manual ALTER), the whole block is skipped
+	// and recordings.archived + idx_recordings_archived are NEVER created — even
+	// though schema_meta is bumped to v8+ regardless.
+	//
+	// Symptom: any query that SELECTs `archived` from recordings fails with
+	// "no such column: archived" → HTTP 500. This breaks archived-camera deletion
+	// (handleDeleteArchiveGroup calls ListRecordings with Archived filter) and
+	// every archived-recordings list. A production DB hit exactly this: cameras
+	// had the column, recordings did not, schema_version was already 25.
+	//
+	// Fix: check recordings.archived independently and add it if missing. This is
+	// idempotent and safe on DBs that already have the column (the check is 0→skip).
+	var recordingsArchivedColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='archived'`).Scan(&recordingsArchivedColExists)
+	if recordingsArchivedColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN archived INTEGER DEFAULT 0`)
+	}
+	// Re-create the index unconditionally (CREATE IF NOT EXISTS). It may have been
+	// skipped alongside the column in the v7 block.
+	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_archived ON recordings(archived)`)
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
+
+	// Migration v25 → v26: add activation_state column to cameras.
+	// Values: 'active' (default — recorder starts normally) or
+	// 'pending_activation' (camera persisted + visible, but recorder NOT started;
+	// used by auto-discover for authenticated ONVIF devices awaiting credentials).
+	var activationStateColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='activation_state'`).Scan(&activationStateColExists)
+	if activationStateColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active'`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='26' WHERE key='schema_version'")
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 

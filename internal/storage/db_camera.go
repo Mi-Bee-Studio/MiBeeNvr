@@ -71,13 +71,18 @@ type CameraRow struct {
 	RecordingEnabled *bool `json:"recording_enabled,omitempty"`
 	// Recording schedule (injected from YAML at API response time)
 	RecordingSchedule *config.ScheduleConfig `json:"recording_schedule,omitempty"`
+	// ActivationState: "active" (recorder runs) or "pending_activation"
+	// (persisted + visible but recorder not started — awaiting credentials).
+	// "" is treated as "active". Set by auto-discover for authenticated devices.
+	ActivationState string `json:"activation_state,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
-		archived, archived_at, archive_retention_days
+		archived, archived_at, archive_retention_days,
+		COALESCE(activation_state, 'active')
 		FROM cameras WHERE archived=0 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -93,7 +98,8 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
-			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays); err != nil {
+			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
+			&c.ActivationState); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -119,7 +125,8 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
-		archived, archived_at, archive_retention_days
+		archived, archived_at, archive_retention_days,
+		COALESCE(activation_state, 'active')
 		FROM cameras WHERE archived=1 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -135,7 +142,8 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
-			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays); err != nil {
+			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
+			&c.ActivationState); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -177,6 +185,52 @@ func (d *DB) UpsertCameraIngest(ctx context.Context, cameraID, streamKey, srtPas
 	return err
 }
 
+// UpdateCameraActivationState sets the activation_state column for a camera.
+// Empty state is normalized to "active". Used by auto-discover (pending→active
+// on credential activation) and by the AddCamera path to persist the state.
+func (d *DB) UpdateCameraActivationState(ctx context.Context, cameraID, state string) error {
+	if state == "" {
+		state = "active"
+	}
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET activation_state=? WHERE id=?;`, state, cameraID)
+	return err
+}
+
+// CameraExistsByOnvifEndpoint reports whether ANY camera row — including
+// ARCHIVED ones — already references the given onvif_endpoint or serial_number.
+// Used by auto-discover dedup: ListCameras (the usual dedup source) only
+// returns archived=0 rows, so without this an archived camera would be
+// invisible to dedup and auto-discover would immediately re-enroll the same
+// physical device the user just archived. Querying the whole table (no archived
+// filter) closes that gap.
+//
+// serial is matched only against serial_number (not stable_id, which is a
+// YAML-only field not stored in this DB column set) and is ONVIF-specific.
+func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, serial string) (bool, error) {
+	if onvifEndpoint == "" && serial == "" {
+		return false, nil
+	}
+	if onvifEndpoint != "" {
+		var c int
+		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE onvif_endpoint=? LIMIT 1`, onvifEndpoint).Scan(&c); err != nil {
+			return false, err
+		}
+		if c > 0 {
+			return true, nil
+		}
+	}
+	if serial != "" {
+		var c int
+		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE serial_number=? LIMIT 1`, serial).Scan(&c); err != nil {
+			return false, err
+		}
+		if c > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error) {
 	var c CameraRow
 	var mergeEnabled sql.NullBool
@@ -186,12 +240,14 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	err := d.readConn().QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
-		archived, archived_at, archive_retention_days
+		archived, archived_at, archive_retention_days,
+		COALESCE(activation_state, 'active')
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
+		&c.ActivationState,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

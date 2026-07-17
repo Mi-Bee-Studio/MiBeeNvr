@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -947,11 +948,14 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	require.Equal(t, 1, onvifEndpointExists, "onvif_endpoint column must exist after Init")
 	require.Equal(t, 1, profileTokenExists, "profile_token column must exist after Init")
 
-	// Verify schema version is at least 11 (current version with transcoding_tasks)
+	// Verify schema version advanced past v6 (use >= rather than a hardcoded
+	// number so this test doesn't break on every new migration).
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "24", version)
+	n, err := strconv.Atoi(version)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, 6)
 }
 
 func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
@@ -969,11 +973,14 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, mergeTierExists, "merge_tier column must exist after Init")
 
-	// Verify schema version is at least 16
+	// Verify schema version advanced past v16 (use >= rather than a hardcoded
+	// number so this test doesn't break on every new migration).
 	var version string
 	err = db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "24", version)
+	n, err := strconv.Atoi(version)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, 16)
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
