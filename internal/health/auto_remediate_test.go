@@ -357,24 +357,42 @@ func TestAutoRemediator_DisabledConfig(t *testing.T) {
 type mockRediscoverFn struct {
 	mu       sync.Mutex
 	calls    []string
-	found    bool // result to return
-	err      error
+	found    bool          // result to return
+	err      error         // result to return
 	delay    time.Duration // simulate scan duration
 	callDone chan struct{} // closed when a call completes (for synchronization)
 }
 
 func (m *mockRediscoverFn) call(_ context.Context, cameraID string) (bool, error) {
-	if m.delay > 0 {
-		time.Sleep(m.delay)
-	}
+	// Snapshot the mutable fields under the lock so the test goroutine can
+	// safely mutate them (setResult / resetCallDone) without racing this call.
+	// The delay sleep and the channel close happen OUTSIDE the lock.
 	m.mu.Lock()
+	delay := m.delay
+	found := m.found
+	err := m.err
+	done := m.callDone
 	m.calls = append(m.calls, cameraID)
+	m.callDone = nil // consume: a call signals exactly one waiting resetCallDone
 	m.mu.Unlock()
-	if m.callDone != nil {
-		close(m.callDone)
-		m.callDone = nil // only close once
+
+	if delay > 0 {
+		time.Sleep(delay)
 	}
-	return m.found, m.err
+	if done != nil {
+		close(done)
+	}
+	return found, err
+}
+
+// resetCallDone arms a fresh callDone channel for the next call to close.
+// Test goroutines wait on the returned channel; the next call() closes it.
+func (m *mockRediscoverFn) resetCallDone() chan struct{} {
+	ch := make(chan struct{})
+	m.mu.Lock()
+	m.callDone = ch
+	m.mu.Unlock()
+	return ch
 }
 
 func (m *mockRediscoverFn) callCount(t *testing.T) int {
@@ -413,10 +431,10 @@ func TestBlacklistRescan_PeriodicRediscovery(t *testing.T) {
 	r.SetRediscoverer(rd.call)
 
 	// Wait for the justBlacklisted scan deterministically via callDone.
-	rd.callDone = make(chan struct{})
+	blacklistCh := rd.resetCallDone()
 	blacklistCamera(t, r, "cam-1")
 	select {
-	case <-rd.callDone:
+	case <-blacklistCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for blacklist-moment scan")
 	}
@@ -429,10 +447,10 @@ func TestBlacklistRescan_PeriodicRediscovery(t *testing.T) {
 	}
 	r.mu.Unlock()
 
-	rd.callDone = make(chan struct{})
+	rescanCh := rd.resetCallDone()
 	_ = r.Check("cam-1", string(model.StatusError)) // blacklisted → should dispatch rescan
 	select {
-	case <-rd.callDone:
+	case <-rescanCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for periodic rescan")
 	}
