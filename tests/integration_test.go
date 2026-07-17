@@ -334,7 +334,7 @@ func TestMultiCameraConcurrent(t *testing.T) {
 
 	// Verify each camera has its own recording directory
 	for _, camID := range cameraIDs {
-		files, err := store.ListFiles(camID)
+		files, err := store.ListSegments(camID)
 		require.NoError(t, err)
 		require.Len(t, files, 1, "camera %s should have 1 segment", camID)
 
@@ -585,8 +585,8 @@ func TestMJPEGSegmentRoundTrip(t *testing.T) {
 		require.Equal(t, byte(0xD8), data[1])
 	}
 
-	// 6. Segment appears in ListFiles
-	files, err := store.ListFiles(cameraID)
+	// 6. Segment appears in ListSegments (one entry per segment, not per .jpg frame)
+	files, err := store.ListSegments(cameraID)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	require.Equal(t, final, files[0])

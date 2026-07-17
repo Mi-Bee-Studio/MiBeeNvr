@@ -242,9 +242,9 @@ func countJPGFiles(t *testing.T, dir string) int {
 
 func countSegmentDirs(t *testing.T, m *storage.Manager, cameraID string) int {
 	t.Helper()
-	files, err := m.ListFiles(cameraID)
+	segs, err := m.ListSegments(cameraID)
 	require.NoError(t, err)
-	return len(files)
+	return len(segs)
 }
 
 // --- Tests ---
@@ -275,7 +275,7 @@ func TestMJPEGRecorder_RecordsFrames(t *testing.T) {
 	require.NoError(t, rec.Stop())
 	require.Equal(t, model.StatusStopped, rec.Status())
 
-	files, err := mgr.ListFiles("cam-mjpeg-test")
+	files, err := mgr.ListSegments("cam-mjpeg-test")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one recorded segment")
 
@@ -370,7 +370,7 @@ func TestMJPEGRecorder_FrameSampling(t *testing.T) {
 	require.NoError(t, rec.Stop())
 
 	// With SampleInterval=3, sending 9 frames should save exactly 3
-	files, err := mgr.ListFiles("cam-mjpeg-sample")
+	files, err := mgr.ListSegments("cam-mjpeg-sample")
 	require.NoError(t, err)
 	require.Len(t, files, 1, "expected exactly 1 segment")
 
@@ -498,7 +498,7 @@ func TestMJPEGRecorderWithAudio(t *testing.T) {
 	collector.mu.Unlock()
 
 	// Verify AVI file was created.
-	files, err := mgr.ListFiles("cam-mjpeg-audio")
+	files, err := mgr.ListSegments("cam-mjpeg-audio")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one segment")
 
@@ -558,7 +558,7 @@ func TestMJPEGRecorderNoAudio(t *testing.T) {
 	require.Equal(t, 0, collector.count(), "no audio frames should be broadcast when no audio in SDP")
 
 	// Video should still be recorded as JPEG directory (backward compat).
-	files, err := mgr.ListFiles("cam-noaudio")
+	files, err := mgr.ListSegments("cam-noaudio")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected video recording even with no audio in SDP")
 
@@ -608,7 +608,7 @@ func TestMJPEGRecorderAudioDrop(t *testing.T) {
 	require.NoError(t, rec.Stop())
 
 	// Verify AVI file was produced without panic.
-	files, err := mgr.ListFiles("cam-audiodrop")
+	files, err := mgr.ListSegments("cam-audiodrop")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one segment")
 
