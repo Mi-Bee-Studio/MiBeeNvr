@@ -123,20 +123,46 @@ func TestExistsInDB_SerialDedup(t *testing.T) {
 	}
 }
 
-func TestExistsInDB_IgnoresNonOnvifCameras(t *testing.T) {
+func TestExistsInDB_NonOnvifCameraWithoutOnvifEndpoint(t *testing.T) {
 	t.Helper()
 	db := newTestDB(t)
 	ctx := context.Background()
-	// A non-ONVIF camera sharing the same URL must NOT cause dedup — ONVIF
-	// auto-discovery should never be blocked by an unrelated RTSP camera.
+	// An RTSP camera whose URL merely collides with an ONVIF device_service path
+	// (but whose onvif_endpoint column is EMPTY) must NOT trigger dedup — there
+	// is no evidence it is the same physical device. Dedup keys on the
+	// onvif_endpoint column, not the url.
 	if err := db.UpsertCamera(ctx, "cam-rtsp", "RTSP Cam", "rtsp", "h264",
-		"http://192.168.1.50:80/onvif/device_service", "", "", "", "", ""); err != nil {
+		"rtsp://192.168.1.50/stream", "", "", "", "", ""); err != nil {
 		t.Fatalf("UpsertCamera: %v", err)
 	}
 	cfg := &config.AutoDiscoverConfig{}
 	adder := NewAdder(cfg, nil, db, nil)
 	if adder.existsInDB(ctx, "http://192.168.1.50:80/onvif/device_service", "") {
-		t.Error("non-ONVIF camera with a colliding URL must not trigger ONVIF dedup")
+		t.Error("RTSP camera with no onvif_endpoint must not trigger ONVIF dedup")
+	}
+}
+
+// TestExistsInDB_NonOnvifCameraWithMatchingOnvifEndpoint covers the exact
+// production regression: an ESP32 camera was manually added as protocol=http
+// (direct MJPEG) but carries the device's onvif_endpoint (backfilled at add
+// time). Auto-discover then saw the same device via ONVIF and — because dedup
+// used to skip non-onvif cameras — enrolled a DUPLICATE protocol=onvif row,
+// one of which was broken. Dedup must match onvif_endpoint across ALL protocols.
+func TestExistsInDB_NonOnvifCameraWithMatchingOnvifEndpoint(t *testing.T) {
+	t.Helper()
+	db := newTestDB(t)
+	ctx := context.Background()
+	endpoint := "http://192.168.1.50:80/onvif/device_service"
+	// Manually-added http camera (direct MJPEG) that ALSO has the onvif_endpoint
+	// populated — exactly like the production ESP32 .224 case.
+	if err := db.UpsertCamera(ctx, "cam-http", "MiBeeCam", "http", "jpeg",
+		"http://192.168.1.50:81/stream", "", "", endpoint, "", ""); err != nil {
+		t.Fatalf("UpsertCamera: %v", err)
+	}
+	cfg := &config.AutoDiscoverConfig{}
+	adder := NewAdder(cfg, nil, db, nil)
+	if !adder.existsInDB(ctx, endpoint, "") {
+		t.Error("a manually-added http camera with a matching onvif_endpoint must trigger dedup (same physical device)")
 	}
 }
 

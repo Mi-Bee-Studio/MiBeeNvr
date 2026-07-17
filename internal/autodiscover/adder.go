@@ -167,6 +167,18 @@ func (a *Adder) enrich(ctx context.Context, dev *onvif.DiscoveredDevice, endpoin
 
 // existsInDB reports whether a camera already persists with the given endpoint
 // or serial. A nil DB disables persisted dedup (returns false).
+//
+// Endpoint dedup is protocol-agnostic: a camera manually added as protocol=http
+// (direct MJPEG) still carries the device's onvif_endpoint (backfilled at add
+// time), so an ONVIF device discovered later must NOT be re-enrolled under a
+// second protocol=onvif row. Restricting dedup to protocol=onvif only caused
+// exactly this duplicate (e.g. ESP32 MiBeeCam added manually as http, then
+// auto-discovered again as onvif — two rows, one of them broken). Matching
+// onvif_endpoint across ALL protocols fixes this.
+//
+// Serial dedup stays ONVIF-scoped: the serial_number column has ONVIF-specific
+// meaning and a non-ONVIF camera's serial (if any) is not a reliable same-device
+// signal.
 func (a *Adder) existsInDB(ctx context.Context, endpoint, serial string) bool {
 	if a.db == nil {
 		return false
@@ -177,16 +189,16 @@ func (a *Adder) existsInDB(ctx context.Context, endpoint, serial string) bool {
 		return false
 	}
 	for _, c := range existing {
-		if c.Protocol != "onvif" {
-			continue
-		}
+		// Endpoint dedup: any protocol. A manually-added http/rtsp camera whose
+		// onvif_endpoint matches the discovered device is the SAME physical device.
 		if endpoint != "" && c.ONVIFEndpoint == endpoint {
 			return true
 		}
-		// Serial-level dedup: the stable_id column is the ONVIF serial. This
-		// catches the same physical camera after an IP change (new endpoint
-		// string, same serial) — preventing duplicate enrollments.
-		if serial != "" {
+		// Serial-level dedup: ONVIF-scoped. The stable_id/serial_number is the
+		// ONVIF serial — only meaningful for onvif-protocol cameras. This catches
+		// the same physical ONVIF camera after an IP change (new endpoint string,
+		// same serial) — preventing duplicate enrollments.
+		if serial != "" && c.Protocol == "onvif" {
 			if c.SerialNumber == serial {
 				return true
 			}
