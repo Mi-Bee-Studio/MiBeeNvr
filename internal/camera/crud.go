@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
 // AddCamera adds a new camera to the manager, starts its recorder, and persists.
@@ -305,8 +306,16 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 // UpdateCamera applies partial updates to an existing camera.
 // Returns the updated CameraConfig.
 func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, updates CameraUpdate) (*config.CameraConfig, error) {
+	// PHASE 1 — under cm.mu: find camera, mutate config, persist to DB + disk.
+	// We do NOT use defer Unlock here: the recorder stop/start below must run
+	// OUTSIDE cm.mu because startRecorder's sub-helpers (clearStartFailed,
+	// markStartFailed, framePollers) acquire cm.mu themselves — re-entering under
+	// a held Lock self-deadlocks (Go's RWMutex is non-reentrant). This is the same
+	// pattern as RestartRecorder / StartCamera / AddCamera / RediscoverAndReconnect
+	// (see startRecorder's doc comment at recorder_factory.go). Holding the lock
+	// across startRecorder previously caused a permanent cm.mu deadlock that
+	// blocked every camera API endpoint.
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Find camera
 	idx := -1
@@ -319,6 +328,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 	}
 	if idx == -1 {
+		cm.mu.Unlock()
 		return nil, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	// Save original for potential rollback
@@ -469,69 +479,91 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		segDur = recorder.DefaultSegmentDur
 	}
 
-	// Stop existing recorder if needs restart
-	if needsRestart {
-		if rec, ok := cm.recorders[cam.ID]; ok {
-			if err := rec.Stop(); err != nil {
-				logger.Warn("failed to stop recorder", "camera_id", cam.ID, "error", err)
-			}
-			delete(cm.recorders, cam.ID)
-		}
-		// Stop keyframe extractor if running
-		if ext, ok := cm.keyframeExtractors[cam.ID]; ok {
-			delete(cm.keyframeExtractors, cam.ID)
-			if err := ext.Stop(); err != nil {
-				logger.Warn("failed to stop keyframe extractor", "camera_id", cam.ID, "error", err)
-			}
-		}
-		// Stop frame poller if running
-		cm.stopTimelapseFramePoller(cam.ID)
-		// Stop dual-mode timelapse schedule monitor
-		cm.stopDualModeTimelapseScheduleMonitor(cam.ID)
+	// If ONVIF endpoint changed, close cached client so a fresh one is created.
+	// CloseONVIFClient takes onvifMu + deviceInfoMu (NOT cm.mu), so it is safe
+	// under the held lock.
+	if onvifEndpointChanged {
+		cm.CloseONVIFClient(cam.ID)
 	}
 
-	// Start recorder if protocol changed to a recordable one
+	// Persist config to disk (rollback on failure) while still holding cm.mu so
+	// the on-disk config is consistent with the in-memory mutation.
+	if err := cm.persistConfig(); err != nil {
+		// Rollback: restore original camera config
+		cm.cfg.Cameras[idx] = savedCam
+		cm.mu.Unlock()
+		return nil, fmt.Errorf("failed to persist config: %w", err)
+	}
+
+	// Snapshot everything the post-lock phase needs, then release cm.mu before
+	// any recorder stop/start (startRecorder's sub-helpers acquire cm.mu — see
+	// the function-level comment above).
+	camCopy := *cam
+	hasSchedule := cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0
+	relayTargets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+	snapshotURLEmpty := cam.SnapshotURL == ""
+	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
+	cm.mu.Unlock()
+
+	// PHASE 2 — outside cm.mu: stop/start recorder + async side effects.
 	if needsRestart {
-		if _, exists := cm.recorders[cam.ID]; !exists {
-			if err := cm.startRecorder(ctx, *cam, segDur); err != nil {
+		// Snapshot the old recorder + timelapse subcomponents under a brief Lock,
+		// then stop them OUTSIDE the lock (Stop can join a goroutine / do I/O).
+		var oldRec model.Recorder
+		var oldExt *timelapse.KeyframeExtractor
+		cm.mu.Lock()
+		if rec, ok := cm.recorders[cameraID]; ok {
+			oldRec = rec
+			delete(cm.recorders, cameraID)
+		}
+		if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+			oldExt = ext
+			delete(cm.keyframeExtractors, cameraID)
+		}
+		cm.stopTimelapseFramePoller(cameraID)
+		cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+		cm.mu.Unlock()
+		if oldRec != nil {
+			if err := oldRec.Stop(); err != nil {
+				logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+			}
+		}
+		if oldExt != nil {
+			if err := oldExt.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+			}
+		}
+
+		// startRecorder runs entirely outside cm.mu — it acquires the lock itself
+		// via markStartFailed/clearStartFailed/framePollers (see recorder_factory.go).
+		if cm.GetRecorder(cameraID) == nil {
+			if err := cm.startRecorder(ctx, camCopy, segDur); err != nil {
 				logger.Error("failed to start recorder", "error", err)
 			}
 		}
 	}
 
-	// If ONVIF endpoint changed, close cached client so a fresh one is created
-	if onvifEndpointChanged {
-		cm.CloseONVIFClient(cam.ID)
-	}
-
-	// Persist config to disk (rollback on failure)
-	if err := cm.persistConfig(); err != nil {
-		// Rollback: restore original camera config
-		cm.cfg.Cameras[idx] = savedCam
-		return nil, fmt.Errorf("failed to persist config: %w", err)
-	}
-
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
-	protocolChangedToOnvif := updates.Protocol != nil && *updates.Protocol == string(model.ProtoONVIF)
-	if (protocolChangedToOnvif || onvifEndpointChanged) && cam.SnapshotURL == "" {
-		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
+	if (protocolChangedToOnvif || onvifEndpointChanged) && snapshotURLEmpty {
+		go cm.autoPopulateSnapshotURL(context.Background(), cameraID)
 	}
 
-	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
-	// under cm.mu — SetCameraTargets calls back into GetHub which re-locks cm.mu,
-	// which would self-deadlock under the held Lock (see AddCamera for rationale).
+	// Reconcile push-out relay targets. Already outside cm.mu, but still run in a
+	// goroutine to avoid blocking the API response on relay-engine teardown.
 	if cm.relayMgr != nil {
-		cameraID := cam.ID
-		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
+		cameraID := cameraID
+		targets := relayTargets
 		go cm.relayMgr.SetCameraTargets(cameraID, targets)
 	}
 
 	// Start or update recording schedule monitor if a schedule is configured.
-	if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
-		cm.startRecordingScheduleMonitor(context.Background(), cam.ID)
+	if hasSchedule {
+		cm.startRecordingScheduleMonitor(context.Background(), cameraID)
 	}
 
-	return cam, nil
+	// Return a snapshot — we no longer hold cm.mu, so returning the live pointer
+	// into cm.cfg.Cameras would race with concurrent mutations.
+	return &camCopy, nil
 }
 
 // ActivateCamera transitions a "pending_activation" camera to "active": applies
