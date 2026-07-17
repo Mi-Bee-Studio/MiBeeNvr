@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 )
@@ -19,11 +20,11 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
 	// Check for duplicate ID
 	for _, existing := range cm.cfg.Cameras {
 		if existing.ID == cam.ID {
+			cm.mu.Unlock()
 			return "", &model.CameraAlreadyExistsError{CameraID: cam.ID}
 		}
 	}
@@ -36,18 +37,19 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
+		// Persist the activation_state column (UpsertCamera does not write it;
+		// mirrors the UpsertCameraIngest split). Pending-activation cameras are
+		// visible in the UI but skip recorder startup (see below).
+		if cam.ActivationState != "" && cam.ActivationState != "active" {
+			if err := cm.db.UpdateCameraActivationState(ctx, cam.ID, cam.ActivationState); err != nil {
+				logger.Warn("failed to persist activation_state", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
-	// Start recorder if protocol supports it
-	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	if err != nil {
-		segDur = recorder.DefaultSegmentDur
-	}
-	if err := cm.startRecorder(ctx, cam, segDur); err != nil {
-		logger.Error("failed to start recorder", "error", err)
-	}
-
-	// Persist config to disk (rollback on failure)
+	// Persist config to disk (rollback on failure). Done under the lock so the
+	// on-disk config is consistent with the in-memory slice before any recorder
+	// starts (a recorder may read cm.cfg on startup).
 	if err := cm.persistConfig(); err != nil {
 		// Rollback: remove the camera we just added
 		for i, c := range cm.cfg.Cameras {
@@ -56,12 +58,41 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 				break
 			}
 		}
+		cm.mu.Unlock()
 		return "", fmt.Errorf("failed to persist config: %w", err)
 	}
 
+	// Snapshot the fields needed post-lock. startRecorder must NOT be called
+	// under cm.mu (its sub-helpers — clearStartFailed, markStartFailed,
+	// framePollers — acquire cm.mu themselves; re-entering self-deadlocks, see
+	// startRecorder's doc comment). The same applies to relay reconcile and
+	// autoPopulateSnapshotURL (they re-lock via GetHub). We release the lock
+	// here and run those below.
+	needsRecorderStart := cam.ActivationState != "pending_activation"
+	segDur := recorder.DefaultSegmentDur
+	if d, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration); err == nil {
+		segDur = d
+	}
+	startCam := cam // value copy for use after unlock
+	cm.mu.Unlock()
+
+	// Start recorder if protocol supports it AND the camera is not pending
+	// activation. A pending-activation camera (auto-discovered, credentials
+	// unknown) is persisted and visible but must NOT connect — otherwise the
+	// health loop would storm it with auth-failure events. Activation flips the
+	// state to "active" and starts the recorder via StartCamera.
+	if needsRecorderStart {
+		if err := cm.startRecorder(ctx, startCam, segDur); err != nil {
+			logger.Error("failed to start recorder", "error", err)
+		}
+	} else {
+		logger.Info("camera added in pending_activation state; recorder not started",
+			"camera_id", startCam.ID, "name", startCam.Name, "endpoint", startCam.ONVIFEndpoint)
+	}
+
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)
-	if cam.Protocol == string(model.ProtoONVIF) && cam.SnapshotURL == "" {
-		go cm.autoPopulateSnapshotURL(context.Background(), cam.ID)
+	if startCam.Protocol == string(model.ProtoONVIF) && startCam.SnapshotURL == "" {
+		go cm.autoPopulateSnapshotURL(context.Background(), startCam.ID)
 	}
 
 	// Reconcile push-out relay targets. Run in a goroutine so it does NOT execute
@@ -69,12 +100,35 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	// (RLock), and re-entering under a held Lock would self-deadlock (Go's
 	// RWMutex is not reentrant).
 	if cm.relayMgr != nil {
-		cameraID := cam.ID
-		targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
-		go cm.relayMgr.SetCameraTargets(cameraID, targets)
+		targets := append([]config.PushTargetConfig(nil), startCam.PushTargets...)
+		go cm.relayMgr.SetCameraTargets(startCam.ID, targets)
 	}
 
-	return cam.ID, nil
+	// Notify subscribers (auto-discover frontend toast, etc.). Publish is
+	// non-blocking (ring buffer, drops oldest on overflow). source is "auto" for
+	// auto-discovered cameras, "manual" otherwise.
+	cm.publishCameraAdded(ctx, startCam)
+
+	return startCam.ID, nil
+}
+
+// publishCameraAdded emits a camera.added event if an event bus is configured.
+// Safe to call under cm.mu (Publish never blocks).
+func (cm *CameraManager) publishCameraAdded(ctx context.Context, cam config.CameraConfig) {
+	if cm.eventBus == nil {
+		return
+	}
+	source := "manual"
+	if cam.ActivationState == "pending_activation" {
+		source = "auto"
+	}
+	cm.eventBus.Publish(ctx, event.TopicCameraAdded, map[string]any{
+		"camera_id":        cam.ID,
+		"name":             cam.Name,
+		"endpoint":         cam.ONVIFEndpoint,
+		"activation_state": cam.ActivationState,
+		"source":           source,
+	})
 }
 
 // RemoveCamera removes a camera from the manager, stops its recorder, and removes it from config.
@@ -300,6 +354,19 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.StreamEncoding = *updates.StreamEncoding
 	}
+	if updates.ActivationState != nil {
+		// Pending→active does NOT set needsRestart: a pending camera never had a
+		// recorder running, so there is nothing to restart. The caller
+		// (ActivateCamera) explicitly starts the recorder after this returns.
+		// Persisting the state to the DB is done here (under cm.mu) for atomicity.
+		prev := cam.ActivationState
+		cam.ActivationState = *updates.ActivationState
+		if prev != *updates.ActivationState && cm.db != nil {
+			if err := cm.db.UpdateCameraActivationState(ctx, cameraID, *updates.ActivationState); err != nil {
+				logger.Warn("failed to persist activation_state in UpdateCamera", "camera_id", cameraID, "error", err)
+			}
+		}
+	}
 
 	if updates.Transcoding != nil {
 		cam.Transcoding = updates.Transcoding
@@ -439,4 +506,30 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 
 	return cam, nil
+}
+
+// ActivateCamera transitions a "pending_activation" camera to "active": applies
+// the supplied credentials, flips the activation state (config + DB), and starts
+// the recorder. Used by auto-discover — an authenticated ONVIF device discovered
+// without valid credentials is persisted as pending_activation; the user then
+// supplies credentials via the "activate" UI, which calls this method.
+//
+// Idempotent for an already-active camera: credentials are still updated (so the
+// same endpoint can fix wrong creds on a live camera) and StartCamera restarts
+// the recorder with the new credentials.
+func (cm *CameraManager) ActivateCamera(ctx context.Context, cameraID, username, password string) error {
+	active := "active"
+	updates := CameraUpdate{
+		Username:        &username,
+		Password:        &password,
+		ActivationState: &active,
+	}
+	if _, err := cm.UpdateCamera(ctx, cameraID, updates); err != nil {
+		return err
+	}
+	logger.Info("camera activated", "camera_id", cameraID)
+	// StartCamera is idempotent (returns CameraAlreadyRunningError if running);
+	// for a freshly-activated pending camera it starts the recorder for the first
+	// time, for an already-active camera it restarts with updated creds.
+	return cm.StartCamera(ctx, cameraID)
 }

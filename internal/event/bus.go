@@ -17,6 +17,12 @@ const (
 	TopicAIVehicle            = "ai.detection.vehicle"
 	TopicAIAnimal             = "ai.detection.animal"
 	TopicAIEventCreated       = "ai.event.created"
+	// TopicCameraAdded is published when a camera is created — both via the
+	// manual add path (source="manual") and the auto-discover engine
+	// (source="auto"). Payload: map[string]any{camera_id, name, endpoint,
+	// activation_state, source}. The frontend subscribes via
+	// /api/events?filter=camera. to refresh its camera list and toast the user.
+	TopicCameraAdded = "camera.added"
 )
 
 var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")

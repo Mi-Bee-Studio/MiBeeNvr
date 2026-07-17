@@ -612,6 +612,17 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_archived ON recordings(archived)`)
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
 
+	// Migration v25 → v26: add activation_state column to cameras.
+	// Values: 'active' (default — recorder starts normally) or
+	// 'pending_activation' (camera persisted + visible, but recorder NOT started;
+	// used by auto-discover for authenticated ONVIF devices awaiting credentials).
+	var activationStateColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='activation_state'`).Scan(&activationStateColExists)
+	if activationStateColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active'`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='26' WHERE key='schema_version'")
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 

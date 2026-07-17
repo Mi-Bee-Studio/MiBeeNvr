@@ -41,6 +41,7 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	Health        HealthConfig        `yaml:"health"`
+	AutoDiscover  AutoDiscoverConfig  `yaml:"auto_discover"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
 	Transcoding   TranscodingConfig   `yaml:"transcoding"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
@@ -146,6 +147,15 @@ type CameraConfig struct {
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
 	// pattern as timelapse scheduling.
 	RecordingSchedule *ScheduleConfig `yaml:"recording_schedule,omitempty" json:"recording_schedule,omitempty"`
+
+	// ActivationState gates recorder startup. "" or "active" (default) = the camera
+	// connects and records normally. "pending_activation" = the camera is persisted
+	// (DB + config) and visible in the UI, but its recorder is NOT started and no
+	// connection attempts are made — used by auto-discover for ONVIF devices that
+	// require credentials the NVR does not yet have. The user supplies credentials
+	// via the "activate" action, which flips this to "active" and starts the recorder.
+	// See internal/autodiscover/ for the discovery engine.
+	ActivationState string `yaml:"activation_state,omitempty" json:"activation_state,omitempty"`
 
 	// Push-out targets (relay): forward this camera's live stream to remote
 	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
@@ -436,6 +446,69 @@ func (r RediscoveryConfig) RediscoveryEnabled() bool {
 		return true
 	}
 	return *r.Enabled
+}
+
+// AutoDiscoverConfig controls the background auto-discovery engine
+// (internal/autodiscover/). When enabled, the NVR continuously listens for
+// WS-Discovery Hello messages (passive, zero-latency — a camera is seen the
+// moment it powers on) and periodically issues multicast Probe sweeps (active,
+// catches devices that do not send Hello, e.g. after a silent IP change).
+// Discovered ONVIF devices are added automatically: unauthenticated ones
+// (e.g. ESP32 MiBeeCam) are activated immediately; authenticated ones that
+// match the default credentials are activated, otherwise they are persisted in
+// "pending_activation" state awaiting user-supplied credentials.
+//
+// Mirrors the Hikvision NVR "plug-and-play" experience. Defaults to OFF so
+// existing deployments are unchanged until the user opts in.
+type AutoDiscoverConfig struct {
+	// Enabled is *bool so the feature defaults to OFF when unset (unlike
+	// Rediscovery which defaults ON). Use AutoDiscoverEnabled() to read the
+	// effective value — never dereference the pointer directly.
+	Enabled *bool `yaml:"enabled"`
+	// ScanIntervalSeconds is the period between active Probe sweeps (default 60).
+	// Must be >= 30 to respect RPi-3B constraints.
+	ScanIntervalSeconds int `yaml:"scan_interval"`
+	// ListenForHello controls the passive mode: a resident UDP 3702 listener
+	// that reacts to WS-Discovery Hello the instant a device announces itself.
+	// Defaults to true when AutoDiscover is enabled. Can be turned off to use
+	// active-sweep-only mode (lower resource, higher latency).
+	ListenForHello *bool `yaml:"listen_for_hello"`
+	// NetworkInterface binds the discovery sockets to a specific interface
+	// (e.g. "end0", "eth0"). Empty = default multicast interface (the kernel's
+	// default route). Set this when the NVR is multi-homed and cameras live on a
+	// non-default interface, otherwise multicast Probe/Hello may go out the wrong NIC.
+	NetworkInterface string `yaml:"network_interface"`
+	// DefaultUsername/DefaultPassword are tried against authenticated ONVIF
+	// devices during discovery. If they succeed, the device is activated
+	// immediately; if they fail or are unset, the device is added in
+	// "pending_activation" state. Leave blank to require manual activation for
+	// every authenticated device.
+	DefaultUsername string `yaml:"default_username"`
+	DefaultPassword string `yaml:"default_password"`
+	// IgnoreScopes is a deny-list of ONVIF scope substrings. A device whose
+	// scopes contain any entry is skipped (never auto-added). Useful to exclude
+	// e.g. a specific hardware line: ["hardware/LegacyCam"].
+	IgnoreScopes []string `yaml:"ignore_scopes"`
+}
+
+// AutoDiscoverEnabled reports the effective enabled state. Unlike most *bool
+// config fields in this package, auto-discover defaults to OFF (the zero value
+// of the pointer is nil → false) so existing deployments are not surprised by
+// cameras appearing automatically.
+func (a AutoDiscoverConfig) AutoDiscoverEnabled() bool {
+	if a.Enabled == nil {
+		return false
+	}
+	return *a.Enabled
+}
+
+// ListenForHelloEnabled reports whether the passive Hello listener should run.
+// Defaults to true (when the pointer is nil) whenever auto-discover is enabled.
+func (a AutoDiscoverConfig) ListenForHelloEnabled() bool {
+	if a.ListenForHello == nil {
+		return true
+	}
+	return *a.ListenForHello
 }
 
 type HealthAlertsConfig struct {
@@ -1370,6 +1443,16 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.Rediscovery.MaxDuration == "" {
 		cfg.Health.Rediscovery.MaxDuration = "30s"
+	}
+
+	// Auto-discover defaults. The feature itself defaults to OFF (see
+	// AutoDiscoverEnabled); these only apply when the user turns it on.
+	// ScanInterval floor of 60s keeps multicast Probe load RPi-3B-friendly.
+	if cfg.AutoDiscover.ScanIntervalSeconds == 0 {
+		cfg.AutoDiscover.ScanIntervalSeconds = 60
+	}
+	if cfg.AutoDiscover.ScanIntervalSeconds < 30 {
+		cfg.AutoDiscover.ScanIntervalSeconds = 30
 	}
 
 	// AI defaults

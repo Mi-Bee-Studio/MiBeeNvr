@@ -19,6 +19,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -815,6 +816,18 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("register health: %w", err)
+	}
+
+	// 3.5. auto-discover (optional, default OFF). Continuously discovers ONVIF
+	// devices (passive Hello listener + periodic Probe sweep) and auto-enrolls
+	// them. Registered after camera+health so camMgr.AddCamera is available, and
+	// stops before camera on shutdown (reverse order) so it can't add a camera
+	// while the manager is tearing down.
+	if cfg.AutoDiscover.AutoDiscoverEnabled() {
+		adSvc := autodiscover.New(&cfg.AutoDiscover, camMgr, db, eventBus)
+		if err := a.Register(adSvc); err != nil {
+			return nil, fmt.Errorf("register autodiscover: %w", err)
+		}
 	}
 
 	// 4. merge — run in background goroutine with its own cancel
