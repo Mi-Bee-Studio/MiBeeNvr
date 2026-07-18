@@ -617,6 +617,75 @@ cameras:
 - **描述**: 启用摄像头健康监控系统。启用后，系统会监控摄像头状态、检测异常并可选地自动修复
 - **示例**: `true`, `false`
 
+## 自动发现配置
+
+启用后，NVR 在后台自动发现接入局域网的 ONVIF 摄像头并自动入库，无需手动点"扫描设备"——对标海康 NVR 的即插即用体验。默认**关闭**，需显式开启。
+
+### 工作模式
+
+双模式并行：
+- **被动 Hello 监听**（`listen_for_hello`）：常驻 UDP 3702 多播监听，设备上电发出 WS-Discovery Hello 即被发现，零延迟。
+- **主动周期 Probe**（`scan_interval`）：每隔 N 秒主动多播 Probe 扫描，作为兜底。
+
+### 凭据处理（activation_state）
+
+发现设备后，NVR 尝试连接并判定：
+- **无鉴权设备**（如 ESP32 MiBeeCam）：直接启用，立即开始录像。
+- **需鉴权设备**：若配置了 `default_username`/`default_password` 且凭据有效，直接启用；否则标记为 **待激活**（`activation_state: pending_activation`）——入库但**不启动录像**，前端显示"待激活"徽章，用户补充凭据后点击"激活"才开始录像。
+
+### `auto_discover.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 开启后台自动发现并自动入库。默认关闭以避免在陌生网络中误加设备。
+- **示例**: `true`
+
+### `auto_discover.scan_interval`
+- **类型**: integer（秒）
+- **默认**: `60`
+- **下限**: `30`（低于 30 会被自动调整，保护 RPi-3B 资源）
+- **描述**: 主动 Probe 扫描周期。被动 Hello 监听不受此值影响（即时响应）。
+- **示例**: `60`, `120`
+
+### `auto_discover.listen_for_hello`
+- **类型**: boolean
+- **默认**: `true`（当 auto_discover 启用时）
+- **描述**: 启用被动 Hello 监听（零延迟发现）。关闭则仅用主动周期扫描模式（资源更低，延迟更高）。
+- **示例**: `true`, `false`
+
+### `auto_discover.network_interface`
+- **类型**: string
+- **默认**: `""`（内核默认多播接口）
+- **描述**: 绑定发现 socket 到指定网卡（如 `eth0`、`end0`）。NVR 多网卡且摄像头在非默认网卡时需设置，否则多播可能走错网卡。
+- **示例**: `"eth0"`, `""`
+
+### `auto_discover.default_username` / `default_password`
+- **类型**: string
+- **默认**: `""`
+- **描述**: 发现需鉴权的 ONVIF 设备时尝试的默认凭据。成功则直接启用；失败或留空则设备标记为待激活。
+- **示例**: `username: "admin"`, `password: "admin123"`
+
+### `auto_discover.ignore_scopes`
+- **类型**: string 列表
+- **默认**: `[]`
+- **描述**: ONVIF scope 子串黑名单。设备的 scope 包含任一条目则跳过（永不自动添加）。用于排除特定硬件型号。
+- **示例**: `["hardware/LegacyCam"]`
+
+### 完整示例
+
+```yaml
+auto_discover:
+  enabled: true
+  scan_interval: 60
+  listen_for_hello: true
+  network_interface: ""
+  default_username: "admin"
+  default_password: "admin123"
+  ignore_scopes:
+    - "hardware/LegacyCam"
+```
+
+> 也可通过 **设置 → 功能 → 自动发现摄像头** 在 Web UI 中配置（修改后自动持久化到 YAML）。密码不会通过 API 返回（前端仅显示"已设置"状态）。
+
 ## 远程日志配置
 
 ### `remote_log.enabled`

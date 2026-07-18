@@ -56,7 +56,21 @@ MiBee NVR provides the following ONVIF service integrations:
 
 MiBee NVR supports two camera discovery methods:
 
-### WS-Discovery (Multicast)
+### Auto-Discover (background, recommended)
+
+When enabled (**Settings → Features → Auto-Discover Cameras**, or YAML `auto_discover.enabled: true`), the NVR discovers ONVIF cameras joining the LAN in the background and enrolls them automatically — no manual scan needed (Hikvision-NVR-style plug-and-play).
+
+- **Unauthenticated devices** (e.g. ESP32 MiBeeCam): activated immediately and start recording.
+- **Authenticated devices**: activated immediately if default credentials are configured and valid; otherwise marked as "pending activation". Click "Activate" on the Cameras page and supply credentials to start recording.
+- A toast notification appears on the Cameras page when a new device is discovered.
+
+> Off by default. See [Configuration — Auto-Discover Configuration](./configuration.md#auto-discover-configuration) for the full option reference.
+
+### Manual Discovery
+
+The methods below require the user to trigger them explicitly (click "Scan Devices"). Useful when auto-discover is off or for troubleshooting.
+
+#### WS-Discovery (Multicast)
 
 **Method**: UDP multicast to `239.255.255.250:3702`
 ```bash
@@ -68,7 +82,7 @@ nmap -p 3702 --open 192.168.1.0/24
 - ✅ Works on bare metal/Raspberry Pi
 - ❌ **Blocked in Docker containers** (multicast not supported)
 
-### HTTP Probe
+#### HTTP Probe
 
 **Method**: Direct HTTP request to ONVIF endpoint
 ```bash

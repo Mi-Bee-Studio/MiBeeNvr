@@ -868,6 +868,75 @@ cameras:
 - **Description**: Global maximum number of remediation actions per minute across all cameras
 - **Example**: `10`, `20`, `50`
 
+## Auto-Discover Configuration
+
+When enabled, the NVR discovers ONVIF cameras joining the LAN in the background and enrolls them automatically — no manual "scan" button needed (Hikvision-NVR-style plug-and-play). **Off by default**; opt in explicitly.
+
+### Operating modes
+
+Two modes run in parallel:
+- **Passive Hello listener** (`listen_for_hello`): a resident UDP 3702 multicast listener that reacts the instant a device announces itself via WS-Discovery Hello (zero latency).
+- **Active periodic Probe** (`scan_interval`): a multicast Probe sweep every N seconds, as a fallback.
+
+### Credential handling (activation_state)
+
+After discovering a device, the NVR connects and classifies it:
+- **Unauthenticated devices** (e.g. ESP32 MiBeeCam): activated immediately, recording starts right away.
+- **Authenticated devices**: if `default_username`/`default_password` are configured and valid, activated immediately; otherwise marked **pending activation** (`activation_state: pending_activation`) — enrolled but **not recording**. The UI shows a "Pending Activation" badge; the user supplies credentials and clicks "Activate" to start recording.
+
+### `auto_discover.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable background auto-discovery and auto-enrollment. Off by default to avoid enrolling devices on unfamiliar networks.
+- **Example**: `true`
+
+### `auto_discover.scan_interval`
+- **Type**: integer (seconds)
+- **Default**: `60`
+- **Minimum**: `30` (values below 30 are clamped, to respect RPi-3B resources)
+- **Description**: Active Probe sweep period. The passive Hello listener is unaffected by this value (it responds instantly).
+- **Example**: `60`, `120`
+
+### `auto_discover.listen_for_hello`
+- **Type**: boolean
+- **Default**: `true` (when auto_discover is enabled)
+- **Description**: Enable the passive Hello listener (zero-latency discovery). Disable for active-sweep-only mode (lower resource, higher latency).
+- **Example**: `true`, `false`
+
+### `auto_discover.network_interface`
+- **Type**: string
+- **Default**: `""` (kernel default multicast interface)
+- **Description**: Bind the discovery sockets to a specific NIC (e.g. `eth0`, `end0`). Set when the NVR is multi-homed and cameras live on a non-default interface, otherwise multicast may go out the wrong NIC.
+- **Example**: `"eth0"`, `""`
+
+### `auto_discover.default_username` / `default_password`
+- **Type**: string
+- **Default**: `""`
+- **Description**: Default credentials tried against authenticated ONVIF devices during discovery. On success the device is activated immediately; on failure (or if blank) the device is added as pending activation.
+- **Example**: `username: "admin"`, `password: "admin123"`
+
+### `auto_discover.ignore_scopes`
+- **Type**: list of strings
+- **Default**: `[]`
+- **Description**: Deny-list of ONVIF scope substrings. A device whose scopes contain any entry is skipped (never auto-added). Useful to exclude a specific hardware line.
+- **Example**: `["hardware/LegacyCam"]`
+
+### Full example
+
+```yaml
+auto_discover:
+  enabled: true
+  scan_interval: 60
+  listen_for_hello: true
+  network_interface: ""
+  default_username: "admin"
+  default_password: "admin123"
+  ignore_scopes:
+    - "hardware/LegacyCam"
+```
+
+> You can also configure this via **Settings → Features → Auto-Discover Cameras** in the Web UI (changes persist to YAML automatically). The password is never returned over the API (the UI only shows whether one is set).
+
 ## Remote Log Configuration
 
 ### `remote_log.enabled`
