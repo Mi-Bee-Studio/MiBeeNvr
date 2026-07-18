@@ -113,9 +113,13 @@
   async function loadAIEvents(cid: string, d: string) {
     try {
       const [y, m, dd] = d.split('-').map(Number);
-      const startISO = new Date(Date.UTC(y, m - 1, dd, 0, 0, 0)).toISOString();
-      const endISO = new Date(Date.UTC(y, m - 1, dd, 23, 59, 59)).toISOString();
-      const resp = await listAIEvents({ camera_id: cid, start: startISO, end: endISO, asc: true, limit: 500 });
+      // Local-midnight range: a "day" is the user's calendar day, so recordings
+      // from local 00:00–08:00 (UTC previous-day 16:00–24:00) are included.
+      const startISO = new Date(y, m - 1, dd, 0, 0, 0).toISOString();
+      const endISO = new Date(y, m - 1, dd, 23, 59, 59).toISOString();
+      // High-frequency detection (e.g. person every second) can produce thousands
+      // of events/day. asc + a low cap would silently drop evening event markers.
+      const resp = await listAIEvents({ camera_id: cid, start: startISO, end: endISO, asc: true, limit: 2000 });
       aiEvents = resp.events || [];
     } catch {
       aiEvents = []; // silent fail — events are an overlay, not critical
@@ -128,18 +132,23 @@
     snapNotice = '';
     try {
       const [y, m, dd] = d.split('-').map(Number);
-      const startISO = new Date(Date.UTC(y, m - 1, dd, 0, 0, 0)).toISOString();
-      const endISO = new Date(Date.UTC(y, m - 1, dd, 23, 59, 59)).toISOString();
+      // Local-midnight range (see loadAIEvents comment).
+      const startISO = new Date(y, m - 1, dd, 0, 0, 0).toISOString();
+      const endISO = new Date(y, m - 1, dd, 23, 59, 59).toISOString();
       const resp = await listRecordings({
         camera_id: cid,
         start: startISO,
         end: endISO,
         sort_by: 'started_at',
         order: 'asc',
-        limit: 500,
+        // Same fragmentation cap as Recordings.svelte loadTimelineData (10000):
+        // a single badly-fragmented camera can produce thousands of short
+        // segments/day. asc + a low cap silently truncates the day so the
+        // afternoon appears empty on this per-camera DVR bar.
+        limit: 10000,
       });
 
-      const dayStartMs = Date.UTC(y, m - 1, dd, 0, 0, 0);
+      const dayStartMs = new Date(y, m - 1, dd).getTime();
 
       segments = resp.recordings
         .map((rec) => {

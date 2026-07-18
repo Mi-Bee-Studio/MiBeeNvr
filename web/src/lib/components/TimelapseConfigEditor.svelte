@@ -362,15 +362,14 @@
             <select
               id="timelapse-merge-duration"
               class="input"
-              value={config.merge_duration || 'natural-day'}
+              value={config.merge_duration || '1h'}
               onchange={(e) => updateField('merge_duration', (e.target as HTMLSelectElement).value)}
             >
-              <option value="8h">{t('timelapse.mergeDuration8h')}</option>
-              <option value="12h">{t('timelapse.mergeDuration12h')}</option>
-              <option value="24h">{t('timelapse.mergeDuration24h')}</option>
-              <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
-              <option value="7d">{t('timelapse.mergeDuration7d')}</option>
-              <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+              <option value="1h">{t('timelapse.mergeDuration1h')}</option>
+              <option value="30m">{t('timelapse.mergeDuration30m')}</option>
+              <option value="15m">{t('timelapse.mergeDuration15m')}</option>
+              <option value="10m">{t('timelapse.mergeDuration10m')}</option>
+              <option value="5m">{t('timelapse.mergeDuration5m')}</option>
             </select>
             <p class="th-text-muted text-xs mt-1">{t('timelapse.mergeDurationHint')}</p>
           </div>

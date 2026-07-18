@@ -261,7 +261,7 @@
           {/if}
 
           <!-- Current time indicator (live "now" marker, only for today) -->
-          {#if selectedDate === new Date().toISOString().slice(0, 10)}
+          {#if selectedDate === new Date().toLocaleDateString('en-CA')}
             {@const nowSec = (Date.now() - dayStartMs) / 1000}
             {#if nowSec >= 0 && nowSec <= DAY_SECONDS}
               <div

@@ -328,7 +328,7 @@ export async function batchMergeTimelapse(params: {
 
   const body = JSON.stringify({
     camera_ids: params.camera_ids,
-    duration: params.duration || 'natural-day',
+    duration: params.duration || '1h',
     date: params.date || '',
   });
 

@@ -924,6 +924,8 @@ func Validate(cfg *Config) error {
 		if cfg.Merge.RollingWindow != "" {
 			if d, err := time.ParseDuration(cfg.Merge.RollingWindow); err != nil || d <= 0 {
 				return fmt.Errorf("invalid merge.rolling_window %q: must be a positive duration", cfg.Merge.RollingWindow)
+			} else if d > time.Hour {
+				return fmt.Errorf("invalid merge.rolling_window %q: must be ≤ 1h (windows >1h span a UTC day boundary and were removed for timezone safety)", cfg.Merge.RollingWindow)
 			}
 		}
 		if cfg.Merge.RollingMinDuration != "" {
@@ -1534,7 +1536,7 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Timelapse.MergeOutputFPS = 30
 			}
 			if cam.Timelapse.MergeDuration == "" {
-				cam.Timelapse.MergeDuration = "natural-day"
+				cam.Timelapse.MergeDuration = "1h"
 			}
 			// MergeEnabled defaults to nil (auto-detect)
 		}
@@ -1747,23 +1749,46 @@ func mergeTimeRanges(ranges []TimeRange) []TimeRange {
 }
 
 // ParseMergeDuration parses a MergeDuration value and returns the corresponding time.Duration.
-// Valid values: "8h", "12h", "24h", "natural-day", "7d", "30d"
-// Empty string defaults to "natural-day" (24 hours).
+//
+// The merge window is capped at 1h. Windows >1h (the legacy 8h/12h/24h/
+// natural-day/7d/30d) were removed because they align to local midnight and
+// therefore span a UTC day boundary — once storage/queries mix UTC and the
+// user's timezone, a multi-hour window both amplifies IO (it touches two UTC
+// day-partitions) and mis-buckets recordings across the boundary. A 1h window
+// never crosses a natural-day boundary regardless of timezone, so timezone
+// only shifts which hour-bucket a segment lands in — no IO amplification, no
+// cross-day bucketing. "Watch a whole day" is handled by client-side
+// continuous playback (RecordingDetail auto-advances to the next segment),
+// not by synthesizing a large file server-side.
+//
+// Valid input: any Go duration string (time.ParseDuration) in (0, 1h], e.g.
+// "1h", "30m", "15m", "10m", "5m". Empty string defaults to "1h".
+//
+// Backward compatibility: legacy values (8h/12h/24h/natural-day/7d/30d) do
+// NOT error — they are silently capped to 1h with a warning, so existing
+// config files upgrade without breaking. Removing them entirely would fail
+// startup on every deployed instance that set merge_duration.
 func ParseMergeDuration(s string) (time.Duration, error) {
+	// Legacy values: silently cap to 1h. Stored configs from older releases
+	// still carry these; erroring would block startup.
 	switch s {
-	case "", "natural-day":
-		return 24 * time.Hour, nil
-	case "8h":
-		return 8 * time.Hour, nil
-	case "12h":
-		return 12 * time.Hour, nil
-	case "24h":
-		return 24 * time.Hour, nil
-	case "7d":
-		return 7 * 24 * time.Hour, nil
-	case "30d":
-		return 30 * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("invalid merge duration %q: must be one of \"8h\", \"12h\", \"24h\", \"natural-day\", \"7d\", \"30d\"", s)
+	case "", "natural-day", "8h", "12h", "24h", "7d", "30d":
+		if s != "" {
+			slog.Warn("timelapse merge_duration capped to 1h",
+				"configured", s,
+				"reason", "windows >1h span a UTC day boundary and were removed for timezone safety")
+		}
+		return time.Hour, nil
 	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid merge duration %q: %w", s, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid merge duration %q: must be a positive duration", s)
+	}
+	if d > time.Hour {
+		return 0, fmt.Errorf("invalid merge duration %q: must be ≤ 1h (e.g. \"1h\", \"30m\", \"15m\")", s)
+	}
+	return d, nil
 }

@@ -27,10 +27,7 @@ export interface SeekResult {
  * @param targetSec Target wall-clock position in seconds-from-midnight
  * @returns The hit/snapped segment + intra-segment offset + snapped flag
  */
-export function findSegmentAt(
-  segments: TimelineSegment[],
-  targetSec: number,
-): SeekResult {
+export function findSegmentAt(segments: TimelineSegment[], targetSec: number): SeekResult {
   if (segments.length === 0) return { seg: null, offset: 0, snapped: false };
 
   // Exact hit?
@@ -67,11 +64,18 @@ export function epochMsToDaySec(epochMs: number, dayStartMs: number): number {
 }
 
 /**
- * Parse a YYYY-MM-DD date string to UTC midnight epoch-ms.
+ * Parse a YYYY-MM-DD date string to LOCAL midnight epoch-ms.
+ *
+ * The day boundary is the user's local calendar day, not the UTC day — this
+ * matches how recordings are displayed (the 24h timeline axis labels are local
+ * hours) and how Recordings.svelte queries a selected day (local midnight →
+ * ISO range). Using UTC midnight here would shift the entire axis by the
+ * timezone offset (e.g. a recording at local 16:00 / UTC 08:00 would render at
+ * the "08:00" tick instead of "16:00").
  */
 export function parseDayStart(dateStr: string): number {
   const [y, m, d] = dateStr.split('-').map(Number);
-  return Date.UTC(y, m - 1, d, 0, 0, 0);
+  return new Date(y, m - 1, d).getTime();
 }
 
 /**

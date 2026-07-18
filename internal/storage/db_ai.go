@@ -61,6 +61,12 @@ type AIEventFilter struct {
 
 // ListAIEvents returns AI events matching the filter, ordered by created_at DESC
 // (or ASC if f.AscOrder is true).
+//
+// NOTE: unlike ListRecordings/ListHealthEvents (where Limit=0 means "no limit"),
+// a zero/negative Limit here defaults to 50. AI events can number in the tens of
+// thousands per day for high-frequency detectors, so an unguarded "no limit" would
+// risk pulling huge result sets on the default list page. Callers that need more
+// (e.g. TimelineBar overlay, which fetches a full day) MUST pass an explicit Limit.
 func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50

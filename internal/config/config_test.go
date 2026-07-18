@@ -1357,13 +1357,12 @@ func TestParseMergeDuration_Valid(t *testing.T) {
 		input    string
 		expected time.Duration
 	}{
-		{"", 24 * time.Hour},
-		{"natural-day", 24 * time.Hour},
-		{"8h", 8 * time.Hour},
-		{"12h", 12 * time.Hour},
-		{"24h", 24 * time.Hour},
-		{"7d", 7 * 24 * time.Hour},
-		{"30d", 30 * 24 * time.Hour},
+		{"", time.Hour}, // empty defaults to 1h
+		{"1h", time.Hour},
+		{"30m", 30 * time.Minute},
+		{"15m", 15 * time.Minute},
+		{"10m", 10 * time.Minute},
+		{"5m", 5 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1374,14 +1373,33 @@ func TestParseMergeDuration_Valid(t *testing.T) {
 	}
 }
 
+// TestParseMergeDuration_LegacyCapped verifies that legacy window values
+// (>1h, which spanned UTC day boundaries) are silently capped to 1h instead
+// of erroring, so existing deployed configs upgrade without breaking startup.
+func TestParseMergeDuration_LegacyCapped(t *testing.T) {
+	for _, legacy := range []string{"natural-day", "8h", "12h", "24h", "7d", "30d"} {
+		t.Run(legacy, func(t *testing.T) {
+			dur, err := ParseMergeDuration(legacy)
+			require.NoError(t, err, "legacy %q must not error (backward-compat)", legacy)
+			require.Equal(t, time.Hour, dur, "legacy %q must be capped to 1h", legacy)
+		})
+	}
+}
+
 func TestParseMergeDuration_Invalid(t *testing.T) {
+	// Garbage input
 	_, err := ParseMergeDuration("invalid")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "must be one of")
+	// New values >1h are rejected (only legacy strings are capped)
+	_, err = ParseMergeDuration("2h")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "≤ 1h")
+	_, err = ParseMergeDuration("0")
+	require.Error(t, err)
 }
 
 func TestValidateTimelapseMergeDuration_Valid(t *testing.T) {
-	for _, md := range []string{"8h", "12h", "24h", "natural-day", "7d", "30d"} {
+	for _, md := range []string{"1h", "30m", "15m", "10m", "5m"} {
 		cfg := &Config{
 			Cameras: []CameraConfig{{
 				ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
