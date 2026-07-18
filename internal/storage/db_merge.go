@@ -379,6 +379,50 @@ func (d *DB) ListMergedRecordingsForValidation(ctx context.Context) ([]*model.Re
 	return result, rows.Err()
 }
 
+// ListRecordingsByMergeStatus returns recordings matching one of the given
+// merge_status values (e.g. "incompatible", "failed", "dark"). Used by the
+// `repair fragments` CLI to surface segments the merge engine permanently gave
+// up on — those accumulate as un-mergeable debris that rolling merge will never
+// retry (rolling.go marks them "incompatible so we don't retry forever").
+//
+// cameraID == "" matches all cameras; limit <= 0 means no limit.
+// Results are ordered by started_at ASC so dry-run output reads chronologically.
+func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string, cameraID string, limit int) ([]*model.Recording, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(statuses))
+	args := make([]any, 0, len(statuses)+2)
+	for i, s := range statuses {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE merge_status IN (" +
+		strings.Join(placeholders, ",") + ")"
+	if cameraID != "" {
+		q += " AND camera_id=?"
+		args = append(args, cameraID)
+	}
+	q += " ORDER BY started_at ASC"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := d.readConn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	recs, err := scanRecordingRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.Recording, len(recs))
+	for i := range recs {
+		result[i] = &recs[i]
+	}
+	return result, nil
+}
+
 // ResetMergeStatus clears merge_status and merge_path for a recording, reverting
 // it to its unmerged state so playback falls back to original frames.
 func (d *DB) ResetMergeStatus(ctx context.Context, id string) error {
