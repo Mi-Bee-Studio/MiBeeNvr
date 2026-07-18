@@ -278,8 +278,19 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 // Concurrency: safe to call from any goroutine. All registry mutations go
 // through apply() (configMu, nanosecond map swap); rec.Start (network dial) and
 // the timelapse sub-helpers run OUTSIDE any lock. The recorder is registered in
-// the snapshot via apply; on failure it is removed via apply.
+// the snapshot via apply; on failure it is removed via apply. Serialized
+// per-camera via withCameraLifecycle so two concurrent startRecorder calls for
+// the same camera (e.g. manual restart + health auto-remediation) can't both
+// construct a recorder and leak the loser.
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
+	return cm.withCameraLifecycle(cam.ID, func() error {
+		return cm.startRecorderLocked(ctx, cam, segDur)
+	})
+}
+
+// startRecorderLocked is the body of startRecorder, called under the per-camera
+// lifecycle guard.
+func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
 	if rec == nil {
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)

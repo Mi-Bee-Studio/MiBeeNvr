@@ -89,6 +89,10 @@ type CameraManager struct {
 	// lifecycle path) and have their own mutex so lifecycle operations don't
 	// serialize against registry reads.
 	auxMu sync.Mutex
+	// lifecycleMu holds per-camera mutexes (camera_id → *sync.Mutex) used by
+	// withCameraLifecycle to serialize start/stop/restart for a single camera,
+	// preventing concurrent-recorder-construction leaks. See registry.go.
+	lifecycleMu sync.Map
 	// snapshot is the immutable, atomically-published registry view consumed by
 	// ALL lock-free reads (GetRecorder/GetHub/Status/statusSnapshot/counts). See
 	// registry.go. Writes go through apply(); lifecycle I/O runs outside any lock
@@ -635,113 +639,122 @@ func (cm *CameraManager) GetStreamURL(cameraID string) string {
 }
 
 // RestartRecorder stops and recreates the recorder for the given camera.
-// The camera must be enabled.
+// The camera must be enabled. The stop+start is serialized per-camera via
+// withCameraLifecycle so it can't race a concurrent restart/stop (which would
+// leak a recorder or interleave with a health auto-remediation restart).
 func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) error {
 	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
-
-	// Stop existing recorder (snapshot it, remove from registry via apply, then
-	// Stop OUTSIDE any lock — rec.Stop can join a goroutine).
-	if rec := cm.snapshotRecorder(cameraID); rec != nil {
-		cm.apply(func(s *snapshot) *snapshot {
-			delete(s.recorders, cameraID)
-			return s
-		})
-		if err := rec.Stop(); err != nil {
-			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
-		}
-	}
-	// Record reconnect attempt
-	if cm.metrics != nil {
-		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
-	}
-
-	// startRecorder runs entirely outside any lock; it registers via apply.
 	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, camCopy, segDur)
+	return cm.withCameraLifecycle(cameraID, func() error {
+		// Stop existing recorder (snapshot it, remove from registry via apply,
+		// then Stop — rec.Stop can join a goroutine, runs under the per-camera
+		// guard but NOT under any registry lock).
+		if rec := cm.snapshotRecorder(cameraID); rec != nil {
+			cm.apply(func(s *snapshot) *snapshot {
+				delete(s.recorders, cameraID)
+				return s
+			})
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+			}
+		}
+		// Record reconnect attempt
+		if cm.metrics != nil {
+			cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
+		}
+		// startRecorderLocked registers via apply; safe to call under the guard
+		// (it does not re-enter withCameraLifecycle).
+		return cm.startRecorderLocked(ctx, camCopy, segDur)
+	})
 }
 
-// StartCamera manually starts the recorder for the given camera.
+// StartCamera manually starts the recorder for the given camera. Serialized
+// per-camera so it can't race a concurrent restart/stop.
 func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
 	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
-
-	// Check if already running — stale recorders (error/stopped) can be restarted
-	if rec := cm.snapshotRecorder(cameraID); rec != nil {
-		status := rec.Status()
-		if status == model.StatusRecording || status == model.StatusReconnecting {
-			return &model.CameraAlreadyRunningError{CameraID: cameraID}
-		}
-		// Stale recorder — stop and remove so we can start fresh
-		cm.apply(func(s *snapshot) *snapshot {
-			delete(s.recorders, cameraID)
-			return s
-		})
-		if err := rec.Stop(); err != nil {
-			logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
-		}
-		if cm.metrics != nil {
-			cm.metrics.ActiveCameras.Dec()
-		}
-	}
-
 	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	return cm.startRecorder(ctx, camCopy, segDur)
+	return cm.withCameraLifecycle(cameraID, func() error {
+		// Check if already running — stale recorders (error/stopped) can be restarted
+		if rec := cm.snapshotRecorder(cameraID); rec != nil {
+			status := rec.Status()
+			if status == model.StatusRecording || status == model.StatusReconnecting {
+				return &model.CameraAlreadyRunningError{CameraID: cameraID}
+			}
+			// Stale recorder — stop and remove so we can start fresh
+			cm.apply(func(s *snapshot) *snapshot {
+				delete(s.recorders, cameraID)
+				return s
+			})
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
+			}
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+		return cm.startRecorderLocked(ctx, camCopy, segDur)
+	})
 }
 
-// StopCamera manually stops the recorder for the given camera.
+// StopCamera manually stops the recorder for the given camera. Serialized
+// per-camera so it can't race a concurrent start/restart.
 func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
-	rec := cm.snapshotRecorder(cameraID)
-	if rec == nil {
-		return fmt.Errorf("camera %q not found", cameraID)
-	}
-
-	// Remove from registry first (apply), then Stop outside any lock.
-	cm.apply(func(s *snapshot) *snapshot {
-		delete(s.recorders, cameraID)
-		delete(s.hubs, cameraID)
-		return s
-	})
-	if err := rec.Stop(); err != nil {
-		logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
-	}
-	if cm.metrics != nil {
-		cm.metrics.ActiveCameras.Dec()
-	}
-	logger.Info("stopped recorder for camera", "camera_id", cameraID)
-
-	// Stop keyframe extractor if running (snapshot under auxMu, stop outside)
-	cm.auxMu.Lock()
-	ext, hasExt := cm.keyframeExtractors[cameraID]
-	if hasExt {
-		delete(cm.keyframeExtractors, cameraID)
-	}
-	cm.auxMu.Unlock()
-	if hasExt && ext != nil {
-		if err := ext.Stop(); err != nil {
-			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+	return cm.withCameraLifecycle(cameraID, func() error {
+		rec := cm.snapshotRecorder(cameraID)
+		if rec == nil {
+			return fmt.Errorf("camera %q not found", cameraID)
 		}
-	}
 
-	// Stop frame poller if running
-	cm.stopTimelapseFramePoller(cameraID)
+		// Remove from registry first (apply), then Stop (under the per-camera
+		// guard, not under any registry lock).
+		cm.apply(func(s *snapshot) *snapshot {
+			delete(s.recorders, cameraID)
+			delete(s.hubs, cameraID)
+			return s
+		})
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
+		}
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+		logger.Info("stopped recorder for camera", "camera_id", cameraID)
 
-	// Stop dual-mode timelapse schedule monitor if running
-	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+		// Stop keyframe extractor if running (snapshot under auxMu, stop outside)
+		cm.auxMu.Lock()
+		ext, hasExt := cm.keyframeExtractors[cameraID]
+		if hasExt {
+			delete(cm.keyframeExtractors, cameraID)
+		}
+		cm.auxMu.Unlock()
+		if hasExt && ext != nil {
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
+			}
+		}
 
-	return nil
+		// Stop frame poller if running
+		cm.stopTimelapseFramePoller(cameraID)
+
+		// Stop dual-mode timelapse schedule monitor if running
+		cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+
+		return nil
+	})
 }
 
 // SetProtocolEnabled enables or disables a protocol.

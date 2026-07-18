@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -626,6 +627,78 @@ func TestRestartRecorder(t *testing.T) {
 	assert.Equal(t, 4, mgr.RecorderCount())
 	ok := mgr.GetRecorder("cam-h264") != nil
 	assert.True(t, ok)
+}
+
+// TestWithCameraLifecycle_SerializesConcurrentOps verifies the per-camera
+// single-flight guard serializes lifecycle operations for one camera (no two
+// run concurrently — the precondition that prevents recorder-construction
+// leaks when a manual restart overlaps a health auto-remediation restart).
+func TestWithCameraLifecycle_SerializesConcurrentOps(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	var (
+		inFlight    atomic.Int32
+		maxInFlight atomic.Int32
+		wg          sync.WaitGroup
+	)
+	const goroutines = 20
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			_ = mgr.withCameraLifecycle("cam-h264", func() error {
+				// Record concurrency: if two ever overlap, maxInFlight > 1.
+				cur := inFlight.Add(1)
+				for {
+					old := maxInFlight.Load()
+					if cur <= old || maxInFlight.CompareAndSwap(old, cur) {
+						break
+					}
+				}
+				time.Sleep(2 * time.Millisecond) // widen the overlap window
+				inFlight.Add(-1)
+				return nil
+			})
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), maxInFlight.Load(), "lifecycle ops for one camera must be serialized (no concurrent execution)")
+}
+
+// TestWithCameraLifecycle_DifferentCamerasDoNotBlock verifies the per-camera
+// guard does NOT serialize across different cameras — B's lifecycle must
+// proceed even while A's is mid-flight.
+func TestWithCameraLifecycle_DifferentCamerasDoNotBlock(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+
+	aStarted := make(chan struct{})
+	aProceed := make(chan struct{})
+	bDone := make(chan struct{})
+
+	// A holds its guard open until released.
+	go func() {
+		_ = mgr.withCameraLifecycle("cam-a", func() error {
+			close(aStarted)
+			<-aProceed
+			return nil
+		})
+	}()
+	<-aStarted
+
+	// B must be able to run concurrently (different camera → different guard).
+	go func() {
+		_ = mgr.withCameraLifecycle("cam-b", func() error {
+			close(bDone)
+			return nil
+		})
+	}()
+	select {
+	case <-bDone:
+		// good — B ran despite A holding its guard
+	case <-time.After(time.Second):
+		t.Fatal("cam-b lifecycle was blocked by cam-a's guard — guards must be per-camera")
+	}
+	close(aProceed)
 }
 
 func TestCreateRecorder_ONVIF(t *testing.T) {

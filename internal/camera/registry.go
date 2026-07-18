@@ -1,6 +1,8 @@
 package camera
 
 import (
+	"sync"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -149,4 +151,25 @@ func (cm *CameraManager) snapshotHub(cameraID string) *model.StreamHub {
 // snapshotConfig returns the CameraConfig pointer for cameraID, or nil.
 func (cm *CameraManager) snapshotConfig(cameraID string) *config.CameraConfig {
 	return cm.loadSnapshot().configs[cameraID]
+}
+
+// withCameraLifecycle serializes lifecycle operations (start/stop/restart) for
+// a single camera. Without it, two goroutines can race to startRecorder the
+// same camera simultaneously — e.g. a manual API restart overlapping a health
+// auto-remediation restart — and the second call overwrites the first recorder
+// in the snapshot, leaking it (its run goroutine keeps running, unreachable via
+// the manager, until process exit). The guard is a per-camera mutex lazily
+// created in a sync.Map; it is held only around the fn, never across reads.
+//
+// This is a simpler alternative to a full per-camera actor model: it provides
+// the critical serialization (no concurrent recorder construction for one
+// camera) without the message-passing machinery. fn runs OUTSIDE any registry
+// lock, so it may perform network I/O (rec.Start/Stop) without blocking other
+// cameras or readers.
+func (cm *CameraManager) withCameraLifecycle(cameraID string, fn func() error) error {
+	muIface, _ := cm.lifecycleMu.LoadOrStore(cameraID, &sync.Mutex{})
+	mu := muIface.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
 }
