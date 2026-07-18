@@ -217,6 +217,8 @@ func dispatchSubcommand(args []string) {
 		cmdInit()
 	case "migrate-mjpeg":
 		cmdMigrateMJPEG()
+	case "repair":
+		cmdRepair()
 	case "hash-password":
 		cmdHashPassword()
 	case "encrypt-config":

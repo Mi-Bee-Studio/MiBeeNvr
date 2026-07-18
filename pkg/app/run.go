@@ -222,12 +222,13 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("db init: %w", err)
 	}
 
-	// Startup health check: verify that recordings marked as 'merged' still have
-	// their merged output files on disk. Stale entries (from past server crashes,
-	// manual deletion, or merge failures that left the DB in an inconsistent state)
-	// are reset to their unmerged state so playback can fall back to original frames
-	// or segments instead of serving a 404.
-	validateMergedRecordings(ctx, db, cfg.Storage.RootDir)
+	// NOTE: Merged-recording file validation was previously run on every startup
+	// here (validateMergedRecordings). It has been extracted to a CLI tool
+	// (`mibee-nvr repair merge-status`) to avoid the per-boot full-table scan +
+	// per-file os.Stat overhead on USB HDD. Operators should run it after crashes
+	// or upgrades. The playback path already falls back gracefully to the
+	// original segments if a merged file 404s, so removing the startup scan does
+	// not break playback — it just defers the cleanup to an on-demand CLI run.
 
 	// Step 2: Metrics
 	metrics := metrics.NewMetrics()
