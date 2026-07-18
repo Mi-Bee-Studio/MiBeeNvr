@@ -423,6 +423,44 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 	return result, nil
 }
 
+// ListFakeMergedRecordings returns recordings marked merge_status='merged' but
+// with an empty merge_path — i.e. segments that were marked "merged" by the
+// rolling merge singleton fast-path (when a batch had <2 valid segments) but
+// were never actually merged. These permanently fell out of the merge queue
+// (backfill only selects pending), accumulating as thousands of un-merged
+// short fragments that clutter the timeline.
+//
+// cameraID == "" matches all cameras; limit <= 0 means no limit.
+// Ordered by started_at ASC for chronological dry-run output.
+//
+// Reset these to pending (via SetMergeStatus) to re-queue them for merging.
+func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limit int) ([]*model.Recording, error) {
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
+	args := []any{}
+	if cameraID != "" {
+		q += " AND camera_id=?"
+		args = append(args, cameraID)
+	}
+	q += " ORDER BY started_at ASC"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := d.readConn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	recs, err := scanRecordingRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*model.Recording, len(recs))
+	for i := range recs {
+		result[i] = &recs[i]
+	}
+	return result, nil
+}
+
 // ResetMergeStatus clears merge_status and merge_path for a recording, reverting
 // it to its unmerged state so playback falls back to original frames.
 func (d *DB) ResetMergeStatus(ctx context.Context, id string) error {

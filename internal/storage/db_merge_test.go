@@ -100,3 +100,62 @@ func TestListRecordingsByMergeStatus(t *testing.T) {
 		require.Empty(t, got)
 	})
 }
+
+// TestListFakeMergedRecordings verifies the query behind `repair fragments
+// --reset-fake-merged`: recordings marked merged but with an empty merge_path
+// (never actually merged by the singleton fast-path bug).
+func TestListFakeMergedRecordings(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_fake.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now().UTC()
+	// Three recordings: a real merge (has merge_path), a fake merge (no path),
+	// and a pending one. Only the fake merge should be returned.
+	recs := []*model.Recording{
+		{ID: "real-merged", CameraID: "camA", FilePath: "/src1.mp4", Format: model.FormatH264, StartedAt: now, Duration: 30, FileSize: 100},
+		{ID: "fake-merged", CameraID: "camA", FilePath: "/src2.mp4", Format: model.FormatH264, StartedAt: now.Add(time.Second), Duration: 30, FileSize: 100},
+		{ID: "pending-one", CameraID: "camA", FilePath: "/src3.mp4", Format: model.FormatH264, StartedAt: now.Add(2 * time.Second), Duration: 30, FileSize: 100},
+	}
+	for _, r := range recs {
+		require.NoError(t, db.InsertRecording(ctx, r))
+	}
+	// real-merged: mark merged WITH a merge_path (real merge output).
+	require.NoError(t, db.SetMergeResult(ctx, "real-merged", "/merged/output.mp4", "go"))
+	// fake-merged: mark merged but SetMergeStatus leaves merge_path empty (the bug).
+	require.NoError(t, db.SetMergeStatus(ctx, []string{"fake-merged"}, model.MergeStatusMerged))
+	// pending-one stays pending.
+
+	// 1. Only fake-merged is returned.
+	got, err := db.ListFakeMergedRecordings(ctx, "", 0)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "fake-merged", got[0].ID)
+	require.Equal(t, "", got[0].MergePath, "fake-merged has empty merge_path")
+
+	// 2. Camera filter works.
+	t.Run("camera filter", func(t *testing.T) {
+		got, err := db.ListFakeMergedRecordings(ctx, "camA", 0)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+	})
+
+	// 3. Non-matching camera returns empty.
+	t.Run("other camera", func(t *testing.T) {
+		got, err := db.ListFakeMergedRecordings(ctx, "camB", 0)
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+
+	// 4. After resetting fake-merged to pending, it's no longer returned.
+	t.Run("after reset to pending", func(t *testing.T) {
+		require.NoError(t, db.SetMergeStatus(ctx, []string{"fake-merged"}, model.MergeStatusPending))
+		got, err := db.ListFakeMergedRecordings(ctx, "", 0)
+		require.NoError(t, err)
+		require.Empty(t, got, "once reset to pending, it's no longer fake-merged")
+	})
+}
