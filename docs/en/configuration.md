@@ -868,6 +868,12 @@ cameras:
 - **Description**: Global maximum number of remediation actions per minute across all cameras
 - **Example**: `10`, `20`, `50`
 
+### `health.auto_remediation.rediscovery_rescan_minutes`
+- **Type**: integer
+- **Default**: 5
+- **Description**: While a camera is blacklisted, re-attempt IP rediscovery every N minutes. Without this, a camera that comes back online mid-blacklist (e.g. power restored) is not recovered until the full `blacklist_hours` elapses — rediscovery only scanned once at the blacklist moment. Each rescan is a bounded network sweep (≤30s, ≤16 parallel probes). Set to 0 to disable (legacy single-scan behavior).
+- **Example**: `5`, `10`, `0` (disabled)
+
 ## Auto-Discover Configuration
 
 When enabled, the NVR discovers ONVIF cameras joining the LAN in the background and enrolls them automatically — no manual "scan" button needed (Hikvision-NVR-style plug-and-play). **Off by default**; opt in explicitly.

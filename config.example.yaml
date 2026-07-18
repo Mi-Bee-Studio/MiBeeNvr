@@ -233,6 +233,8 @@ observability:
 #     cooldown_minutes: 5             # Cooldown between restarts in minutes (default: 5)
 #     blacklist_hours: 1              # Hours to blacklist camera after repeated failures (default: 1)
 #     global_max_per_min: 10          # Max restarts across all cameras per minute (default: 10)
+#     reconnecting_timeout_minutes: 10 # Min time in reconnecting before hard restart (default: 10)
+#     rediscovery_rescan_minutes: 5   # Re-attempt IP rediscovery during blacklist (default: 5, 0=disabled)
 
 # Remote logging — send logs to external HTTP endpoint
 # remote_log:
