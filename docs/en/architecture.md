@@ -26,7 +26,7 @@ Every camera owns a `*model.StreamHub` — a frame fan-out bus. Producers call `
                      └─────────────────────────────────────────┘
 ```
 
-The **central hub registry** (`CameraManager.hubRegistry`, `GetHub(id)` / `GetOrCreateHub(id)`) is the single source of truth: pull recorders, ingest servers, and relay targets all reference the SAME hub object for a given camera.
+The **central hub registry** (the `hubs` map inside `CameraManager`'s copy-on-write snapshot, exposed via the lock-free `GetHub(id)` / `GetOrCreateHub(id)`) is the single source of truth: pull recorders, ingest servers, and relay targets all reference the SAME hub object for a given camera.
 
 ---
 
@@ -105,7 +105,7 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
 - **H.264 remux or H.265 transcode**: H.264 sources remux zero-copy. H.265 sources live-transcode to H.264 via `livetranscode.LiveTranscoder` (FFmpeg subprocess) when `TranscodePolicy` ≠ `off`; if `off`, H.265 is rejected with `errPermanent`. Thermal monitoring protects ARM SBCs. See [Relay Guide](relay-guide.md#h265-transcoding).
 - **Per-target independence**: each target is a separate goroutine + connection + reconnect loop (`TieredBackoffWithJitter`). Failure of one target never affects another, recording, or live.
 - **Dedicated `RelayStatus`**: NOT `RecorderStatus`. "Streaming to a target" ≠ "recording to disk" — the camera health UI must not conflate them.
-- **Reconcile is async**: `SetCameraTargets` runs in a goroutine (not under `cm.mu`) because it calls `GetHub` which re-locks the camera manager's mutex.
+- **Reconcile is async**: `SetCameraTargets` runs in a goroutine so it doesn't block the AddCamera/UpdateCamera API response on relay-engine teardown. (GetHub is a lock-free snapshot read, so there's no lock-reentrancy concern.)
 - **SPS/PPS from source**: `camMgr.GetSPS(cameraID)` returns the source's SPS/PPS for target track initialization.
 
 ### Why not FFmpeg?

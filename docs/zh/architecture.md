@@ -105,7 +105,7 @@ Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
 - **H.264 转封装或 H.265 转码**:H.264 源零拷贝转封装。H.265 源在 `TranscodePolicy` ≠ `off` 时经 `livetranscode.LiveTranscoder`(FFmpeg 子进程)实时转码为 H.264;若为 `off`,H.265 以 `errPermanent` 拒绝。热监控保护 ARM SBC。参见[转发指南](relay-guide.md#h265-transcoding)。
 - **每个目标相互独立**:每个目标是独立的 goroutine + 连接 + 重连循环(`TieredBackoffWithJitter`)。某一个目标的失败绝不会影响其他目标、录制或直播。
 - **专用的 `RelayStatus`**:不是 `RecorderStatus`。"向目标推流" ≠ "录制到磁盘" —— 摄像头健康界面绝不能将两者混为一谈。
-- **调和是异步的**:`SetCameraTargets` 在 goroutine 中运行(而非在 `cm.mu` 之下),因为它调用了 `GetHub`,后者会重新加锁摄像头管理器的互斥量。
+- **调和是异步的**:`SetCameraTargets` 在 goroutine 中运行,这样 AddCamera/UpdateCamera 的 API 响应不会被 relay 引擎的拆卸阻塞。(GetHub 现在是无锁的快照读取,不再有锁重入问题。)
 - **从源端获取 SPS/PPS**:`camMgr.GetSPS(cameraID)` 返回源端的 SPS/PPS,用于目标轨道初始化。
 
 ### 为什么不用 FFmpeg?
