@@ -3,6 +3,7 @@ package camera
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -21,15 +22,41 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 
 	// PHASE 1 — under configMu: dedup check, append to cfg.Cameras, persist DB +
-	// disk, republish snapshot. mutateCameras handles the slice mutation +
-	// snapshot republish; the dedup check + persist happen inside the same
-	// configMu critical section for consistency.
+	// disk, republish snapshot. The dedup check covers three identity keys:
+	//   - ID (exact): a re-add of the same camera ID
+	//   - ONVIFEndpoint: the same physical ONVIF device must not be enrolled
+	//     twice even with different IDs (auto-discover generates fresh IDs per
+	//     discovery, so ID-level dedup alone cannot catch a re-discovered
+	//     device). This is the last line of defense behind the auto-discover
+	//     Adder's own existsInDB check.
+	//   - StableID (ONVIF serial): catches the same device after a DHCP IP
+	//     change (endpoint string differs, hardware identity is the same).
 	var dup bool
+	var dupID string
 	var persistErr error
 	cm.configMu.Lock()
 	for _, existing := range cm.cfg.Cameras {
 		if existing.ID == cam.ID {
 			dup = true
+			dupID = existing.ID
+			break
+		}
+		// ONVIF endpoint dedup: both must be onvif protocol with a non-empty,
+		// equal endpoint. Stripped of trailing slash for tolerance.
+		if cam.Protocol == string(model.ProtoONVIF) && existing.Protocol == string(model.ProtoONVIF) {
+			if ep := strings.TrimRight(cam.ONVIFEndpoint, "/"); ep != "" {
+				if strings.TrimRight(existing.ONVIFEndpoint, "/") == ep {
+					dup = true
+					dupID = existing.ID
+					break
+				}
+			}
+		}
+		// StableID (hardware serial) dedup across protocols: same physical
+		// device regardless of how it's addressed.
+		if cam.StableID != "" && existing.StableID == cam.StableID {
+			dup = true
+			dupID = existing.ID
 			break
 		}
 	}
@@ -71,6 +98,15 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	cm.configMu.Unlock()
 
 	if dup {
+		// dupID is the EXISTING camera that this add duplicates (by ID, ONVIF
+		// endpoint, or stable_id). Log it so auto-discover's "why didn't this
+		// add?" is debuggable — AddCamera is the last-line dedup behind the
+		// Adder's existsInDB, so reaching here means an upstream dedup gap.
+		if dupID != "" && dupID != cam.ID {
+			logger.Info("AddCamera deduped: camera already enrolled under a different ID",
+				"incoming_id", cam.ID, "existing_id", dupID,
+				"endpoint", cam.ONVIFEndpoint, "stable_id", cam.StableID)
+		}
 		return "", &model.CameraAlreadyExistsError{CameraID: cam.ID}
 	}
 	if persistErr != nil {

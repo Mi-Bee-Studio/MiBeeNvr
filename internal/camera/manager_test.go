@@ -473,6 +473,90 @@ func TestAddCamera_DuplicateID(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 }
 
+// TestAddCamera_DuplicateONVIFEndpoint verifies AddCamera dedupes by ONVIF
+// endpoint, not just by ID. Auto-discover generates a fresh random ID per
+// discovery, so ID-level dedup alone cannot stop the same physical ONVIF device
+// from being enrolled twice (one manual/early add + one auto-discover add with
+// a different ID). This is the last-line defense behind the auto-discover
+// Adder's existsInDB check.
+//
+// Uses ActivationState="pending_activation" so AddCamera skips recorder startup
+// (a real ONVIF handshake against the fake endpoint would hang the test). The
+// dedup check runs in PHASE 1 regardless of activation state.
+func TestAddCamera_DuplicateONVIFEndpoint(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const ep = "http://192.168.63.212:80/onvif/device_service"
+	// First add (mimics a manual/early add with a non-generated ID).
+	id1, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID:              "cam-early-manual",
+		Name:            "视通",
+		Protocol:        "onvif",
+		ONVIFEndpoint:   ep,
+		ActivationState: "pending_activation", // skip recorder start
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "cam-early-manual", id1)
+
+	// Second add: different (auto-generated) ID, SAME endpoint — must be rejected.
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID:              "cam-autodiscover-fresh-id",
+		Name:            "IPC",
+		Protocol:        "onvif",
+		ONVIFEndpoint:   ep,
+		ActivationState: "pending_activation",
+	})
+	require.Error(t, err, "AddCamera must dedupe by ONVIF endpoint, not just ID")
+	assert.Contains(t, err.Error(), "already exists")
+
+	// Trailing-slash tolerance: the same endpoint with a trailing slash is the
+	// same device (WS-Discovery / device firmware sometimes appends one).
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID:              "cam-autodiscover-slash",
+		Name:            "IPC2",
+		Protocol:        "onvif",
+		ONVIFEndpoint:   ep + "/",
+		ActivationState: "pending_activation",
+	})
+	require.Error(t, err, "AddCamera must dedupe by endpoint ignoring trailing slash")
+
+	// No duplicate was actually added.
+	assert.Equal(t, 5, len(mgr.cfg.Cameras), "only the 4 seed cameras + 1 manual add should exist")
+}
+
+// TestAddCamera_DuplicateStableID verifies AddCamera dedupes by stable_id
+// (ONVIF hardware serial) — catches the same device after a DHCP IP change
+// (endpoint differs, hardware identity is the same).
+func TestAddCamera_DuplicateStableID(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const serial = "030a000200e76182e1d6"
+	_, err := mgr.AddCamera(ctx, config.CameraConfig{
+		ID:              "cam-old-ip",
+		Name:            "Cam at old IP",
+		Protocol:        "onvif",
+		StableID:        serial,
+		ActivationState: "pending_activation", // skip recorder start
+	})
+	require.NoError(t, err)
+
+	// Same device, different endpoint (IP changed), same stable_id — must reject.
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID:              "cam-new-ip",
+		Name:            "Cam at new IP",
+		Protocol:        "onvif",
+		ONVIFEndpoint:   "http://192.168.63.99:80/onvif/device_service",
+		StableID:        serial,
+		ActivationState: "pending_activation",
+	})
+	require.Error(t, err, "AddCamera must dedupe by stable_id (hardware serial)")
+	assert.Contains(t, err.Error(), "already exists")
+}
+
 func TestAddCamera_AutoID(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
