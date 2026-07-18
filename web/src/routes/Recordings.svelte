@@ -142,7 +142,7 @@ function detectMergeChanges(recordingsList: Recording[]) {
 }
 
 // ── Batch merge state ──
-let batchMergeDuration = $state('natural-day');
+let batchMergeDuration = $state('1h');
 let batchMerging = $state(false);
 
 
@@ -376,12 +376,17 @@ let batchMerging = $state(false);
     try {
       const dayStart = new Date(selectedDate + 'T00:00:00');
       const dayEnd = new Date(selectedDate + 'T23:59:59.999');
+      // A badly-fragmented day (e.g. Xiaomi cameras reconnecting every few
+      // seconds) can produce thousands of short segments — 5000+/day observed
+      // in production. A low cap here silently truncates the day: since we sort
+      // asc, only the earliest segments load and the afternoon appears empty on
+      // the timeline. 10000 covers the worst observed fragmentation with headroom.
       const response = await listRecordings({
         start: dayStart.toISOString(),
         end: dayEnd.toISOString(),
         sort_by: 'started_at',
         order: 'asc',
-        limit: 2000,
+        limit: 10000,
         signal: timelineAbortController.signal,
       });
       timelineRecordings = response.recordings;
@@ -916,12 +921,11 @@ let batchMerging = $state(false);
         bind:value={batchMergeDuration}
         disabled={batchMerging}
       >
-        <option value="8h">{t('timelapse.mergeDuration8h')}</option>
-        <option value="12h">{t('timelapse.mergeDuration12h')}</option>
-        <option value="24h">{t('timelapse.mergeDuration24h')}</option>
-        <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
-        <option value="7d">{t('timelapse.mergeDuration7d')}</option>
-        <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+        <option value="1h">{t('timelapse.mergeDuration1h')}</option>
+        <option value="30m">{t('timelapse.mergeDuration30m')}</option>
+        <option value="15m">{t('timelapse.mergeDuration15m')}</option>
+        <option value="10m">{t('timelapse.mergeDuration10m')}</option>
+        <option value="5m">{t('timelapse.mergeDuration5m')}</option>
       </select>
       <button
         onclick={handleBatchMerge}
