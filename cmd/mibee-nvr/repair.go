@@ -22,6 +22,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -56,6 +57,7 @@ type repairOpts struct {
 	cameraID   string
 	limit      int
 	dryRun     bool
+	prune      bool // delete DB row + file for recordings that can't be repaired
 }
 
 func parseRepairFlags(startIdx int) repairOpts {
@@ -71,6 +73,8 @@ func parseRepairFlags(startIdx int) repairOpts {
 			opts.dryRun = false
 		case arg == "--dry-run":
 			opts.dryRun = true
+		case arg == "--prune":
+			opts.prune = true
 		case arg == "--config" && i+1 < len(os.Args):
 			i++
 			opts.configPath = os.Args[i]
@@ -158,6 +162,9 @@ func runRepairDuration() int {
 	if opts.limit > 0 {
 		fmt.Printf("  limit:  %d\n", opts.limit)
 	}
+	if opts.prune {
+		fmt.Printf("  prune:  yes (unrepairable recordings will be deleted)\n")
+	}
 	fmt.Println()
 
 	zeroRecs, err := db.ListZeroDurationRecordings(ctx, opts.cameraID, opts.limit)
@@ -174,7 +181,36 @@ func runRepairDuration() int {
 
 	fixed := 0
 	skipped := 0
+	pruned := 0
 	failed := 0
+
+	// handleUnrepairable is called when a recording can't be repaired (probe
+	// failed or duration too small). With --prune, it deletes the DB row and
+	// the file; without --prune, it just skips.
+	handleUnrepairable := func(idx int, total int, rec *model.Recording, reason string) {
+		if opts.prune {
+			fmt.Printf("  [%d/%d] PRUNE %s — %s\n", idx, total, rec.ID, reason)
+			if !opts.dryRun {
+				// Delete the DB row first, then the file (DB is the source of truth).
+				if err := db.DeleteRecording(ctx, rec.ID); err != nil {
+					fmt.Fprintf(os.Stderr, "         DB DELETE FAILED: %v\n", err)
+					failed++
+					return
+				}
+				// Best-effort file/directory deletion. Ignore errors — the DB row
+				// is already gone, and the file may be a directory (MJPEG) or
+				// already missing.
+				if rec.FilePath != "" {
+					_ = os.RemoveAll(rec.FilePath)
+				}
+			}
+			pruned++
+		} else {
+			fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — %s\n", idx, total, rec.ID, reason)
+			skipped++
+		}
+	}
+
 	for i, rec := range zeroRecs {
 		if ctx.Err() != nil {
 			break
@@ -188,8 +224,7 @@ func runRepairDuration() int {
 		if mediaprobe.IsLikelyMP4(rec.FilePath) {
 			d, err := mediaprobe.FastProbeDuration(rec.FilePath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — probe failed: %v\n", i+1, len(zeroRecs), rec.ID, err)
-				skipped++
+				handleUnrepairable(i+1, len(zeroRecs), rec, fmt.Sprintf("probe failed: %v", err))
 				continue
 			}
 			dur = d
@@ -199,15 +234,13 @@ func runRepairDuration() int {
 			// is recorded, use it; otherwise count files in the directory.
 			d, err := estimateMJpegDirDuration(rec.FilePath, rec.FrameCount)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — mjpeg estimate failed: %v\n", i+1, len(zeroRecs), rec.ID, err)
-				skipped++
+				handleUnrepairable(i+1, len(zeroRecs), rec, fmt.Sprintf("mjpeg estimate failed: %v", err))
 				continue
 			}
 			dur = d
 		}
 		if dur < 0.1 {
-			fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — probed duration too small (%.1fs)\n", i+1, len(zeroRecs), rec.ID, dur)
-			skipped++
+			handleUnrepairable(i+1, len(zeroRecs), rec, fmt.Sprintf("duration too small (%.1fs)", dur))
 			continue
 		}
 
@@ -231,8 +264,8 @@ func runRepairDuration() int {
 	}
 
 	fmt.Println()
-	fmt.Printf("Summary: %d fixed, %d skipped, %d failed (of %d total)\n", fixed, skipped, failed, len(zeroRecs))
-	if opts.dryRun && fixed > 0 {
+	fmt.Printf("Summary: %d fixed, %d skipped, %d pruned, %d failed (of %d total)\n", fixed, skipped, pruned, failed, len(zeroRecs))
+	if opts.dryRun && (fixed > 0 || pruned > 0) {
 		fmt.Println("Dry run — no changes made. Re-run with --execute to apply.")
 	}
 	return 0
@@ -389,6 +422,7 @@ Subcommands:
 Common options:
   --dry-run      Report what would change without modifying (default)
   --execute      Actually apply the repair
+  --prune        (duration only) Delete DB row + file for unrepairable recordings
   --config <path> Config file path (default: mibee-nvr.yaml)
   --help, -h     Show help
 
@@ -406,9 +440,14 @@ so this tool re-probes each file's actual duration via pure-Go MP4 box parsing
 
 After repair, the timeline will show full coverage for affected days.
 
+Recordings that cannot be repaired (probe fails, file is corrupt/empty, or
+probed duration is ~0) are skipped by default. Use --prune to delete their
+DB row and the corrupt file instead of leaving them as duration=0 noise.
+
 Options:
   --execute         Actually update the DB (default: dry-run, report only)
   --dry-run         Report only, no changes (default)
+  --prune           Delete DB row + file for recordings that can't be repaired
   --camera <id>     Only repair recordings for this camera
   --limit <n>       Max recordings to process (0 = no limit)
   --config <path>   Config file path (default: mibee-nvr.yaml)
