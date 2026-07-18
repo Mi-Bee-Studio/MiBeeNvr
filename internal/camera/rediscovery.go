@@ -17,7 +17,7 @@ import (
 // Best-effort: skips silently on any error (no serial, device unreachable,
 // minimal ONVIF devices that reject the call). No-op if StableID is already set.
 func (cm *CameraManager) ensureStableID(cameraID string) {
-	cm.mu.Lock()
+	cm.configMu.Lock()
 	var cam *config.CameraConfig
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID {
@@ -27,10 +27,10 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 	}
 	// Re-check under lock in case another goroutine filled it already.
 	if cam == nil || strings.TrimSpace(cam.StableID) != "" {
-		cm.mu.Unlock()
+		cm.configMu.Unlock()
 		return
 	}
-	cm.mu.Unlock()
+	cm.configMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -41,7 +41,7 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 		return
 	}
 
-	cm.mu.Lock()
+	cm.configMu.Lock()
 	// Locate again under the write lock (slice may have been mutated).
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID {
@@ -52,7 +52,7 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 			break
 		}
 	}
-	cm.mu.Unlock()
+	cm.configMu.Unlock()
 
 	if err := cm.persistConfig(); err != nil {
 		logger.Warn("failed to persist auto-populated stable_id", "camera_id", cameraID, "error", err)
@@ -96,7 +96,7 @@ func (cm *CameraManager) ensureProfileToken(cameraID string) {
 			return // nothing resolved
 		}
 		// Check if the config already has this token — avoid unnecessary writes.
-		cm.mu.Lock()
+		cm.configMu.Lock()
 		alreadySet := false
 		for i := range cm.cfg.Cameras {
 			if cm.cfg.Cameras[i].ID == cameraID {
@@ -107,7 +107,7 @@ func (cm *CameraManager) ensureProfileToken(cameraID string) {
 			}
 		}
 		if alreadySet {
-			cm.mu.Unlock()
+			cm.configMu.Unlock()
 			return
 		}
 		// Persist the resolved token.
@@ -117,7 +117,7 @@ func (cm *CameraManager) ensureProfileToken(cameraID string) {
 				break
 			}
 		}
-		cm.mu.Unlock()
+		cm.configMu.Unlock()
 		if err := cm.persistConfig(); err != nil {
 			logger.Warn("failed to persist auto-selected profile_token", "camera_id", cameraID, "error", err)
 		} else {
@@ -144,7 +144,7 @@ func (cm *CameraManager) ensureProfileToken(cameraID string) {
 func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID string) (found bool, err error) {
 	// Snapshot the camera config under the lock, then release it for the (slow)
 	// network scan. The recorder is updated afterwards under a fresh lock.
-	cm.mu.Lock()
+	cm.configMu.Lock()
 	var cam config.CameraConfig
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID {
@@ -152,7 +152,7 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 			break
 		}
 	}
-	cm.mu.Unlock()
+	cm.configMu.Unlock()
 
 	if cam.ID == "" {
 		return false, &model.CameraNotFoundError{CameraID: cameraID}
@@ -181,7 +181,7 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 		"old_endpoint", cam.ONVIFEndpoint, "new_endpoint", result.NewEndpoint)
 
 	// Apply the new endpoint under the lock + persist + restart.
-	cm.mu.Lock()
+	cm.configMu.Lock()
 	idx := -1
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID {
@@ -190,7 +190,7 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 		}
 	}
 	if idx < 0 {
-		cm.mu.Unlock()
+		cm.configMu.Unlock()
 		return false, &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	savedCam := cm.cfg.Cameras[idx]
@@ -208,7 +208,7 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 	if perr := cm.persistConfig(); perr != nil {
 		// Rollback the in-memory change so config and disk stay consistent.
 		cm.cfg.Cameras[idx] = savedCam
-		cm.mu.Unlock()
+		cm.configMu.Unlock()
 		return false, fmt.Errorf("rediscovery: failed to persist config: %w", perr)
 	}
 
@@ -221,14 +221,10 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 	if perr != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
-	// Snapshot config + segDur, then release the lock before startRecorder.
-	// startRecorder's sub-helpers (timelapse extractor, markStartFailed, etc.)
-	// acquire cm.mu themselves — re-entering under a held Lock self-deadlocks
-	// (Go's RWMutex is non-reentrant). This is the same pattern as
-	// RestartRecorder and StartCamera. Holding the lock here previously caused
-	// a permanent cm.mu deadlock that blocked every camera API endpoint.
+	// Snapshot config + segDur, then release configMu before startRecorder
+	// (startRecorder registers via apply and runs lock-free).
 	camCopy := cm.cfg.Cameras[idx]
-	cm.mu.Unlock()
+	cm.configMu.Unlock()
 	rerr = cm.startRecorder(ctx, camCopy, segDur)
 	if rerr != nil {
 		return false, fmt.Errorf("rediscovery: failed to restart recorder: %w", rerr)

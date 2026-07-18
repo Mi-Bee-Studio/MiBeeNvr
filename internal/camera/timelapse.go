@@ -169,18 +169,18 @@ func (cm *CameraManager) createTimelapseMJPEGRecorder(cam config.CameraConfig, s
 // every minute and starts/stops the timelapse recorder accordingly.
 func (cm *CameraManager) startTimelapseScheduleMonitor(ctx context.Context, cameraID string, rec model.Recorder, tlCfg config.CameraTimelapseConfig) {
 	ctx, cancel := context.WithCancel(ctx)
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	if existing, ok := cm.scheduleMonitors[cameraID]; ok {
 		existing()
 	}
 	cm.scheduleMonitors[cameraID] = cancel
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	go func() {
 		defer func() {
-			cm.mu.Lock()
+			cm.auxMu.Lock()
 			delete(cm.scheduleMonitors, cameraID)
-			cm.mu.Unlock()
+			cm.auxMu.Unlock()
 		}()
 
 		ticker := time.NewTicker(1 * time.Minute)
@@ -219,8 +219,8 @@ func (cm *CameraManager) startTimelapseScheduleMonitor(ctx context.Context, came
 
 // stopTimelapseScheduleMonitor cancels the schedule monitor goroutine for the given camera.
 func (cm *CameraManager) stopTimelapseScheduleMonitor(cameraID string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	cm.auxMu.Lock()
+	defer cm.auxMu.Unlock()
 	if cancel, ok := cm.scheduleMonitors[cameraID]; ok {
 		cancel()
 		delete(cm.scheduleMonitors, cameraID)
@@ -228,13 +228,14 @@ func (cm *CameraManager) stopTimelapseScheduleMonitor(cameraID string) {
 }
 
 // stopDualModeTimelapseScheduleMonitor cancels the dual-mode schedule monitor
-// goroutine for the given camera (keyed as "tl-"+cameraID).
-// The caller MUST hold cm.mu.
+// goroutine for the given camera (keyed as "tl-"+cameraID). Self-locking.
 func (cm *CameraManager) stopDualModeTimelapseScheduleMonitor(cameraID string) {
+	cm.auxMu.Lock()
 	if cancel, ok := cm.scheduleMonitors["tl-"+cameraID]; ok {
 		cancel()
 		delete(cm.scheduleMonitors, "tl-"+cameraID)
 	}
+	cm.auxMu.Unlock()
 }
 
 // startDualModeTimelapseScheduleMonitor starts a goroutine that enforces the
@@ -258,18 +259,18 @@ func (cm *CameraManager) startDualModeTimelapseScheduleMonitor(
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	if existing, ok := cm.scheduleMonitors["tl-"+cameraID]; ok {
 		existing()
 	}
 	cm.scheduleMonitors["tl-"+cameraID] = cancel
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	go func() {
 		defer func() {
-			cm.mu.Lock()
+			cm.auxMu.Lock()
 			delete(cm.scheduleMonitors, "tl-"+cameraID)
-			cm.mu.Unlock()
+			cm.auxMu.Unlock()
 		}()
 
 		ticker := time.NewTicker(1 * time.Minute)
@@ -325,19 +326,18 @@ func (cm *CameraManager) startDualModeTimelapseScheduleMonitorForCamera(
 
 	startFn := func() {
 		if usesKeyframe {
-			if hub := getRecorderHub(cm.recorders[cameraID]); hub != nil {
-				if err := cm.startTimelapseKeyframeExtractor(cameraID, cam, hub, cm.recorders[cameraID]); err != nil {
+			rec := cm.snapshotRecorder(cameraID)
+			if hub := getRecorderHub(rec); hub != nil {
+				if err := cm.startTimelapseKeyframeExtractor(cameraID, cam, hub, rec); err != nil {
 					logger.Warn("dual-mode schedule: failed to start keyframe extractor", "camera_id", cameraID, "error", err)
 				}
 			}
 		} else {
-			if rec, ok := cm.recorders[cameraID]; ok {
+			if rec := cm.snapshotRecorder(cameraID); rec != nil {
 				if poller, err := cm.startTimelapseFramePoller(cameraID, cam, rec); err != nil {
 					logger.Warn("dual-mode schedule: failed to start frame poller", "camera_id", cameraID, "error", err)
 				} else if poller != nil {
-					cm.mu.Lock()
-					cm.framePollers[cameraID] = poller
-					cm.mu.Unlock()
+					cm.setFramePoller(cameraID, poller)
 				}
 			}
 		}
@@ -358,14 +358,14 @@ func (cm *CameraManager) startDualModeTimelapseScheduleMonitorForCamera(
 // This reuses the timelapse scheduler's IsScheduleActive for time-range evaluation.
 // The monitor checks every minute and transitions the recorder state accordingly.
 func (cm *CameraManager) startRecordingScheduleMonitor(ctx context.Context, cameraID string) {
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	// Cancel any existing monitor for this camera.
 	if cancel, ok := cm.scheduleMonitors["rec-"+cameraID]; ok {
 		cancel()
 	}
 	monitorCtx, cancel := context.WithCancel(ctx)
 	cm.scheduleMonitors["rec-"+cameraID] = cancel
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
@@ -386,10 +386,7 @@ func (cm *CameraManager) startRecordingScheduleMonitor(ctx context.Context, came
 
 		if !cm.scheduler.IsScheduleActive(schedule) {
 			logger.Info("recording schedule: outside active hours, stopping recorder", "camera_id", cameraID)
-			cm.mu.RLock()
-			rec, ok := cm.recorders[cameraID]
-			cm.mu.RUnlock()
-			if ok {
+			if rec := cm.snapshotRecorder(cameraID); rec != nil {
 				if err := rec.Stop(); err != nil {
 					logger.Warn("failed to stop recorder per recording schedule", "camera_id", cameraID, "error", err)
 				}
@@ -402,10 +399,8 @@ func (cm *CameraManager) startRecordingScheduleMonitor(ctx context.Context, came
 				return
 			case <-ticker.C:
 				isActive := cm.scheduler.IsScheduleActive(schedule)
-				cm.mu.RLock()
-				rec, ok := cm.recorders[cameraID]
-				cm.mu.RUnlock()
-				if !ok {
+				rec := cm.snapshotRecorder(cameraID)
+				if rec == nil {
 					continue
 				}
 				status := rec.Status()
@@ -471,9 +466,9 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		return err
 	}
 
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	cm.keyframeExtractors[cameraID] = extractor
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	logger.Info("started timelapse keyframe extractor", "camera_id", cameraID, "interval", interval)
 	return nil
@@ -481,12 +476,12 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 
 // stopTimelapseKeyframeExtractor stops and removes the keyframe extractor for the given camera.
 func (cm *CameraManager) stopTimelapseKeyframeExtractor(cameraID string) {
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	extractor, ok := cm.keyframeExtractors[cameraID]
 	if ok {
 		delete(cm.keyframeExtractors, cameraID)
 	}
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	if ok && extractor != nil {
 		if err := extractor.Stop(); err != nil {
@@ -496,13 +491,16 @@ func (cm *CameraManager) stopTimelapseKeyframeExtractor(cameraID string) {
 	}
 }
 
-// stopTimelapseFramePoller stops and removes the frame poller for the given camera.
-// The caller MUST hold cm.mu.
+// stopTimelapseFramePoller stops and removes the frame poller for the given
+// camera. Self-locking (takes cm.auxMu to snapshot the poller, then stops it
+// outside the lock since Stop can do I/O).
 func (cm *CameraManager) stopTimelapseFramePoller(cameraID string) {
+	cm.auxMu.Lock()
 	poller, ok := cm.framePollers[cameraID]
 	if ok {
 		delete(cm.framePollers, cameraID)
 	}
+	cm.auxMu.Unlock()
 	if ok && poller != nil {
 		if err := poller.Stop(); err != nil {
 			logger.Warn("failed to stop timelapse frame poller", "camera_id", cameraID, "error", err)
@@ -511,15 +509,22 @@ func (cm *CameraManager) stopTimelapseFramePoller(cameraID string) {
 	}
 }
 
+// setFramePoller stores a frame poller for the camera (replacing any existing).
+func (cm *CameraManager) setFramePoller(cameraID string, poller *timelapse.SnapshotCapturer) {
+	cm.auxMu.Lock()
+	cm.framePollers[cameraID] = poller
+	cm.auxMu.Unlock()
+}
+
 // stopAllTimelapseKeyframeExtractors stops all keyframe extractors (used during manager Stop).
 func (cm *CameraManager) stopAllTimelapseKeyframeExtractors() {
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	extractors := make([]*timelapse.KeyframeExtractor, 0, len(cm.keyframeExtractors))
 	for _, ext := range cm.keyframeExtractors {
 		extractors = append(extractors, ext)
 	}
 	cm.keyframeExtractors = make(map[string]*timelapse.KeyframeExtractor)
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	for _, ext := range extractors {
 		if err := ext.Stop(); err != nil {
@@ -530,13 +535,13 @@ func (cm *CameraManager) stopAllTimelapseKeyframeExtractors() {
 
 // stopAllTimelapseFramePollers stops all frame pollers (used during manager Stop).
 func (cm *CameraManager) stopAllTimelapseFramePollers() {
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	pollers := make([]*timelapse.SnapshotCapturer, 0, len(cm.framePollers))
 	for _, p := range cm.framePollers {
 		pollers = append(pollers, p)
 	}
 	cm.framePollers = make(map[string]*timelapse.SnapshotCapturer)
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	for _, p := range pollers {
 		if err := p.Stop(); err != nil {
@@ -547,82 +552,90 @@ func (cm *CameraManager) stopAllTimelapseFramePollers() {
 
 // PauseTimelapse stops the timelapse recorder for the given camera.
 // The caller is responsible for updating the config Paused flag and persisting.
+// Serialized per-camera via withCameraLifecycle so it can't race a concurrent
+// ResumeTimelapse/restart (which would leak a recorder or leave one running
+// after a pause).
 func (cm *CameraManager) PauseTimelapse(ctx context.Context, cameraID string) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	rec, ok := cm.recorders[cameraID]
-	if !ok {
-		return nil // No recorder running, nothing to stop
-	}
-
-	if err := rec.Stop(); err != nil {
-		logger.Warn("failed to stop timelapse recorder on pause", "camera_id", cameraID, "error", err)
-	}
-	delete(cm.recorders, cameraID)
-	if cm.metrics != nil {
-		cm.metrics.ActiveCameras.Dec()
-	}
-	logger.Info("timelapse recorder paused", "camera_id", cameraID)
-	return nil
+	return cm.withCameraLifecycle(cameraID, func() error {
+		// Snapshot the recorder (lock-free), remove from registry via apply, then
+		// Stop OUTSIDE any registry lock (Stop can join a goroutine). Safe under
+		// the per-camera guard — no concurrent resume/restart can interleave.
+		rec := cm.snapshotRecorder(cameraID)
+		if rec == nil {
+			return nil // No recorder running, nothing to stop
+		}
+		cm.apply(func(s *snapshot) *snapshot {
+			delete(s.recorders, cameraID)
+			return s
+		})
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop timelapse recorder on pause", "camera_id", cameraID, "error", err)
+		}
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+		logger.Info("timelapse recorder paused", "camera_id", cameraID)
+		return nil
+	})
 }
 
 // ResumeTimelapse starts the timelapse recorder for the given camera if schedule allows.
 // The caller is responsible for updating the config Paused flag and persisting.
+// Serialized per-camera via withCameraLifecycle so two concurrent resume calls
+// (or resume vs pause/restart) can't both construct a recorder and leak the loser.
 func (cm *CameraManager) ResumeTimelapse(ctx context.Context, cameraID string) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	// Check if already running
-	if _, ok := cm.recorders[cameraID]; ok {
-		return nil
-	}
-
-	// Find camera config
-	var cam *config.CameraConfig
-	for i := range cm.cfg.Cameras {
-		if cm.cfg.Cameras[i].ID == cameraID {
-			cam = &cm.cfg.Cameras[i]
-			break
-		}
-	}
+	// Find camera config + parse segDur up front (no guard needed for reads).
+	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	if cam.Timelapse == nil {
 		return fmt.Errorf("camera %q has no timelapse configuration", cameraID)
 	}
-
 	// Check schedule (Paused should already be false since caller sets it)
 	if !cm.scheduler.IsRecordingTime(*cam.Timelapse) {
 		logger.Info("timelapse resume: not recording time per schedule", "camera_id", cameraID)
 		return nil
 	}
-
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
+	camCopy := *cam
 
-	rec := cm.createRecorder(*cam, segDur)
-	if rec == nil {
-		return nil
-	}
-
-	cm.recorders[cameraID] = rec
-	if err := rec.Start(ctx); err != nil {
-		delete(cm.recorders, cameraID)
-		if cm.metrics != nil {
-			cm.metrics.ActiveCameras.Dec()
+	return cm.withCameraLifecycle(cameraID, func() error {
+		// Re-check under the guard: another resume/restart may have started a
+		// recorder while we were waiting for the per-camera mutex.
+		if rec := cm.snapshotRecorder(cameraID); rec != nil {
+			return nil
 		}
-		return fmt.Errorf("failed to start timelapse recorder on resume: %w", err)
-	}
 
-	if cm.metrics != nil {
-		cm.metrics.ActiveCameras.Inc()
-	}
-	logger.Info("timelapse recorder resumed", "camera_id", cameraID)
-	return nil
+		// createRecorder + rec.Start run OUTSIDE any registry lock (createRecorder
+		// registers its hub via apply; Start is a network dial). The recorder is
+		// registered in the snapshot via apply after a successful Start. Safe under
+		// the per-camera guard — no concurrent pause/restart can interleave.
+		rec := cm.createRecorder(camCopy, segDur)
+		if rec == nil {
+			return nil
+		}
+
+		if err := rec.Start(ctx); err != nil {
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
+			return fmt.Errorf("failed to start timelapse recorder on resume: %w", err)
+		}
+		cm.apply(func(s *snapshot) *snapshot {
+			s.recorders[cameraID] = rec
+			return s
+		})
+
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Inc()
+		}
+		logger.Info("timelapse recorder resumed", "camera_id", cameraID)
+		return nil
+	})
 }
 
 // isRecorderH265 checks if the given recorder (or its delegate for ONVIF recorders)

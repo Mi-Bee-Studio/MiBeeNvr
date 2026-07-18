@@ -11,7 +11,8 @@ import (
 
 // getOrCreateONVIFClient returns a cached ONVIF client for the given camera,
 // creating one if it doesn't exist in the cache.
-// Camera config lookup is done OUTSIDE the onvifMu lock to avoid deadlock with cm.mu.
+// Camera config lookup uses the lock-free snapshot (GetCameraConfig), so it
+// does not acquire onvifMu or configMu — safe to call from any context.
 func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID string) (*onvif.Client, error) {
 	cam := cm.GetCameraConfig(cameraID)
 	if cam == nil {
@@ -51,9 +52,8 @@ func (cm *CameraManager) getOrCreateONVIFClient(ctx context.Context, cameraID st
 // and PTZ controller avoids redundant GetCapabilities handshakes — critical for
 // minimal ONVIF devices (ESP32 MiBeeCam) that block under concurrent HTTP load.
 //
-// Unlike getOrCreateONVIFClient, this does NOT call GetCameraConfig (which takes
-// cm.mu.RLock) so it is safe to invoke while the caller already holds cm.mu
-// (e.g. createRecorder called from startRecorder under the cm.mu write lock).
+// Unlike getOrCreateONVIFClient, this variant takes the resolved endpoint +
+// credentials as arguments rather than looking them up via GetCameraConfig.
 // Callers needing a connected client must call Connect on the result (idempotent).
 func (cm *CameraManager) reuseOrCreateONVIFClient(cameraID, endpoint, username, password string) *onvif.Client {
 	cm.onvifMu.Lock()

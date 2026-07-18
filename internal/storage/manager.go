@@ -276,6 +276,89 @@ func (m *Manager) ListFiles(cameraID string) ([]string, error) {
 	return files, nil
 }
 
+// ListSegments lists all recording segment entries for a camera. Unlike
+// ListFiles (which returns only leaf files — e.g. the individual .jpg frames
+// inside an MJPEG segment directory), ListSegments returns one entry per
+// segment: directories for MJPEG/timelapse recordings, files (.mp4/.avi) for
+// H.264/H.265/AVI recordings. Temp (.tmp) and hidden entries are skipped.
+//
+// Use this (not ListFiles) when you need to count or inspect segments — the
+// segment directory IS the unit of a recording segment, regardless of format.
+func (m *Manager) ListSegments(cameraID string) ([]string, error) {
+	cameraDir := filepath.Join(m.rootDir, cameraID)
+
+	// Return an explicit error for a nonexistent camera directory —
+	// filepath.WalkDir would otherwise silently return an empty result.
+	if _, statErr := os.Stat(cameraDir); statErr != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, statErr)
+	}
+
+	var segments []string
+	err := filepath.WalkDir(cameraDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible entries
+		}
+		// Skip temp and hidden entries at any level.
+		name := d.Name()
+		if strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// A segment entry is either:
+		//   - a directory whose name matches the MJPEG/timelapse segment pattern
+		//     "{cameraID}_{timestamp}_{uuid}" (no extension), OR
+		//   - a file whose name matches the mp4/avi segment pattern
+		//     "{cameraID}_{timestamp}_{uuid}.{ext}".
+		// Both contain an underscore-delimited timestamp + uuid. The recording
+		// tree is YYYYMM/DD/HH/<segment>, so segments live exactly three levels
+		// below the camera dir. We detect them by the naming pattern rather than
+		// by depth so this stays robust to tree-layout changes.
+		if isSegmentEntry(name) {
+			segments = append(segments, path)
+			if d.IsDir() {
+				return filepath.SkipDir // don't descend into the segment dir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot walk camera dir %q: %w", cameraDir, err)
+	}
+	return segments, nil
+}
+
+// isSegmentEntry reports whether name looks like a recording segment entry
+// (MJPEG/timelapse dir or mp4/avi file). It matches the segment naming pattern
+// produced by CreateSegment: "{cameraID}_{timestamp}_{uuid}" optionally with an
+// extension. This is intentionally a structural check (≥2 underscores, the
+// middle field parses as digits) rather than a strict format match, so it
+// tolerates cameraID characters and uuid variations.
+func isSegmentEntry(name string) bool {
+	// Must have at least the {cameraID}_{ts}_{uuid} shape → ≥2 underscores.
+	first := strings.IndexByte(name, '_')
+	if first < 0 {
+		return false
+	}
+	rest := name[first+1:]
+	second := strings.IndexByte(rest, '_')
+	if second < 0 {
+		return false
+	}
+	// The timestamp field (between the first two underscores) should be all digits.
+	ts := rest[:second]
+	if len(ts) == 0 {
+		return false
+	}
+	for i := range ts {
+		if ts[i] < '0' || ts[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // ListCameraDirEntries returns all entries in a camera's storage directory.
 func (m *Manager) ListCameraDirEntries(cameraID string) ([]os.DirEntry, error) {
 	cameraDir := filepath.Join(m.rootDir, cameraID)

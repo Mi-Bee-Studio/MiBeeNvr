@@ -137,7 +137,7 @@ func TestHTTPJPEGAVIRecording(t *testing.T) {
 	require.Equal(t, model.StatusStopped, rec.Status())
 
 	// Verify AVI segment was created
-	files, err := mgr.ListFiles("cam-http-jpeg-avi")
+	files, err := mgr.ListSegments("cam-http-jpeg-avi")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one recorded segment")
 
@@ -243,7 +243,7 @@ func TestHTTPJPEGFlagDisabled(t *testing.T) {
 	require.NoError(t, rec.Stop())
 
 	// Verify MJPEG directory segment was created
-	files, err := mgr.ListFiles("cam-http-jpeg-dir")
+	files, err := mgr.ListSegments("cam-http-jpeg-dir")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one recorded segment")
 

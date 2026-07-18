@@ -92,14 +92,27 @@ func NewONVIFRecorder(cfg ONVIFConfig, client onvif.DeviceClient, store SegmentS
 
 // Start connects to the ONVIF device, resolves the RTSP URI, creates an internal
 // H264Recorder or H265Recorder based on the profile encoding, and starts it.
+//
+// Concurrency: the ONVIF handshake (Connect, GetProfiles, GetStreamURI) and the
+// delegate Start run OUTSIDE r.mu — these are multi-second network operations
+// that must NOT block Status()/Delegate()/RTSPURL() (polled every 500ms by the
+// grid's latest-frame handler). Only the initial already-running guard and the
+// final state publication take the (short) lock. SOAP goroutine-safety is
+// guaranteed by the onvif.Client's own internal mutex, NOT by r.mu.
 func (r *ONVIFRecorder) Start(ctx context.Context) error {
+	// Already-running guard (short lock).
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
+		r.mu.Unlock()
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
+	r.mu.Unlock()
 
+	// All handshake I/O runs unlocked. On any failure we return the error
+	// WITHOUT mutating r.status — matching the legacy behavior where a failed
+	// Start left status at its pre-Start value (StatusStopped for a fresh
+	// recorder). The health manager tracks failed starts via the camera
+	// manager's failedStartCameras map, not via recorder status.
 	// 1. Connect to ONVIF device
 	if err := r.onvifClient.Connect(ctx); err != nil {
 		return fmt.Errorf("onvif connect: %w", err)
@@ -129,26 +142,57 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("onvif get stream URI: %w", err)
 	}
-	r.rtspURL = streamInfo.URI
-	if r.rtspURL == "" {
+	rtspURL := streamInfo.URI
+	if rtspURL == "" {
 		return fmt.Errorf("onvif device returned empty stream URI — check device credentials")
 	}
 	// The stream URI's host may lag behind the ONVIF endpoint after a DHCP
 	// reassignment (device still advertises its old IP). Rewrite it to the
 	// known-good endpoint host so the RTSP dial reaches the right address.
-	if fixed := rewriteStaleStreamHost(r.rtspURL, r.cfg.ONVIFEndpoint); fixed != r.rtspURL {
+	if fixed := rewriteStaleStreamHost(rtspURL, r.cfg.ONVIFEndpoint); fixed != rtspURL {
 		onvifRecLogger.Info("rewrote stale stream URI host to match ONVIF endpoint",
-			"camera_id", r.cfg.CameraID, "old", r.rtspURL, "new", fixed)
-		r.rtspURL = fixed
+			"camera_id", r.cfg.CameraID, "old", rtspURL, "new", fixed)
+		rtspURL = fixed
 	}
-	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", r.rtspURL)
+	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", rtspURL)
 
-	// 3. Create delegate recorder based on encoding
-	r.delegate = r.newRecorder(r.rtspURL)
+	// Publish rtspURL BEFORE createDelegate: createDelegate → detectEncoding →
+	// probeRTSPEncoding reads r.rtspURL to DESCRIBE the stream and detect the
+	// real codec (H264 vs H265 vs JPEG). If r.rtspURL is still empty at that
+	// point, the probe no-ops and we fall back to the ONVIF-claimed encoding,
+	// which is wrong for cameras that lie (e.g. an H265 stream claimed as
+	// H264 → "H264 media not found in stream" death-loop).
+	//
+	// Set under r.mu: the recorder is registered in the manager snapshot BEFORE
+	// rec.Start runs (startRecorderLocked registers then dials), so a concurrent
+	// RTSPURL() reader (e.g. relay engine / GetStreamURL) can reach r.rtspURL
+	// during this handshake. A bare unlocked string write is a two-word
+	// non-atomic store → torn read. The short lock makes it safe.
+	r.mu.Lock()
+	r.rtspURL = rtspURL
+	r.mu.Unlock()
 
-	// 4. Start delegate
+	// 4. Create delegate recorder based on encoding (createDelegate may do an
+	//    RTSP DESCRIBE probe + HTTP MJPEG probes — all unlocked).
+	delegate := r.newRecorder(rtspURL)
+
+	// 5. Start delegate (network dial — unlocked).
+	if err := delegate.Start(ctx); err != nil {
+		// Publish the delegate so Stop/Status can reach it (short lock).
+		r.mu.Lock()
+		r.delegate = delegate
+		r.rtspURL = rtspURL
+		r.mu.Unlock()
+		return err
+	}
+
+	// 6. Publish resolved state (short lock).
+	r.mu.Lock()
+	r.delegate = delegate
+	r.rtspURL = rtspURL
 	r.status = model.StatusRecording
-	return r.delegate.Start(ctx)
+	r.mu.Unlock()
+	return nil
 }
 
 // Stop stops the internal delegate recorder.
@@ -164,13 +208,18 @@ func (r *ONVIFRecorder) Stop() error {
 }
 
 // Status returns the current recorder status, delegating to the internal recorder if available.
+// Snapshots the delegate pointer under the short lock, then calls its Status()
+// OUTSIDE the lock — so a long-running Start handshake (which no longer holds
+// r.mu) can't block this hot path (polled every 500ms by grid latest-frame).
 func (r *ONVIFRecorder) Status() model.RecorderStatus {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.delegate != nil {
-		return r.delegate.Status()
+	delegate := r.delegate
+	st := r.status
+	r.mu.Unlock()
+	if delegate != nil {
+		return delegate.Status()
 	}
-	return r.status
+	return st
 }
 
 // RTSPURL returns the resolved RTSP URL from ONVIF (may be empty before Start).

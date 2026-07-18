@@ -193,8 +193,14 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	// Register the recorder's hub in the central registry so that push ingest
 	// servers (SRT listener / RTMP server) share the SAME hub object and their
 	// frames reach the live consumers (HLS/WebRTC/FLV/WS) attached on demand.
+	// Published via apply() (configMu held only for the map swap) — fixes the
+	// previous contract gap where createRecorder wrote hubRegistry with no lock.
 	if hub := getRecorderHub(rec); hub != nil {
-		cm.hubRegistry[cam.ID] = hub
+		hubToRegister := hub
+		cm.apply(func(s *snapshot) *snapshot {
+			s.hubs[cam.ID] = hubToRegister
+			return s
+		})
 	}
 	return rec
 }
@@ -268,18 +274,33 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 }
 
 // startRecorder creates and starts a recorder for the given camera config.
-// The caller must NOT hold cm.mu — startRecorder's sub-helpers (timelapse
-// extractor, markStartFailed, framePollers) acquire cm.mu themselves, so
-// re-entering under a held Lock self-deadlocks. Callers snapshot the config
-// under the lock, Unlock, then call startRecorder (see RestartRecorder,
-// StartCamera, RediscoverAndReconnect).
-// If the recorder is created, it will be registered in cm.recorders.
+//
+// Concurrency: safe to call from any goroutine. All registry mutations go
+// through apply() (configMu, nanosecond map swap); rec.Start (network dial) and
+// the timelapse sub-helpers run OUTSIDE any lock. The recorder is registered in
+// the snapshot via apply; on failure it is removed via apply. Serialized
+// per-camera via withCameraLifecycle so two concurrent startRecorder calls for
+// the same camera (e.g. manual restart + health auto-remediation) can't both
+// construct a recorder and leak the loser.
 func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
+	return cm.withCameraLifecycle(cam.ID, func() error {
+		return cm.startRecorderLocked(ctx, cam, segDur)
+	})
+}
+
+// startRecorderLocked is the body of startRecorder, called under the per-camera
+// lifecycle guard.
+func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.CameraConfig, segDur time.Duration) error {
 	rec := cm.createRecorder(cam, segDur)
 	if rec == nil {
 		return fmt.Errorf("camera %q: protocol %q does not support recording", cam.ID, cam.Protocol)
 	}
-	cm.recorders[cam.ID] = rec
+	// Register the recorder in the snapshot before Start so concurrent readers
+	// (statusSnapshot, GetRecorder) observe it immediately.
+	cm.apply(func(s *snapshot) *snapshot {
+		s.recorders[cam.ID] = rec
+		return s
+	})
 
 	// For timelapse recorders, check scheduler before starting
 	if cam.Protocol == "timelapse" && cam.Timelapse != nil {
@@ -295,13 +316,16 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 	// so their lifecycle is independent of this ctx (e.g. HTTP request context).
 	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
 	if err := rec.Start(ctx); err != nil {
-		delete(cm.recorders, cam.ID)
+		cm.apply(func(s *snapshot) *snapshot {
+			delete(s.recorders, cam.ID)
+			return s
+		})
 		// Record connection error metric
 		if cm.metrics != nil {
 			cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
 		}
 		// Track this camera as failed-to-start so the health manager's status
-		// loop can see it (it's no longer in cm.recorders) and drive the
+		// loop can see it (it's no longer in the snapshot) and drive the
 		// auto-remediation → IP rediscovery self-healing chain. Without this,
 		// a camera whose IP changed would be silently stuck forever.
 		cm.markStartFailed(cam.ID, err)
@@ -322,9 +346,7 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 			if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 				logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 			} else if poller != nil {
-				cm.mu.Lock()
-				cm.framePollers[cam.ID] = poller
-				cm.mu.Unlock()
+				cm.setFramePoller(cam.ID, poller)
 			}
 		} else if hub := getRecorderHub(rec); hub != nil {
 			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
@@ -335,16 +357,16 @@ func (cm *CameraManager) startRecorder(ctx context.Context, cam config.CameraCon
 		if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 			logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 		} else if poller != nil {
-			cm.mu.Lock()
-			cm.framePollers[cam.ID] = poller
-			cm.mu.Unlock()
+			cm.setFramePoller(cam.ID, poller)
 		}
 	}
 
 	// Enforce timelapse schedule for dual-mode cameras.
 	cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 
+	cm.errorDetailsMu.Lock()
 	cm.errorDetails[cam.ID] = nil
+	cm.errorDetailsMu.Unlock()
 	// The recorder started successfully — clear any prior failed-start tracking
 	// so statusFunc stops reporting it as StatusError (it now has a real recorder
 	// whose status is the source of truth). This closes the self-healing loop.
