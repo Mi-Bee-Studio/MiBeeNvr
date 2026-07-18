@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,17 +20,28 @@ import (
 // health manager via SetHealthManager) surfaces it as StatusError so the existing
 // CheckAll → restart → blacklist → rediscovery chain can self-heal it.
 func TestStatusSnapshot_FailedStartCameraExposesError(t *testing.T) {
-	mgr := NewCameraManager(testConfig(), nil, nil, "")
+	cfg := testConfig()
+	mgr := NewCameraManager(cfg, nil, nil, "")
 
-	// No cameras tracked initially.
-	assert.Empty(t, mgr.statusSnapshot(), "no cameras should be tracked initially")
+	// Add cam-onvif-1 to config so statusSnapshot considers it a tracked camera.
+	// (In production, markStartFailed is only ever called for cameras that exist
+	// in config — startRecorder only handles configured cameras. statusSnapshot
+	// filters failedStarts entries that have no matching config entry, so the
+	// camera must be configured to surface here.)
+	cfg.Cameras = append(cfg.Cameras, config.CameraConfig{ID: "cam-onvif-1", Protocol: "onvif"})
+	mgr.reseedSnapshotConfigs()
+
+	// No status tracked initially (config-only, no recorder/failedStart yet).
+	snap := mgr.statusSnapshot()
+	assert.NotContains(t, snap, "cam-onvif-1",
+		"configured-but-not-started camera should not appear until it has a status")
 
 	// Simulate ONVIF recorder Start() failure (camera IP changed, unreachable).
 	mgr.markStartFailed("cam-onvif-1", errors.New("dial tcp 192.168.63.201:8080: no route to host"))
 
 	// The camera must now be visible to the health loop as StatusError — this is
 	// the trigger status that auto-remediate.Check acts on (auto_remediate.go:123).
-	snap := mgr.statusSnapshot()
+	snap = mgr.statusSnapshot()
 	require.Contains(t, snap, "cam-onvif-1",
 		"failed-start camera must be visible to the health manager's status loop")
 	assert.Equal(t, string(model.StatusError), snap["cam-onvif-1"],
@@ -64,7 +76,15 @@ func TestStatusSnapshot_FailedStartDoesNotShadowActiveRecorder(t *testing.T) {
 // TestMarkStartFailed_Idempotent ensures calling markStartFailed multiple times
 // (e.g. health loop retries → restart → fails again) doesn't accumulate or panic.
 func TestMarkStartFailed_Idempotent(t *testing.T) {
-	mgr := NewCameraManager(testConfig(), nil, nil, "")
+	cfg := testConfig()
+	mgr := NewCameraManager(cfg, nil, nil, "")
+	// Configure the cameras under test — statusSnapshot only surfaces
+	// failedStarts entries for cameras that still exist in config.
+	cfg.Cameras = append(cfg.Cameras,
+		config.CameraConfig{ID: "cam-1", Protocol: "onvif"},
+		config.CameraConfig{ID: "cam-2", Protocol: "onvif"},
+	)
+	mgr.reseedSnapshotConfigs()
 
 	mgr.markStartFailed("cam-1", errors.New("first failure"))
 	mgr.markStartFailed("cam-1", errors.New("second failure"))

@@ -226,6 +226,15 @@ func (cm *CameraManager) statusSnapshot() map[string]string {
 		result[id] = string(rec.Status())
 	}
 	for id := range s.failedStarts {
+		// Only surface a failed-start for cameras that still exist in config.
+		// A failedStarts entry can outlive its camera if the camera was removed
+		// and a stale entry lingered (failedStarts is in-memory only, not
+		// persisted); reporting it would surface a phantom camera to the health
+		// loop and the /api/health details. The configs map is the source of
+		// truth for "does this camera still exist".
+		if _, stillConfigured := s.configs[id]; !stillConfigured {
+			continue
+		}
 		if _, exists := result[id]; !exists {
 			result[id] = string(model.StatusError)
 		}
