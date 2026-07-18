@@ -312,10 +312,18 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 		}
 	}
 
-	// Recorders derive their run context from context.Background() internally,
-	// so their lifecycle is independent of this ctx (e.g. HTTP request context).
-	// The ctx is only used for short initial setup (e.g. ONVIF device probe).
-	if err := rec.Start(ctx); err != nil {
+	// Detach the recorder's lifecycle from the caller's context. Recorders run
+	// long-lived background goroutines (reconnect loop, frame watchdog) that must
+	// outlive short-lived callers — notably the HTTP request ctx from POST
+	// /api/cameras/{id}/start, whose cancellation on response return would
+	// silently kill the recorder (the run loop exits via ctx.Err() with no error
+	// log, so the camera appears to "start" then immediately stops). Each
+	// recorder derives its own cancellable child ctx from the one passed to
+	// Start and stores the cancel func for its Stop() — so passing
+	// context.Background() means the recorder's lifetime is governed solely by
+	// its own Stop(), which is what CameraManager.Stop / StopCamera /
+	// RestartRecorder use to drive shutdown.
+	if err := rec.Start(context.Background()); err != nil {
 		cm.apply(func(s *snapshot) *snapshot {
 			delete(s.recorders, cam.ID)
 			return s
