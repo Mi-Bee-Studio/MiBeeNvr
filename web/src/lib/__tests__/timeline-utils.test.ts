@@ -3,9 +3,9 @@ import { findSegmentAt, parseDayStart, formatLength, epochMsToDaySec } from '$li
 
 describe('findSegmentAt', () => {
   const segments = [
-    { id: 'a', startSec: 0, endSec: 300 },       // 00:00–00:05
-    { id: 'b', startSec: 600, endSec: 1200 },    // 00:10–00:20
-    { id: 'c', startSec: 3600, endSec: 5400 },   // 01:00–01:30
+    { id: 'a', startSec: 0, endSec: 300 }, // 00:00–00:05
+    { id: 'b', startSec: 600, endSec: 1200 }, // 00:10–00:20
+    { id: 'c', startSec: 3600, endSec: 5400 }, // 01:00–01:30
   ];
 
   it('hits a segment exactly', () => {
@@ -80,29 +80,31 @@ describe('findSegmentAt', () => {
 });
 
 describe('parseDayStart', () => {
-  it('parses YYYY-MM-DD to UTC midnight', () => {
-    const ms = parseDayStart('2026-06-16');
-    expect(new Date(ms).toISOString()).toBe('2026-06-16T00:00:00.000Z');
+  // parseDayStart returns LOCAL midnight (the user's calendar day), so the
+  // timezone-safe assertion is equality with new Date(y,m-1,d).getTime() —
+  // which itself uses local time. Asserting a specific UTC instant would
+  // depend on the test runner's timezone and break in CI.
+  it('parses YYYY-MM-DD to local midnight', () => {
+    expect(parseDayStart('2026-06-16')).toBe(new Date(2026, 5, 16).getTime());
   });
 
   it('handles month/year correctly', () => {
-    const ms = parseDayStart('2026-01-01');
-    expect(new Date(ms).getUTCMonth()).toBe(0);
-    expect(new Date(ms).getUTCDate()).toBe(1);
+    expect(parseDayStart('2026-01-01')).toBe(new Date(2026, 0, 1).getTime());
   });
 });
 
 describe('epochMsToDaySec', () => {
-  it('converts epoch ms to seconds from midnight', () => {
+  it('converts epoch ms to seconds from local midnight', () => {
     const dayStart = parseDayStart('2026-06-16');
-    // 06:00 UTC = 21600 seconds
-    const sixAM = Date.UTC(2026, 5, 16, 6, 0, 0);
+    // Local 06:00 = 21600 seconds from local midnight
+    const sixAM = new Date(2026, 5, 16, 6, 0, 0).getTime();
     expect(epochMsToDaySec(sixAM, dayStart)).toBe(21600);
   });
 
   it('returns negative for times before day start', () => {
     const dayStart = parseDayStart('2026-06-16');
-    const prev = Date.UTC(2026, 5, 15, 23, 0, 0);
+    // Local 23:00 the previous day is 1h before local midnight
+    const prev = new Date(2026, 5, 15, 23, 0, 0).getTime();
     expect(epochMsToDaySec(prev, dayStart)).toBe(-3600);
   });
 });

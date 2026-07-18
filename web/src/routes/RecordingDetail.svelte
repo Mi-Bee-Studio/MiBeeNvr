@@ -105,7 +105,7 @@ let mergeInProgress = $state(false);
 let mergeProgressPct = $state(0);
 let mergeErrorMsg = $state('');
 let mergeAbortController = $state<AbortController | null>(null);
-let selectedMergeDuration = $state('natural-day');
+let selectedMergeDuration = $state('1h');
 let mergeStartTime = $state(0);
 let mergeEta = $state('');
 let mergeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -383,8 +383,12 @@ function startMergeSse(cameraId: string, recordingId: string) {
   let transcodePollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 
   function timelineDate(): string {
-    if (!recording || !recording.started_at) return new Date().toISOString().slice(0, 10);
-    return recording.started_at.slice(0, 10);
+    // Local calendar date of the recording (YYYY-MM-DD in the user's timezone).
+    // toLocaleDateString('en-CA') emits ISO-style YYYY-MM-DD per local time.
+    // Using the UTC date from started_at would put the timeline on the wrong
+    // day for recordings near local midnight (UTC previous day).
+    if (!recording || !recording.started_at) return new Date().toLocaleDateString('en-CA');
+    return new Date(recording.started_at).toLocaleDateString('en-CA');
   }
 
   async function startTranscodeForPlayback() {
@@ -1350,12 +1354,11 @@ $effect(() => {
                       value={selectedMergeDuration}
                       onchange={(e) => selectedMergeDuration = (e.target as HTMLSelectElement).value}
                     >
-                      <option value="8h">{t('timelapse.mergeDuration8h')}</option>
-                      <option value="12h">{t('timelapse.mergeDuration12h')}</option>
-                      <option value="24h">{t('timelapse.mergeDuration24h')}</option>
-                      <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
-                      <option value="7d">{t('timelapse.mergeDuration7d')}</option>
-                      <option value="30d">{t('timelapse.mergeDuration30d')}</option>
+                      <option value="1h">{t('timelapse.mergeDuration1h')}</option>
+                      <option value="30m">{t('timelapse.mergeDuration30m')}</option>
+                      <option value="15m">{t('timelapse.mergeDuration15m')}</option>
+                      <option value="10m">{t('timelapse.mergeDuration10m')}</option>
+                      <option value="5m">{t('timelapse.mergeDuration5m')}</option>
                     </select>
                     <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2">
                       <Play size={16} /> {t('detail.mergeAndPlay')}
@@ -1506,12 +1509,6 @@ $effect(() => {
                 </div>
               </div>
 
-              <!-- Keyboard shortcuts hint -->
-              <div class="px-4 py-2 th-bg-tertiary">
-                <p class="text-xs text-center th-text-muted">
-                  {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
-                </p>
-              </div>
             {/if}
           {/if}
           {#if recording.format === 'avi'}
