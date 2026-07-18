@@ -417,7 +417,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		// Pending→active does NOT set needsRestart: a pending camera never had a
 		// recorder running, so there is nothing to restart. The caller
 		// (ActivateCamera) explicitly starts the recorder after this returns.
-		// Persisting the state to the DB is done here (under cm.mu) for atomicity.
+		// Persisting the state to the DB is done here (under configMu) for atomicity.
 		prev := cam.ActivationState
 		cam.ActivationState = *updates.ActivationState
 		if prev != *updates.ActivationState && cm.db != nil {
@@ -503,8 +503,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 
 	// If ONVIF endpoint changed, close cached client so a fresh one is created.
-	// CloseONVIFClient takes onvifMu + deviceInfoMu (NOT cm.mu), so it is safe
-	// under the held lock.
+	// CloseONVIFClient takes onvifMu + deviceInfoMu (NOT configMu), so it is
+	// safe under the held lock.
 	if onvifEndpointChanged {
 		cm.CloseONVIFClient(cam.ID)
 	}
@@ -573,8 +573,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		go cm.autoPopulateSnapshotURL(context.Background(), cameraID)
 	}
 
-	// Reconcile push-out relay targets. Already outside cm.mu, but still run in a
-	// goroutine to avoid blocking the API response on relay-engine teardown.
+	// Reconcile push-out relay targets. Run in a goroutine to avoid blocking the
+	// API response on relay-engine teardown.
 	if cm.relayMgr != nil {
 		cameraID := cameraID
 		targets := relayTargets
@@ -586,8 +586,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cm.startRecordingScheduleMonitor(context.Background(), cameraID)
 	}
 
-	// Return a snapshot — we no longer hold cm.mu, so returning the live pointer
-	// into cm.cfg.Cameras would race with concurrent mutations.
+	// Return a snapshot — we no longer hold configMu, so returning the live
+	// pointer into cm.cfg.Cameras would race with concurrent mutations.
 	return &camCopy, nil
 }
 

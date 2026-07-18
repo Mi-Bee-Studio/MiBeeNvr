@@ -107,7 +107,6 @@ type CameraManager struct {
 	onvifMu            sync.Mutex                          // protects onvifClients
 	errorDetails       map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	errorDetailsMu     sync.RWMutex                        // protects errorDetails
-	failedStartCameras map[string]error                    // cameraID → startup failure reason (alias into snapshot.failedStarts, kept for statusSnapshot compat)
 	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
 	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
 	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
@@ -169,7 +168,6 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		keyframeExtractors: make(map[string]*timelapse.KeyframeExtractor),
 		framePollers:       make(map[string]*timelapse.SnapshotCapturer),
 		errorDetails:       make(map[string]*model.CameraErrorDetail),
-		failedStartCameras: make(map[string]error),
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
@@ -207,13 +205,13 @@ func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 
 // statusSnapshot returns the current status of every camera the manager knows
 // about, for consumption by the health manager's periodic loop. It merges two
-// sources:
-//   - cm.recorders: active recorders report their real Status().
-//   - cm.failedStartCameras: cameras whose recorder failed to start (e.g. ONVIF
-//     endpoint unreachable after an IP change). These are NOT in cm.recorders
-//     (startRecorder deletes them on failure), so without surfacing them here
-//     they would be invisible to the health loop → never auto-remediated → never
-//     rediscovered. They are reported as StatusError so the existing
+// snapshot sources (both lock-free):
+//   - snapshot.recorders: active recorders report their real Status().
+//   - snapshot.failedStarts: cameras whose recorder failed to start (e.g. ONVIF
+//     endpoint unreachable after an IP change). These are NOT in the recorders
+//     map (startRecorder removes them on failure), so without surfacing them
+//     here they would be invisible to the health loop → never auto-remediated →
+//     never rediscovered. They are reported as StatusError so the existing
 //     CheckAll → restart → blacklist → rediscovery chain can self-heal them.
 //
 // A camera present in BOTH maps (stale failed-start entry + live recorder) is
@@ -406,8 +404,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 	// reconcile targets at runtime, but Start() loads cameras directly from cfg —
 	// without this, every service restart silently drops all push_targets
 	// (push-status returns [] and no "relay target started" is ever logged).
-	// Run in a goroutine per camera: SetCameraTargets calls GetHub which re-locks
-	// cm.mu (RLock), and re-entering under a held Lock would self-deadlock.
+	// Run in a goroutine per camera so Start isn't blocked on relay-engine init.
 	if cm.relayMgr != nil {
 		for _, cam := range cm.cfg.Cameras {
 			if len(cam.PushTargets) == 0 {
