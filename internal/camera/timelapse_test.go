@@ -444,9 +444,9 @@ func TestStartTimelapseScheduleMonitor(t *testing.T) {
 	mgr.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
 
 	// Verify monitor was registered
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	_, exists := mgr.scheduleMonitors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "schedule monitor should be registered")
 
 	// Stop the monitor
@@ -455,9 +455,9 @@ func TestStartTimelapseScheduleMonitor(t *testing.T) {
 	// Wait a moment for goroutine to finish
 	time.Sleep(50 * time.Millisecond)
 
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	_, exists = mgr.scheduleMonitors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.False(t, exists, "schedule monitor should be removed after stop")
 }
 
@@ -630,25 +630,26 @@ func TestStartRecorder_TimelapseMJPEG(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify recorder is registered
-	mgr.mu.RLock()
-	rec, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	rec := mgr.GetRecorder(cam.ID)
+	exists := rec != nil
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "recorder should be registered")
 	assert.NotNil(t, rec)
 
 	// Verify schedule monitor was started
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	_, hasMonitor := mgr.scheduleMonitors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, hasMonitor, "schedule monitor should be started for timelapse recorder")
 
 	// Cleanup
 	mgr.stopTimelapseScheduleMonitor(cam.ID)
 	rec.Stop()
 	// Remove from recorders to avoid interfering with other tests
-	mgr.mu.Lock()
-	delete(mgr.recorders, cam.ID)
-	mgr.mu.Unlock()
+	mgr.auxMu.Lock()
+	mgr.apply(func(s *snapshot) *snapshot { delete(s.recorders, cam.ID); return s })
+	mgr.auxMu.Unlock()
 }
 
 func TestStartRecorder_TimelapseRTSPKeyframe(t *testing.T) {
@@ -689,9 +690,10 @@ func TestStartRecorder_TimelapseRTSPKeyframe(t *testing.T) {
 	// Should NOT error — startRecorder creates and registers H264Recorder for standalone timelapse with rtsp_keyframe
 	require.NoError(t, err, "rtsp_keyframe should not cause an error")
 	// Verify H264Recorder is registered (createRecorder now returns H264Recorder for rtsp_keyframe)
-	mgr.mu.RLock()
-	rec, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	rec := mgr.GetRecorder(cam.ID)
+	exists := rec != nil
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "rtsp_keyframe should register a recorder")
 	assert.IsType(t, &recorder.H264Recorder{}, rec, "should be an H264Recorder")
 }
@@ -837,14 +839,15 @@ func TestTimelapseWiring_PauseStopsRecorder(t *testing.T) {
 	require.NotNil(t, rec, "should create timelapse recorder")
 
 	// Manually register the recorder as if startRecorder did it
-	mgr.mu.Lock()
-	mgr.recorders[cam.ID] = rec
-	mgr.mu.Unlock()
+	mgr.auxMu.Lock()
+	mgr.SetTestRecorder(cam.ID, rec)
+	mgr.auxMu.Unlock()
 
 	// Verify recorder is registered
-	mgr.mu.RLock()
-	_, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	_rec := mgr.GetRecorder(cam.ID)
+	exists := _rec != nil
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "recorder should be registered before pause")
 
 	// Pause the timelapse
@@ -853,9 +856,10 @@ func TestTimelapseWiring_PauseStopsRecorder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify recorder is removed from map
-	mgr.mu.RLock()
-	_, exists = mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	_rec = mgr.GetRecorder(cam.ID)
+	exists = _rec != nil
+	mgr.auxMu.Unlock()
 	assert.False(t, exists, "recorder should be removed after pause")
 }
 
@@ -915,6 +919,7 @@ func TestTimelapseWiring_ResumeStartsRecorder(t *testing.T) {
 
 	// Add camera to config so ResumeTimelapse can find it
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
+	mgr.reseedSnapshotConfigs()
 
 	// Resume should start the recorder (no schedule = 24/7 recording)
 	ctx := context.Background()
@@ -922,16 +927,17 @@ func TestTimelapseWiring_ResumeStartsRecorder(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify recorder is now registered
-	mgr.mu.RLock()
-	rec, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	rec := mgr.GetRecorder(cam.ID)
+	exists := rec != nil
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "recorder should be registered after resume")
 
 	if exists && rec != nil {
 		rec.Stop()
-		mgr.mu.Lock()
-		delete(mgr.recorders, cam.ID)
-		mgr.mu.Unlock()
+		mgr.auxMu.Lock()
+		mgr.apply(func(s *snapshot) *snapshot { delete(s.recorders, cam.ID); return s })
+		mgr.auxMu.Unlock()
 	}
 }
 
@@ -967,14 +973,15 @@ func TestTimelapseWiring_ResumeAlreadyRunningNoOp(t *testing.T) {
 	}
 
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
+	mgr.reseedSnapshotConfigs()
 
 	// Manually register a recorder (simulating already running)
 	segDur, _ := time.ParseDuration(cfg.Storage.SegmentDuration)
 	rec := mgr.createRecorder(cam, segDur)
 	require.NotNil(t, rec)
-	mgr.mu.Lock()
-	mgr.recorders[cam.ID] = rec
-	mgr.mu.Unlock()
+	mgr.auxMu.Lock()
+	mgr.SetTestRecorder(cam.ID, rec)
+	mgr.auxMu.Unlock()
 
 	// Resume should be a no-op since already running
 	ctx := context.Background()
@@ -982,16 +989,17 @@ func TestTimelapseWiring_ResumeAlreadyRunningNoOp(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify still registered
-	mgr.mu.RLock()
-	_, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	_rec := mgr.GetRecorder(cam.ID)
+	exists := _rec != nil
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "recorder should still be registered after no-op resume")
 
 	// Cleanup
 	rec.Stop()
-	mgr.mu.Lock()
-	delete(mgr.recorders, cam.ID)
-	mgr.mu.Unlock()
+	mgr.auxMu.Lock()
+	mgr.apply(func(s *snapshot) *snapshot { delete(s.recorders, cam.ID); return s })
+	mgr.auxMu.Unlock()
 }
 
 func TestTimelapseWiring_ResumeCameraNotFound(t *testing.T) {
@@ -1045,6 +1053,7 @@ func TestTimelapseWiring_ResumeNoTimelapseConfig(t *testing.T) {
 		// No Timelapse config
 	}
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
+	mgr.reseedSnapshotConfigs()
 
 	ctx := context.Background()
 	err = mgr.ResumeTimelapse(ctx, cam.ID)
@@ -1089,6 +1098,7 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 	}
 
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
+	mgr.reseedSnapshotConfigs()
 
 	// Resume should be a no-op since not recording time per schedule
 	ctx := context.Background()
@@ -1096,9 +1106,10 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 	require.NoError(t, err, "should not error when not recording time")
 
 	// Verify no recorder was created
-	mgr.mu.RLock()
-	_, exists := mgr.recorders[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Lock()
+	_rec := mgr.GetRecorder(cam.ID)
+	exists := _rec != nil
+	mgr.auxMu.Unlock()
 	assert.False(t, exists, "recorder should not be created when not recording time")
 }
 

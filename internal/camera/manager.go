@@ -74,7 +74,6 @@ type CameraManager struct {
 	store              *storage.Manager
 	db                 *storage.DB
 	configPath         string
-	recorders          map[string]model.Recorder // camera_id → Recorder
 	metrics            *metrics.Metrics
 	mergeMgr           *merge.MergeManager                     // segment merge manager (nil = no merge)
 	timelapseMergeMgr  *timelapse.RollingMergeManager          // timelapse rolling merge (nil = no merge)
@@ -84,29 +83,32 @@ type CameraManager struct {
 	scheduleMonitors   map[string]context.CancelFunc           // camera_id -> cancel func for schedule monitor
 	keyframeExtractors map[string]*timelapse.KeyframeExtractor // camera_id -> keyframe extractor (H.264/H.265)
 	framePollers       map[string]*timelapse.SnapshotCapturer  // camera_id -> frame poller (MJPEG/JPEG latest_frame)
-	mu                 sync.RWMutex
+	// auxMu guards the auxiliary lifecycle bookkeeping maps (scheduleMonitors,
+	// keyframeExtractors, framePollers). These are NOT part of the registry
+	// snapshot (they're per-camera lifecycle handles, mutated only by the
+	// lifecycle path) and have their own mutex so lifecycle operations don't
+	// serialize against registry reads.
+	auxMu sync.Mutex
+	// snapshot is the immutable, atomically-published registry view consumed by
+	// ALL lock-free reads (GetRecorder/GetHub/Status/statusSnapshot/counts). See
+	// registry.go. Writes go through apply(); lifecycle I/O runs outside any lock
+	// and is serialized per-camera by the actor (actor.go).
+	snapshot atomic.Pointer[snapshot]
+	// configMu serializes the apply() write path (snapshot clone + mutate +
+	// store) AND cfg.Cameras mutation + persistConfig disk writes. It is the
+	// ONLY mutex covering registry state, and it is held only for nanosecond map
+	// copies plus millisecond disk writes — never for network I/O or rec.Start.
+	configMu           sync.Mutex
 	onvifClients       map[string]*onvif.Client            // camera_id → cached ONVIF client
 	onvifMu            sync.Mutex                          // protects onvifClients
 	errorDetails       map[string]*model.CameraErrorDetail // cameraID → latest error detail
-	// failedStartCameras tracks cameras whose recorder failed to start (e.g. the
-	// camera's IP changed and the configured endpoint is unreachable). These
-	// cameras are NOT in cm.recorders (startRecorder deletes them on failure), so
-	// without this tracking they would be invisible to the health manager's status
-	// loop → never auto-remediated → never rediscovered. statusFunc exposes them
-	// as StatusError so the existing CheckAll→restart→blacklist→rediscovery chain
-	// can self-heal them. Cleared on successful (re)start.
-	failedStartCameras map[string]error                 // cameraID → startup failure reason
-	eventSubscribers   map[string]onvif.EventSubscriber // camera_id → event subscriber
-	deviceInfoCache    map[string]*onvif.DeviceInfo     // camera_id → cached device info
-	deviceInfoMu       sync.RWMutex                     // protects deviceInfoCache
-	frameSampleCounter uint64                           // atomic: 1/100 sampling for frame processing duration
-	eventBus           *event.EventBus                  // event bus for publishing segment events
-	// hubRegistry is the central map of camera_id → StreamHub. It is the single
-	// source of truth for hubs so that pull recorders (RTSP/ONVIF/...) and push
-	// ingest servers (SRT listener / RTMP server) share the SAME hub object for
-	// a given camera. The SRT/RTMP servers consult GetOrCreateHub(); the
-	// recorder's own .Hub field points at the same instance after initStreamHub.
-	hubRegistry map[string]*model.StreamHub
+	errorDetailsMu     sync.RWMutex                        // protects errorDetails
+	failedStartCameras map[string]error                    // cameraID → startup failure reason (alias into snapshot.failedStarts, kept for statusSnapshot compat)
+	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
+	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
+	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
+	eventBus           *event.EventBus                     // event bus for publishing segment events
 	// relayMgr (optional) is notified when a camera's push-out targets change so
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.
@@ -149,12 +151,11 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	} else {
 		logger.Info("CameraManager created with EventBus")
 	}
-	return &CameraManager{
+	cm := &CameraManager{
 		cfg:                cfg,
 		store:              store,
 		db:                 db,
 		configPath:         configPath,
-		recorders:          make(map[string]model.Recorder),
 		metrics:            m,
 		mergeMgr:           mm,
 		transcodeMgr:       tm,
@@ -169,8 +170,19 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
 		eventBus:           eb,
-		hubRegistry:        make(map[string]*model.StreamHub),
 	}
+	// Publish the initial immutable snapshot. Config pointers seed the configs
+	// map from cfg.Cameras so GetCameraConfig works before Start() runs. The
+	// recorders/hubs maps start empty (populated as recorders start). Guard
+	// against a nil cfg (some tests construct a manager with a nil config).
+	initSnap := newSnapshot()
+	if cfg != nil {
+		for i := range cfg.Cameras {
+			initSnap.configs[cfg.Cameras[i].ID] = &cfg.Cameras[i]
+		}
+	}
+	cm.snapshot.Store(initSnap)
+	return cm
 }
 
 // SetHealthManager sets the health manager for camera health monitoring.
@@ -179,9 +191,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 // Used by stats endpoints that only need the count, avoiding a redundant
 // ListCameras DB round-trip per request.
 func (cm *CameraManager) CameraCount() int {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return len(cm.cfg.Cameras)
+	return len(cm.loadSnapshot().configs)
 }
 
 func (cm *CameraManager) SetHealthManager(m *health.Manager) {
@@ -205,13 +215,15 @@ func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 // A camera present in BOTH maps (stale failed-start entry + live recorder) is
 // dominated by its real recorder status.
 func (cm *CameraManager) statusSnapshot() map[string]string {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	result := make(map[string]string, len(cm.recorders)+len(cm.failedStartCameras))
-	for id, rec := range cm.recorders {
+	// Lock-free: load the immutable snapshot and read each recorder's Status().
+	// Each recorder guards its own status with a short internal mutex; this loop
+	// never holds any CameraManager lock, so it can never block lifecycle ops.
+	s := cm.loadSnapshot()
+	result := make(map[string]string, len(s.recorders)+len(s.failedStarts))
+	for id, rec := range s.recorders {
 		result[id] = string(rec.Status())
 	}
-	for id := range cm.failedStartCameras {
+	for id := range s.failedStarts {
 		if _, exists := result[id]; !exists {
 			result[id] = string(model.StatusError)
 		}
@@ -222,36 +234,42 @@ func (cm *CameraManager) statusSnapshot() map[string]string {
 // markStartFailed records a camera whose recorder failed to start, so that
 // statusFunc can surface it to the health manager as StatusError. This is the
 // entry point that connects startup failures to the auto-remediation → IP
-// rediscovery self-healing chain. Caller must NOT hold cm.mu.
+// markStartFailed records a camera whose recorder failed to start, so that
+// statusFunc can surface it to the health manager as StatusError. This is the
+// entry point that connects startup failures to the auto-remediation → IP
+// rediscovery self-healing chain. Safe to call from the lifecycle actor or any
+// goroutine — apply() takes only the short configMu.
 func (cm *CameraManager) markStartFailed(cameraID string, err error) {
-	cm.mu.Lock()
-	cm.failedStartCameras[cameraID] = err
-	cm.mu.Unlock()
+	cm.apply(func(s *snapshot) *snapshot {
+		s.failedStarts[cameraID] = err
+		return s
+	})
 }
 
 // clearStartFailed removes a camera from the failed-start tracking. Called on
 // successful (re)start so the camera transitions to normal health monitoring.
-// Caller must NOT hold cm.mu.
+// Safe to call from the lifecycle actor or any goroutine.
 func (cm *CameraManager) clearStartFailed(cameraID string) {
-	cm.mu.Lock()
-	delete(cm.failedStartCameras, cameraID)
-	cm.mu.Unlock()
+	cm.apply(func(s *snapshot) *snapshot {
+		delete(s.failedStarts, cameraID)
+		return s
+	})
 }
 
 // SetTranscodeManager sets the transcoding manager for post-recording enqueue.
 // Can be called with nil to disable transcoding. Thread-safe.
 func (cm *CameraManager) SetTranscodeManager(m *transcoding.TranscodeManager) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	cm.configMu.Lock()
 	cm.transcodeMgr = m
+	cm.configMu.Unlock()
 }
 
 // EnqueueTranscode checks per-camera transcoding config and enqueues a
 // transcoding task if enabled. Non-blocking — runs the enqueue in a goroutine.
 func (cm *CameraManager) EnqueueTranscode(cameraID, recordingID, inputPath, inputFormat string) {
-	cm.mu.RLock()
+	cm.configMu.Lock()
 	tm := cm.transcodeMgr
-	cm.mu.RUnlock()
+	cm.configMu.Unlock()
 
 	if tm == nil {
 		return
@@ -302,9 +320,10 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 		case string(model.ProtoRTSP), string(model.ProtoHTTP):
 			rec := cm.createRecorder(cam, segDur)
 			if rec != nil {
-				cm.mu.Lock()
-				cm.recorders[cam.ID] = rec
-				cm.mu.Unlock()
+				cm.apply(func(s *snapshot) *snapshot {
+					s.recorders[cam.ID] = rec
+					return s
+				})
 				if err := rec.Start(ctx); err != nil {
 					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
 					if cm.metrics != nil {
@@ -329,9 +348,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 							} else if poller != nil {
-								cm.mu.Lock()
-								cm.framePollers[cam.ID] = poller
-								cm.mu.Unlock()
+								cm.setFramePoller(cam.ID, poller)
 							}
 						} else if hub := getRecorderHub(rec); hub != nil {
 							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
@@ -342,9 +359,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 						if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 							logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 						} else if poller != nil {
-							cm.mu.Lock()
-							cm.framePollers[cam.ID] = poller
-							cm.mu.Unlock()
+							cm.setFramePoller(cam.ID, poller)
 						}
 					}
 					// Enforce timelapse schedule for dual-mode cameras (start/stop
@@ -404,12 +419,13 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 // Stop stops all running recorders and waits for them to complete.
 func (cm *CameraManager) Stop() error {
-	cm.mu.RLock()
-	recs := make([]model.Recorder, 0, len(cm.recorders))
-	for _, rec := range cm.recorders {
+	// Snapshot the recorders (lock-free) then stop each OUTSIDE any lock —
+	// rec.Stop can join a goroutine / do I/O and must not hold configMu.
+	s := cm.loadSnapshot()
+	recs := make([]model.Recorder, 0, len(s.recorders))
+	for _, rec := range s.recorders {
 		recs = append(recs, rec)
 	}
-	cm.mu.RUnlock()
 
 	var errs []error
 	for _, rec := range recs {
@@ -424,12 +440,12 @@ func (cm *CameraManager) Stop() error {
 	cm.closeAllONVIFClients()
 
 	// Stop all timelapse schedule monitors
-	cm.mu.Lock()
+	cm.auxMu.Lock()
 	for _, cancel := range cm.scheduleMonitors {
 		cancel()
 	}
 	cm.scheduleMonitors = make(map[string]context.CancelFunc)
-	cm.mu.Unlock()
+	cm.auxMu.Unlock()
 
 	// Stop all timelapse keyframe extractors
 	cm.stopAllTimelapseKeyframeExtractors()
@@ -451,24 +467,40 @@ func (cm *CameraManager) Stop() error {
 // they obtain the SAME hub the recorder owns, so frames reach the live
 // consumers (HLS/WebRTC/FLV/WS) that subscribe on demand. If a pull recorder
 // already created the hub via initStreamHub, that instance is returned.
+//
+// The check-then-create is atomic via apply() (configMu held only for the map
+// swap — hub construction + metrics wiring run inside apply but are pure CPU,
+// no I/O). Two concurrent GetOrCreateHub calls for the same camera return the
+// same hub: the second's apply sees the first's published snapshot.
 func (cm *CameraManager) GetOrCreateHub(cameraID string) *model.StreamHub {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	if hub, ok := cm.hubRegistry[cameraID]; ok {
+	// Fast path: hub already exists (lock-free).
+	if hub := cm.snapshotHub(cameraID); hub != nil {
 		return hub
 	}
-	hub := model.NewStreamHub()
-	hub.SetCameraID(cameraID)
-	// Wire the same observability callbacks as initStreamHub so push hubs are
-	// instrumented identically to pull hubs.
-	cm.wireHubMetricsLocked(hub, cameraID, string(model.ProtoSRT))
-	cm.hubRegistry[cameraID] = hub
-	return hub
+	// Slow path: create under configMu.
+	var created *model.StreamHub
+	cm.apply(func(s *snapshot) *snapshot {
+		if existing, ok := s.hubs[cameraID]; ok {
+			// Another goroutine won the race inside apply — reuse its hub.
+			created = existing
+			return s
+		}
+		hub := model.NewStreamHub()
+		hub.SetCameraID(cameraID)
+		// Wire the same observability callbacks as initStreamHub so push hubs are
+		// instrumented identically to pull hubs.
+		cm.wireHubMetrics(hub, cameraID, string(model.ProtoSRT))
+		s.hubs[cameraID] = hub
+		created = hub
+		return s
+	})
+	return created
 }
 
-// wireHubMetricsLocked attaches the standard StreamHub observability callbacks
-// (frame counters, drop counters, buffer-depth gauges). Caller must hold cm.mu.
-func (cm *CameraManager) wireHubMetricsLocked(hub *model.StreamHub, cameraID, protocol string) {
+// wireHubMetrics attaches the standard StreamHub observability callbacks
+// (frame counters, drop counters, buffer-depth gauges). Reads only
+// construction-time fields (cm.metrics, cm.frameSampleCounter).
+func (cm *CameraManager) wireHubMetrics(hub *model.StreamHub, cameraID, protocol string) {
 	m := cm.metrics
 	if m == nil {
 		return
@@ -517,11 +549,11 @@ func (cm *CameraManager) GetIngestRecorder(cameraID string) *recorder.IngestReco
 
 // RTMPKeyMap returns a copy of camera_id → stream_key for all RTMP cameras.
 // Used by main.go to build the RTMP server's StreamKeyResolver (reverse lookup).
+// Lock-free read from the snapshot.
 func (cm *CameraManager) RTMPKeyMap() map[string]string {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	out := make(map[string]string, len(cm.cfg.Cameras))
-	for _, cam := range cm.cfg.Cameras {
+	s := cm.loadSnapshot()
+	out := make(map[string]string, len(s.configs))
+	for _, cam := range s.configs {
 		if cam.Protocol == string(model.ProtoRTMP) && cam.StreamKey != "" {
 			out[cam.ID] = cam.StreamKey
 		}
@@ -532,12 +564,11 @@ func (cm *CameraManager) RTMPKeyMap() map[string]string {
 // ResolveStreamKey maps an incoming RTMP stream key to its camera ID (with the
 // legacy global rtmp.stream_keys map as a fallback). This is the LIVE resolver
 // used by the RTMP server on every publisher connect — it reflects cameras added
-// at runtime, unlike a snapshot built once at startup.
+// at runtime, unlike a snapshot built once at startup. Lock-free read.
 func (cm *CameraManager) ResolveStreamKey(streamKey string) (cameraID string, ok bool) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+	s := cm.loadSnapshot()
 	// Per-camera stream_key fields take precedence.
-	for _, cam := range cm.cfg.Cameras {
+	for _, cam := range s.configs {
 		if cam.Protocol == string(model.ProtoRTMP) && cam.StreamKey == streamKey {
 			return cam.ID, true
 		}
@@ -553,12 +584,11 @@ func (cm *CameraManager) ResolveStreamKey(streamKey string) (cameraID string, ok
 
 // SRTStreamConfigs returns a copy of the SRT push parameters (passphrase,
 // stream_id) for all SRT cameras. Used by main.go to keep the SRT listener's
-// per-stream encryption map in sync with per-camera config.
+// per-stream encryption map in sync with per-camera config. Lock-free read.
 func (cm *CameraManager) SRTStreamConfigs() []config.SRTStream {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	out := make([]config.SRTStream, 0, len(cm.cfg.Cameras))
-	for _, cam := range cm.cfg.Cameras {
+	s := cm.loadSnapshot()
+	out := make([]config.SRTStream, 0, len(s.configs))
+	for _, cam := range s.configs {
 		if cam.Protocol == string(model.ProtoSRT) {
 			out = append(out, config.SRTStream{
 				CameraID:   cam.ID,
@@ -577,15 +607,9 @@ func (cm *CameraManager) GetTimelapseMergeMgr() *timelapse.RollingMergeManager {
 }
 
 // GetCameraConfig returns the config for the given camera ID, or nil if not found.
+// Lock-free read from the immutable snapshot.
 func (cm *CameraManager) GetCameraConfig(cameraID string) *config.CameraConfig {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	for i := range cm.cfg.Cameras {
-		if cm.cfg.Cameras[i].ID == cameraID {
-			return &cm.cfg.Cameras[i]
-		}
-	}
-	return nil
+	return cm.snapshotConfig(cameraID)
 }
 
 // GetStreamURL returns the source camera's stream URL (e.g. rtsp://...)
@@ -613,39 +637,30 @@ func (cm *CameraManager) GetStreamURL(cameraID string) string {
 // RestartRecorder stops and recreates the recorder for the given camera.
 // The camera must be enabled.
 func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) error {
-	cm.mu.Lock()
-
-	// Find camera config
-	var cam *config.CameraConfig
-	for i := range cm.cfg.Cameras {
-		if cm.cfg.Cameras[i].ID == cameraID {
-			cam = &cm.cfg.Cameras[i]
-			break
-		}
-	}
+	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
-		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
-	// Stop existing recorder
-	if rec, ok := cm.recorders[cameraID]; ok {
+	// Stop existing recorder (snapshot it, remove from registry via apply, then
+	// Stop OUTSIDE any lock — rec.Stop can join a goroutine).
+	if rec := cm.snapshotRecorder(cameraID); rec != nil {
+		cm.apply(func(s *snapshot) *snapshot {
+			delete(s.recorders, cameraID)
+			return s
+		})
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 		}
-		delete(cm.recorders, cameraID)
 	}
 	// Record reconnect attempt
 	if cm.metrics != nil {
 		cm.metrics.CameraReconnectAttemptsTotal.WithLabelValues(cameraID).Inc()
 	}
 
-	// Snapshot the config + segDur so we can start WITHOUT holding cm.mu.
-	// startRecorder's timelapse sub-helpers (startTimelapseKeyframeExtractor etc.)
-	// acquire cm.mu themselves, so re-entering under a held Lock would self-deadlock.
+	// startRecorder runs entirely outside any lock; it registers via apply.
 	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
@@ -654,44 +669,32 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 
 // StartCamera manually starts the recorder for the given camera.
 func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error {
-	cm.mu.Lock()
-
-	// Find camera config
-	var cam *config.CameraConfig
-	for i := range cm.cfg.Cameras {
-		if cm.cfg.Cameras[i].ID == cameraID {
-			cam = &cm.cfg.Cameras[i]
-			break
-		}
-	}
+	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
-		cm.mu.Unlock()
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 
 	// Check if already running — stale recorders (error/stopped) can be restarted
-	if rec, ok := cm.recorders[cameraID]; ok {
+	if rec := cm.snapshotRecorder(cameraID); rec != nil {
 		status := rec.Status()
 		if status == model.StatusRecording || status == model.StatusReconnecting {
-			cm.mu.Unlock()
 			return &model.CameraAlreadyRunningError{CameraID: cameraID}
 		}
 		// Stale recorder — stop and remove so we can start fresh
+		cm.apply(func(s *snapshot) *snapshot {
+			delete(s.recorders, cameraID)
+			return s
+		})
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
 		}
-		delete(cm.recorders, cameraID)
 		if cm.metrics != nil {
 			cm.metrics.ActiveCameras.Dec()
 		}
 	}
 
-	// Snapshot config + segDur, then release the lock before startRecorder
-	// (its timelapse sub-helpers acquire cm.mu themselves — re-entering under a
-	// held Lock would self-deadlock).
 	camCopy := *cam
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	cm.mu.Unlock()
 	if err != nil {
 		segDur = recorder.DefaultSegmentDur
 	}
@@ -700,27 +703,33 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 
 // StopCamera manually stops the recorder for the given camera.
 func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	rec, ok := cm.recorders[cameraID]
-	if !ok {
+	rec := cm.snapshotRecorder(cameraID)
+	if rec == nil {
 		return fmt.Errorf("camera %q not found", cameraID)
 	}
 
+	// Remove from registry first (apply), then Stop outside any lock.
+	cm.apply(func(s *snapshot) *snapshot {
+		delete(s.recorders, cameraID)
+		delete(s.hubs, cameraID)
+		return s
+	})
 	if err := rec.Stop(); err != nil {
 		logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
 	}
-	delete(cm.recorders, cameraID)
-	delete(cm.hubRegistry, cameraID)
 	if cm.metrics != nil {
 		cm.metrics.ActiveCameras.Dec()
 	}
 	logger.Info("stopped recorder for camera", "camera_id", cameraID)
 
-	// Stop keyframe extractor if running
-	if ext, ok := cm.keyframeExtractors[cameraID]; ok {
+	// Stop keyframe extractor if running (snapshot under auxMu, stop outside)
+	cm.auxMu.Lock()
+	ext, hasExt := cm.keyframeExtractors[cameraID]
+	if hasExt {
 		delete(cm.keyframeExtractors, cameraID)
+	}
+	cm.auxMu.Unlock()
+	if hasExt && ext != nil {
 		if err := ext.Stop(); err != nil {
 			logger.Warn("failed to stop keyframe extractor", "camera_id", cameraID, "error", err)
 		}
@@ -745,36 +754,46 @@ func (cm *CameraManager) SetProtocolEnabled(protocol string, enabled bool) {
 }
 
 func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	for id, rec := range cm.recorders {
-		var camProtocol string
-		for _, cam := range cm.cfg.Cameras {
-			if cam.ID == id {
-				camProtocol = cam.Protocol
-				break
+	// Snapshot the matching recorders (lock-free), remove each from the
+	// registry via apply, then Stop OUTSIDE any lock.
+	s := cm.loadSnapshot()
+	type stopTarget struct {
+		id  string
+		rec model.Recorder
+	}
+	var targets []stopTarget
+	for id, rec := range s.recorders {
+		if c := s.configs[id]; c != nil && c.Protocol == protocol {
+			targets = append(targets, stopTarget{id, rec})
+		}
+	}
+	for _, t := range targets {
+		cm.apply(func(st *snapshot) *snapshot {
+			delete(st.recorders, t.id)
+			return st
+		})
+		if err := t.rec.Stop(); err != nil {
+			logger.Warn("failed to stop recorder", "camera_id", t.id, "error", err)
+		}
+		if cm.metrics != nil {
+			cm.metrics.ActiveCameras.Dec()
+		}
+		// Stop keyframe extractor if running
+		cm.auxMu.Lock()
+		ext, ok := cm.keyframeExtractors[t.id]
+		if ok {
+			delete(cm.keyframeExtractors, t.id)
+		}
+		cm.auxMu.Unlock()
+		if ok && ext != nil {
+			if err := ext.Stop(); err != nil {
+				logger.Warn("failed to stop keyframe extractor", "camera_id", t.id, "error", err)
 			}
 		}
-		if camProtocol == protocol {
-			if err := rec.Stop(); err != nil {
-				logger.Warn("failed to stop recorder", "camera_id", id, "error", err)
-			}
-			delete(cm.recorders, id)
-			if cm.metrics != nil {
-				cm.metrics.ActiveCameras.Dec()
-			}
-			// Stop keyframe extractor if running
-			if ext, ok := cm.keyframeExtractors[id]; ok {
-				delete(cm.keyframeExtractors, id)
-				if err := ext.Stop(); err != nil {
-					logger.Warn("failed to stop keyframe extractor", "camera_id", id, "error", err)
-				}
-			}
-			// Stop frame poller if running (caller holds cm.mu)
-			cm.stopTimelapseFramePoller(id)
-			// Stop dual-mode timelapse schedule monitor
-			cm.stopDualModeTimelapseScheduleMonitor(id)
-		}
+		// Stop frame poller if running
+		cm.stopTimelapseFramePoller(t.id)
+		// Stop dual-mode timelapse schedule monitor
+		cm.stopDualModeTimelapseScheduleMonitor(t.id)
 	}
 }
 
@@ -845,8 +864,10 @@ func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID s
 		return
 	}
 
-	// Update SnapshotURL under write lock
-	cm.mu.Lock()
+	// Update SnapshotURL under configMu (cfg.Cameras is the mutable config slice).
+	// The snapshot's configs[id] points into cfg.Cameras, so the new value is
+	// visible through the existing pointer without republishing the snapshot.
+	cm.configMu.Lock()
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID && cm.cfg.Cameras[i].SnapshotURL == "" {
 			cm.cfg.Cameras[i].SnapshotURL = uri
@@ -856,7 +877,7 @@ func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID s
 	if err := cm.persistConfig(); err != nil {
 		logger.Warn("failed to persist snapshot URL", "camera_id", cameraID, "error", err)
 	}
-	cm.mu.Unlock()
+	cm.configMu.Unlock()
 
 	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", uri)
 }

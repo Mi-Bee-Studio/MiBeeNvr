@@ -6,23 +6,22 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
-// Status returns the status of all managed recorders.
+// Status returns the status of all managed recorders. Lock-free: loads an
+// immutable snapshot and reads each recorder's Status() (each recorder guards
+// its own status with a short internal mutex). This never blocks writers.
 func (cm *CameraManager) Status() map[string]model.RecorderStatus {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	result := make(map[string]model.RecorderStatus, len(cm.recorders))
-	for id, rec := range cm.recorders {
+	s := cm.loadSnapshot()
+	result := make(map[string]model.RecorderStatus, len(s.recorders))
+	for id, rec := range s.recorders {
 		result[id] = rec.Status()
 	}
 	return result
 }
 
-// CameraStatus returns the status of a single camera recorder.
+// CameraStatus returns the status of a single camera recorder. Lock-free read.
 func (cm *CameraManager) CameraStatus(cameraID string) model.RecorderStatus {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	rec, ok := cm.recorders[cameraID]
-	if !ok {
+	rec := cm.snapshotRecorder(cameraID)
+	if rec == nil {
 		return model.StatusError
 	}
 	return rec.Status()
@@ -30,48 +29,45 @@ func (cm *CameraManager) CameraStatus(cameraID string) model.RecorderStatus {
 
 // SetErrorDetail sets the error detail for a camera. Thread-safe.
 func (cm *CameraManager) SetErrorDetail(cameraID string, detail *model.CameraErrorDetail) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	cm.errorDetailsMu.Lock()
 	cm.errorDetails[cameraID] = detail
+	cm.errorDetailsMu.Unlock()
 }
 
 // GetErrorDetail returns the error detail for a camera, or nil if none. Thread-safe.
 func (cm *CameraManager) GetErrorDetail(cameraID string) *model.CameraErrorDetail {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+	cm.errorDetailsMu.RLock()
+	defer cm.errorDetailsMu.RUnlock()
 	return cm.errorDetails[cameraID]
 }
 
-// RecorderCount returns the number of managed recorders.
+// RecorderCount returns the number of managed recorders. Lock-free read.
 func (cm *CameraManager) RecorderCount() int {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return len(cm.recorders)
+	return len(cm.loadSnapshot().recorders)
 }
 
 // GetRecorder returns the recorder for the given camera ID, or nil if not found.
+// Lock-free read: loads the snapshot and indexes it. This is the hot path for
+// latest-frame polling (500ms/tile) and must never block.
 func (cm *CameraManager) GetRecorder(cameraID string) model.Recorder {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.recorders[cameraID]
+	return cm.snapshotRecorder(cameraID)
 }
 
 // SetTestRecorder sets a recorder for testing purposes only.
 // This allows tests to inject a recorder into the camera manager.
 func (cm *CameraManager) SetTestRecorder(cameraID string, rec model.Recorder) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.recorders[cameraID] = rec
+	cm.apply(func(s *snapshot) *snapshot {
+		s.recorders[cameraID] = rec
+		return s
+	})
 }
 
 // GetHub returns the StreamHub registered for the given camera ID, or nil if
 // none exists. This is the read-only lookup consumed by HLS/WebRTC/FLV/WS
 // handlers (they fall back to getRecorderHub, but push-only cameras — srt/rtmp —
-// expose their hub through this registry).
+// expose their hub through this registry). Lock-free read.
 func (cm *CameraManager) GetHub(cameraID string) *model.StreamHub {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.hubRegistry[cameraID]
+	return cm.snapshotHub(cameraID)
 }
 
 // GetSPS returns the source camera's current H.264 SPS/PPS (raw NALUs, no start

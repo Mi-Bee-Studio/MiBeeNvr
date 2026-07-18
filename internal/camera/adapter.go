@@ -45,25 +45,21 @@ type publicAdapter struct {
 
 // List implements pkg/camera.Manager.
 func (a *publicAdapter) List() []pkgcamera.Camera {
-	a.cm.mu.RLock()
-	defer a.cm.mu.RUnlock()
-	out := make([]pkgcamera.Camera, 0, len(a.cm.cfg.Cameras))
-	for i := range a.cm.cfg.Cameras {
-		out = append(out, cameraView{cfg: &a.cm.cfg.Cameras[i]})
+	s := a.cm.loadSnapshot()
+	out := make([]pkgcamera.Camera, 0, len(s.configs))
+	for _, cfg := range s.configs {
+		out = append(out, cameraView{cfg: cfg})
 	}
 	return out
 }
 
 // Get implements pkg/camera.Manager.
 func (a *publicAdapter) Get(id string) (pkgcamera.Camera, error) {
-	a.cm.mu.RLock()
-	defer a.cm.mu.RUnlock()
-	for i := range a.cm.cfg.Cameras {
-		if a.cm.cfg.Cameras[i].ID == id {
-			return cameraView{cfg: &a.cm.cfg.Cameras[i]}, nil
-		}
+	cfg := a.cm.snapshotConfig(id)
+	if cfg == nil {
+		return nil, pkgcamera.NewNotFoundError(id)
 	}
-	return nil, pkgcamera.NewNotFoundError(id)
+	return cameraView{cfg: cfg}, nil
 }
 
 // Status implements pkg/camera.Manager.

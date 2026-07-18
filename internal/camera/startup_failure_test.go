@@ -53,9 +53,7 @@ func TestStatusSnapshot_FailedStartDoesNotShadowActiveRecorder(t *testing.T) {
 	// Camera failed to start, then was restarted successfully but the stale
 	// failedStartCameras entry wasn't cleaned (defensive scenario).
 	mgr.markStartFailed("cam-onvif-1", errors.New("old failure"))
-	mgr.mu.Lock()
-	mgr.recorders["cam-onvif-1"] = &mockStatusRecorder{st: model.StatusRecording}
-	mgr.mu.Unlock()
+	mgr.SetTestRecorder("cam-onvif-1", &mockStatusRecorder{st: model.StatusRecording})
 
 	snap := mgr.statusSnapshot()
 	require.Contains(t, snap, "cam-onvif-1")

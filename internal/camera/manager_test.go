@@ -429,7 +429,7 @@ func TestAddCamera_EnabledH264(t *testing.T) {
 	assert.Equal(t, "cam-new-h264", id)
 
 	// Recorder should be created
-	_, ok := mgr.recorders["cam-new-h264"]
+	ok := mgr.GetRecorder("cam-new-h264") != nil
 	assert.True(t, ok, "recorder should be created for enabled h264 camera")
 	assert.Equal(t, 1, mgr.RecorderCount())
 
@@ -452,7 +452,7 @@ func TestAddCamera_HTTPJPEG(t *testing.T) {
 	assert.Equal(t, "cam-new-jpeg", id)
 
 	// Recorder should be created for http_jpeg
-	_, ok := mgr.recorders["cam-new-jpeg"]
+	ok := mgr.GetRecorder("cam-new-jpeg") != nil
 	assert.True(t, ok, "recorder should be created for http_jpeg camera")
 	assert.Equal(t, 1, mgr.RecorderCount())
 }
@@ -531,7 +531,7 @@ func TestRemoveCamera_WithRecorder(t *testing.T) {
 
 	// Recorder should be removed
 	assert.Equal(t, 3, mgr.RecorderCount())
-	_, ok := mgr.recorders["cam-h264"]
+	ok := mgr.GetRecorder("cam-h264") != nil
 	assert.False(t, ok)
 
 	// Camera should be removed from config
@@ -624,7 +624,7 @@ func TestRestartRecorder(t *testing.T) {
 
 	// Recorder should still be there
 	assert.Equal(t, 4, mgr.RecorderCount())
-	_, ok := mgr.recorders["cam-h264"]
+	ok := mgr.GetRecorder("cam-h264") != nil
 	assert.True(t, ok)
 }
 
@@ -1002,6 +1002,7 @@ func TestAutoPopulateSnapshotURL_PreservesExistingURL(t *testing.T) {
 		URL:         "http://192.168.1.100/onvif/device_service",
 		SnapshotURL: "http://existing-snapshot.jpg",
 	})
+	mgr.reseedSnapshotConfigs()
 
 	// autoPopulateSnapshotURL will fail early (no ONVIF client connectable)
 	// but the important thing is it doesn't overwrite the existing URL
@@ -1040,8 +1041,8 @@ func TestAddCamera_ONVIF_PreservesExistingSnapshotURL(t *testing.T) {
 	assert.Equal(t, "http://custom-snapshot.jpg", camCfg.SnapshotURL)
 
 	// Cleanup
-	mgr.mu.Lock()
-	defer mgr.mu.Unlock()
+	mgr.auxMu.Lock()
+	defer mgr.auxMu.Unlock()
 	for i, c := range mgr.cfg.Cameras {
 		if c.ID == "new-onvif-cam" {
 			mgr.cfg.Cameras = append(mgr.cfg.Cameras[:i], mgr.cfg.Cameras[i+1:]...)
@@ -1062,6 +1063,7 @@ func TestUpdateCamera_ONVIFEndpointChange_ClosesClient(t *testing.T) {
 		Protocol: "onvif",
 		URL:      "http://192.168.1.100/onvif/device_service",
 	})
+	mgr.reseedSnapshotConfigs()
 
 	// Pre-seed ONVIF client cache
 	mockClient := onvif.NewClient("http://192.168.1.100/onvif/device_service", "admin", "pass")
@@ -1140,7 +1142,7 @@ func TestDualModeIntegration(t *testing.T) {
 	require.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
 	// Verify the recorder's StreamHub exists
-	rec := mgr.recorders["cam-dual"]
+	rec := mgr.GetRecorder("cam-dual")
 	require.NotNil(t, rec)
 	hub := getRecorderHub(rec)
 	require.NotNil(t, hub, "recorder should have a StreamHub")
@@ -1260,9 +1262,9 @@ func TestDualMode_H264Timelapse_CreatesKeyframeExtractor(t *testing.T) {
 	require.NoError(t, err, "should start keyframe extractor for H264 dual-mode")
 
 	// Verify KFE is registered and running
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.NotNil(t, ext)
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
@@ -1318,9 +1320,9 @@ func TestDualMode_ONVIFTimelapse_H265_CreatesKeyframeExtractor(t *testing.T) {
 	require.NoError(t, err, "should start keyframe extractor for ONVIF dual-mode")
 
 	// Verify KFE is registered and running
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
@@ -1371,9 +1373,9 @@ func TestDualMode_ONVIFTimelapse_H264_CreatesKeyframeExtractor(t *testing.T) {
 	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start keyframe extractor for ONVIF H264 dual-mode")
 
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
@@ -1406,9 +1408,9 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 		}
 		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "no timelapse config should not error")
-		mgr.mu.RLock()
+		mgr.auxMu.Lock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
-		mgr.mu.RUnlock()
+		mgr.auxMu.Unlock()
 		assert.False(t, exists, "should not create KFE without timelapse config")
 	})
 
@@ -1425,9 +1427,9 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 		}
 		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "disabled timelapse should not error")
-		mgr.mu.RLock()
+		mgr.auxMu.Lock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
-		mgr.mu.RUnlock()
+		mgr.auxMu.Unlock()
 		assert.False(t, exists, "should not create KFE when timelapse disabled")
 	})
 
@@ -1446,9 +1448,9 @@ func TestDualMode_TimelapseDisabled_NoKeyframeExtractor(t *testing.T) {
 		}
 		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, nil, nil)
 		assert.NoError(t, err, "wrong frame source should not error")
-		mgr.mu.RLock()
+		mgr.auxMu.Lock()
 		_, exists := mgr.keyframeExtractors[cam.ID]
-		mgr.mu.RUnlock()
+		mgr.auxMu.Unlock()
 		assert.False(t, exists, "should not create KFE with non-rtsp_keyframe source")
 	})
 }
@@ -1486,6 +1488,7 @@ func TestDualMode_KeyframeExtractorStopsOnCameraStop(t *testing.T) {
 
 	// Add camera to config so StopCamera can find it
 	mgr.cfg.Cameras = append(mgr.cfg.Cameras, cam)
+	mgr.reseedSnapshotConfigs()
 
 	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
 	require.NoError(t, err)
@@ -1497,18 +1500,16 @@ func TestDualMode_KeyframeExtractorStopsOnCameraStop(t *testing.T) {
 	require.NotNil(t, hub)
 
 	// Register recorder manually (startRecorder would fail on rec.Start for fake URL)
-	mgr.mu.Lock()
-	mgr.recorders[cam.ID] = rec
-	mgr.mu.Unlock()
+	mgr.SetTestRecorder(cam.ID, rec)
 
 	// Start KFE
 	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err)
 
 	// Verify KFE is registered and running
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	require.True(t, exists)
 	require.True(t, ext.IsRunning())
 
@@ -1518,9 +1519,9 @@ func TestDualMode_KeyframeExtractorStopsOnCameraStop(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify KFE is removed from map
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	_, exists = mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.False(t, exists, "keyframe extractor should be removed after StopCamera")
 
 	// Verify KFE is no longer running
@@ -1573,9 +1574,9 @@ func TestDualMode_StandaloneTimelapseRTSPKeyframe_GetsValidRecorder(t *testing.T
 	err = mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, nil)
 	require.NoError(t, err, "should start KFE with standalone timelapse recorder hub")
 
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
@@ -1629,9 +1630,9 @@ func TestDualMode_ONVIFTimelapse_AutoFrameSource_CreatesKeyframeExtractor(t *tes
 	require.NoError(t, err, "should start keyframe extractor for ONVIF dual-mode with auto frame source")
 
 	// Verify KFE is registered and running
-	mgr.mu.RLock()
+	mgr.auxMu.Lock()
 	ext, exists := mgr.keyframeExtractors[cam.ID]
-	mgr.mu.RUnlock()
+	mgr.auxMu.Unlock()
 	assert.True(t, exists, "keyframe extractor should be registered")
 	assert.True(t, ext.IsRunning(), "keyframe extractor should be running")
 
