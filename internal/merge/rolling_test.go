@@ -474,16 +474,19 @@ func TestBackfillCamera_IncludeFailed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, withFailed, 1, "failed segment should be included with includeFailed=true")
 
-	// Backfill with includeFailed=true should reset and merge it.
+	// Backfill with includeFailed=true resets it to pending. With only 1 segment
+	// there's nothing to merge — it's left pending (singleton fast-path removed:
+	// a lone segment is not falsely marked merged). It will merge when a neighbor
+	// arrives in a future backfill.
 	merged, err := r.BackfillCamera(context.Background(), cameraID, true)
 	require.NoError(t, err)
-	require.Equal(t, 1, merged, "should merge the previously-failed segment")
+	require.Equal(t, 0, merged, "single segment is not merged (left pending for retry with future neighbors)")
 
-	// Verify it's now merged.
+	// Verify it's now pending (reset from failed), NOT falsely merged.
 	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
-	require.Equal(t, model.MergeStatusMerged, recs[0].MergeStatus, "should be marked merged")
+	require.Equal(t, model.MergeStatusPending, recs[0].MergeStatus, "should be reset to pending, not falsely merged")
 }
 
 // ---------------------------------------------------------------------------
@@ -519,27 +522,21 @@ func TestBackfillCamera_MissingFileSkipped(t *testing.T) {
 	}
 	require.NoError(t, env.db.InsertRecording(context.Background(), missingRec))
 
-	// Backfill should skip the missing file and merge the good one.
+	// Backfill should skip the missing file. With only 1 valid segment left,
+	// there's nothing to merge — the singleton is left pending (NOT marked
+	// merged, which would permanently eject it from the merge queue — see the
+	// fake-merged bug fix in backfillMP4/backfillBatchFormat).
 	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
 	require.NoError(t, err)
-	require.Equal(t, 1, merged, "should merge only the good segment")
+	require.Equal(t, 0, merged, "single valid segment is not merged (left pending for retry)")
 
-	// Verify: good segment merged, missing segment still pending (or gone).
+	// Verify: both segments remain pending — neither is falsely marked merged.
 	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
-	// The good segment should be marked merged (status), the missing one should NOT be merged.
-	hasGoodMerged := false
-	hasPendingMissing := false
 	for _, rec := range recs {
-		if rec.ID == "good-rec" && rec.MergeStatus == model.MergeStatusMerged {
-			hasGoodMerged = true
-		}
-		if rec.ID == "missing-rec" && rec.MergeStatus != model.MergeStatusMerged {
-			hasPendingMissing = true
-		}
+		require.NotEqual(t, model.MergeStatusMerged, rec.MergeStatus,
+			"segment %s must not be marked merged (singleton fast-path removed)", rec.ID)
 	}
-	require.True(t, hasGoodMerged, "good segment should be marked merged")
-	require.True(t, hasPendingMissing, "missing-file segment should NOT be merged")
 }
 
 // ---------------------------------------------------------------------------

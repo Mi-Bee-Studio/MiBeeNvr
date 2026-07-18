@@ -461,15 +461,9 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				valid = append(valid, rec)
 			}
 			if len(valid) < 2 {
-				for _, rec := range valid {
-					if err := storage.RetryOnBusy(ctx, func() error {
-						return r.db.SetMergeStatus(ctx, []string{rec.ID}, model.MergeStatusMerged)
-					}); err != nil {
-						rollingLogger.Warn("backfill: failed to mark singleton",
-							"camera_id", cameraID, "recording_id", rec.ID, "error", err)
-					}
-					merged++
-				}
+				// Not enough segments to merge — leave pending (see comment in
+				// backfillBatchFormat). Marking singletons merged permanently
+				// ejected them from the merge queue.
 				continue
 			}
 
@@ -650,16 +644,18 @@ func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, camer
 			valid = append(valid, rec)
 		}
 		if len(valid) < 2 {
-			// Not enough segments to merge — mark singletons as merged.
-			for _, rec := range valid {
-				if err := storage.RetryOnBusy(ctx, func() error {
-					return r.db.SetMergeStatus(ctx, []string{rec.ID}, model.MergeStatusMerged)
-				}); err != nil {
-					rollingLogger.Warn("backfill: failed to mark singleton",
-						"camera_id", cameraID, "recording_id", rec.ID, "error", err)
-				}
-				merged++
-			}
+			// Not enough segments to merge in this batch. Leave them pending —
+			// do NOT mark as merged. Marking singletons merged (the old behavior)
+			// permanently ejected them from the merge queue: backfill only selects
+			// pending segments, so a segment marked merged here would never be
+			// retried even when adjacent segments arrive later. This produced
+			// thousands of "fake merged" 30s fragments that cluttered the timeline
+			// (merge_status=merged but merge_path empty — never actually merged).
+			// Keeping them pending means the next backfill/periodic merge will
+			// reconsider them alongside any new neighbors.
+			rollingLogger.Debug("backfill: batch has <2 valid segments, leaving pending",
+				"camera_id", cameraID, "format", format,
+				"valid", len(valid), "missing", len(batch)-len(valid))
 			continue
 		}
 

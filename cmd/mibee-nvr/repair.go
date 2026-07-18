@@ -393,13 +393,15 @@ func runRepairFragments() int {
 	// Parse fragments-specific flags (in addition to the shared flags already
 	// parsed by parseRepairFlags: --execute/--dry-run/--camera/--limit/--config).
 	var statusStr string
-	var retry, forceDelete bool
+	var retry, forceDelete, resetFakeMerged bool
 	for i := 3; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--retry":
 			retry = true
 		case "--force-delete":
 			forceDelete = true
+		case "--reset-fake-merged":
+			resetFakeMerged = true
 		case "--status":
 			if i+1 < len(os.Args) {
 				i++
@@ -409,6 +411,18 @@ func runRepairFragments() int {
 			printRepairFragmentsUsage()
 			return 0
 		}
+	}
+
+	// --reset-fake-merged is a distinct operation mode: it targets segments
+	// marked merged but never actually merged (empty merge_path), resetting
+	// them to pending so the merge engine re-queues them. It does not use
+	// --status/--retry/--force-delete.
+	if resetFakeMerged {
+		if statusStr != "" || retry || forceDelete {
+			fmt.Fprintln(os.Stderr, "Error: --reset-fake-merged cannot be combined with --status/--retry/--force-delete.")
+			return 1
+		}
+		return runRepairFragmentsResetFakeMerged(opts)
 	}
 
 	// Default status: incompatible (the most common debris). Comma-separated list allowed.
@@ -584,6 +598,118 @@ func runRepairFragments() int {
 	return 0
 }
 
+// runRepairFragmentsResetFakeMerged handles `repair fragments --reset-fake-merged`:
+// finds segments marked merge_status='merged' but with an empty merge_path (the
+// rolling merge singleton fast-path marked them merged without actually merging),
+// and resets them to pending so the merge engine re-queues them for a real merge.
+//
+// This is the cleanup companion to the singleton-bug fix in rolling.go: existing
+// deployments already have thousands of these fake-merged fragments accumulated
+// before the fix. After resetting, a service restart (or waiting for periodic
+// merge) will re-merge them into proper long recordings.
+func runRepairFragmentsResetFakeMerged(opts repairOpts) int {
+	db, _, err := openDBFromConfig(opts.configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	ctx, cancel := setupSignalHandler()
+	defer cancel()
+
+	mode := "DRY RUN (no changes)"
+	if !opts.dryRun {
+		mode = "EXECUTE"
+	}
+	fmt.Printf("repair fragments --reset-fake-merged — %s\n", mode)
+	fmt.Printf("  target: merge_status='merged' with empty merge_path (never actually merged)\n")
+	if opts.cameraID != "" {
+		fmt.Printf("  camera: %s\n", opts.cameraID)
+	}
+	if opts.limit > 0 {
+		fmt.Printf("  limit:  %d\n", opts.limit)
+	}
+	fmt.Println()
+
+	recs, err := db.ListFakeMergedRecordings(ctx, opts.cameraID, opts.limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing fake-merged recordings: %v\n", err)
+		return 1
+	}
+	if len(recs) == 0 {
+		fmt.Println("No fake-merged recordings found. Nothing to do.")
+		return 0
+	}
+
+	// Per-camera summary (count / total duration / total size).
+	type camStat struct {
+		count int
+		dur   float64
+		size  int64
+	}
+	byCam := map[string]*camStat{}
+	var totalDur float64
+	var totalSize int64
+	for _, r := range recs {
+		s := byCam[r.CameraID]
+		if s == nil {
+			s = &camStat{}
+			byCam[r.CameraID] = s
+		}
+		s.count++
+		s.dur += r.Duration
+		s.size += r.FileSize
+		totalDur += r.Duration
+		totalSize += r.FileSize
+	}
+	fmt.Printf("Found %d fake-merged recordings across %d camera(s):\n\n", len(recs), len(byCam))
+	for cam, s := range byCam {
+		fmt.Printf("  %-40s %4d segments  %7.1f min  %6.2f GB\n", cam, s.count, s.dur/60, float64(s.size)/1024/1024/1024)
+	}
+	fmt.Printf("  %-40s %4d segments  %7.1f min  %6.2f GB\n", "TOTAL", len(recs), totalDur/60, float64(totalSize)/1024/1024/1024)
+	fmt.Println()
+
+	if opts.dryRun {
+		fmt.Println("Dry run — no changes made. Re-run with --execute to reset these to pending.")
+		fmt.Println("After resetting, restart the service (or wait for periodic merge) to re-merge them.")
+		return 0
+	}
+
+	// Reset to pending in chunks (SetMergeStatus batches internally).
+	ids := make([]string, len(recs))
+	for i, r := range recs {
+		ids[i] = r.ID
+	}
+	const chunkSize = 500
+	reset := 0
+	failed := 0
+	for start := 0; start < len(ids); start += chunkSize {
+		if ctx.Err() != nil {
+			break
+		}
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		if err := db.SetMergeStatus(ctx, chunk, model.MergeStatusPending); err != nil {
+			fmt.Fprintf(os.Stderr, "  reset failed for batch [%d:%d]: %v\n", start, end, err)
+			failed += len(chunk)
+			continue
+		}
+		reset += len(chunk)
+		fmt.Printf("  reset %d/%d to pending\n", reset, len(ids))
+	}
+	fmt.Println()
+	fmt.Printf("Summary: %d reset to pending, %d failed (of %d total)\n", reset, failed, len(recs))
+	if reset > 0 {
+		fmt.Println("Restart the service (or wait for the next periodic merge cycle) to re-merge these")
+		fmt.Println("into proper long recordings. They will now appear as pending on the timeline.")
+	}
+	return 0
+}
+
 // splitCSV splits a comma-separated string, trimming whitespace and dropping empties.
 func splitCSV(s string) []string {
 	var out []string
@@ -752,20 +878,36 @@ Examples:
   # Also include 'failed' and 'dark' segments (comma-separated)
   mibee-nvr repair fragments --status incompatible,failed,dark --force-delete --execute
 
-Live merge states (pending/merged/merging) are NEVER matched — the tool
-refuses --status values that the merge engine is still actively processing.
+Live merge states (pending/merged/merging) are NEVER matched by --status — the
+tool refuses values that the merge engine is still actively processing.
+
+--reset-fake-merged is a separate operation mode for a different class of debris:
+recordings marked merge_status='merged' but with an empty merge_path. These were
+marked "merged" by the rolling merge singleton fast-path (a batch with <2 valid
+segments) without actually being merged, permanently ejecting them from the merge
+queue. They show up as thousands of un-merged short fragments on the timeline.
+Resetting them to pending re-queues them for a real merge.
+
+  # Find fake-merged fragments (merged but never actually merged)
+  mibee-nvr repair fragments --reset-fake-merged
+
+  # Reset them to pending, then restart the service to re-merge
+  mibee-nvr repair fragments --reset-fake-merged --execute
+  sudo systemctl restart mibee-nvr
 
 Options:
-  --execute         Actually apply the action (default: dry-run, report only)
-  --dry-run         Report only, no changes (default)
-  --retry           Reset matched segments to pending (merge engine retries)
-  --force-delete    Delete DB row + file permanently (mutually exclusive with --retry)
-  --status <list>   Comma-separated merge statuses to match
-                    (default: incompatible; allowed: incompatible, failed, dark)
-  --camera <id>     Only process this camera
-  --limit <n>       Max segments to process (0 = no limit; bounds IO on RPi)
-  --config <path>   Config file path (default: mibee-nvr.yaml)
-  --help, -h        Show this help
+  --execute              Actually apply the action (default: dry-run, report only)
+  --dry-run              Report only, no changes (default)
+  --retry                Reset matched segments to pending (merge engine retries)
+  --force-delete         Delete DB row + file permanently (mutually exclusive with --retry)
+  --reset-fake-merged    Reset merged-but-not-actually-merged segments to pending
+                         (separate mode; cannot combine with --status/--retry/--force-delete)
+  --status <list>        Comma-separated merge statuses to match
+                         (default: incompatible; allowed: incompatible, failed, dark)
+  --camera <id>          Only process this camera
+  --limit <n>            Max segments to process (0 = no limit; bounds IO on RPi)
+  --config <path>        Config file path (default: mibee-nvr.yaml)
+  --help, -h             Show this help
 `)
 }
 
