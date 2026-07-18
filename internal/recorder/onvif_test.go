@@ -123,6 +123,42 @@ func TestONVIFRecorder_Start_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestONVIFRecorder_Start_RtspURLSetBeforeCreateDelegate is a regression test
+// for a bug introduced when Start was refactored to run the handshake outside
+// r.mu. createDelegate → detectEncoding → probeRTSPEncoding reads r.rtspURL to
+// DESCRIBE the stream and detect the real codec (H264 vs H265). If r.rtspURL is
+// still empty when createDelegate runs, the probe no-ops and Start falls back to
+// the ONVIF-claimed encoding — which is wrong for cameras that lie (an H265
+// stream claimed as H264 → "H264 media not found in stream" death-loop). This
+// asserts r.rtspURL is populated BEFORE newRecorder is invoked.
+func TestONVIFRecorder_Start_RtspURLSetBeforeCreateDelegate(t *testing.T) {
+	client := &onvif.MockDeviceClient{
+		Profiles: []onvif.DeviceProfile{
+			{Token: "profile_1", Name: "HD", Encoding: "H264", Width: 1920, Height: 1080},
+		},
+		StreamURI: &onvif.StreamInfo{
+			URI:          "rtsp://192.168.1.100/stream",
+			Protocol:     "RTSP",
+			Encoding:     "H264",
+			ProfileToken: "profile_1",
+		},
+	}
+
+	var rtspURLObservedAtCreate string
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		or.newRecorder = func(_ string) model.Recorder {
+			// createDelegate reads r.rtspURL internally (via probeRTSPEncoding).
+			// Snapshot it at the moment newRecorder is called.
+			rtspURLObservedAtCreate = or.rtspURL
+			return &mockRecorder{}
+		}
+	})
+
+	require.NoError(t, r.Start(context.Background()))
+	require.Equal(t, "rtsp://192.168.1.100/stream", rtspURLObservedAtCreate,
+		"r.rtspURL must be set BEFORE createDelegate runs so probeRTSPEncoding can DESCRIBE the stream")
+}
+
 func TestONVIFRecorder_Start_ConnectFails(t *testing.T) {
 	client := &onvif.MockDeviceClient{
 		ConnectError: errors.New("connection refused"),
