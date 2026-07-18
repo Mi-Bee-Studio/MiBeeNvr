@@ -345,10 +345,10 @@ func ParseSegmentDurationOnly(filePath string) (float64, error) {
 	defer f.Close()
 
 	type durTrack struct {
-		timescale  uint32
-		stts       []mp4.SttsEntry
-		isVideo    bool
-		hasTime    bool
+		timescale uint32
+		stts      []mp4.SttsEntry
+		isVideo   bool
+		hasTime   bool
 	}
 	var tracks []*durTrack
 	var current *durTrack
@@ -433,7 +433,6 @@ func ParseSegmentDurationOnly(filePath string) (float64, error) {
 	}
 	return float64(totalUnits) / float64(video.timescale), nil
 }
-
 
 // from a track accumulator's sample tables.
 func buildTrackSamples(tr *trackAccum) ([]SampleEntry, error) {
