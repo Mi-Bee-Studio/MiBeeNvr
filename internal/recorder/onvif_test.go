@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -163,6 +165,80 @@ type errorStreamURIClient struct {
 func (e *errorStreamURIClient) GetStreamURI(ctx context.Context, profileToken string) (*onvif.StreamInfo, error) {
 	e.StreamURICallCount++
 	return nil, errors.New("stream URI not found")
+}
+
+// blockingConnectClient wraps MockDeviceClient so Connect blocks until the
+// release channel is closed — used to simulate a slow ONVIF handshake and
+// verify Status()/Delegate() don't block during it.
+type blockingConnectClient struct {
+	*onvif.MockDeviceClient
+	release chan struct{}
+}
+
+func (b *blockingConnectClient) Connect(ctx context.Context) error {
+	select {
+	case <-b.release:
+		return b.MockDeviceClient.Connect(ctx)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestONVIFRecorder_StatusDoesNotBlockDuringSlowStart verifies the core Stage 2
+// guarantee: Status() returns promptly even while Start is mid-handshake
+// (Connect/GetProfiles/GetStreamURI are multi-second network ops). The old
+// implementation held r.mu across the whole handshake, blocking every
+// Status()/Delegate()/RTSPURL() call — which stalled the grid's 500ms
+// latest-frame polling for any ONVIF camera that was (re)connecting.
+func TestONVIFRecorder_StatusDoesNotBlockDuringSlowStart(t *testing.T) {
+	release := make(chan struct{})
+	client := &blockingConnectClient{
+		MockDeviceClient: &onvif.MockDeviceClient{
+			DeviceInfo: &onvif.DeviceInfo{Manufacturer: "Test", Model: "Cam"},
+			StreamURI: &onvif.StreamInfo{
+				URI:          "rtsp://192.168.1.100/stream",
+				Protocol:     "RTSP",
+				ProfileToken: "profile_1",
+			},
+		},
+		release: release,
+	}
+	r := newTestONVIFRecorder(t, client, func(or *ONVIFRecorder) {
+		or.newRecorder = func(_ string) model.Recorder { return &mockRecorder{} }
+	})
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- r.Start(context.Background())
+	}()
+
+	// Give Start a moment to enter the (blocking) Connect handshake.
+	time.Sleep(50 * time.Millisecond)
+
+	// Status() must return promptly while Start is blocked in Connect. If the
+	// old lock-across-handshake behavior regressed, this would hang until
+	// 'release' is closed (the test timeout would fire).
+	done := make(chan model.RecorderStatus, 1)
+	go func() {
+		done <- r.Status()
+	}()
+	select {
+	case st := <-done:
+		// Before Start succeeds, status is still the initial StatusStopped.
+		assert.Equal(t, model.StatusStopped, st)
+	case <-time.After(time.Second):
+		t.Fatal("Status() blocked while Start was mid-handshake — handshake must run outside r.mu")
+	}
+
+	// Release the handshake so the goroutine can finish and the test cleans up.
+	close(release)
+	select {
+	case err := <-startDone:
+		// delegate.Start on the mock recorder succeeds, so this should be nil.
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not complete after releasing the handshake")
+	}
 }
 
 func TestONVIFRecorder_Stop(t *testing.T) {
