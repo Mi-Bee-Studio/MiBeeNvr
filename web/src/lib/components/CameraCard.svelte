@@ -20,6 +20,7 @@
    mergeError?: string;
    onRetryMerge?: (camera: Camera) => void;
    onrediscover?: (camera: Camera) => void;
+   onactivate?: (camera: Camera, credentials: { username: string; password: string }) => Promise<void>;
  }
 
   let {
@@ -36,13 +37,37 @@
    mergeProgress = 0,
    mergeError = '',
    onRetryMerge,
-   onrediscover
+   onrediscover,
+   onactivate
  }: Props = $props();
 
   let menuOpen = $state(false);
   let editingName = $state(false);
   let nameInput = $state('');
   $effect(() => { nameInput = camera.name; });
+
+  // Activate-dialog state (pending_activation cameras)
+  let activateOpen = $state(false);
+  let activateUsername = $state('');
+  let activatePassword = $state('');
+  let activating = $state(false);
+  $effect(() => {
+    // Pre-fill username from the camera config (if any) when the dialog opens.
+    if (activateOpen) activateUsername = camera.username ?? '';
+  });
+  let isPendingActivation = $derived(camera.activation_state === 'pending_activation');
+
+  async function submitActivate() {
+    if (!onactivate || activating) return;
+    activating = true;
+    try {
+      await onactivate(camera, { username: activateUsername, password: activatePassword });
+      activateOpen = false;
+      activatePassword = '';
+    } finally {
+      activating = false;
+    }
+  }
 
   let variant = $derived(
     camera.status === 'recording'
@@ -218,6 +243,9 @@ let healthShowWarningIcon = $derived(
       {:else}
         <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
       {/if}
+      {#if isPendingActivation}
+        <span class="badge badge-warning">{t('cameras.pendingActivation')}</span>
+      {/if}
     </div>
   </div>
 
@@ -283,6 +311,19 @@ let healthShowWarningIcon = $derived(
           <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.rediscoverLabel')}</span>
         </button>
      {/if}
+     <!-- Activate: supply credentials for a pending_activation camera (auto-discovered,
+          credentials unknown). -->
+     {#if isPendingActivation && onactivate}
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
+          onclick={() => (activateOpen = true)}
+          title={t('cameras.activateTitle')}
+          aria-label={t('cameras.activate')}
+        >
+          <AlertCircle size={14} />
+          <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.activate')}</span>
+        </button>
+     {/if}
      <!-- Retry merge button when merge failed -->
      {#if mergeStatus === 'failed' && onRetryMerge}
         <button
@@ -334,6 +375,31 @@ let healthShowWarningIcon = $derived(
     </div>
   </div>
 </div>
+
+{#if activateOpen}
+  <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true">
+    <div class="card max-w-md w-full p-6">
+      <h3 class="text-lg font-semibold th-text-primary mb-2">{t('cameras.activateTitle')}</h3>
+      <p class="th-text-secondary text-sm mb-4">{t('cameras.activateDescription')}</p>
+      <div class="mb-4">
+        <label for="act-user" class="input-label">{t('cameras.activateUsername')}</label>
+        <input id="act-user" class="input mt-1" bind:value={activateUsername} autocomplete="username" />
+      </div>
+      <div class="mb-6">
+        <label for="act-pass" class="input-label">{t('cameras.activatePassword')}</label>
+        <input id="act-pass" type="password" class="input mt-1" bind:value={activatePassword} autocomplete="current-password" onkeydown={(e) => { if (e.key === 'Enter') submitActivate(); }} />
+      </div>
+      <div class="flex gap-3 justify-end">
+        <button onclick={() => { activateOpen = false; activatePassword = ''; }} class="btn btn-secondary" disabled={activating}>
+          {t('recordings.cancel')}
+        </button>
+        <button onclick={submitActivate} class="btn btn-primary" disabled={activating || !activateUsername || !activatePassword}>
+          {#if activating}{t('cameras.activateSubmitting')}{:else}{t('cameras.activate')}{/if}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .camera-card {

@@ -289,6 +289,8 @@ func (h *Handler) Routes() http.Handler {
 		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
+		r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)
+		r.Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
 		r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
 		r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
 		r.Post("/api/backup", h.handleBackup)

@@ -52,6 +52,10 @@ export interface Camera {
   // subnets used to relocate the camera after its IP changes.
   stable_id?: string;
   subnet_hints?: string[];
+  // Auto-discover activation gate: "active" (default, recorder runs) or
+  // "pending_activation" (auto-discovered but credentials unknown — recorder
+  // NOT started, user must supply credentials via the activate endpoint).
+  activation_state?: string;
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -361,6 +365,25 @@ export async function rediscoverCamera(
   const effectiveSignal = signal ?? AbortSignal.timeout(90000);
   return apiRequest<{ found: boolean; status?: string; reason?: string }>(`/cameras/${id}/rediscover`, {
     method: 'POST',
+    signal: effectiveSignal,
+  });
+}
+
+/**
+ * Activate a pending_activation camera by supplying credentials. The backend
+ * flips activation_state to "active" and starts the recorder. Idempotent for an
+ * already-active camera (re-applies credentials + restarts with new creds).
+ * Activation may trigger an ONVIF handshake + RTSP dial, so use a generous timeout.
+ */
+export async function activateCamera(
+  id: string,
+  credentials: { username: string; password: string },
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  const effectiveSignal = signal ?? AbortSignal.timeout(60000);
+  return apiRequest<{ status: string }>(`/cameras/${id}/activate`, {
+    method: 'POST',
+    body: JSON.stringify(credentials),
     signal: effectiveSignal,
   });
 }

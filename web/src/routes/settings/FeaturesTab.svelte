@@ -3,12 +3,14 @@
   import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus, getAiStatus, updateAiConfig } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
   import { getSettings, generateAPIKey, revokeAPIKey } from '$lib/api';
+  import { getAutoDiscoverSettings, updateAutoDiscoverSettings, type AutoDiscoverSettings } from '$lib/api/settings';
   import { refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import type { Camera, DownloadStatus, Zone, ZoneList, PerCameraAiState } from '$lib/api';
   import type { MiBeeVisionConfig } from '$lib/api';
   import { t } from '$lib/i18n';
   import { AlertTriangle, ChevronDown, Plus, Trash2, X, Copy, Check } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { friendlyError } from '$lib/errors';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import SettingsTranscodingCard from './SettingsTranscodingCard.svelte';
 
@@ -40,6 +42,32 @@
   let copiedKey = $state(false);
 
   const hasMiBeeVisionKey = $derived(mibeeVisionKeys.length > 0);
+
+  // --- Auto-Discover ---
+  let adSettings = $state<AutoDiscoverSettings | null>(null);
+  let adOriginal = $state<AutoDiscoverSettings | null>(null);
+  let adSaving = $state(false);
+  // Local form fields (so the toggle/inputs are reactive before save).
+  let adEnabled = $state(false);
+  let adScanInterval = $state(60);
+  let adListenForHello = $state(true);
+  let adNetworkInterface = $state('');
+  let adDefaultUsername = $state('');
+  let adDefaultPassword = $state(''); // only sent when the user types a new one
+  let adIgnoreScopes = $state(''); // comma-separated in the UI
+  let adHasPassword = $state(false);
+  // Dirty when any field diverges from the loaded config.
+  let adDirty = $derived(
+    !!adSettings && (
+      adEnabled !== adSettings.enabled ||
+      Number(adScanInterval) !== adSettings.scan_interval ||
+      adListenForHello !== adSettings.listen_for_hello ||
+      adNetworkInterface !== adSettings.network_interface ||
+      adDefaultUsername !== adSettings.default_username ||
+      adIgnoreScopes !== (adSettings.ignore_scopes ?? []).join(', ') ||
+      adDefaultPassword !== ''
+    )
+  );
 
   // Feature flags dirty tracking
   let featuresDirty = $derived(JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags));
@@ -308,6 +336,50 @@ async function handleDeleteZone(zoneName: string) {
     } catch { /* clipboard may not be available */ }
   }
 
+  // --- Auto-Discover load/save ---
+  async function loadAutoDiscover() {
+    try {
+      const cfg = await getAutoDiscoverSettings();
+      adSettings = cfg;
+      adOriginal = cfg;
+      adEnabled = cfg.enabled;
+      adScanInterval = cfg.scan_interval;
+      adListenForHello = cfg.listen_for_hello;
+      adNetworkInterface = cfg.network_interface;
+      adDefaultUsername = cfg.default_username;
+      adHasPassword = cfg.has_default_password;
+      adIgnoreScopes = (cfg.ignore_scopes ?? []).join(', ');
+      adDefaultPassword = ''; // never pre-fill; only sent when the user types
+    } catch (e: any) {
+      showToast(friendlyError(e, 'settings.autoDiscover.loadFailed'), 'error');
+    }
+  }
+
+  async function saveAutoDiscover() {
+    if (adSaving) return;
+    adSaving = true;
+    try {
+      const payload: Record<string, unknown> = {
+        enabled: adEnabled,
+        scan_interval: Number(adScanInterval),
+        listen_for_hello: adListenForHello,
+        network_interface: adNetworkInterface,
+        default_username: adDefaultUsername,
+        ignore_scopes: adIgnoreScopes.split(',').map((s) => s.trim()).filter(Boolean),
+      };
+      // Only send the password when the user typed a new one (empty = unchanged).
+      if (adDefaultPassword) payload.default_password = adDefaultPassword;
+      await updateAutoDiscoverSettings(payload);
+      showToast(t('settings.autoDiscover.saved'), 'success');
+      adDefaultPassword = '';
+      await loadAutoDiscover(); // refresh has_default_password
+    } catch (e: any) {
+      showToast(friendlyError(e, 'settings.autoDiscover.saveFailed'), 'error');
+    } finally {
+      adSaving = false;
+    }
+  }
+
   onMount(() => {
     loadFeatures();
     loadAiSettings();
@@ -316,6 +388,7 @@ async function handleDeleteZone(zoneName: string) {
     loadZones();
     loadFFmpegStatus();
     loadMiBeeVisionKeys();
+    loadAutoDiscover();
   });
 </script>
 
@@ -396,6 +469,94 @@ async function handleDeleteZone(zoneName: string) {
             <span class="spinner mr-2"></span>
           {/if}
           {t('settings.save')}
+        </button>
+      </div>
+    </div>
+  {/if}
+</SettingsCard>
+
+<!-- Auto-Discover Cameras -->
+<SettingsCard
+  title={t('settings.autoDiscover.title')}
+  subtitle={t('settings.autoDiscover.description')}
+  badge={adEnabled
+    ? { text: t('settings.featureToggles.enabled'), color: 'success' as const }
+    : { text: t('settings.featureToggles.disabled'), color: 'warning' as const }}
+>
+  <div class="flex items-center justify-between mb-4">
+    <span class="text-sm th-text-secondary">{t('settings.autoDiscover.enabled')}</span>
+    <button
+      aria-label={t('settings.autoDiscover.enabled')}
+      type="button"
+      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {adEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
+      onclick={() => { adEnabled = !adEnabled; }}
+      onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); adEnabled = !adEnabled; } }}
+      role="switch"
+      aria-checked={adEnabled}
+    >
+      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {adEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+    </button>
+  </div>
+
+  {#if adEnabled}
+    <div class="space-y-6">
+      <!-- Scan interval -->
+      <div>
+        <label class="input-label" for="ad-scan">{t('settings.autoDiscover.scanInterval')}</label>
+        <input id="ad-scan" type="number" min="30" step="10" class="input mt-1 w-full" bind:value={adScanInterval} />
+        <p class="text-xs th-text-tertiary mt-1">{t('settings.autoDiscover.scanIntervalHint')}</p>
+      </div>
+
+      <!-- Listen for Hello -->
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="text-sm th-text-primary">{t('settings.autoDiscover.listenForHello')}</span>
+          <p class="text-xs th-text-tertiary mt-0.5">{t('settings.autoDiscover.listenForHelloHint')}</p>
+        </div>
+        <button
+          aria-label={t('settings.autoDiscover.listenForHello')}
+          type="button"
+          class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none {adListenForHello ? 'bg-blue-600' : 'th-bg-tertiary'}"
+          onclick={() => { adListenForHello = !adListenForHello; }}
+          role="switch" aria-checked={adListenForHello}
+        >
+          <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {adListenForHello ? 'translate-x-6' : 'translate-x-1'}"></span>
+        </button>
+      </div>
+
+      <!-- Network interface -->
+      <div>
+        <label class="input-label" for="ad-iface">{t('settings.autoDiscover.networkInterface')}</label>
+        <input id="ad-iface" type="text" class="input mt-1 w-full" bind:value={adNetworkInterface} placeholder="eth0" />
+        <p class="text-xs th-text-tertiary mt-1">{t('settings.autoDiscover.networkInterfaceHint')}</p>
+      </div>
+
+      <!-- Default credentials -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="input-label" for="ad-user">{t('settings.autoDiscover.defaultUsername')}</label>
+          <input id="ad-user" type="text" class="input mt-1 w-full" bind:value={adDefaultUsername} autocomplete="username" />
+          <p class="text-xs th-text-tertiary mt-1">{t('settings.autoDiscover.defaultUsernameHint')}</p>
+        </div>
+        <div>
+          <label class="input-label" for="ad-pass">{t('settings.autoDiscover.defaultPassword')}</label>
+          <input id="ad-pass" type="password" class="input mt-1 w-full" bind:value={adDefaultPassword} autocomplete="new-password" placeholder={adHasPassword ? '••••••••' : ''} />
+          <p class="text-xs th-text-tertiary mt-1">{adHasPassword ? t('settings.autoDiscover.passwordSet') : t('settings.autoDiscover.defaultPasswordHint')}</p>
+        </div>
+      </div>
+
+      <!-- Ignore scopes -->
+      <div>
+        <label class="input-label" for="ad-scopes">{t('settings.autoDiscover.ignoreScopes')}</label>
+        <input id="ad-scopes" type="text" class="input mt-1 w-full" bind:value={adIgnoreScopes} placeholder="hardware/LegacyCam" />
+        <p class="text-xs th-text-tertiary mt-1">{t('settings.autoDiscover.ignoreScopesHint')}</p>
+      </div>
+
+      <!-- Save -->
+      <div class="flex justify-end">
+        <button type="button" class="btn btn-primary" onclick={saveAutoDiscover} disabled={adSaving || !adDirty}>
+          {#if adSaving}<span class="spinner mr-2"></span>{/if}
+          {t('settings.autoDiscover.save')}
         </button>
       </div>
     </div>

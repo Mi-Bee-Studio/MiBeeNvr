@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -392,6 +392,20 @@
     }
   }
 
+  // Activate a pending_activation camera (auto-discovered, credentials unknown)
+  // by supplying ONVIF credentials. The CameraCard dialog collects them and
+  // calls this via the onactivate prop.
+  async function handleActivateCamera(camera: Camera, credentials: { username: string; password: string }) {
+    try {
+      await activateCamera(camera.id, credentials);
+      showToast(t('cameras.activateSuccess'), 'success');
+      await loadCameras();
+    } catch (e: any) {
+      showToast(friendlyError(e, 'cameras.activateFailed'), 'error');
+      throw e; // re-throw so CameraCard keeps the dialog open on failure
+    }
+  }
+
 
   async function handleSaveName(camera: Camera, name: string) {
     try {
@@ -435,6 +449,42 @@
 
     const healthInterval = window.setInterval(() => loadHealth(), 30000);
     return () => clearInterval(healthInterval);
+  });
+
+  // Live auto-discover notifications: when the backend's auto-discover service
+  // adds a camera, it publishes a 'camera.added' SSE event. Refresh the list and
+  // toast so the user sees the new camera immediately (mirrors Hikvision NVR
+  // plug-and-play feedback). The EventSource uses named events (the backend
+  // emits event: camera.added), so we addEventListener rather than onmessage.
+  $effect(() => {
+    let es: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+    function connect() {
+      es = new EventSource('/api/events?filter=camera.');
+      es.addEventListener('camera.added', (e: MessageEvent) => {
+        try {
+          const d = JSON.parse(e.data) as { name?: string; activation_state?: string };
+          loadCameras();
+          if (d.activation_state === 'pending_activation') {
+            showToast(t('cameras.autoDiscoveredPending', { name: d.name ?? '' }), 'warning');
+          } else {
+            showToast(t('cameras.autoDiscovered', { name: d.name ?? '' }), 'success');
+          }
+        } catch { /* ignore malformed event */ }
+      });
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        // Reconnect after a delay (the events endpoint may have been briefly
+        // unavailable, e.g. during a redeploy).
+        reconnectTimer = setTimeout(connect, 5000);
+      };
+    }
+    connect();
+    return () => {
+      es?.close();
+      clearTimeout(reconnectTimer);
+    };
   });
 </script>
 
@@ -576,6 +626,7 @@
                 onstop={handleStopCamera}
                 onrestart={handleRestartCamera}
                 onrediscover={handleRediscoverCamera}
+                onactivate={handleActivateCamera}
                 onsaveName={handleSaveName}
               />
               <!-- Inline Edit Form for this camera -->
