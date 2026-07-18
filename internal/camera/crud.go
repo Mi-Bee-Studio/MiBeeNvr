@@ -170,9 +170,11 @@ func (cm *CameraManager) publishCameraAdded(ctx context.Context, cam config.Came
 // RemoveCamera removes a camera from the manager, stops its recorder, and removes it from config.
 // Does NOT delete the camera record from the database.
 func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) error {
-	// Snapshot the recorder + aux components (lock-free / auxMu) so we can stop
-	// them OUTSIDE any lock after the config/snapshot removal.
+	// Snapshot the recorder + hub + aux components (lock-free / auxMu) so we can
+	// stop them OUTSIDE any lock after the config/snapshot removal, AND restore
+	// them on a persistConfig rollback.
 	rec := cm.snapshotRecorder(cameraID)
+	hub := cm.snapshotHub(cameraID)
 	var ext *timelapse.KeyframeExtractor
 	cm.auxMu.Lock()
 	if e, ok := cm.keyframeExtractors[cameraID]; ok {
@@ -203,11 +205,17 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	if err := cm.persistConfig(); err != nil {
 		persistErr = err
 		// Rollback: re-insert camera at original position + restore snapshot.
+		// Restore all four maps symmetrically with the Phase 1 deletes
+		// (recorders/hubs/configs/failedStarts) so a persistConfig failure
+		// leaves the camera fully restored, not half-removed.
 		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
 		rb := cm.loadSnapshot().clone()
 		rb.configs[cameraID] = &cm.cfg.Cameras[idx]
 		if rec != nil {
 			rb.recorders[cameraID] = rec
+		}
+		if hub != nil {
+			rb.hubs[cameraID] = hub
 		}
 		cm.snapshot.Store(rb)
 	}
@@ -223,6 +231,10 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	}
 
 	// PHASE 2 — outside configMu: stop recorder + aux components + relay.
+	// Drop the per-camera lifecycle mutex entry — the camera is gone, so no
+	// future lifecycle op can reference it. Prevents unbounded lifecycleMu
+	// growth under add/remove churn.
+	cm.lifecycleMu.Delete(cameraID)
 	if rec != nil {
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)
@@ -255,8 +267,10 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 // The camera row and recordings are preserved in the database.
 // Merge failure is non-blocking (logged but continues).
 func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) error {
-	// Snapshot the recorder + aux components to stop OUTSIDE any lock.
+	// Snapshot the recorder + hub + aux components to stop OUTSIDE any lock,
+	// and to restore on a persistConfig rollback.
 	rec := cm.snapshotRecorder(cameraID)
+	hub := cm.snapshotHub(cameraID)
 	var ext *timelapse.KeyframeExtractor
 	cm.auxMu.Lock()
 	if e, ok := cm.keyframeExtractors[cameraID]; ok {
@@ -309,11 +323,15 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	if err := cm.persistConfig(); err != nil {
 		persistErr = err
 		// Rollback: re-insert camera at original position + restore snapshot.
+		// Restore all four maps symmetrically with the deletes above.
 		cm.cfg.Cameras = append(cm.cfg.Cameras[:idx], append([]config.CameraConfig{savedCam}, cm.cfg.Cameras[idx:]...)...)
 		rb := cm.loadSnapshot().clone()
 		rb.configs[cameraID] = &cm.cfg.Cameras[idx]
 		if rec != nil {
 			rb.recorders[cameraID] = rec
+		}
+		if hub != nil {
+			rb.hubs[cameraID] = hub
 		}
 		cm.snapshot.Store(rb)
 	}
@@ -329,6 +347,8 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	}
 
 	// PHASE 2 — outside configMu: stop recorder + aux + async merge.
+	// Drop the per-camera lifecycle mutex entry — the camera is archived/gone.
+	cm.lifecycleMu.Delete(cameraID)
 	if rec != nil {
 		if err := rec.Stop(); err != nil {
 			logger.Warn("failed to stop recorder", "camera_id", cameraID, "error", err)

@@ -161,11 +161,16 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	// real codec (H264 vs H265 vs JPEG). If r.rtspURL is still empty at that
 	// point, the probe no-ops and we fall back to the ONVIF-claimed encoding,
 	// which is wrong for cameras that lie (e.g. an H265 stream claimed as
-	// H264 → "H264 media not found in stream" death-loop). Safe to set unlocked:
-	// Start is serialized per-camera by withCameraLifecycle, and r.rtspURL has
-	// no readers until the recorder is registered in the snapshot (after Start
-	// returns).
+	// H264 → "H264 media not found in stream" death-loop).
+	//
+	// Set under r.mu: the recorder is registered in the manager snapshot BEFORE
+	// rec.Start runs (startRecorderLocked registers then dials), so a concurrent
+	// RTSPURL() reader (e.g. relay engine / GetStreamURL) can reach r.rtspURL
+	// during this handshake. A bare unlocked string write is a two-word
+	// non-atomic store → torn read. The short lock makes it safe.
+	r.mu.Lock()
 	r.rtspURL = rtspURL
+	r.mu.Unlock()
 
 	// 4. Create delegate recorder based on encoding (createDelegate may do an
 	//    RTSP DESCRIBE probe + HTTP MJPEG probes — all unlocked).
