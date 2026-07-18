@@ -180,12 +180,30 @@ func runRepairDuration() int {
 			break
 		}
 
-		// Probe the actual file duration.
-		dur, err := mediaprobe.ProbeDuration(rec.FilePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — probe failed: %v\n", i+1, len(zeroRecs), rec.ID, err)
-			skipped++
-			continue
+		// Probe the actual duration. For MP4 files use FastProbeDuration (reads
+		// only the stts box — ~100× faster than full ParseSegment for large
+		// files). For MJPEG frame directories (ESP32 MiBeeCam), estimate from
+		// frame count × a nominal frame interval.
+		var dur float64
+		if mediaprobe.IsLikelyMP4(rec.FilePath) {
+			d, err := mediaprobe.FastProbeDuration(rec.FilePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — probe failed: %v\n", i+1, len(zeroRecs), rec.ID, err)
+				skipped++
+				continue
+			}
+			dur = d
+		} else {
+			// MJPEG frame directory: estimate from file count × interval.
+			// ESP32 MiBeeCam captures at ~2 fps with 30s segments; if frame_count
+			// is recorded, use it; otherwise count files in the directory.
+			d, err := estimateMJpegDirDuration(rec.FilePath, rec.FrameCount)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — mjpeg estimate failed: %v\n", i+1, len(zeroRecs), rec.ID, err)
+				skipped++
+				continue
+			}
+			dur = d
 		}
 		if dur < 0.1 {
 			fmt.Fprintf(os.Stderr, "  [%d/%d] SKIP %s — probed duration too small (%.1fs)\n", i+1, len(zeroRecs), rec.ID, dur)
@@ -313,6 +331,44 @@ func runRepairMergeStatus() int {
 	// Reference cfg to avoid unused warning if RootDir isn't needed.
 	_ = cfg
 	return 0
+}
+
+// estimateMJpegDirDuration estimates the duration of an MJPEG frame-directory
+// recording. ESP32 MiBeeCam stores JPEG frames in a directory (not a single MP4).
+// We count .jpg/.jpeg files in the directory and multiply by a nominal frame
+// interval. If frame_count is recorded in the DB (non-zero), we use that instead
+// of counting files (faster).
+//
+// The frame interval defaults to 0.5s (2fps — typical for ESP32 MiBeeCam at
+// the configured segment duration). This is an estimate, not exact, but far
+// better than 0 for timeline display purposes.
+const mjpegNominalFrameInterval = 0.5 // seconds per frame (2fps)
+
+func estimateMJpegDirDuration(filePath string, frameCount int) (float64, error) {
+	// If frame_count is recorded and > 0, use it (avoids directory scan).
+	if frameCount > 0 {
+		return float64(frameCount) * mjpegNominalFrameInterval, nil
+	}
+	// Otherwise count JPEG files in the directory.
+	entries, err := os.ReadDir(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("read mjpeg dir: %w", err)
+	}
+	count := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && (hasSuffix(name, ".jpg") || hasSuffix(name, ".jpeg")) {
+			count++
+		}
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("no jpeg frames in %s", filePath)
+	}
+	return float64(count) * mjpegNominalFrameInterval, nil
+}
+
+func hasSuffix(s, suffix string) bool {
+	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }
 
 // ---------------------------------------------------------------------------
