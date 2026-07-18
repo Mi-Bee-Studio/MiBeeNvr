@@ -816,6 +816,48 @@ func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration fl
 	return err
 }
 
+// ListZeroDurationRecordings returns recordings whose duration is 0 — these are
+// corrupted segments where the recorder failed to compute ended_at at close time
+// (a bug fixed in a prior release; historical rows remain). The video files are
+// typically intact, so a CLI repair tool can re-probe the file duration and call
+// UpdateRecordingDuration to restore correct metadata.
+//
+// cameraID="" scans all cameras. limit caps the result (0 = unlimited).
+func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, limit int) ([]*model.Recording, error) {
+	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, archived FROM recordings WHERE duration = 0 AND ended_at IS NOT NULL`
+	args := []interface{}{}
+	if cameraID != "" {
+		query += " AND camera_id = ?"
+		args = append(args, cameraID)
+	}
+	query += " ORDER BY camera_id, started_at ASC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	query += ";"
+
+	rows, err := d.readConn().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []*model.Recording
+	for rows.Next() {
+		var r model.Recording
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.Merged, &mergeStatusStr, &r.Archived); err != nil {
+			return nil, err
+		}
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+		res = append(res, &r)
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 // UpdateRecordingAIStatus sets the AI processing status for a recording.
 // status: "pending", "processing", "done", "failed", "skipped"
 // errMsg: optional error description (for "failed" status)
