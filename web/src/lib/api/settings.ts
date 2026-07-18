@@ -152,6 +152,45 @@ export async function updateFeatures(features: FeatureFlags, signal?: AbortSigna
   });
 }
 
+// --- Auto-discover settings ---
+
+export interface AutoDiscoverSettings {
+  enabled: boolean;
+  scan_interval: number; // seconds (floor 30)
+  listen_for_hello: boolean;
+  network_interface: string;
+  default_username: string;
+  has_default_password: boolean; // never returns the password itself
+  ignore_scopes: string[];
+}
+
+// Request body for updates: all optional (nil = unchanged). default_password is
+// only sent when the user types a new value.
+export interface AutoDiscoverUpdate {
+  enabled?: boolean;
+  scan_interval?: number;
+  listen_for_hello?: boolean;
+  network_interface?: string;
+  default_username?: string;
+  default_password?: string;
+  ignore_scopes?: string[];
+}
+
+export async function getAutoDiscoverSettings(signal?: AbortSignal): Promise<AutoDiscoverSettings> {
+  return apiRequest<AutoDiscoverSettings>('/settings/auto-discover', { signal });
+}
+
+export async function updateAutoDiscoverSettings(
+  config: AutoDiscoverUpdate,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>('/settings/auto-discover', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+    signal,
+  });
+}
+
 // --- Streaming settings ---
 
 export async function getStreamingSettings(signal?: AbortSignal): Promise<StreamingConfig> {
