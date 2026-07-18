@@ -47,6 +47,12 @@ merge:
   batch_limit: 200
   min_segment_age: "10m"
   min_segments_to_merge: 3
+  rolling_enabled: true              # 事件驱动滚动合并（默认开），消除 30s 碎片段
+  rolling_debounce: "5s"
+  rolling_window: "1h"
+  rolling_min_duration: "5m"
+  rolling_backfill_max_segments: 500 # 启动回填上限（防 RPi IO 风暴）
+  rolling_backfill_max_age: "72h"    # 只回填最近 N 小时的段
 ftp:
   enabled: true
   port: 2121

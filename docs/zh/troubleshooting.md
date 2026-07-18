@@ -371,6 +371,29 @@ sudo apk add ffmpeg
 
 ### 录像损坏
 
+#### 时间轴显示录像缺失（duration=0 段）
+**症状**: 时间轴上某些日期显示有缺口或没有录像，但摄像头当时一直在录像。数据库里有记录但显示为零宽度的细线或完全不显示。
+
+**原因**: 一个历史 bug 导致部分录像段写入数据库时 `duration=0`、`ended_at = started_at`。磁盘上的视频文件完好，但元数据错误，时间轴无法正确渲染。
+
+**解决**: 使用 `repair duration` CLI 工具重新探测视频文件的实际时长并恢复正确的元数据：
+
+```bash
+# 1. 检查有多少录像受影响（dry run，不修改数据）
+./mibee-nvr repair duration --config mibee-nvr.yaml --dry-run
+
+# 2. 修复（更新数据库中的 duration + ended_at）
+./mibee-nvr repair duration --config mibee-nvr.yaml --execute
+
+# 3. 对于无法修复的录像（损坏/空文件），删除它们：
+./mibee-nvr repair duration --config mibee-nvr.yaml --prune --execute
+
+# 可选：只处理某个摄像头或限制数量
+./mibee-nvr repair duration --camera cam-front-door --limit 100 --execute
+```
+
+该工具使用纯 Go MP4 box 解析（`mediaprobe`）——不需要 ffprobe。对于大文件使用 `FastProbeDuration`（只读 `stts` box，比全量解析快约 100 倍）。MJPEG 帧目录（ESP32 MiBeeCam）通过帧数估算支持。
+
 #### MP4 文件无法播放
 **症状**: 录像已创建但无法用媒体播放器播放
 

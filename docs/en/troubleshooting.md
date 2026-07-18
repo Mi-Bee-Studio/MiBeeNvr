@@ -376,6 +376,29 @@ Or use the in-app downloader: **Settings → Transcoding → Download FFmpeg**
 
 ### Corrupted Recordings
 
+#### Timeline Shows Missing Recordings (duration=0 segments)
+**Symptom**: The timeline shows gaps or missing recordings for certain days, even though the camera was recording continuously. The database has recording rows but they appear as zero-width blips or don't show at all.
+
+**Cause**: A historical bug caused some recording segments to be written to the database with `duration=0` and `ended_at = started_at`. The video files on disk are intact, but the metadata is wrong, so the timeline can't render them.
+
+**Solution**: Use the `repair duration` CLI tool to re-probe the actual video file durations and restore correct metadata:
+
+```bash
+# 1. Check how many recordings are affected (dry run, no changes)
+./mibee-nvr repair duration --config mibee-nvr.yaml --dry-run
+
+# 2. Fix them (updates duration + ended_at in the DB)
+./mibee-nvr repair duration --config mibee-nvr.yaml --execute
+
+# 3. For recordings that can't be repaired (corrupt/empty files), delete them:
+./mibee-nvr repair duration --config mibee-nvr.yaml --prune --execute
+
+# Optional: only process a specific camera or limit the count
+./mibee-nvr repair duration --camera cam-front-door --limit 100 --execute
+```
+
+The tool uses pure-Go MP4 box parsing (`mediaprobe`) — no ffprobe required. For large files it uses `FastProbeDuration` which reads only the `stts` box (~100× faster than full parsing). MJPEG frame directories (ESP32 MiBeeCam) are supported via frame-count estimation.
+
 #### MP4 Files Won't Play
 **Symptom**: Recordings created but cannot be played with media players
 

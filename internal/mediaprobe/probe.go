@@ -82,6 +82,21 @@ func ProbeDuration(filePath string) (float64, error) {
 	return seg.TotalDuration.Seconds(), nil
 }
 
+// FastProbeDuration reads ONLY the duration from an MP4 file's stts box,
+// skipping per-sample processing entirely. It is ~100× faster than ProbeDuration
+// for large files (1-hour segments with ~100K samples) because it doesn't build
+// the sample table, detect keyframes, or validate per-sample bounds.
+//
+// Use this when you only need the duration (e.g. the `repair duration` CLI).
+// For other metadata (codec, resolution, SPS/PPS), use ProbeMP4 or ProbeDuration.
+func FastProbeDuration(filePath string) (float64, error) {
+	dur, err := merge.ParseSegmentDurationOnly(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("mediaprobe: fast probe duration: %w", err)
+	}
+	return dur, nil
+}
+
 // resolutionFromSPS dispatches to the codec-appropriate SPS parser.
 func resolutionFromSPS(codec string, sps []byte) (width, height int, err error) {
 	switch codec {
