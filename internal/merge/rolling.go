@@ -33,6 +33,36 @@ func backfillBatchPauseForArch() time.Duration {
 	return 200 * time.Millisecond
 }
 
+// adaptiveBatchPause scales the inter-batch pause by the current backlog size
+// and disk free space. When the backlog is large (>2000 pending) AND disk space
+// is ample (>30% free), it halves the pause to digest fragments faster. When
+// disk is tight (<10% free), it doubles the pause to protect the write path.
+// Otherwise it uses the architecture baseline.
+//
+// pendingCount is the total pending segment count (across all cameras) at the
+// start of this backfill cycle; diskFree is the current free-space percentage.
+func adaptiveBatchPause(pendingCount int, diskFreePercent int) time.Duration {
+	base := backfillBatchPauseForArch()
+	if diskFreePercent < 10 {
+		return base * 2 // disk tight: slow down to protect writes
+	}
+	if pendingCount > 2000 && diskFreePercent > 30 {
+		return base / 2 // backlog large + disk ample: speed up
+	}
+	return base
+}
+
+// diskFreePercent returns the percentage (0-100) of free space on the storage
+// volume. Returns 100 on error (fail-open: don't throttle on unknown disk state).
+func (r *RollingMergeCoordinator) diskFreePercent() int {
+	total, used, err := r.store.GetDiskUsage()
+	if err != nil || total == 0 {
+		return 100
+	}
+	free := total - used
+	return int(free * 100 / total)
+}
+
 // checkDiskSpaceForMerge returns true if there is at least 1.1× required bytes free
 // on the storage volume. Mirrors the admission check in MergeManager.processCamera
 // (manager.go) so backfill cannot fill the disk. required is the estimated merged
@@ -182,6 +212,12 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 	// Runs asynchronously so it never blocks service startup.
 	go r.backfillOnStartup(ctx)
 
+	// Periodic backfill sweep: continues digesting historical pending that the
+	// one-shot startup backfill couldn't finish (it's throttled to max_segments/
+	// max_age). Without this, pending accumulates whenever fragment production
+	// outpaces the startup scan + event-driven merge.
+	go r.backfillLoop(ctx)
+
 	rollingLogger.Info("rolling merge coordinator started")
 	return nil
 }
@@ -277,6 +313,85 @@ func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
 
 	if totalMerged > 0 {
 		rollingLogger.Info("backfill complete", "segments_merged", totalMerged)
+	}
+}
+
+// backfillLoop runs a periodic sweep of historical pending segments, in
+// addition to the one-shot startup backfill. The startup backfill is throttled
+// (max_segments/max_age) and runs once; without a periodic sweep, historical
+// pending accumulates whenever the startup backfill can't keep up (thousands of
+// 30s H265 fragments/day). This closes the gap: every `rolling_backfill_interval`
+// (default 10m) it processes up to `rolling_backfill_batch` (default 500) pending
+// segments, using try-locks to yield to real-time events.
+func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
+	global := r.getGlobalCfg()
+	interval := time.Duration(0)
+	if global.RollingBackfillInterval != "" && global.RollingBackfillInterval != "0" {
+		if d, err := time.ParseDuration(global.RollingBackfillInterval); err == nil && d > 0 {
+			interval = d
+		}
+	}
+	if interval <= 0 {
+		rollingLogger.Info("backfill loop disabled (rolling_backfill_interval=0)")
+		return
+	}
+	rollingLogger.Info("backfill loop started", "interval", interval)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.backfillHistorical(ctx)
+		}
+	}
+}
+
+// backfillHistorical processes one batch of pending segments across all
+// rolling-enabled cameras. Unlike backfillOnStartup, it has NO max_age filter
+// (so it digests old backlogs beyond 72h) and processes at most
+// rolling_backfill_batch segments per cycle to bound IO.
+func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
+	global := r.getGlobalCfg()
+	limit := global.RollingBackfillBatch
+	if limit <= 0 {
+		limit = 500
+	}
+	// No max_age filter — the periodic sweep's job is to eventually clear ALL
+	// historical pending, including pre-72h backlogs the startup scan deferred.
+	recs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false, limit, time.Time{})
+	if err != nil {
+		rollingLogger.Warn("backfill loop: failed to list pending segments", "error", err)
+		return
+	}
+	if len(recs) == 0 {
+		return // nothing to do this cycle
+	}
+
+	byCamera := make(map[string][]*model.Recording)
+	for _, rec := range recs {
+		byCamera[rec.CameraID] = append(byCamera[rec.CameraID], rec)
+	}
+
+	totalMerged := 0
+	for cameraID, camRecs := range byCamera {
+		if ctx.Err() != nil {
+			break
+		}
+		if !r.resolveRollingConfig(cameraID).Enabled {
+			continue
+		}
+		merged, err := r.backfillCameraRecordings(ctx, cameraID, camRecs)
+		if err != nil {
+			rollingLogger.Warn("backfill loop: failed for camera",
+				"camera_id", cameraID, "error", err)
+		}
+		totalMerged += merged
+	}
+	if totalMerged > 0 {
+		rollingLogger.Info("backfill loop: merged historical segments",
+			"segments_merged", totalMerged, "cameras", len(byCamera))
 	}
 }
 
@@ -418,7 +533,7 @@ func splitByFormat(recs []*model.Recording) (mp4, avi, mjpeg []*model.Recording)
 // Uses the per-batch lock release pattern to avoid blocking live events.
 func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	const backfillBatchSize = 20 // small batches to yield lock to real-time events
-	batchPause := backfillBatchPauseForArch()
+	batchPause := adaptiveBatchPause(len(recs), r.diskFreePercent())
 
 	// Group recordings by natural-hour window for batch merging.
 	// Segments in different hours go into separate merge batches.
@@ -622,7 +737,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 // window at once. This is simpler and avoids format-specific append complexities.
 func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, cameraID string, recs []*model.Recording, format string) (int, error) {
 	const batchBatchSize = 20 // small batches to yield lock to real-time events
-	batchPause := backfillBatchPauseForArch()
+	batchPause := adaptiveBatchPause(len(recs), r.diskFreePercent())
 
 	merged := 0
 	for startIdx := 0; startIdx < len(recs); startIdx += batchBatchSize {

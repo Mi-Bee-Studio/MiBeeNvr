@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
 	"net"
@@ -243,6 +244,19 @@ type MergeConfig struct {
 	// left for the periodic MergeManager to digest gradually.
 	RollingBackfillMaxSegments int    `yaml:"rolling_backfill_max_segments" json:"rolling_backfill_max_segments"`
 	RollingBackfillMaxAge      string `yaml:"rolling_backfill_max_age" json:"rolling_backfill_max_age"`
+
+	// RollingBackfillInterval governs a periodic background sweep of historical
+	// pending segments (in addition to the one-shot startup backfill). The
+	// startup backfill is throttled to max_segments/max_age and only runs once;
+	// without a periodic sweep, historical pending accumulates whenever the
+	// startup backfill can't keep up (e.g. thousands of 30s H265 fragments/day).
+	// Default "10m"; "0" disables the periodic sweep (startup backfill only).
+	RollingBackfillInterval string `yaml:"rolling_backfill_interval" json:"rolling_backfill_interval"`
+
+	// RollingBackfillBatch caps how many pending segments one periodic sweep
+	// processes per cycle, so a single sweep can't monopolize IO for minutes.
+	// Default 500. The sweep uses try-locks and yields to real-time events.
+	RollingBackfillBatch int `yaml:"rolling_backfill_batch" json:"rolling_backfill_batch"`
 }
 
 // RollingEnabledValue reports the effective rolling-merge enabled state,
@@ -861,12 +875,24 @@ func Validate(cfg *Config) error {
 	if cfg.FTP.Port < 1 || cfg.FTP.Port > 65535 {
 		return fmt.Errorf("ftp port out of range: %d", cfg.FTP.Port)
 	}
-	// Validate segment_duration — clamp to 30s with warning (RPi constraint)
+	// Validate segment_duration — cap based on available RAM.
+	// The MP4 muxer holds all samples in RAM until the segment closes (moov atom
+	// written last), so a longer segment = more RAM per stream. On a 1GB device
+	// (RPi 3B) a 2-minute 1080p H265 segment is ~60MB/stream — 4 streams risk OOM.
+	// On a 4GB+ device (Banana Pi M5, x86) 1-2 minute segments are safe and
+	// halve the fragment count rolling merge must digest (the main driver of
+	// timeline clutter and merge backlog).
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("storage.segment_duration invalid: %w", err)
-	} else if dur > 30*time.Second {
-		slog.Warn("storage.segment_duration exceeds 30s on RPi 3B, clamping to 30s", "got", cfg.Storage.SegmentDuration)
-		cfg.Storage.SegmentDuration = "30s"
+	} else {
+		maxSegDur := maxSegmentDurationForMem()
+		if dur > maxSegDur {
+			capped := maxSegDur.String()
+			slog.Warn("storage.segment_duration exceeds platform RAM limit, clamping",
+				"got", cfg.Storage.SegmentDuration, "capped_to", capped,
+				"mem_available_mb", memAvailableMB(), "reason", "MP4 muxer holds samples in RAM until segment close")
+			cfg.Storage.SegmentDuration = capped
+		}
 	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
@@ -940,6 +966,14 @@ func Validate(cfg *Config) error {
 		}
 		if cfg.Merge.RollingBackfillMaxSegments < 0 {
 			return fmt.Errorf("merge.rolling_backfill_max_segments must be >= 0, got %d", cfg.Merge.RollingBackfillMaxSegments)
+		}
+		if cfg.Merge.RollingBackfillInterval != "" && cfg.Merge.RollingBackfillInterval != "0" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingBackfillInterval); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_backfill_interval %q: must be a positive duration or \"0\" to disable", cfg.Merge.RollingBackfillInterval)
+			}
+		}
+		if cfg.Merge.RollingBackfillBatch < 0 {
+			return fmt.Errorf("merge.rolling_backfill_batch must be >= 0, got %d", cfg.Merge.RollingBackfillBatch)
 		}
 	}
 	// Validate transcoding configuration
@@ -1343,6 +1377,12 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Merge.RollingBackfillMaxAge == "" {
 		cfg.Merge.RollingBackfillMaxAge = "72h"
+	}
+	if cfg.Merge.RollingBackfillInterval == "" {
+		cfg.Merge.RollingBackfillInterval = "10m"
+	}
+	if cfg.Merge.RollingBackfillBatch == 0 {
+		cfg.Merge.RollingBackfillBatch = 500
 	}
 	// Transcoding defaults
 	if cfg.Transcoding.MaxWorkers == 0 {
@@ -1791,4 +1831,50 @@ func ParseMergeDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid merge duration %q: must be ≤ 1h (e.g. \"1h\", \"30m\", \"15m\")", s)
 	}
 	return d, nil
+}
+
+// memAvailableMB reports the system's available memory in MB. Used to gate the
+// segment-duration cap: the MP4 muxer holds all samples in RAM until a segment
+// closes, so available RAM bounds the safe maximum segment duration.
+//
+// Reads /proc/meminfo (Linux). On non-Linux or parse failure, returns a
+// conservative 1024 MB so the low-memory (30s) cap applies — never over-estimates.
+func memAvailableMB() int {
+	const fallback = 1024 // conservative: assume low memory → 30s cap
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return fallback
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// "MemAvailable:  3123456 kB"
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				var kb int
+				if _, err := fmt.Sscanf(fields[1], "%d", &kb); err == nil {
+					return kb / 1024
+				}
+			}
+		}
+	}
+	return fallback
+}
+
+// maxSegmentDurationForMem returns the maximum safe segment duration based on
+// available RAM. Low-memory devices (≤2GB, e.g. RPi 3B) are capped at 30s to
+// avoid OOM; higher-memory devices (Banana Pi M5, x86) allow up to 2m, which
+// halves the fragment count rolling merge must process.
+func maxSegmentDurationForMem() time.Duration {
+	const (
+		lowMemCap  = 30 * time.Second // RPi 3B (≤2GB): MP4 muxer RAM safety
+		highMemCap = 2 * time.Minute  // Banana Pi M5 / x86 (≥2GB): fewer fragments
+		threshold  = 2048             // MB — 2GB
+	)
+	if memAvailableMB() > threshold {
+		return highMemCap
+	}
+	return lowMemCap
 }
