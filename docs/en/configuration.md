@@ -185,6 +185,10 @@ version: "1.0"
   - 30s segments: ~15-20MB per segment
   - 60s segments: ~30-40MB per segment
   - 120s segments: ~60-80MB per segment
+- **Platform-aware cap (auto-applied at startup)**: to keep the MP4 muxer's RAM usage safe, the configured value is clamped based on available RAM:
+  - **≤2 GB available RAM** (e.g. Raspberry Pi 3B): capped at **30s**
+  - **>2 GB available RAM** (e.g. Banana Pi M5, x86): up to **2m** (120s), which halves the fragment count rolling merge must process
+  - Values above the platform cap are **silently clamped** with a warning in the logs (they do not fail startup). On non-Linux hosts or if `/proc/meminfo` cannot be read, the conservative 30s cap applies.
 - **RPi Constraint**: Maximum 30 seconds on Raspberry Pi 3B
 - **Example**: `"30s"`, `"1m"`, `"5m"`
 

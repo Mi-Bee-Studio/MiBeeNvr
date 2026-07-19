@@ -273,11 +273,12 @@ cameras:
 
 ### Prometheus Metrics
 
-Transcoding metrics are exposed at `/api/metrics`:
-- `mibee_nvr_transcoding_queue_length`: Current queue size
-- `mibee_nvr_transcoding_active_jobs`: Running FFmpeg processes
-- `mibee_nvr_transcoding_total_completed`: Total completed tasks
-- `mibee_nvr_transcoding_failed_total`: Failed tasks count
+Transcoding metrics are exposed at `/api/metrics` (the full list with labels and types is in [metrics.md](metrics.md#11-transcoding-metrics)):
+- `nvr_transcoding_active_jobs`: Currently running transcoding jobs (gauge)
+- `nvr_transcoding_jobs_total`: Total transcoding jobs, with `codec_from`, `codec_to`, `encoder`, `crf`, and `status` (`completed`/`failed`/`cancelled`) labels (counter)
+- `nvr_transcoding_duration_seconds`: Duration of completed transcoding jobs, by codec conversion (histogram)
+- `nvr_transcoding_bytes_processed`: Total bytes processed by transcoding jobs (counter)
+- `nvr_transcoding_ffmpeg_status`: FFmpeg availability — 0=not_installed, 1=downloading, 2=available (gauge)
 
 ### Web UI Status
 

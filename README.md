@@ -108,7 +108,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - RTSP (H.264/H.265/MJPEG) streaming
 - HTTP JPEG snapshot streaming
 - ONVIF discovery & management with PTZ control
-- Xiaomi CS2 P2P protocol support
+- Xiaomi CS2 + legacy TUTK (7 models) cloud camera support
 - SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
 - Native Go push-out relay (forward any camera to remote RTMP/RTSP targets; FFmpeg optional for compatibility)
 
@@ -164,7 +164,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 | RTMP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
 | RTSP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
 | ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI |
-| Xiaomi CS2 | Camera → NVR | ✅ Done | P2P protocol, cloud auth |
+| Xiaomi (CS2 + TUTK) | Camera → NVR | ✅ Done | CS2 P2P + legacy TUTK (7 models), cloud auth |
 
 ## Use Cases
 
@@ -235,7 +235,7 @@ tests/              # Integration tests
 e2e-tests/         # Playwright E2E tests
 ```
 
-For full project details, see [AGENTS.md](AGENTS.md).
+For full project details, see the [architecture overview](docs/en/architecture.md).
 
 ## Contributing
 

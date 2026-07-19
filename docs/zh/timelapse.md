@@ -1,157 +1,150 @@
-#BN|# 延时摄影录制
-#KM|
-#KM|延时摄影功能从摄像头录制中创建延时摄影视频，将数小时或数天压缩为几分钟。MiBee NVR v2 引入了重大改进，包括灵活的合并间隔、H.264/H.265 双模式支持以及统一的录制界面。
-#RW|
-#RZ|## 概览
-#SY|
-#PB|延时摄影系统自动将视频片段合并为压缩的延时摄影录制。v2 版本的关键改进：
-#XW|
-#XY|- **灵活的合并间隔**：支持 8h、12h、24h、natural-day、7d 和 30d 间隔
-#BS|- **H.264/H.265 双模式**：任何 RTSP 摄像机现在无需额外硬件即可生成延时摄影录制
-#NS|- **统一界面**：集成的录制页面，支持表格、图库和日历视图模式
-#MT|- **关键帧提取**：使用现有 RTSP 流进行零开销的延时摄影生成
-#BQ|
-#RX|## 配置
-#RJ|
-#YY|### 基础延时摄影设置
-#HX|
-#KP|在配置中为摄像头启用延时摄影录制：
-#YT|
-#VY|```yaml
-#BB|cameras:
-#HP|  - name: "前门摄像头"
-#TP|    protocol: "rtsp"
-#WB|    encoding: "h264"
-#HS|    url: "rtsp://192.168.1.100:554/stream"
-#NH|    enabled: true
-#JJ|    
-#KW|    # 延时摄影配置 (v2 功能)
-#RJ|    timelapse:
-#JP|      enabled: true
-#MB|      merge_duration: "natural-day"  # v2: 灵活的合并间隔
-#RX|      frame_source: "rtsp_keyframe"  # v2: 双模式关键帧提取
-#VH|      output_fps: 30
-#JB|```
-#TX|
-#WJ|### 双模式配置（RTSP 摄像头）
-#RB|
-#XK|对于现有的 RTSP 摄像头，启用双模式延时摄影而无需更改摄像头协议：
-#MS|
-#VY|```yaml
-#BB|cameras:
-#ZT|  - name: "客厅摄像头"
-#TP|    protocol: "rtsp"
-#QN|    encoding: "h265"
-#TB|    url: "rtsp://192.168.1.101:554/stream"
-#NH|    enabled: true
-#VJ|    
-#RJ|    timelapse:
-#PJ|      enabled: true                          # 启用延时摄影
-#BY|      merge_duration: "24h"                  # 每 24 小时合并一次
-#TX|      frame_source: "rtsp_keyframe"         # 从 RTSP 流提取
-#VH|      output_fps: 30
-#KT|```
-#YJ|
-#WX|### 独立延时摄影配置
-#XN|
-#XY|创建带有独立 RTSP 源的专用延时摄影摄像头：
-#KR|
-#VY|```yaml
-#BB|cameras:
-#JW|  - name: "纯延时摄影摄像头"
-#QT|    protocol: "timelapse"
-#WB|    encoding: "h264"
-#SJ|    url: "rtsp://backup-camera.example.com:554/stream"
-#NH|    enabled: true
-#JQ|    
-#SR|    timelapse:
-#JP|      enabled: true
-#NB|      merge_duration: "7d"                  # 周度合并
-#NT|      frame_source: "rtsp_keyframe"         # 从延时摄影流提取
-#QZ|      output_fps: 15                         # 降低帧率以适应长时间
-#JH|```
-#HV|
-#JT|## 合并间隔选项（v2）
-#SZ|
-#WS|`merge_duration` 字段支持不同用例的灵活间隔：
-#VB|
-#ZY|| 间隔 | 描述 | 对齐方式 | 用途 |
-#JN||----------|-------------|-----------|----------|
-#TZ|| `8h` | 8 小时合并 | 00:00、08:00、16:00 UTC | 商务时段、班次变化 |
-#ZM|| `12h` | 12 小时合并 | 00:00、12:00 UTC | 日/夜周期、上午/下午片段 |
-#YY|| `24h` | 24 小时合并 | 每天 00:00 UTC | 日概览、安全审查 |
-#TQ|| `natural-day` | 自然日（0-24h） | 本地时间 | 用户友好的日总结 |
-#VW|| `7d` | 周度合并 | 周一 00:00 UTC | 周度审查、模式分析 |
-#HN|| `30d` | 月度合并 | 每月 1 日 00:00 UTC | 月度报告、长期分析 |
-#KR|
-#TK|### 配置示例
-#VS|
-#VY|```yaml
-#VV|# 8小时商务监控
-#MK|timelapse:
-#BV|  enabled: true
-#VR|  merge_duration: "8h"
-#JB|  output_fps: 30
-#MS|
-#WZ|# 自然日日度总结
-#MK|timelapse:
-#BV|  enabled: true
-#XK|  merge_duration: "natural-day"
-#BV|  output_fps: 10
-#ZS|
-#WT|# 周度模式分析
-#MK|timelapse:
-#BV|  enabled: true
-#SQ|  merge_duration: "7d"
-#WB|  output_fps: 5
-#TS|
-#TB|# 月度报告
-#MK|timelapse:
-#BV|  enabled: true
-#VB|  merge_duration: "30d"
-#QN|  output_fps: 2
-#TM|```
-#BJ|
-#RS|## 双模式延时摄影（v2）
-#BK|
-#MH|双模式延时摄影允许任何 RTSP 摄像机生成延时摄影录制，无需额外的硬件要求。
-#RM|
-#RV|### 工作原理
-#XM|
-#BR|1. **主要 RTSP 流**：摄像头按常规录制视频片段
-#TB|2. **关键帧提取**：KeyframeExtractor 订阅 RTSP StreamHub
-#XH|3. **帧处理**：从流中提取 IDR 帧（H.264 类型 5，H.265 类型 19/20）
-#QR|4. **延时摄影生成**：提取的帧被处理为压缩的延时摄影视频
-#YB|
-#XS|### 支持的摄像头类型
-#XB|
-#MX|- **RTSP H.264**：支持 H.264 编码的 IP 摄像头
-#XH|- **RTSP H.265**：支持 H.265 编码的现代摄像头，提供更好的效率
-#KK|- **ONVIF**：自动发现摄像头，同时支持 H.264 和 H.265 流
-#WP|
-#KT|### H.265 支持
-#BM|
-#VZ|系统自动检测 H.265 流并相应配置 KeyframeExtractor：
-#QX|
-#VY|```yaml
-#VZ|# ONVIF H.265 摄像头
-#BB|cameras:
-#ZK|  - name: "安全摄像头 1"
-#VY|    protocol: "onvif"
-#ST|    encoding: "h265"                    # 主要编码
-#BH|    stream_encoding: "H265"            # ONVIF 特定字段
-#WX|    url: "onvif://192.168.1.102"
-#NH|    enabled: true
-#VM|    
-#RJ|    timelapse:
-#JP|      enabled: true
-#KM|      merge_duration: "24h"
-#BN|      frame_source: "rtsp_keyframe"
-#QV|```
-#HV|
-## 统一录制界面（v2）
+# 延时摄影录制
 
-v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有增强的导航和过滤功能。
+延时摄影功能从摄像头录制中创建延时摄影视频，将数小时或数天压缩为几分钟。MiBee NVR 支持灵活的合并间隔、H.264/H.265 双模式支持以及统一的录制界面。
+
+## 概览
+
+延时摄影系统自动将视频片段合并为压缩的延时摄影录制。关键功能：
+
+- **最高 1h 的合并间隔**：按小时合并，使时区行为可预测（关于 1h 上限详见下文说明）
+- **H.264/H.265 双模式**：任何 RTSP 摄像机无需额外硬件即可生成延时摄影录制
+- **统一界面**：集成的录制页面，支持表格、图库和日历视图模式
+- **关键帧提取**：使用现有 RTSP 流进行零开销的延时摄影生成
+
+## 配置
+
+### 基础延时摄影设置
+
+在配置中为摄像头启用延时摄影录制：
+
+```yaml
+cameras:
+  - name: "前门摄像头"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://192.168.1.100:554/stream"
+    enabled: true
+
+    # 延时摄影配置
+    timelapse:
+      enabled: true
+      merge_duration: "1h"             # 合并间隔，上限为 1h（见下文）
+      frame_source: "rtsp_keyframe"    # 双模式关键帧提取
+      output_fps: 30
+```
+
+### 双模式配置（RTSP 摄像头）
+
+对于现有的 RTSP 摄像头，启用双模式延时摄影而无需更改摄像头协议：
+
+```yaml
+cameras:
+  - name: "客厅摄像头"
+    protocol: "rtsp"
+    encoding: "h265"
+    url: "rtsp://192.168.1.101:554/stream"
+    enabled: true
+
+    timelapse:
+      enabled: true                          # 启用延时摄影
+      merge_duration: "30m"                  # 每 30 分钟合并一次
+      frame_source: "rtsp_keyframe"          # 从 RTSP 流提取
+      output_fps: 30
+```
+
+### 独立延时摄影配置
+
+创建带有独立 RTSP 源的专用延时摄影摄像头：
+
+```yaml
+cameras:
+  - name: "纯延时摄影摄像头"
+    protocol: "timelapse"
+    encoding: "h264"
+    url: "rtsp://backup-camera.example.com:554/stream"
+    enabled: true
+
+    timelapse:
+      enabled: true
+      merge_duration: "1h"                  # 最大合并间隔
+      frame_source: "rtsp_keyframe"         # 从延时摄影流提取
+      output_fps: 15                         # 降低帧率以适应长时间
+```
+
+## 合并间隔选项
+
+`merge_duration` 字段控制抓取到的关键帧多久合并为一个延时摄影文件。
+
+**重要：merge_duration 上限为 1h。** 任何大于 1h 的值都不会被采纳——合并窗口被限制在 1h。引入此上限的原因是：多小时窗口会对齐到本地午夜，因此会跨越 UTC 日期边界；一旦存储/查询混合了 UTC 与用户时区，多小时窗口既会放大 IO（触及两个 UTC 日期分区），又会在边界上把录制错误地分桶。1h 窗口无论时区如何都不会跨越自然日边界。"观看一整天"由客户端连续播放处理（录制详情视图会自动前进到下一段），而不是在服务端合成一个大文件。
+
+具体规则：
+
+- 有效值是任何不超过 1h 的 Go duration 字符串（例如 `"5m"`、`"10m"`、`"15m"`、`"30m"`、`"1h"`）。空字符串默认为 `"1h"`。
+- 旧版多小时字符串（`"8h"`、`"12h"`、`"24h"`、`"natural-day"`、`"7d"`、`"30d"`）出于向后兼容被接受，但会**静默截断为 1h** 并在日志中给出告警。现有配置升级不会中断。
+- 任何其他大于 `1h` 的 Go duration 字符串（例如 `"2h"`、`"90m"`）会在配置校验时被报错拒绝。
+
+### 配置示例
+
+```yaml
+# 按小时合并（最大值）
+timelapse:
+  enabled: true
+  merge_duration: "1h"
+  output_fps: 30
+
+# 半小时合并
+timelapse:
+  enabled: true
+  merge_duration: "30m"
+  output_fps: 10
+
+# 15 分钟合并，得到更细粒度的片段
+timelapse:
+  enabled: true
+  merge_duration: "15m"
+  output_fps: 5
+```
+
+## 双模式延时摄影
+
+双模式延时摄影允许任何 RTSP 摄像机生成延时摄影录制，无需额外的硬件要求。
+
+### 工作原理
+
+1. **主要 RTSP 流**：摄像头按常规录制视频片段
+2. **关键帧提取**：KeyframeExtractor 订阅 RTSP StreamHub
+3. **帧处理**：从流中提取 IDR 帧（H.264 类型 5，H.265 类型 19/20）
+4. **延时摄影生成**：提取的帧被处理为压缩的延时摄影视频
+
+### 支持的摄像头类型
+
+- **RTSP H.264**：支持 H.264 编码的 IP 摄像头
+- **RTSP H.265**：支持 H.265 编码的现代摄像头，提供更好的效率
+- **ONVIF**：自动发现摄像头，同时支持 H.264 和 H.265 流
+
+### H.265 支持
+
+系统自动检测 H.265 流并相应配置 KeyframeExtractor：
+
+```yaml
+# ONVIF H.265 摄像头
+cameras:
+  - name: "安全摄像头 1"
+    protocol: "onvif"
+    encoding: "h265"                    # 主要编码
+    stream_encoding: "H265"            # ONVIF 特定字段
+    url: "onvif://192.168.1.102"
+    enabled: true
+
+    timelapse:
+      enabled: true
+      merge_duration: "1h"
+      frame_source: "rtsp_keyframe"
+```
+
+## 统一录制界面
+
+MiBee NVR 将延时摄影和常规录制合并到统一 Library 页面，具有增强的导航和过滤功能。
 
 ### 视图模式
 
@@ -186,8 +179,6 @@ v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有�
 - 延迟加载以提升性能
 - 点击查看/下载录制
 
-<!-- TODO: screenshot -->
-
 ### 列表视图
 
 ```bash
@@ -201,8 +192,6 @@ v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有�
 - 格式指示器
 - 快速下载按钮
 - 搜索和过滤功能
-
-<!-- TODO: screenshot -->
 
 ### 日历视图
 
@@ -218,8 +207,6 @@ v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有�
 - 点击日期过滤录制
 - 时间线导航控件
 
-<!-- TODO: screenshot -->
-
 ### 时间线栏
 
 在视图模式选项卡上方，时间线栏始终可见，提供：
@@ -228,286 +215,280 @@ v2 版本将延时摄影和常规录制合并到统一 Library 页面，具有�
 - 时间范围选择器（周/月/3个月）
 - 格式过滤器集成
 - 可点击的时间期间导航
-- 录制可用性的视觉指示器
+- 录制可用性的视觉指示
 
-<!-- TODO: screenshot -->
-#WY><!-- TODO: Add screenshot of unified Recordings page -->
-#MV|
-#ZV## 迁移指南
-#JM|
-#YM### 从延时摄影 v1 迁移到 v2
-#PX|
-#RR#### 1. 更新配置
-#XQ>
-#MN**迁移前（v1）：**
-#NZ>
-#VY>```yaml
-#MK>timelapse:
-#BV>  enabled: true
-#MB>  daily_merge: true
-#JB>  output_fps: 30
-#WW>```
-#XJ>
-#KW**迁移后（v2）：**
-#BB>
-#VY>```yaml
-#MK>timelapse:
-#BV>  enabled: true
-#YS>  merge_duration: "natural-day"  # v2 字段
-#QZ>  frame_source: "rtsp_keyframe"   # v2 字段
-#JB>  output_fps: 30
-#MT>```
-#MJ>
-#SW#### 2. 新的合并间隔选项
-#VQ>
-#TR>如果需要不同的合并间隔：
-#TZ>
-#VY>```yaml
-#RP># 从日度合并改为 8 小时合并
-#MK>timelapse:
-#BV>  enabled: true
-#HP>  merge_duration: "8h"            # v2: 灵活间隔
-#HN>  frame_source: "rtsp_keyframe"
-#JB>  output_fps: 30
-#SR>```
-#NQ>
-#NV#### 3. 现有 RTSP 摄像头的双模式迁移
-#XP>
-#NW>为现有 RTSP 摄像头启用延时摄影而无需更改其配置：
-#TK>
-#VY>```yaml
-#MY># 迁移前：仅常规录制
-#BB>cameras:
-#KV>  - name: "现有摄像头"
-#TP>    protocol: "rtsp"
-#WB>    encoding: "h264"
-#HS>    url: "rtsp://192.168.1.100:554/stream"
-#NH>    enabled: true
-#TM>
-#QH>
-#MH># 迁移后：为现有摄像头添加延时摄影
-#BB>cameras:
-#KV>  - name: "现有摄像头"
-#TP>    protocol: "rtsp"
-#WB>    encoding: "h264"
-#HS>    url: "rtsp://192.168.1.100:554/stream"
-#NH>    enabled: true
-#WQ>
-#JJ>
-#JJ>    timelapse:                     # 添加此部分
-#JP>      enabled: true
-#BN>      merge_duration: "natural-day"
-#JH>      frame_source: "rtsp_keyframe"  # v2 双模式
-#VH>      output_fps: 30
-#KS>```
-#XK>
-#WK#### 向后兼容性
-#RY>
-#JB>- **现有摄像头无需更改即可继续工作**
-#PR>- **遗留的 `daily_merge` 字段仍然可用但已弃用**
-#YM>- **现有的延时摄影录制**在统一界面中仍然可以访问
-#ZY>- **API 端点**与现有集成保持兼容
-#KQ>
-#YR#### 迁移检查清单
-#MV>
-#SR>1. [ ] 审查现有摄像头配置
-#XV>2. [ ] 为需要的 RTSP 摄像头添加 `timelapse.enabled: true`
-#SK>3. [ ] 设置适当的 `merge_duration`（默认："natural-day"）
-#SV>4. [ ] 使用样本摄像头测试双模式功能
-#QW>5. [ ] 验证统一录制界面工作正常
-#NV>6. [ ] 检查现有录制仍然可以访问
-#QT>
-#QS## 故障排除
-#XQ>
-#NJ### 常见问题
-#QB>
-#VS#### 1. 关键帧提取不工作
-#XS>
-#ZJ**症状**：延时摄影录制为空或缺少帧
-#YM>
-#KB**解决方案**：验证摄像头编码和流配置：
-#RT>
-#BV>```bash
-#VJ># 检查摄像头是否支持关键帧提取
-#YX>curl -u admin:password "http://localhost:9090/api/cameras/camera-id/status"
-#TH>```
-#QN>
-#JB>确保在摄像头配置中正确指定 H.264/H.265 编码。
-#XN>
-#VX#### 2. 合并间隔问题
-#RM>
-#QZ**症状**：合并未按预期间隔运行
-#NK>
-#SK**解决方案**：检查合并日志并验证间隔格式：
-#NN>
-#BV>```bash
-#TY># 检查合并管理器状态
-#QW>curl -u admin:password "http://localhost:9090/api/timelapse/status"
-#ZT>
-#KQ># 验证配置中的间隔格式
-#QS>grep "merge_duration" /path/to/config.yaml
-#NJ>```
-#XS>
-#RB>有效值：`8h`、`12h`、`24h`、`natural-day`、`7d`、`30d`
-#TH>
-#RB#### 3. 双模式摄像头设置
-#MM>
-#QT**症状**：双模式摄像头未生成延时摄影录制
-#BJ>
-#VP**解决方案**：验证双模式配置：
-#JW>
-#VY>```yaml
-#JY># 正确的双模式设置
-#BB>cameras:
-#QH>  - name: "双模式摄像头"
-#WY>    protocol: "rtsp"                    # 必须是 rtsp/onvif
-#TW>    encoding: "h264"                    或 "h265"
-#HS>    url: "rtsp://192.168.1.100:554/stream"
-#NH>    enabled: true
-#MB>
-#MB>    timelapse:
-#WR>      enabled: true                      # 必须启用
-#YW>      merge_duration: "24h"             # 设置间隔
-#TZ>      frame_source: "rtsp_keyframe"       # 关键帧源
-#VH>      output_fps: 30
-#VM>```
-#XW>
-#WX#### 4. ONVIF 流编码
-#SQ>
-#ZB**症状**：ONVIF 摄像头 H.265 延时摄影不工作
-#PS>
-#HT**解决方案**：检查 `encoding` 和 `stream_encoding` 字段：
-#QB>
-#VY>```yaml
-#BB>cameras:
-#BT>  - name: "ONVIF H.265"
-#VY>    protocol: "onvif"
-#QN>    encoding: "h265"
-#JM>    stream_encoding: "H265"  # ONVIF 特定字段
-#WX>    url: "onvif://192.168.1.102"
-#NH>    enabled: true
-#NX>
-#NX>    timelapse:
-#JP>      enabled: true
-#KM>      merge_duration: "24h"
-#BN>      frame_source: "rtsp_keyframe"
-#JM>```
-#SQ>
-#VP### 调试命令
-#ZK>
-#BV>```bash
-#WH># 检查延时摄影管理器状态
-#QW>curl -u admin:password "http://localhost:9090/api/timelapse/status"
-#JS>
-#VY># 列出所有录制文件（延时摄影 + 常规）
-#WM>curl -u admin:password "http://localhost:9090/api/recordings"
-#JB>
-#QK># 检查摄像头延时摄影配置  
-#NZ>curl -u admin:password "http://localhost:9090/api/cameras/camera-id"
-#SW>
-#ZM># 查看合并日志（如果可用）
-#XV>journalctl -u mibee-nvr -f | grep merge
-#KS>```
-#HM>
-#TT## 性能考虑
-#RR>
-#BB### 内存使用
-#ZS>
-#KX>- **关键帧提取**使用最少的内存（无视频解码）
-#RH>- **合并操作**使用 1MB 缓冲的临时文件
-#YY>- **RPi 3B 兼容**：最大 512MB 内存预算
-#TB>
-#WZ### 存储需求
-#ZY>
-#TM>- **延时摄影文件**通常比原始素材小 90-95%
-#WR>- **合并间隔**影响文件大小：
-#MX>  - 8 小时合并：每小时素材约 50-100MB
-#VJ>  - 24 小时合并：每日素材约 200-400MB
-#QW>  - 7 天合并：每周素材约 1-2GB
-#HR>
-#YX### 网络影响
-#TN>
-#ZZ>- **双模式**不使用额外的网络带宽
-#VV>- **关键帧提取**与现有 RTSP 流配合工作
-#SN>- **Web 界面**使用延迟加载高效加载
-#XH>
-#ST## API 参考
-#ZT>
-#WP### 延时摄影端点
-#RN>
-#PM#### 获取延时摄影状态
-#VJ>
-#BV>```bash
-#MQ>GET /api/timelapse/status
-#BW>```
-#XT>
-#HR>响应包含全局延时摄影设置和合并状态。
-#YY>
-#TH#### 触发手动合并
-#QY>
-#BV>```bash
-#ST>POST /api/timelapse/merge
-#PN>```
-#QM>
-#JQ>可选的 `duration` 查询参数用于指定时间窗口。
-#QY>
-#YP#### 列出录制文件
-#PB>
-#BV>```bash
-#YW>GET /api/recordings?format=timelapse
-#XK>```
-#XH>
+## 迁移指南
+
+### 从旧版 `daily_merge` 字段迁移
+
+#### 1. 更新配置
+
+**迁移前：**
+
+```yaml
+timelapse:
+  enabled: true
+  daily_merge: true
+  output_fps: 30
+```
+
+**迁移后：**
+
+```yaml
+timelapse:
+  enabled: true
+  merge_duration: "1h"             # 上限为 1h（原为 daily_merge）
+  frame_source: "rtsp_keyframe"
+  output_fps: 30
+```
+
+#### 2. 合并间隔选项
+
+如果需要不同的合并间隔：
+
+```yaml
+# 半小时合并
+timelapse:
+  enabled: true
+  merge_duration: "30m"
+  frame_source: "rtsp_keyframe"
+  output_fps: 30
+```
+
+#### 3. 现有 RTSP 摄像头的双模式迁移
+
+为现有 RTSP 摄像头启用延时摄影而无需更改其配置：
+
+```yaml
+# 迁移前：仅常规录制
+cameras:
+  - name: "现有摄像头"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://192.168.1.100:554/stream"
+    enabled: true
+
+# 迁移后：为现有摄像头添加延时摄影
+cameras:
+  - name: "现有摄像头"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://192.168.1.100:554/stream"
+    enabled: true
+
+    timelapse:                     # 添加此部分
+      enabled: true
+      merge_duration: "1h"
+      frame_source: "rtsp_keyframe"  # 双模式
+      output_fps: 30
+```
+
+### 向后兼容性
+
+- **现有摄像头无需更改即可继续工作**
+- **遗留的 `daily_merge` 字段**仍然可用但已弃用
+- **遗留的多小时 `merge_duration` 值**（`8h`/`12h`/`24h`/`natural-day`/`7d`/`30d`）会被静默截断为 1h
+- **现有的延时摄影录制**在统一界面中仍然可以访问
+- **API 端点**与现有集成保持兼容
+
+### 迁移检查清单
+
+1. [ ] 审查现有摄像头配置
+2. [ ] 为需要的 RTSP 摄像头添加 `timelapse.enabled: true`
+3. [ ] 设置适当的 `merge_duration`（默认："1h"，最大："1h"）
+4. [ ] 使用样本摄像头测试双模式功能
+5. [ ] 验证统一录制界面工作正常
+6. [ ] 检查现有录制仍然可以访问
+
+## 故障排除
+
+### 常见问题
+
+#### 1. 关键帧提取不工作
+
+**症状**：延时摄影录制为空或缺少帧
+
+**解决方案**：验证摄像头编码和流配置：
+
+```bash
+# 检查摄像头是否支持关键帧提取
+curl -u admin:password "http://localhost:9090/api/cameras/camera-id/status"
+```
+
+确保在摄像头配置中正确指定 H.264/H.265 编码。
+
+#### 2. 合并间隔问题
+
+**症状**：合并未按预期间隔运行
+
+**解决方案**：检查合并日志并验证间隔格式：
+
+```bash
+# 检查合并管理器状态
+curl -u admin:password "http://localhost:9090/api/timelapse/status"
+
+# 验证配置中的间隔格式
+grep "merge_duration" /path/to/config.yaml
+```
+
+有效值：任何不超过 1h 的 Go duration（例如 `5m`、`15m`、`30m`、`1h`）。旧版字符串 `8h`/`12h`/`24h`/`natural-day`/`7d`/`30d` 会被静默截断为 `1h`；任何其他大于 `1h` 的值会被拒绝。
+
+#### 3. 双模式摄像头设置
+
+**症状**：双模式摄像头未生成延时摄影录制
+
+**解决方案**：验证双模式配置：
+
+```yaml
+# 正确的双模式设置
+cameras:
+  - name: "双模式摄像头"
+    protocol: "rtsp"                    # 必须是 rtsp/onvif
+    encoding: "h264"                    或 "h265"
+    url: "rtsp://192.168.1.100:554/stream"
+    enabled: true
+
+    timelapse:
+      enabled: true                      # 必须启用
+      merge_duration: "1h"               # 设置间隔（最大 1h）
+      frame_source: "rtsp_keyframe"      # 关键帧源
+      output_fps: 30
+```
+
+#### 4. ONVIF 流编码
+
+**症状**：ONVIF 摄像头 H.265 延时摄影不工作
+
+**解决方案**：检查 `encoding` 和 `stream_encoding` 字段：
+
+```yaml
+cameras:
+  - name: "ONVIF H.265"
+    protocol: "onvif"
+    encoding: "h265"
+    stream_encoding: "H265"  # ONVIF 特定字段
+    url: "onvif://192.168.1.102"
+    enabled: true
+
+    timelapse:
+      enabled: true
+      merge_duration: "1h"
+      frame_source: "rtsp_keyframe"
+```
+
+### 调试命令
+
+```bash
+# 检查延时摄影管理器状态
+curl -u admin:password "http://localhost:9090/api/timelapse/status"
+
+# 列出所有录制文件（延时摄影 + 常规）
+curl -u admin:password "http://localhost:9090/api/recordings"
+
+# 检查摄像头延时摄影配置
+curl -u admin:password "http://localhost:9090/api/cameras/camera-id"
+
+# 查看合并日志（如果可用）
+journalctl -u mibee-nvr -f | grep merge
+```
+
+## 性能考虑
+
+### 内存使用
+
+- **关键帧提取**使用最少的内存（无视频解码）
+- **合并操作**使用 1MB 缓冲的临时文件
+- **RPi 3B 兼容**：最大 512MB 内存预算
+
+### 存储需求
+
+- **延时摄影文件**通常比原始素材小 90-95%
+- **合并间隔**影响文件大小：
+  - 30m 合并：更小、更频繁的片段
+  - 1h 合并（最大值）：更大的按小时片段
+
+### 网络影响
+
+- **双模式**不使用额外的网络带宽
+- **关键帧提取**与现有 RTSP 流配合工作
+- **Web 界面**使用延迟加载高效加载
+
+## API 参考
+
+### 延时摄影端点
+
+#### 获取延时摄影状态
+
+```bash
+GET /api/timelapse/status
+```
+
+响应包含全局延时摄影设置和合并状态。
+
+#### 触发手动合并
+
+```bash
+POST /api/timelapse/merge
+```
+
+可选的 `duration` 查询参数用于指定时间窗口。
+
+#### 列出录制文件
+
+```bash
+GET /api/recordings?format=timelapse
+```
+
 列出延时摄影录制文件。在 Web 界面中使用 `view=gallery|list&format=timelapse`，或在统一 Library 页面中访问 `#/recordings?format=timelapse`。
-#PX>
-#KQ### 配置 API
-#XT>
-#HP>更新摄像头延时摄影配置：
-#PN>
-#BV>```bash
-#VQ>PUT /api/cameras/camera-id
-#NQ>{
-#QQ>  "timelapse": {
-#QP>    "enabled": true,
-#BQ>    "merge_duration": "24h",
-#ZB>    "frame_source": "rtsp_keyframe",
-#RT>    "output_fps": 30
-#SR>  }
-#NH>}
-#MS>```
-#QR>
-#QH## 最佳实践
-#VN>
-#SB### 配置技巧
-#MQ>
-#BQ>1. **根据用例选择合适的合并间隔**：
-#KV>   - 安全监控：8 小时或 24 小时用于日度审查
-#SQ>   - 商业分析：7 天用于周度模式
-#SR>   - 长期存储：30 天用于月度报告
-#TS>
-#TM>2. **优化输出 FPS**：
-#ZV>   - 30 FPS：实时事件
-#KQ>   - 15 FPS：日度总结
-#TQ>   - 5 FPS：周度概览
-#JS>   - 2 FPS：月度报告
-#HP>
-#ZM>3. **使用 natural-day** 用于对齐本地时间的用户友好日度总结
-#TH>
-#QJ### 双模式设置
-#SZ>
-#PK>1. **先在一个摄像头上测试**，然后再在所有摄像头上启用
-#PT>2. **监控存储**使用量，特别是增加了录制体积时
-#RZ>3. **验证摄像头编码**是否正确指定（H.264/H.265）
-#NS>4. **检查流编码**，特别是 ONVIF 摄像头
-#QS>
-#HV### 性能监控
-#JX>
-#ZY>1. **定期维护**：根据保留策略清理旧的延时摄影录制
-#KW>2. **存储监控**：监控可用磁盘空间，特别是长时间合并时
-#RB>3. **系统资源**：在资源受限设备上监控合并操作期间的内存使用
-#XW>
-#NH## 相关文档
-#RJ>
-#KW>- [配置参考](configuration.md)
-#MV>- [摄像头指南](camera-guide.md)
-#XB>- [API 参考](api-reference.md)
-#NV>- [故障排除](troubleshooting.md)
+
+### 配置 API
+
+更新摄像头延时摄影配置：
+
+```bash
+PUT /api/cameras/camera-id
+{
+  "timelapse": {
+    "enabled": true,
+    "merge_duration": "1h",
+    "frame_source": "rtsp_keyframe",
+    "output_fps": 30
+  }
+}
+```
+
+## 最佳实践
+
+### 配置技巧
+
+1. **根据用例选择合适的合并间隔**（注意 1h 上限）：
+   - 安全监控：`1h` 用于频繁的可审查片段
+   - 更细粒度的片段：`30m` 或 `15m`
+   - 降低输出 FPS 以保持长间隔片段小巧
+
+2. **优化输出 FPS**：
+   - 30 FPS：实时事件
+   - 15 FPS：频繁总结
+   - 5 FPS：紧凑概览
+
+3. **对于"观看一整天"的用例**，依赖录制详情视图中的客户端连续播放（它会自动前进到下一段），而不是合成单个多小时文件。
+
+### 双模式设置
+
+1. **先在一个摄像头上测试**，然后再在所有摄像头上启用
+2. **监控存储**使用量，特别是增加了录制体积时
+3. **验证摄像头编码**是否正确指定（H.264/H.265）
+4. **检查流编码**，特别是 ONVIF 摄像头
+
+### 性能监控
+
+1. **定期维护**：根据保留策略清理旧的延时摄影录制
+2. **存储监控**：监控可用磁盘空间，特别是长时间合并时
+3. **系统资源**：在资源受限设备上监控合并操作期间的内存使用
+
+## 相关文档
+
+- [配置参考](configuration.md)
+- [摄像头指南](camera-guide.md)
+- [API 参考](api-reference.md)
+- [故障排除](troubleshooting.md)

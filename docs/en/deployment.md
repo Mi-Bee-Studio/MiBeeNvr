@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 Install a specific version:
 
 ```bash
-sudo ./install.sh --version v0.2.0
+sudo ./install.sh --version v0.9.0
 ```
 
 Uninstall (preserves recordings in `/var/lib/mibee-nvr`):
@@ -201,8 +201,8 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 **Run a specific version:**
 
 ```bash
-docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
-docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
 ```
 
 **Stop and remove:**
@@ -265,7 +265,7 @@ services:
 
 Important notes:
 
-- Segment duration must stay at 30s (`segment_duration: "30s"`)
+- Segment duration: 30s on low-memory devices (≤2 GB available RAM, e.g. RPi 3B); up to 2m on hosts with >2 GB RAM (x86, Banana Pi M5). The configured value is auto-clamped to the platform cap at startup.
 - Use an external USB disk (ext4) for recording storage
 - Limit concurrent recording to 2-3 cameras depending on resolution and bitrate
 
@@ -457,7 +457,7 @@ server {
 
 The Raspberry Pi 3B has 905MB RAM. For stable operation:
 
-- **Segment duration**: Use 30s (`segment_duration: "30s"`). Longer durations hold more frames in RAM (e.g., 120s = 60-80MB per segment).
+- **Segment duration**: 30s on low-memory devices (≤2 GB available RAM, e.g. RPi 3B); up to 2m on hosts with >2 GB RAM (x86, Banana Pi M5), which halves the fragment count rolling merge must process. Longer durations hold more frames in RAM (e.g., 120s = 60-80MB per segment), so the configured value is auto-clamped to the platform cap (≤2 GB → 30s, >2 GB → up to 2m) at startup with a warning if it was reduced.
 - **Memory limit**: Uncomment `MemoryMax=512M` in `deploy/mibee-nvr.service` to prevent OOM kills.
 - **Storage**: Use an external USB disk (ext4) for recordings. The SD card will wear out quickly with continuous writes.
 - **Cameras**: Limit to 2-3 concurrent H.264/H.265 streams depending on resolution and bitrate.
@@ -467,7 +467,7 @@ The Raspberry Pi 3B has 905MB RAM. For stable operation:
 ### Using install.sh (Recommended)
 
 ```bash
-sudo ./install.sh --version v0.2.0
+sudo ./install.sh --version v0.9.0
 ```
 
 The script stops the service, replaces the binary, and restarts automatically. Config and recordings are preserved.
