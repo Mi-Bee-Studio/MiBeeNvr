@@ -5,11 +5,11 @@
 [![Svelte](https://img.shields.io/badge/Svelte-FF3E00?style=flat&logo=svelte&logoColor=white)](https://svelte.dev/)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
-[![Raspberry Pi](https://img.shields.io/badge/Raspberry_Pi-A22846?style=flat&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/)
+[![ARM](https://img.shields.io/badge/ARM-0091BD?style=flat&logo=arm&logoColor=white)](https://www.arm.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
 
-> **Turn any Raspberry Pi into a professional NVR in 60 seconds.**  
-> Single binary, zero dependencies, no cloud required. Runs on Raspberry Pi 3B with 512MB memory budget.
+> **Turn any low-power ARM device into a professional NVR in 60 seconds.**  
+> Single binary, zero dependencies, no cloud required. Runs on low-power ARM devices with a 512MB memory budget.
 
 > [**中文**](README.zh.md) — [English](README.md)
 
@@ -82,7 +82,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 ## Why MiBee NVR?
 
 - **Single Binary**: Zero dependencies, embedded Svelte 5 SPA, `CGO_ENABLED=0`
-- **Raspberry Pi 3B Ready**: Runs on 1GB RAM with 512MB memory budget
+- **Low-Power ARM Ready**: Runs on 1GB RAM with a 512MB memory budget (validated on Raspberry Pi 3B as the minimum baseline)
 - **Multi-Protocol Streaming**: HLS, WebRTC, HTTP-FLV, RTMP, SRT, WebSocket
 - **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in
 - **Modern Web UI**: Dark/light themes, i18n support, responsive design

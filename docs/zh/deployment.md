@@ -248,7 +248,7 @@ tar xzf nvr-backup-20240101.tar.gz
 docker compose up -d
 ```
 
-#### 在树莓派上使用 Docker
+#### 在 ARM 开发板上使用 Docker（如树莓派）
 
 树莓派需要使用 ARM64 架构镜像：
 
@@ -453,7 +453,7 @@ server {
 }
 ```
 
-## 树莓派 3B 注意事项
+## 低内存设备注意事项（如树莓派 3B）
 
 树莓派 3B 仅有 905MB 内存。为保证稳定运行：
 

@@ -248,7 +248,7 @@ tar xzf nvr-backup-20240101.tar.gz
 docker compose up -d
 ```
 
-#### Running on Raspberry Pi
+#### Running on ARM SBCs (e.g. Raspberry Pi)
 
 Raspberry Pi requires the ARM64 image:
 
@@ -453,7 +453,7 @@ server {
 }
 ```
 
-## RPi 3B Notes
+## Low-Memory Device Notes (e.g. RPi 3B)
 
 The Raspberry Pi 3B has 905MB RAM. For stable operation:
 

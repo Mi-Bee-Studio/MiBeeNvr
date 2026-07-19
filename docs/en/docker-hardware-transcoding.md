@@ -2,7 +2,7 @@
 
 ## Overview
 
-Hardware passthrough is essential for optimal transcoding performance in Docker containers. MiBee NVR supports multiple hardware acceleration paths: V4L2 M2M for Raspberry Pi, VAAPI for Intel/AMD GPUs, and NVENC for NVIDIA GPUs. This guide explains how to configure Docker to expose hardware devices to the container for maximum transcoding efficiency.
+Hardware passthrough is essential for optimal transcoding performance in Docker containers. MiBee NVR supports multiple hardware acceleration paths: VAAPI for Intel/AMD GPUs, NVENC for NVIDIA GPUs, and V4L2 M2M for Raspberry Pi. This guide explains how to configure Docker to expose hardware devices to the container for maximum transcoding efficiency.
 
 ## Raspberry Pi V4L2 M2M
 
