@@ -29,11 +29,11 @@
 </script>
 
 <details class="mt-6 border th-border rounded-lg"
-  open={mergeConfig ? true : undefined}
+  open={mergeConfig?.customized ? true : undefined}
 >
   <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
     {t('merge.title')}
-    {#if mergeConfig}
+    {#if mergeConfig?.customized}
       <span class="text-xs th-text-muted ml-2">{t('merge.customized')}</span>
     {:else}
       <span class="text-xs th-text-muted ml-2">{t('merge.usingDefault')}</span>

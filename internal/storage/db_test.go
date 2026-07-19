@@ -837,6 +837,46 @@ func TestListCameras_WithMergeConfig(t *testing.T) {
 	require.Equal(t, 100, *cameras[1].MergeBatchLimit)
 }
 
+func TestClearCameraMerge_ResetsAllOverrides(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge_clear.db")
+	db, _ := New(dbPath)
+	ctx := context.Background()
+	_ = db.Init(ctx)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Clear Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", ""))
+
+	// Set a per-camera override first.
+	enabled := false
+	interval := "5m"
+	window := "1h"
+	batch := 50
+	age := "2m"
+	minSeg := 5
+	require.NoError(t, db.UpsertCameraMerge(ctx, "cam1", &enabled, &interval, &window, &age, &batch, &minSeg))
+
+	cam, err := db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.NotNil(t, cam.MergeEnabled)
+	require.False(t, *cam.MergeEnabled)
+	require.NotNil(t, cam.MergeCheckInterval)
+
+	// ClearCameraMerge must NULL every field (UpsertCameraMerge(nil...) would be
+	// a COALESCE no-op and leave the override in place — regression for #68-3).
+	require.NoError(t, db.ClearCameraMerge(ctx, "cam1"))
+
+	cam, err = db.GetCamera(ctx, "cam1")
+	require.NoError(t, err)
+	require.Nil(t, cam.MergeEnabled)
+	require.Nil(t, cam.MergeCheckInterval)
+	require.Nil(t, cam.MergeWindowSize)
+	require.Nil(t, cam.MergeBatchLimit)
+	require.Nil(t, cam.MergeMinSegmentAge)
+	require.Nil(t, cam.MergeMinSegmentsToMerge)
+}
+
 func TestUpsertCameraMerge_AllFalseValues(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

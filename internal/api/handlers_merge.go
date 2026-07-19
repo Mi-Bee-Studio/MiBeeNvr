@@ -161,9 +161,11 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Pass all nil to clear (revert to global defaults)
-	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
-		nil, nil, nil, nil, nil, nil); err != nil {
+	// Actually NULL out all per-camera merge fields so the camera reverts to the
+	// global defaults. (Previously called UpsertCameraMerge with all-nil args,
+	// which COALESCEs to existing values — a no-op — so the override never
+	// cleared and the editor kept reopening in "(customized)" state. Issue #68-3.)
+	if err := h.db.ClearCameraMerge(r.Context(), cameraID); err != nil {
 		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
 		WriteError(w, http.StatusInternalServerError, "failed to clear merge config")
 		return
@@ -195,7 +197,20 @@ func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// customized=false means every per-camera field is NULL → the camera uses
+	// the global defaults and the editor should render collapsed / "using
+	// default". Previously this endpoint always returned a non-null object, so
+	// the editor could not tell "has override" from "all defaults" and reopened
+	// expanded every time (issue #68-3).
+	customized := cam.MergeEnabled != nil ||
+		cam.MergeCheckInterval != nil ||
+		cam.MergeWindowSize != nil ||
+		cam.MergeBatchLimit != nil ||
+		cam.MergeMinSegmentAge != nil ||
+		cam.MergeMinSegmentsToMerge != nil
+
 	writeJSON(w, http.StatusOK, map[string]any{
+		"customized":            customized,
 		"enabled":               cam.MergeEnabled,
 		"check_interval":        cam.MergeCheckInterval,
 		"window_size":           cam.MergeWindowSize,

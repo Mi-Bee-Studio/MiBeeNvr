@@ -884,7 +884,7 @@ async function performCameraSave() {
                     {#if relayPresetsLoading}
                       <option value="">Loading...</option>
                     {:else}
-                      <option value="">Generic</option>
+                      <option value="">{t('cameras.pushPlatformGeneric')}</option>
                       {#each relayPresets as preset (preset.name)}
                         <option value={preset.name}>{preset.name}{preset.description ? ` — ${preset.description}` : ''}</option>
                       {/each}
@@ -897,9 +897,9 @@ async function performCameraSave() {
                   {:else}
                     <select class="input w-auto" value={tgt.transcode_policy || 'auto'}
                       onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' })}>
-                      <option value="auto">Auto-detect hardware</option>
-                      <option value="force_sw">Force software encode</option>
-                      <option value="off">Reject H.265 sources</option>
+                      <option value="auto">{t('cameras.pushTranscodeAuto')}</option>
+                      <option value="force_sw">{t('cameras.pushTranscodeForceSW')}</option>
+                      <option value="off">{t('cameras.pushTranscodeRejectH265')}</option>
                     </select>
                   {/if}
 
@@ -946,20 +946,20 @@ async function performCameraSave() {
                 <!-- Preset override panel (collapsed) -->
                 <details class="text-xs">
                   <summary class="cursor-pointer th-text-secondary hover:th-text-primary transition-colors select-none">
-                    Preset Overrides
+                    {t('cameras.pushPresetOverrides')}
                     {#if tgt.video_preset_override}
-                      <span class="ml-1 text-[var(--color-accent)]">(custom)</span>
+                      <span class="ml-1 text-[var(--color-accent)]">{t('cameras.pushPresetCustom')}</span>
                     {/if}
                   </summary>
                   <div class="grid grid-cols-3 gap-x-3 gap-y-2 pt-2 pb-1">
                     <div>
-                      <label for={tgt.id + '-resolution'} class="input-label">Resolution</label>
+                      <label for={tgt.id + '-resolution'} class="input-label">{t('cameras.pushPresetResolution')}</label>
                       <input id={tgt.id + '-resolution'} type="text" class="input w-full" placeholder="1920x1080"
                         value={tgt.video_preset_override?.resolution || ''}
                         oninput={(e) => updatePushTargetOverride(tgt.id, { resolution: (e.target as HTMLInputElement).value || undefined })} />
                     </div>
                     <div>
-                      <label for={tgt.id + '-framerate'} class="input-label">Framerate</label>
+                      <label for={tgt.id + '-framerate'} class="input-label">{t('cameras.pushPresetFramerate')}</label>
                       <input id={tgt.id + '-framerate'} type="number" class="input w-full" placeholder="30" min="1" max="120"
                         value={tgt.video_preset_override?.framerate ?? ''}
                         oninput={(e) => {
@@ -968,7 +968,7 @@ async function performCameraSave() {
                         }} />
                     </div>
                     <div>
-                      <label for={tgt.id + '-bitrate'} class="input-label">Bitrate (kbps)</label>
+                      <label for={tgt.id + '-bitrate'} class="input-label">{t('cameras.pushPresetBitrate')}</label>
                       <input id={tgt.id + '-bitrate'} type="number" class="input w-full" placeholder="3000" min="100" max="50000"
                         value={tgt.video_preset_override?.video_bitrate_kbps ?? ''}
                         oninput={(e) => {
@@ -977,7 +977,7 @@ async function performCameraSave() {
                         }} />
                     </div>
                     <div>
-                      <label for={tgt.id + '-gop'} class="input-label">GOP (s)</label>
+                      <label for={tgt.id + '-gop'} class="input-label">{t('cameras.pushPresetGOP')}</label>
                       <input id={tgt.id + '-gop'} type="number" class="input w-full" placeholder="2" min="1" max="10"
                         value={tgt.video_preset_override?.gop_seconds ?? ''}
                         oninput={(e) => {
@@ -986,20 +986,20 @@ async function performCameraSave() {
                         }} />
                     </div>
                     <div>
-                      <label for={tgt.id + '-profile'} class="input-label">Profile</label>
+                      <label for={tgt.id + '-profile'} class="input-label">{t('cameras.pushPresetProfile')}</label>
                       <select id={tgt.id + '-profile'} class="input w-full" value={tgt.video_preset_override?.profile || ''}
                         onchange={(e) => {
                           const v = (e.target as HTMLSelectElement).value;
                           updatePushTargetOverride(tgt.id, { profile: (v as 'baseline' | 'main' | 'high') || undefined });
                         }}>
-                        <option value="">Preset default</option>
+                        <option value="">{t('cameras.pushPresetDefault')}</option>
                         <option value="baseline">baseline</option>
                         <option value="main">main</option>
                         <option value="high">high</option>
                       </select>
                     </div>
                     <div>
-                      <label for={tgt.id + '-bframes'} class="input-label">B-frames</label>
+                      <label for={tgt.id + '-bframes'} class="input-label">{t('cameras.pushPresetBFrames')}</label>
                       <input id={tgt.id + '-bframes'} type="number" class="input w-full" placeholder="0" min="0" max="2"
                         value={tgt.video_preset_override?.bframes ?? ''}
                         oninput={(e) => {
@@ -1010,7 +1010,7 @@ async function performCameraSave() {
                   </div>
                   <button type="button" class="btn-ghost text-xs th-text-muted mt-1"
                     onclick={() => resetPushTargetOverride(tgt.id)}>
-                    Reset to preset defaults
+                    {t('cameras.pushPresetReset')}
                   </button>
                 </details>
               </div>
@@ -1133,7 +1133,7 @@ async function performCameraSave() {
       cameraId={editingCamera.id}
       {mergeConfig}
       {mergeConfigLoading}
-      onchange={(config) => mergeConfig = config}
+      onchange={(config) => mergeConfig = { ...config, customized: true }}
       ondelete={() => mergeConfig = null}
     />
   {/if}

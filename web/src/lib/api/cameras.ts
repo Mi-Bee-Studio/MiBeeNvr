@@ -272,7 +272,10 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'Xiaomi',
     encodings: ['h264', 'h265'],
     builtIn: true,
-    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
+    // Xiaomi cameras authenticate via Xiaomi cloud account token (configured in
+    // Settings), NOT per-camera username/password. Hiding the credential fields
+    // avoids the misconception that they apply (issue #68-1).
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: false },
   },
   {
     id: 'rtmp',
@@ -432,6 +435,9 @@ export function getSnapshotUrl(cameraId: string): string {
 // --- Per-camera merge config ---
 
 export interface MergeConfig {
+  // customized=false means no per-camera override exists (all fields NULL) →
+  // the camera uses global defaults. Drives editor collapse state (issue #68-3).
+  customized?: boolean;
   enabled?: boolean;
   check_interval?: string;
   window_size?: string;
