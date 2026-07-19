@@ -167,7 +167,8 @@ type Manager struct {
 	maxPeers     int
 	idleTimeout  time.Duration
 	frameBufSize int
-	drainWg      sync.WaitGroup // tracks RTCP drain goroutines for clean shutdown
+	iceServers   []webrtc.ICEServer // STUN/TURN servers for cross-network ICE; nil = LAN-only
+	drainWg      sync.WaitGroup     // tracks RTCP drain goroutines for clean shutdown
 	mets         *metrics.Metrics
 }
 
@@ -211,6 +212,15 @@ func withFrameBufSize(n int) ManagerOption {
 func WithMetrics(m *metrics.Metrics) ManagerOption {
 	return func(mgr *Manager) {
 		mgr.mets = m
+	}
+}
+
+// WithICEServers sets STUN/TURN servers used when creating PeerConnections.
+// This enables cross-network (WAN/4G/remote WiFi) WHEP access. Leave empty for
+// LAN-only deployments (preserves the legacy behavior).
+func WithICEServers(servers []webrtc.ICEServer) ManagerOption {
+	return func(m *Manager) {
+		m.iceServers = servers
 	}
 }
 
@@ -371,8 +381,12 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		return nil, "", ErrMaxPeersReached
 	}
 
-	// Create PeerConnection via shared API factory
-	pc, err := m.api.NewPeerConnection(webrtc.Configuration{})
+	// Create PeerConnection via shared API factory. ICEServers is populated from
+	// config when configured for cross-network access; empty (nil) preserves the
+	// legacy LAN-only behavior.
+	pc, err := m.api.NewPeerConnection(webrtc.Configuration{
+		ICEServers: m.iceServers,
+	})
 	if err != nil {
 		return nil, "", err
 	}

@@ -368,6 +368,15 @@ func TestServeWS_MaxViewers(t *testing.T) {
 	_, err = readMessage(t, conn1)
 	require.NoError(t, err)
 
+	// Wait until conn1 is actually registered in the viewer map before dialing
+	// conn2. ServeWS writes the init sequence (SPS/PPS) BEFORE registering the
+	// viewer (manager.go ~line 545), so readMessage returning does NOT guarantee
+	// the viewer count has been incremented. Under -race on loaded CI runners,
+	// conn2's dial could pass the maxViewers check before conn1's registration
+	// completed — a flaky failure. Polling viewerCount closes this window.
+	eventually(t, func() bool { return m.viewerCount("cam1") == 1 },
+		2*time.Second, 10*time.Millisecond)
+
 	dialer := websocket.Dialer{}
 	_, resp, err := dialer.Dial(wsURL, nil)
 	assert.True(t, err != nil || (resp != nil && resp.StatusCode != http.StatusSwitchingProtocols),

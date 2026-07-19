@@ -47,6 +47,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
+
+	pionwebrtc "github.com/pion/webrtc/v4"
 )
 
 // serviceFunc wraps a pair of start/stop functions as a Service.
@@ -70,6 +72,26 @@ func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
 		FrameSkipRate:       cfg.FrameSkipRate,
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
 	}
+}
+
+// webrtcICEServers converts the config-layer ICE server list to pion's type.
+// Returns nil when empty so the WebRTC Manager falls back to LAN-only behavior
+// (no STUN/TURN, mDNS host candidates only) — preserving the legacy default.
+func webrtcICEServers(servers []config.ICEServerConfig) []pionwebrtc.ICEServer {
+	if len(servers) == 0 {
+		return nil
+	}
+	out := make([]pionwebrtc.ICEServer, 0, len(servers))
+	for _, s := range servers {
+		ic := pionwebrtc.ICEServer{URLs: s.URLs}
+		if s.Username != "" {
+			ic.Username = s.Username
+			ic.Credential = s.Credential
+			ic.CredentialType = pionwebrtc.ICECredentialTypePassword
+		}
+		out = append(out, ic)
+	}
+	return out
 }
 
 // buildRouter constructs the chi HTTP router with all middleware, routes, mounts,
@@ -436,8 +458,12 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			webrtc.WithMaxPeers(cfg.Streaming.WebRTC.MaxViewers),
 			webrtc.WithIdleTimeout(idleTimeout),
 			webrtc.WithMetrics(metrics),
+			webrtc.WithICEServers(webrtcICEServers(cfg.Streaming.WebRTC.ICEServers)),
 		)
-		slog.Info("WebRTC manager initialized", "max_viewers", cfg.Streaming.WebRTC.MaxViewers)
+		slog.Info("WebRTC manager initialized",
+			"max_viewers", cfg.Streaming.WebRTC.MaxViewers,
+			"ice_servers", len(cfg.Streaming.WebRTC.ICEServers),
+		)
 	}
 
 	// Step 7.6: FLV manager
