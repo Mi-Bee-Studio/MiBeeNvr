@@ -3,7 +3,8 @@
   import { normalizeProtocol } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff } from 'lucide-svelte';
+  import { showToast } from '$lib/toast';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, X } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -45,6 +46,18 @@
   let editingName = $state(false);
   let nameInput = $state('');
   $effect(() => { nameInput = camera.name; });
+
+  // Push-out targets popover (issue #70-1): clicking the "1/1" badge opens a
+  // popover listing each target's URL with a copy-to-clipboard button.
+  let pushTargetsOpen = $state(false);
+  async function copyPushUrl(url: string, name?: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(t('cameras.pushOutUrlCopied'), 'success');
+    } catch {
+      showToast(t('cameras.pushOutUrlCopyFailed'), 'error');
+    }
+  }
 
   // Activate-dialog state (pending_activation cameras)
   let activateOpen = $state(false);
@@ -229,10 +242,69 @@ let healthShowWarningIcon = $derived(
      </span>
    {/if}
    {#if camera.push_targets && camera.push_targets.length > 0}
-     <span class="badge badge-info flex items-center gap-1" title={t('cameras.pushOutTitle')}>
-       <ArrowUpRight size={10} />
-       {camera.push_targets.filter(pt => pt.enabled).length}/{camera.push_targets.length}
-     </span>
+     <div class="relative">
+       <button
+         type="button"
+         class="badge badge-info flex items-center gap-1 cursor-pointer hover:brightness-110 transition"
+         title={t('cameras.pushOutTitle')}
+         aria-label={t('cameras.pushOutTitle')}
+         aria-expanded={pushTargetsOpen}
+         onclick={() => (pushTargetsOpen = !pushTargetsOpen)}
+       >
+         <ArrowUpRight size={10} />
+         {camera.push_targets.filter((pt) => pt.enabled).length}/{camera.push_targets.length}
+       </button>
+       {#if pushTargetsOpen}
+         <div
+           class="absolute z-50 top-full left-0 mt-1 w-72 card p-2 border th-border shadow-lg"
+           role="dialog"
+           aria-label={t('cameras.pushOutTitle')}
+         >
+           <div class="flex items-center justify-between mb-1 px-1">
+             <span class="text-xs font-medium th-text-secondary">{t('cameras.pushOutTitle')}</span>
+             <button
+               type="button"
+               class="th-text-muted hover:th-text-primary"
+               aria-label={t('common.close')}
+               onclick={() => (pushTargetsOpen = false)}
+             >
+               <X size={12} />
+             </button>
+           </div>
+           <ul class="space-y-1">
+             {#each camera.push_targets as pt (pt.id)}
+               <li class="p-2 rounded th-bg-hover">
+                 <div class="flex items-center justify-between gap-2">
+                   <span class="text-xs font-medium th-text-primary truncate">
+                     {pt.name || pt.platform || pt.protocol}
+                   </span>
+                   <span class="text-[10px] th-text-muted shrink-0">
+                     {#if pt.enabled}
+                       <span class="th-color-success">●</span>
+                     {:else}
+                       <span class="th-text-muted">○</span>
+                     {/if}
+                     {pt.protocol.toUpperCase()}
+                   </span>
+                 </div>
+                 <div class="flex items-center gap-1 mt-1">
+                   <code class="text-[10px] th-text-secondary truncate flex-1 font-mono">{pt.url}</code>
+                   <button
+                     type="button"
+                     class="btn-ghost p-1 th-text-muted hover:th-text-primary shrink-0"
+                     title={t('cameras.pushOutCopyUrl')}
+                     aria-label={t('cameras.pushOutCopyUrl')}
+                     onclick={() => copyPushUrl(pt.url, pt.name)}
+                   >
+                     <Copy size={12} />
+                   </button>
+                 </div>
+               </li>
+             {/each}
+           </ul>
+         </div>
+       {/if}
+     </div>
    {/if}
    {#if camera.status === 'recording'}
         <span class="badge badge-success">{t('cameras.statusRecording')}</span>

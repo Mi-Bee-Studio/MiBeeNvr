@@ -178,7 +178,7 @@ describe('CameraForm - push target platform selector', () => {
       const selects = container.querySelectorAll('select');
       const platformSelect = Array.from(selects).find((s) => {
         const opts = Array.from(s.options);
-        return opts.some((o) => o.textContent === 'Generic');
+        return opts.some((o) => o.textContent === 'cameras.pushPlatformGeneric');
       });
       expect(platformSelect).toBeTruthy();
     });
@@ -256,7 +256,7 @@ describe('CameraForm - transcode policy', () => {
       const selects = container.querySelectorAll('select');
       const transcodeSelect = Array.from(selects).find((s) => {
         const opts = Array.from(s.options);
-        return opts.some((o) => o.value === 'auto' && o.textContent?.includes('Auto-detect hardware'));
+        return opts.some((o) => o.value === 'auto' && o.textContent?.includes('cameras.pushTranscodeAuto'));
       });
       expect(transcodeSelect).toBeTruthy();
     });
@@ -291,7 +291,7 @@ describe('CameraForm - preset override panel', () => {
     const details = Array.from(container.querySelectorAll('details'));
     const overrideDetails = details.find((d) => {
       const summary = d.querySelector('summary');
-      return summary?.textContent?.includes('Preset Overrides');
+      return summary?.textContent?.includes('cameras.pushPresetOverrides');
     });
     expect(overrideDetails).toBeTruthy();
     expect(overrideDetails?.hasAttribute('open')).toBe(false);
@@ -319,7 +319,7 @@ describe('CameraForm - preset override panel', () => {
     const details = Array.from(container.querySelectorAll('details'));
     const overrideDetails = details.find((d) => {
       const summary = d.querySelector('summary');
-      return summary?.textContent?.includes('Preset Overrides');
+      return summary?.textContent?.includes('cameras.pushPresetOverrides');
     });
     if (!overrideDetails) throw new Error('Override panel not found');
     const summary = overrideDetails.querySelector('summary');
@@ -327,12 +327,12 @@ describe('CameraForm - preset override panel', () => {
 
     const labels = container.querySelectorAll('label');
     const labelTexts = Array.from(labels).map((l) => l.textContent);
-    expect(labelTexts.some((t) => t?.includes('Resolution'))).toBeTruthy();
-    expect(labelTexts.some((t) => t?.includes('Framerate'))).toBeTruthy();
-    expect(labelTexts.some((t) => t?.includes('Bitrate'))).toBeTruthy();
-    expect(labelTexts.some((t) => t?.includes('GOP'))).toBeTruthy();
-    expect(labelTexts.some((t) => t?.includes('Profile'))).toBeTruthy();
-    expect(labelTexts.some((t) => t?.includes('B-frames'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetResolution'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetFramerate'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetBitrate'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetGOP'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetProfile'))).toBeTruthy();
+    expect(labelTexts.some((t) => t?.includes('cameras.pushPresetBFrames'))).toBeTruthy();
   });
 
   it('shows "Reset to preset defaults" button', async () => {
@@ -355,7 +355,7 @@ describe('CameraForm - preset override panel', () => {
     await fireEvent.click(addTargetBtn);
 
     const allBtns = container.querySelectorAll('button');
-    const resetBtn = Array.from(allBtns).find((b) => b.textContent?.includes('Reset to preset defaults'));
+    const resetBtn = Array.from(allBtns).find((b) => b.textContent?.includes('cameras.pushPresetReset'));
     expect(resetBtn).toBeTruthy();
   });
 
@@ -394,10 +394,10 @@ describe('CameraForm - preset override panel', () => {
     const details = Array.from(container.querySelectorAll('details'));
     const overrideDetails = details.find((d) => {
       const summary = d.querySelector('summary');
-      return summary?.textContent?.includes('Preset Overrides');
+      return summary?.textContent?.includes('cameras.pushPresetOverrides');
     });
     expect(overrideDetails).toBeTruthy();
     const summary = overrideDetails?.querySelector('summary');
-    expect(summary?.textContent?.includes('custom')).toBeTruthy();
+    expect(summary?.textContent?.includes('cameras.pushPresetCustom')).toBeTruthy();
   });
 });

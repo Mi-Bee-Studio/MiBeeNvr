@@ -318,6 +318,26 @@ func (d *DB) UpsertCameraMerge(ctx context.Context, cameraID string, mergeEnable
 	return err
 }
 
+// ClearCameraMerge resets ALL per-camera merge-config overrides to NULL so the
+// camera falls back to the global defaults. Unlike UpsertCameraMerge(nil...),
+// which COALESCEs and keeps existing values, this actually clears them.
+// Required by the "Use global default" UI action (issue #68-3): the previous
+// implementation called UpsertCameraMerge with all-nil args, which was a no-op,
+// so the per-camera override persisted and the editor kept showing "(customized)"
+// every time the user reopened it.
+func (d *DB) ClearCameraMerge(ctx context.Context, cameraID string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE cameras SET
+			merge_enabled = NULL,
+			merge_check_interval = NULL,
+			merge_window_size = NULL,
+			merge_batch_limit = NULL,
+			merge_min_segment_age = NULL,
+			merge_min_segments_to_merge = NULL
+		WHERE id = ?;`, cameraID)
+	return err
+}
+
 // SetMergeStatus updates merge_status for the given recording IDs in a single batched
 // UPDATE (with chunking to stay under SQLite's variable limit). Empty ids slice is a no-op.
 // Replaces the former per-row ExecContext loop (N IDs = N round-trips) with at most
