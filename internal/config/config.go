@@ -379,9 +379,19 @@ type StreamingConfig struct {
 
 // WebRTCConfig configures WebRTC WHEP streaming
 type WebRTCConfig struct {
-	Enabled     *bool  `yaml:"enabled"`      // default true
-	MaxViewers  int    `yaml:"max_viewers"`  // default 2, range [1,10]
-	IdleTimeout string `yaml:"idle_timeout"` // default "60s"
+	Enabled     *bool             `yaml:"enabled"`               // default true
+	MaxViewers  int               `yaml:"max_viewers"`           // default 2, range [1,10]
+	IdleTimeout string            `yaml:"idle_timeout"`          // default "60s"
+	ICEServers  []ICEServerConfig `yaml:"ice_servers,omitempty"` // STUN/TURN for cross-network access; empty = LAN-only (default)
+}
+
+// ICEServerConfig describes a single STUN/TURN server used for cross-network
+// (WAN/4G/remote WiFi) WebRTC access. Leave streaming.webrtc.ice_servers empty
+// for LAN-only deployments — this preserves the legacy behavior.
+type ICEServerConfig struct {
+	URLs       []string `yaml:"urls"`                 // required, e.g. ["stun:stun.l.google.com:19302"] or ["turn:turn.example.com:3478?transport=udp"]
+	Username   string   `yaml:"username,omitempty"`   // TURN only
+	Credential string   `yaml:"credential,omitempty"` // TURN only
 }
 
 // FLVConfig configures HTTP-FLV streaming
@@ -1126,6 +1136,17 @@ func Validate(cfg *Config) error {
 	}
 	if _, err := time.ParseDuration(cfg.Streaming.WebRTC.IdleTimeout); err != nil {
 		return fmt.Errorf("streaming.webrtc.idle_timeout invalid: %w", err)
+	}
+	// Validate WebRTC ICE servers (for cross-network access). Empty = LAN-only.
+	for i, s := range cfg.Streaming.WebRTC.ICEServers {
+		if len(s.URLs) == 0 {
+			return fmt.Errorf("streaming.webrtc.ice_servers[%d].urls is required", i)
+		}
+		for _, u := range s.URLs {
+			if !strings.HasPrefix(u, "stun:") && !strings.HasPrefix(u, "turn:") && !strings.HasPrefix(u, "turns:") {
+				return fmt.Errorf("streaming.webrtc.ice_servers[%d].urls: %q must start with stun:/turn:/turns:", i, u)
+			}
+		}
 	}
 	if _, err := time.ParseDuration(cfg.Streaming.FLV.IdleTimeout); err != nil {
 		return fmt.Errorf("streaming.flv.idle_timeout invalid: %w", err)

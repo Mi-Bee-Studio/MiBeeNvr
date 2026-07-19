@@ -200,6 +200,14 @@ observability:
 #     enabled: true                   # Enable WebRTC WHEP streaming (default: true)
 #     max_viewers: 2                  # Max concurrent WebRTC viewers (range: 1-10, default: 2)
 #     idle_timeout: "60s"             # WebRTC viewer idle timeout (default: 60s)
+#     # Cross-network (WAN / 4G / remote WiFi) WebRTC access requires ICE servers.
+#     # Leave empty for LAN-only deployments (the default — preserves legacy behavior).
+#     # See docs/{zh,en}/remote-access.md for STUN/TURN setup and tunnel options.
+#     # ice_servers:
+#     #   - urls: ["stun:stun.l.google.com:19302"]            # public Google STUN
+#     #   - urls: ["turn:turn.example.com:3478?transport=udp"] # TURN needs creds
+#     #     username: "user"
+#     #     credential: "pass"
 #   flv:
 #     enabled: true                   # Enable HTTP-FLV streaming (default: true)
 #     max_viewers: 10                 # Max concurrent FLV viewers (range: 1-50, default: 10)

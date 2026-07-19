@@ -197,6 +197,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
 | [Relay Guide](docs/en/relay-guide.md) | RTMP live platform relay configuration and troubleshooting |
 | [转发指南](docs/zh/relay-guide.md) | RTMP 直播平台转发配置和故障排除 |
+| [Remote Access](docs/en/remote-access.md) | External/4G access via Tailscale, Cloudflare Tunnel, and WebRTC ICE/STUN/TURN config |
+| [远程访问](docs/zh/remote-access.md) | 外网/4G 访问:Tailscale、Cloudflare Tunnel 及 WebRTC ICE/STUN/TURN 配置 |
 
 ## Build & Deploy
 
