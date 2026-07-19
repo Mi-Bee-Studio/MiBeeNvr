@@ -394,6 +394,7 @@ func runRepairFragments() int {
 	// parsed by parseRepairFlags: --execute/--dry-run/--camera/--limit/--config).
 	var statusStr string
 	var retry, forceDelete, resetFakeMerged bool
+	var maxDurationSec float64
 	for i := 3; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--retry":
@@ -402,6 +403,16 @@ func runRepairFragments() int {
 			forceDelete = true
 		case "--reset-fake-merged":
 			resetFakeMerged = true
+		case "--max-duration":
+			if i+1 < len(os.Args) {
+				i++
+				if v, err := parseFloat(os.Args[i]); err == nil && v > 0 {
+					maxDurationSec = v
+				} else {
+					fmt.Fprintf(os.Stderr, "Error: invalid --max-duration %q (must be a positive number of seconds)\n", os.Args[i])
+					return 1
+				}
+			}
 		case "--status":
 			if i+1 < len(os.Args) {
 				i++
@@ -422,7 +433,7 @@ func runRepairFragments() int {
 			fmt.Fprintln(os.Stderr, "Error: --reset-fake-merged cannot be combined with --status/--retry/--force-delete.")
 			return 1
 		}
-		return runRepairFragmentsResetFakeMerged(opts)
+		return runRepairFragmentsResetFakeMerged(opts, maxDurationSec)
 	}
 
 	// Default status: incompatible (the most common debris). Comma-separated list allowed.
@@ -607,7 +618,7 @@ func runRepairFragments() int {
 // deployments already have thousands of these fake-merged fragments accumulated
 // before the fix. After resetting, a service restart (or waiting for periodic
 // merge) will re-merge them into proper long recordings.
-func runRepairFragmentsResetFakeMerged(opts repairOpts) int {
+func runRepairFragmentsResetFakeMerged(opts repairOpts, maxDurationSec float64) int {
 	db, _, err := openDBFromConfig(opts.configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -624,6 +635,9 @@ func runRepairFragmentsResetFakeMerged(opts repairOpts) int {
 	}
 	fmt.Printf("repair fragments --reset-fake-merged — %s\n", mode)
 	fmt.Printf("  target: merge_status='merged' with empty merge_path (never actually merged)\n")
+	if maxDurationSec > 0 {
+		fmt.Printf("  max-duration: %.0fs (only short singleton fragments; long recordings left alone)\n", maxDurationSec)
+	}
 	if opts.cameraID != "" {
 		fmt.Printf("  camera: %s\n", opts.cameraID)
 	}
@@ -632,7 +646,7 @@ func runRepairFragmentsResetFakeMerged(opts repairOpts) int {
 	}
 	fmt.Println()
 
-	recs, err := db.ListFakeMergedRecordings(ctx, opts.cameraID, opts.limit)
+	recs, err := db.ListFakeMergedRecordings(ctx, opts.cameraID, opts.limit, maxDurationSec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error listing fake-merged recordings: %v\n", err)
 		return 1
@@ -902,6 +916,10 @@ Options:
   --force-delete         Delete DB row + file permanently (mutually exclusive with --retry)
   --reset-fake-merged    Reset merged-but-not-actually-merged segments to pending
                          (separate mode; cannot combine with --status/--retry/--force-delete)
+  --max-duration <sec>   Only match segments shorter than this (with --reset-fake-merged).
+                         Targets singleton fragments while leaving long already-merged
+                         recordings (which legitimately have an empty merge_path) untouched.
+                         Recommended: 300 (5min) — singleton fragments are typically ≤60s.
   --status <list>        Comma-separated merge statuses to match
                          (default: incompatible; allowed: incompatible, failed, dark)
   --camera <id>          Only process this camera
@@ -916,4 +934,11 @@ func parseInt(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)
 	return n, err
+}
+
+// parseFloat parses a float (e.g. "300" seconds) without importing strconv.
+func parseFloat(s string) (float64, error) {
+	var f float64
+	_, err := fmt.Sscanf(s, "%f", &f)
+	return f, err
 }
