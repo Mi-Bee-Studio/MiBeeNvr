@@ -2679,6 +2679,73 @@ func (noopCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
 
+// stubCloudProxy is a CloudAuthProxy whose CheckVendor returns a configured
+// vendor string. Used to exercise handleCheckVendor's compatibility mapping.
+// All other methods behave like noopCloudProxy.
+type stubCloudProxy struct {
+	vendor string
+}
+
+func (stubCloudProxy) SetCloudConfig(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (stubCloudProxy) SignIn(_ context.Context, _, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	return nil, nil, fmt.Errorf("not implemented")
+}
+func (stubCloudProxy) SubmitCaptcha(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	return nil, nil, fmt.Errorf("not implemented")
+}
+func (stubCloudProxy) SubmitVerify(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
+	return nil, nil, fmt.Errorf("not implemented")
+}
+func (stubCloudProxy) ListDevices(_ context.Context) ([]CloudDeviceInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (s stubCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
+	return s.vendor, nil
+}
+
+// TestXiaomiCheckVendorCompatibility is a regression test for issue #64:
+// the pre-add vendor gate must NOT mark TUTK cameras as incompatible now
+// that the TUTK transport (internal/tutk/) ships in v0.9.0. Both CS2 and
+// TUTK must return compatible=true; only genuinely unknown vendors could
+// be flagged (and even those default to compatible to avoid false blocks).
+func TestXiaomiCheckVendorCompatibility(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		vendor      string
+		wantVendor  string
+		description string
+	}{
+		{"cs2", "cs2", "CS2 vendor reports compatible"},
+		{"tutk", "tutk", "TUTK vendor reports compatible (issue #64 regression)"},
+		{"unknown", "unknown", "unknown vendor still returns compatible (no false blocks)"},
+	} {
+		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
+			db, store := setupTestDB(t)
+			defer db.Close()
+			cfg := &config.Config{
+				Cleanup:  config.CleanupConfig{RetentionDays: 30},
+				Cameras:  []config.CameraConfig{},
+				Xiaomi:   config.XiaomiConfig{Token: "test-token"},
+			}
+			h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, stubCloudProxy{vendor: tc.vendor}, nil)
+
+			rr := doRequest(t, h.Routes(), "GET", "/api/xiaomi/check-vendor?did=123456", nil, "", "")
+			require.Equal(t, http.StatusOK, rr.Code, "vendor check should succeed")
+
+			var resp struct {
+				Vendor     string `json:"vendor"`
+				Compatible bool   `json:"compatible"`
+			}
+			parseJSON(t, rr, &resp)
+			require.Equal(t, tc.wantVendor, resp.Vendor, "vendor echoed back")
+			require.True(t, resp.Compatible, "%s must be compatible (issue #64)", tc.vendor)
+		})
+	}
+}
+
 func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 	t.Helper()
 	t.Parallel()

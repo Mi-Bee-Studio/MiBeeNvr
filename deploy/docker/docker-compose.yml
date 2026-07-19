@@ -33,9 +33,15 @@ services:
     # and may improve WebRTC/FLV streaming performance.
     # When using host mode, REMOVE the "ports" section below
     # (port mappings are ignored in host mode).
+    # If the host's 9090 is already in use (e.g. Synology DSM), also set
+    #   server.listen: ":8080"   (or any free port) in mibee-nvr.yaml
+    # so the container binds a free host port directly.
     # network_mode: host
 
     ports:
+      # Format is "HOST:CONTAINER". The container always listens on 9090.
+      # If port 9090 is taken on your host (e.g. Synology DSM), change ONLY
+      # the left side, e.g. "8080:9090" → access via http://HOST_IP:8080.
       - "9090:9090"   # Web UI / API
       - "2121:2121"   # FTP
       - "2122-2140:2122-2140"  # FTP passive ports

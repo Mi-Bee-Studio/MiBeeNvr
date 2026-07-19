@@ -470,6 +470,34 @@ sudo apk add ffmpeg
    sudo kill -9 <PID>
    ```
 
+#### Docker / NAS（群晖）9090 被占用
+**症状**: 在群晖等 NAS 上部署 Docker 版本时，host 的 9090 被 NAS 系统服务占用，NVR 无法以 host 网络模式启动（`address already in use`）。
+
+**解决方案**（按推荐顺序）：
+
+1. **默认 bridge 模式 + 改 host 侧端口映射**（推荐，最简单）：
+   编辑 `docker-compose.yml`，把端口映射的**左边**（host 侧）改成空闲端口，容器内仍监听 9090：
+   ```yaml
+       ports:
+         - "8080:9090"   # 左边改成空闲端口，右边 9090 不动
+   ```
+   然后 `docker compose up -d`，访问 `http://NAS_IP:8080`。
+
+2. **必须用 host 网络模式时（需要 ONVIF 自动发现）**：同时改容器内监听端口，让容器绑定 host 的空闲端口：
+   ```yaml
+   # docker-compose.yml
+       network_mode: host
+       # 删除 ports 段（host 模式下被忽略）
+   ```
+   ```yaml
+   # mibee-nvr.yaml
+   server:
+     listen: ":8080"   # 避开 NAS 占用的 9090
+   ```
+   访问 `http://NAS_IP:8080`。
+
+> **何时需要 host 模式**：只有 ONVIF 自动发现（UDP 多播 WS-Discovery）需要 host 模式。普通的 RTSP/ONVIF/小米摄像头录像、直播、回放在 bridge 模式下都能正常工作，优先用方案 1。
+
 ### 防火墙问题
 
 #### 无法访问 Web UI

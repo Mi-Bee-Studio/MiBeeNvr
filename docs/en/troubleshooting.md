@@ -475,6 +475,34 @@ The tool uses pure-Go MP4 box parsing (`mediaprobe`) — no ffprobe required. Fo
    sudo kill -9 <PID>
    ```
 
+#### Docker / NAS (Synology) — port 9090 taken
+**Symptom**: On Synology DSM (or other NAS) the host's port 9090 is already used by a system service, so the NVR container cannot start in host networking mode (`address already in use`).
+
+**Solution** (in order of preference):
+
+1. **Default bridge mode + change the host-side port mapping** (recommended, simplest):
+   Edit `docker-compose.yml` and change ONLY the **left** side (host) of the port mapping. The container still listens on 9090:
+   ```yaml
+       ports:
+         - "8080:9090"   # left = free host port, right stays 9090
+   ```
+   Then `docker compose up -d` and open `http://NAS_IP:8080`.
+
+2. **If you must use host networking mode** (e.g. for ONVIF auto-discovery): also change the in-container listen port so the container binds a free host port:
+   ```yaml
+   # docker-compose.yml
+       network_mode: host
+       # remove the ports section (ignored in host mode)
+   ```
+   ```yaml
+   # mibee-nvr.yaml
+   server:
+     listen: ":8080"   # avoid the NAS-occupied 9090
+   ```
+   Open `http://NAS_IP:8080`.
+
+> **When you need host mode**: only ONVIF auto-discovery (UDP multicast WS-Discovery) requires host mode. Plain RTSP/ONVIF/Xiaomi recording, live streaming, and playback all work fine in bridge mode — prefer option 1.
+
 ### Firewall Issues
 
 #### Cannot Access Web UI
