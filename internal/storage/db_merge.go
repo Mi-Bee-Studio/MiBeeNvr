@@ -431,15 +431,22 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 // short fragments that clutter the timeline.
 //
 // cameraID == "" matches all cameras; limit <= 0 means no limit.
+// maxDurationSec > 0 restricts to recordings with duration <= that value (used
+// to target singleton fragments while leaving long already-merged recordings
+// alone — some merged outputs legitimately have an empty merge_path).
 // Ordered by started_at ASC for chronological dry-run output.
 //
 // Reset these to pending (via SetMergeStatus) to re-queue them for merging.
-func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limit int) ([]*model.Recording, error) {
+func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limit int, maxDurationSec float64) ([]*model.Recording, error) {
 	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
 	args := []any{}
 	if cameraID != "" {
 		q += " AND camera_id=?"
 		args = append(args, cameraID)
+	}
+	if maxDurationSec > 0 {
+		q += " AND duration <= ?"
+		args = append(args, maxDurationSec)
 	}
 	q += " ORDER BY started_at ASC"
 	if limit > 0 {

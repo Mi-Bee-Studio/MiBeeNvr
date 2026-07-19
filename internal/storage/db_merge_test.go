@@ -131,7 +131,7 @@ func TestListFakeMergedRecordings(t *testing.T) {
 	// pending-one stays pending.
 
 	// 1. Only fake-merged is returned.
-	got, err := db.ListFakeMergedRecordings(ctx, "", 0)
+	got, err := db.ListFakeMergedRecordings(ctx, "", 0, 0)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, "fake-merged", got[0].ID)
@@ -139,22 +139,36 @@ func TestListFakeMergedRecordings(t *testing.T) {
 
 	// 2. Camera filter works.
 	t.Run("camera filter", func(t *testing.T) {
-		got, err := db.ListFakeMergedRecordings(ctx, "camA", 0)
+		got, err := db.ListFakeMergedRecordings(ctx, "camA", 0, 0)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 	})
 
 	// 3. Non-matching camera returns empty.
 	t.Run("other camera", func(t *testing.T) {
-		got, err := db.ListFakeMergedRecordings(ctx, "camB", 0)
+		got, err := db.ListFakeMergedRecordings(ctx, "camB", 0, 0)
 		require.NoError(t, err)
 		require.Empty(t, got)
 	})
 
-	// 4. After resetting fake-merged to pending, it's no longer returned.
+	// 4. maxDuration filter: only returns fragments with duration <= the threshold.
+	// Useful for targeting singleton debris while leaving long already-merged
+	// recordings (which legitimately have an empty merge_path) untouched.
+	t.Run("maxDuration filter", func(t *testing.T) {
+		// fake-merged has duration=30s. A 60s threshold includes it; a 10s
+		// threshold (below 30s) excludes it.
+		got, err := db.ListFakeMergedRecordings(ctx, "", 0, 60)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "30s fragment passes a 60s threshold")
+		got, err = db.ListFakeMergedRecordings(ctx, "", 0, 10)
+		require.NoError(t, err)
+		require.Empty(t, got, "30s fragment excluded by a 10s threshold")
+	})
+
+	// 5. After resetting fake-merged to pending, it's no longer returned.
 	t.Run("after reset to pending", func(t *testing.T) {
 		require.NoError(t, db.SetMergeStatus(ctx, []string{"fake-merged"}, model.MergeStatusPending))
-		got, err := db.ListFakeMergedRecordings(ctx, "", 0)
+		got, err := db.ListFakeMergedRecordings(ctx, "", 0, 0)
 		require.NoError(t, err)
 		require.Empty(t, got, "once reset to pending, it's no longer fake-merged")
 	})
