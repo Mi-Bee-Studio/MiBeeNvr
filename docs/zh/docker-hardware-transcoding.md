@@ -2,7 +2,7 @@
 
 ## 概述
 
-硬件直通对于 Docker 容器中的最佳转码性能至关重要。MiBee NVR 支持多种硬件加速路径：树莓派的 V4L2 M2M、Intel/AMD GPU 的 VAAPI，以及 NVIDIA GPU 的 NVENC。本指南介绍如何配置 Docker 以将硬件设备暴露给容器，以实现最大转码效率。
+硬件直通对于 Docker 容器中的最佳转码性能至关重要。MiBee NVR 支持多种硬件加速路径：Intel/AMD GPU 的 VAAPI、NVIDIA GPU 的 NVENC，以及树莓派的 V4L2 M2M。本指南介绍如何配置 Docker 以将硬件设备暴露给容器，以实现最大转码效率。
 
 ## 树莓派 V4L2 M2M
 
