@@ -3,7 +3,7 @@ set -euo pipefail
 
 # MiBee NVR — One-click installer for Linux
 # Usage: curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | bash
-#        or: ./install.sh --version v0.2.0
+#        or: ./install.sh --version v0.9.0
 #        or: ./install.sh --uninstall
 
 REPO="Mi-Bee-Studio/MiBeeNvr"
@@ -294,7 +294,7 @@ do_install() {
             --version)
                 shift
                 if [[ $# -eq 0 ]]; then
-                    error "--version requires an argument (e.g. v0.2.0)"
+                    error "--version requires an argument (e.g. v0.9.0)"
                     exit 1
                 fi
                 version="$1"

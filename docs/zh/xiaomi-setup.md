@@ -22,15 +22,15 @@ MiBee NVR 通过 CS2 P2P 协议为小米云摄像头提供全面支持。此集�
 | **小米 C200** | `chuangmi.camera.046c04` | CS2 P2P | ✅ 完全 | HD 1080p 室内摄像头 |
 | **小米 C300** | `chuangmi.camera.72ac1` | CS2 P2P | ✅ 完全 | 2K 室内摄像头 |
 | **小方** | `isa.camera.isc5c1` | TUTK | ✅ 完全 | 云台球型摄像头（旧款） |
-| **鹿客 V1** | `lumi.camera.v1` | TUTK | ✅ 完全 | 智能门铃摄像头（旧款） |
+| **鹿客 V1** | `loock.cateye.v01` | TUTK | ✅ 完全 | 智能门铃摄像头（旧款） |
 | **Loock V2** | `loock.cateye.v02` | CS2 P2P | ✅ 完全 | 智能门铃摄像头 |
 | **大方** | `isa.camera.df3` | TUTK | ✅ 完全 | 云台球型摄像头（旧款） |
-| **Aqara G2** | `isa.camera.g2h` | TUTK | ✅ 完全 | 室内立方摄像头（旧款） |
-| **IMILAB A1** | `isa.camera.a1` | TUTK | ✅ 完全 | 室内摄像头（旧款） |
-| **小白** | `isa.camera.xf` | TUTK | ✅ 完全 | 云台摄像头（旧款） |
+| **Aqara G2** | `lumi.camera.gwagl01` | TUTK | ✅ 完全 | 室内立方摄像头（旧款） |
+| **IMILAB A1** | `chuangmi.camera.ipc019e` | TUTK | ✅ 完全 | 室内摄像头（旧款） |
+| **小白** | `chuangmi.camera.xiaobai` | TUTK | ✅ 完全 | 云台摄像头（旧款） |
 | **米家** | `chuangmi.camera.v2` | TUTK | ✅ 完全 | 基础室内摄像头（旧款） |
 
-**重要提示**：现在同时支持 CS2 和 TUTK 协议摄像头。TUTK 旧款型号通过 `internal/tutk/` 使用旧版协议。双工音频功能仅适用于 CS2 型号。
+**重要提示**：现在同时支持 CS2 和 TUTK 协议摄像头。TUTK 旧款型号通过 `internal/tutk/` 使用旧版协议。双工音频功能仅适用于 TUTK 型号（CS2 型号不支持，因为双工音频需要 TUTK 传输）。
 ## 配置
 
 ### 基本配置
@@ -258,7 +258,7 @@ curl -u admin:password -o snapshot.jpg \
 
 ## 双工音频
 
-双工音频允许您通过支持的小米摄像头进行语音交流。此功能仅适用于 CS2 型号（TUTK 型号由于协议限制不支持）。
+双工音频允许您通过支持的小米摄像头进行语音交流。此功能仅适用于 TUTK 型号 —— 它需要 TUTK 传输，因此 CS2 摄像头会返回 `two-way audio requires TUTK transport` 错误，不支持双工音频。
 
 ### 前置条件
 

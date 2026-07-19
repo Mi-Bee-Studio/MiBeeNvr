@@ -399,6 +399,60 @@ Or use the in-app downloader: **Settings → Transcoding → Download FFmpeg**
 
 The tool uses pure-Go MP4 box parsing (`mediaprobe`) — no ffprobe required. For large files it uses `FastProbeDuration` which reads only the `stts` box (~100× faster than full parsing). MJPEG frame directories (ESP32 MiBeeCam) are supported via frame-count estimation.
 
+#### Merged Recordings 404 (stale merge_status)
+**Symptom**: Recordings that previously played now return 404, or the timeline shows merged recordings whose underlying file has gone missing (e.g. after a disk full event, manual cleanup, or a crash mid-merge).
+
+**Cause**: The DB marks these recordings `merge_status='merged'` and points playback at the merged file, but the merged file is missing or empty on disk. Playback then 404s instead of falling back to the original segments.
+
+**Solution**: Use the `repair merge-status` CLI tool to validate merged recordings and reset the ones whose file is missing/empty back to unmerged state. This previously ran automatically on every server startup (a per-boot full-table scan + per-file stat); it is now an on-demand CLI to avoid that overhead.
+
+```bash
+# 1. Dry run: see how many merged recordings have a missing/empty file
+./mibee-nvr repair merge-status --config mibee-nvr.yaml
+
+# 2. Reset stale statuses so playback falls back to the original segments
+./mibee-nvr repair merge-status --config mibee-nvr.yaml --execute
+```
+
+Options: `--execute` (default is dry-run), `--dry-run`, `--config <path>`, `--help`. The tool only resets recordings marked `merged` whose file is missing or empty — live merge states are never touched.
+
+#### Timeline Cluttered With Un-Merged Fragments (merge debris)
+**Symptom**: The timeline is littered with many short fragments that never get merged into a long recording. Per-camera summaries may show large amounts of "incompatible"/"failed"/"dark" segments occupying disk.
+
+**Cause**: When `MergeMP4Segments` fails (e.g. SPS/PPS differ between segments after a camera reconnect), the rolling/periodic merge marks those segments with a dead `merge_status` (`incompatible`/`failed`/`dark`) so it doesn't retry forever. These accumulate as debris that will never be merged. A related class is "fake-merged" segments — marked `merged` by the rolling merge singleton fast-path (a batch with <2 valid segments) without actually being merged, permanently ejecting them from the merge queue.
+
+**Solution**: Use the `repair fragments` CLI tool to surface and clear this debris.
+
+```bash
+# 1. Report only: see what debris exists and how much space it uses (no changes)
+./mibee-nvr repair fragments --config mibee-nvr.yaml
+
+# 2. Give the merge engine another chance on a few segments first
+#    (resets them to 'pending'; if they merge, the debris clears itself)
+./mibee-nvr repair fragments --retry --execute --camera <id> --limit 5
+
+# 3. If they come back incompatible (genuinely corrupt), delete DB row + file:
+./mibee-nvr repair fragments --force-delete --execute
+
+# 4. Include 'failed' and 'dark' segments too (comma-separated):
+./mibee-nvr repair fragments --status incompatible,failed,dark --force-delete --execute
+```
+
+For the "fake-merged" class (merged but never actually merged — empty `merge_path`):
+
+```bash
+# Find them
+./mibee-nvr repair fragments --reset-fake-merged
+
+# Reset them to pending, then restart the service to re-merge
+./mibee-nvr repair fragments --reset-fake-merged --execute
+sudo systemctl restart mibee-nvr
+```
+
+Options: `--execute` (default is dry-run), `--dry-run`, `--retry` (reset matched segments to pending — try this first), `--force-delete` (delete DB row + file; mutually exclusive with `--retry`), `--reset-fake-merged` (separate mode for merged-but-not-actually-merged segments; cannot be combined with `--status`/`--retry`/`--force-delete`), `--max-duration <sec>` (with `--reset-fake-merged`: only match segments shorter than this — targets short singleton fragments while leaving legitimately long already-merged recordings alone; recommended `300` i.e. 5 min), `--status <list>` (default `incompatible`; allowed `incompatible`, `failed`, `dark`), `--camera <id>`, `--limit <n>`, `--config <path>`, `--help`.
+
+Live merge states (`pending`/`merged`/`merging`) are never matched by `--status` — the tool refuses values the merge engine is still actively processing.
+
 #### MP4 Files Won't Play
 **Symptom**: Recordings created but cannot be played with media players
 

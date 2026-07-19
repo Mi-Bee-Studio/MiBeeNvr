@@ -158,7 +158,7 @@ curl -u username:password \
 
 **端点：** `GET /api/xiaomi/check-vendor`
 
-通过 DID 检查小米设备的供应商协议。验证设备使用的是 CS2 协议（支持）还是 TUTK 协议（不支持）。
+通过 DID 检查小米设备的供应商协议。自 v0.9.0 起，CS2 和 TUTK（旧版）协议都受支持，因此此端点对两者都返回 `compatible: true`。`vendor` 字段告诉你设备使用的协议，以便 UI 选择正确的传输。当小米集成被禁用、未配置 token 或供应商查询出错时，端点也会返回 `compatible: true` 且 `vendor: "unknown"`（预添加闸门从不在不确定时阻止）。
 
 **查询参数：**
 
@@ -172,7 +172,7 @@ curl -u username:password \
   "http://localhost:9090/api/xiaomi/check-vendor?did=camera_did_123"
 ```
 
-**响应（CS2 - 兼容）：**
+**响应（CS2 设备）：**
 ```json
 {
   "vendor": "cs2",
@@ -180,11 +180,18 @@ curl -u username:password \
 }
 ```
 
-**响应（TUTK - 不兼容）：**
+**响应（TUTK / 旧版设备）：**
 ```json
 {
   "vendor": "tutk",
-  "compatible": false,
-  "message": "This device uses TUTK protocol which is not supported by MiBee NVR. Only CS2 protocol cameras are supported."
+  "compatible": true
+}
+```
+
+**响应（未知 —— 集成禁用、无 token 或查询出错）：**
+```json
+{
+  "vendor": "unknown",
+  "compatible": true
 }
 ```

@@ -273,11 +273,12 @@ cameras:
 
 ### Prometheus 指标
 
-转码指标在 `/api/metrics` 暴露：
-- `mibee_nvr_transcoding_queue_length`: 当前队列长度
-- `mibee_nvr_transcoding_active_jobs`: 运行的 FFmpeg 进程数
-- `mibee_nvr_transcoding_total_completed`: 总完成任务数
-- `mibee_nvr_transcoding_failed_total`: 失败任务计数
+转码指标在 `/api/metrics` 暴露（带标签和类型的完整列表见 [metrics.md](metrics.md#11-transcoding-metrics)）：
+- `nvr_transcoding_active_jobs`: 当前运行的转码任务（gauge）
+- `nvr_transcoding_jobs_total`: 转码任务总数，带 `codec_from`、`codec_to`、`encoder`、`crf` 和 `status`（`completed`/`failed`/`cancelled`）标签（counter）
+- `nvr_transcoding_duration_seconds`: 已完成转码任务的耗时，按编码转换分组（histogram）
+- `nvr_transcoding_bytes_processed`: 转码任务处理的总字节数（counter）
+- `nvr_transcoding_ffmpeg_status`: FFmpeg 可用性 —— 0=未安装、1=下载中、2=可用（gauge）
 
 ### Web UI 状态
 

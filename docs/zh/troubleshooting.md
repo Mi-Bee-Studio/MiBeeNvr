@@ -394,6 +394,59 @@ sudo apk add ffmpeg
 
 该工具使用纯 Go MP4 box 解析（`mediaprobe`）——不需要 ffprobe。对于大文件使用 `FastProbeDuration`（只读 `stts` box，比全量解析快约 100 倍）。MJPEG 帧目录（ESP32 MiBeeCam）通过帧数估算支持。
 
+#### 已合并录像 404（merge_status 过期）
+**症状**: 之前能播放的录像现在返回 404，或时间轴显示已合并录像但其底层文件已丢失（例如在磁盘满、手动清理或合并过程中崩溃之后）。
+
+**原因**: 数据库将这些录像标记为 `merge_status='merged'` 并让播放指向合并后的文件，但磁盘上该合并文件已缺失或为空。于是播放返回 404，而不是回退到原始分段。
+
+**解决**: 使用 `repair merge-status` CLI 工具校验已合并录像，并将文件缺失/为空的录像重置回未合并状态。此操作以前在每次服务器启动时自动运行（每次启动全表扫描 + 逐文件 stat）；现已改为按需 CLI，以避免该开销。
+
+```bash
+# 1. Dry run：查看有多少已合并录像的文件缺失/为空
+./mibee-nvr repair merge-status --config mibee-nvr.yaml
+
+# 2. 重置过期状态，使播放回退到原始分段
+./mibee-nvr repair merge-status --config mibee-nvr.yaml --execute
+```
+
+选项：`--execute`（默认 dry-run）、`--dry-run`、`--config <path>`、`--help`。该工具只重置被标记为 `merged` 但文件缺失或为空的录像 —— 活跃合并状态永远不会被触碰。
+
+#### 时间轴被未合并碎片塞满（合并碎片）
+**症状**: 时间轴上布满许多从未合并成长录像的短碎片。按摄像头汇总可能显示大量 `incompatible`/`failed`/`dark` 段占用磁盘。
+
+**原因**: 当 `MergeMP4Segments` 失败时（例如摄像头重连后分段间 SPS/PPS 不同），滚动/周期合并会将这些段标记为死的 `merge_status`（`incompatible`/`failed`/`dark`），以免永远重试。它们会作为永远不会被合并的碎片累积。另一类相关的是"假合并"段 —— 被滚动合并单例快速路径（<2 个有效段的批次）标记为 `merged` 但实际上未合并，永久将它们排出合并队列。
+
+**解决**: 使用 `repair fragments` CLI 工具暴露并清理这些碎片。
+
+```bash
+# 1. 仅报告：查看存在哪些碎片及占用多少空间（不修改）
+./mibee-nvr repair fragments --config mibee-nvr.yaml
+
+# 2. 先给合并引擎再来一次机会（重置为 'pending'；若合并成功，碎片自清）
+./mibee-nvr repair fragments --retry --execute --camera <id> --limit 5
+
+# 3. 若仍回到 incompatible（确实损坏），删除数据库行 + 文件：
+./mibee-nvr repair fragments --force-delete --execute
+
+# 4. 同时包含 'failed' 和 'dark' 段（逗号分隔）：
+./mibee-nvr repair fragments --status incompatible,failed,dark --force-delete --execute
+```
+
+对于"假合并"类（已合并但从未真正合并 —— `merge_path` 为空）：
+
+```bash
+# 查找它们
+./mibee-nvr repair fragments --reset-fake-merged
+
+# 重置为 pending，然后重启服务以重新合并
+./mibee-nvr repair fragments --reset-fake-merged --execute
+sudo systemctl restart mibee-nvr
+```
+
+选项：`--execute`（默认 dry-run）、`--dry-run`、`--retry`（将匹配段重置为 pending —— 先试这个）、`--force-delete`（删除数据库行 + 文件；与 `--retry` 互斥）、`--reset-fake-merged`（针对已合并但未真正合并段的独立模式；不能与 `--status`/`--retry`/`--force-delete` 组合）、`--max-duration <秒>`（配合 `--reset-fake-merged`：只匹配短于此阈值的段 —— 针对短的单例碎片，保留合法的已合并长录像；推荐 `300` 即 5 分钟）、`--status <列表>`（默认 `incompatible`；允许 `incompatible`、`failed`、`dark`）、`--camera <id>`、`--limit <n>`、`--config <path>`、`--help`。
+
+活跃合并状态（`pending`/`merged`/`merging`）永远不会被 `--status` 匹配 —— 工具会拒绝合并引擎仍在处理的值。
+
 #### MP4 文件无法播放
 **症状**: 录像已创建但无法用媒体播放器播放
 

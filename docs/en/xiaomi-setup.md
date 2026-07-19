@@ -22,15 +22,15 @@ MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS
 | **Xiaomi C200** | `chuangmi.camera.046c04` | CS2 P2P | ✅ Full | HD 1080p indoor camera |
 | **Xiaomi C300** | `chuangmi.camera.72ac1` | CS2 P2P | ✅ Full | 2K indoor camera |
 | **Xiaofang** | `isa.camera.isc5c1` | TUTK | ✅ Full | Pan/tilt dome camera (legacy) |
-| **Loock V1** | `lumi.camera.v1` | TUTK | ✅ Full | Smart doorbell camera (legacy) |
+| **Loock V1** | `loock.cateye.v01` | TUTK | ✅ Full | Smart doorbell camera (legacy) |
 | **Loock V2** | `loock.cateye.v02` | CS2 P2P | ✅ Full | Smart doorbell camera |
 | **Dafang** | `isa.camera.df3` | TUTK | ✅ Full | Pan/tilt dome camera (legacy) |
-| **Aqara G2** | `isa.camera.g2h` | TUTK | ✅ Full | Indoor cube camera (legacy) |
-| **IMILAB A1** | `isa.camera.a1` | TUTK | ✅ Full | Indoor camera (legacy) |
-| **Xiaobai** | `isa.camera.xf` | TUTK | ✅ Full | Pan/tilt camera (legacy) |
+| **Aqara G2** | `lumi.camera.gwagl01` | TUTK | ✅ Full | Indoor cube camera (legacy) |
+| **IMILAB A1** | `chuangmi.camera.ipc019e` | TUTK | ✅ Full | Indoor camera (legacy) |
+| **Xiaobai** | `chuangmi.camera.xiaobai` | TUTK | ✅ Full | Pan/tilt camera (legacy) |
 | **Mijia** | `chuangmi.camera.v2` | TUTK | ✅ Full | Basic indoor camera (legacy) |
 
-**Important**: Both CS2 and TUTK protocol cameras are now supported. TUTK models use the legacy protocol via `internal/tutk/`. Two-way audio is available for CS2 models only.
+**Important**: Both CS2 and TUTK protocol cameras are now supported. TUTK models use the legacy protocol via `internal/tutk/`. Two-way audio is available for TUTK models only (CS2 models are blocked because two-way audio requires the TUTK transport).
 ## Configuration
 
 ### Basic Configuration
@@ -258,7 +258,7 @@ curl -u admin:password -o snapshot.jpg \
 
 ## Two-Way Audio
 
-Two-way audio allows you to communicate through supported Xiaomi cameras. This feature is available for CS2 models only (TUTK models are blocked due to a protocol limitation).
+Two-way audio allows you to communicate through supported Xiaomi cameras. This feature is available for TUTK models only — it requires the TUTK transport, so CS2 cameras return `two-way audio requires TUTK transport` and are not supported.
 
 ### Prerequisites
 

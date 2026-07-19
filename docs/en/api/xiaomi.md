@@ -158,7 +158,7 @@ curl -u username:password \
 
 **Endpoint:** `GET /api/xiaomi/check-vendor`
 
-Check the vendor protocol for a Xiaomi device by DID. Validates whether the device uses the CS2 protocol (supported) or TUTK protocol (not supported).
+Check the vendor protocol for a Xiaomi device by DID. As of v0.9.0 both CS2 and TUTK (legacy) protocols are supported, so this endpoint returns `compatible: true` for both. The `vendor` field tells you which protocol the device uses so the UI can pick the right transport. The endpoint also returns `compatible: true` with `vendor: "unknown"` when the Xiaomi integration is disabled, no token is configured, or the vendor lookup errors (the pre-add gate never blocks on uncertainty).
 
 **Query Parameters:**
 
@@ -172,7 +172,7 @@ curl -u username:password \
   "http://localhost:9090/api/xiaomi/check-vendor?did=camera_did_123"
 ```
 
-**Response (CS2 - compatible):**
+**Response (CS2 device):**
 ```json
 {
   "vendor": "cs2",
@@ -180,11 +180,18 @@ curl -u username:password \
 }
 ```
 
-**Response (TUTK - incompatible):**
+**Response (TUTK / legacy device):**
 ```json
 {
   "vendor": "tutk",
-  "compatible": false,
-  "message": "This device uses TUTK protocol which is not supported by MiBee NVR. Only CS2 protocol cameras are supported."
+  "compatible": true
+}
+```
+
+**Response (unknown — integration disabled, no token, or lookup error):**
+```json
+{
+  "vendor": "unknown",
+  "compatible": true
 }
 ```

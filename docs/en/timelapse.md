@@ -1,13 +1,13 @@
 # Timelapse Recording
 
-Timelapse functionality creates time-lapse videos from camera recordings, compressing hours or days into minutes. MiBee NVR v2 introduces major improvements with flexible merge durations, H.264/H.265 dual-mode support, and a unified recordings interface.
+Timelapse functionality creates time-lapse videos from camera recordings, compressing hours or days into minutes. MiBee NVR supports flexible merge durations, H.264/H.265 dual-mode support, and a unified recordings interface.
 
 ## Overview
 
-The timelapse system automatically merges video segments into compressed timelapse recordings. Key improvements in v2:
+The timelapse system automatically merges video segments into compressed timelapse recordings. Key features:
 
-- **Flexible Merge Durations**: Support for 8h, 12h, 24h, natural-day, 7d, and 30d intervals
-- **H.264/H.265 Dual-Mode**: Any RTSP camera can now generate timelapse recordings without additional hardware
+- **Merge Durations up to 1h**: Hourly merge intervals keep timezone behavior predictable (see the note below on the 1h cap)
+- **H.264/H.265 Dual-Mode**: Any RTSP camera can generate timelapse recordings without additional hardware
 - **Unified Interface**: Integrated recordings page with table, gallery, and calendar view modes
 - **Keyframe Extraction**: Zero-overhead timelapse generation using existing RTSP streams
 
@@ -25,11 +25,11 @@ cameras:
     url: "rtsp://192.168.1.100:554/stream"
     enabled: true
     
-    # Timelapse configuration (v2 features)
+    # Timelapse configuration
     timelapse:
       enabled: true
-      merge_duration: "natural-day"  # v2: flexible merge intervals
-      frame_source: "rtsp_keyframe"  # v2: dual-mode keyframe extraction
+      merge_duration: "1h"             # merge interval, capped at 1h (see below)
+      frame_source: "rtsp_keyframe"  # dual-mode keyframe extraction
       output_fps: 30
 ```
 
@@ -44,10 +44,10 @@ cameras:
     encoding: "h265"
     url: "rtsp://192.168.1.101:554/stream"
     enabled: true
-    
+
     timelapse:
       enabled: true                          # Enable timelapse
-      merge_duration: "24h"                  # Merge every 24 hours
+      merge_duration: "30m"                  # Merge every 30 minutes
       frame_source: "rtsp_keyframe"         # Extract from RTSP stream
       output_fps: 30
 ```
@@ -63,56 +63,49 @@ cameras:
     encoding: "h264"
     url: "rtsp://backup-camera.example.com:554/stream"
     enabled: true
-    
-    timlapse:
+
+    timelapse:
       enabled: true
-      merge_duration: "7d"                  # Weekly merges
+      merge_duration: "1h"                  # Maximum merge interval
       frame_source: "rtsp_keyframe"         # Extract from timelapse stream
       output_fps: 15                         # Lower fps for longer durations
 ```
 
-## Merge Duration Options (v2)
+## Merge Duration Options
 
-The `merge_duration` field supports flexible intervals for different use cases:
+The `merge_duration` field controls how often captured keyframes are merged into a single timelapse file.
 
-| Duration | Description | Alignment | Use Case |
-|----------|-------------|-----------|----------|
-| `8h` | 8-hour merges | 00:00, 08:00, 16:00 UTC | Business hours, shift changes |
-| `12h` | 12-hour merges | 00:00, 12:00 UTC | Day/night cycles, AM/PM segments |
-| `24h` | 24-hour merges | 00:00 UTC daily | Daily overview, security review |
-| `natural-day` | Natural day (0-24h) | Local time | User-friendly daily summary |
-| `7d` | Weekly merges | Monday 00:00 UTC | Weekly reviews, pattern analysis |
-| `30d` | Monthly merges | 1st of month 00:00 UTC | Monthly reports, long-term analysis |
+**Important: merge_duration is capped at 1h.** Any value greater than 1h is not honored — the merge window is capped at 1h. The cap was added because multi-hour windows align to local midnight and therefore cross a UTC day boundary; once storage/queries mix UTC and the user's timezone, a multi-hour window both amplifies IO (it touches two UTC day-partitions) and mis-buckets recordings across the boundary. A 1h window never crosses a natural-day boundary regardless of timezone. "Watch a whole day" is handled by client-side continuous playback (the recordings detail view auto-advances to the next segment), not by synthesizing a large file server-side.
+
+Concretely:
+
+- Valid values are any Go duration string up to and including `1h` (e.g. `"5m"`, `"10m"`, `"15m"`, `"30m"`, `"1h"`). The empty string defaults to `"1h"`.
+- The legacy multi-hour strings (`"8h"`, `"12h"`, `"24h"`, `"natural-day"`, `"7d"`, `"30d"`) are accepted for backward compatibility but are **silently clamped to 1h** with a warning in the logs. Existing configs upgrade without breaking.
+- Any other Go duration string greater than `1h` (e.g. `"2h"`, `"90m"`) is rejected at config validation with an error.
 
 ### Configuration Examples
 
 ```yaml
-# 8-hour business monitoring
+# Hourly merges (the maximum)
 timelapse:
   enabled: true
-  merge_duration: "8h"
+  merge_duration: "1h"
   output_fps: 30
 
-# Daily summary with natural day
+# Half-hourly merges
 timelapse:
   enabled: true
-  merge_duration: "natural-day"
+  merge_duration: "30m"
   output_fps: 10
 
-# Weekly pattern analysis
+# 15-minute merges for finer-grained clips
 timelapse:
   enabled: true
-  merge_duration: "7d"
+  merge_duration: "15m"
   output_fps: 5
-
-# Monthly reports
-timelapse:
-  enabled: true
-  merge_duration: "30d"
-  output_fps: 2
 ```
 
-## Dual-Mode Timelapse (v2)
+## Dual-Mode Timelapse
 
 Dual-mode timelapse allows any RTSP camera to generate timelapse recordings without additional hardware requirements.
 
@@ -142,16 +135,16 @@ cameras:
     stream_encoding: "H265"            # ONVIF-specific field
     url: "onvif://192.168.1.102"
     enabled: true
-    
+
     timelapse:
       enabled: true
-      merge_duration: "24h"
+      merge_duration: "1h"
       frame_source: "rtsp_keyframe"
 ```
 
-## Unified Recordings Interface (v2)
+## Unified Recordings Interface
 
-The v2 release merges timelapse and regular recordings into a unified Library page with enhanced navigation and filtering capabilities.
+MiBee NVR merges timelapse and regular recordings into a unified Library page with enhanced navigation and filtering capabilities.
 
 ### View Modes
 
@@ -186,8 +179,6 @@ Displays recordings in a responsive grid layout with:
 - Lazy loading for performance
 - Click to view/download recordings
 
-<!-- TODO: screenshot -->
-
 ### List View
 
 ```bash
@@ -201,8 +192,6 @@ Provides a compact list view with:
 - Format indicators
 - Quick download buttons
 - Search and filter capabilities
-
-<!-- TODO: screenshot -->
 
 ### Calendar View
 
@@ -218,8 +207,6 @@ Provides calendar-based navigation with:
 - Click dates to filter recordings
 - Timeline navigation controls
 
-<!-- TODO: screenshot -->
-
 ### Timeline Bar
 
 Above the view mode tabs, the timeline bar is always visible and provides:
@@ -230,16 +217,13 @@ Above the view mode tabs, the timeline bar is always visible and provides:
 - Clickable navigation between time periods
 - Visual indicators for recording availability
 
-<!-- TODO: screenshot -->
-<!-- TODO: Add screenshot of unified Recordings page -->
-
 ## Migration Guide
 
-### From Timelapse v1 to v2
+### From the legacy `daily_merge` field
 
 #### 1. Update Configuration
 
-**Before (v1):**
+**Before:**
 
 ```yaml
 timelapse:
@@ -248,25 +232,25 @@ timelapse:
   output_fps: 30
 ```
 
-**After (v2):**
+**After:**
 
 ```yaml
 timelapse:
   enabled: true
-  merge_duration: "natural-day"  # v2 field
-  frame_source: "rtsp_keyframe"   # v2 field
+  merge_duration: "1h"             # capped at 1h (was daily_merge)
+  frame_source: "rtsp_keyframe"
   output_fps: 30
 ```
 
-#### 2. New Merge Duration Options
+#### 2. Merge Duration Options
 
 If you want different merge intervals:
 
 ```yaml
-# Change from daily to 8-hour merges
+# Half-hourly merges
 timelapse:
   enabled: true
-  merge_duration: "8h"            # v2: flexible intervals
+  merge_duration: "30m"
   frame_source: "rtsp_keyframe"
   output_fps: 30
 ```
@@ -291,11 +275,11 @@ cameras:
     encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
     enabled: true
-    
+
     timelapse:                     # Add this section
       enabled: true
-      merge_duration: "natural-day"
-      frame_source: "rtsp_keyframe"  # v2 dual-mode
+      merge_duration: "1h"
+      frame_source: "rtsp_keyframe"  # dual-mode
       output_fps: 30
 ```
 
@@ -303,6 +287,7 @@ cameras:
 
 - **Existing cameras continue working** without changes
 - **Legacy `daily_merge` field** still works but is deprecated
+- **Legacy multi-hour `merge_duration` values** (`8h`/`12h`/`24h`/`natural-day`/`7d`/`30d`) are silently clamped to 1h
 - **Existing timelapse recordings** remain accessible in the unified interface
 - **API endpoints** maintain compatibility with existing integrations
 
@@ -310,7 +295,7 @@ cameras:
 
 1. [ ] Review existing camera configurations
 2. [ ] Add `timelapse.enabled: true` to desired RTSP cameras
-3. [ ] Set appropriate `merge_duration` (default: "natural-day")
+3. [ ] Set appropriate `merge_duration` (default: "1h", max: "1h")
 4. [ ] Test dual-mode functionality with sample cameras
 5. [ ] Verify unified recordings interface works
 6. [ ] Check that existing recordings are still accessible
@@ -346,7 +331,7 @@ curl -u admin:password "http://localhost:9090/api/timelapse/status"
 grep "merge_duration" /path/to/config.yaml
 ```
 
-Valid values: `8h`, `12h`, `24h`, `natural-day`, `7d`, `30d`
+Valid values: any Go duration up to and including `1h` (e.g. `5m`, `15m`, `30m`, `1h`). The legacy strings `8h`/`12h`/`24h`/`natural-day`/`7d`/`30d` are silently clamped to `1h`; any other value greater than `1h` is rejected.
 
 #### 3. Dual-Mode Camera Setup
 
@@ -365,7 +350,7 @@ cameras:
     
     timelapse:
       enabled: true                      # Must be enabled
-      merge_duration: "24h"             # Set duration
+      merge_duration: "1h"              # Set duration (max 1h)
       frame_source: "rtsp_keyframe"       # Keyframe source
       output_fps: 30
 ```
@@ -387,7 +372,7 @@ cameras:
     
     timelapse:
       enabled: true
-      merge_duration: "24h"
+      merge_duration: "1h"
       frame_source: "rtsp_keyframe"
 ```
 
@@ -419,9 +404,8 @@ journalctl -u mibee-nvr -f | grep merge
 
 - **Timelapse files** are typically 90-95% smaller than original footage
 - **Merge duration** affects file sizes:
-  - 8h merges: ~50-100MB per hour of footage
-  - 24h merges: ~200-400MB per day
-  - 7d merges: ~1-2GB per week
+  - 30m merges: smaller, more frequent clips
+  - 1h merges (the maximum): larger hourly clips
 
 ### Network Impact
 
@@ -466,7 +450,7 @@ PUT /api/cameras/camera-id
 {
   "timelapse": {
     "enabled": true,
-    "merge_duration": "24h",
+    "merge_duration": "1h",
     "frame_source": "rtsp_keyframe",
     "output_fps": 30
   }
@@ -477,18 +461,17 @@ PUT /api/cameras/camera-id
 
 ### Configuration Tips
 
-1. **Choose appropriate merge durations** based on your use case:
-   - Security monitoring: 8h or 24h for daily review
-   - Business analytics: 7d for weekly patterns
-   - Long-term storage: 30d for monthly reports
+1. **Choose appropriate merge durations** based on your use case (remember the 1h cap):
+   - Security monitoring: `1h` for frequent reviewable clips
+   - Finer-grained clips: `30m` or `15m`
+   - Lower output FPS to keep longer-interval clips small
 
 2. **Optimize output FPS**:
    - 30 FPS: Real-time events
-   - 15 FPS: Daily summaries
-   - 5 FPS: Weekly overviews
-   - 2 FPS: Monthly reports
+   - 15 FPS: Frequent summaries
+   - 5 FPS: Compact overviews
 
-3. **Use natural-day** for user-friendly daily summaries aligned with local time
+3. **For "watch a whole day" use cases**, rely on client-side continuous playback in the recordings detail view (it auto-advances to the next segment) rather than synthesizing a single multi-hour file.
 
 ### Dual-Mode Setup
 

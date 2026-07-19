@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 安装指定版本：
 
 ```bash
-sudo ./install.sh --version v0.2.0
+sudo ./install.sh --version v0.9.0
 ```
 
 卸载（保留 `/var/lib/mibee-nvr` 中的录像数据）：
@@ -201,8 +201,8 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 **运行指定版本：**
 
 ```bash
-docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
-docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.2.0
+docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
 ```
 
 **停止和删除：**
@@ -265,7 +265,7 @@ services:
 
 注意事项：
 
-- 片段时长必须保持在 30 秒（`segment_duration: "30s"`）
+- 片段时长：低内存设备（可用 RAM ≤2 GB，如树莓派 3B）使用 30s；可用 RAM >2 GB 的主机（x86、Banana Pi M5）最高 2m。配置值会在启动时自动钳制到平台上限。
 - 建议使用外接 USB 硬盘（ext4 格式）存储录像数据
 - 同时录制不超过 2-3 路摄像头，具体取决于分辨率和码率
 
@@ -457,7 +457,7 @@ server {
 
 树莓派 3B 仅有 905MB 内存。为保证稳定运行：
 
-- **片段时长**：使用 30 秒（`segment_duration: "30s"`）。更长的片段会在内存中缓存更多帧（如 120 秒片段占用 60-80MB）。
+- **片段时长**：低内存设备（可用 RAM ≤2 GB，如树莓派 3B）使用 30s；可用 RAM >2 GB 的主机（x86、Banana Pi M5）最高 2m，可将滚动合并需处理的分片数减半。更长的片段会在内存中缓存更多帧（如 120 秒片段占用 60-80MB），因此配置值会在启动时自动钳制到平台上限（≤2 GB → 30s，>2 GB → 最高 2m），若被降低会给出告警。
 - **内存限制**：在 `deploy/mibee-nvr.service` 中取消注释 `MemoryMax=512M`，防止 OOM。
 - **存储**：使用外接 USB 硬盘（ext4）存储录像。SD 卡在持续写入场景下会快速磨损。
 - **摄像头数量**：建议同时录制不超过 2-3 路 H.264/H.265 流，具体取决于分辨率和码率。
@@ -467,7 +467,7 @@ server {
 ### 使用安装脚本（推荐）
 
 ```bash
-sudo ./install.sh --version v0.2.0
+sudo ./install.sh --version v0.9.0
 ```
 
 脚本会自动停止服务、替换二进制文件并重启。配置和录像数据不受影响。
