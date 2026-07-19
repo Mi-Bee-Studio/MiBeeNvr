@@ -528,12 +528,33 @@ func TestFTPPortZeroRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "ftp port out of range")
 }
 
-func TestSegmentDurationExceeds30s(t *testing.T) {
-	cfg := &Config{Storage: StorageConfig{SegmentDuration: "60s"}}
+func TestSegmentDurationClampedToPlatformCap(t *testing.T) {
+	// The cap is platform-aware: 30s on low-memory devices (RPi 3B ≤2GB),
+	// 2m on higher-memory devices. A value above the platform cap is clamped.
+	segDurCap := maxSegmentDurationForMem()
+	// Pick a value strictly above the cap.
+	over := segDurCap + 30*time.Second
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: over.String()}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)
-	require.Equal(t, "30s", cfg.Storage.SegmentDuration, "should be clamped to 30s")
+	got, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+	require.LessOrEqual(t, got, segDurCap, "segment_duration should be clamped to the platform cap")
+}
+
+func TestSegmentDurationHighMemAllows1m(t *testing.T) {
+	// On a high-memory host (CI runners typically have >2GB), 1m is allowed
+	// without clamping. On a low-memory host this test is skipped — the 1m
+	// value would be clamped to 30s there, which is correct behavior.
+	if memAvailableMB() <= 2048 {
+		t.Skip("host has ≤2GB RAM; 1m segment_duration correctly clamped to 30s here")
+	}
+	cfg := &Config{Storage: StorageConfig{SegmentDuration: "1m"}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "1m", cfg.Storage.SegmentDuration, "1m should pass on high-memory host")
 }
 
 func TestHLSSegmentDurationDefault30sPasses(t *testing.T) {
