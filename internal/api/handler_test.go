@@ -2689,18 +2689,23 @@ type stubCloudProxy struct {
 func (stubCloudProxy) SetCloudConfig(_ context.Context, _, _, _ string) error {
 	return nil
 }
+
 func (stubCloudProxy) SignIn(_ context.Context, _, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (stubCloudProxy) SubmitCaptcha(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (stubCloudProxy) SubmitVerify(_ context.Context, _, _ string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }
+
 func (stubCloudProxy) ListDevices(_ context.Context) ([]CloudDeviceInfo, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+
 func (s stubCloudProxy) CheckVendor(_ context.Context, _ string) (string, error) {
 	return s.vendor, nil
 }
@@ -2726,9 +2731,9 @@ func TestXiaomiCheckVendorCompatibility(t *testing.T) {
 			db, store := setupTestDB(t)
 			defer db.Close()
 			cfg := &config.Config{
-				Cleanup:  config.CleanupConfig{RetentionDays: 30},
-				Cameras:  []config.CameraConfig{},
-				Xiaomi:   config.XiaomiConfig{Token: "test-token"},
+				Cleanup: config.CleanupConfig{RetentionDays: 30},
+				Cameras: []config.CameraConfig{},
+				Xiaomi:  config.XiaomiConfig{Token: "test-token"},
 			}
 			h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, stubCloudProxy{vendor: tc.vendor}, nil)
 
