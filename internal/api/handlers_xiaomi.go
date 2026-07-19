@@ -263,17 +263,13 @@ func (h *Handler) handleCheckVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if vendor == "tutk" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"vendor":     "tutk",
-			"compatible": false,
-			"message":    "This device uses TUTK protocol which is not supported by MiBee NVR. Only CS2 protocol cameras are supported.",
-		})
-		return
-	}
-
+	// Both CS2 and TUTK vendors are supported as of v0.9.0 (TUTK transport ported
+	// from go2rtc — see internal/tutk/). Only return compatible=false for vendors
+	// we genuinely cannot handle. Resolves issue #64: the pre-add gate was still
+	// blocking TUTK cameras with a "not supported" message even though recording
+	// worked once the user bypassed the warning dialog.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"vendor":     "cs2",
+		"vendor":     vendor,
 		"compatible": true,
 	})
 }
