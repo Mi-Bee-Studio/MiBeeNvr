@@ -354,44 +354,63 @@ func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
 // rolling_backfill_batch segments per cycle to bound IO.
 func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 	global := r.getGlobalCfg()
-	limit := global.RollingBackfillBatch
-	if limit <= 0 {
-		limit = 500
-	}
-	// No max_age filter — the periodic sweep's job is to eventually clear ALL
-	// historical pending, including pre-72h backlogs the startup scan deferred.
-	recs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false, limit, time.Time{})
-	if err != nil {
-		rollingLogger.Warn("backfill loop: failed to list pending segments", "error", err)
-		return
-	}
-	if len(recs) == 0 {
-		return // nothing to do this cycle
+	totalLimit := global.RollingBackfillBatch
+	if totalLimit <= 0 {
+		totalLimit = 500
 	}
 
-	byCamera := make(map[string][]*model.Recording)
-	for _, rec := range recs {
-		byCamera[rec.CameraID] = append(byCamera[rec.CameraID], rec)
+	// Enumerate rolling-enabled cameras and divide the per-cycle limit evenly
+	// across them. The previous implementation queried pending segments across
+	// ALL cameras in a single SELECT with `ORDER BY camera_id, started_at ASC
+	// LIMIT N`. That ordering meant a single camera with a large backlog
+	// (production: cam-fa049182 with ~4000 pending) starved every camera that
+	// sorted after it — backfill never reached them at all. Per-camera queries
+	// with fair share guarantee every camera gets a slice of each cycle.
+	rollingCameras := make([]string, 0)
+	for _, cam := range r.cameras() {
+		if r.resolveRollingConfig(cam.ID).Enabled {
+			rollingCameras = append(rollingCameras, cam.ID)
+		}
+	}
+	if len(rollingCameras) == 0 {
+		return
+	}
+	// Fair share: at least 50 per camera, more if total budget allows.
+	perCamera := totalLimit / len(rollingCameras)
+	if perCamera < 50 {
+		perCamera = 50
 	}
 
 	totalMerged := 0
-	for cameraID, camRecs := range byCamera {
+	camerasTouched := 0
+	for _, cameraID := range rollingCameras {
 		if ctx.Err() != nil {
 			break
 		}
-		if !r.resolveRollingConfig(cameraID).Enabled {
+		// No max_age filter — the periodic sweep's job is to eventually clear
+		// ALL historical pending, including pre-72h backlogs the startup scan
+		// deferred.
+		recs, err := r.db.ListPendingSegmentsForRolling(ctx, cameraID, false, perCamera, time.Time{})
+		if err != nil {
+			rollingLogger.Warn("backfill loop: failed to list pending segments",
+				"camera_id", cameraID, "error", err)
 			continue
 		}
-		merged, err := r.backfillCameraRecordings(ctx, cameraID, camRecs)
+		if len(recs) == 0 {
+			continue
+		}
+		merged, err := r.backfillCameraRecordings(ctx, cameraID, recs)
 		if err != nil {
 			rollingLogger.Warn("backfill loop: failed for camera",
 				"camera_id", cameraID, "error", err)
 		}
 		totalMerged += merged
+		camerasTouched++
 	}
-	if totalMerged > 0 {
-		rollingLogger.Info("backfill loop: merged historical segments",
-			"segments_merged", totalMerged, "cameras", len(byCamera))
+	if totalMerged > 0 || camerasTouched > 0 {
+		rollingLogger.Info("backfill loop: processed historical segments",
+			"segments_merged", totalMerged, "cameras_touched", camerasTouched,
+			"rolling_cameras", len(rollingCameras), "per_camera_limit", perCamera)
 	}
 }
 

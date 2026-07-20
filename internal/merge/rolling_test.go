@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -840,4 +841,80 @@ func TestShouldPurgeSingleton_AgeThreshold(t *testing.T) {
 	}
 	require.False(t, r.shouldPurgeSingleton(mixed),
 		"batch with a recent newest segment must stay pending")
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillHistorical_FairAcrossCameras — regression test for the backfill
+// starvation bug. Old impl queried pending segments across ALL cameras in one
+// SELECT with `ORDER BY camera_id, started_at ASC LIMIT N`. A camera with a
+// large backlog that sorted early (e.g. cam-5xxx before cam-fxxx) consumed the
+// whole N-segment budget every cycle, so cameras sorting later were never
+// reached — production: cam-fa049182 (3969 pending) got zero backfill across
+// 3 weeks of operation while earlier-sorting cameras stayed stuck too.
+//
+// Fix: backfillHistorical now enumerates rolling-enabled cameras and queries
+// each camera's pending independently with a fair-share limit. This test
+// seeds two cameras where the alphabetically-first camera has a HUGE backlog
+// (enough to saturate any global LIMIT) and verifies the second camera STILL
+// gets its segments processed in a single backfillHistorical call.
+// ---------------------------------------------------------------------------
+
+func TestBackfillHistorical_FairAcrossCameras(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:       boolPtr(true),
+		RollingDebounce:      "50ms",
+		RollingWindow:        "1h",
+		RollingBackfillBatch: 20, // small global budget per cycle
+	}
+	// Two cameras: "aaa-hog" sorts before "zzz-starved" alphabetically.
+	cameras := []config.CameraConfig{{ID: "aaa-hog"}, {ID: "zzz-starved"}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	// aaa-hog: seed MANY old singletons (10 days old, each in its own hour
+	// window) — far more than RollingBackfillBatch=20. The old global-LIMIT
+	// impl spent its entire budget on these and never reached zzz-starved.
+	old := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour)
+	for i := range 50 {
+		// Spread across distinct hours so each is a singleton window.
+		createAndInsertSegment(t, env, fmt.Sprintf("hog-%d", i), "aaa-hog",
+			old.Add(time.Duration(i)*time.Hour))
+	}
+
+	// zzz-starved: seed 3 segments in ONE hour window (a real mergeable batch).
+	// Under the old impl this camera was never reached. Under the fix its
+	// batch must be processed in the same cycle.
+	starvedBase := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour).Add(5 * time.Minute)
+	for i := range 3 {
+		createAndInsertSegment(t, env, fmt.Sprintf("starved-%d", i), "zzz-starved",
+			starvedBase.Add(time.Duration(i)*30*time.Second))
+	}
+
+	// Run one backfillHistorical cycle (the periodic sweep path).
+	r.backfillHistorical(context.Background())
+
+	// aaa-hog's singletons should all be retired (old + alone → purged).
+	hogRecs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: "aaa-hog", Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, hogRecs, 50, "aaa-hog segments preserved (retired in place)")
+	for _, rec := range hogRecs {
+		require.Equal(t, model.MergeStatusMerged, rec.MergeStatus,
+			"aaa-hog historical singletons must be retired")
+	}
+
+	// The critical assertion: zzz-starved's 3 segments were ACTUALLY MERGED
+	// into 1 file, even though aaa-hog has 30 segments that would have
+	// saturated a global LIMIT under the old impl.
+	starvedRecs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: "zzz-starved", Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, starvedRecs, 1,
+		"zzz-starved must be merged in the same cycle — proves fair scheduling "+
+			"(old impl would have starved this camera)")
+	require.True(t, starvedRecs[0].Merged)
+	require.NotEmpty(t, starvedRecs[0].FilePath)
 }
