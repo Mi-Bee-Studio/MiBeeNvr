@@ -440,7 +440,13 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			if cam.Timelapse.MergeOutputFPS > 0 {
 				fps = cam.Timelapse.MergeOutputFPS
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc)
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc, timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
+				cam := camMgr.GetCameraConfig(cameraID)
+				if cam == nil || cam.RecordingEnabled == nil {
+					return true // nil = default true (recording enabled)
+				}
+				return *cam.RecordingEnabled
+			}))
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(
 				"merge scheduler: configured camera",
