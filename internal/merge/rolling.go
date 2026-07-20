@@ -530,6 +530,60 @@ func splitByFormat(recs []*model.Recording) (mp4, avi, mjpeg []*model.Recording)
 // (which gets slower as the bucket grows). Benchmark: batch-merge of 50 segments
 // is ~10x faster than 50 sequential appends.
 //
+// singletonPurgeAge bounds how long a lone segment in its hour window stays
+// pending before backfill gives up waiting for a neighbor and marks it merged.
+//
+// Background: backfill queries the oldest pending segments first
+// (ORDER BY started_at ASC). Sparse historical recordings — e.g. a camera
+// that only recorded a single 5-minute clip in some hour weeks ago — produce
+// hour windows with only one pending segment. The >=2 batch requirement
+// means these singletons can never be merged, and because they're the oldest,
+// they block backfill from ever reaching the dense recent windows behind them.
+// On a production tree this caused ~8500 segments stuck pending forever.
+//
+// Once a singleton is older than this threshold, it is effectively permanent:
+// no new segment will arrive to join its window (the camera has long since
+// moved on). Marking it merged lets backfill drain past it. The segment file
+// is untouched — it remains a fully playable standalone recording.
+const singletonPurgeAge = 7 * 24 * time.Hour
+
+// shouldPurgeSingleton reports whether a batch of valid (on-disk) segments
+// that failed the >=2 merge threshold should be marked merged and retired
+// from the pending queue. Returns true only when the NEWEST segment in the
+// batch is older than singletonPurgeAge — recent singletons stay pending in
+// case a neighbor arrives.
+func (r *RollingMergeCoordinator) shouldPurgeSingleton(valid []*model.Recording) bool {
+	if len(valid) == 0 {
+		return false
+	}
+	// valid comes from recs which are ORDER BY started_at ASC, so the last
+	// entry is the newest in the batch.
+	newest := valid[len(valid)-1].StartedAt
+	return time.Since(newest) > singletonPurgeAge
+}
+
+// markSingletonsMerged marks the given recordings as merged (without actually
+// producing a merged file) and returns the count marked. Used to retire
+// historical lone segments that will never gain a merge partner. Each segment
+// keeps its original file_path — playback still works, it just no longer
+// shows as "pending merge" in the UI.
+func (r *RollingMergeCoordinator) markSingletonsMerged(ctx context.Context, cameraID string, recs []*model.Recording) int {
+	ids := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		ids = append(ids, rec.ID)
+	}
+	if err := storage.RetryOnBusy(ctx, func() error {
+		return r.db.SetMergeStatus(ctx, ids, model.MergeStatusMerged)
+	}); err != nil {
+		rollingLogger.Warn("backfill MP4: failed to retire historical singletons",
+			"camera_id", cameraID, "count", len(ids), "error", err)
+		return 0
+	}
+	rollingLogger.Info("backfill MP4: retired historical singletons (no neighbor arrived within purge age)",
+		"camera_id", cameraID, "count", len(ids), "purge_age", singletonPurgeAge)
+	return len(ids)
+}
+
 // Uses the per-batch lock release pattern to avoid blocking live events.
 func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	const backfillBatchSize = 20 // small batches to yield lock to real-time events
@@ -576,9 +630,24 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				valid = append(valid, rec)
 			}
 			if len(valid) < 2 {
-				// Not enough segments to merge — leave pending (see comment in
-				// backfillBatchFormat). Marking singletons merged permanently
-				// ejected them from the merge queue.
+				// Not enough segments to merge in this batch. See the long
+				// comment in backfillBatchFormat for why we do NOT mark these
+				// merged unconditionally — doing so would eject recent segments
+				// from the queue before their neighbors arrive.
+				//
+				// BUT: historical singletons (older than
+				// singletonPurgeAge) are different. A segment that has sat
+				// pending alone in its window for this long will essentially
+				// never gain a neighbor — the camera has long since moved on
+				// to other hours. Leaving them pending forever is what caused
+				// the 8500-segment backlog observed in production: backfill
+				// always queries the oldest pending first, these singletons
+				// always fail the >=2 check, and the queue never drains. Mark
+				// them merged so the next cycle progresses past them.
+				if r.shouldPurgeSingleton(valid) {
+					n := r.markSingletonsMerged(ctx, cameraID, valid)
+					merged += n
+				}
 				continue
 			}
 
