@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -360,10 +361,24 @@ func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
 	}
 }
 
+// backfillConcurrency bounds how many cameras backfillHistorical merges in
+// parallel. Each camera has its own merge lock (r.mergeLocks) so per-camera
+// appends stay serialized; this constant bounds total disk IO across cameras.
+// On USB HDD, 3 is the sweet spot: enough to overlap one camera's DB query +
+// MP4 parse with another's file write, without causing destructive seek
+// thrashing that would starve the recording pipeline.
+const backfillConcurrency = 3
+
 // backfillHistorical processes one batch of pending segments across all
 // rolling-enabled cameras. Unlike backfillOnStartup, it has NO max_age filter
 // (so it digests old backlogs beyond 72h) and processes at most
 // rolling_backfill_batch segments per cycle to bound IO.
+//
+// Cameras are processed CONCURRENTLY (up to backfillConcurrency at once) rather
+// than serially. Each camera has its own merge lock (r.mergeLocks) so appends
+// are naturally serialized per-camera; running multiple cameras in parallel
+// multiplies throughput by overlapping DB query + parse of one camera with the
+// file IO of another.
 func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 	global := r.getGlobalCfg()
 	totalLimit := global.RollingBackfillBatch
@@ -393,36 +408,64 @@ func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 		perCamera = 50
 	}
 
-	totalMerged := 0
-	camerasTouched := 0
+	// Process cameras concurrently with a bounded semaphore. Per-camera merge
+	// locks (r.acquireMergeLock inside backfillMP4) guarantee no two goroutines
+	// merge the same camera at once; the semaphore bounds total disk IO.
+	concurrency := backfillConcurrency
+	if concurrency > len(rollingCameras) {
+		concurrency = len(rollingCameras)
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var totalMerged atomic.Int64
+	var camerasTouched atomic.Int64
+
 	for _, cameraID := range rollingCameras {
 		if ctx.Err() != nil {
 			break
 		}
-		// No max_age filter — the periodic sweep's job is to eventually clear
-		// ALL historical pending, including pre-72h backlogs the startup scan
-		// deferred.
-		recs, err := r.db.ListPendingSegmentsForRolling(ctx, cameraID, false, perCamera, time.Time{})
-		if err != nil {
-			rollingLogger.Warn("backfill loop: failed to list pending segments",
-				"camera_id", cameraID, "error", err)
-			continue
-		}
-		if len(recs) == 0 {
-			continue
-		}
-		merged, err := r.backfillCameraRecordings(ctx, cameraID, recs)
-		if err != nil {
-			rollingLogger.Warn("backfill loop: failed for camera",
-				"camera_id", cameraID, "error", err)
-		}
-		totalMerged += merged
-		camerasTouched++
+		wg.Add(1)
+		go func(camID string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			// No max_age filter — the periodic sweep's job is to eventually
+			// clear ALL historical pending, including pre-72h backlogs the
+			// startup scan deferred.
+			recs, err := r.db.ListPendingSegmentsForRolling(ctx, camID, false, perCamera, time.Time{})
+			if err != nil {
+				rollingLogger.Warn("backfill loop: failed to list pending segments",
+					"camera_id", camID, "error", err)
+				return
+			}
+			if len(recs) == 0 {
+				return
+			}
+			merged, err := r.backfillCameraRecordings(ctx, camID, recs)
+			if err != nil {
+				rollingLogger.Warn("backfill loop: failed for camera",
+					"camera_id", camID, "error", err)
+			}
+			if merged > 0 {
+				totalMerged.Add(int64(merged))
+				camerasTouched.Add(1)
+			}
+		}(cameraID)
 	}
-	if totalMerged > 0 || camerasTouched > 0 {
+	wg.Wait()
+
+	merged := int(totalMerged.Load())
+	touched := int(camerasTouched.Load())
+	if merged > 0 || touched > 0 {
 		rollingLogger.Info("backfill loop: processed historical segments",
-			"segments_merged", totalMerged, "cameras_touched", camerasTouched,
-			"rolling_cameras", len(rollingCameras), "per_camera_limit", perCamera)
+			"segments_merged", merged, "cameras_touched", touched,
+			"rolling_cameras", len(rollingCameras), "per_camera_limit", perCamera,
+			"concurrency", concurrency)
 	}
 }
 
