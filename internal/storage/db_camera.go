@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -59,8 +60,8 @@ type CameraRow struct {
 	// Push-out relay targets + retention, injected from YAML at API response time.
 	PushTargets       []config.PushTargetConfig `json:"push_targets,omitempty"`
 	PushRetentionDays *int                      `json:"push_retention_days,omitempty"`
-	// IP self-healing fields (injected from YAML, not stored in DB). StableID is the
-	// ONVIF serial number used to re-acquire the camera after its IP changes.
+	// StableID is the ONVIF serial number used for IP self-healing.
+	// Persisted in DB via UpsertCamera / UpdateCameraStableID.
 	StableID    string   `json:"stable_id,omitempty"`
 	SubnetHints []string `json:"subnet_hints,omitempty"`
 	// Dark frame filtering (injected from YAML at API response time)
@@ -78,7 +79,7 @@ type CameraRow struct {
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, stable_id, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
@@ -95,7 +96,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr sql.NullString
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.StableID, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
@@ -122,7 +123,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 
 // ListArchivedCameras returns only cameras marked as archived.
 func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
-	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	rows, err := d.readConn().QueryContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, stable_id, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
@@ -139,7 +140,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 		var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 		var archivedAtStr sql.NullString
-		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		if err := rows.Scan(&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.StableID, &c.RetentionDays, &c.Username, &c.HasPassword,
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
@@ -165,12 +166,12 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 }
 
 // UpsertCamera inserts or updates a camera record in the database
-func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding string) error {
-	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding) VALUES(?,?,?,?,?,?,?,?,?,?)
+func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding, stableID string) error {
+	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding, stable_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding;`
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding, stable_id=excluded.stable_id;`
 
-	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, onvifEndpoint, profileToken, streamEncoding)
+	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, onvifEndpoint, profileToken, streamEncoding, stableID)
 
 	return err
 }
@@ -186,7 +187,7 @@ func (d *DB) UpsertCameraIngest(ctx context.Context, cameraID, streamKey, srtPas
 }
 
 // UpdateCameraActivationState sets the activation_state column for a camera.
-// Empty state is normalized to "active". Used by auto-discover (pending→active
+// Empty state is normalized to "active". Used by auto-discover (pending->active
 // on credential activation) and by the AddCamera path to persist the state.
 func (d *DB) UpdateCameraActivationState(ctx context.Context, cameraID, state string) error {
 	if state == "" {
@@ -204,8 +205,8 @@ func (d *DB) UpdateCameraActivationState(ctx context.Context, cameraID, state st
 // physical device the user just archived. Querying the whole table (no archived
 // filter) closes that gap.
 //
-// serial is matched only against serial_number (not stable_id, which is a
-// YAML-only field not stored in this DB column set) and is ONVIF-specific.
+// serial is matched against serial_number + stable_id (stable_id is now
+// DB-persisted via the v27 migration).
 func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, serial string) (bool, error) {
 	if onvifEndpoint == "" && serial == "" {
 		return false, nil
@@ -221,7 +222,8 @@ func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, ser
 	}
 	if serial != "" {
 		var c int
-		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE serial_number=? LIMIT 1`, serial).Scan(&c); err != nil {
+		// Check both serial_number and stable_id
+		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE serial_number=? OR stable_id=? LIMIT 1`, serial, serial).Scan(&c); err != nil {
 			return false, err
 		}
 		if c > 0 {
@@ -237,13 +239,13 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	var mergeCheckInterval, mergeWindowSize, mergeMinSegmentAge sql.NullString
 	var mergeBatchLimit, mergeMinSegmentsToMerge sql.NullInt64
 	var archivedAtStr sql.NullString
-	err := d.readConn().QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
+	err := d.readConn().QueryRowContext(ctx, `SELECT id, name, protocol, encoding, url, description, location, brand, model, serial_number, stable_id, retention_days, username, CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END as has_password,
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state, 'active')
 		FROM cameras WHERE id = ?`, cameraID).Scan(
-		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.RetentionDays, &c.Username, &c.HasPassword,
+		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.StableID, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
@@ -268,6 +270,12 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 	return &c, nil
 }
 
+// GetCameraByID retrieves a single camera record by its ID.
+// Returns nil if the camera does not exist.
+func (d *DB) GetCameraByID(ctx context.Context, cameraID string) (*CameraRow, error) {
+	return d.GetCamera(ctx, cameraID)
+}
+
 // DeleteCamera removes a camera record from the database.
 // Returns an error if the camera does not exist.
 func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
@@ -282,9 +290,154 @@ func (d *DB) DeleteCamera(ctx context.Context, cameraID string) error {
 	return nil
 }
 
+// DeleteCameraRow removes a camera record from the database.
+// Unlike DeleteCamera, this does NOT return an error if the camera does not exist.
+func (d *DB) DeleteCameraRow(ctx context.Context, cameraID string) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM cameras WHERE id = ?;`, cameraID)
+	return err
+}
+
 // UpdateCameraMetadata updates DB-only metadata fields for a camera.
 func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error {
 	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`
 	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
 	return err
 }
+
+// UpdateCameraStableID updates the stable_id column for a camera.
+// stable_id is the ONVIF serial number used for IP self-healing.
+// Idempotent: does nothing if cameraID does not exist (0 rows affected).
+func (d *DB) UpdateCameraStableID(ctx context.Context, cameraID, stableID string) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET stable_id=? WHERE id=?;`, stableID, cameraID)
+	return err
+}
+
+// GetCameraStableID retrieves the stable_id for a camera.
+// Returns empty string if camera not found or stable_id is not set.
+func (d *DB) GetCameraStableID(ctx context.Context, cameraID string) (string, error) {
+	var stableID string
+	err := d.readConn().QueryRowContext(ctx, `SELECT COALESCE(stable_id, '') FROM cameras WHERE id=? LIMIT 1`, cameraID).Scan(&stableID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return stableID, nil
+}
+
+// CameraExistsByStableID reports whether any camera row (including archived)
+// has the given stable_id. Used for dedup when enrolling a device by its
+// ONVIF serial number.
+func (d *DB) CameraExistsByStableID(ctx context.Context, stableID string) (bool, error) {
+	if stableID == "" {
+		return false, nil
+	}
+	var c int
+	if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE stable_id=? LIMIT 1`, stableID).Scan(&c); err != nil {
+		return false, err
+	}
+	return c > 0, nil
+}
+
+// ReassignCameraStableID moves a stable_id from one camera to another.
+// Previously used to atomically transfer the identity when merging duplicate
+// camera records. Sets the old camera's stable_id to empty string.
+func (d *DB) ReassignCameraStableID(ctx context.Context, fromCameraID, toCameraID string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reassign stable_id begin tx: %w", err)
+	}
+	defer tx.Rollback() // no-op if committed
+
+	// Read current stable_id from source
+	var stableID string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(stable_id, '') FROM cameras WHERE id=? LIMIT 1`, fromCameraID).Scan(&stableID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil // source camera gone, nothing to reassign
+		}
+		return fmt.Errorf("reassign stable_id read source: %w", err)
+	}
+	if stableID == "" {
+		return nil // nothing to reassign
+	}
+
+	// Clear source
+	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET stable_id='' WHERE id=?`, fromCameraID); err != nil {
+		return fmt.Errorf("reassign stable_id clear source: %w", err)
+	}
+
+	// Set destination
+	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET stable_id=? WHERE id=?`, stableID, toCameraID); err != nil {
+		return fmt.Errorf("reassign stable_id set dest: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("reassign stable_id commit: %w", err)
+	}
+	return nil
+}
+
+// ReassignCameraData atomically re-tags all related data rows from sourceCameraID
+// to targetCameraID in a single transaction. Updates recordings, camera_health_events,
+// ai_events, and transcoding_tasks tables.
+// Returns an error if the target camera does not exist.
+// Does NOT delete the source camera row — call DeleteCameraRow separately.
+func (d *DB) ReassignCameraData(ctx context.Context, sourceCameraID, targetCameraID string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reassign data begin tx: %w", err)
+	}
+	defer tx.Rollback() // no-op if committed
+
+	// Pre-check: target camera must exist
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM cameras WHERE id=? LIMIT 1`, targetCameraID).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("target camera %q not found", targetCameraID)
+		}
+		return fmt.Errorf("reassign data check target: %w", err)
+	}
+
+	// Re-tag recordings — also rewrite path columns (file_path, merge_path, thumbnail_path)
+	// so they point to the target camera's directory instead of the source camera's.
+	// Without this, the disk step (which moves files to target dir) would leave the DB
+	// pointing to the now-empty source dir, breaking playback and orphaning every row.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE recordings SET camera_id=? WHERE camera_id=?`, targetCameraID, sourceCameraID); err != nil {
+		return fmt.Errorf("reassign recordings: %w", err)
+	}
+
+	// Rewrite path columns: file_path may be NULL or empty; only rewrite when it contains sourceID.
+	// Use REPLACE() to swap the source camera ID prefix in the directory and filename components.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE recordings SET file_path = REPLACE(file_path, ?, ?) WHERE camera_id=? AND file_path LIKE ?`,
+		sourceCameraID, targetCameraID, targetCameraID, "%"+sourceCameraID+"%"); err != nil {
+		return fmt.Errorf("rewrite file_path: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE recordings SET merge_path = REPLACE(merge_path, ?, ?) WHERE camera_id=? AND merge_path LIKE ?`,
+		sourceCameraID, targetCameraID, targetCameraID, "%"+sourceCameraID+"%"); err != nil {
+		return fmt.Errorf("rewrite merge_path: %w", err)
+	}
+	// Re-tag camera_health_events
+	if _, err := tx.ExecContext(ctx, `UPDATE camera_health_events SET camera_id=? WHERE camera_id=?`, targetCameraID, sourceCameraID); err != nil {
+		return fmt.Errorf("reassign health events: %w", err)
+	}
+
+	// Re-tag ai_events
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_events SET camera_id=? WHERE camera_id=?`, targetCameraID, sourceCameraID); err != nil {
+		return fmt.Errorf("reassign ai events: %w", err)
+	}
+
+	// Re-tag transcoding_tasks
+	if _, err := tx.ExecContext(ctx, `UPDATE transcoding_tasks SET camera_id=? WHERE camera_id=?`, targetCameraID, sourceCameraID); err != nil {
+		return fmt.Errorf("reassign transcoding tasks: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("reassign data commit: %w", err)
+	}
+	return nil
+}
+

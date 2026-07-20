@@ -221,8 +221,9 @@ func (d *DB) Init(ctx context.Context) error {
         location TEXT DEFAULT '',
         brand TEXT DEFAULT '',
         model TEXT DEFAULT '',
-        serial_number TEXT DEFAULT '',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	serial_number TEXT DEFAULT '',
+	stable_id TEXT DEFAULT '',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 	recSQL := `CREATE TABLE IF NOT EXISTS recordings (
         id TEXT PRIMARY KEY,
@@ -622,6 +623,30 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active'`)
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='26' WHERE key='schema_version'")
+
+	// Migration v26 → v27: add stable_id column to cameras table.
+	// stable_id is the ONVIF serial number used for IP self-healing (re-acquiring
+	// a camera after its IP changes). Previously YAML-only, now persisted in DB
+	// for dedup and rediscovery queries.
+	//
+	// Rollback SQL:
+	//   ALTER TABLE cameras DROP COLUMN stable_id;
+	//   UPDATE schema_meta SET value='26' WHERE key='schema_version';
+	var stableIDColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stable_id'`).Scan(&stableIDColExists)
+	if stableIDColExists == 0 {
+		// Backup before schema mutation
+		backupPath := d.path + ".pre-v27-backup"
+		if backupErr := d.Backup(ctx, backupPath); backupErr != nil {
+			logger.Warn("failed to create pre-v27 backup", "path", backupPath, "error", backupErr)
+		}
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN stable_id TEXT DEFAULT ''`); err != nil {
+			logger.Error("failed to add stable_id column", "error", err)
+			return err
+		}
+		logger.Info("added stable_id column to cameras (migration v27)")
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='27' WHERE key='schema_version'")
 
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
