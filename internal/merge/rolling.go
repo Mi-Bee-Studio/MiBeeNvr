@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -138,8 +139,20 @@ type bucketInfo struct {
 	spsKey         string // SHA-256(SPS+PPS+VPS) for compatibility checking
 	windowStart    time.Time
 	windowEnd      time.Time
-	segmentCount   int // how many segments have been merged into this bucket
+	segmentCount   int   // how many segments have been merged into this bucket
+	mergedFileSize int64 // current byte size of mergedFilePath (0 if no bucket yet)
 }
+
+// bucketSizeLimit caps how large an accumulating rolling-merge bucket file can
+// grow before a new bucket is rolled. MP4 mdat box size is a uint32, so once a
+// bucket exceeds ~4 GiB the next append fails with "mdat box size exceeds
+// MaxUint32" and the segment is lost from the merge queue. High-bitrate cameras
+// (e.g. 2K云台 at ~1.7 MB/s) hit this within ~40 minutes of recording in one
+// window. The 3 GiB threshold leaves headroom for one more append before the
+// hard 4 GiB limit. When triggered, the current bucket is finalized and a new
+// bucket starts within the same window — playback sees multiple merged files
+// per hour instead of one, which is fine (the timeline UI groups by hour).
+const bucketSizeLimit = 3 << 30 // 3 GiB
 
 // NewRollingMergeCoordinator creates a new coordinator.
 // It does NOT start subscribing until Start() is called.
@@ -348,50 +361,111 @@ func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
 	}
 }
 
+// backfillConcurrency bounds how many cameras backfillHistorical merges in
+// parallel. Each camera has its own merge lock (r.mergeLocks) so per-camera
+// appends stay serialized; this constant bounds total disk IO across cameras.
+// On USB HDD, 3 is the sweet spot: enough to overlap one camera's DB query +
+// MP4 parse with another's file write, without causing destructive seek
+// thrashing that would starve the recording pipeline.
+const backfillConcurrency = 3
+
 // backfillHistorical processes one batch of pending segments across all
 // rolling-enabled cameras. Unlike backfillOnStartup, it has NO max_age filter
 // (so it digests old backlogs beyond 72h) and processes at most
 // rolling_backfill_batch segments per cycle to bound IO.
+//
+// Cameras are processed CONCURRENTLY (up to backfillConcurrency at once) rather
+// than serially. Each camera has its own merge lock (r.mergeLocks) so appends
+// are naturally serialized per-camera; running multiple cameras in parallel
+// multiplies throughput by overlapping DB query + parse of one camera with the
+// file IO of another.
 func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 	global := r.getGlobalCfg()
-	limit := global.RollingBackfillBatch
-	if limit <= 0 {
-		limit = 500
+	totalLimit := global.RollingBackfillBatch
+	if totalLimit <= 0 {
+		totalLimit = 500
 	}
-	// No max_age filter — the periodic sweep's job is to eventually clear ALL
-	// historical pending, including pre-72h backlogs the startup scan deferred.
-	recs, err := r.db.ListPendingSegmentsForRolling(ctx, "", false, limit, time.Time{})
-	if err != nil {
-		rollingLogger.Warn("backfill loop: failed to list pending segments", "error", err)
+
+	// Enumerate rolling-enabled cameras and divide the per-cycle limit evenly
+	// across them. The previous implementation queried pending segments across
+	// ALL cameras in a single SELECT with `ORDER BY camera_id, started_at ASC
+	// LIMIT N`. That ordering meant a single camera with a large backlog
+	// (production: cam-fa049182 with ~4000 pending) starved every camera that
+	// sorted after it — backfill never reached them at all. Per-camera queries
+	// with fair share guarantee every camera gets a slice of each cycle.
+	rollingCameras := make([]string, 0)
+	for _, cam := range r.cameras() {
+		if r.resolveRollingConfig(cam.ID).Enabled {
+			rollingCameras = append(rollingCameras, cam.ID)
+		}
+	}
+	if len(rollingCameras) == 0 {
 		return
 	}
-	if len(recs) == 0 {
-		return // nothing to do this cycle
+	// Fair share: at least 50 per camera, more if total budget allows.
+	perCamera := totalLimit / len(rollingCameras)
+	if perCamera < 50 {
+		perCamera = 50
 	}
 
-	byCamera := make(map[string][]*model.Recording)
-	for _, rec := range recs {
-		byCamera[rec.CameraID] = append(byCamera[rec.CameraID], rec)
+	// Process cameras concurrently with a bounded semaphore. Per-camera merge
+	// locks (r.acquireMergeLock inside backfillMP4) guarantee no two goroutines
+	// merge the same camera at once; the semaphore bounds total disk IO.
+	concurrency := backfillConcurrency
+	if concurrency > len(rollingCameras) {
+		concurrency = len(rollingCameras)
 	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var totalMerged atomic.Int64
+	var camerasTouched atomic.Int64
 
-	totalMerged := 0
-	for cameraID, camRecs := range byCamera {
+	for _, cameraID := range rollingCameras {
 		if ctx.Err() != nil {
 			break
 		}
-		if !r.resolveRollingConfig(cameraID).Enabled {
-			continue
-		}
-		merged, err := r.backfillCameraRecordings(ctx, cameraID, camRecs)
-		if err != nil {
-			rollingLogger.Warn("backfill loop: failed for camera",
-				"camera_id", cameraID, "error", err)
-		}
-		totalMerged += merged
+		wg.Add(1)
+		go func(camID string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			// No max_age filter — the periodic sweep's job is to eventually
+			// clear ALL historical pending, including pre-72h backlogs the
+			// startup scan deferred.
+			recs, err := r.db.ListPendingSegmentsForRolling(ctx, camID, false, perCamera, time.Time{})
+			if err != nil {
+				rollingLogger.Warn("backfill loop: failed to list pending segments",
+					"camera_id", camID, "error", err)
+				return
+			}
+			if len(recs) == 0 {
+				return
+			}
+			merged, err := r.backfillCameraRecordings(ctx, camID, recs)
+			if err != nil {
+				rollingLogger.Warn("backfill loop: failed for camera",
+					"camera_id", camID, "error", err)
+			}
+			if merged > 0 {
+				totalMerged.Add(int64(merged))
+				camerasTouched.Add(1)
+			}
+		}(cameraID)
 	}
-	if totalMerged > 0 {
-		rollingLogger.Info("backfill loop: merged historical segments",
-			"segments_merged", totalMerged, "cameras", len(byCamera))
+	wg.Wait()
+
+	merged := int(totalMerged.Load())
+	touched := int(camerasTouched.Load())
+	if merged > 0 || touched > 0 {
+		rollingLogger.Info("backfill loop: processed historical segments",
+			"segments_merged", merged, "cameras_touched", touched,
+			"rolling_cameras", len(rollingCameras), "per_camera_limit", perCamera,
+			"concurrency", concurrency)
 	}
 }
 
@@ -530,6 +604,60 @@ func splitByFormat(recs []*model.Recording) (mp4, avi, mjpeg []*model.Recording)
 // (which gets slower as the bucket grows). Benchmark: batch-merge of 50 segments
 // is ~10x faster than 50 sequential appends.
 //
+// singletonPurgeAge bounds how long a lone segment in its hour window stays
+// pending before backfill gives up waiting for a neighbor and marks it merged.
+//
+// Background: backfill queries the oldest pending segments first
+// (ORDER BY started_at ASC). Sparse historical recordings — e.g. a camera
+// that only recorded a single 5-minute clip in some hour weeks ago — produce
+// hour windows with only one pending segment. The >=2 batch requirement
+// means these singletons can never be merged, and because they're the oldest,
+// they block backfill from ever reaching the dense recent windows behind them.
+// On a production tree this caused ~8500 segments stuck pending forever.
+//
+// Once a singleton is older than this threshold, it is effectively permanent:
+// no new segment will arrive to join its window (the camera has long since
+// moved on). Marking it merged lets backfill drain past it. The segment file
+// is untouched — it remains a fully playable standalone recording.
+const singletonPurgeAge = 7 * 24 * time.Hour
+
+// shouldPurgeSingleton reports whether a batch of valid (on-disk) segments
+// that failed the >=2 merge threshold should be marked merged and retired
+// from the pending queue. Returns true only when the NEWEST segment in the
+// batch is older than singletonPurgeAge — recent singletons stay pending in
+// case a neighbor arrives.
+func (r *RollingMergeCoordinator) shouldPurgeSingleton(valid []*model.Recording) bool {
+	if len(valid) == 0 {
+		return false
+	}
+	// valid comes from recs which are ORDER BY started_at ASC, so the last
+	// entry is the newest in the batch.
+	newest := valid[len(valid)-1].StartedAt
+	return time.Since(newest) > singletonPurgeAge
+}
+
+// markSingletonsMerged marks the given recordings as merged (without actually
+// producing a merged file) and returns the count marked. Used to retire
+// historical lone segments that will never gain a merge partner. Each segment
+// keeps its original file_path — playback still works, it just no longer
+// shows as "pending merge" in the UI.
+func (r *RollingMergeCoordinator) markSingletonsMerged(ctx context.Context, cameraID string, recs []*model.Recording) int {
+	ids := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		ids = append(ids, rec.ID)
+	}
+	if err := storage.RetryOnBusy(ctx, func() error {
+		return r.db.SetMergeStatus(ctx, ids, model.MergeStatusMerged)
+	}); err != nil {
+		rollingLogger.Warn("backfill MP4: failed to retire historical singletons",
+			"camera_id", cameraID, "count", len(ids), "error", err)
+		return 0
+	}
+	rollingLogger.Info("backfill MP4: retired historical singletons (no neighbor arrived within purge age)",
+		"camera_id", cameraID, "count", len(ids), "purge_age", singletonPurgeAge)
+	return len(ids)
+}
+
 // Uses the per-batch lock release pattern to avoid blocking live events.
 func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	const backfillBatchSize = 20 // small batches to yield lock to real-time events
@@ -576,9 +704,24 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				valid = append(valid, rec)
 			}
 			if len(valid) < 2 {
-				// Not enough segments to merge — leave pending (see comment in
-				// backfillBatchFormat). Marking singletons merged permanently
-				// ejected them from the merge queue.
+				// Not enough segments to merge in this batch. See the long
+				// comment in backfillBatchFormat for why we do NOT mark these
+				// merged unconditionally — doing so would eject recent segments
+				// from the queue before their neighbors arrive.
+				//
+				// BUT: historical singletons (older than
+				// singletonPurgeAge) are different. A segment that has sat
+				// pending alone in its window for this long will essentially
+				// never gain a neighbor — the camera has long since moved on
+				// to other hours. Leaving them pending forever is what caused
+				// the 8500-segment backlog observed in production: backfill
+				// always queries the oldest pending first, these singletons
+				// always fail the >=2 check, and the queue never drains. Mark
+				// them merged so the next cycle progresses past them.
+				if r.shouldPurgeSingleton(valid) {
+					n := r.markSingletonsMerged(ctx, cameraID, valid)
+					merged += n
+				}
 				continue
 			}
 
@@ -1142,7 +1285,8 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()
 
-	// Check for window rollover or SPS/PPS change → close old bucket, start new.
+	// Check for window rollover, SPS/PPS change, or size limit → close old
+	// bucket, start new.
 	needNewBucket := false
 	if bucket.mergedFilePath != "" {
 		if !seg.startedAt.Before(bucket.windowEnd) && !seg.startedAt.Equal(bucket.windowStart) {
@@ -1159,6 +1303,19 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 				"old_key", bucket.spsKey[:8],
 				"new_key", spsKey[:8])
 			needNewBucket = true
+		} else if bucket.mergedFileSize > 0 && bucket.mergedFileSize+newInfo.MdatSize > bucketSizeLimit {
+			// Bucket approaching the 4 GiB MP4 mdat hard limit. Finalize it
+			// and start a fresh bucket within the same window. Without this,
+			// high-bitrate cameras (2K云台 ~1.7MB/s → 6GB/hour) accumulate
+			// until MergeMP4Segments returns "mdat box size exceeds MaxUint32"
+			// and the segment is lost from the merge queue.
+			rollingLogger.Info("bucket size limit reached, starting new bucket",
+				"camera_id", seg.cameraID,
+				"bucket_size_mb", bucket.mergedFileSize>>20,
+				"new_segment_mb", newInfo.MdatSize>>20,
+				"limit_mb", bucketSizeLimit>>20,
+				"segment_count", bucket.segmentCount)
+			needNewBucket = true
 		}
 	}
 
@@ -1169,6 +1326,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 		bucket.mergedRecID = ""
 		bucket.spsKey = ""
 		bucket.segmentCount = 0
+		bucket.mergedFileSize = 0
 		bucket.windowStart = windowStart
 		bucket.windowEnd = windowEnd
 	}
@@ -1196,6 +1354,15 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.mergedRecID = mergedRecID
 	bucket.spsKey = spsKey
 	bucket.segmentCount++
+	// Track merged file size for the bucketSizeLimit check on the next append.
+	// One stat per merged segment is cheap (the file was just written and its
+	// inode is hot in cache), and avoids the need to thread size through every
+	// create/append return path.
+	if fi, statErr := os.Stat(outputPath); statErr == nil {
+		bucket.mergedFileSize = fi.Size()
+	} else {
+		bucket.mergedFileSize = 0 // unknown — size check will be skipped next cycle
+	}
 
 	// Record metrics.
 	if r.metrics != nil {

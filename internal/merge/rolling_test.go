@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -663,4 +664,338 @@ func TestListPendingSegmentsForRolling_AgeFilter(t *testing.T) {
 	combined, err := env.db.ListPendingSegmentsForRolling(ctx, cameraID, false, 10, cutoff)
 	require.NoError(t, err)
 	require.Len(t, combined, 1)
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillMP4_HistoricalSingletonPurged — regression test for the
+// "backfill loop stuck on historical singletons" production bug.
+//
+// Backfill queries the oldest pending segments first (ORDER BY started_at ASC).
+// A lone historical segment in its own hour window can never reach the >=2
+// batch threshold, so backfill kept re-querying the same stuck segments every
+// cycle and never drained the queue (~8500 stuck pending in production).
+//
+// Fix: backfillMP4 marks singletons older than singletonPurgeAge as merged,
+// retiring them from the queue. Recent singletons stay pending in case a
+// neighbor arrives.
+// ---------------------------------------------------------------------------
+
+func TestBackfillMP4_HistoricalSingletonPurged(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	cameraID := "singleton-cam"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	// A lone segment from 10 days ago — older than singletonPurgeAge (7d).
+	// It lives in its own hour window with no neighbors.
+	old := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour).Add(23 * time.Minute)
+	createAndInsertSegment(t, env, "old-singleton", cameraID, old)
+
+	// Run the rolling backfill path (same as backfillHistorical →
+	// backfillCameraRecordings → backfillMP4).
+	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, merged, "historical singleton should be retired (counted as merged)")
+
+	// Verify the segment is now retired from the pending queue.
+	// (Merged boolean stays false — only merge_status flips to "merged",
+	// since no actual merge happened. The original file is untouched.)
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, model.MergeStatusMerged, recs[0].MergeStatus,
+		"historical singleton should be retired (merge_status=merged)")
+	require.False(t, recs[0].Merged, "singleton purge does not set Merged=true (no real merge)")
+
+	// And it must be gone from the pending queue.
+	pending, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, false, 0, time.Time{})
+	require.NoError(t, err)
+	require.Empty(t, pending, "retired singleton must leave the pending queue")
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillMP4_RecentSingletonStaysPending — the counterpart guard: a
+// lone segment that is NEWER than singletonPurgeAge must stay pending so a
+// late-arriving neighbor can still be merged with it.
+// ---------------------------------------------------------------------------
+
+func TestBackfillMP4_RecentSingletonStaysPending(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	cameraID := "recent-singleton-cam"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	// A lone segment from 1 hour ago — well within singletonPurgeAge (7d).
+	recent := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Hour).Add(13 * time.Minute)
+	createAndInsertSegment(t, env, "recent-singleton", cameraID, recent)
+
+	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, merged, "recent singleton must NOT be retired — wait for a neighbor")
+
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.False(t, recs[0].Merged, "recent singleton must stay pending")
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillMP4_DenseWindowStillMerges — make sure the singleton purge
+// didn't break the normal multi-segment case: a dense historical window
+// (>=2 segments, older than singletonPurgeAge) must still be actually merged
+// into a single file, not just "retired".
+// ---------------------------------------------------------------------------
+
+func TestBackfillMP4_DenseWindowStillMerges(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	cameraID := "dense-old-cam"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	// 3 segments in the same hour, all 10 days old.
+	base := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour).Add(7 * time.Minute)
+	for i := range 3 {
+		createAndInsertSegment(t, env, "dense-"+string(rune('a'+i)), cameraID,
+			base.Add(time.Duration(i)*30*time.Second))
+	}
+
+	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
+	require.NoError(t, err)
+	require.Equal(t, 3, merged, "all 3 segments should be merged")
+
+	// Should collapse to 1 merged recording with a real merged file.
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "3 segments should collapse to 1 merged recording")
+	require.True(t, recs[0].Merged)
+	require.NotEmpty(t, recs[0].FilePath, "dense window must produce a real merged file, not just status flip")
+
+	// Verify the merged file actually contains the samples (2 per segment × 3).
+	info, err := ParseSegment(recs[0].FilePath)
+	require.NoError(t, err)
+	require.Equal(t, 6, info.SampleCount)
+}
+
+// ---------------------------------------------------------------------------
+// TestShouldPurgeSingleton_AgeThreshold — unit test for the age gate itself,
+// so the boundary is explicit and doesn't depend on the full backfill path.
+// ---------------------------------------------------------------------------
+
+func TestShouldPurgeSingleton_AgeThreshold(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: "c"}})
+
+	// Empty → false (nothing to retire).
+	require.False(t, r.shouldPurgeSingleton(nil))
+
+	// Newest segment 8 days old → purge (older than 7d).
+	old := []*model.Recording{{
+		ID:        "x",
+		StartedAt: time.Now().Add(-8 * 24 * time.Hour),
+	}}
+	require.True(t, r.shouldPurgeSingleton(old))
+
+	// Newest segment 6 days old → keep (within 7d).
+	recent := []*model.Recording{{
+		ID:        "x",
+		StartedAt: time.Now().Add(-6 * 24 * time.Hour),
+	}}
+	require.False(t, r.shouldPurgeSingleton(recent))
+
+	// Mixed batch: take the NEWEST (last in ASC-sorted slice). If the newest
+	// is recent, keep the whole batch even if older entries exist.
+	mixed := []*model.Recording{
+		{ID: "old", StartedAt: time.Now().Add(-30 * 24 * time.Hour)},
+		{ID: "new", StartedAt: time.Now().Add(-1 * time.Hour)},
+	}
+	require.False(t, r.shouldPurgeSingleton(mixed),
+		"batch with a recent newest segment must stay pending")
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillHistorical_FairAcrossCameras — regression test for the backfill
+// starvation bug. Old impl queried pending segments across ALL cameras in one
+// SELECT with `ORDER BY camera_id, started_at ASC LIMIT N`. A camera with a
+// large backlog that sorted early (e.g. cam-5xxx before cam-fxxx) consumed the
+// whole N-segment budget every cycle, so cameras sorting later were never
+// reached — production: cam-fa049182 (3969 pending) got zero backfill across
+// 3 weeks of operation while earlier-sorting cameras stayed stuck too.
+//
+// Fix: backfillHistorical now enumerates rolling-enabled cameras and queries
+// each camera's pending independently with a fair-share limit. This test
+// seeds two cameras where the alphabetically-first camera has a HUGE backlog
+// (enough to saturate any global LIMIT) and verifies the second camera STILL
+// gets its segments processed in a single backfillHistorical call.
+// ---------------------------------------------------------------------------
+
+func TestBackfillHistorical_FairAcrossCameras(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:       boolPtr(true),
+		RollingDebounce:      "50ms",
+		RollingWindow:        "1h",
+		RollingBackfillBatch: 20, // small global budget per cycle
+	}
+	// Two cameras: "aaa-hog" sorts before "zzz-starved" alphabetically.
+	cameras := []config.CameraConfig{{ID: "aaa-hog"}, {ID: "zzz-starved"}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	// aaa-hog: seed MANY old singletons (10 days old, each in its own hour
+	// window) — far more than RollingBackfillBatch=20. The old global-LIMIT
+	// impl spent its entire budget on these and never reached zzz-starved.
+	old := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour)
+	for i := range 50 {
+		// Spread across distinct hours so each is a singleton window.
+		createAndInsertSegment(t, env, fmt.Sprintf("hog-%d", i), "aaa-hog",
+			old.Add(time.Duration(i)*time.Hour))
+	}
+
+	// zzz-starved: seed 3 segments in ONE hour window (a real mergeable batch).
+	// Under the old impl this camera was never reached. Under the fix its
+	// batch must be processed in the same cycle.
+	starvedBase := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Hour).Add(5 * time.Minute)
+	for i := range 3 {
+		createAndInsertSegment(t, env, fmt.Sprintf("starved-%d", i), "zzz-starved",
+			starvedBase.Add(time.Duration(i)*30*time.Second))
+	}
+
+	// Run one backfillHistorical cycle (the periodic sweep path).
+	r.backfillHistorical(context.Background())
+
+	// aaa-hog's singletons should all be retired (old + alone → purged).
+	hogRecs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: "aaa-hog", Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, hogRecs, 50, "aaa-hog segments preserved (retired in place)")
+	for _, rec := range hogRecs {
+		require.Equal(t, model.MergeStatusMerged, rec.MergeStatus,
+			"aaa-hog historical singletons must be retired")
+	}
+
+	// The critical assertion: zzz-starved's 3 segments were ACTUALLY MERGED
+	// into 1 file, even though aaa-hog has 30 segments that would have
+	// saturated a global LIMIT under the old impl.
+	starvedRecs, _, err := env.db.ListRecordingsWithTotal(context.Background(),
+		model.RecordingFilter{CameraID: "zzz-starved", Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, starvedRecs, 1,
+		"zzz-starved must be merged in the same cycle — proves fair scheduling "+
+			"(old impl would have starved this camera)")
+	require.True(t, starvedRecs[0].Merged)
+	require.NotEmpty(t, starvedRecs[0].FilePath)
+}
+
+// ---------------------------------------------------------------------------
+// TestRollingMerge_BucketSizeLimit — when an accumulating bucket approaches
+// the 4 GiB MP4 mdat hard limit, the next segment should start a fresh bucket
+// within the same window (rather than failing with "mdat box size exceeds
+// MaxUint32" and dropping the segment from the merge queue).
+//
+// High-bitrate cameras (2K云台 ~1.7MB/s) hit this within ~40 min of recording
+// in one window. The fix: bucketInfo now tracks mergedFileSize and mergeOneSegment
+// rolls a new bucket when mergedFileSize + incoming segment > bucketSizeLimit.
+// ---------------------------------------------------------------------------
+
+func TestRollingMerge_BucketSizeLimit(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	cameraID := "size-cam"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, r.Start(ctx))
+	defer r.Stop()
+
+	// Publish one segment to create the bucket.
+	now := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	filePath1 := createAndInsertSegment(t, env, "seg-1", cameraID, now)
+	publishSegmentCompleted(t, bus, cameraID, "seg-1", filePath1, "h264", now)
+	waitForBucketStable(t, r, cameraID, 1, 5*time.Second)
+
+	// Simulate the bucket having grown near the 3 GiB limit. We can't actually
+	// write 3 GiB in a test, so directly set the tracked size on the bucket
+	// state — this is the same field mergeOneSegment checks.
+	bucketAny, ok := r.buckets.Load(cameraID)
+	require.True(t, ok, "bucket should exist after first segment")
+	bucket := bucketAny.(*bucketInfo)
+	bucket.mu.Lock()
+	bucket.mergedFileSize = bucketSizeLimit + 1 // over the limit
+	bucket.mu.Unlock()
+
+	// Publish a second segment in the SAME window. The size check should roll
+	// a new bucket: segmentCount resets to 1 (the new segment alone), rather
+	// than incrementing to 2 (appending to the oversized bucket).
+	seg2Time := now.Add(30 * time.Second)
+	filePath2 := createAndInsertSegment(t, env, "seg-2", cameraID, seg2Time)
+	publishSegmentCompleted(t, bus, cameraID, "seg-2", filePath2, "h264", seg2Time)
+
+	// Wait for the second segment to be processed. With the size-limit fix,
+	// the bucket rolls and segmentCount ends at 1. Without the fix, the bucket
+	// appends and segmentCount ends at 2. Poll until stable (count stops
+	// changing) — we can't use waitForBucketStable(count=1) because count=1
+	// is also the state BEFORE seg-2 is processed.
+	deadline := time.Now().Add(5 * time.Second)
+	var finalCount, finalSize int64
+	for time.Now().Before(deadline) {
+		bucket.mu.Lock()
+		c := bucket.segmentCount
+		s := bucket.mergedFileSize
+		bucket.mu.Unlock()
+		// seg-2 processed → either count=1 (rolled) or count=2 (appended).
+		// Also wait for size to be updated from the fake 3GiB value (stat
+		// after merge resets it to the real small file size).
+		if (c == 1 || c == 2) && s != bucketSizeLimit+1 {
+			finalCount = int64(c)
+			finalSize = s
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.Greater(t, finalCount, int64(0), "seg-2 should have been processed")
+	require.Equal(t, int64(1), finalCount,
+		"oversized bucket should roll to a new bucket (segmentCount=1), not append (segmentCount=2)")
+	require.Less(t, finalSize, int64(bucketSizeLimit),
+		"new bucket should be well under the size limit")
 }
