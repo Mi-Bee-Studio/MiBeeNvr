@@ -61,6 +61,11 @@ func NewDemuxer(r io.ReadSeeker) (*Demuxer, error) {
 	return d, nil
 }
 
+// MicroSecPerFrame returns the video frame duration in microseconds.
+func (d *Demuxer) MicroSecPerFrame() uint32 {
+	return d.dwMicroSecPerFrame
+}
+
 // NextChunk reads and returns the next data chunk from the AVI file.
 // It returns io.EOF when no more chunks are available.
 //

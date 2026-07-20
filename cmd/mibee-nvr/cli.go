@@ -225,5 +225,7 @@ func dispatchSubcommand(args []string) {
 		cmdEncryptConfigFn()
 	case "download-model":
 		cmdDownloadModelFn()
+	case "merge-cameras":
+		cmdMergeCameras()
 	}
 }

@@ -735,7 +735,7 @@ func TestReconcileOrphanedFiles_Basic(t *testing.T) {
 	defer db.Close()
 
 	// Insert camera into DB
-	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Create camera directory and MP4 files with correct naming pattern
 	camDir := filepath.Join(storeDir, "test-cam-1")
@@ -804,7 +804,7 @@ func TestReconcileOrphanedFiles_SkipsNonMatching(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "test-cam-1")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -833,7 +833,7 @@ func TestReconcileOrphanedFiles_SkipsZeroByte(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "test-cam-1")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -860,7 +860,7 @@ func TestReconcileOrphanedFiles_Idempotent(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "test-cam-1", "Test Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "test-cam-1")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -893,7 +893,7 @@ func TestReconcileOrphanedFiles_MJPEGDirs(t *testing.T) {
 	defer db.Close()
 
 	// Insert camera into DB
-	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Create camera directory and MJPEG segment dirs with correct naming
 	camDir := filepath.Join(storeDir, "mjpeg-cam")
@@ -945,7 +945,7 @@ func TestReconcileOrphanedFiles_MixedMP4AndMJPEG(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam-mix", "Mix Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-mix", "Mix Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "cam-mix")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -995,7 +995,7 @@ func TestReconcileOrphanedFiles_MJPEGEmptyDir(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "mjpeg-cam")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -1023,7 +1023,7 @@ func TestReconcileOrphanedFiles_MJPEGIdempotent(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "mjpeg-cam")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -1059,7 +1059,7 @@ func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "mjpeg-cam", "MJPEG Cam", "rtsp", "mjpeg", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	camDir := filepath.Join(storeDir, "mjpeg-cam")
 	require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -1165,7 +1165,7 @@ func TestReconcileOrphanedFiles_SkipsDateBucketDirs(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam-dates", "Date Cam", "rtsp", "h264", "rtsp://x", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-dates", "Date Cam", "rtsp", "h264", "rtsp://x", "", "", "", "", "", ""))
 	cameraIDs := map[string]bool{"cam-dates": true}
 
 	camDir := filepath.Join(storeDir, "cam-dates")
@@ -1231,7 +1231,7 @@ func TestReconcileIncrementalCommit(t *testing.T) {
 	for camIdx := 1; camIdx <= 3; camIdx++ {
 		camID := fmt.Sprintf("cam-%d", camIdx)
 		cameraIDs[camID] = true
-		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 		camDir := filepath.Join(storeDir, camID)
 		require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -1283,7 +1283,7 @@ func TestReconcilePerCameraCommit(t *testing.T) {
 	// Create 3 cameras with 5 files each
 	for camIdx := 1; camIdx <= 3; camIdx++ {
 		camID := fmt.Sprintf("cam-%d", camIdx)
-		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+		require.NoError(t, db.UpsertCamera(ctx, camID, "Cam "+camID, "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 		camDir := filepath.Join(storeDir, camID)
 		require.NoError(t, os.MkdirAll(camDir, 0o755))
@@ -1331,7 +1331,7 @@ func TestInsertOrphanRecordingsBatching(t *testing.T) {
 	defer db.Close()
 
 	// Insert a camera so foreign key constraint works (if any)
-	require.NoError(t, db.UpsertCamera(ctx, "batch-cam", "Batch Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "batch-cam", "Batch Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Create 1200 orphan recordings (2 full batches of 500 + 1 partial batch of 200)
 	// orphanBatchSize = 500, so: 500 + 500 + 200 = 1200

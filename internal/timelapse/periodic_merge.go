@@ -43,15 +43,35 @@ type PeriodicMergeManager struct {
 
 	retryCounts map[string]retryInfo
 	retryMu     sync.Mutex
+
+	// recordingEnabledProvider reports whether a camera has recording_enabled=true.
+	// When set and returns true, Run extracts frames from video recordings in the
+	// merge window and includes them alongside existing timelapse recordings.
+	recordingEnabledProvider func(cameraID string) bool
+}
+
+// Option configures PeriodicMergeManager behavior.
+type Option func(*PeriodicMergeManager)
+
+// WithRecordingEnabledProvider sets a function that reports if a camera has
+// recording_enabled=true. When true, Run will extract frames from video
+// recordings in the merge window and include them in the timelapse output.
+// The provider is called once per Run invocation with the camera ID.
+// Use functional options pattern so existing call sites need no changes.
+func WithRecordingEnabledProvider(p func(cameraID string) bool) Option {
+	return func(m *PeriodicMergeManager) {
+		m.recordingEnabledProvider = p
+	}
 }
 
 // NewPeriodicMergeManager creates a new PeriodicMergeManager with the given merge duration.
 // If loc is nil, UTC is used for window alignment.
-func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, duration time.Duration, loc *time.Location) *PeriodicMergeManager {
+// Variadic opts enable optional behavior without breaking existing call sites.
+func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, merger TimelapseMerger, fps int, dataDir string, duration time.Duration, loc *time.Location, opts ...Option) *PeriodicMergeManager {
 	if loc == nil {
 		loc = time.UTC
 	}
-	return &PeriodicMergeManager{
+	m := &PeriodicMergeManager{
 		store:       store,
 		updater:     updater,
 		merger:      merger,
@@ -61,6 +81,10 @@ func NewPeriodicMergeManager(store RecordingLister, updater MergeStatusUpdater, 
 		loc:         loc,
 		retryCounts: make(map[string]retryInfo),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Duration returns the configured merge duration.
@@ -70,6 +94,12 @@ func (m *PeriodicMergeManager) Duration() time.Duration {
 
 // Run executes the merge pipeline for the given camera for the merge window
 // containing the reference time t.
+//
+// When recording is enabled (recordingEnabledProvider returns true), the method
+// also queries video-format recordings (H264, H265, AVI, MJPEG) in the same
+// window, extracts frames via RecordingFrameExtractor, and merges them alongside
+// existing timelapse recordings. Extracted frames are organized into per-codec
+// temporary directories and cleaned up after merge completion.
 func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.Time) error {
 	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")
@@ -91,6 +121,37 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 	// or retryable failed segments).
 	segments := m.filterEligibleSegments(recordings)
 
+	// Deferred cleanup for extracted frame temporary directories (when
+	// recording is enabled and recordings are found).
+	var tmpDirs []string
+	defer func() {
+		for _, d := range tmpDirs {
+			if err := os.RemoveAll(d); err != nil {
+				slog.Warn("periodic merge: failed to clean up temp dir",
+					"dir", d, "error", err)
+			}
+		}
+	}()
+
+	// When recording is enabled, extract frames from video recordings in the
+	// merge window and include them alongside existing timelapse segments.
+	// This supports:
+	//   - H264 ✅ (keyframe-sync IDR samples from MP4)
+	//   - H265 ✅ (IRAP NAL type 19/20 sync samples from MP4)
+	//   - AVI ✅  (MJPEG JPEG frames via internal/avi demuxer)
+	//   - MJPEG ✅ (same JPEG extraction as AVI)
+	//   - MPEG-TS ✗ (no moov/stss boxes, too expensive to probe)
+	recordingEnabled := m.recordingEnabledProvider != nil && m.recordingEnabledProvider(cameraID)
+	if recordingEnabled {
+		videoSegs, dirs, err := m.extractRecordingFrames(ctx, cameraID, startTime, endTime)
+		if err != nil {
+			slog.Warn("periodic merge: recording frame extraction failed",
+				"camera_id", cameraID, "error", err)
+		}
+		tmpDirs = append(tmpDirs, dirs...)
+		segments = append(segments, videoSegs...)
+	}
+
 	// 2. Handle no segments.
 	if len(segments) == 0 {
 		slog.Warn(
@@ -99,6 +160,14 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 			"window", windowLabel,
 		)
 		return nil
+	}
+
+	if recordingEnabled {
+		// 3b. Per-codec merge: group segments by codec type and run separate
+		// pipelines to avoid mixing incompatible codecs (e.g. H264+H265)
+		// in a single merge output. Temporary directories are cleaned up
+		// via the deferred function above.
+		return m.runPerCodecMerge(ctx, segments, cameraID, windowLabel)
 	}
 
 	// 3. Build output path.
@@ -848,4 +917,143 @@ func probeVideoFrameCount(ctx context.Context, filePath string) (int, error) {
 		return 0, fmt.Errorf("ffprobe frame count parse failed: %w", err)
 	}
 	return count, nil
+}
+
+// extractRecordingFrames queries video-format recordings in the merge window
+// and extracts frames into per-codec temporary directories. Returns synthetic
+// Recording entries for each codec group and the list of temp dirs to clean up.
+//
+// Supported formats for frame extraction:
+//   - H264 ✅ (keyframe-sync H.264 IDR samples from MP4)
+//   - H265 ✅ (IRAP NAL type 19/20 sync samples from MP4)
+//   - AVI ✅  (MJPEG JPEG frames via internal/avi demuxer)
+//   - MJPEG ✅ (same JPEG extraction as AVI)
+//   - MPEG-TS ✗ (no moov/stss boxes, too expensive to probe)
+func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, cameraID string, startTime, endTime time.Time) ([]model.Recording, []string, error) {
+	videoFormats := []model.Format{model.FormatH264, model.FormatH265, model.FormatAVI, model.FormatMJPEG}
+	recs, err := m.store.ListRecordings(ctx, model.RecordingFilter{
+		CameraID:  cameraID,
+		Formats:   videoFormats,
+		StartTime: startTime,
+		EndTime:   endTime,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list video recordings: %w", err)
+	}
+	if len(recs) == 0 {
+		return nil, nil, nil
+	}
+
+	// Map recording format to extraction codec (grouping key).
+	// MJPEG recordings produce JPEG frames like AVI.
+	codecKey := func(f model.Format) model.Format {
+		if f == model.FormatMJPEG {
+			return model.FormatAVI // MJPEG → JPEG extraction like AVI
+		}
+		return f
+	}
+
+	// Group recordings by codec for per-codec extraction.
+	codecRecordings := make(map[model.Format][]model.Recording)
+	for _, r := range recs {
+		ck := codecKey(r.Format)
+		codecRecordings[ck] = append(codecRecordings[ck], r)
+	}
+
+	extractor := NewRecordingFrameExtractor()
+	// Determine extraction interval based on FPS. At least 1 frame per recording.
+	interval := time.Second / time.Duration(m.fps)
+	if interval <= 0 {
+		interval = 100 * time.Millisecond // default 10fps
+	}
+
+	var segments []model.Recording
+	var tmpDirs []string
+
+	for codec, recs := range codecRecordings {
+		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("periodic_extract_%s_*", codec))
+		if err != nil {
+			// Clean up previously created dirs on error.
+			for _, d := range tmpDirs {
+				os.RemoveAll(d)
+			}
+			return nil, nil, fmt.Errorf("create temp dir for %s: %w", codec, err)
+		}
+		tmpDirs = append(tmpDirs, tmpDir)
+
+		for _, rec := range recs {
+			n, err := extractor.ExtractFrames(rec.FilePath, codec, interval, tmpDir)
+			if err != nil {
+				slog.Warn("periodic merge: frame extraction failed, skipping recording",
+					"recording_id", rec.ID, "format", rec.Format, "error", err)
+				continue
+			}
+			slog.Debug("periodic merge: extracted frames from recording",
+				"recording_id", rec.ID, "format", rec.Format, "frames", n, "dir", tmpDir)
+		}
+
+		// Check if any frames were actually extracted.
+		entries, err := os.ReadDir(tmpDir)
+		if err != nil || len(entries) == 0 {
+			slog.Warn("periodic merge: no frames extracted for codec, skipping",
+				"codec", codec, "camera_id", cameraID)
+			continue
+		}
+
+		// Create a synthetic Recording entry for this codec's extracted frame directory.
+		// MergeStatus is empty (unmerged), so runMergePipeline's hasUnmergedRawSegments
+		// check will route through Go keyframe merge path (Tier 4) as a raw frame dir.
+		segments = append(segments, model.Recording{
+			ID:          fmt.Sprintf("extracted_%s_%s", cameraID, string(codec)),
+			CameraID:    cameraID,
+			FilePath:    tmpDir,
+			Format:      codec,
+			MergeStatus: "", // unmerged raw segment
+		})
+	}
+
+	return segments, tmpDirs, nil
+}
+
+// runPerCodecMerge groups segments by codec type and runs a separate merge
+// pipeline for each group. This prevents mixing incompatible codecs (e.g.
+// H264 + H265) in a single merge output.
+//
+// Codec grouping:
+//   - Timelapse + AVI/MJPEG extracted frames → "jpeg" group
+//   - H264 extracted frames → "h264" group
+//   - H265 extracted frames → "h265" group
+//
+// Output naming:
+//   - JPEG group: periodic_WINDOW.mp4
+//   - H264 group: periodic_WINDOW_h264.mp4
+//   - H265 group: periodic_WINDOW_h265.mp4
+func (m *PeriodicMergeManager) runPerCodecMerge(ctx context.Context, segments []model.Recording, cameraID, windowLabel string) error {
+	// Map each segment to its codec group.
+	// Timelapse and MJPEG/AVI extracted frames are JPEG-based and can be grouped.
+	groups := make(map[string][]model.Recording)
+	for _, seg := range segments {
+		codec := string(seg.Format)
+		if codec == string(model.FormatTimelapse) || codec == "" {
+			codec = "jpeg" // timelapse JPEG frames
+		}
+		groups[codec] = append(groups[codec], seg)
+	}
+
+	var lastErr error
+	for codec, segs := range groups {
+		suffix := ""
+		if codec != "jpeg" {
+			suffix = "_" + codec
+		}
+		outputFilename := fmt.Sprintf("periodic_%s%s.mp4", windowLabel, suffix)
+		outputPath := filepath.Join(m.dataDir, cameraID, outputFilename)
+
+		if err := m.runMergePipeline(ctx, segs, outputPath); err != nil {
+			slog.Warn("periodic merge: per-codec merge failed",
+				"codec", codec, "camera_id", cameraID, "error", err)
+			lastErr = err
+		}
+	}
+	return lastErr
 }

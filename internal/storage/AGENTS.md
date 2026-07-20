@@ -30,7 +30,7 @@ retry.go             # RetryOnBusy + SetBusyErrorHook (SQLITE_BUSY retry, increm
 |------|----------|-------|
 | Change DB schema | `db.go` `Init()` | CREATE IF NOT EXISTS migrations; redundant-index DROP at end (unconditional) |
 | Fix time handling | `timeToDB()` / `parseTime()` / `scanTime()` | UTC storage, 5+ legacy format backward compat |
-| Add camera field | `CameraRow` struct + `createCamerasTable()` | Add column + update SELECT/INSERT/UPDATE |
+#BQ|| Add camera field | `CameraRow` struct + `createCamerasTable()` | Add column + update SELECT/INSERT/UPDATE | **Schema v27**: Added `stable_id` column for ONVIF serial persistence
 | Query recordings (paginated) | `ListRecordingsWithTotal()` | Page via `ListRecordings` (covering index) + cached count (2s TTL). Do NOT use `COUNT(*) OVER()` — it's a proven regression (full scan + temp sort). |
 | Query recordings (count only) | `CountRecordingsWithFilter()` | Shares `recordingsFilterWhere` with List methods; cached when called via ListRecordingsWithTotal |
 | Batch merge-status update | `SetMergeStatus`/`SetMergeError`/`UpdateMergeProgressBatch` | Chunked `WHERE id IN (...)` via `chunkIDs(ids, 500)` |

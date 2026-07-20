@@ -57,6 +57,90 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 	if err := cm.persistConfig(); err != nil {
 		logger.Warn("failed to persist auto-populated stable_id", "camera_id", cameraID, "error", err)
 	}
+
+	// Persist stable_id to DB in addition to YAML. DB write is best-effort:
+	// YAML is the source of truth, DB is a fast-lookup cache (used by IP
+	// self-healing / rediscovery). Never return or panic on DB failure.
+	if cm.db != nil {
+		if err := cm.db.UpdateCameraStableID(ctx, cameraID, info.SerialNumber); err != nil {
+			logger.Warn("failed to persist stable_id to db", "camera_id", cameraID, "stable_id", info.SerialNumber, "error", err)
+		}
+	}
+}
+
+// backfillStableIDs runs at startup (in a goroutine) to backfill DB stable_id
+// from YAML config. It handles two cases:
+//
+//  1. YAML has stable_id but DB stable_id is empty — backfill DB from YAML.
+//  2. ONVIF YAML has no stable_id — attempt ONVIF GetCachedDeviceInfo to
+//     discover and persist serial number to both YAML and DB.
+//
+// Non-ONVIF cameras without a stable_id are skipped (stable_id is only
+// meaningful for ONVIF IP self-healing). Must NOT block Start().
+func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
+	if cm.db == nil {
+		return
+	}
+
+	// Snapshot the camera list under configMu so concurrent RemoveCamera/
+	// UpdateCamera writes (which reslice cm.cfg.Cameras under the same lock)
+	// don't race with our read. The rest of the loop does no cfg.Cameras
+	// reads except the YAML-write path, which re-locks and re-reads safely.
+	cm.configMu.Lock()
+	cameras := make([]config.CameraConfig, len(cm.cfg.Cameras))
+	copy(cameras, cm.cfg.Cameras)
+	cm.configMu.Unlock()
+
+	for i := range cameras {
+		cam := cameras[i]
+		yamlStableID := strings.TrimSpace(cam.StableID)
+
+		if yamlStableID != "" {
+			// YAML has stable_id — backfill DB if empty (e.g. cameras added
+			// before the stable_id column migration, or restored from backup).
+			dbStableID, err := cm.db.GetCameraStableID(ctx, cam.ID)
+			if err != nil {
+				logger.Warn("backfill: failed to read db stable_id", "camera_id", cam.ID, "error", err)
+				continue
+			}
+			if strings.TrimSpace(dbStableID) == "" {
+				if err := cm.db.UpdateCameraStableID(ctx, cam.ID, yamlStableID); err != nil {
+					logger.Warn("backfill: failed to write stable_id to db", "camera_id", cam.ID, "stable_id", yamlStableID, "error", err)
+				} else {
+					logger.Info("backfill: wrote stable_id to db from yaml", "camera_id", cam.ID, "stable_id", yamlStableID)
+				}
+			}
+		} else if strings.EqualFold(string(cam.Protocol), "onvif") {
+			// YAML has no stable_id for an ONVIF camera — try to discover it.
+			info := cm.GetCachedDeviceInfo(ctx, cam.ID)
+			if info != nil && strings.TrimSpace(info.SerialNumber) != "" {
+				// Write to YAML config (source of truth).
+				cm.configMu.Lock()
+				for j := range cm.cfg.Cameras {
+					if cm.cfg.Cameras[j].ID == cam.ID {
+						if strings.TrimSpace(cm.cfg.Cameras[j].StableID) == "" {
+							cm.cfg.Cameras[j].StableID = info.SerialNumber
+						}
+						break
+					}
+				}
+				cm.configMu.Unlock()
+
+				if err := cm.persistConfig(); err != nil {
+					logger.Warn("backfill: failed to persist yaml stable_id", "camera_id", cam.ID, "error", err)
+				}
+
+				// Write to DB (best-effort).
+				if cm.db != nil {
+					if err := cm.db.UpdateCameraStableID(ctx, cam.ID, info.SerialNumber); err != nil {
+						logger.Warn("backfill: failed to persist stable_id to db", "camera_id", cam.ID, "error", err)
+					}
+				}
+			} else {
+				logger.Debug("backfill: could not discover stable_id for onvif camera", "camera_id", cam.ID)
+			}
+		}
+	}
 }
 
 // ensureProfileToken persists the profile token that the ONVIF recorder
@@ -201,7 +285,7 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 	cm.CloseONVIFClient(cameraID)
 	if cm.db != nil {
 		c := cm.cfg.Cameras[idx]
-		if uerr := cm.db.UpsertCamera(ctx, c.ID, c.Name, string(c.Protocol), c.Encoding, c.URL, c.Username, c.Password, c.ONVIFEndpoint, c.ProfileToken, c.StreamEncoding); uerr != nil {
+		if uerr := cm.db.UpsertCamera(ctx, c.ID, c.Name, string(c.Protocol), c.Encoding, c.URL, c.Username, c.Password, c.ONVIFEndpoint, c.ProfileToken, c.StreamEncoding, c.StableID); uerr != nil {
 			logger.Error("failed to upsert camera after rediscovery", "camera_id", cameraID, "error", uerr)
 		}
 	}

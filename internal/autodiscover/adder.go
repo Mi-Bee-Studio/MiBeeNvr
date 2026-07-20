@@ -112,7 +112,7 @@ func (a *Adder) HandleDiscovered(ctx context.Context, dev onvif.DiscoveredDevice
 	// 4. Persisted dedup: skip if a camera with the same endpoint or serial
 	// already exists. Serial-level dedup catches devices whose IP changed (the
 	// endpoint string differs but it is the same physical camera).
-	if a.existsInDB(ctx, endpoint, dev.Serial) {
+	if a.existsInDB(ctx, endpoint, dev.Serial, dev.Serial) {
 		a.markSeen(endpoint) // refresh window so we don't re-probe every cycle
 		return
 	}
@@ -165,24 +165,44 @@ func (a *Adder) enrich(ctx context.Context, dev *onvif.DiscoveredDevice, endpoin
 	onvif.EnrichDevice(ctx, dev)
 }
 
-// existsInDB reports whether a camera already persists with the given endpoint
-// or serial. A nil DB disables persisted dedup (returns false).
+// existsInDB reports whether a camera already persists with the given stable_id,
+// endpoint, or serial. stable_id is checked first (IP self-healing priority);
+// if empty or no match, falls back to endpoint+serial check (existing dedup
+// logic that covers non-ONVIF cameras and serial_number fallback).
+// A nil DB disables persisted dedup (returns false).
 //
 // The query covers ALL camera rows — including ARCHIVED ones — via
-// CameraExistsByOnvifEndpoint. This matters because ListCameras only returns
-// archived=0 rows; without the archived-inclusive lookup, archiving a camera
-// would make it invisible to dedup and auto-discover would immediately
-// re-enroll the same physical device the user just archived (verified in
-// production: archiving .224, then auto-discover re-added it within 60s).
+// CameraExistsByStableID and CameraExistsByOnvifEndpoint. This matters because
+// ListCameras only returns archived=0 rows; without the archived-inclusive
+// lookup, archiving a camera would make it invisible to dedup and
+// auto-discover would immediately re-enroll the same physical device the
+// user just archived (verified in production: archiving .224, then
+// auto-discover re-added it within 60s).
 //
 // Endpoint dedup is protocol-agnostic: a camera manually added as protocol=http
 // (direct MJPEG) still carries the device's onvif_endpoint (backfilled at add
 // time), so an ONVIF device discovered later must NOT be re-enrolled under a
 // second protocol=onvif row. Serial is ONVIF-specific (serial_number column).
-func (a *Adder) existsInDB(ctx context.Context, endpoint, serial string) bool {
+func (a *Adder) existsInDB(ctx context.Context, endpoint, serial, stableID string) bool {
 	if a.db == nil {
 		return false
 	}
+
+	// Priority 1: stable_id match. A device with the same ONVIF serial that
+	// was previously enrolled (and whose IP may have changed) is the same
+	// physical camera — skip enrollment.
+	if stableID != "" {
+		exists, err := a.db.CameraExistsByStableID(ctx, stableID)
+		if err != nil {
+			logger.Warn("dedup: CameraExistsByStableID failed, falling back to endpoint dedup", "error", err)
+		} else if exists {
+			return true
+		}
+	}
+
+	// Priority 2: endpoint or serial match (existing dedup logic).
+	// Covers non-ONVIF cameras without a stable_id, and the serial_number
+	// fallback for devices whose enrichment succeeded.
 	exists, err := a.db.CameraExistsByOnvifEndpoint(ctx, endpoint, serial)
 	if err != nil {
 		logger.Warn("dedup: CameraExistsByOnvifEndpoint failed, skipping dedup this cycle", "error", err)

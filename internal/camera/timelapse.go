@@ -325,6 +325,13 @@ func (cm *CameraManager) startDualModeTimelapseScheduleMonitorForCamera(
 	usesKeyframe := effectiveDualModeFrameSource(cam) == "rtsp_keyframe" && !isJPEG
 
 	startFn := func() {
+		// When recording is enabled, timelapse frames come from recorded segments
+		// via PeriodicMergeManager — no dedicated capturer needed.
+		if cam.RecordingEnabled == nil || *cam.RecordingEnabled {
+			logger.Info("dual-mode timelapse schedule: not starting capturer, recording_enabled=true",
+				"camera_id", cameraID)
+			return
+		}
 		if usesKeyframe {
 			rec := cm.snapshotRecorder(cameraID)
 			if hub := getRecorderHub(rec); hub != nil {
