@@ -321,7 +321,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cam.StableID); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
@@ -349,33 +349,43 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 						hOverrides = &resolved
 					}
 					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
-					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
-					if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-						// Runtime override: an ONVIF camera with empty encoding may have
-						// resolved to rtsp_keyframe statically but actually be a JPEG device
-						// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
-						// case, use a frame poller instead.
-						if isRecorderJPEG(rec) {
-							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-							} else if poller != nil {
-								cm.setFramePoller(cam.ID, poller)
-							}
-						} else if hub := getRecorderHub(rec); hub != nil {
-							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
-								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+						// Check if recording is enabled (nil = default true).
+						// When recording_enabled=true, timelapse frames come from recorded
+						// segments via PeriodicMergeManager — skip starting the dedicated
+						// capturer (keyframe extractor or frame poller) and rolling merge.
+						recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+						if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
+							logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
+								"camera_id", cam.ID)
+						} else {
+							// Start keyframe extractor if camera has rtsp_keyframe timelapse config
+							if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
+								// Runtime override: an ONVIF camera with empty encoding may have
+								// resolved to rtsp_keyframe statically but actually be a JPEG device
+								// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
+								// case, use a frame poller instead.
+								if isRecorderJPEG(rec) {
+									if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+										logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+									} else if poller != nil {
+										cm.setFramePoller(cam.ID, poller)
+									}
+								} else if hub := getRecorderHub(rec); hub != nil {
+									if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
+										logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+									}
+								}
+							} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+								if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+									logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+								} else if poller != nil {
+									cm.setFramePoller(cam.ID, poller)
+								}
 							}
 						}
-					} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
-						if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-							logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-						} else if poller != nil {
-							cm.setFramePoller(cam.ID, poller)
-						}
-					}
-					// Enforce timelapse schedule for dual-mode cameras (start/stop
-					// the keyframe extractor or frame poller based on time-of-day).
-					cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
+						// Enforce timelapse schedule for dual-mode cameras (start/stop
+						// the keyframe extractor or frame poller based on time-of-day).
+						cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 				}
 			}
 		case string(model.ProtoONVIF):
@@ -423,6 +433,13 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			targets := append([]config.PushTargetConfig(nil), cam.PushTargets...)
 			go cm.relayMgr.SetCameraTargets(cameraID, targets)
 		}
+	}
+	// Backfill stable_id from YAML config to DB for cameras that have a
+	// YAML stable_id but no DB stable_id yet (e.g. pre-migration cameras).
+	// For ONVIF cameras without stable_id, attempt to discover via ONVIF.
+	// Non-blocking: runs in a goroutine and must not delay Start().
+	if cm.db != nil {
+		go cm.backfillStableIDs(ctx)
 	}
 	return nil
 }

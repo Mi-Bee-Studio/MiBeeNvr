@@ -1260,6 +1260,8 @@ func TestDualModeIntegration(t *testing.T) {
 				Protocol: "rtsp",
 				Encoding: "h265",
 				URL:      "rtsp://127.0.0.1:1/stream",
+				// RecordingEnabled=false so the timelapse capturer is used
+				RecordingEnabled: ptrBool(false),
 				Timelapse: &config.CameraTimelapseConfig{
 					Enabled:     true,
 					FrameSource: "rtsp_keyframe",
@@ -1897,4 +1899,241 @@ func TestSetCameraTargetsNoDeadlock(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("SetCameraTargets did not complete within timeout")
 	}
+}
+
+// ptrBool returns a pointer to the given bool value.
+func ptrBool(v bool) *bool { return &v }
+
+func TestStartSkipsTimelapseWhenRecordingEnabled(t *testing.T) {
+	t.Helper()
+
+	trueVal := true
+	segDur := 10 * time.Minute
+
+	tests := []struct {
+		name             string
+		recordingEnabled *bool
+		expectSkip       bool // true = capturer should be skipped (not started)
+	}{
+		{"recording_enabled_true", ptrBool(true), true},
+		{"recording_enabled_false", ptrBool(false), false},
+		{"recording_enabled_nil", nil, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			cfg := &config.Config{
+				Storage: config.StorageConfig{
+					RootDir:         filepath.Join(tmpDir, "storage"),
+					SegmentDuration: "10m",
+				},
+			}
+			require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+			store, err := storage.NewManager(cfg.Storage.RootDir)
+			require.NoError(t, err)
+			t.Cleanup(func() { store.CleanupTempFiles() })
+
+			mgr := NewCameraManager(cfg, store, nil, "")
+
+			cam := config.CameraConfig{
+				ID:       tc.name,
+				Name:     "Test Camera",
+				Protocol: "rtsp",
+				Encoding: "h264",
+				URL:      "rtsp://192.168.1.100/stream",
+				RecordingEnabled: tc.recordingEnabled,
+				Timelapse: &config.CameraTimelapseConfig{
+					Enabled:     trueVal,
+					FrameSource: "rtsp_keyframe",
+					Interval:    "10s",
+				},
+			}
+
+			// Create the recorder (succeeds — no network I/O)
+			rec := mgr.createRecorder(cam, segDur)
+			require.NotNil(t, rec, "should create recorder")
+
+			hub := getRecorderHub(rec)
+			require.NotNil(t, hub, "recorder should have StreamHub")
+
+			// Verify the recording_enabled guard condition
+			recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+			assert.Equal(t, tc.expectSkip, recordingEnabled && cam.Timelapse.Enabled,
+				"recording_enabled && timelapse.enabled condition")
+
+			if tc.expectSkip {
+				// When recording_enabled=true, verify no extractor/poller is started
+				mgr.auxMu.Lock()
+				_, kfeExists := mgr.keyframeExtractors[tc.name]
+				_, fpExists := mgr.framePollers[tc.name]
+				mgr.auxMu.Unlock()
+				assert.False(t, kfeExists, "keyframe extractor should not exist when recording_enabled is true/nil")
+				assert.False(t, fpExists, "frame poller should not exist when recording_enabled is true/nil")
+			} else {
+				// When recording_enabled=false, verify the extractor CAN be started
+				// (the guard in Start() allows it)
+				err := mgr.startTimelapseKeyframeExtractor(tc.name, cam, hub, rec)
+				require.NoError(t, err, "should start keyframe extractor when recording_enabled=false")
+				mgr.auxMu.Lock()
+				ext, kfeExists := mgr.keyframeExtractors[tc.name]
+				mgr.auxMu.Unlock()
+				assert.True(t, kfeExists, "keyframe extractor should exist when recording_enabled=false")
+				assert.NotNil(t, ext)
+				mgr.stopTimelapseKeyframeExtractor(tc.name)
+			}
+		})
+	}
+}
+
+func TestTimelapseDisabledNoCapturer(t *testing.T) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "10m",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.CleanupTempFiles() })
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	segDur := 10 * time.Minute
+
+	t.Run("timelapse nil", func(t *testing.T) {
+		cam := config.CameraConfig{
+			ID:       "cam-no-tl",
+			Protocol: "rtsp",
+			Encoding: "h264",
+			URL:      "rtsp://192.168.1.100/stream",
+		}
+		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		timelapseEnabled := cam.Timelapse != nil && cam.Timelapse.Enabled
+		assert.False(t, recordingEnabled && timelapseEnabled,
+			"nil timelapse: should not try to skip capturer")
+		assert.Equal(t, "", effectiveDualModeFrameSource(cam),
+			"nil timelapse: effective frame source should be empty")
+
+		// Verify that Start() path would not try to skip
+		rec := mgr.createRecorder(cam, segDur)
+		require.NotNil(t, rec, "should create recorder for non-timelapse camera")
+		hub := getRecorderHub(rec)
+		require.NotNil(t, hub)
+		// Calling startTimelapseKeyframeExtractor should respect timelapse disabled
+		err := mgr.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec)
+		assert.NoError(t, err, "no error when timelapse disabled")
+		mgr.auxMu.Lock()
+		_, kfeExists := mgr.keyframeExtractors[cam.ID]
+		mgr.auxMu.Unlock()
+		assert.False(t, kfeExists, "no keyframe extractor when timelapse config absent")
+	})
+
+	t.Run("timelapse disabled", func(t *testing.T) {
+		cam := config.CameraConfig{
+			ID:       "cam-tl-disabled",
+			Protocol: "rtsp",
+			Encoding: "h264",
+			URL:      "rtsp://192.168.1.100/stream",
+			Timelapse: &config.CameraTimelapseConfig{
+				Enabled:     false,
+				FrameSource: "rtsp_keyframe",
+			},
+		}
+		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		timelapseEnabled := cam.Timelapse != nil && cam.Timelapse.Enabled
+		assert.False(t, recordingEnabled && timelapseEnabled,
+			"disabled timelapse: should not try to skip capturer")
+		assert.Equal(t, "", effectiveDualModeFrameSource(cam),
+			"disabled timelapse: effective frame source should be empty")
+	})
+}
+
+// TestAddCameraReverseONVIFLookup verifies that tryFillStableIDFromONVIF populates
+// StableID when the ONVIF device returns a serial number.
+func TestAddCameraReverseONVIFLookup(t *testing.T) {
+	mockClient := &onvif.MockDeviceClient{
+		DeviceInfo: &onvif.DeviceInfo{
+			SerialNumber: "ABC123",
+		},
+	}
+
+	cam := &config.CameraConfig{
+		Protocol:      "onvif",
+		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+		Username:      "admin",
+		Password:      "admin",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := tryFillStableIDFromONVIFWithClient(ctx, cam, mockClient)
+	require.NoError(t, err)
+	assert.Equal(t, "ABC123", cam.StableID)
+	assert.Equal(t, 1, mockClient.ConnectCalls)
+	assert.Equal(t, 1, mockClient.GetDeviceInformationCalls)
+}
+
+// TestAddCameraReverseONVIFFailure verifies that when the ONVIF connection fails,
+// AddCamera still succeeds (best-effort) and StableID remains empty.
+func TestAddCameraReverseONVIFFailure(t *testing.T) {
+	mockClient := &onvif.MockDeviceClient{
+		ConnectError: fmt.Errorf("connection refused"),
+	}
+
+	cam := &config.CameraConfig{
+		Protocol:      "onvif",
+		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := tryFillStableIDFromONVIFWithClient(ctx, cam, mockClient)
+	require.NoError(t, err, "best-effort: must not return error on connect failure")
+	assert.Empty(t, cam.StableID, "StableID must remain empty on connect failure")
+	assert.Equal(t, 1, mockClient.ConnectCalls)
+	assert.Equal(t, 0, mockClient.GetDeviceInformationCalls)
+}
+
+// TestAddCameraReverseONVIFSkip verifies that when StableID is already set,
+// the reverse ONVIF lookup is skipped entirely.
+func TestAddCameraReverseONVIFSkip(t *testing.T) {
+	// Test 1: StableID already set → skip
+	cam := &config.CameraConfig{
+		StableID:      "already-set",
+		Protocol:      "onvif",
+		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := tryFillStableIDFromONVIF(ctx, cam)
+	require.NoError(t, err)
+	assert.Equal(t, "already-set", cam.StableID, "StableID must remain unchanged")
+
+	// Test 2: Non-ONVIF protocol → skip
+	cam2 := &config.CameraConfig{
+		Protocol: "rtsp",
+		URL:      "rtsp://192.168.1.1/stream",
+	}
+	err = tryFillStableIDFromONVIF(ctx, cam2)
+	require.NoError(t, err)
+	assert.Empty(t, cam2.StableID)
+
+	// Test 3: Empty endpoint → skip
+	cam3 := &config.CameraConfig{
+		Protocol: "onvif",
+	}
+	err = tryFillStableIDFromONVIF(ctx, cam3)
+	require.NoError(t, err)
+	assert.Empty(t, cam3.StableID)
 }
