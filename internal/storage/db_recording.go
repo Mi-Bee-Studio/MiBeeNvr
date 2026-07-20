@@ -538,17 +538,22 @@ func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[st
 			args[i] = p
 		}
 		q := "SELECT file_path FROM recordings WHERE file_path IN (" + strings.Join(placeholders, ",") + ")"
-		rows, err := d.readConn().QueryContext(ctx, q, args...)
-		if err != nil {
+		if err := func() error {
+			rows, err := d.readConn().QueryContext(ctx, q, args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var p string
+				if err := rows.Scan(&p); err == nil {
+					result[p] = true
+				}
+			}
+			return rows.Err()
+		}(); err != nil {
 			return nil, err
 		}
-		for rows.Next() {
-			var p string
-			if err := rows.Scan(&p); err == nil {
-				result[p] = true
-			}
-		}
-		rows.Close()
 	}
 	return result, nil
 }

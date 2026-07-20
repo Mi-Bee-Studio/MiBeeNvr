@@ -238,7 +238,7 @@ func TestRunFree_DoesNotBlockOnStorageScan(t *testing.T) {
 		t.Fatalf("mkdir hour: %v", err)
 	}
 	const mp4Count = 2000
-	for i := 0; i < mp4Count; i++ {
+	for i := range mp4Count {
 		// Current layout: nested under date dirs.
 		name := fmt.Sprintf("cam-seed_20260720_1000_%04d.mp4", i)
 		if err := os.WriteFile(filepath.Join(hourDir, name), []byte("x"), 0o644); err != nil {
@@ -254,7 +254,7 @@ func TestRunFree_DoesNotBlockOnStorageScan(t *testing.T) {
 		}
 	}
 	// A few .tmp orphans for CleanupTempFiles.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		name := fmt.Sprintf("cam-seed_20260720_1000_orphan_%04d.tmp", i)
 		if err := os.WriteFile(filepath.Join(hourDir, name), []byte("x"), 0o644); err != nil {
 			t.Fatalf("seed tmp %d: %v", i, err)
@@ -262,12 +262,12 @@ func TestRunFree_DoesNotBlockOnStorageScan(t *testing.T) {
 	}
 	// MJPEG frame directories — reconcile's slow path (full Walk per dir to
 	// count frames). Each has multiple JPEG files inside.
-	for d := 0; d < 20; d++ {
+	for d := range 20 {
 		mjpegDir := filepath.Join(hourDir, fmt.Sprintf("cam-seed_20260720_1000_mjpeg_%04d", d))
 		if err := os.MkdirAll(mjpegDir, 0o755); err != nil {
 			t.Fatalf("mkdir mjpeg %d: %v", d, err)
 		}
-		for f := 0; f < 10; f++ {
+		for f := range 10 {
 			jpg := filepath.Join(mjpegDir, fmt.Sprintf("frame_%04d.jpg", f))
 			if err := os.WriteFile(jpg, []byte("x"), 0o644); err != nil {
 				t.Fatalf("seed jpg %d/%d: %v", d, f, err)

@@ -1245,7 +1245,7 @@ func TestGetRecordingPathsByCamera(t *testing.T) {
 	// Seed two cameras with overlapping file names to ensure the query
 	// isolates by camera_id.
 	for _, cam := range []string{"camA", "camB"} {
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			rec := &model.Recording{
 				ID:        fmt.Sprintf("%s-%d", cam, i),
 				CameraID:  cam,
@@ -1260,12 +1260,12 @@ func TestGetRecordingPathsByCamera(t *testing.T) {
 	got, err := db.GetRecordingPathsByCamera(ctx, "camA")
 	require.NoError(t, err)
 	require.Len(t, got, 3, "camA should return exactly 3 paths")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.True(t, got[fmt.Sprintf("/store/camA/seg_%d.mp4", i)],
 			"camA path should be in result")
 	}
 	// Ensure no cross-camera leakage.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.False(t, got[fmt.Sprintf("/store/camB/seg_%d.mp4", i)],
 			"camB path must NOT be in camA result")
 	}
