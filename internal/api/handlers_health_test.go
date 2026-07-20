@@ -307,9 +307,9 @@ func TestHealth_CameraAggregation(t *testing.T) {
 
 	// Seed cameras in DB so names are available
 	ctx := context.Background()
-	h.db.UpsertCamera(ctx, "cam-1", "Front Door", "rtsp", "h264", "rtsp://x", "", "", "", "", "")
-	h.db.UpsertCamera(ctx, "cam-2", "Back Yard", "rtsp", "h264", "rtsp://x", "", "", "", "", "")
-	h.db.UpsertCamera(ctx, "cam-3", "Garage", "rtsp", "h264", "rtsp://x", "", "", "", "", "")
+	h.db.UpsertCamera(ctx, "cam-1", "Front Door", "rtsp", "h264", "rtsp://x", "", "", "", "", "", "")
+	h.db.UpsertCamera(ctx, "cam-2", "Back Yard", "rtsp", "h264", "rtsp://x", "", "", "", "", "", "")
+	h.db.UpsertCamera(ctx, "cam-3", "Garage", "rtsp", "h264", "rtsp://x", "", "", "", "", "", "")
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)

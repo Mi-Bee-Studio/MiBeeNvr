@@ -30,7 +30,7 @@ func TestPTZMoveEndpoint(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "admin", "pass", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "admin", "pass", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`
@@ -52,7 +52,7 @@ func TestPTZMoveNonOnvifRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`
@@ -84,7 +84,7 @@ func TestPTZMoveInvalidMode(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"mode": "invalid", "pan": 0.5}`
@@ -101,7 +101,7 @@ func TestPTZStopEndpoint(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/onvif-cam/ptz/stop", nil)
@@ -121,7 +121,7 @@ func TestPTZStatusEndpoint(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "onvif-cam", "ONVIF Camera", "onvif", "", "onvif://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/onvif-cam/ptz/status", nil)

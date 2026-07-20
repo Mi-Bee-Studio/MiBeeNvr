@@ -206,7 +206,7 @@ func (s *Server) resolveOrCreateCamera(ctx context.Context, name string) string 
 
 	// Create a new camera
 	id := camera.GenerateCameraID()
-	err = s.db.UpsertCamera(ctx, id, name, string(model.ProtoHTTPJPEG), "", "", "", "", "", "", "")
+	err = s.db.UpsertCamera(ctx, id, name, string(model.ProtoHTTPJPEG), "", "", "", "", "", "", "", "")
 	if err != nil {
 		webdavLogger.Warn("failed to auto-create camera", "id", id, "name", name, "error", err)
 		return ""
