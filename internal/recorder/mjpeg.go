@@ -178,6 +178,18 @@ func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore, opts ...*metrics.Metr
 	if len(opts) > 0 {
 		m = opts[0]
 	}
+	// When audio is enabled, MJPEG goes through the AVI muxer (same as
+	// HTTPJPEGRecorder with AVI=true), which buffers all frames in RAM until
+	// segment close. Apply the same RAM-dependent cap to prevent OOM on
+	// low-memory hosts. See aviSegmentDurCap for rationale.
+	if cfg.AudioEnabled {
+		if durCap := aviSegmentDurCap(); cfg.SegmentDur > durCap {
+			mjpegLogger.Warn("AVI (audio) mode: SegmentDur capped by available RAM",
+				"camera_id", cfg.CameraID, "configured", cfg.SegmentDur, "capped_to", durCap,
+				"mem_available_mb", memAvailableMB())
+			cfg.SegmentDur = durCap
+		}
+	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
