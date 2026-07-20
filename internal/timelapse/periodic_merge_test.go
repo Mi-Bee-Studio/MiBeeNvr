@@ -679,3 +679,202 @@ func TestPeriodicMergeManager_Run_MixedFormatSegments(t *testing.T) {
 		t.Fatalf("expected mixed format merge to succeed via Go fallback: %v", err)
 	}
 }
+
+// --- Recording-enabled frame extraction tests ---
+
+// mockRecordingListerMultiFormat returns different segments for timelapse vs
+// video-format queries, enabling tests of the recording_enabled extraction path.
+type mockRecordingListerMultiFormat struct {
+	timelapseSegments []model.Recording
+	videoSegments     []model.Recording
+}
+
+func (m *mockRecordingListerMultiFormat) ListRecordings(_ context.Context, filter model.RecordingFilter) ([]model.Recording, error) {
+	if filter.Format == model.FormatTimelapse {
+		return m.timelapseSegments, nil
+	}
+	if len(filter.Formats) > 0 {
+		return m.videoSegments, nil
+	}
+	return nil, nil
+}
+
+func TestPeriodicMerge_RecordingEnabled_ProviderOption(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cameraID := "test-cam"
+
+	providerCalled := false
+	provider := func(cameraID string) bool {
+		providerCalled = true
+		return true
+	}
+
+	mgr := NewPeriodicMergeManager(
+		&mockRecordingListerMultiFormat{},
+		&mockMergeStatusUpdater{},
+		nil, 10, dataDir, 8*time.Hour, nil,
+		WithRecordingEnabledProvider(provider),
+	)
+
+	// Run with recording_enabled=true but no segments of any type.
+	err := mgr.Run(context.Background(), cameraID, time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error with no segments: %v", err)
+	}
+	if !providerCalled {
+		t.Error("expected recordingEnabledProvider to be called")
+	}
+	// Verify that audio from providerCalled test is correct
+	if mgr.Duration() != 8*time.Hour {
+		t.Errorf("expected Duration 8h, got %v", mgr.Duration())
+	}
+}
+
+func TestPeriodicMerge_RecordingEnabled_True(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cameraID := "test-cam"
+
+	// Create a timelapse segment with dummy frames (2 segments to avoid the
+	// single-segment-copy path in runMergePipeline when FilePath is a directory).
+	tlDir := filepath.Join(dataDir, "tl-seg")
+	os.MkdirAll(tlDir, 0o755)
+	os.WriteFile(filepath.Join(tlDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
+	os.WriteFile(filepath.Join(tlDir, "frame_000002.jpg"), []byte("dummy"), 0o644)
+
+	mockLister := &mockRecordingListerMultiFormat{
+		timelapseSegments: []model.Recording{
+			{ID: "tl-1", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			{ID: "tl-2", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+
+
+		videoSegments: []model.Recording{
+			{ID: "vid-avi", CameraID: cameraID, FilePath: filepath.Join(dataDir, "dummy.avi"), Format: model.FormatAVI},
+		},
+	}
+
+	db := newTrackDB()
+	merger := &successMerger{delay: 5 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(
+		mockLister, db, merger, 10, dataDir, 8*time.Hour, nil,
+		WithRecordingEnabledProvider(func(cameraID string) bool { return true }),
+	)
+
+	// Run with recording_enabled=true. The AVI recording will fail extraction
+	// (dummy file is not valid AVI), but the timelapse segment should merge
+	// successfully.
+	err := mgr.Run(context.Background(), cameraID, time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify timelapse segments were processed (merged).
+	if status := db.GetStatus("tl-1"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-1 status daily_merged or merged, got %q", status)
+	}
+	if status := db.GetStatus("tl-2"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-2 status daily_merged or merged, got %q", status)
+	}
+}
+
+func TestPeriodicMerge_RecordingEnabled_False(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cameraID := "test-cam"
+	cameraDir := filepath.Join(dataDir, cameraID)
+	os.MkdirAll(cameraDir, 0o755)
+
+	// Create 2 timelapse segments with dummy frames to avoid the
+	// single-segment-copy path in runMergePipeline.
+	tlDir := filepath.Join(dataDir, "tl-seg")
+	os.MkdirAll(tlDir, 0o755)
+	os.WriteFile(filepath.Join(tlDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
+	os.WriteFile(filepath.Join(tlDir, "frame_000002.jpg"), []byte("dummy"), 0o644)
+
+	// When recording_enabled=false, only timelapse segments are merged (original behavior).
+	// The provider returns false, so extractRecordingFrames is never called.
+	providerInvoked := false
+	db := newTrackDB()
+	merger := &successMerger{delay: 5 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(
+		&mockRecordingListerWithSegments{
+			segments: []model.Recording{
+				{ID: "tl-1", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+				{ID: "tl-2", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			},
+
+		},
+		db, merger, 10, dataDir, 8*time.Hour, nil,
+		WithRecordingEnabledProvider(func(cameraID string) bool {
+			providerInvoked = true
+			return false
+		}),
+	)
+
+	err := mgr.Run(context.Background(), cameraID, time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !providerInvoked {
+		t.Error("expected recordingEnabledProvider to be called")
+	}
+	// Verify timelapse segments were processed (original path unchanged).
+	if status := db.GetStatus("tl-1"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-1 status daily_merged or merged, got %q", status)
+	}
+	if status := db.GetStatus("tl-2"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-2 status daily_merged or merged, got %q", status)
+	}
+}
+
+func TestPeriodicMerge_MixedSources(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cameraID := "test-cam"
+	cameraDir := filepath.Join(dataDir, cameraID)
+	os.MkdirAll(cameraDir, 0o755)
+
+	// Create a timelapse segment with dummy frames.
+	tlDir := filepath.Join(dataDir, "tl-seg")
+	os.MkdirAll(tlDir, 0o755)
+	os.WriteFile(filepath.Join(tlDir, "frame_000001.jpg"), []byte("dummy"), 0o644)
+	os.WriteFile(filepath.Join(tlDir, "frame_000002.jpg"), []byte("dummy"), 0o644)
+
+	// Mixed sources: timelapse segments + video recordings (H264 + AVI).
+	// Video recordings point to non-existent files — extraction will fail
+	// gracefully and be logged as warnings. Timelapse segments should still
+	// be merged successfully.
+	mockLister := &mockRecordingListerMultiFormat{
+		timelapseSegments: []model.Recording{
+			{ID: "tl-1", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+			{ID: "tl-2", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
+		},
+		videoSegments: []model.Recording{
+			{ID: "vid-h264", CameraID: cameraID, FilePath: filepath.Join(dataDir, "rec.h264"), Format: model.FormatH264},
+			{ID: "vid-avi", CameraID: cameraID, FilePath: filepath.Join(dataDir, "rec.avi"), Format: model.FormatAVI},
+			{ID: "vid-mjpeg", CameraID: cameraID, FilePath: filepath.Join(dataDir, "rec.mjpeg"), Format: model.FormatMJPEG},
+		},
+	}
+
+	db := newTrackDB()
+	merger := &successMerger{delay: 5 * time.Millisecond}
+	mgr := NewPeriodicMergeManager(
+		mockLister, db, merger, 10, dataDir, 8*time.Hour, nil,
+		WithRecordingEnabledProvider(func(cameraID string) bool { return true }),
+	)
+
+	err := mgr.Run(context.Background(), cameraID, time.Date(2025, 6, 7, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error with mixed sources: %v", err)
+	}
+
+	// Verify timelapse segments were processed.
+	if status := db.GetStatus("tl-1"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-1 status 'daily_merged' or 'merged', got %q", status)
+	}
+	if status := db.GetStatus("tl-2"); status != "daily_merged" && status != "merged" {
+		t.Errorf("expected tl-2 status 'daily_merged' or 'merged', got %q", status)
+	}
+}
