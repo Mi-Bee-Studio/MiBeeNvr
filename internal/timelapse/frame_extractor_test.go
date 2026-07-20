@@ -33,7 +33,7 @@ func buildTestJPEG(t *testing.T, frameNum byte) []byte {
 		0xFF, 0xE0, 0x00, 0x10, // APP0, length=16
 		'J', 'F', 'I', 'F', 0x00, // identifier
 		0x01, 0x01, // version
-		0x00, // units
+		0x00,       // units
 		0x00, 0x01, // x density
 		0x00, 0x01, // y density
 		0x00, 0x00, // thumbnail
@@ -44,7 +44,7 @@ func buildTestJPEG(t *testing.T, frameNum byte) []byte {
 		0x08,       // precision (8 bits)
 		0x00, 0x30, // height = 48
 		0x00, 0x40, // width = 64
-		0x03,       // number of components
+		0x03,             // number of components
 		0x01, 0x11, 0x00, // component 1: Y, 1:1 sampling, quant table 0
 		0x02, 0x11, 0x00, // component 2: Cb
 		0x03, 0x11, 0x00, // component 3: Cr
@@ -557,7 +557,7 @@ func (m *testMP4Muxer) writeStbl(w *mp4.Writer, chunkOffset int64) error {
 			}
 		}
 		if _, err := mp4.Marshal(w, &mp4.Stss{
-			EntryCount: uint32(len(syncSampleNums)),
+			EntryCount:   uint32(len(syncSampleNums)),
 			SampleNumber: syncSampleNums,
 		}, mp4.Context{}); err != nil {
 			return err
@@ -780,26 +780,25 @@ func (m *testMP4Muxer) buildHvcCForMarshal() *mp4.HvcC {
 	}
 
 	return &mp4.HvcC{
-		ConfigurationVersion:        1,
-		GeneralProfileSpace:         0,
-		GeneralTierFlag:             false,
-		GeneralProfileIdc:           1,
-		GeneralLevelIdc:             51,  // Level 3.1
-		MinSpatialSegmentationIdc:   0,
-		ParallelismType:             0,
-		ChromaFormatIdc:             1,  // 4:2:0
-		BitDepthLumaMinus8:          0,  // 8-bit
-		BitDepthChromaMinus8:        0,  // 8-bit
-		AvgFrameRate:                0,
-		ConstantFrameRate:           0,
-		NumTemporalLayers:           0,
-		TemporalIdNested:            0,
-		LengthSizeMinusOne:          3,  // 4-byte NAL length prefix
-		NumOfNaluArrays:             uint8(len(arrays)),
-		NaluArrays:                  arrays,
+		ConfigurationVersion:      1,
+		GeneralProfileSpace:       0,
+		GeneralTierFlag:           false,
+		GeneralProfileIdc:         1,
+		GeneralLevelIdc:           51, // Level 3.1
+		MinSpatialSegmentationIdc: 0,
+		ParallelismType:           0,
+		ChromaFormatIdc:           1, // 4:2:0
+		BitDepthLumaMinus8:        0, // 8-bit
+		BitDepthChromaMinus8:      0, // 8-bit
+		AvgFrameRate:              0,
+		ConstantFrameRate:         0,
+		NumTemporalLayers:         0,
+		TemporalIdNested:          0,
+		LengthSizeMinusOne:        3, // 4-byte NAL length prefix
+		NumOfNaluArrays:           uint8(len(arrays)),
+		NaluArrays:                arrays,
 	}
 }
-
 
 // writeDinf writes the data information box (dinf > dref > url).
 func writeDinf(w *mp4.Writer) error {
@@ -1079,9 +1078,9 @@ func TestBuildAnnexBFrame(t *testing.T) {
 			wantNalus: 1, // just IDR
 		},
 		{
-			name:      "H264 param sets in sample data are stripped",
-			isH265:    false,
-			sample:    func() []byte {
+			name:   "H264 param sets in sample data are stripped",
+			isH265: false,
+			sample: func() []byte {
 				// Build sample with SPS+PPS+IDR (all length-prefixed)
 				sps := buildTestH264SPS()
 				pps := buildTestH264PPS()
@@ -1126,10 +1125,10 @@ func TestIsParamSetNALU(t *testing.T) {
 		{"H264 PPS (type 8)", []byte{0x68, 0xCE}, false, true},
 		{"H264 IDR (type 5)", []byte{0x65, 0x88}, false, false},
 		{"H264 non-IDR (type 1)", []byte{0x41, 0x88}, false, false},
-		{"H265 VPS (type 32)", []byte{0x40, 0x01}, true, true},   // 32 << 1 = 0x40
-		{"H265 SPS (type 33)", []byte{0x42, 0x01}, true, true},    // 33 << 1 = 0x42
-		{"H265 PPS (type 34)", []byte{0x44, 0x01}, true, true},    // 34 << 1 = 0x44
-		{"H265 IDR (type 19)", []byte{0x26, 0x01}, true, false},   // 19 << 1 = 0x26
+		{"H265 VPS (type 32)", []byte{0x40, 0x01}, true, true},  // 32 << 1 = 0x40
+		{"H265 SPS (type 33)", []byte{0x42, 0x01}, true, true},  // 33 << 1 = 0x42
+		{"H265 PPS (type 34)", []byte{0x44, 0x01}, true, true},  // 34 << 1 = 0x44
+		{"H265 IDR (type 19)", []byte{0x26, 0x01}, true, false}, // 19 << 1 = 0x26
 		{"H265 non-IDR (type 1)", []byte{0x02, 0x01}, true, false},
 		{"empty", []byte{}, false, false},
 		{"nil", nil, false, false},
@@ -1338,7 +1337,7 @@ func TestRecordingFrameExtractor_OutputNamingConvention(t *testing.T) {
 			if tt.format == model.FormatAVI {
 				var buf bytes.Buffer
 				m := avi.NewVideoOnlyMuxer(&buf, 64, 48)
-			for i := range 30 {
+				for i := range 30 {
 					m.WriteVideo(buildTestJPEG(t, byte(i)), int64(i)*33333)
 				}
 				m.Close()
@@ -1347,7 +1346,7 @@ func TestRecordingFrameExtractor_OutputNamingConvention(t *testing.T) {
 			} else {
 				isH265 := tt.format == model.FormatH265
 				var samples []testSample
-			for range 30 {
+				for range 30 {
 					if isH265 {
 						samples = append(samples, testSample{data: buildH265IDRSample(), isKeyFrame: true, duration: 1})
 					} else {

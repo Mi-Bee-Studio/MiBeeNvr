@@ -71,9 +71,9 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 // backfillStableIDs runs at startup (in a goroutine) to backfill DB stable_id
 // from YAML config. It handles two cases:
 //
-// 1. YAML has stable_id but DB stable_id is empty — backfill DB from YAML.
-// 2. ONVIF YAML has no stable_id — attempt ONVIF GetCachedDeviceInfo to
-//    discover and persist serial number to both YAML and DB.
+//  1. YAML has stable_id but DB stable_id is empty — backfill DB from YAML.
+//  2. ONVIF YAML has no stable_id — attempt ONVIF GetCachedDeviceInfo to
+//     discover and persist serial number to both YAML and DB.
 //
 // Non-ONVIF cameras without a stable_id are skipped (stable_id is only
 // meaningful for ONVIF IP self-healing). Must NOT block Start().
@@ -81,8 +81,18 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 	if cm.db == nil {
 		return
 	}
-	for i := range cm.cfg.Cameras {
-		cam := cm.cfg.Cameras[i]
+
+	// Snapshot the camera list under configMu so concurrent RemoveCamera/
+	// UpdateCamera writes (which reslice cm.cfg.Cameras under the same lock)
+	// don't race with our read. The rest of the loop does no cfg.Cameras
+	// reads except the YAML-write path, which re-locks and re-reads safely.
+	cm.configMu.Lock()
+	cameras := make([]config.CameraConfig, len(cm.cfg.Cameras))
+	copy(cameras, cm.cfg.Cameras)
+	cm.configMu.Unlock()
+
+	for i := range cameras {
+		cam := cameras[i]
 		yamlStableID := strings.TrimSpace(cam.StableID)
 
 		if yamlStableID != "" {
@@ -132,6 +142,7 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 		}
 	}
 }
+
 // ensureProfileToken persists the profile token that the ONVIF recorder
 // auto-selected during Start (via onvif.SelectMainProfile). Without this, every
 // NVR restart re-runs GetProfiles to re-select — a redundant round-trip that

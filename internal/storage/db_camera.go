@@ -440,4 +440,3 @@ func (d *DB) ReassignCameraData(ctx context.Context, sourceCameraID, targetCamer
 	}
 	return nil
 }
-

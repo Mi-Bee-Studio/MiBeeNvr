@@ -749,7 +749,6 @@ func TestPeriodicMerge_RecordingEnabled_True(t *testing.T) {
 			{ID: "tl-2", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
 		},
 
-
 		videoSegments: []model.Recording{
 			{ID: "vid-avi", CameraID: cameraID, FilePath: filepath.Join(dataDir, "dummy.avi"), Format: model.FormatAVI},
 		},
@@ -804,7 +803,6 @@ func TestPeriodicMerge_RecordingEnabled_False(t *testing.T) {
 				{ID: "tl-1", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
 				{ID: "tl-2", CameraID: cameraID, FilePath: tlDir, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged},
 			},
-
 		},
 		db, merger, 10, dataDir, 8*time.Hour, nil,
 		WithRecordingEnabledProvider(func(cameraID string) bool {

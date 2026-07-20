@@ -224,12 +224,12 @@ func containsHelper(s, substr string) bool {
 	return false
 }
 
-func replaceAll(s, old, new string) string {
+func replaceAll(s, old, replacement string) string {
 	result := make([]byte, 0, len(s))
 	i := 0
 	for i < len(s) {
 		if i <= len(s)-len(old) && s[i:i+len(old)] == old {
-			result = append(result, new...)
+			result = append(result, replacement...)
 			i += len(old)
 		} else {
 			result = append(result, s[i])

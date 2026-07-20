@@ -1938,11 +1938,11 @@ func TestStartSkipsTimelapseWhenRecordingEnabled(t *testing.T) {
 			mgr := NewCameraManager(cfg, store, nil, "")
 
 			cam := config.CameraConfig{
-				ID:       tc.name,
-				Name:     "Test Camera",
-				Protocol: "rtsp",
-				Encoding: "h264",
-				URL:      "rtsp://192.168.1.100/stream",
+				ID:               tc.name,
+				Name:             "Test Camera",
+				Protocol:         "rtsp",
+				Encoding:         "h264",
+				URL:              "rtsp://192.168.1.100/stream",
 				RecordingEnabled: tc.recordingEnabled,
 				Timelapse: &config.CameraTimelapseConfig{
 					Enabled:     trueVal,

@@ -349,43 +349,43 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 						hOverrides = &resolved
 					}
 					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
-						// Check if recording is enabled (nil = default true).
-						// When recording_enabled=true, timelapse frames come from recorded
-						// segments via PeriodicMergeManager — skip starting the dedicated
-						// capturer (keyframe extractor or frame poller) and rolling merge.
-						recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
-						if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
-							logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
-								"camera_id", cam.ID)
-						} else {
-							// Start keyframe extractor if camera has rtsp_keyframe timelapse config
-							if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-								// Runtime override: an ONVIF camera with empty encoding may have
-								// resolved to rtsp_keyframe statically but actually be a JPEG device
-								// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
-								// case, use a frame poller instead.
-								if isRecorderJPEG(rec) {
-									if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-										logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-									} else if poller != nil {
-										cm.setFramePoller(cam.ID, poller)
-									}
-								} else if hub := getRecorderHub(rec); hub != nil {
-									if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
-										logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
-									}
-								}
-							} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+					// Check if recording is enabled (nil = default true).
+					// When recording_enabled=true, timelapse frames come from recorded
+					// segments via PeriodicMergeManager — skip starting the dedicated
+					// capturer (keyframe extractor or frame poller) and rolling merge.
+					recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+					if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
+						logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
+							"camera_id", cam.ID)
+					} else {
+						// Start keyframe extractor if camera has rtsp_keyframe timelapse config
+						if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
+							// Runtime override: an ONVIF camera with empty encoding may have
+							// resolved to rtsp_keyframe statically but actually be a JPEG device
+							// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
+							// case, use a frame poller instead.
+							if isRecorderJPEG(rec) {
 								if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 									logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 								} else if poller != nil {
 									cm.setFramePoller(cam.ID, poller)
 								}
+							} else if hub := getRecorderHub(rec); hub != nil {
+								if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
+									logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+								}
+							}
+						} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+							} else if poller != nil {
+								cm.setFramePoller(cam.ID, poller)
 							}
 						}
-						// Enforce timelapse schedule for dual-mode cameras (start/stop
-						// the keyframe extractor or frame poller based on time-of-day).
-						cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
+					}
+					// Enforce timelapse schedule for dual-mode cameras (start/stop
+					// the keyframe extractor or frame poller based on time-of-day).
+					cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
 				}
 			}
 		case string(model.ProtoONVIF):

@@ -26,7 +26,9 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	// the Phase 1 dedup check, so StableID-based dedup can catch the same device
 	// by hardware serial even when the incoming config has no stable_id yet.
 	// Best-effort with 3s timeout; never blocks the add.
-	tryFillStableIDFromONVIF(ctx, &cam)
+	if err := tryFillStableIDFromONVIF(ctx, &cam); err != nil {
+		logger.Debug("AddCamera: best-effort ONVIF stable_id lookup failed", "camera_id", cam.ID, "error", err)
+	}
 
 	// PHASE 1 — under configMu: dedup check, append to cfg.Cameras, persist DB +
 	// disk, republish snapshot. The dedup check covers three identity keys:

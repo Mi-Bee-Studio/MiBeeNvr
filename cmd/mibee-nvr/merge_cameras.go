@@ -31,12 +31,12 @@ func cmdMergeCameras() {
 }
 
 type mergeCamerasFlags struct {
-	cfgPath      string
-	sourceID     string
-	targetID     string
-	dryRun       bool
-	execute      bool
-	force        bool
+	cfgPath  string
+	sourceID string
+	targetID string
+	dryRun   bool
+	execute  bool
+	force    bool
 	// Target field overrides applied to the target camera after merge.
 	targetOnvifEndpoint   string
 	targetURL             string

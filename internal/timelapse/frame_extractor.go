@@ -17,6 +17,7 @@ package timelapse
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -97,7 +98,7 @@ func (e *RecordingFrameExtractor) extractAVI(filePath string, interval time.Dura
 
 	for {
 		chunk, err := d.NextChunk()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
