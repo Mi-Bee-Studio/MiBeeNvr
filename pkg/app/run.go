@@ -252,25 +252,41 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("storage: %w", err)
 	}
 
-	// Cleanup temp files from previous crash
-	if err := store.CleanupTempFiles(); err != nil {
-		slog.Warn("temp cleanup", "error", err)
-	}
+	// Cleanup temp files from previous crash. Run in background — on large
+	// storage trees (100k+ files) the walk can take 20+ seconds, and leftover
+	// .tmp files are harmless to delay (each new segment uses a unique uuid).
+	// CleanupIncomplete below is a single SQL DELETE (ms-scale) and stays sync.
+	go func() {
+		start := time.Now()
+		if err := store.CleanupTempFiles(); err != nil {
+			slog.Warn("background temp cleanup", "error", err)
+			return
+		}
+		slog.Info("background temp cleanup done", "duration", time.Since(start))
+	}()
 	if err := db.CleanupIncomplete(ctx); err != nil {
 		slog.Warn("incomplete cleanup", "error", err)
 	}
 
-	// Reconcile orphaned recording files (exists on disk but not in DB)
+	// Reconcile orphaned recording files (exists on disk but not in DB). Run in
+	// background — on USB HDD with 100k+ legacy flat-layout files this scan
+	// takes 3+ minutes (measured), blocking service availability the whole time.
+	// New recordings write their DB row on CloseSegment regardless, so delaying
+	// reconciliation of historical orphans has no runtime impact.
 	cameraIDs := make(map[string]bool)
 	for _, cam := range cfg.Cameras {
 		cameraIDs[cam.ID] = true
 	}
-	reconciled, err := store.ReconcileOrphanedFiles(ctx, db, cameraIDs)
-	if err != nil {
-		slog.Error("failed to reconcile orphaned files", "error", err)
-	} else if reconciled > 0 {
-		slog.Info("reconciled orphaned recording files", "count", reconciled)
-	}
+	go func() {
+		start := time.Now()
+		reconciled, err := store.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+		if err != nil {
+			slog.Error("background orphan reconciliation failed", "error", err)
+			return
+		}
+		slog.Info("background orphan reconciliation done",
+			"reconciled", reconciled, "duration", time.Since(start))
+	}()
 
 	// Step 4: Auth middleware
 	authmw.SetAuthMetrics(metrics)

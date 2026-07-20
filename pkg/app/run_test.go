@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -201,4 +203,95 @@ func TestRunFree_SmokeStartStop(t *testing.T) {
 	if err := a.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+}
+
+// TestRunFree_DoesNotBlockOnStorageScan is a regression test for the startup
+// delay caused by synchronous storage scans. Production measurement on a USB
+// HDD with 100k+ files showed:
+//   - CleanupTempFiles (filepath.WalkDir over the whole tree): ~23s
+//   - ReconcileOrphanedFiles (per-camera ReadDir + per-MJPEG-dir Walk): ~3min
+//
+// Both must run in the background so the HTTP server can start serving within
+// seconds. This test seeds a large cam-* subtree with a mix of MP4 files,
+// .tmp orphans, and MJPEG frame directories (the slow path for reconcile),
+// then asserts RunFree returns well within the time a synchronous scan would
+// take.
+//
+// The authoritative fix verification is the production deploy measurement
+// (journalctl: db ready → "listening" interval < 5s, plus "background temp
+// cleanup done" / "background orphan reconciliation done" logs).
+func TestRunFree_DoesNotBlockOnStorageScan(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping startup-blocking regression test in short mode")
+	}
+
+	cfg, dir := minimalConfig(t)
+
+	// Seed a camera subtree with many files in the production layout:
+	//   cam-seed/YYYY/MM/DD/HH/{uuid}.mp4   (current layout)
+	//   cam-seed/{legacy_flat}.mp4          (old layout, still on production)
+	//   cam-seed/YYYY/MM/DD/HH/{uuid}.tmp/  (MJPEG frame dir, reconcile walks it)
+	camDir := filepath.Join(dir, "cam-seed")
+	hourDir := filepath.Join(camDir, "2026", "07", "20", "10")
+	if err := os.MkdirAll(hourDir, 0o755); err != nil {
+		t.Fatalf("mkdir hour: %v", err)
+	}
+	const mp4Count = 2000
+	for i := 0; i < mp4Count; i++ {
+		// Current layout: nested under date dirs.
+		name := fmt.Sprintf("cam-seed_20260720_1000_%04d.mp4", i)
+		if err := os.WriteFile(filepath.Join(hourDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed mp4 %d: %v", i, err)
+		}
+		// Legacy flat layout at cam dir top level (reconcile reads this via
+		// os.ReadDir(camDir) and stats every entry).
+		if i < 500 {
+			flatName := fmt.Sprintf("cam-seed_20260629_1000_%04d.mp4", i)
+			if err := os.WriteFile(filepath.Join(camDir, flatName), []byte("x"), 0o644); err != nil {
+				t.Fatalf("seed flat mp4 %d: %v", i, err)
+			}
+		}
+	}
+	// A few .tmp orphans for CleanupTempFiles.
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("cam-seed_20260720_1000_orphan_%04d.tmp", i)
+		if err := os.WriteFile(filepath.Join(hourDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed tmp %d: %v", i, err)
+		}
+	}
+	// MJPEG frame directories — reconcile's slow path (full Walk per dir to
+	// count frames). Each has multiple JPEG files inside.
+	for d := 0; d < 20; d++ {
+		mjpegDir := filepath.Join(hourDir, fmt.Sprintf("cam-seed_20260720_1000_mjpeg_%04d", d))
+		if err := os.MkdirAll(mjpegDir, 0o755); err != nil {
+			t.Fatalf("mkdir mjpeg %d: %v", d, err)
+		}
+		for f := 0; f < 10; f++ {
+			jpg := filepath.Join(mjpegDir, fmt.Sprintf("frame_%04d.jpg", f))
+			if err := os.WriteFile(jpg, []byte("x"), 0o644); err != nil {
+				t.Fatalf("seed jpg %d/%d: %v", d, f, err)
+			}
+		}
+	}
+
+	configPath := filepath.Join(dir, "mibee-nvr.yaml")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+
+	start := time.Now()
+	a, err := RunFree(cfg, configPath)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+	defer a.Stop()
+
+	// RunFree returned, so startup was not blocked by either storage scan.
+	// Generous 5s budget covers DB init + manager construction on slow CI.
+	if elapsed > 5*time.Second {
+		t.Errorf("RunFree took %v; cleanup or reconcile may be blocking startup again", elapsed)
+	}
+	t.Logf("RunFree returned in %v with seeded storage tree", elapsed)
 }

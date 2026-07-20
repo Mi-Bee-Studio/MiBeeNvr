@@ -436,33 +436,66 @@ func (m *Manager) IsAvailable() bool {
 	return err == nil
 }
 
-// CleanupTempFiles removes all orphaned .tmp files and directories from the storage root.
+// CleanupTempFiles removes all orphaned .tmp files and directories left by
+// crashed segment writes. Temp segments are only ever created under
+// <root>/cam-xxx/YYYY/MM/DD/HH/{uuid}.tmp (see CreateSegment), so this scan is
+// scoped to cam-* subtrees only — it skips hls/, recordings/, bin/, certs/,
+// database files, and any other non-camera content at the root. This keeps the
+// scan bounded: on a production tree with 100k+ files it avoids walking the
+// HLS shard directories entirely.
+//
+// This function is safe to call concurrently with recording (each segment uses
+// a unique uuid path; a leftover .tmp from a previous crash never collides with
+// a new write). Callers that don't need the result immediately should run it in
+// a goroutine to avoid blocking startup.
 func (m *Manager) CleanupTempFiles() error {
-	return filepath.WalkDir(m.rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip inaccessible entries
+	entries, err := os.ReadDir(m.rootDir)
+	if err != nil {
+		return fmt.Errorf("storage: read root dir %q: %w", m.rootDir, err)
+	}
+	var firstErr error
+	for _, entry := range entries {
+		// Only descend into camera directories (prefix "cam-"). Everything else
+		// at the root (hls/, recordings/, bin/, certs/, *.db, config files,
+		// top-level *.tmp backups, etc.) is out of scope for segment cleanup.
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "cam-") {
+			continue
 		}
-		if d.IsDir() {
-			// Don't remove the root dir itself, and skip .tmp directories
-			if path == m.rootDir {
+		camDir := filepath.Join(m.rootDir, entry.Name())
+		if err := filepath.WalkDir(camDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil // skip inaccessible entries
+			}
+			if !d.IsDir() {
+				// Remove .tmp files
+				if strings.HasSuffix(d.Name(), ".tmp") {
+					if err := os.Remove(path); err != nil {
+						// Don't abort the whole walk on a single failure (file
+						// may be in use); record and continue.
+						logger.Warn("temp cleanup: failed to remove temp file", "path", path, "error", err)
+					}
+				}
+				return nil
+			}
+			// Don't remove the camera dir itself, and skip .tmp directories
+			if path == camDir {
 				return nil
 			}
 			if strings.HasSuffix(d.Name(), ".tmp") {
 				if err := os.RemoveAll(path); err != nil {
-					return fmt.Errorf("storage: failed to remove temp dir %q: %w", path, err)
+					logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
 				}
 				return filepath.SkipDir
 			}
 			return nil
-		}
-		// Remove .tmp files
-		if strings.HasSuffix(d.Name(), ".tmp") {
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("storage: failed to remove temp file %q: %w", path, err)
+		}); err != nil {
+			logger.Warn("temp cleanup: walk error", "dir", camDir, "error", err)
+			if firstErr == nil {
+				firstErr = err
 			}
 		}
-		return nil
-	})
+	}
+	return firstErr
 }
 
 // ReconcileOrphanedFiles scans camera directories for .mp4 files that are not registered
@@ -507,8 +540,78 @@ func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs 
 	return totalReconciled, nil
 }
 
+// recordingNameInfo holds the parsed fields of a recording file/dir name.
+// Populated by parseRecordingName when the name matches the canonical shape.
+type recordingNameInfo struct {
+	cameraID  string
+	startedAt time.Time
+	nanoID    string
+	isMP4File bool // true for .mp4 files (H264), false for extension-less MJPEG dirs
+}
+
+// parseRecordingName parses a cam-dir entry name into its recording fields,
+// without touching the disk. Returns ok=false if the name does not match the
+// canonical recording shape:
+//
+//	<camID>_YYYYMMDD_HHMMSS_<nano>        (MJPEG dir, no extension)
+//	<camID>_YYYYMMDD_HHMMSS_<nano>.mp4     (H264 file)
+//
+// This is the cheap name-shape gate used by reconcileCameraDir to skip
+// non-recording entries — most importantly date-bucket dirs ("202607/", "20/",
+// "07/") created by the segment writer — before paying for any stat or subtree
+// walk. Misclassifying a date dir as an MJPEG recording dir caused a production
+// 8.7GB / 6.5-minute IO storm because each date dir's entire subtree got walked.
+//
+// cameraIDHint, when non-empty, requires parts[0] == cameraIDHint (the parent
+// cam dir name); entries from other cameras are rejected. Pass "" to skip the
+// camera-ID check (only shape is validated).
+func parseRecordingName(name, cameraIDHint string) (recordingNameInfo, bool) {
+	isMP4 := strings.HasSuffix(name, ".mp4")
+	baseName := name
+	if isMP4 {
+		baseName = strings.TrimSuffix(name, ".mp4")
+	} else if filepath.Ext(name) != "" {
+		// Non-mp4 entry with an extension (.avi.tmp, .json, .tmp, ...) — not a
+		// recording name. Extension-less dirs are still candidates (MJPEG).
+		return recordingNameInfo{}, false
+	}
+	parts := strings.SplitN(baseName, "_", 4)
+	if len(parts) != 4 {
+		return recordingNameInfo{}, false
+	}
+	if cameraIDHint != "" && parts[0] != cameraIDHint {
+		return recordingNameInfo{}, false
+	}
+	startedAt, err := time.ParseInLocation("20060102_150405", parts[1]+"_"+parts[2], time.Local)
+	if err != nil {
+		return recordingNameInfo{}, false
+	}
+	return recordingNameInfo{
+		cameraID:  parts[0],
+		startedAt: startedAt,
+		nanoID:    parts[3],
+		isMP4File: isMP4,
+	}, true
+}
+
 // reconcileCameraDir scans a single camera directory and inserts orphaned recordings.
 // Uses incremental batches of orphanBatchSize to minimize write lock duration.
+//
+// To avoid expensive disk IO on large trees, entry filtering is done in two
+// cheap phases BEFORE any stat or subtree walk, both encapsulated in
+// parseRecordingName:
+//  1. Name-shape gate: only entries shaped "<camID>_YYYYMMDD_HHMMSS_<nano>"
+//     (optionally suffixed with .mp4) are considered. This skips date bucket
+//     directories (e.g. "202607/", "20/", "07/") that the segment writer
+//     creates under each cam dir, as well as random unrelated files. Without
+//     this gate, a single date directory like "202607/" would be misclassified
+//     as an MJPEG recording dir and fully walked, causing the entire historical
+//     subtree (potentially 100k+ files) to be re-stat'd per date dir.
+//  2. Camera-ID gate: parts[0] must equal dirName. Entries from other cameras
+//     or stale exports are skipped without IO.
+//
+// Only after both gates does the function call f.Info() (one stat per
+// surviving entry) and, for MJPEG dirs, the per-frame Walk.
 func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string) (int, error) {
 	files, err := os.ReadDir(filepath.Join(m.rootDir, dirName))
 	if err != nil {
@@ -519,73 +622,57 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 	for _, f := range files {
 		name := f.Name()
 
-		var baseName string
-		var frameCount int
-		var totalSize int64
-		var format model.Format
-		info, infoErr := f.Info()
-		if infoErr != nil {
+		// Phase 1 + 2: cheap name-shape + camera-ID gate, no IO. This is what
+		// prevents date-bucket dirs from being walked.
+		info, ok := parseRecordingName(name, dirName)
+		if !ok {
 			continue
 		}
 
+		// Only now — after the gates pass — pay for one stat per entry.
+		fi, fiErr := f.Info()
+		if fiErr != nil {
+			continue
+		}
+
+		var totalSize int64
+		var frameCount int
+		var format model.Format
 		if f.IsDir() {
-			// Skip dirs with extensions (e.g., .tmp dirs)
-			if ext := filepath.Ext(name); ext != "" {
-				continue
-			}
-			baseName = name
+			// MJPEG recording directory: count JPEG frames and total size.
+			// Only legit recording-named dirs reach here, so this Walk is now
+			// bounded to actual frame dirs (tens of entries), not date trees.
 			format = model.FormatMJPEG
-			// Count JPEG frames and total size
 			dirPath := filepath.Join(m.rootDir, dirName, name)
-			filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
-				if err != nil || fi.IsDir() {
+			filepath.Walk(dirPath, func(path string, walkFI os.FileInfo, walkErr error) error {
+				if walkErr != nil || walkFI.IsDir() {
 					return nil
 				}
 				frameCount++
-				totalSize += fi.Size()
+				totalSize += walkFI.Size()
 				return nil
 			})
 			if frameCount == 0 {
 				continue
 			}
 		} else {
-			if !strings.HasSuffix(name, ".mp4") {
+			if !info.isMP4File {
+				continue // named like a recording but not .mp4 — shouldn't happen
+			}
+			if fi.Size() == 0 {
 				continue
 			}
-			baseName = strings.TrimSuffix(name, ".mp4")
 			format = model.FormatH264
-			if info.Size() == 0 {
-				continue
-			}
-			totalSize = info.Size()
-		}
-
-		parts := strings.SplitN(baseName, "_", 4)
-		if len(parts) != 4 {
-			continue
-		}
-
-		cameraIDPart := parts[0]
-		dateStr := parts[1]
-		timeStr := parts[2]
-		nanoStr := parts[3]
-
-		if cameraIDPart != dirName {
-			continue
-		}
-
-		startedAt, err := time.ParseInLocation("20060102_150405", dateStr+"_"+timeStr, time.Local)
-		if err != nil {
-			continue
+			totalSize = fi.Size()
 		}
 
 		cameraOrphans = append(cameraOrphans, model.Recording{
-			ID:         nanoStr,
+			ID:         info.nanoID,
 			CameraID:   dirName,
 			FilePath:   filepath.Join(m.rootDir, dirName, name),
 			Format:     format,
-			StartedAt:  startedAt,
-			EndedAt:    startedAt,
+			StartedAt:  info.startedAt,
+			EndedAt:    info.startedAt,
 			Duration:   0,
 			FileSize:   totalSize,
 			FrameCount: frameCount,
@@ -597,12 +684,13 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 		return 0, nil
 	}
 
-	// Query which files already exist in DB
-	paths := make([]string, len(cameraOrphans))
-	for i, o := range cameraOrphans {
-		paths[i] = o.FilePath
-	}
-	existing, err := db.GetRecordingsByPathSet(ctx, paths)
+	// Query which files already exist in DB. Use the per-camera path set rather
+	// than GetRecordingsByPathSet(IN ?, ?, ...): the per-camera query rides the
+	// idx_recordings_camera_time index for a bounded range scan of just this
+	// camera's rows, instead of a full table scan on the unindexed file_path
+	// column. On a production tree (~15k recordings, ~6 cameras) this cut
+	// reconcile IO dramatically. We intersect locally against the hashset.
+	existing, err := db.GetRecordingPathsByCamera(ctx, dirName)
 	if err != nil {
 		return 0, fmt.Errorf("query existing recordings for %q: %w", dirName, err)
 	}

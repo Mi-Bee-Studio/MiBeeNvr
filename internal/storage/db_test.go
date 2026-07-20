@@ -1228,6 +1228,54 @@ func TestGetRecordingsByPathSet_Empty(t *testing.T) {
 	require.Len(t, result, 0)
 }
 
+// TestGetRecordingPathsByCamera verifies the per-camera path lookup used by
+// orphan reconciliation. This must scope by camera_id so the query rides the
+// idx_recordings_camera_time index instead of scanning the whole recordings
+// table (which on production with 15k rows dominates reconcile IO).
+func TestGetRecordingPathsByCamera(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_paths_by_cam.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now()
+	// Seed two cameras with overlapping file names to ensure the query
+	// isolates by camera_id.
+	for _, cam := range []string{"camA", "camB"} {
+		for i := 0; i < 3; i++ {
+			rec := &model.Recording{
+				ID:        fmt.Sprintf("%s-%d", cam, i),
+				CameraID:  cam,
+				FilePath:  fmt.Sprintf("/store/%s/seg_%d.mp4", cam, i),
+				Format:    model.FormatH264,
+				StartedAt: now.Add(time.Duration(i) * time.Minute),
+			}
+			require.NoError(t, db.InsertRecording(ctx, rec))
+		}
+	}
+
+	got, err := db.GetRecordingPathsByCamera(ctx, "camA")
+	require.NoError(t, err)
+	require.Len(t, got, 3, "camA should return exactly 3 paths")
+	for i := 0; i < 3; i++ {
+		require.True(t, got[fmt.Sprintf("/store/camA/seg_%d.mp4", i)],
+			"camA path should be in result")
+	}
+	// Ensure no cross-camera leakage.
+	for i := 0; i < 3; i++ {
+		require.False(t, got[fmt.Sprintf("/store/camB/seg_%d.mp4", i)],
+			"camB path must NOT be in camA result")
+	}
+
+	// Unknown camera returns empty set, no error.
+	got, err = db.GetRecordingPathsByCamera(ctx, "camUnknown")
+	require.NoError(t, err)
+	require.Len(t, got, 0)
+}
+
 func TestInsertOrphanRecordings(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test_orphan.db")
