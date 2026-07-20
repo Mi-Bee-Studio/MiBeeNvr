@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
@@ -20,6 +21,12 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	if cam.ID == "" {
 		cam.ID = GenerateCameraID()
 	}
+
+	// Reverse ONVIF lookup: attempt to populate StableID from the device before
+	// the Phase 1 dedup check, so StableID-based dedup can catch the same device
+	// by hardware serial even when the incoming config has no stable_id yet.
+	// Best-effort with 3s timeout; never blocks the add.
+	tryFillStableIDFromONVIF(ctx, &cam)
 
 	// PHASE 1 — under configMu: dedup check, append to cfg.Cameras, persist DB +
 	// disk, republish snapshot. The dedup check covers three identity keys:
@@ -69,7 +76,7 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 
 		// Persist to database
 		if cm.db != nil {
-			if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+			if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cam.StableID); err != nil {
 				logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 			}
 			// Persist the activation_state column (UpsertCamera does not write it).
@@ -165,6 +172,49 @@ func (cm *CameraManager) publishCameraAdded(ctx context.Context, cam config.Came
 		"activation_state": cam.ActivationState,
 		"source":           source,
 	})
+}
+
+// tryFillStableIDFromONVIF attempts to fetch the ONVIF device serial number and
+// populate cam.StableID from the hardware device. Best-effort: always returns nil;
+// logs warning on failure but never blocks camera addition.
+// Creates a one-time ONVIF client (not cached) so the manager's client cache is
+// not polluted by a camera that may not be added (e.g. deduped).
+func tryFillStableIDFromONVIF(ctx context.Context, cam *config.CameraConfig) error {
+	if cam.StableID != "" || cam.Protocol != string(model.ProtoONVIF) || cam.ONVIFEndpoint == "" {
+		return nil
+	}
+
+	endpoint := cam.ONVIFEndpoint
+	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
+	return tryFillStableIDFromONVIFWithClient(ctx, cam, client)
+}
+
+// tryFillStableIDFromONVIFWithClient is like tryFillStableIDFromONVIF but accepts
+// an onvif.DeviceClient directly for testability.
+func tryFillStableIDFromONVIFWithClient(ctx context.Context, cam *config.CameraConfig, client onvif.DeviceClient) error {
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	if err := client.Connect(lookupCtx); err != nil {
+		logger.Warn("reverse ONVIF lookup: connect failed, skipping",
+			"endpoint", cam.ONVIFEndpoint, "error", err)
+		return nil
+	}
+
+	info, err := client.GetDeviceInformation(lookupCtx)
+	if err != nil {
+		logger.Warn("reverse ONVIF lookup: GetDeviceInformation failed, skipping",
+			"endpoint", cam.ONVIFEndpoint, "error", err)
+		return nil
+	}
+
+	if serial := strings.TrimSpace(info.SerialNumber); serial != "" {
+		cam.StableID = serial
+		logger.Info("reverse ONVIF lookup: populated stable_id",
+			"endpoint", cam.ONVIFEndpoint, "stable_id", serial)
+	}
+
+	return nil
 }
 
 // RemoveCamera removes a camera from the manager, stops its recorder, and removes it from config.
@@ -536,7 +586,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 
 	// Persist to database
 	if cm.db != nil {
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cam.StableID); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
