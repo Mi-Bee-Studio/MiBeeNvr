@@ -206,7 +206,7 @@ type HealthOverrides struct {
 type CleanupConfig struct {
 	RetentionDays        int    `yaml:"retention_days"`         // default 30
 	CheckInterval        string `yaml:"check_interval"`         // default "1h"
-	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 95
+	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 85 (HDD perf cliff near 90%+ full)
 }
 
 type MergeConfig struct {
@@ -257,6 +257,15 @@ type MergeConfig struct {
 	// processes per cycle, so a single sweep can't monopolize IO for minutes.
 	// Default 500. The sweep uses try-locks and yields to real-time events.
 	RollingBackfillBatch int `yaml:"rolling_backfill_batch" json:"rolling_backfill_batch"`
+
+	// RollingBackfillConcurrency bounds how many cameras the periodic sweep
+	// merges in parallel. Each camera holds its own merge lock, so this controls
+	// total disk IO across cameras — the main knob for trading merge throughput
+	// against recording-pipeline latency on USB HDD.
+	// Default 0 = auto: 1 on devices with ≤2GB RAM (RPi 3B), 3 on larger hosts.
+	// Lower it (e.g. 1) if recording drops frames during backlog clearing;
+	// raise it on SSD/NVMe hosts where seek contention is not a concern.
+	RollingBackfillConcurrency int `yaml:"rolling_backfill_concurrency" json:"rolling_backfill_concurrency"`
 }
 
 // RollingEnabledValue reports the effective rolling-merge enabled state,
@@ -985,6 +994,9 @@ func Validate(cfg *Config) error {
 		if cfg.Merge.RollingBackfillBatch < 0 {
 			return fmt.Errorf("merge.rolling_backfill_batch must be >= 0, got %d", cfg.Merge.RollingBackfillBatch)
 		}
+		if cfg.Merge.RollingBackfillConcurrency < 0 || cfg.Merge.RollingBackfillConcurrency > 16 {
+			return fmt.Errorf("merge.rolling_backfill_concurrency must be between 0 (auto) and 16, got %d", cfg.Merge.RollingBackfillConcurrency)
+		}
 	}
 	// Validate transcoding configuration
 	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {
@@ -1272,7 +1284,10 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.Cleanup.CheckInterval = "1h"
 	}
 	if cfg.Cleanup.DiskThresholdPercent == 0 {
-		cfg.Cleanup.DiskThresholdPercent = 95
+		// 85% avoids the HDD performance cliff that starts around 90%+ full,
+		// where random writes during SQLite checkpoints + segment merges start
+		// contending with sequential recording writes for head seeks.
+		cfg.Cleanup.DiskThresholdPercent = 85
 	}
 	// Auth - rate limit defaults
 	if cfg.Auth.RateLimit.MaxFailures == 0 {
@@ -1404,6 +1419,16 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Merge.RollingBackfillBatch == 0 {
 		cfg.Merge.RollingBackfillBatch = 500
+	}
+	// RollingBackfillConcurrency: auto-select by available RAM if user didn't
+	// set it explicitly. RPi 3B (1GB RAM, USB-bound IO, Cortex-A53) gets 1 to
+	// avoid seek thrashing against the recorder; hosts with >2GB get 3.
+	if cfg.Merge.RollingBackfillConcurrency == 0 {
+		if memAvailableMB() > 2048 {
+			cfg.Merge.RollingBackfillConcurrency = 3
+		} else {
+			cfg.Merge.RollingBackfillConcurrency = 1
+		}
 	}
 	// Transcoding defaults
 	if cfg.Transcoding.MaxWorkers == 0 {

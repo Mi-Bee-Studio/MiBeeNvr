@@ -101,7 +101,7 @@ cameras: []
 cleanup:
   retention_days: 30               # Delete recordings older than N days (1-3650)
   check_interval: "1h"             # How often to check for expired recordings
-  disk_threshold_percent: 95       # Start cleanup when disk usage exceeds N% (50-99)
+  disk_threshold_percent: 85       # Start cleanup when disk usage exceeds N% (50-99). 85 avoids the HDD perf cliff near 90%+ full.
 
 # Segment merging — combine short segments into longer recordings
 # Two independent systems:
@@ -132,6 +132,11 @@ merge:
   # upgrade to default-on rolling merge cannot trigger an IO storm on RPi 3B.
   rolling_backfill_max_segments: 500  # Max segments merged at startup (0=unlimited)
   rolling_backfill_max_age: "72h"     # Only backfill segments newer than this; older → periodic merge
+  # Periodic backfill sweep — digests historical pending segments that the
+  # event-driven path misses (pre-72h backlogs, recorder downtime catch-up).
+  rolling_backfill_interval: "10m"    # Sweep cadence (default 10m; "0" to disable)
+  rolling_backfill_batch: 500         # Max segments processed per sweep cycle (default 500)
+  rolling_backfill_concurrency: 0     # Cameras merged in parallel (0=auto: 1 on ≤2GB RAM, 3 otherwise). Lower if recording drops frames during backlog clearing.
 
 # FTP server — provides file access over FTP protocol
 # Configurable port and passive port range
