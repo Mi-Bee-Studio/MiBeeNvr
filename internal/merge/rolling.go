@@ -138,8 +138,20 @@ type bucketInfo struct {
 	spsKey         string // SHA-256(SPS+PPS+VPS) for compatibility checking
 	windowStart    time.Time
 	windowEnd      time.Time
-	segmentCount   int // how many segments have been merged into this bucket
+	segmentCount   int   // how many segments have been merged into this bucket
+	mergedFileSize int64 // current byte size of mergedFilePath (0 if no bucket yet)
 }
+
+// bucketSizeLimit caps how large an accumulating rolling-merge bucket file can
+// grow before a new bucket is rolled. MP4 mdat box size is a uint32, so once a
+// bucket exceeds ~4 GiB the next append fails with "mdat box size exceeds
+// MaxUint32" and the segment is lost from the merge queue. High-bitrate cameras
+// (e.g. 2K云台 at ~1.7 MB/s) hit this within ~40 minutes of recording in one
+// window. The 3 GiB threshold leaves headroom for one more append before the
+// hard 4 GiB limit. When triggered, the current bucket is finalized and a new
+// bucket starts within the same window — playback sees multiple merged files
+// per hour instead of one, which is fine (the timeline UI groups by hour).
+const bucketSizeLimit = 3 << 30 // 3 GiB
 
 // NewRollingMergeCoordinator creates a new coordinator.
 // It does NOT start subscribing until Start() is called.
@@ -1230,7 +1242,8 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()
 
-	// Check for window rollover or SPS/PPS change → close old bucket, start new.
+	// Check for window rollover, SPS/PPS change, or size limit → close old
+	// bucket, start new.
 	needNewBucket := false
 	if bucket.mergedFilePath != "" {
 		if !seg.startedAt.Before(bucket.windowEnd) && !seg.startedAt.Equal(bucket.windowStart) {
@@ -1247,6 +1260,19 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 				"old_key", bucket.spsKey[:8],
 				"new_key", spsKey[:8])
 			needNewBucket = true
+		} else if bucket.mergedFileSize > 0 && bucket.mergedFileSize+newInfo.MdatSize > bucketSizeLimit {
+			// Bucket approaching the 4 GiB MP4 mdat hard limit. Finalize it
+			// and start a fresh bucket within the same window. Without this,
+			// high-bitrate cameras (2K云台 ~1.7MB/s → 6GB/hour) accumulate
+			// until MergeMP4Segments returns "mdat box size exceeds MaxUint32"
+			// and the segment is lost from the merge queue.
+			rollingLogger.Info("bucket size limit reached, starting new bucket",
+				"camera_id", seg.cameraID,
+				"bucket_size_mb", bucket.mergedFileSize>>20,
+				"new_segment_mb", newInfo.MdatSize>>20,
+				"limit_mb", bucketSizeLimit>>20,
+				"segment_count", bucket.segmentCount)
+			needNewBucket = true
 		}
 	}
 
@@ -1257,6 +1283,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 		bucket.mergedRecID = ""
 		bucket.spsKey = ""
 		bucket.segmentCount = 0
+		bucket.mergedFileSize = 0
 		bucket.windowStart = windowStart
 		bucket.windowEnd = windowEnd
 	}
@@ -1284,6 +1311,15 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.mergedRecID = mergedRecID
 	bucket.spsKey = spsKey
 	bucket.segmentCount++
+	// Track merged file size for the bucketSizeLimit check on the next append.
+	// One stat per merged segment is cheap (the file was just written and its
+	// inode is hot in cache), and avoids the need to thread size through every
+	// create/append return path.
+	if fi, statErr := os.Stat(outputPath); statErr == nil {
+		bucket.mergedFileSize = fi.Size()
+	} else {
+		bucket.mergedFileSize = 0 // unknown — size check will be skipped next cycle
+	}
 
 	// Record metrics.
 	if r.metrics != nil {

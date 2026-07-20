@@ -918,3 +918,84 @@ func TestBackfillHistorical_FairAcrossCameras(t *testing.T) {
 	require.True(t, starvedRecs[0].Merged)
 	require.NotEmpty(t, starvedRecs[0].FilePath)
 }
+
+// ---------------------------------------------------------------------------
+// TestRollingMerge_BucketSizeLimit — when an accumulating bucket approaches
+// the 4 GiB MP4 mdat hard limit, the next segment should start a fresh bucket
+// within the same window (rather than failing with "mdat box size exceeds
+// MaxUint32" and dropping the segment from the merge queue).
+//
+// High-bitrate cameras (2K云台 ~1.7MB/s) hit this within ~40 min of recording
+// in one window. The fix: bucketInfo now tracks mergedFileSize and mergeOneSegment
+// rolls a new bucket when mergedFileSize + incoming segment > bucketSizeLimit.
+// ---------------------------------------------------------------------------
+
+func TestRollingMerge_BucketSizeLimit(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	cameraID := "size-cam"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, r.Start(ctx))
+	defer r.Stop()
+
+	// Publish one segment to create the bucket.
+	now := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	filePath1 := createAndInsertSegment(t, env, "seg-1", cameraID, now)
+	publishSegmentCompleted(t, bus, cameraID, "seg-1", filePath1, "h264", now)
+	waitForBucketStable(t, r, cameraID, 1, 5*time.Second)
+
+	// Simulate the bucket having grown near the 3 GiB limit. We can't actually
+	// write 3 GiB in a test, so directly set the tracked size on the bucket
+	// state — this is the same field mergeOneSegment checks.
+	bucketAny, ok := r.buckets.Load(cameraID)
+	require.True(t, ok, "bucket should exist after first segment")
+	bucket := bucketAny.(*bucketInfo)
+	bucket.mu.Lock()
+	bucket.mergedFileSize = bucketSizeLimit + 1 // over the limit
+	bucket.mu.Unlock()
+
+	// Publish a second segment in the SAME window. The size check should roll
+	// a new bucket: segmentCount resets to 1 (the new segment alone), rather
+	// than incrementing to 2 (appending to the oversized bucket).
+	seg2Time := now.Add(30 * time.Second)
+	filePath2 := createAndInsertSegment(t, env, "seg-2", cameraID, seg2Time)
+	publishSegmentCompleted(t, bus, cameraID, "seg-2", filePath2, "h264", seg2Time)
+
+	// Wait for the second segment to be processed. With the size-limit fix,
+	// the bucket rolls and segmentCount ends at 1. Without the fix, the bucket
+	// appends and segmentCount ends at 2. Poll until stable (count stops
+	// changing) — we can't use waitForBucketStable(count=1) because count=1
+	// is also the state BEFORE seg-2 is processed.
+	deadline := time.Now().Add(5 * time.Second)
+	var finalCount, finalSize int64
+	for time.Now().Before(deadline) {
+		bucket.mu.Lock()
+		c := bucket.segmentCount
+		s := bucket.mergedFileSize
+		bucket.mu.Unlock()
+		// seg-2 processed → either count=1 (rolled) or count=2 (appended).
+		// Also wait for size to be updated from the fake 3GiB value (stat
+		// after merge resets it to the real small file size).
+		if (c == 1 || c == 2) && s != bucketSizeLimit+1 {
+			finalCount = int64(c)
+			finalSize = s
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.Greater(t, finalCount, int64(0), "seg-2 should have been processed")
+	require.Equal(t, int64(1), finalCount,
+		"oversized bucket should roll to a new bucket (segmentCount=1), not append (segmentCount=2)")
+	require.Less(t, finalSize, int64(bucketSizeLimit),
+		"new bucket should be well under the size limit")
+}
