@@ -32,7 +32,7 @@ func newTestDB(t *testing.T) *storage.DB {
 func seedOnvifCamera(t *testing.T, db *storage.DB, id, endpoint, serial string) {
 	t.Helper()
 	ctx := context.Background()
-	if err := db.UpsertCamera(ctx, id, "Existing", "onvif", "", "", "", "", endpoint, "", ""); err != nil {
+	if err := db.UpsertCamera(ctx, id, "Existing", "onvif", "", "", "", "", endpoint, "", "", ""); err != nil {
 		t.Fatalf("UpsertCamera: %v", err)
 	}
 	if serial != "" {
@@ -93,11 +93,11 @@ func TestExistsInDB_EndpointDedup(t *testing.T) {
 	seedOnvifCamera(t, db, "cam-existing", endpoint, "")
 
 	// Same endpoint → duplicate.
-	if !adder.existsInDB(context.Background(), endpoint, "") {
+	if !adder.existsInDB(context.Background(), endpoint, "", "") {
 		t.Error("expected existsInDB=true for a known endpoint")
 	}
 	// Different endpoint, empty serial → not a duplicate.
-	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "") {
+	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "", "") {
 		t.Error("expected existsInDB=false for an unknown endpoint")
 	}
 }
@@ -114,11 +114,11 @@ func TestExistsInDB_SerialDedup(t *testing.T) {
 	// The same physical camera reappears at a NEW IP (different endpoint string)
 	// but the same serial → must still be deduplicated, otherwise the NVR would
 	// create a duplicate entry every time a camera's DHCP lease changes.
-	if !adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "ABC123") {
+	if !adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "ABC123", "") {
 		t.Error("expected existsInDB=true by serial match (roaming camera)")
 	}
 	// Different serial → not a duplicate.
-	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "DIFFERENT") {
+	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "DIFFERENT", "") {
 		t.Error("expected existsInDB=false for unknown serial")
 	}
 }
@@ -132,12 +132,12 @@ func TestExistsInDB_NonOnvifCameraWithoutOnvifEndpoint(t *testing.T) {
 	// is no evidence it is the same physical device. Dedup keys on the
 	// onvif_endpoint column, not the url.
 	if err := db.UpsertCamera(ctx, "cam-rtsp", "RTSP Cam", "rtsp", "h264",
-		"rtsp://192.168.1.50/stream", "", "", "", "", ""); err != nil {
+		"rtsp://192.168.1.50/stream", "", "", "", "", "", ""); err != nil {
 		t.Fatalf("UpsertCamera: %v", err)
 	}
 	cfg := &config.AutoDiscoverConfig{}
 	adder := NewAdder(cfg, nil, db, nil)
-	if adder.existsInDB(ctx, "http://192.168.1.50:80/onvif/device_service", "") {
+	if adder.existsInDB(ctx, "http://192.168.1.50:80/onvif/device_service", "", "") {
 		t.Error("RTSP camera with no onvif_endpoint must not trigger ONVIF dedup")
 	}
 }
@@ -156,12 +156,12 @@ func TestExistsInDB_NonOnvifCameraWithMatchingOnvifEndpoint(t *testing.T) {
 	// Manually-added http camera (direct MJPEG) that ALSO has the onvif_endpoint
 	// populated — exactly like the production ESP32 .224 case.
 	if err := db.UpsertCamera(ctx, "cam-http", "MiBeeCam", "http", "jpeg",
-		"http://192.168.1.50:81/stream", "", "", endpoint, "", ""); err != nil {
+		"http://192.168.1.50:81/stream", "", "", endpoint, "", "", ""); err != nil {
 		t.Fatalf("UpsertCamera: %v", err)
 	}
 	cfg := &config.AutoDiscoverConfig{}
 	adder := NewAdder(cfg, nil, db, nil)
-	if !adder.existsInDB(ctx, endpoint, "") {
+	if !adder.existsInDB(ctx, endpoint, "", "") {
 		t.Error("a manually-added http camera with a matching onvif_endpoint must trigger dedup (same physical device)")
 	}
 }
@@ -170,8 +170,45 @@ func TestExistsInDB_NilDB(t *testing.T) {
 	t.Helper()
 	// A nil DB (defensive) must report "does not exist" rather than panic.
 	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
-	if adder.existsInDB(context.Background(), "http://anything", "anyserial") {
+	if adder.existsInDB(context.Background(), "http://anything", "anyserial", "") {
 		t.Error("nil DB should report existsInDB=false")
+	}
+}
+
+// TestExistsInDB_StableIDPriority verifies that stable_id dedup takes precedence
+// over endpoint dedup. A camera whose IP changed (new endpoint) but has the same
+// ONVIF serial (stored as stable_id) must be recognized as existing.
+func TestExistsInDB_StableIDPriority(t *testing.T) {
+	t.Helper()
+	db := newTestDB(t)
+	ctx := context.Background()
+	cfg := &config.AutoDiscoverConfig{}
+	adder := NewAdder(cfg, nil, db, nil)
+
+	// Seed a camera with stable_id="ABC" at one endpoint.
+	endpoint := "http://192.168.1.50:80/onvif/device_service"
+	if err := db.UpsertCamera(ctx, "cam-existing", "Existing", "onvif", "", "", "", "", endpoint, "", "", "ABC"); err != nil {
+		t.Fatalf("UpsertCamera: %v", err)
+	}
+
+	// Same stable_id, DIFFERENT endpoint → must be deduplicated (IP change scenario).
+	if !adder.existsInDB(ctx, "http://192.168.1.99:80/onvif/device_service", "", "ABC") {
+		t.Error("expected existsInDB=true by stable_id match (IP change)")
+	}
+
+	// Different stable_id → not a duplicate.
+	if adder.existsInDB(ctx, "http://192.168.1.99:80/onvif/device_service", "", "XYZ") {
+		t.Error("expected existsInDB=false for unknown stable_id")
+	}
+
+	// Empty stableID + known endpoint → still dedup via endpoint fallback.
+	if !adder.existsInDB(ctx, endpoint, "", "") {
+		t.Error("expected existsInDB=true via endpoint fallback when stable_id is empty")
+	}
+
+	// Empty stableID + unknown endpoint → not a duplicate.
+	if adder.existsInDB(ctx, "http://unknown/onvif/device_service", "", "") {
+		t.Error("expected existsInDB=false for unknown endpoint with empty stable_id")
 	}
 }
 
