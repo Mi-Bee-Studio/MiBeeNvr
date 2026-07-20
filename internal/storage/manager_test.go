@@ -531,6 +531,83 @@ func TestCleanupTempFiles_NoTempFiles(t *testing.T) {
 	}
 }
 
+// TestCleanupTempFiles_ScopesToCameraDirs verifies the scan is bounded to
+// cam-* subtrees. The original implementation walked the entire tree, which on
+// a 100k+ file production tree blocked startup for 20+ seconds. .tmp segment
+// residue only ever appears under <root>/cam-xxx/YYYY/MM/DD/HH/ (see
+// CreateSegment), so hls/, recordings/, bin/, certs/, and top-level files are
+// out of scope and must be left untouched even if they happen to have a .tmp
+// suffix.
+func TestCleanupTempFiles_ScopesToCameraDirs(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+
+	// Camera subtree with an orphan .tmp that MUST be removed.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cam-test", "2026", "07", "20", "10"), 0o755))
+	camTmp := filepath.Join(dir, "cam-test", "2026", "07", "20", "10", "orphan.tmp")
+	require.NoError(t, os.WriteFile(camTmp, []byte("x"), 0o644))
+
+	// Out-of-scope locations that must NOT be touched even with .tmp suffix.
+	// These mimic real layout: hls shards, recordings dir, bin, certs, db files,
+	// and a top-level .tmp config backup.
+	outOfScope := []string{
+		filepath.Join(dir, "hls", "cam-test", "segment.tmp"),
+		filepath.Join(dir, "recordings", "stale.tmp"),
+		filepath.Join(dir, "bin", "mibee-nvr.tmp"),
+		filepath.Join(dir, "certs", "selfsigned.crt.tmp"),
+		filepath.Join(dir, "config.yaml.tmp"), // top-level file with .tmp suffix
+	}
+	for _, p := range outOfScope {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("keep"), 0o644))
+	}
+
+	require.NoError(t, m.CleanupTempFiles())
+
+	// In-scope: removed.
+	_, err := os.Stat(camTmp)
+	require.Error(t, err, "camera .tmp file should be removed")
+
+	// Out-of-scope: all preserved.
+	for _, p := range outOfScope {
+		_, err := os.Stat(p)
+		require.NoError(t, err, "out-of-scope .tmp file should NOT be removed: %s", p)
+	}
+}
+
+// TestCleanupTempFiles_HandlesNonExistentRoot guards the top-level ReadDir
+// against a missing root (e.g. misconfigured storage.root_dir). Must return an
+// error, not panic.
+func TestCleanupTempFiles_HandlesNonExistentRoot(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	m.rootDir = filepath.Join(t.TempDir(), "does-not-exist")
+
+	err := m.CleanupTempFiles()
+	require.Error(t, err, "missing root dir should return error")
+}
+
+// TestCleanupTempFiles_PreservesNormalFilesUnderCamera is a regression guard:
+// the walk removes ONLY .tmp entries — normal .mp4 segments and MJPEG frame
+// directories under cam-* must survive.
+func TestCleanupTempFiles_PreservesNormalFilesUnderCamera(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cam-1", "2026", "07", "20", "10"), 0o755))
+
+	hourDir := filepath.Join(dir, "cam-1", "2026", "07", "20", "10")
+	mp4Path := filepath.Join(hourDir, "cam-1_20260720_100000_123.mp4")
+	mjpegDir := filepath.Join(hourDir, "cam-1_20260720_100001_124")
+	require.NoError(t, os.WriteFile(mp4Path, []byte("mp4"), 0o644))
+	require.NoError(t, os.MkdirAll(mjpegDir, 0o755))
+
+	require.NoError(t, m.CleanupTempFiles())
+
+	_, err := os.Stat(mp4Path)
+	require.NoError(t, err, "normal .mp4 segment must survive cleanup")
+	_, err = os.Stat(mjpegDir)
+	require.NoError(t, err, "normal MJPEG frame dir must survive cleanup")
+}
+
 // --- IsAvailable ---
 
 func TestIsAvailable_DirExists(t *testing.T) {
@@ -997,6 +1074,139 @@ func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
 	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
 	require.NoError(t, err)
 	require.Equal(t, 0, count)
+}
+
+// TestParseRecordingName is the authoritative regression test for the
+// date-bucket-dir misclassification bug. The bug: reconcileCameraDir treated
+// ANY extension-less directory under cam-* as an MJPEG recording dir and
+// fully walked it. The segment writer's date bucket dirs ("202607/", "20/",
+// "07/") are also extension-less, so each was walked recursively — every
+// historical mp4 (540k+ files on production) got stat'd once per enclosing
+// date dir, causing an 8.7GB / 6.5-minute startup IO storm.
+//
+// Fix: parseRecordingName is the cheap name-shape gate. Only names matching
+// "<camID>_YYYYMMDD_HHMMSS_<nano>" (optionally + ".mp4") return ok=true.
+// Date buckets and any other non-conforming names return ok=false WITHOUT
+// touching the disk, so reconcileCameraDir never walks them.
+//
+// This test exercises the pure function directly — no IO, no timing, no
+// flakiness. It is the reliable regression guard; the production deploy
+// measurement (reconcile duration + read_bytes) is the authoritative
+// end-to-end verification.
+func TestParseRecordingName(t *testing.T) {
+	const camID = "cam-4aeeef41-e379-4d93-b289-c3aedbe5d729"
+
+	valid := []struct {
+		name    string
+		wantMP4 bool
+	}{
+		{camID + "_20260629_063758_1782686278819104131.mp4", true},
+		{camID + "_20260629_063758_1782686278819104131", false}, // MJPEG dir
+		{camID + "_20260720_100000_1111111111111111111.mp4", true},
+	}
+	for _, tc := range valid {
+		got, ok := parseRecordingName(tc.name, camID)
+		require.True(t, ok, "valid name rejected: %s", tc.name)
+		require.Equal(t, camID, got.cameraID)
+		require.Equal(t, tc.wantMP4, got.isMP4File)
+		require.False(t, got.startedAt.IsZero(), "startedAt should parse")
+		require.NotEmpty(t, got.nanoID)
+	}
+
+	invalid := []string{
+		// Date bucket dirs from the segment writer layout — the primary bug.
+		"202607",
+		"20",
+		"07",
+		"202606",
+		// MJPEG dirs missing the nano segment (only 3 parts).
+		camID + "_20260629_063758",
+		// Wrong camera ID.
+		"cam-other_20260629_063758_1782686278819104131.mp4",
+		// Bad date format.
+		camID + "_notadate_063758_1782686278819104131.mp4",
+		camID + "_20261329_063758_1782686278819104131.mp4", // month 13
+		// Non-mp4 file with extension.
+		camID + "_20260629_063758_1782686278819104131.avi",
+		"config.yaml",
+		"orphan.tmp",
+		// Random junk.
+		"",
+		"foo",
+		"a_b_c",
+	}
+	for _, name := range invalid {
+		_, ok := parseRecordingName(name, camID)
+		require.False(t, ok, "invalid name accepted (would cause spurious stat/walk): %q", name)
+	}
+
+	// cameraIDHint="" should skip the camera-ID gate but still validate shape.
+	_, ok := parseRecordingName("cam-other_20260629_063758_1782686278819104131.mp4", "")
+	require.True(t, ok, "empty cameraIDHint should accept any camera prefix")
+	_, ok = parseRecordingName("202607", "")
+	require.False(t, ok, "date dir must be rejected even with empty cameraIDHint")
+}
+
+// TestReconcileOrphanedFiles_SkipsDateBucketDirs is the integration-level
+// counterpart to TestParseRecordingName: it seeds a realistic nested layout
+// (date bucket dirs with mp4 files inside, plus legit flat orphans) and
+// asserts only the legit orphans are reconciled. It does NOT assert timing —
+// that's the pure-function test's job — but verifies the end-to-end behavior.
+func TestReconcileOrphanedFiles_SkipsDateBucketDirs(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_dates.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-dates", "Date Cam", "rtsp", "h264", "rtsp://x", "", "", "", "", ""))
+	cameraIDs := map[string]bool{"cam-dates": true}
+
+	camDir := filepath.Join(storeDir, "cam-dates")
+	require.NoError(t, os.MkdirAll(camDir, 0o755))
+
+	// (A) Nested current-layout mp4 files under a date bucket. Must NOT
+	// reconcile — date dirs are out of scope (registered via CloseSegment).
+	nestedHour := filepath.Join(camDir, "202607", "20", "10")
+	require.NoError(t, os.MkdirAll(nestedHour, 0o755))
+	nestedNames := []string{
+		"cam-dates_20260720_100000_1111111111111111111.mp4",
+		"cam-dates_20260720_100100_2222222222222222222.mp4",
+		"cam-dates_20260720_100200_3333333333333333333.mp4",
+	}
+	for _, n := range nestedNames {
+		require.NoError(t, os.WriteFile(filepath.Join(nestedHour, n), []byte("x"), 0o644))
+	}
+
+	// (B) A legit legacy-layout flat mp4 at cam dir top level. SHOULD reconcile.
+	flatName := "cam-dates_20260629_100000_4444444444444444444.mp4"
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, flatName), []byte("flat-mp4"), 0o644))
+
+	// (C) A legit MJPEG recording dir at cam dir top level. SHOULD reconcile.
+	mjpegDir := "cam-dates_20260629_100100_5555555555555555555"
+	require.NoError(t, os.MkdirAll(filepath.Join(camDir, mjpegDir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, mjpegDir, "frame_0000.jpg"), []byte("jpg"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, mjpegDir, "frame_0001.jpg"), []byte("jpg"), 0o644))
+
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	// Exactly 2: the flat mp4 + the legit MJPEG dir. The 3 nested mp4 inside
+	// date buckets must NOT be counted.
+	require.Equal(t, 2, count, "nested date-bucket mp4 files must not be reconciled")
+
+	// Spot-check: the nested mp4s are NOT in DB.
+	for _, n := range nestedNames {
+		nano := strings.SplitN(strings.TrimSuffix(n, ".mp4"), "_", 4)[3]
+		got, err := db.GetRecording(ctx, nano)
+		require.NoError(t, err)
+		require.Nil(t, got, "nested date-bucket file %q must not be reconciled into DB", n)
+	}
 }
 
 // TestReconcileIncrementalCommit verifies that ReconcileOrphanedFiles processes each camera

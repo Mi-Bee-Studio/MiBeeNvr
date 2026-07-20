@@ -511,19 +511,68 @@ func (d *DB) DailyRecordingSummary(ctx context.Context, filter model.RecordingFi
 
 // GetRecordingsByPathSet returns a set of file paths that exist in the recordings table.
 // Used for orphan file reconciliation to determine which files are already registered.
+//
+// Note: this query does NOT scope by camera_id and relies on a full scan of the
+// recordings table (file_path is not indexed). For orphan reconciliation where
+// the caller already knows the camera_id, prefer GetRecordingPathsByCamera which
+// uses the idx_recordings_camera_time index for a bounded range scan.
 func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 	if len(paths) == 0 {
 		return result, nil
 	}
-	placeholders := make([]string, len(paths))
-	args := make([]interface{}, len(paths))
-	for i, p := range paths {
-		placeholders[i] = "?"
-		args[i] = p
+	// SQLite's SQLITE_MAX_VARIABLE_NUMBER defaults to 999 (older) or 32766
+	// (3.32+). modernc.org/sqlite sets 32766, but to stay portable and avoid
+	// pathological planner behavior on huge IN lists, chunk at 500.
+	const chunkSize = 500
+	for start := 0; start < len(paths); start += chunkSize {
+		end := start + chunkSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		chunk := paths[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, p := range chunk {
+			placeholders[i] = "?"
+			args[i] = p
+		}
+		q := "SELECT file_path FROM recordings WHERE file_path IN (" + strings.Join(placeholders, ",") + ")"
+		if err := func() error {
+			rows, err := d.readConn().QueryContext(ctx, q, args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var p string
+				if err := rows.Scan(&p); err == nil {
+					result[p] = true
+				}
+			}
+			return rows.Err()
+		}(); err != nil {
+			return nil, err
+		}
 	}
-	q := "SELECT file_path FROM recordings WHERE file_path IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := d.readConn().QueryContext(ctx, q, args...)
+	return result, nil
+}
+
+// GetRecordingPathsByCamera returns the set of file_path values stored for a
+// single camera. Used by orphan reconciliation as a much cheaper replacement
+// for GetRecordingsByPathSet when the caller knows the camera_id: it uses the
+// idx_recordings_camera_time(camera_id, ...) index for a bounded range scan
+// (only that camera's rows) instead of scanning the entire recordings table.
+//
+// The returned set is the complete path list for the camera; callers intersect
+// it with their disk scan locally (O(n) hashset lookup) rather than via a
+// potentially huge IN (?, ?, ...) list. On a production tree with ~15k
+// recordings, this reduces per-camera reconciliation IO from a full table scan
+// to an index range read of just that camera's rows.
+func (d *DB) GetRecordingPathsByCamera(ctx context.Context, cameraID string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	rows, err := d.readConn().QueryContext(ctx,
+		`SELECT file_path FROM recordings WHERE camera_id = ?`, cameraID)
 	if err != nil {
 		return nil, err
 	}
