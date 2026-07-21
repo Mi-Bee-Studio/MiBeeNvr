@@ -404,3 +404,44 @@ func TestMigrateOneRecording_NoJPGs(t *testing.T) {
 	err := migrateOneRecording(ctx, db, store, rec, logger)
 	require.ErrorIs(t, err, errSkipped)
 }
+
+// TestMigrateMJPEGToAVI_OverwritesStaleBackup verifies that a pre-existing
+// .migrate-backup file (left over from a prior interrupted run) does not block
+// the migration. Before the fix, VACUUM INTO failed with "output file already
+// exists" on every re-run, requiring manual cleanup.
+func TestMigrateMJPEGToAVI_OverwritesStaleBackup(t *testing.T) {
+	db, store, ctx, dir := setupMigrateTest(t)
+	defer db.Close()
+
+	// Simulate a stale backup from a previous run by pre-creating the file
+	// the migration will try to write to.
+	backupPath := db.path + ".migrate-backup"
+	require.NoError(t, os.WriteFile(backupPath, []byte("stale backup from prior run"), 0o644))
+	info, err := os.Stat(backupPath)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), int64(0), "precondition: stale backup exists")
+
+	// Seed one eligible recording so the migration does real work.
+	mjpegDir := createTestMJPEGDir(t, dir, "cam1/rec_stale", 3)
+	insertMJPEGRecording(t, db, ctx, "r-stale", "cam1", mjpegDir, time.Now())
+
+	opts := MigrateOptions{
+		Cutoff:      72 * time.Hour,
+		Concurrency: 1,
+		DryRun:      false,
+	}
+	err = MigrateMJPEGToAVI(ctx, db, store, opts)
+	require.NoError(t, err, "migration must succeed despite stale backup file")
+
+	// The backup should now be a valid VACUUM INTO output (larger than the
+	// placeholder we wrote, since it contains the full DB).
+	newInfo, err := os.Stat(backupPath)
+	require.NoError(t, err)
+	require.Greater(t, newInfo.Size(), info.Size(),
+		"backup should be overwritten with a real VACUUM INTO output")
+
+	// And the recording should have been migrated.
+	updated, err := db.GetRecording(ctx, "r-stale")
+	require.NoError(t, err)
+	require.Equal(t, model.FormatAVI, updated.Format)
+}
