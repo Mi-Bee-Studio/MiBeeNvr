@@ -318,8 +318,6 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/timelapse/{id}", h.handleTimelapseGet)
 		r.Delete("/api/timelapse/{id}", h.handleTimelapseDelete)
 		r.Post("/api/timelapse/{id}/download", h.handleTimelapseDownload)
-		r.Get("/api/timelapse/{id}/thumbnail", h.handleTimelapseThumbnail)
-		r.Get("/api/timelapse/{id}/preview", h.handleTimelapsePreview)
 		r.Get("/api/timelapse/merge/progress/{cameraId}", h.handleTimelapseMergeProgress)
 		r.Get("/api/protocols", h.handleProtocols)
 		r.Get("/api/features", h.handleGetFeatures)

@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import {
     listRecordings,
-    listTimelapseRecordings,
     listCameras,
     deleteRecording,
     batchDeleteRecordings,
@@ -18,27 +17,28 @@
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Search, ChevronUp, LayoutGrid, Table2, ArrowUp, AlertCircle, Trash2, Clock } from 'lucide-svelte';
+  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock } from 'lucide-svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
   import CompactList from '../components/library/CompactList.svelte';
-  import GalleryGrid from '../components/timelapse/GalleryGrid.svelte';
   import CalendarView from '../components/timelapse/CalendarView.svelte';
   import AviPlayback from '../components/AviPlayback.svelte';
   import DayTimeline from '../lib/components/DayTimeline.svelte';
 
   // ── URL params initialization ──
   // Timeline is the default view for continuous 24/7 recording (the natural
-  // interaction model). Gallery/list fall back to per-segment cards, which suit
+  // interaction model). List falls back to per-segment cards, which suit
   // sparse event clips but not thousands of 30s fragments.
-  let initialViewMode: 'timeline' | 'gallery' | 'list' = 'timeline';
+  let initialViewMode: 'timeline' | 'list' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'gallery' || v === 'list' || v === 'timeline') initialViewMode = v;
+    if (v === 'list' || v === 'timeline') initialViewMode = v;
+    // Legacy ?view=gallery URLs (gallery view was removed) silently fall back
+    // to the default timeline view rather than rendering an empty page.
     const f = params.get('format');
     if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
     const c = params.get('camera');
@@ -62,10 +62,6 @@
   let calLoading = $state(false);
   let calError = $state('');
 
-  // ── Gallery recordings (selected day only — naturally bounded) ──
-  let galleryRecordings = $state<Recording[]>([]);
-  let galleryLoading = $state(false);
-
   // ── List mode data (paginated) ──
   let listRecordingsData = $state<Recording[]>([]);
   let listLoading = $state(false);
@@ -82,7 +78,7 @@
   let currentPageNum = $state(1);
 
   // ── View mode ──
-  let viewMode = $state<'timeline' | 'gallery' | 'list'>(initialViewMode);
+  let viewMode = $state<'timeline' | 'list'>(initialViewMode);
 
   // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
   let timelineRecordings = $state<Recording[]>([]);
@@ -101,7 +97,6 @@
   // ── UI state ──
   let showBackToTop = $state(false);
   let calAbortController: AbortController | null = null;
-  let galleryAbortController: AbortController | null = null;
   let listAbortController: AbortController | null = null;
 
   // ── AVI playback modal state ──
@@ -156,7 +151,7 @@ let batchMerging = $state(false);
   let currentPage = $derived(offset > 0 || limit > 0 ? Math.floor(offset / limit) + 1 : 1);
   let totalPages = $derived(totalRecordings > 0 && limit > 0 ? Math.ceil(totalRecordings / limit) : 0);
   let selectedTimelapseRecordings = $derived(
-    galleryRecordings.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
+    listRecordingsData.filter(r => selectedIds.has(r.id) && r.format === 'timelapse')
   );
   let showBatchMergeButton = $derived(selectedTimelapseRecordings.length >= 2);
 
@@ -252,7 +247,6 @@ let batchMerging = $state(false);
     if (!deleteConfirm) return;
     try {
       await deleteRecording(deleteConfirm.id);
-      galleryRecordings = galleryRecordings.filter(r => r.id !== deleteConfirm.id);
       listRecordingsData = listRecordingsData.filter(r => r.id !== deleteConfirm.id);
       showToast(t('common.recordingDeleted'), 'success');
       deleteConfirm = null;
@@ -268,8 +262,7 @@ let batchMerging = $state(false);
       selectedIds = new Set();
       showBatchDeleteConfirm = false;
       loadCalendarSummary();
-      loadGalleryData();
-      if (viewMode === 'list') loadListData();
+      loadListData();
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('recordings.batchDeleteFailed'), 'error');
     }
@@ -314,49 +307,6 @@ let batchMerging = $state(false);
       calError = e instanceof Error ? e.message : t('common.failedLoadRecordings');
     } finally {
       calLoading = false;
-    }
-  }
-
-  // Gallery: full recordings for the selected day only (naturally bounded by one day).
-  async function loadGalleryData() {
-    if (!selectedDate) {
-      galleryRecordings = [];
-      return;
-    }
-    if (galleryAbortController) galleryAbortController.abort();
-    galleryAbortController = new AbortController();
-    galleryLoading = true;
-
-    try {
-      const dayStart = new Date(selectedDate + 'T00:00:00');
-      const dayEnd = new Date(selectedDate + 'T23:59:59.999');
-
-      if (useTimelapseApi) {
-        // Timelapse API returns timelapse + mjpeg formats (preserves prior behavior).
-        const response = await listTimelapseRecordings({
-          camera_id: cameraId || undefined,
-          start: dayStart.toISOString(),
-          end: dayEnd.toISOString(),
-          signal: galleryAbortController.signal,
-        });
-        galleryRecordings = response.recordings;
-      } else {
-        const response = await listRecordings({
-          ...sharedFilterParams(),
-          format: apiFormat || undefined,
-          start: dayStart.toISOString(),
-          end: dayEnd.toISOString(),
-          signal: galleryAbortController.signal,
-        });
-        galleryRecordings = response.recordings;
-      }
-      // Detect merge status changes (completed/failed)
-      detectMergeChanges(galleryRecordings);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
-      // Non-fatal: gallery stays stale on error
-    } finally {
-      galleryLoading = false;
     }
   }
 
@@ -535,7 +485,7 @@ let batchMerging = $state(false);
   }
 
   async function handleBatchTranscode() {
-    const selectedRecordings = galleryRecordings.filter(r => selectedIds.has(r.id));
+    const selectedRecordings = listRecordingsData.filter(r => selectedIds.has(r.id));
     if (selectedRecordings.length === 0) return;
     if (!transcodingStatus?.enabled) {
       showToast(t('transcoding.warning_global_disabled'), 'error');
@@ -594,7 +544,6 @@ let batchMerging = $state(false);
 
   // ── Deferred load timers ──
   let calLoadTimeout: number;
-  let galleryLoadTimeout: number;
   let listLoadTimeout: number;
 
   // ── Lifecycle ──
@@ -606,7 +555,6 @@ let batchMerging = $state(false);
 
     refreshInterval = window.setInterval(() => {
       loadCalendarSummary();
-      loadGalleryData();
       loadTimelineData();
     }, getRefreshInterval());
 
@@ -629,11 +577,9 @@ let batchMerging = $state(false);
         // Resumed: restart polling and refresh immediately so data is fresh.
         refreshInterval = window.setInterval(() => {
           loadCalendarSummary();
-          loadGalleryData();
           loadTimelineData();
         }, getRefreshInterval());
         loadCalendarSummary();
-        loadGalleryData();
         loadTimelineData();
         startTranscodingPoll();
       }
@@ -658,14 +604,6 @@ let batchMerging = $state(false);
     clearTimeout(calLoadTimeout);
     calLoadTimeout = window.setTimeout(() => loadCalendarSummary(), 100);
     return () => clearTimeout(calLoadTimeout);
-  });
-
-  // Gallery: reload when selected day or filters change
-  $effect(() => {
-    const _ = [selectedDate, cameraId, formatPill, searchQuery, mergedFilter, showArchived];
-    clearTimeout(galleryLoadTimeout);
-    galleryLoadTimeout = window.setTimeout(() => loadGalleryData(), 100);
-    return () => clearTimeout(galleryLoadTimeout);
   });
 
   // Watch list mode pagination/sort → reload list data
@@ -697,7 +635,6 @@ let batchMerging = $state(false);
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = window.setInterval(() => {
       loadCalendarSummary();
-      loadGalleryData();
     }, getRefreshInterval());
     limit = getItemsPerPage();
     return () => {
@@ -712,7 +649,7 @@ let batchMerging = $state(false);
     const base = qIdx !== -1 ? hash.slice(0, qIdx) : hash;
 
     const params = new URLSearchParams();
-    if (viewMode !== 'gallery') params.set('view', viewMode);
+    params.set('view', viewMode);
     if (formatPill !== 'All') params.set('format', formatPill);
     if (cameraId) params.set('camera', cameraId);
 
@@ -729,7 +666,9 @@ let batchMerging = $state(false);
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'timeline' || v === 'gallery' || v === 'list') viewMode = v;
+        if (v === 'timeline' || v === 'list') viewMode = v;
+        // Legacy ?view=gallery (gallery view removed) falls back to default
+        // timeline via the initial value — no explicit handling needed.
         const f = params.get('format');
         if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
         const c = params.get('camera');
@@ -740,9 +679,9 @@ let batchMerging = $state(false);
     return () => window.removeEventListener('hashchange', handler);
   });
 
-  // Auto-select today's date when in gallery/timeline mode and no date selected
+  // Auto-select today's date when in timeline mode and no date selected
   $effect(() => {
-    if ((viewMode === 'gallery' || viewMode === 'timeline') && !selectedDate) {
+    if (viewMode === 'timeline' && !selectedDate) {
       const today = new Date();
       const y = today.getFullYear();
       const m = String(today.getMonth() + 1).padStart(2, '0');
@@ -807,13 +746,6 @@ let batchMerging = $state(false);
           {t('library.viewTimeline')}
         </button>
         <button
-          class="btn btn-sm {viewMode === 'gallery' ? 'btn-primary' : 'btn-ghost'}"
-          onclick={() => viewMode = 'gallery'}
-        >
-          <LayoutGrid size={16} class="mr-1" />
-          {t('library.viewGallery')}
-        </button>
-        <button
           class="btn btn-sm {viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}"
           onclick={() => viewMode = 'list'}
         >
@@ -851,20 +783,6 @@ let batchMerging = $state(false);
             />
           </div>
         {/if}
-      {:else if viewMode === 'gallery'}
-        <!-- ── Gallery view ── -->
-        <GalleryGrid
-          bind:selectedDate
-          recordings={galleryRecordings}
-          {cameras}
-          onselectRecording={viewRecording}
-          selectedIds={[]}
-          ontoggleselect={(r: Recording) => toggleSelect(r.id)}
-          selectMode={selectedIds.size > 0}
-          ondeleteRecording={(r: Recording) => deleteConfirm = r}
-          onplay={handlePlay}
-
-        />
       {:else if viewMode === 'list'}
         <!-- ── List view ── -->
         <CompactList

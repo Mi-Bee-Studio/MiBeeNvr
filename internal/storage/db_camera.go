@@ -399,7 +399,7 @@ func (d *DB) ReassignCameraData(ctx context.Context, sourceCameraID, targetCamer
 		return fmt.Errorf("reassign data check target: %w", err)
 	}
 
-	// Re-tag recordings — also rewrite path columns (file_path, merge_path, thumbnail_path)
+	// Re-tag recordings — also rewrite path columns (file_path, merge_path)
 	// so they point to the target camera's directory instead of the source camera's.
 	// Without this, the disk step (which moves files to target dir) would leave the DB
 	// pointing to the now-empty source dir, breaking playback and orphaning every row.
