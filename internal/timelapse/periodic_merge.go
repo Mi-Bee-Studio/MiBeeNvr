@@ -41,6 +41,15 @@ type TimelapseMergeStore interface {
 	FindTimelapseMergeByWindow(ctx context.Context, cameraID string, windowStart time.Time, durationLabel string) (*model.TimelapseMerge, error)
 }
 
+// IntermediateMP4Pruner is implemented by storage.DB to let the periodic
+// merger clear the recordings.merge_path pointer for source segments whose
+// intermediate .mp4 output has been pruned. Kept as a separate interface so
+// the shared MergeStatusUpdater (used by the rolling merger too) does not
+// need to grow a periodic-merge-specific method.
+type IntermediateMP4Pruner interface {
+	ClearMergePathBatch(ctx context.Context, ids []string) error
+}
+
 // PeriodicMergeManager handles merge operations for timelapse recordings
 // with configurable merge intervals (8h, 12h, 24h, 7d, 30d).
 type PeriodicMergeManager struct {
@@ -62,21 +71,27 @@ type PeriodicMergeManager struct {
 
 	// mergeStore, when set, persists one row per periodic-merge output to the
 	// timelapse_merges table so the frontend can discover / play / delete the
-	// long-window videos. nil = legacy behavior (no DB row, file on disk only).
+	// long-window videos. nil = legacy behavior (file on disk, no DB record).
 	mergeStore TimelapseMergeStore
+
+	// retainIntermediateMP4, when false (the default), makes finalizeMerge
+	// delete each source segment's rolling-merge .mp4 output (the file at
+	// recordings.merge_path) after the periodic merge has folded those
+	// segments into a long-window output. This reclaims disk without losing
+	// data — the raw frame directories (frame_*.h264/.h265/.jpg) are kept so
+	// the periodic output can be regenerated if needed.
+	retainIntermediateMP4 bool
+
+	// pruner, when set AND retainIntermediateMP4 is false, clears the
+	// recordings.merge_path DB pointer for source segments whose intermediate
+	// .mp4 has been pruned. nil = skip DB cleanup (legacy behavior).
+	pruner IntermediateMP4Pruner
 
 	// durationLabel is the original config string (e.g. "24h", "natural-day",
 	// "8h") preserved so DB rows record what the user configured, not the
 	// parsed duration. Empty when the manager was constructed without a label
 	// (legacy callers / tests) — in that case the row uses duration.String().
 	durationLabel string
-
-	// lastResult caches the most recent merger.Merge() result for the current
-	// Run, read by finalizeMerge to populate the DB row's codec + frame count.
-	// Guarded by resultMu because Run may be invoked concurrently (scheduler
-	// goroutine + user-triggered API merge) for the same manager.
-	resultMu  sync.Mutex
-	lastResult *MergeResult
 
 	// runCtx holds per-Run metadata (camera/window/label) that finalizeMerge
 	// needs to write the timelapse_merges DB row. Set at the top of Run under
@@ -127,6 +142,28 @@ func WithMergeStore(s TimelapseMergeStore) Option {
 func WithDurationLabel(label string) Option {
 	return func(m *PeriodicMergeManager) {
 		m.durationLabel = label
+	}
+}
+
+// WithRetainIntermediateMP4 controls whether per-segment rolling-merge .mp4
+// outputs are kept after a periodic merge folds them into a long-window
+// output. Pass true to retain (debugging / re-merge safety); pass false (the
+// default) to clean them up and reclaim disk. The raw frame directories are
+// always preserved regardless.
+func WithRetainIntermediateMP4(retain bool) Option {
+	return func(m *PeriodicMergeManager) {
+		m.retainIntermediateMP4 = retain
+	}
+}
+
+// WithIntermediateMP4Pruner wires the storage layer used to clear
+// recordings.merge_path after intermediate .mp4 files are pruned. Optional —
+// when nil, finalizeMerge prunes the files but cannot update the DB pointer
+// (the row would still point at a now-deleted path). Production wiring passes
+// the *storage.DB here.
+func WithIntermediateMP4Pruner(p IntermediateMP4Pruner) Option {
+	return func(m *PeriodicMergeManager) {
+		m.pruner = p
 	}
 }
 
@@ -751,6 +788,13 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 	// succeeded; only the DB bookkeeping failed.
 	m.recordMergeRow(ctx, segments, outputPath)
 
+	// Prune intermediate rolling-merge .mp4 outputs (the files at
+	// recordings.merge_path) now that the segments have been folded into the
+	// long-window periodic output. The raw frame directories are preserved.
+	if !m.retainIntermediateMP4 {
+		m.pruneIntermediateMP4s(ctx, segments)
+	}
+
 	slog.Info(
 		"periodic merge: completed successfully",
 		"segments", len(segments),
@@ -834,6 +878,47 @@ func (m *PeriodicMergeManager) recordMergeRow(ctx context.Context, segments []mo
 	if _, err := m.mergeStore.InsertTimelapseMerge(ctx, row); err != nil {
 		slog.Warn("periodic merge: insert merge row failed",
 			"camera_id", rc.cameraID, "output_path", outputPath, "error", err)
+	}
+}
+
+// pruneIntermediateMP4s removes the per-segment rolling-merge .mp4 files (at
+// recordings.merge_path) for the given source segments and clears the DB
+// pointer. The raw frame directories (recordings.file_path) are preserved so
+// the periodic output can be regenerated.
+//
+// Failures are best-effort and logged — a missing file or DB error does NOT
+// fail the overall merge, which has already produced its output.
+func (m *PeriodicMergeManager) pruneIntermediateMP4s(ctx context.Context, segments []model.Recording) {
+	var clearedIDs []string
+	prunedCount := 0
+	for _, seg := range segments {
+		if seg.MergePath == "" {
+			continue
+		}
+		if err := os.Remove(seg.MergePath); err != nil {
+			if !os.IsNotExist(err) {
+				slog.Warn("periodic merge: prune intermediate mp4 failed",
+					"recording_id", seg.ID, "merge_path", seg.MergePath, "error", err)
+			}
+			// Even on error, clear the DB pointer — the file is either gone or
+			// unwritable; either way we don't want playback pointing at it.
+		} else {
+			prunedCount++
+		}
+		clearedIDs = append(clearedIDs, seg.ID)
+	}
+	if len(clearedIDs) == 0 {
+		return
+	}
+	if m.pruner != nil {
+		if err := m.pruner.ClearMergePathBatch(ctx, clearedIDs); err != nil {
+			slog.Warn("periodic merge: clear merge_path DB pointer failed",
+				"count", len(clearedIDs), "error", err)
+		}
+	}
+	if prunedCount > 0 {
+		slog.Info("periodic merge: pruned intermediate mp4 outputs",
+			"pruned", prunedCount, "cleared_db_pointers", len(clearedIDs))
 	}
 }
 

@@ -388,13 +388,15 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Get FPS from camera's timelapse config, default 10
+	// Get FPS + retain-intermediate-mp4 flag from camera's timelapse config.
 	fps := 10
+	retainMP4 := false
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
 			if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
 				fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
 			}
+			retainMP4 = h.config.Cameras[i].Timelapse.RetainIntermediateMP4Value()
 			break
 		}
 	}
@@ -423,6 +425,8 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 	// store so the output is discoverable via /api/timelapse/merges, and the
 	// recording-enabled provider so recording_enabled=true cameras include
 	// video frames in the merge (parity with the scheduled path in run.go).
+	// Also wire the intermediate-.mp4 pruner so manual merges reclaim the
+	// same disk the scheduled path does.
 	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
 		timelapse.WithMergeStore(h.db),
 		timelapse.WithDurationLabel(durationStr),
@@ -436,6 +440,8 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 			}
 			return *cam.RecordingEnabled
 		}),
+		timelapse.WithRetainIntermediateMP4(retainMP4),
+		timelapse.WithIntermediateMP4Pruner(h.db),
 	)
 
 	go func() {
@@ -815,13 +821,15 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 	triggered := 0
 
 	for _, cameraID := range body.CameraIDs {
-		// Get FPS from camera's timelapse config
+		// Get FPS + retain-intermediate-mp4 flag from camera's timelapse config.
 		fps := 10
+		retainMP4 := false
 		for i := range h.config.Cameras {
 			if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
 				if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
 					fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
 				}
+				retainMP4 = h.config.Cameras[i].Timelapse.RetainIntermediateMP4Value()
 				break
 			}
 		}
@@ -829,6 +837,8 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
 			timelapse.WithMergeStore(h.db),
 			timelapse.WithDurationLabel(body.Duration),
+			timelapse.WithRetainIntermediateMP4(retainMP4),
+			timelapse.WithIntermediateMP4Pruner(h.db),
 		)
 
 		// Launch merge in background
@@ -916,7 +926,7 @@ func (h *Handler) handleListTimelapseMerges(w http.ResponseWriter, r *http.Reque
 	}
 	total, err := h.db.CountTimelapseMerges(r.Context(), f)
 	if err != nil {
-		//nolint:nilerr // count is best-effort; a failed COUNT must not fail the list request
+		// Count is best-effort — a failed COUNT must not fail the list request.
 		total = 0
 	}
 	if merges == nil {

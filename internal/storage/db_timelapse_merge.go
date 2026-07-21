@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -110,7 +112,7 @@ func (d *DB) FindTimelapseMergeByWindow(ctx context.Context, cameraID string, wi
 	q := selectTimelapseMergeColumns + ` FROM timelapse_merges WHERE camera_id=? AND window_start=? AND duration_label=? LIMIT 1`
 	row := d.readConn().QueryRowContext(ctx, q, cameraID, timeToDB(windowStart), durationLabel)
 	m, err := scanTimelapseMerge(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -225,12 +227,6 @@ func buildTimelapseMergeWhere(f TimelapseMergeFilter) (string, []any) {
 	if len(clauses) == 0 {
 		return "", nil
 	}
-	whereClause := " WHERE "
-	for i, c := range clauses {
-		if i > 0 {
-			whereClause += " AND "
-		}
-		whereClause += c
-	}
+	whereClause := " WHERE " + strings.Join(clauses, " AND ")
 	return whereClause, args
 }

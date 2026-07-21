@@ -325,6 +325,24 @@ type CameraTimelapseConfig struct {
 	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`         // default true
 	MergeDuration  string          `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
 	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"` // default 30, range 1-60
+	// RetainIntermediateMP4 controls whether the per-segment .mp4 files
+	// produced by rolling merge are kept after a periodic (8h/24h/7d/30d)
+	// merge has folded them into a long-window output. Defaults to false
+	// (clean up) to reclaim the ~1.5GB/day/camera we observed in production.
+	// Set to true to keep them for debugging or re-merge safety. The original
+	// raw frame directories (frame_*.h264 / .h265 / .jpg) are always preserved
+	// regardless of this flag — only the rolling-merge .mp4 outputs are pruned.
+	RetainIntermediateMP4 *bool `yaml:"retain_intermediate_mp4,omitempty" json:"retain_intermediate_mp4,omitempty"`
+}
+
+// RetainIntermediateMP4Value returns the effective bool value of
+// RetainIntermediateMP4, defaulting to false (clean up) when nil. Callers
+// must use this accessor rather than dereferencing the pointer directly.
+func (c *CameraTimelapseConfig) RetainIntermediateMP4Value() bool {
+	if c == nil || c.RetainIntermediateMP4 == nil {
+		return false
+	}
+	return *c.RetainIntermediateMP4
 }
 
 type AuthConfig struct {

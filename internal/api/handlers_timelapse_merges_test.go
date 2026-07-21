@@ -19,7 +19,8 @@ type timelapseMergesListResponse struct {
 
 func seedTimelapseMerge(t *testing.T, db interface {
 	InsertTimelapseMerge(ctx context.Context, m *model.TimelapseMerge) (int64, error)
-}, m *model.TimelapseMerge) {
+}, m *model.TimelapseMerge,
+) {
 	t.Helper()
 	if _, err := db.InsertTimelapseMerge(context.Background(), m); err != nil {
 		t.Fatalf("seed timelapse merge: %v", err)

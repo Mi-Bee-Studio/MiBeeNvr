@@ -454,6 +454,10 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 				// Preserve the user-facing label so DB rows record "natural-day"
 				// rather than "24h0m0s".
 				timelapse.WithDurationLabel(cam.Timelapse.MergeDuration),
+				// Prune per-segment rolling-merge .mp4 outputs after the periodic
+				// merge folds them in, unless the camera opts to retain them.
+				timelapse.WithRetainIntermediateMP4(cam.Timelapse.RetainIntermediateMP4Value()),
+				timelapse.WithIntermediateMP4Pruner(db),
 			)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(

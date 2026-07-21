@@ -13,14 +13,14 @@ import (
 // row with sensible defaults so each test only overrides what it asserts on.
 func newTimelapseMerge(cameraID string, windowStart time.Time, label string) *model.TimelapseMerge {
 	return &model.TimelapseMerge{
-		CameraID:      cameraID,
-		WindowStart:   windowStart,
-		WindowEnd:     windowStart.Add(24 * time.Hour),
-		DurationLabel: label,
-		OutputPath:    "/tmp/periodic-merge/" + cameraID + "/periodic_" + windowStart.Format("2006-01-02_150405") + ".mp4",
-		FrameCount:    2880,
-		Codec:         model.TimelapseMergeCodecH265,
-		FPS:           30,
+		CameraID:         cameraID,
+		WindowStart:      windowStart,
+		WindowEnd:        windowStart.Add(24 * time.Hour),
+		DurationLabel:    label,
+		OutputPath:       "/tmp/periodic-merge/" + cameraID + "/periodic_" + windowStart.Format("2006-01-02_150405") + ".mp4",
+		FrameCount:       2880,
+		Codec:            model.TimelapseMergeCodecH265,
+		FPS:              30,
 		SourceSegmentIDs: `["1784636406191031930","1784636277274361781"]`,
 	}
 }
@@ -129,7 +129,7 @@ func TestListAndCountTimelapseMerges(t *testing.T) {
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	// 3 merges for cameraA across 3 days + 1 merge for cameraB.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		m := newTimelapseMerge(cameraA, base.AddDate(0, 0, i), "natural-day")
 		_, err := db.InsertTimelapseMerge(ctx, m)
 		require.NoError(t, err)

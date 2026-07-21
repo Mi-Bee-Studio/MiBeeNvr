@@ -377,6 +377,39 @@ func (d *DB) SetMergeResult(ctx context.Context, id string, mergePath, mergeTier
 	return err
 }
 
+// ClearMergePathBatch empties merge_path and resets merge_progress for the
+// given recording IDs. Used by the periodic timelapse merge after it has
+// folded segments into a long-window output: the intermediate rolling-merge
+// .mp4 at recordings.merge_path is now redundant, so we clear the DB pointer
+// (and the caller removes the file on disk). merge_status is left unchanged
+// — the segment is still considered merged-into-the-window (daily_merged).
+// Empty ids slice is a no-op.
+func (d *DB) ClearMergePathBatch(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	q := `UPDATE recordings SET merge_path='', merge_progress=0 WHERE id IN (%s);`
+	for _, chunk := range chunkIDs(ids, batchUpdateChunkSize) {
+		placeholders := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		stmt := fmt.Sprintf(q, strings.Join(placeholders, ","))
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ListMergedRecordingsForValidation returns all recordings that have a non-empty
 // merge_path and merge_status='merged'. Used at startup to verify that the merged
 // output files actually exist on disk — stale DB entries from deleted/missing files

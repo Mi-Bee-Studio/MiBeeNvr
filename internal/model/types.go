@@ -66,21 +66,21 @@ type Recording struct {
 // OutputPath; SourceSegmentIDs is a JSON array of the recordings.id values
 // that were folded into this merge.
 type TimelapseMerge struct {
-	ID                int64     `json:"id"`
-	CameraID          string    `json:"camera_id"`
-	WindowStart       time.Time `json:"window_start"`
-	WindowEnd         time.Time `json:"window_end"`
-	DurationLabel     string    `json:"duration_label"`      // "1h","8h","24h","natural-day","7d","30d"
-	OutputPath        string    `json:"output_path"`         // periodic-merge/<cam>/periodic_<windowLabel>.mp4
-	FileSize          int64     `json:"file_size"`
-	FrameCount        int       `json:"frame_count"`
-	Codec             string    `json:"codec"`               // h264 / h265 / mjpeg
-	FPS               int       `json:"fps"`
-	Status            string    `json:"status"`              // pending/merging/completed/failed
-	Error             string    `json:"error,omitempty"`
-	SourceSegmentIDs  string    `json:"source_segment_ids"`  // JSON array of recordings.id
-	CreatedAt         time.Time `json:"created_at"`
-	CompletedAt       time.Time `json:"completed_at,omitempty"`
+	ID               int64     `json:"id"`
+	CameraID         string    `json:"camera_id"`
+	WindowStart      time.Time `json:"window_start"`
+	WindowEnd        time.Time `json:"window_end"`
+	DurationLabel    string    `json:"duration_label"` // "1h","8h","24h","natural-day","7d","30d"
+	OutputPath       string    `json:"output_path"`    // periodic-merge/<cam>/periodic_<windowLabel>.mp4
+	FileSize         int64     `json:"file_size"`
+	FrameCount       int       `json:"frame_count"`
+	Codec            string    `json:"codec"` // h264 / h265 / mjpeg
+	FPS              int       `json:"fps"`
+	Status           string    `json:"status"` // pending/merging/completed/failed
+	Error            string    `json:"error,omitempty"`
+	SourceSegmentIDs string    `json:"source_segment_ids"` // JSON array of recordings.id
+	CreatedAt        time.Time `json:"created_at"`
+	CompletedAt      time.Time `json:"completed_at,omitempty"`
 }
 
 type Segment struct {

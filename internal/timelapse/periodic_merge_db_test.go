@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 // newTimelapseTestDB opens a fresh storage.DB and runs migrations (including
@@ -188,6 +189,140 @@ func TestPeriodicMergeManager_NoStoreSkipsDB(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	// Nothing to assert — the point is that it doesn't panic or error with no store.
+}
+
+// TestPeriodicMergeManager_PruneIntermediateMP4 verifies that after a
+// successful periodic merge, the per-segment rolling-merge .mp4 outputs (at
+// recordings.merge_path) are deleted AND the DB pointer is cleared, when
+// retainIntermediateMP4 is false (the default). The raw frame directories
+// (recordings.file_path) must be preserved.
+func TestPeriodicMergeManager_PruneIntermediateMP4(t *testing.T) {
+	t.Helper()
+	db := newTimelapseTestDB(t)
+	dataDir := t.TempDir()
+
+	// Two source segment frame directories (preserved).
+	segDir1 := filepath.Join(dataDir, "seg-1")
+	mkdirWrite(t, segDir1, "frame_000001.jpg", []byte("dummy"))
+	segDir2 := filepath.Join(dataDir, "seg-2")
+	mkdirWrite(t, segDir2, "frame_000001.jpg", []byte("dummy"))
+	// Two intermediate rolling-merge .mp4 outputs (should be pruned).
+	intermMP4_1 := filepath.Join(dataDir, "seg-1.mp4")
+	require.NoError(t, os.WriteFile(intermMP4_1, []byte("intermediate1"), 0o644))
+	intermMP4_2 := filepath.Join(dataDir, "seg-2.mp4")
+	require.NoError(t, os.WriteFile(intermMP4_2, []byte("intermediate2"), 0o644))
+
+	// Seed the source recordings so we can verify merge_path is cleared.
+	seedTime := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, db.InsertRecording(context.Background(), &model.Recording{
+		ID: "seg-1", CameraID: "cam-prune", FilePath: segDir1, Format: model.FormatTimelapse,
+		StartedAt: seedTime, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_1,
+	}))
+	require.NoError(t, db.InsertRecording(context.Background(), &model.Recording{
+		ID: "seg-2", CameraID: "cam-prune", FilePath: segDir2, Format: model.FormatTimelapse,
+		StartedAt: seedTime, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_2,
+	}))
+
+	merger := &successMerger{}
+	mgr := NewPeriodicMergeManager(
+		&mockRecordingListerWithSegments{
+			segments: []model.Recording{
+				{ID: "seg-1", CameraID: "cam-prune", FilePath: segDir1, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_1},
+				{ID: "seg-2", CameraID: "cam-prune", FilePath: segDir2, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_2},
+			},
+		},
+		db,
+		merger,
+		30,
+		dataDir,
+		24*time.Hour,
+		time.UTC,
+		WithMergeStore(db),
+		WithDurationLabel("natural-day"),
+		// retainIntermediateMP4 defaults to false → prune.
+		WithIntermediateMP4Pruner(db),
+	)
+
+	if err := mgr.Run(context.Background(), "cam-prune", time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Intermediate .mp4 files deleted.
+	if _, err := os.Stat(intermMP4_1); !os.IsNotExist(err) {
+		t.Errorf("intermediate mp4 %s should have been pruned, got err=%v", intermMP4_1, err)
+	}
+	if _, err := os.Stat(intermMP4_2); !os.IsNotExist(err) {
+		t.Errorf("intermediate mp4 %s should have been pruned, got err=%v", intermMP4_2, err)
+	}
+
+	// Raw frame directories preserved.
+	if _, err := os.Stat(segDir1); err != nil {
+		t.Errorf("raw frame dir %s must be preserved, got err=%v", segDir1, err)
+	}
+	if _, err := os.Stat(segDir2); err != nil {
+		t.Errorf("raw frame dir %s must be preserved, got err=%v", segDir2, err)
+	}
+
+	// DB merge_path cleared for both source recordings.
+	r1, err := db.GetRecording(context.Background(), "seg-1")
+	require.NoError(t, err)
+	if r1.MergePath != "" {
+		t.Errorf("seg-1 merge_path = %q, want empty (cleared after prune)", r1.MergePath)
+	}
+	r2, err := db.GetRecording(context.Background(), "seg-2")
+	require.NoError(t, err)
+	if r2.MergePath != "" {
+		t.Errorf("seg-2 merge_path = %q, want empty (cleared after prune)", r2.MergePath)
+	}
+}
+
+// TestPeriodicMergeManager_RetainIntermediateMP4 verifies the inverse: when
+// retainIntermediateMP4=true, the intermediate .mp4 outputs are NOT pruned.
+func TestPeriodicMergeManager_RetainIntermediateMP4(t *testing.T) {
+	t.Helper()
+	db := newTimelapseTestDB(t)
+	dataDir := t.TempDir()
+
+	segDir1 := filepath.Join(dataDir, "seg-1")
+	mkdirWrite(t, segDir1, "frame_000001.jpg", []byte("dummy"))
+	segDir2 := filepath.Join(dataDir, "seg-2")
+	mkdirWrite(t, segDir2, "frame_000001.jpg", []byte("dummy"))
+	intermMP4_1 := filepath.Join(dataDir, "seg-1.mp4")
+	require.NoError(t, os.WriteFile(intermMP4_1, []byte("intermediate1"), 0o644))
+	intermMP4_2 := filepath.Join(dataDir, "seg-2.mp4")
+	require.NoError(t, os.WriteFile(intermMP4_2, []byte("intermediate2"), 0o644))
+
+	merger := &successMerger{}
+	mgr := NewPeriodicMergeManager(
+		&mockRecordingListerWithSegments{
+			segments: []model.Recording{
+				{ID: "seg-1", CameraID: "cam-retain", FilePath: segDir1, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_1},
+				{ID: "seg-2", CameraID: "cam-retain", FilePath: segDir2, Format: model.FormatTimelapse, MergeStatus: model.MergeStatusMerged, MergePath: intermMP4_2},
+			},
+		},
+		newTrackDB(),
+		merger,
+		30,
+		dataDir,
+		24*time.Hour,
+		time.UTC,
+		WithMergeStore(db),
+		WithDurationLabel("natural-day"),
+		WithRetainIntermediateMP4(true), // retain → no pruning
+		WithIntermediateMP4Pruner(db),
+	)
+
+	if err := mgr.Run(context.Background(), "cam-retain", time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both intermediate .mp4 files still present.
+	if _, err := os.Stat(intermMP4_1); err != nil {
+		t.Errorf("intermediate mp4 %s should be retained, got err=%v", intermMP4_1, err)
+	}
+	if _, err := os.Stat(intermMP4_2); err != nil {
+		t.Errorf("intermediate mp4 %s should be retained, got err=%v", intermMP4_2, err)
+	}
 }
 
 // mkdirWrite is a tiny helper that creates a directory and writes one file

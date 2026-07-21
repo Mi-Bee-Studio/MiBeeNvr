@@ -45,6 +45,8 @@ func runRepair() int {
 		return runRepairFragments()
 	case "delete-by-format":
 		return runRepairDeleteByFormat()
+	case "prune-intermediate-mp4":
+		return runRepairPruneIntermediateMP4()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -65,6 +67,8 @@ type repairOpts struct {
 	// delete-by-format specific
 	keepFormat string        // format value to PRESERVE (e.g. "timelapse"); all other formats are deleted
 	olderThan  time.Duration // 0 = no age filter (delete all matching regardless of age)
+	// prune-intermediate-mp4 specific
+	before string // YYYY-MM-DD — only prune recordings started before this date (UTC)
 }
 
 func parseRepairFlags(startIdx int) repairOpts {
@@ -104,6 +108,9 @@ func parseRepairFlags(startIdx int) repairOpts {
 				os.Exit(1)
 			}
 			opts.olderThan = d
+		case arg == "--before" && i+1 < len(os.Args):
+			i++
+			opts.before = os.Args[i]
 		case arg == "--help", arg == "-h":
 			opts.configPath = "__help__"
 		}
@@ -991,6 +998,166 @@ func runRepairDeleteByFormat() int {
 	return 0
 }
 
+// runRepairPruneIntermediateMP4 implements `repair prune-intermediate-mp4`:
+// one-shot bulk reclaim of the per-segment rolling-merge .mp4 outputs that
+// accumulate when periodic timelapse merges run with
+// retain_intermediate_mp4=true (or that pre-date the auto-prune feature).
+//
+// For each timelapse/mjpeg recording with a non-empty merge_path AND a
+// 'daily_merged' status (meaning a periodic merge has already folded it into
+// a long-window output), this command removes the intermediate .mp4 file and
+// clears the DB pointer. The raw frame directories (file_path) are preserved.
+//
+// Safety:
+//   - Per-camera by default (--camera); omit --camera to scan ALL cameras.
+//   - --before YYYY-MM-DD limits to recordings started before that UTC date
+//     (recommended — never prune the most-recent window the periodic merger
+//     may still be working on).
+//   - --limit caps the count for bounded runs.
+//   - --dry-run default; --execute to apply. 20ms throttle between deletes.
+func runRepairPruneIntermediateMP4() int {
+	opts := parseRepairFlags(3)
+	if opts.configPath == "__help__" {
+		printRepairPruneIntermediateMP4Usage()
+		return 0
+	}
+
+	db, _, err := openDBFromConfig(opts.configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	ctx, cancel := setupSignalHandler()
+	defer cancel()
+
+	mode := "DRY RUN (no changes)"
+	if !opts.dryRun {
+		mode = "EXECUTE"
+	}
+	fmt.Printf("repair prune-intermediate-mp4 — %s\n", mode)
+	if opts.cameraID != "" {
+		fmt.Printf("  camera:  %s\n", opts.cameraID)
+	} else {
+		fmt.Println("  camera:  (all cameras)")
+	}
+	if opts.before != "" {
+		fmt.Printf("  before:  %s (UTC, inclusive)\n", opts.before)
+	}
+	if opts.limit > 0 {
+		fmt.Printf("  limit:   %d recordings\n", opts.limit)
+	}
+	fmt.Println()
+
+	// Query timelapse + mjpeg recordings with a non-empty merge_path that have
+	// been folded into a periodic output (daily_merged). Sort ascending so the
+	// oldest (least-likely-to-be-re-merged) get pruned first.
+	filter := model.RecordingFilter{
+		CameraID:  opts.cameraID,
+		Formats:   []model.Format{model.FormatTimelapse, model.FormatMJPEG},
+		Limit:     opts.limit,
+		SortBy:    "started_at",
+		SortOrder: "asc",
+	}
+	if opts.before != "" {
+		before, err := time.Parse("2006-01-02", opts.before)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid --before %q (use YYYY-MM-DD): %v\n", opts.before, err)
+			return 1
+		}
+		filter.EndTime = before
+	}
+	recs, err := db.ListRecordings(ctx, filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing recordings: %v\n", err)
+		return 1
+	}
+
+	prunedCount := 0
+	skippedNotDailyMerged := 0
+	skippedNoMergePath := 0
+	var clearedIDs []string
+	totalBytes := int64(0)
+	for _, r := range recs {
+		if r.MergePath == "" {
+			skippedNoMergePath++
+			continue
+		}
+		// Only prune segments that have been folded into a periodic output.
+		// A plain 'merged' status (rolling merge only, no periodic yet) is
+		// preserved — the periodic output may not exist yet.
+		if r.MergeStatus != model.MergeStatusDailyMerged {
+			skippedNotDailyMerged++
+			continue
+		}
+		if opts.dryRun {
+			var size int64
+			if st, err := os.Stat(r.MergePath); err == nil {
+				size = st.Size()
+			}
+			totalBytes += size
+			fmt.Printf("  [dry-run] would prune: %s  (%s, %s, %s)\n", r.MergePath, r.ID, r.Format, humanBytes(size))
+			prunedCount++
+			clearedIDs = append(clearedIDs, r.ID)
+			continue
+		}
+		size, err := os.Stat(r.MergePath)
+		var sizeBytes int64
+		if err == nil {
+			sizeBytes = size.Size()
+		}
+		if err := os.Remove(r.MergePath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "  WARN: failed to remove %s: %v\n", r.MergePath, err)
+			continue
+		}
+		prunedCount++
+		totalBytes += sizeBytes
+		clearedIDs = append(clearedIDs, r.ID)
+		// Throttle to be friendly to USB HDD.
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Batch-clear the merge_path DB pointers.
+	if !opts.dryRun && len(clearedIDs) > 0 {
+		if err := db.ClearMergePathBatch(ctx, clearedIDs); err != nil {
+			fmt.Fprintf(os.Stderr, "  WARN: ClearMergePathBatch failed: %v (files already removed)\n", err)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("Summary: pruned %d intermediate .mp4 outputs (%s reclaimed)\n", prunedCount, humanBytes(totalBytes))
+	if skippedNoMergePath > 0 {
+		fmt.Printf("  skipped (no merge_path):        %d\n", skippedNoMergePath)
+	}
+	if skippedNotDailyMerged > 0 {
+		fmt.Printf("  skipped (not daily_merged yet):  %d\n", skippedNotDailyMerged)
+	}
+	if opts.dryRun && prunedCount > 0 {
+		fmt.Println("\nThis was a DRY RUN. Re-run with --execute to apply.")
+	}
+	return 0
+}
+
+// humanBytes formats a byte count as a human-readable string (KB/MB/GB).
+func humanBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case b >= GB:
+		return fmt.Sprintf("%.2f GB", float64(b)/GB)
+	case b >= MB:
+		return fmt.Sprintf("%.2f MB", float64(b)/MB)
+	case b >= KB:
+		return fmt.Sprintf("%.2f KB", float64(b)/KB)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
 // splitCSV splits a comma-separated string, trimming whitespace and dropping empties.
 func splitCSV(s string) []string {
 	var out []string
@@ -1064,11 +1231,13 @@ and are safe to run while the server is stopped (preferred) or running (WAL mode
 allows concurrent access).
 
 Subcommands:
-  duration          Fix recordings stuck at duration=0 by re-probing video files
-  merge-status      Reset merge_status for recordings whose merged file is missing
-  fragments         Clean up segments the merge engine gave up on (incompatible/failed)
-  delete-by-format  Bulk-delete a camera's recordings of all formats EXCEPT one
-                    (e.g. delete regular video while keeping every timelapse segment)
+  duration               Fix recordings stuck at duration=0 by re-probing video files
+  merge-status           Reset merge_status for recordings whose merged file is missing
+  fragments              Clean up segments the merge engine gave up on (incompatible/failed)
+  delete-by-format       Bulk-delete a camera's recordings of all formats EXCEPT one
+                         (e.g. delete regular video while keeping every timelapse segment)
+  prune-intermediate-mp4 Bulk-remove per-segment rolling-merge .mp4 outputs that have
+                         already been folded into a periodic (8h/24h/7d/30d) merge output
 
 Common options:
   --dry-run      Report what would change without modifying (default)
@@ -1239,6 +1408,48 @@ Options:
   --execute              Actually delete (default: dry-run, report only)
   --dry-run              Report only, no changes (default)
   --limit <n>            Max segments to delete (0 = no limit; bounds IO on RPi)
+  --config <path>        Config file path (default: mibee-nvr.yaml)
+  --help, -h             Show this help
+`)
+}
+
+func printRepairPruneIntermediateMP4Usage() {
+	fmt.Print(`Usage: mibee-nvr repair prune-intermediate-mp4 [options]
+
+Bulk-remove the per-segment rolling-merge .mp4 outputs that have already been
+folded into a periodic (8h/12h/24h/natural-day/7d/30d) timelapse merge output.
+After a periodic merge succeeds, those intermediate files are redundant — the
+long-window output already contains them. This command reclaims that disk
+(the production NVR observed ~1.5GB/day per camera accumulating).
+
+Only recordings with:
+  - format IN (timelapse, mjpeg)
+  - non-empty merge_path
+  - merge_status = 'daily_merged'
+are pruned. Recordings with merge_status='merged' (rolling only, not yet
+periodic-folded) are PRESERVED — the periodic output may not exist yet.
+
+The raw frame directories (recordings.file_path: frame_*.h264/.h265/.jpg) are
+ALWAYS preserved regardless — only the intermediate .mp4 outputs are removed.
+
+Examples:
+
+  # Dry-run: see what would be pruned for one camera
+  mibee-nvr repair prune-intermediate-mp4 --camera=front-door --before=2026-07-21
+
+  # Apply for one camera
+  mibee-nvr repair prune-intermediate-mp4 --camera=front-door --before=2026-07-21 --execute
+
+  # Reclaim across ALL cameras, only recordings older than today
+  mibee-nvr repair prune-intermediate-mp4 --before=2026-07-21 --execute
+
+Options:
+  --camera <id>          Limit to one camera (optional; omit for all cameras)
+  --before YYYY-MM-DD    Only prune recordings started before this UTC date
+                         (recommended — protects the active window)
+  --limit <n>            Cap the number of recordings processed (0 = no limit)
+  --dry-run              Report only, no changes (default)
+  --execute              Actually prune files + clear DB pointers
   --config <path>        Config file path (default: mibee-nvr.yaml)
   --help, -h             Show this help
 `)
