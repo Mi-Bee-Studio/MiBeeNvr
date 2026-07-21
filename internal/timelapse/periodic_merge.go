@@ -285,14 +285,32 @@ func parseMergeRange(t time.Time, dur time.Duration, loc *time.Location) (time.T
 		return start, end
 	}
 
-	// Duration-based alignment: align time-of-day to nearest multiple of dur from midnight local.
-	// For 24h: midnight local
-	// For 12h: midnight or noon local
-	// For 8h:  00:00, 08:00, 16:00 local
+	// Duration-based alignment: align time-of-day to the largest multiple of
+	// dur that is ≤ the time-of-day, starting from midnight local.
+	//   - 24h: midnight local
+	//   - 12h: midnight or noon local
+	//   - 8h:  00:00, 08:00, 16:00 local
+	//   - sub-hour (e.g. 45m, 30m): aligned by wall-clock seconds, supports
+	//     fractional-hour durations that don't divide 24 evenly.
 	durHours := int(dur.Hours())
-	hour := t.Hour()
-	alignedHour := (hour / durHours) * durHours
-	start := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
+	if durHours > 0 && 24%durHours == 0 {
+		// Whole-hour duration that divides 24: integer-hour alignment.
+		hour := t.Hour()
+		alignedHour := (hour / durHours) * durHours
+		start := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
+		end := start.Add(dur)
+		return start, end
+	}
+	// General case: align by wall-clock nanoseconds since midnight. Works for
+	// any positive duration (sub-hour, non-divisor-of-24, etc.). The window
+	// may straddle midnight if dur does not divide 24h evenly.
+	secOfDay := t.Hour()*3600 + t.Minute()*60 + t.Second()
+	durSec := int(dur / time.Second)
+	if durSec <= 0 {
+		durSec = 1
+	}
+	alignedSec := (secOfDay / durSec) * durSec
+	start := time.Date(year, month, day, 0, 0, 0, 0, loc).Add(time.Duration(alignedSec) * time.Second)
 	end := start.Add(dur)
 	return start, end
 }
