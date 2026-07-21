@@ -17,7 +17,7 @@
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock } from 'lucide-svelte';
+  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass } from 'lucide-svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
@@ -29,14 +29,16 @@
   // ── URL params initialization ──
   // Timeline is the default view for continuous 24/7 recording (the natural
   // interaction model). List falls back to per-segment cards, which suit
-  // sparse event clips but not thousands of 30s fragments.
-  let initialViewMode: 'timeline' | 'list' = 'timeline';
+  // sparse event clips but not thousands of 30s fragments. Timelapse is its
+  // own view because timelapse segments are sparse point-samples (not coverage)
+  // and mixing them with video bands distorts the perceived recording gaps.
+  let initialViewMode: 'timeline' | 'list' | 'timelapse' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'list' || v === 'timeline') initialViewMode = v;
+    if (v === 'list' || v === 'timeline' || v === 'timelapse') initialViewMode = v;
     // Legacy ?view=gallery URLs (gallery view was removed) silently fall back
     // to the default timeline view rather than rendering an empty page.
     const f = params.get('format');
@@ -78,12 +80,19 @@
   let currentPageNum = $state(1);
 
   // ── View mode ──
-  let viewMode = $state<'timeline' | 'list'>(initialViewMode);
+  let viewMode = $state<'timeline' | 'list' | 'timelapse'>(initialViewMode);
 
   // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
   let timelineRecordings = $state<Recording[]>([]);
   let timelineLoading = $state(false);
   let timelineAbortController: AbortController | null = null;
+
+  // Slices of the day's recordings keyed off the active view: the Timeline tab
+  // shows video bands only (no cyan timelapse noise), the Timelapse tab shows
+  // timelapse bands only. We fetch all formats once (loadTimelineData) and slice
+  // in-component to avoid a second network round-trip and keep totals consistent.
+  let timelineRecordingsVideo = $derived(timelineRecordings.filter(r => r.format !== 'timelapse'));
+  let timelineRecordingsTimelapse = $derived(timelineRecordings.filter(r => r.format === 'timelapse'));
 
   // ── Selection ──
   let selectedIds = $state<Set<string>>(new Set());
@@ -618,11 +627,12 @@ let batchMerging = $state(false);
 
   // Timeline: reload when the selected day changes (camera/format filters don't
   // apply here — the timeline shows all cameras for the whole day; the coverage
-  // bands are colored by format). viewMode gating avoids fetching when the tab
-  // isn't visible (same lazy pattern as gallery/list).
+  // bands are colored by format). viewMode gating avoids fetching when neither
+  // timeline-viewing tab is visible (same lazy pattern as list). The Timelapse
+  // tab reuses the same day fetch and slices off the timelapse-format rows.
   let timelineLoadTimeout: number;
   $effect(() => {
-    if (viewMode === 'timeline') {
+    if (viewMode === 'timeline' || viewMode === 'timelapse') {
       const _ = selectedDate;
       clearTimeout(timelineLoadTimeout);
       timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
@@ -666,7 +676,7 @@ let batchMerging = $state(false);
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'timeline' || v === 'list') viewMode = v;
+        if (v === 'timeline' || v === 'list' || v === 'timelapse') viewMode = v;
         // Legacy ?view=gallery (gallery view removed) falls back to default
         // timeline via the initial value — no explicit handling needed.
         const f = params.get('format');
@@ -679,9 +689,9 @@ let batchMerging = $state(false);
     return () => window.removeEventListener('hashchange', handler);
   });
 
-  // Auto-select today's date when in timeline mode and no date selected
+  // Auto-select today's date when in a timeline-viewing mode and no date selected
   $effect(() => {
-    if (viewMode === 'timeline' && !selectedDate) {
+    if ((viewMode === 'timeline' || viewMode === 'timelapse') && !selectedDate) {
       const today = new Date();
       const y = today.getFullYear();
       const m = String(today.getMonth() + 1).padStart(2, '0');
@@ -746,6 +756,13 @@ let batchMerging = $state(false);
           {t('library.viewTimeline')}
         </button>
         <button
+          class="btn btn-sm {viewMode === 'timelapse' ? 'btn-primary' : 'btn-ghost'}"
+          onclick={() => viewMode = 'timelapse'}
+        >
+          <Hourglass size={16} class="mr-1" />
+          {t('library.viewTimelapse')}
+        </button>
+        <button
           class="btn btn-sm {viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}"
           onclick={() => viewMode = 'list'}
         >
@@ -765,7 +782,7 @@ let batchMerging = $state(false);
           <button onclick={loadCalendarSummary} class="btn btn-primary btn-sm">{t('common.retry')}</button>
         </div>
       {:else if viewMode === 'timeline'}
-        <!-- ── Timeline view (default for continuous 24/7 recording) ── -->
+        <!-- ── Timeline view (video recordings only; timelapse has its own tab) ── -->
         {#if timelineLoading && timelineRecordings.length === 0}
           <div class="card p-12 text-center border th-border">
             <div class="flex justify-center mb-4 th-text-tertiary">
@@ -775,9 +792,30 @@ let batchMerging = $state(false);
           </div>
         {:else}
           <div class="card p-4 border th-border">
+            <p class="text-xs th-text-tertiary mb-2">{t('library.videoOnly')}</p>
             <DayTimeline
               {cameras}
-              recordings={timelineRecordings}
+              recordings={timelineRecordingsVideo}
+              selectedDate={selectedDate || ''}
+              onseek={handleTimelineSeek}
+            />
+          </div>
+        {/if}
+      {:else if viewMode === 'timelapse'}
+        <!-- ── Timelapse view (timelapse-format recordings only) ── -->
+        {#if timelineLoading && timelineRecordings.length === 0}
+          <div class="card p-12 text-center border th-border">
+            <div class="flex justify-center mb-4 th-text-tertiary">
+              <Hourglass size={48} class="animate-pulse" />
+            </div>
+            <p class="th-text-secondary">{t('common.loading')}</p>
+          </div>
+        {:else}
+          <div class="card p-4 border th-border">
+            <p class="text-xs th-text-tertiary mb-2">{t('library.timelapseOnly')}</p>
+            <DayTimeline
+              {cameras}
+              recordings={timelineRecordingsTimelapse}
               selectedDate={selectedDate || ''}
               onseek={handleTimelineSeek}
             />
