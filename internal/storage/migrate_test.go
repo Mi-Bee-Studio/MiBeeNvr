@@ -445,3 +445,45 @@ func TestMigrateMJPEGToAVI_OverwritesStaleBackup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, model.FormatAVI, updated.Format)
 }
+
+// TestMigrateOneRecording_TooManyFramesSkipped verifies the OOM protection:
+// a recording with more than maxFramesPerRecording frames is skipped rather
+// than loaded into the AVI muxer's in-RAM buffer (which would OOM on
+// memory-constrained hosts). Regression test for a production incident where
+// a 24751-frame recording drove the migration process to 1.4 GB RSS and got
+// OOM-killed on a 4 GB host.
+func TestMigrateOneRecording_TooManyFramesSkipped(t *testing.T) {
+	db, store, ctx, dir := setupMigrateTest(t)
+	defer db.Close()
+
+	// Create a recording with maxFramesPerRecording + 1 frames — one over the
+	// limit. Each frame is a tiny valid JPEG (content doesn't matter; the count
+	// is what triggers the guard).
+	overLimit := maxFramesPerRecording + 1
+	mjpegDir := createTestMJPEGDir(t, dir, "cam1/rec_huge", overLimit)
+
+	rec := model.Recording{
+		ID:        "r-huge",
+		CameraID:  "cam1",
+		FilePath:  mjpegDir,
+		Format:    model.FormatMJPEG,
+		StartedAt: time.Now(),
+	}
+	require.NoError(t, db.InsertRecording(ctx, &rec))
+
+	err := migrateOneRecording(ctx, db, store, rec, logger)
+	require.ErrorIs(t, err, errSkipped,
+		"recording with %d frames (> limit %d) must be skipped, not migrated",
+		overLimit, maxFramesPerRecording)
+
+	// Recording must remain format=mjpeg (unchanged).
+	unchanged, err := db.GetRecording(ctx, "r-huge")
+	require.NoError(t, err)
+	require.NotNil(t, unchanged)
+	require.Equal(t, model.FormatMJPEG, unchanged.Format,
+		"skipped recording must retain its original format")
+
+	// And the source directory must still exist (not deleted).
+	_, err = os.Stat(mjpegDir)
+	require.NoError(t, err, "source directory must be preserved when skipped")
+}

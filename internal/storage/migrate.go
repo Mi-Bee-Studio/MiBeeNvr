@@ -28,6 +28,19 @@ type MigrateOptions struct {
 	Resume      bool          // clean orphan .avi files before starting
 }
 
+// maxFramesPerRecording bounds the number of JPEG frames migrateOneRecording
+// will load into the AVI muxer's in-RAM buffer. The muxer (avi.NewVideoOnlyMuxer)
+// accumulates every frame in memory until segment close, so an unbounded frame
+// count risks OOM on memory-constrained hosts.
+//
+// Production hit this: a mis-segmented recording with 24751 frames (~1.2 GB
+// of JPEG data) drove the migration process to 1.4 GB RSS on a 4 GB host and
+// got OOM-killed mid-run, briefly threatening the NVR service sharing the host.
+// Normal recordings are ~500 frames (30s @ 15fps); even 5-minute AVI segments
+// cap around 4500 frames. 10000 frames comfortably covers any legitimate
+// recording while catching pathological cases.
+const maxFramesPerRecording = 10000
+
 // MigrateMJPEGToAVI migrates legacy MJPEG (jpg-directory) recordings to AVI format.
 //
 // Algorithm:
@@ -264,6 +277,19 @@ func migrateOneRecording(ctx context.Context, db *DB, store *Manager, rec model.
 
 	if len(jpgFiles) == 0 {
 		log.Warn("recording has no .jpg files, skipping", "id", rec.ID, "path", rec.FilePath)
+		return errSkipped
+	}
+
+	// Bound the frame count to protect the AVI muxer's in-RAM buffer from
+	// pathological recordings (e.g. a mis-segmented clip with tens of thousands
+	// of frames). The muxer holds every frame in memory until close, so without
+	// this cap a single huge recording can OOM the migration process — and on
+	// a shared host, take the NVR service down with it. See maxFramesPerRecording
+	// for the threshold rationale.
+	if len(jpgFiles) > maxFramesPerRecording {
+		log.Warn("recording has too many frames, skipping (would OOM AVI muxer)",
+			"id", rec.ID, "path", rec.FilePath,
+			"frame_count", len(jpgFiles), "limit", maxFramesPerRecording)
 		return errSkipped
 	}
 
