@@ -13,6 +13,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/go-chi/chi/v5"
 )
@@ -418,8 +419,24 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		}
 	}
 
-	// Create PeriodicMergeManager with the specified duration
-	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc)
+	// Create PeriodicMergeManager with the specified duration. Wire the merge
+	// store so the output is discoverable via /api/timelapse/merges, and the
+	// recording-enabled provider so recording_enabled=true cameras include
+	// video frames in the merge (parity with the scheduled path in run.go).
+	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
+		timelapse.WithMergeStore(h.db),
+		timelapse.WithDurationLabel(durationStr),
+		timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
+			if h.camMgr == nil {
+				return true
+			}
+			cam := h.camMgr.GetCameraConfig(cameraID)
+			if cam == nil || cam.RecordingEnabled == nil {
+				return true
+			}
+			return *cam.RecordingEnabled
+		}),
+	)
 
 	go func() {
 		defer h.activeMerges.Delete(cameraID)
@@ -809,7 +826,10 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 			}
 		}
 
-		mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc)
+		mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
+			timelapse.WithMergeStore(h.db),
+			timelapse.WithDurationLabel(body.Duration),
+		)
 
 		// Launch merge in background
 		go func(camID string, mgr *timelapse.PeriodicMergeManager, ref time.Time) {
@@ -830,4 +850,172 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		"results":   results,
 		"triggered": triggered,
 	})
+}
+
+// --- Periodic timelapse-merge outputs (timelapse_merges table) ---
+//
+// These endpoints expose the long-window timelapse videos (8h / 12h / 24h /
+// natural-day / 7d / 30d) produced by the PeriodicMergeManager. Each row
+// represents one synthesized MP4 covering a window of source segments.
+
+// handleListTimelapseMerges handles GET /api/timelapse/merges.
+// Returns a paginated list of periodic-merge outputs.
+//
+// Query params:
+//
+//	camera_id       — filter by camera
+//	start, end      — RFC3339 bounds on window_start (inclusive)
+//	duration        — exact duration_label match (e.g. "24h", "natural-day")
+//	status          — exact status match (pending/merging/completed/failed)
+//	limit, offset   — pagination (limit capped at 1000)
+func (h *Handler) handleListTimelapseMerges(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	f := storage.TimelapseMergeFilter{
+		CameraID:      r.URL.Query().Get("camera_id"),
+		DurationLabel: r.URL.Query().Get("duration"),
+		Status:        r.URL.Query().Get("status"),
+		Limit:         limit,
+		Offset:        offset,
+	}
+	if v := r.URL.Query().Get("start"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.StartTime = t
+		}
+	}
+	if v := r.URL.Query().Get("end"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.EndTime = t
+		}
+	}
+
+	merges, err := h.db.ListTimelapseMerges(r.Context(), f)
+	if err != nil {
+		logger.Error("list timelapse merges failed", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to list timelapse merges")
+		return
+	}
+	total, err := h.db.CountTimelapseMerges(r.Context(), f)
+	if err != nil {
+		//nolint:nilerr // count is best-effort; a failed COUNT must not fail the list request
+		total = 0
+	}
+	if merges == nil {
+		merges = []model.TimelapseMerge{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"merges": merges,
+		"total":  total,
+	})
+}
+
+// handleGetTimelapseMerge handles GET /api/timelapse/merges/{id}.
+func (h *Handler) handleGetTimelapseMerge(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		WriteError(w, http.StatusBadRequest, "invalid merge id")
+		return
+	}
+	m, err := h.db.GetTimelapseMerge(r.Context(), id)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "timelapse merge not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// handleDownloadTimelapseMerge handles GET /api/timelapse/merges/{id}/download.
+// Serves the merged MP4 with range support (http.ServeFile). The
+// X-Timelapse-Codec header is set so the frontend player can decide whether
+// to use <video> (h264/h265) or fall back to the JPEG frame cycler (mjpeg).
+func (h *Handler) handleDownloadTimelapseMerge(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		WriteError(w, http.StatusBadRequest, "invalid merge id")
+		return
+	}
+	m, err := h.db.GetTimelapseMerge(r.Context(), id)
+	if err != nil || m == nil {
+		WriteError(w, http.StatusNotFound, "timelapse merge not found")
+		return
+	}
+	if m.Status != model.TimelapseMergeStatusCompleted || m.OutputPath == "" {
+		WriteError(w, http.StatusNotFound, "timelapse merge output not available")
+		return
+	}
+	if _, err := os.Stat(m.OutputPath); err != nil {
+		logger.Warn("timelapse merge output missing on disk",
+			"merge_id", id, "output_path", m.OutputPath, "error", err)
+		WriteError(w, http.StatusNotFound, "timelapse merge output file not available")
+		return
+	}
+	// Surface codec so the frontend can pick the right player path.
+	if m.Codec != "" {
+		w.Header().Set("X-Timelapse-Codec", m.Codec)
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(m.OutputPath)))
+	http.ServeFile(w, r, m.OutputPath)
+}
+
+// handleDeleteTimelapseMerge handles DELETE /api/timelapse/merges/{id}.
+// Removes the DB row and the output file on disk. Does NOT touch the source
+// segments that were folded into the merge (those are independent recordings).
+func (h *Handler) handleDeleteTimelapseMerge(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		WriteError(w, http.StatusBadRequest, "invalid merge id")
+		return
+	}
+	m, err := h.db.GetTimelapseMerge(r.Context(), id)
+	if err != nil || m == nil {
+		WriteError(w, http.StatusNotFound, "timelapse merge not found")
+		return
+	}
+	// DB-first: remove the row, then best-effort remove the file.
+	if err := h.db.DeleteTimelapseMerge(r.Context(), id); err != nil {
+		logger.Error("delete timelapse merge row failed", "id", id, "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to delete timelapse merge")
+		return
+	}
+	if m.OutputPath != "" {
+		if err := os.Remove(m.OutputPath); err != nil && !os.IsNotExist(err) {
+			logger.Warn("delete timelapse merge output file failed (DB row already removed)",
+				"id", id, "output_path", m.OutputPath, "error", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }

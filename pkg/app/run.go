@@ -440,13 +440,21 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			if cam.Timelapse.MergeOutputFPS > 0 {
 				fps = cam.Timelapse.MergeOutputFPS
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc, timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
-				cam := camMgr.GetCameraConfig(cameraID)
-				if cam == nil || cam.RecordingEnabled == nil {
-					return true // nil = default true (recording enabled)
-				}
-				return *cam.RecordingEnabled
-			}))
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc,
+				timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
+					cam := camMgr.GetCameraConfig(cameraID)
+					if cam == nil || cam.RecordingEnabled == nil {
+						return true // nil = default true (recording enabled)
+					}
+					return *cam.RecordingEnabled
+				}),
+				// Persist periodic-merge outputs to the timelapse_merges table so
+				// the frontend can discover / play / delete long-window videos.
+				timelapse.WithMergeStore(db),
+				// Preserve the user-facing label so DB rows record "natural-day"
+				// rather than "24h0m0s".
+				timelapse.WithDurationLabel(cam.Timelapse.MergeDuration),
+			)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(
 				"merge scheduler: configured camera",

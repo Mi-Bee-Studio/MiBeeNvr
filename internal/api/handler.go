@@ -311,6 +311,12 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/timelapse", h.handleTimelapseList)
 		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
 		r.Post("/api/timelapse/batch-merge", h.handleTimelapseBatchMerge)
+		// Periodic-merge outputs (timelapse_merges table). Registered BEFORE the
+		// /api/timelapse/{id} wildcard routes so the static /merges paths win.
+		r.Get("/api/timelapse/merges", h.handleListTimelapseMerges)
+		r.Get("/api/timelapse/merges/{id}", h.handleGetTimelapseMerge)
+		r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+		r.Delete("/api/timelapse/merges/{id}", h.handleDeleteTimelapseMerge)
 		r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
 		r.Delete("/api/timelapse/{cameraId}/merge", h.handleTimelapseMergeCancel)
 		r.Post("/api/timelapse/{id}/pause", h.handleTimelapsePause)

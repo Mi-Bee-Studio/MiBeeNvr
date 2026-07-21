@@ -16,6 +16,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/abema/go-mp4"
 )
 
@@ -237,6 +238,7 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 		OutputPath:   outputPath,
 		FramesMerged: framesMerged,
 		Duration:     float64(framesMerged) * sampleDuration.Seconds(),
+		Codec:        model.TimelapseMergeCodecH265,
 	}, nil
 }
 
