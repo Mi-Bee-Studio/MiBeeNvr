@@ -100,6 +100,18 @@ let formatBadgeClass = $derived.by(() => {
   let tlAbortController: AbortController | null = null;
   let tlLoop = $state(false);
   let tlSeekLoading = $state(false);
+
+  // Prefetched next-segment data for seamless JPEG-cycler chaining. Populated
+  // by prefetchNextSegmentFrames() when playback crosses ~80% of the current
+  // segment. When playNextFrame() reaches the last frame, it consumes this
+  // cache to continue into the next segment without a full stop+reload.
+  interface PrefetchedSegment {
+    recordingId: string;
+    frames: TimelapseFrame[];
+    blobCache: Map<number, string>;
+  }
+  let prefetchedNextSegment: PrefetchedSegment | null = null;
+  let prefetchingNextSegment = false;
   let tlSeekTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Merge state
@@ -336,16 +348,22 @@ function startMergeSse(cameraId: string, recordingId: string) {
   async function loadNextRecording() {
     if (!recording) return null;
     try {
+      // Fetch a small window of upcoming segments and skip any that have been
+      // folded into a periodic-merge output (merge_status === 'daily_merged').
+      // Those rows had their intermediate .mp4 pruned (WS3) so they have no
+      // standalone playback content — chaining into them would stall.
+      // Limit 5 balances "find the next playable one" against over-fetching.
       const resp = await listRecordings({
         camera_id: recording.camera_id,
         format: recording.format,
         start: recording.ended_at ? new Date(recording.ended_at).toISOString() : undefined,
         sort_by: 'started_at',
         order: 'asc',
-        limit: 1,
+        limit: 5,
         offset: 0,
       });
-      return resp.recordings.length > 0 ? resp.recordings[0] : null;
+      const playable = resp.recordings.find(r => r.merge_status !== 'daily_merged');
+      return playable ?? null;
     } catch (e) { return null; }
   }
   async function handleVideoEnded() {
@@ -791,6 +809,9 @@ async function loadTimelapsePreview() {
     // Clear old blob URLs
     tlBlobCache.forEach(url => URL.revokeObjectURL(url));
     tlBlobCache = new Map();
+    // Drop any prefetched next-segment data — it's for a different recording.
+    prefetchedNextSegment = null;
+    prefetchingNextSegment = false;
     try {
       timelapseFrames = await getTimelapseFrames(currentId, signal);
       if (timelapseFrames.length > 0) {
@@ -858,14 +879,49 @@ async function loadTimelapsePreview() {
     const signal = tlAbortController?.signal;
     if (signal?.aborted) return;
     const next = tlCurrentFrame + 1;
+
+    // Trigger next-segment prefetch when playback crosses ~80% of the current
+    // segment — gives the prefetch ample time to fetch frames before the
+    // boundary so the chain is seamless.
+    if (timelapseFrames.length > 0 && next >= timelapseFrames.length * 0.8 && !prefetchedNextSegment && !prefetchingNextSegment) {
+      prefetchNextSegmentFrames();
+    }
+
     if (next >= timelapseFrames.length) {
       if (tlLoop) {
         tlCurrentFrame = 0;
         tlPlayTimeout = setTimeout(playNextFrame, 50);
         return;
       }
+      // Seamless chain: if the next segment's frames are prefetched, append
+      // them to the current frame list and continue playing without a stop.
+      // The blob URLs are carried over so no re-fetch is needed.
+      if (prefetchedNextSegment && prefetchedNextSegment.frames.length > 0) {
+        const pre = prefetchedNextSegment;
+        prefetchedNextSegment = null;
+        // Merge: shift current frame index back by current segment length,
+        // then append the prefetched frames + blob cache.
+        // Easiest: switch currentId to the prefetched segment, replace the
+        // frame list + cache, and continue from frame 0.
+        currentId = pre.recordingId;
+        timelapseFrames = pre.frames;
+        // Revoke the OLD cache entries (no longer reachable) and adopt the new.
+        tlBlobCache.forEach(url => URL.revokeObjectURL(url));
+        tlBlobCache = pre.blobCache;
+        tlCurrentFrame = 0;
+        // Clear stale codec cache (different recording).
+        clearMergedCodecCache(pre.recordingId);
+        // Reload the recording metadata in the background (for the side panel,
+        // TimelineBar, etc.) without interrupting playback.
+        void getRecording(pre.recordingId).then(r => { if (r) recording = r; });
+        // Schedule next frame without the full navigateToNext stall.
+        const fps = 10 * tlSpeed;
+        const delay = Math.max(0, (1000 / fps) - 10);
+        tlPlayTimeout = setTimeout(playNextFrame, delay);
+        return;
+      }
+      // No prefetch available → fall back to the legacy stop + navigate path.
       tlIsPlaying = false;
-      // Auto-advance to next recording
       navigateToNext();
       return;
     }
@@ -880,6 +936,36 @@ async function loadTimelapsePreview() {
       const delay = Math.max(0, (1000 / fps) - 10);
       tlPlayTimeout = setTimeout(playNextFrame, delay);
     });
+  }
+
+  // prefetchNextSegmentFrames discovers the next playable timelapse recording
+  // (skipping daily_merged ones) and pre-fetches its frame list + first batch
+  // of blobs so playNextFrame can chain into it without a visible stall.
+  // Failures are silent — worst case we fall back to the navigateToNext path.
+  async function prefetchNextSegmentFrames() {
+    if (!recording || prefetchedNextSegment || prefetchingNextSegment) return;
+    prefetchingNextSegment = true;
+    try {
+      const next = await loadNextRecording();
+      if (!next) return;
+      const frames = await getTimelapseFrames(next.id);
+      if (frames.length === 0) return;
+      const blobCache = new Map<number, string>();
+      // Pre-fetch the first 20 frames so the chain starts instantly.
+      const batchSize = Math.min(20, frames.length);
+      await Promise.all(
+        Array.from({ length: batchSize }, (_, i) =>
+          loadTimelapseFrameBlob(next.id, frames[i].filename)
+            .then(url => blobCache.set(i, url))
+            .catch(() => {})
+        )
+      );
+      prefetchedNextSegment = { recordingId: next.id, frames, blobCache };
+    } catch {
+      // Silent — main playback path remains intact.
+    } finally {
+      prefetchingNextSegment = false;
+    }
   }
 
   function tlTogglePlay() {
