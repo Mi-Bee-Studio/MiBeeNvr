@@ -9,6 +9,7 @@
     setup: () => import('./routes/Setup.svelte'),
     recordings: () => import('./routes/Recordings.svelte'),
     'recording-detail': () => import('./routes/RecordingDetail.svelte'),
+    'timelapse-merge': () => import('./routes/TimelapseMergeDetail.svelte'),
     cameras: () => import('./routes/Cameras.svelte'),
     'cameras-detail': () => import('./routes/Cameras.svelte'),
     live: () => import('./routes/LiveView.svelte'),
@@ -99,6 +100,14 @@ function parseRoute(hash: string) {
       if (segments[1]) {
         return { route: 'recording-detail', params: { id: segments[1] } };
       }
+      return { route: 'recordings', params: {} };
+    }
+
+    if (segments[0] === 'timelapse-merge') {
+      if (segments[1]) {
+        return { route: 'timelapse-merge', params: { id: segments[1] } };
+      }
+      // No id → redirect to recordings list.
       return { route: 'recordings', params: {} };
     }
 
@@ -229,6 +238,7 @@ function parseRoute(hash: string) {
   function getRouteProps(route: string) {
     switch (route) {
       case 'recording-detail': return { recordingId: params.id };
+      case 'timelapse-merge': return { mergeId: params.id };
       case 'live': return { cameraId: params.id };
       case 'dashboard': return { initialTab: params.tab || 'storage' };
       default: return {};
