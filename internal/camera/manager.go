@@ -116,6 +116,11 @@ type CameraManager struct {
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.
 	relayMgr RelayManager
+	// backfillWg tracks the startup stable_id backfill goroutine so Stop can
+	// wait for it to exit before returning. Without this, the goroutine can
+	// outlive the DB handle and crash with "sql: database is closed" when the
+	// test/process tears down resources (flaky TestStartupBackfillStableID).
+	backfillWg sync.WaitGroup
 }
 
 // RelayManager is the subset of *relay.Manager the camera manager calls. Kept
@@ -439,7 +444,11 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 	// For ONVIF cameras without stable_id, attempt to discover via ONVIF.
 	// Non-blocking: runs in a goroutine and must not delay Start().
 	if cm.db != nil {
-		go cm.backfillStableIDs(ctx)
+		cm.backfillWg.Add(1)
+		go func() {
+			defer cm.backfillWg.Done()
+			cm.backfillStableIDs(ctx)
+		}()
 	}
 	return nil
 }
@@ -479,6 +488,12 @@ func (cm *CameraManager) Stop() error {
 
 	// Stop all timelapse frame pollers
 	cm.stopAllTimelapseFramePollers()
+
+	// Wait for the startup stable_id backfill goroutine to exit. It holds the
+	// db handle; without this wait it can race with resource teardown and crash
+	// with "sql: database is closed". The goroutine checks ctx between cameras
+	// so this returns promptly once the caller cancels the start context.
+	cm.backfillWg.Wait()
 
 	return nil
 }

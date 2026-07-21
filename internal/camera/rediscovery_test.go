@@ -160,7 +160,13 @@ func TestStartupBackfillStableID(t *testing.T) {
 	// Use a fresh manager to simulate real startup (we call Start directly).
 	// The backfill runs in a goroutine, so we wait for it.
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Register Stop+cancel as a t.Cleanup that runs BEFORE the db.Close cleanup
+	// registered by newTestManager (LIFO). Stop() waits for the backfill
+	// goroutine so it cannot outlive db.Close.
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, mgr.Stop())
+	})
 	err := mgr.Start(ctx)
 	require.NoError(t, err)
 
@@ -210,7 +216,15 @@ func TestStartupBackfillStableID_NonBlocking(t *testing.T) {
 	mgr.reseedSnapshotConfigs()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Register Stop+cancel as a t.Cleanup that runs BEFORE the db.Close cleanup
+	// registered by newTestManager (t.Cleanup is LIFO: last-registered runs
+	// first). Stop() waits for the backfill goroutine to exit, which prevents
+	// the "sql: database is closed" race where the goroutine issues db calls
+	// after db.Close has already torn down the connection.
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, mgr.Stop())
+	})
 
 	// Act: Start() should return quickly (backfill runs in goroutine).
 	start := time.Now()
@@ -218,8 +232,13 @@ func TestStartupBackfillStableID_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 	elapsed := time.Since(start)
 
-	// Start must return in under 100ms despite 20 backfill items (goroutine).
-	assert.Less(t, elapsed, 100*time.Millisecond,
+	// Start must return quickly despite 20 backfill items (goroutine).
+	// The threshold is generous (1s) because CI runners are slow and Start
+	// does real work beyond just spawning the goroutine (config snapshot,
+	// ONVIF client init, etc.). The assertion's purpose is to catch
+	// "backfill runs synchronously" regressions, not to benchmark Start —
+	// backfill itself takes seconds, so anything well below that is fine.
+	assert.Less(t, elapsed, 1*time.Second,
 		"Start() must return quickly; backfill runs in a goroutine")
 
 	// Eventually, all 20 cameras should be backfilled.
