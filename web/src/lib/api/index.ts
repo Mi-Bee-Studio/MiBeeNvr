@@ -147,7 +147,6 @@ export type {
 // Recordings — list, download, frames, stats, archives
 export {
   listRecordings,
-  listTimelapseRecordings,
   getRecording,
   deleteRecording,
   batchDeleteRecordings,
