@@ -1469,10 +1469,12 @@ $effect(() => {
                       onchange={(e) => selectedMergeDuration = (e.target as HTMLSelectElement).value}
                     >
                       <option value="1h">{t('timelapse.mergeDuration1h')}</option>
-                      <option value="30m">{t('timelapse.mergeDuration30m')}</option>
-                      <option value="15m">{t('timelapse.mergeDuration15m')}</option>
-                      <option value="10m">{t('timelapse.mergeDuration10m')}</option>
-                      <option value="5m">{t('timelapse.mergeDuration5m')}</option>
+                      <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+                      <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+                      <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+                      <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+                      <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+                      <option value="30d">{t('timelapse.mergeDuration30d')}</option>
                     </select>
                     <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2">
                       <Play size={16} /> {t('detail.mergeAndPlay')}

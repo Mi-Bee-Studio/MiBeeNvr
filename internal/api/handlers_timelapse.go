@@ -183,6 +183,21 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 
 // handleTimelapseStatus returns global timelapse merge defaults.
 // GET /api/timelapse/status
+// SupportedTimelapseMergeDurations is the canonical list of named merge-window
+// values exposed to the frontend. Order matters — the first entry is the
+// default shown in dropdowns. Mirrors config.ParseMergeDuration's named
+// windows (1h + 8h/12h/24h/natural-day/7d/30d). Kept here (not in config)
+// because it's an API contract, not a parsing concern.
+var SupportedTimelapseMergeDurations = []string{
+	"1h",
+	"8h",
+	"12h",
+	"24h",
+	"natural-day",
+	"7d",
+	"30d",
+}
+
 func (h *Handler) handleTimelapseStatus(w http.ResponseWriter, r *http.Request) {
 	activeCount := 0
 	if h.timelapseMergeMgr != nil {
@@ -190,11 +205,12 @@ func (h *Handler) handleTimelapseStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	defaultDailyMerge := true
 	writeJSON(w, http.StatusOK, map[string]any{
-		"merge_enabled":    false,
-		"merge_mode":       "auto",
-		"daily_merge":      defaultDailyMerge,
-		"merge_output_fps": 30,
-		"active_count":     activeCount,
+		"merge_enabled":             false,
+		"merge_mode":                "auto",
+		"daily_merge":               defaultDailyMerge,
+		"merge_output_fps":          30,
+		"active_count":              activeCount,
+		"supported_merge_durations": SupportedTimelapseMergeDurations,
 	})
 }
 
@@ -409,7 +425,7 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		}
 	}
 
-	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
+	dataDir := filepath.Join(h.config.Storage.RootDir, "periodic-merge")
 
 	// Parse date or use current time as reference in the configured timezone
 	dateStr := r.URL.Query().Get("date")
@@ -801,7 +817,7 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	dataDir := filepath.Join(h.config.Storage.RootDir, "daily-merge")
+	dataDir := filepath.Join(h.config.Storage.RootDir, "periodic-merge")
 
 	// Parse date
 	refTime := time.Now().In(loc)
