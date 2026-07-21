@@ -146,7 +146,13 @@ func MigrateMJPEGToAVI(ctx context.Context, db *DB, store *Manager, opts Migrate
 	}
 
 	// Step 2: DB backup before any writes.
+	// Remove any stale backup from a prior run first — VACUUM INTO fails if
+	// the destination file already exists, which would block repeat invocations
+	// (common when a previous migration was interrupted and re-run).
 	backupPath := db.path + ".migrate-backup"
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale backup: %w", err)
+	}
 	if err := db.Backup(ctx, backupPath); err != nil {
 		return fmt.Errorf("db backup: %w", err)
 	}
