@@ -797,7 +797,7 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 	}
 	wantTypes := []byte{32, 33, 34} // VPS, SPS, PPS
 	wantNALUs := [][]byte{vps, sps, pps}
-	for i := 0; i < 3; i++ {
+	for i := range wantTypes {
 		if off+5 > len(hvcC) {
 			t.Fatalf("array %d: ran off end of hvcC at offset %d", i, off)
 		}
