@@ -47,7 +47,7 @@ func TestDefaultsApplied(t *testing.T) {
 	require.Equal(t, "30s", cfg.Storage.SegmentDuration)
 	require.Equal(t, 30, cfg.Cleanup.RetentionDays)
 	require.Equal(t, "1h", cfg.Cleanup.CheckInterval)
-	require.Equal(t, 95, cfg.Cleanup.DiskThresholdPercent)
+	require.Equal(t, 85, cfg.Cleanup.DiskThresholdPercent)
 	require.Equal(t, 2121, cfg.FTP.Port)
 	require.Equal(t, true, *cfg.FTP.Enabled)
 	require.Equal(t, true, *cfg.WebDAV.Enabled)

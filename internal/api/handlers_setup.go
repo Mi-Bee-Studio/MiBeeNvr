@@ -74,7 +74,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		Storage: config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
 		Auth:    config.AuthConfig{Username: req.Username, PasswordHash: hash},
 		Cameras: []config.CameraConfig{},
-		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 85},
 		FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
 		WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
 		Observability: config.ObservabilityConfig{

@@ -999,3 +999,42 @@ func TestRollingMerge_BucketSizeLimit(t *testing.T) {
 	require.Less(t, finalSize, int64(bucketSizeLimit),
 		"new bucket should be well under the size limit")
 }
+
+// TestAdaptiveBatchPause locks in the disk-free% + backlog-driven pause
+// scheduling. The function is the main IO-backpressure knob between the merge
+// backfill and the recording pipeline; regressions here directly cause frame
+// drops during backlog clearing on USB HDD.
+func TestAdaptiveBatchPause(t *testing.T) {
+	base := backfillBatchPauseForArch()
+
+	cases := []struct {
+		name       string
+		pending    int
+		diskFree   int
+		wantFactor float64 // want == base * factor (fractional factors use /2 or *3/2)
+	}{
+		{"disk critical (<10%) overrides everything", 5000, 5, 2.0},
+		{"disk critical (<10%) even with no backlog", 0, 9, 2.0},
+		{"disk tight (10-20%) gentle slowdown", 100, 15, 1.5},
+		{"disk tight boundary (19%)", 100, 19, 1.5},
+		{"backlog large + disk ample → speed up", 3000, 50, 0.5},
+		{"backlog large but disk only 31% → speed up", 3000, 31, 0.5},
+		{"backlog large but disk borderline 30% → baseline", 3000, 30, 1.0},
+		{"backlog small + disk ample → baseline", 100, 50, 1.0},
+		{"no backlog + ample disk → baseline", 0, 80, 1.0},
+		{"backlog near threshold (2000) → baseline (not >2000)", 2000, 50, 1.0},
+		{"backlog just over threshold (2001) + ample → speed up", 2001, 50, 0.5},
+		{"disk exactly 20% → baseline (not <20%)", 100, 20, 1.0},
+		{"disk exactly 10% → tight slowdown (is <20%)", 100, 10, 1.5},
+		{"disk exactly 9% → critical (is <10%)", 100, 9, 2.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := adaptiveBatchPause(tc.pending, tc.diskFree)
+			want := time.Duration(float64(base) * tc.wantFactor)
+			require.Equal(t, want, got,
+				"adaptiveBatchPause(pending=%d, diskFree=%d%%): got %v, want %v (base=%v × %v)",
+				tc.pending, tc.diskFree, got, want, base, tc.wantFactor)
+		})
+	}
+}

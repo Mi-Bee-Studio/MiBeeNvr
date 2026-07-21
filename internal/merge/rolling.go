@@ -35,17 +35,32 @@ func backfillBatchPauseForArch() time.Duration {
 }
 
 // adaptiveBatchPause scales the inter-batch pause by the current backlog size
-// and disk free space. When the backlog is large (>2000 pending) AND disk space
-// is ample (>30% free), it halves the pause to digest fragments faster. When
-// disk is tight (<10% free), it doubles the pause to protect the write path.
-// Otherwise it uses the architecture baseline.
+// and disk free space. The scheduling priority is:
+//
+//  1. Disk near-full (<10% free): 2× pause — protect the recording write path.
+//     Recording drops frames first when the HDD head is saturated; merge must
+//     yield hard. This is the regime where cleanup should also be reclaiming
+//     space.
+//  2. Disk getting tight (10-20% free): 1.5× pause — gentle slowdown. On USB
+//     HDD, free space below ~20% correlates with increased fragmentation and
+//     seek contention as the allocator scatters new segments. Slowing merge
+//     here prevents the recording pipeline from being starved before the hard
+//     <10% cliff is hit.
+//  3. Backlog large (>2000 pending) AND disk ample (>30% free): 0.5× pause —
+//     digest fragments faster. This is the "drain the backlog" regime: there's
+//     plenty of headroom for merge IO to overlap with recording without
+//     blocking it.
+//  4. Otherwise: architecture baseline (500ms ARM / 200ms other).
 //
 // pendingCount is the total pending segment count (across all cameras) at the
 // start of this backfill cycle; diskFree is the current free-space percentage.
 func adaptiveBatchPause(pendingCount int, diskFreePercent int) time.Duration {
 	base := backfillBatchPauseForArch()
 	if diskFreePercent < 10 {
-		return base * 2 // disk tight: slow down to protect writes
+		return base * 2 // disk tight: slow down hard to protect writes
+	}
+	if diskFreePercent < 20 {
+		return base * 3 / 2 // disk getting tight: gentle slowdown
 	}
 	if pendingCount > 2000 && diskFreePercent > 30 {
 		return base / 2 // backlog large + disk ample: speed up
@@ -363,11 +378,13 @@ func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
 
 // backfillConcurrency bounds how many cameras backfillHistorical merges in
 // parallel. Each camera has its own merge lock (r.mergeLocks) so per-camera
-// appends stay serialized; this constant bounds total disk IO across cameras.
-// On USB HDD, 3 is the sweet spot: enough to overlap one camera's DB query +
-// MP4 parse with another's file write, without causing destructive seek
-// thrashing that would starve the recording pipeline.
-const backfillConcurrency = 3
+// appends stay serialized; this bounds total disk IO across cameras.
+//
+// The effective value comes from merge.rolling_backfill_concurrency (config),
+// which defaults to 1 on ≤2GB-RAM hosts (RPi 3B) and 3 on larger hosts — see
+// config.go ApplyDefaults. Caller passes it in via getGlobalCfg(); we keep a
+// package-level fallback only for tests that don't run ApplyDefaults.
+const defaultBackfillConcurrency = 3
 
 // backfillHistorical processes one batch of pending segments across all
 // rolling-enabled cameras. Unlike backfillOnStartup, it has NO max_age filter
@@ -411,7 +428,12 @@ func (r *RollingMergeCoordinator) backfillHistorical(ctx context.Context) {
 	// Process cameras concurrently with a bounded semaphore. Per-camera merge
 	// locks (r.acquireMergeLock inside backfillMP4) guarantee no two goroutines
 	// merge the same camera at once; the semaphore bounds total disk IO.
-	concurrency := backfillConcurrency
+	concurrency := global.RollingBackfillConcurrency
+	if concurrency <= 0 {
+		// Tests may bypass ApplyDefaults; fall back to the conservative default
+		// rather than panic on divide-by-zero below.
+		concurrency = defaultBackfillConcurrency
+	}
 	if concurrency > len(rollingCameras) {
 		concurrency = len(rollingCameras)
 	}
