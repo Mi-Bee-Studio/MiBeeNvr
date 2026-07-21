@@ -26,35 +26,39 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
     expect(header).toContain('Recordings');
   });
 
-  test('should load in gallery view by default', async ({ page }) => {
-    // Navigate to recordings page — gallery is the default view
+  test('should load in timeline view by default', async ({ page }) => {
+    // Navigate to recordings page — timeline is the default view
     await page.goto('/#/recordings');
     await page.waitForLoadState('networkidle');
 
-    // Verify gallery container is visible
-    await expect(page.locator('#recording-gallery')).toBeVisible({ timeout: 10000 });
+    // The "Timeline" view tab should be the active (primary) button
+    const timelineButton = page.locator('button').filter({ hasText: 'Timeline' }).first();
+    await expect(timelineButton).toBeVisible({ timeout: 10000 });
+    await expect(timelineButton).toHaveClass(/btn-primary/);
 
     // Calendar with Today button should also be visible
     const todayButton = page.locator('button').filter({ hasText: 'Today' }).first();
     await expect(todayButton).toBeVisible();
   });
 
-  test('should display recordings in gallery mode', async ({ page }) => {
+  test('should display recordings in timeline mode', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
     await page.waitForLoadState('networkidle');
 
-    // Wait for gallery to load with recording cards or empty state
-    await page.waitForSelector('#recording-gallery', { timeout: 10000 });
+    // The Timeline view tab should be active by default
+    const timelineButton = page.locator('button').filter({ hasText: 'Timeline' }).first();
+    await expect(timelineButton).toBeVisible({ timeout: 10000 });
 
-    const cards = await page.locator('.recording-card').count();
-    if (cards > 0) {
-      console.log(`Found ${cards} recording cards`);
-    } else {
-      // Empty state — check for "No recordings" message
-      const noRecordings = await page.locator('text=No recordings found').count();
-      expect(noRecordings).toBeGreaterThan(0);
-    }
+    // The DayTimeline container or its empty state should be present
+    // (timeline renders inside a .card with day-timeline bands when data exists)
+    const timelineLoaded = await page
+      .locator('.card')
+      .filter({ has: page.locator('[class*="timeline"]') })
+      .first()
+      .isVisible({ timeout: 10000 })
+      .catch(() => false);
+    expect(timelineLoaded).toBeTruthy();
   });
 
   test('should switch to compact list view', async ({ page }) => {
@@ -82,13 +86,22 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
     await page.goto('/#/recordings');
     await page.waitForLoadState('networkidle');
 
-    // Wait for recording cards or try list view fallback
-    const cards = page.locator('.recording-card');
-    const cardCount = await cards.count();
+    // Switch to list view (gallery was removed) and wait for rows
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 10000 });
 
-    if (cardCount > 0) {
-      // Click the first recording card
-      await cards.first().click();
+    const listRows = page.locator('.list-row');
+    const rowCount = await listRows.count();
+
+    if (rowCount > 0) {
+      // Click the view action on the first row to open its detail page
+      const viewButton = listRows.first().locator('button[title="View"], a[title="View"]');
+      if (await viewButton.count() > 0) {
+        await viewButton.first().click();
+      } else {
+        // Fallback: click the row's camera name link / title area
+        await listRows.first().locator('a[href*="#/recordings/"]').first().click();
+      }
 
       // Wait for navigation to detail page
       await page.waitForURL(/.*\/recordings\/.*/);
@@ -157,21 +170,15 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
     await videoPill.click();
     await page.waitForTimeout(2000);
 
-    // Look for a recording card with "MP4" format badge
-    let mp4Card = page.locator('.recording-card').filter({ hasText: 'MP4' }).first();
-    let mp4Count = await mp4Card.count();
-
-    if (mp4Count === 0) {
-      // Try list view as fallback
-      await page.locator('button').filter({ hasText: 'List' }).click();
-      await page.waitForSelector('.compact-list', { timeout: 5000 });
-      mp4Card = page.locator('.list-row').filter({ hasText: 'MP4' }).first();
-      mp4Count = await mp4Card.count();
-    }
+    // Switch to list view (gallery was removed) and look for an MP4 row
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 5000 });
+    const mp4Row = page.locator('.list-row').filter({ hasText: 'MP4' }).first();
+    const mp4Count = await mp4Row.count();
 
     if (mp4Count > 0) {
-      // Click the card/row to view detail
-      await mp4Card.click();
+      // Click the row to view detail
+      await mp4Row.click();
 
       // Wait for navigation to detail page
       await page.waitForURL(/.*\/recordings\/.*/);
@@ -201,13 +208,15 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
     await mjpegPill.click();
     await page.waitForTimeout(2000);
 
-    // Look for recording cards
-    const cards = page.locator('.recording-card');
-    const cardCount = await cards.count();
+    // Switch to list view (gallery was removed) and look for recording rows
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 5000 });
+    const rows = page.locator('.list-row');
+    const rowCount = await rows.count();
 
-    if (cardCount > 0) {
-      // Click first card to view detail
-      await cards.first().click();
+    if (rowCount > 0) {
+      // Click first row to view detail
+      await rows.first().click();
       await page.waitForURL(/.*\/recordings\/.*/);
 
       // Check for frame player controls
@@ -291,38 +300,31 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
     await todayButton.click();
     await page.waitForTimeout(500);
 
-    // Gallery should still be visible after clicking Today
-    await expect(page.locator('#recording-gallery')).toBeVisible({ timeout: 5000 });
+    // Timeline view tab should still be visible and active after clicking Today
+    const timelineButton = page.locator('button').filter({ hasText: 'Timeline' }).first();
+    await expect(timelineButton).toBeVisible({ timeout: 5000 });
+    await expect(timelineButton).toHaveClass(/btn-primary/);
     console.log('✓ Calendar Today button works');
-
-    // Recording count should appear in the gallery header
-    const galleryHeader = page.locator('#recording-gallery .text-sm');
-    if (await galleryHeader.count() > 0) {
-      console.log(`  Gallery: ${await galleryHeader.textContent()}`);
-    }
   });
 
-  test('should test batch selection in gallery mode', async ({ page }) => {
+  test('should test batch selection in list mode', async ({ page }) => {
     // Navigate to recordings page
     await page.goto('/#/recordings');
     await page.waitForLoadState('networkidle');
 
-    // Wait for gallery to load with recording cards
-    await page.waitForSelector('.recording-card', { timeout: 10000 });
+    // Switch to list view (gallery was removed) and wait for rows
+    await page.locator('button').filter({ hasText: 'List' }).click();
+    await page.waitForSelector('.compact-list', { timeout: 10000 });
 
-    const cards = page.locator('.recording-card');
-    const cardCount = await cards.count();
+    const rows = page.locator('.list-row');
+    const rowCount = await rows.count();
 
-    if (cardCount >= 2) {
-      // Check checkboxes on the first two cards
-      const firstCheckbox = cards.nth(0).locator('input[type="checkbox"]').first();
-      const secondCheckbox = cards.nth(1).locator('input[type="checkbox"]').first();
+    if (rowCount >= 2) {
+      // Check checkboxes on the first two rows
+      const firstCheckbox = rows.nth(0).locator('input[type="checkbox"]').first();
+      const secondCheckbox = rows.nth(1).locator('input[type="checkbox"]').first();
 
-      // Hover to reveal checkbox, then click
-      await cards.nth(0).hover();
       await firstCheckbox.click({ force: true });
-
-      await cards.nth(1).hover();
       await secondCheckbox.click({ force: true });
 
       // Batch action bar should appear with selected count
@@ -340,7 +342,7 @@ test.describe('MiBee NVR - Recordings Functionality', () => {
         await page.waitForTimeout(500);
       }
 
-      console.log('✓ Batch selection in gallery mode works');
+      console.log('✓ Batch selection in list mode works');
     } else {
       test.skip('Need at least 2 recordings for batch selection test');
     }
