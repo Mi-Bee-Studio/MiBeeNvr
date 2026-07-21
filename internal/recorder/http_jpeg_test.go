@@ -175,7 +175,8 @@ func TestHTTPJPEGAVIRecording(t *testing.T) {
 }
 
 func TestHTTPJPEGSegmentDurCap(t *testing.T) {
-	// When AVI=true with SegmentDur > 30s, it should be capped to 30s.
+	// When AVI=true with SegmentDur above the platform cap, it should be capped.
+	// The cap is RAM-dependent: 30s on ≤2GB hosts, 5m on >2GB hosts.
 	srv, handler := newMJPEGStreamServer()
 	defer srv.Close()
 
@@ -183,13 +184,17 @@ func TestHTTPJPEGSegmentDurCap(t *testing.T) {
 	cfg := HTTPJPEGConfig{
 		CameraID:   "cam-http-jpeg-cap",
 		URL:        srv.URL,
-		SegmentDur: 120 * time.Second, // way over 30s cap
+		SegmentDur: 120 * time.Minute, // way over any platform cap
 		AVI:        true,
 		Width:      32,
 		Height:     24,
 	}
 	rec := NewHTTPJPEGRecorder(cfg, mgr)
-	require.Equal(t, 30*time.Second, rec.cfg.SegmentDur, "SegmentDur should be capped at 30s")
+	want := aviSegmentDurCap()
+	require.Equal(t, want, rec.cfg.SegmentDur,
+		"SegmentDur should be capped at aviSegmentDurCap() = %v (got %v)", want, rec.cfg.SegmentDur)
+	require.Less(t, rec.cfg.SegmentDur, cfg.SegmentDur,
+		"capped value should be less than configured")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -263,4 +268,24 @@ func TestHTTPJPEGFlagDisabled(t *testing.T) {
 		}
 		require.Greater(t, jpgCount, 0, "MJPEG directory should contain .jpg files")
 	}
+}
+
+// TestAviSegmentDurCap verifies the RAM-dependent cap returns one of the two
+// documented values and that it's a positive duration.
+func TestAviSegmentDurCap(t *testing.T) {
+	durCap := aviSegmentDurCap()
+	require.Greater(t, durCap, time.Duration(0), "cap must be positive")
+	// Must be one of the two documented values
+	if durCap != 30*time.Second && durCap != 5*time.Minute {
+		t.Fatalf("aviSegmentDurCap() returned %v, expected 30s (≤2GB) or 5m (>2GB)", durCap)
+	}
+	t.Logf("aviSegmentDurCap() = %v on this host (memAvailableMB=%d)", durCap, memAvailableMB())
+}
+
+// TestMemAvailableMB returns a sane value on Linux.
+func TestMemAvailableMB(t *testing.T) {
+	mb := memAvailableMB()
+	require.Greater(t, mb, 0, "memAvailableMB must be positive")
+	// Any real Linux host has at least 128MB available; the fallback is 1024.
+	require.Less(t, mb, 1024*1024, "memAvailableMB should be <1TB (sanity check)")
 }
