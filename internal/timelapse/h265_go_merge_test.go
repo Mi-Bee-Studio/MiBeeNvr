@@ -821,6 +821,82 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 	}
 }
 
+// TestBuildHvcC_ConservativeTierAndCompat guards against the regression where
+// buildHvcC over-parsed the SPS and faithfully copied inconsistent
+// profile_tier_level fields into the hvcC header. The trigger in production
+// was an H.265 ONVIF camera (cam-fa049182 工作室内) whose SPS carried
+// profile_idc=1 (Main) alongside tier=1 (High) and a stray compat bit
+// 0x40000000 — Windows Edge's HEVC Video Extension rejects such an hvcC as
+// non-compliant with PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS.
+//
+// The fix is to mirror internal/merge/mp4merge.go:buildMergeHvcC and force
+// Main-tier / zero compat / zero constraint defaults, reading only sps[1]
+// (profile byte) and sps[12] (level byte). This test feeds the exact
+// inconsistent SPS from the camera (captured via ffprobe on the production
+// file) and asserts the emitted hvcC header is the safe conservative one.
+func TestBuildHvcC_ConservativeTierAndCompat(t *testing.T) {
+	t.Parallel()
+
+	vps := buildTestH265VPS()
+	// Inconsistent SPS captured from cam-fa049182 (Main profile_idc=1 with
+	// High tier + stray compat bit). Decoded:
+	//   sps[0]=0x42 NAL header byte 1 (type=33 SPS)
+	//   sps[1]=0x01 layerID=0 + temporalID=1
+	//   sps[2]=0x21 profile_space(2)=0 + tier_flag(1)=1 (High!) + profile_idc(5)=1
+	//   sps[3..6]=0x40,0x00,0x00,0x03 compat_flags=0x40000003
+	//   sps[7..12]=0x00,0x90,0x00,0x00,0x03,0x00 constraint + level_idc=0
+	//   ...then padding to reach len > 12 so the level-read path is exercised.
+	inconsistentSPS := []byte{
+		0x42, 0x01, 0x21, 0x40, 0x00, 0x00, 0x03,
+		0x00, 0x90, 0x00, 0x00, 0x03, 0x00, // sps[12] = 0x00
+		// Pad with realistic SPS continuation bytes so the length clearly
+		// exceeds the 13-byte threshold where levelIDC = sps[12] kicks in.
+		0x96, 0xa0, 0x01, 0x40, 0x20, 0x05, 0xa1,
+	}
+	pps := buildTestH265PPS()
+
+	hvcC := buildHvcC(vps, inconsistentSPS, pps)
+
+	// hvcC[0] = configurationVersion = 1
+	if hvcC[0] != 1 {
+		t.Fatalf("configurationVersion = %d, want 1", hvcC[0])
+	}
+
+	// hvcC[1] = profile_space(2) + tier_flag(1) + profile_idc(5)
+	// tier MUST be 0 (Main) regardless of the SPS's tier=1 — the buggy code
+	// copied tier_flag=1 here, producing 0x21. After the fix it must be 0x01.
+	if got := hvcC[1]; got != 0x01 {
+		t.Errorf("hvcC[1] = %#02x (profile_space=%d tier=%d profile_idc=%d), "+
+			"want 0x01 (Main tier + Main profile) — Edge rejects tier=1 paired "+
+			"with profile_idc=1 as non-compliant", got, got>>6, (got>>5)&1, got&0x1F)
+	}
+
+	// hvcC[2..5] = general_profile_compatibility_flags (32 bits) — must be 0,
+	// not the SPS's 0x40000003. A stray compat bit paired with Main profile is
+	// another Edge rejection trigger.
+	for i := 2; i <= 5; i++ {
+		if hvcC[i] != 0x00 {
+			flagVal := uint32(hvcC[2])<<24 | uint32(hvcC[3])<<16 | uint32(hvcC[4])<<8 | uint32(hvcC[5])
+			t.Errorf("hvcC[2..5] = 0x%08x, want 0x00000000 — non-zero compat flags "+
+				"paired with Main profile trigger Edge HEVC rejection", flagVal)
+			break
+		}
+	}
+
+	// hvcC[6..11] = general_constraint_indicator_flags (48 bits) — must be 0.
+	for i := 6; i <= 11; i++ {
+		if hvcC[i] != 0x00 {
+			t.Errorf("hvcC[%d] = %#02x, want 0x00 (constraint indicator must be zero)", i, hvcC[i])
+		}
+	}
+
+	// hvcC[12] = general_level_idc — must equal sps[12] verbatim (0x00 here).
+	// mp4merge.go:buildMergeHvcC does the same raw read at sps[12].
+	if got, want := hvcC[12], inconsistentSPS[12]; got != want {
+		t.Errorf("hvcC[12] (level_idc) = %d, want %d (verbatim sps[12])", got, want)
+	}
+}
+
 func TestListH265FrameFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
