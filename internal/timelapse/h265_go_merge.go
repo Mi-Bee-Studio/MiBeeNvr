@@ -630,49 +630,53 @@ func writeH265Ftyp(w *mp4.Writer) (int64, error) {
 
 // buildHvcC builds the HEVCDecoderConfigurationRecord bytes from raw VPS, SPS,
 // and PPS NAL units (without start codes). Format per ISO 14496-15.
+//
+// This deliberately uses conservative defaults for the profile_tier_level
+// fields rather than fully parsing them from the SPS. Several H.265 ONVIF
+// cameras in production (cam-fa049182 工作室内, cam-5b24e253 视通) emit an SPS
+// whose profile_tier_level is internally inconsistent — e.g. profile_idc=1
+// (Main) paired with tier=1 (High) and a stray compat bit 0x40000000. Windows
+// Edge's HEVC Video Extension enforces strict HEVC conformance and refuses to
+// play an MP4 whose hvcC header fields don't make sense together (Edge's
+// PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS), while Linux Chromium /
+// Firefox reject all HEVC regardless. Mirroring internal/merge/mp4merge.go's
+// buildMergeHvcC, we read only sps[1] (profile byte, masked to 5 bits) and
+// sps[12] (level byte), and force everything else to safe Main-tier / 8-bit
+// 4:2:0 defaults. This keeps the regular-recording merge (mp4merge.go) and
+// timelapse merge (this file) byte-aligned in their hvcC headers, so both
+// paths are equally Edge-playable.
 func buildHvcC(vps, sps, pps []byte) []byte {
 	var buf bytes.Buffer
 
 	// configurationVersion
 	buf.WriteByte(1)
 
-	// Parse SPS for profile/level/chroma/bit-depth info.
-	// Defaults (Main Profile, 8-bit 4:2:0, Level 4.0).
-	profileSpace := 0
-	tierFlag := 0
-	profileIDC := byte(1)
-	compatFlags := uint32(0)
-	constraintFlags := [6]byte{} // 48 bits
-	levelIDC := byte(120)        // Level 4.0 (40 * 3)
-	chromaFormat := byte(1)      // 4:2:0
-	bitDepthLuma := byte(0)      // 8-bit
-	bitDepthChroma := byte(0)    // 8-bit
-
-	if len(sps) >= 15 {
-		parsed := parseH265ProfileLevel(sps)
-		if parsed != nil {
-			profileSpace = parsed.profileSpace
-			tierFlag = parsed.tierFlag
-			profileIDC = parsed.profileIDC
-			compatFlags = parsed.compatFlags
-			constraintFlags = parsed.constraintFlags
-			levelIDC = parsed.levelIDC
-			chromaFormat = parsed.chromaFormat
-			bitDepthLuma = parsed.bitDepthLuma
-			bitDepthChroma = parsed.bitDepthChroma
-		}
+	// Read only the raw profile and level bytes from the SPS — no further
+	// parsing. Falls back to Main profile / Level 4.0 on a too-short SPS.
+	// sps[1] low 5 bits = general_profile_idc (we discard the high 3 bits,
+	// which carry profile_space + tier_flag, to force Main-tier defaults).
+	profileIDC := byte(1) // Main profile
+	levelIDC := byte(120) // Level 4.0 (40 * 3)
+	if len(sps) > 1 {
+		profileIDC = sps[1] & 0x1F
+	}
+	if len(sps) > 12 {
+		levelIDC = sps[12]
 	}
 
-	// general_profile_space (2) + general_tier_flag (1) + general_profile_idc (5)
-	buf.WriteByte(byte(profileSpace<<6) | byte(tierFlag<<5) | profileIDC)
+	// general_profile_space(2)=0 + general_tier_flag(1)=0 (Main tier)
+	//   + general_profile_idc(5)
+	// tier is forced to 0 (Main) regardless of the SPS to avoid the
+	// Edge-rejected Main-profile + High-tier mismatch.
+	buf.WriteByte(profileIDC)
 
-	// general_profile_compatibility_flags (32 bits)
-	compatBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(compatBytes, compatFlags)
-	buf.Write(compatBytes)
+	// general_profile_compatibility_flags (32 bits) = 0
+	// (A non-zero value here, e.g. 0x40000000, combined with Main profile is
+	// another trigger for Edge's HEVC conformance rejection.)
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x00})
 
-	// general_constraint_indicator_flags (48 bits)
-	buf.Write(constraintFlags[:])
+	// general_constraint_indicator_flags (48 bits) = 0
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 
 	// general_level_idc
 	buf.WriteByte(levelIDC)
@@ -684,14 +688,14 @@ func buildHvcC(vps, sps, pps []byte) []byte {
 	// parallelismType (6 reserved + 2 value) = 0
 	buf.WriteByte(0xFC)
 
-	// chromaFormat (6 reserved + 2 value)
-	buf.WriteByte(0xFC | (chromaFormat & 0x03))
+	// chromaFormat (6 reserved bits = 111111 + 2-bit value 01 = 4:2:0)
+	buf.WriteByte(0xFD)
 
-	// bitDepthLumaMinus8 (5 reserved + 3 value)
-	buf.WriteByte(0xF8 | (bitDepthLuma & 0x07))
+	// bitDepthLumaMinus8 (5 reserved bits = 11111 + 3-bit value 000 = 8-bit)
+	buf.WriteByte(0xF8)
 
-	// bitDepthChromaMinus8 (5 reserved + 3 value)
-	buf.WriteByte(0xF8 | (bitDepthChroma & 0x07))
+	// bitDepthChromaMinus8 (5 reserved bits = 11111 + 3-bit value 000 = 8-bit)
+	buf.WriteByte(0xF8)
 
 	// avgFrameRate (16 bits)
 	buf.Write([]byte{0x00, 0x00})
@@ -818,151 +822,6 @@ func writeH265Mdat(w *mp4.Writer, framePaths []string, ctx context.Context) erro
 }
 
 // --- SPS parsing for H.265 ---
-
-// h265SPSProfile holds parsed profile/level/chroma/bit-depth info from an H.265 SPS.
-type h265SPSProfile struct {
-	profileSpace    int
-	tierFlag        int
-	profileIDC      byte
-	compatFlags     uint32
-	constraintFlags [6]byte
-	levelIDC        byte
-	chromaFormat    byte
-	bitDepthLuma    byte
-	bitDepthChroma  byte
-}
-
-// parseH265ProfileLevel extracts profile/level/chroma/bit-depth from an H.265 SPS.
-// The SPS data must include the 2-byte NAL header. Returns nil on parse failure.
-func parseH265ProfileLevel(sps []byte) *h265SPSProfile {
-	data := removeEmulationPrevention(sps)
-	if len(data) < 15 {
-		return nil
-	}
-
-	r := &bitReader{data: data}
-	// Skip NAL header (2 bytes).
-	for range 16 {
-		r.readBit()
-	}
-
-	// sps_video_parameter_set_id (4 bits)
-	r.readBits(4)
-	// sps_max_sub_layers_minus1 (3 bits)
-	maxSubLayers := int(r.readBits(3))
-	// sps_temporal_id_nesting_flag (1 bit)
-	r.readBit()
-
-	if r.overran {
-		return nil
-	}
-
-	// profile_tier_level( maxSubLayers )
-	profileSpace := int(r.readBits(2))
-	tierFlag := int(r.readBit())
-	profileIDC := byte(r.readBits(5))
-
-	// general_profile_compatibility_flags (32 bits)
-	compatFlags := uint32(0)
-	for range 32 {
-		compatFlags = (compatFlags << 1) | uint32(r.readBit())
-	}
-
-	// general_constraint_indicator_flags (48 bits)
-	var constraintFlags [6]byte
-	for i := range 6 {
-		for range 8 {
-			constraintFlags[i] = (constraintFlags[i] << 1) | r.readBit()
-		}
-	}
-
-	// general_level_idc (8 bits)
-	levelIDC := byte(r.readBits(8))
-
-	if r.overran {
-		return nil
-	}
-
-	// Skip sub-layer profile/level if maxSubLayers > 0.
-	if maxSubLayers > 0 {
-		subLayerFlags := make([]struct {
-			profilePresent bool
-			levelPresent   bool
-		}, maxSubLayers)
-		for i := range maxSubLayers - 1 {
-			subLayerFlags[i].profilePresent = r.readBit() == 1
-			subLayerFlags[i].levelPresent = r.readBit() == 1
-		}
-		for i := range maxSubLayers - 1 {
-			if subLayerFlags[i].profilePresent {
-				// Recursive profile_tier_level(0) - skip 96 bits.
-				for range 96 {
-					r.readBit()
-				}
-			}
-			if subLayerFlags[i].levelPresent {
-				r.readBits(8)
-			}
-		}
-	}
-
-	if r.overran {
-		return nil
-	}
-
-	// sps_seq_parameter_set_id (ue(v))
-	r.readUE()
-
-	// chroma_format_idc (ue(v))
-	chromaFormat := byte(r.readUE())
-
-	if chromaFormat == 3 {
-		r.readBit() // separate_colour_plane_flag
-	}
-
-	// Make a deeper pass to find bit depth. These come after dimensions in the SPS,
-	// but we need a simpler approach. We'll parse them by continuing from here.
-
-	// pic_width_in_luma_samples (ue(v))
-	r.readUE()
-	// pic_height_in_luma_samples (ue(v))
-	r.readUE()
-
-	// conformance_window_flag
-	if r.readBit() != 0 {
-		r.readUE() // conf_win_left_offset
-		r.readUE() // conf_win_right_offset
-		r.readUE() // conf_win_top_offset
-		r.readUE() // conf_win_bottom_offset
-	}
-
-	if r.overran {
-		return nil
-	}
-
-	// bit_depth_luma_minus8 (ue(v))
-	bitDepthLuma := byte(r.readUE())
-	// bit_depth_chroma_minus8 (ue(v))
-	bitDepthChroma := byte(r.readUE())
-
-	if r.overran {
-		// Bit depth parsing failed; use defaults but return the rest we have.
-		bitDepthLuma = 0
-		bitDepthChroma = 0
-	}
-
-	return &h265SPSProfile{
-		profileSpace:    profileSpace,
-		tierFlag:        tierFlag,
-		profileIDC:      profileIDC,
-		compatFlags:     compatFlags,
-		constraintFlags: constraintFlags,
-		levelIDC:        levelIDC,
-		chromaFormat:    chromaFormat,
-		bitDepthLuma:    bitDepthLuma,
-		bitDepthChroma:  bitDepthChroma,
-	}
-}
 
 // parseH265Dimensions extracts width and height from a raw H.265 SPS NAL unit.
 // Returns 0, 0 if parsing fails.
