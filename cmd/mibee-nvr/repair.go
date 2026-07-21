@@ -63,7 +63,7 @@ type repairOpts struct {
 	dryRun     bool
 	prune      bool // delete DB row + file for recordings that can't be repaired
 	// delete-by-format specific
-	keepFormat string // format value to PRESERVE (e.g. "timelapse"); all other formats are deleted
+	keepFormat string        // format value to PRESERVE (e.g. "timelapse"); all other formats are deleted
 	olderThan  time.Duration // 0 = no age filter (delete all matching regardless of age)
 }
 
