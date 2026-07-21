@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -740,6 +741,11 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 // Serves the merged MP4 file for a timelapse recording if it has been merged.
 // Returns 404 if the merged MP4 is not available — the frontend falls back to
 // the JPEG frame viewer on this 404 (via MEDIA_ERR_NETWORK in handleVideoError).
+//
+// Sets the X-Timelapse-Codec response header (h264/h265/mjpeg) so the frontend
+// can decide whether to use <video> (H.264/H.265 are browser-playable) or fall
+// back to the JPEG frame cycler (MJPEG-in-MP4 / mjpa is not). Probed via the
+// pure-Go mediaprobe package — no ffprobe.
 func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -762,7 +768,29 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusNotFound, "merged recording file not available")
 		return
 	}
+	// Surface the codec so the frontend player can pick the right path.
+	// HEAD requests also get the header (caller sets it before ServeFile).
+	if codec := probeTimelapseCodec(rec.MergePath); codec != "" {
+		w.Header().Set("X-Timelapse-Codec", codec)
+	}
 	http.ServeFile(w, r, rec.MergePath)
+}
+
+// probeTimelapseCodec returns "h264" / "h265" / "mjpeg" for the MP4 at the
+// given path, or "" if the codec could not be determined. Used to populate the
+// X-Timelapse-Codec response header that the frontend player consults.
+func probeTimelapseCodec(path string) string {
+	info, err := mediaprobe.ProbeMP4(path)
+	if err != nil {
+		return ""
+	}
+	switch info.Codec {
+	case model.TimelapseMergeCodecH264, model.TimelapseMergeCodecH265:
+		return info.Codec
+	default:
+		// mediaprobe returns raw codec string for mjpa; normalize to "mjpeg".
+		return model.TimelapseMergeCodecMJPEG
+	}
 }
 
 // extractFrameTimestamp extracts the capture timestamp from a frame file.

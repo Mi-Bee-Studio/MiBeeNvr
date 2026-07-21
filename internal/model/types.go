@@ -58,6 +58,31 @@ type Recording struct {
 	Archived      bool      `json:"archived"`
 }
 
+// TimelapseMerge represents one periodic-merge output for a camera — the
+// multi-hour / multi-day timelapse video synthesized from many short timelapse
+// segments (or from video recordings when recording_enabled=true).
+//
+// One row per (camera, window-start, duration-label). The actual MP4 lives at
+// OutputPath; SourceSegmentIDs is a JSON array of the recordings.id values
+// that were folded into this merge.
+type TimelapseMerge struct {
+	ID               int64     `json:"id"`
+	CameraID         string    `json:"camera_id"`
+	WindowStart      time.Time `json:"window_start"`
+	WindowEnd        time.Time `json:"window_end"`
+	DurationLabel    string    `json:"duration_label"` // "1h","8h","24h","natural-day","7d","30d"
+	OutputPath       string    `json:"output_path"`    // periodic-merge/<cam>/periodic_<windowLabel>.mp4
+	FileSize         int64     `json:"file_size"`
+	FrameCount       int       `json:"frame_count"`
+	Codec            string    `json:"codec"` // h264 / h265 / mjpeg
+	FPS              int       `json:"fps"`
+	Status           string    `json:"status"` // pending/merging/completed/failed
+	Error            string    `json:"error,omitempty"`
+	SourceSegmentIDs string    `json:"source_segment_ids"` // JSON array of recordings.id
+	CreatedAt        time.Time `json:"created_at"`
+	CompletedAt      time.Time `json:"completed_at,omitempty"`
+}
+
 type Segment struct {
 	ID         string
 	CameraID   string
@@ -230,6 +255,27 @@ const (
 	MergeStatusFailed       = "failed"
 	MergeStatusIncompatible = "incompatible"
 	MergeStatusDark         = "dark" // segment is too dark to be useful (night, no IR)
+	// MergeStatusDailyMerged marks a timelapse segment that has already been
+	// folded into a periodic-merge output (a "daily" / 8h / 24h / 7d / 30d
+	// window). Such segments are excluded from re-merge in subsequent windows.
+	MergeStatusDailyMerged = "daily_merged"
+)
+
+// TimelapseMergeStatus constants for the timelapse_merges table.
+const (
+	TimelapseMergeStatusPending   = "pending"
+	TimelapseMergeStatusMerging   = "merging"
+	TimelapseMergeStatusCompleted = "completed"
+	TimelapseMergeStatusFailed    = "failed"
+)
+
+// TimelapseMergeCodec constants identify the codec of a periodic-merge output
+// MP4, used by the frontend to decide between <video> playback (h264/h265) and
+// the JPEG frame cycler fallback (mjpeg / mjpa).
+const (
+	TimelapseMergeCodecH264  = "h264"
+	TimelapseMergeCodecH265  = "h265"
+	TimelapseMergeCodecMJPEG = "mjpeg"
 )
 
 // Merge quality constants — describe the continuity of a merged recording.

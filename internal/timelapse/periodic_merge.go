@@ -30,6 +30,26 @@ type retryInfo struct {
 	timestamp time.Time
 }
 
+// TimelapseMergeStore is the interface for persisting periodic-merge output
+// metadata to the timelapse_merges table. Implementations must be safe for
+// concurrent use (one Run per camera, but API-triggered merges may race with
+// scheduled ones).
+type TimelapseMergeStore interface {
+	InsertTimelapseMerge(ctx context.Context, m *model.TimelapseMerge) (int64, error)
+	UpdateTimelapseMergeStatus(ctx context.Context, id int64, status, errMsg string) error
+	CompleteTimelapseMerge(ctx context.Context, id int64, outputPath string, fileSize int64, frameCount int, codec, sourceSegmentIDs string) error
+	FindTimelapseMergeByWindow(ctx context.Context, cameraID string, windowStart time.Time, durationLabel string) (*model.TimelapseMerge, error)
+}
+
+// IntermediateMP4Pruner is implemented by storage.DB to let the periodic
+// merger clear the recordings.merge_path pointer for source segments whose
+// intermediate .mp4 output has been pruned. Kept as a separate interface so
+// the shared MergeStatusUpdater (used by the rolling merger too) does not
+// need to grow a periodic-merge-specific method.
+type IntermediateMP4Pruner interface {
+	ClearMergePathBatch(ctx context.Context, ids []string) error
+}
+
 // PeriodicMergeManager handles merge operations for timelapse recordings
 // with configurable merge intervals (8h, 12h, 24h, 7d, 30d).
 type PeriodicMergeManager struct {
@@ -48,6 +68,47 @@ type PeriodicMergeManager struct {
 	// When set and returns true, Run extracts frames from video recordings in the
 	// merge window and includes them alongside existing timelapse recordings.
 	recordingEnabledProvider func(cameraID string) bool
+
+	// mergeStore, when set, persists one row per periodic-merge output to the
+	// timelapse_merges table so the frontend can discover / play / delete the
+	// long-window videos. nil = legacy behavior (file on disk, no DB record).
+	mergeStore TimelapseMergeStore
+
+	// retainIntermediateMP4, when false (the default), makes finalizeMerge
+	// delete each source segment's rolling-merge .mp4 output (the file at
+	// recordings.merge_path) after the periodic merge has folded those
+	// segments into a long-window output. This reclaims disk without losing
+	// data — the raw frame directories (frame_*.h264/.h265/.jpg) are kept so
+	// the periodic output can be regenerated if needed.
+	retainIntermediateMP4 bool
+
+	// pruner, when set AND retainIntermediateMP4 is false, clears the
+	// recordings.merge_path DB pointer for source segments whose intermediate
+	// .mp4 has been pruned. nil = skip DB cleanup (legacy behavior).
+	pruner IntermediateMP4Pruner
+
+	// durationLabel is the original config string (e.g. "24h", "natural-day",
+	// "8h") preserved so DB rows record what the user configured, not the
+	// parsed duration. Empty when the manager was constructed without a label
+	// (legacy callers / tests) — in that case the row uses duration.String().
+	durationLabel string
+
+	// runCtx holds per-Run metadata (camera/window/label) that finalizeMerge
+	// needs to write the timelapse_merges DB row. Set at the top of Run under
+	// runCtxMu. Empty runCtx.cameraID signals "no DB recording" (legacy mode
+	// when mergeStore is nil).
+	runCtxMu sync.Mutex
+	runCtx   periodicRunContext
+}
+
+// periodicRunContext is the per-Run metadata stashed on the manager so that
+// deep callees (finalizeMerge) can write a timelapse_merges DB row without
+// threading extra arguments through every function signature.
+type periodicRunContext struct {
+	cameraID      string
+	startTime     time.Time
+	endTime       time.Time
+	durationLabel string
 }
 
 // Option configures PeriodicMergeManager behavior.
@@ -61,6 +122,48 @@ type Option func(*PeriodicMergeManager)
 func WithRecordingEnabledProvider(p func(cameraID string) bool) Option {
 	return func(m *PeriodicMergeManager) {
 		m.recordingEnabledProvider = p
+	}
+}
+
+// WithMergeStore enables persistence of periodic-merge outputs to the
+// timelapse_merges table. When set, Run inserts a 'merging' row at start,
+// completes it on success (with output path, file size, frame count, codec,
+// source segment ids), or marks it failed on error. nil opts out (legacy
+// behavior: file on disk, no DB record).
+func WithMergeStore(s TimelapseMergeStore) Option {
+	return func(m *PeriodicMergeManager) {
+		m.mergeStore = s
+	}
+}
+
+// WithDurationLabel records the original config string (e.g. "natural-day",
+// "8h", "7d") so DB rows reflect what the user configured rather than the
+// parsed Go duration. Optional — when unset, Run falls back to duration.String().
+func WithDurationLabel(label string) Option {
+	return func(m *PeriodicMergeManager) {
+		m.durationLabel = label
+	}
+}
+
+// WithRetainIntermediateMP4 controls whether per-segment rolling-merge .mp4
+// outputs are kept after a periodic merge folds them into a long-window
+// output. Pass true to retain (debugging / re-merge safety); pass false (the
+// default) to clean them up and reclaim disk. The raw frame directories are
+// always preserved regardless.
+func WithRetainIntermediateMP4(retain bool) Option {
+	return func(m *PeriodicMergeManager) {
+		m.retainIntermediateMP4 = retain
+	}
+}
+
+// WithIntermediateMP4Pruner wires the storage layer used to clear
+// recordings.merge_path after intermediate .mp4 files are pruned. Optional —
+// when nil, finalizeMerge prunes the files but cannot update the DB pointer
+// (the row would still point at a now-deleted path). Production wiring passes
+// the *storage.DB here.
+func WithIntermediateMP4Pruner(p IntermediateMP4Pruner) Option {
+	return func(m *PeriodicMergeManager) {
+		m.pruner = p
 	}
 }
 
@@ -103,6 +206,27 @@ func (m *PeriodicMergeManager) Duration() time.Duration {
 func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.Time) error {
 	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")
+
+	// Stash per-Run context so deep callees (finalizeMerge) can write a
+	// timelapse_merges DB row. cameraID == "" signals legacy no-DB mode.
+	durationLabel := m.durationLabel
+	if durationLabel == "" {
+		durationLabel = m.duration.String()
+	}
+	m.runCtxMu.Lock()
+	m.runCtx = periodicRunContext{
+		cameraID:      cameraID,
+		startTime:     startTime,
+		endTime:       endTime,
+		durationLabel: durationLabel,
+	}
+	m.runCtxMu.Unlock()
+	defer func() {
+		// Clear context on exit so a stale Run doesn't leak into the next one.
+		m.runCtxMu.Lock()
+		m.runCtx = periodicRunContext{}
+		m.runCtxMu.Unlock()
+	}()
 
 	// Query ALL timelapse segments in the date range — both merged (rolling
 	// merge produced .mp4) and unmerged (raw frame directories, when
@@ -285,14 +409,32 @@ func parseMergeRange(t time.Time, dur time.Duration, loc *time.Location) (time.T
 		return start, end
 	}
 
-	// Duration-based alignment: align time-of-day to nearest multiple of dur from midnight local.
-	// For 24h: midnight local
-	// For 12h: midnight or noon local
-	// For 8h:  00:00, 08:00, 16:00 local
+	// Duration-based alignment: align time-of-day to the largest multiple of
+	// dur that is ≤ the time-of-day, starting from midnight local.
+	//   - 24h: midnight local
+	//   - 12h: midnight or noon local
+	//   - 8h:  00:00, 08:00, 16:00 local
+	//   - sub-hour (e.g. 45m, 30m): aligned by wall-clock seconds, supports
+	//     fractional-hour durations that don't divide 24 evenly.
 	durHours := int(dur.Hours())
-	hour := t.Hour()
-	alignedHour := (hour / durHours) * durHours
-	start := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
+	if durHours > 0 && 24%durHours == 0 {
+		// Whole-hour duration that divides 24: integer-hour alignment.
+		hour := t.Hour()
+		alignedHour := (hour / durHours) * durHours
+		start := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
+		end := start.Add(dur)
+		return start, end
+	}
+	// General case: align by wall-clock nanoseconds since midnight. Works for
+	// any positive duration (sub-hour, non-divisor-of-24, etc.). The window
+	// may straddle midnight if dur does not divide 24h evenly.
+	secOfDay := t.Hour()*3600 + t.Minute()*60 + t.Second()
+	durSec := int(dur / time.Second)
+	if durSec <= 0 {
+		durSec = 1
+	}
+	alignedSec := (secOfDay / durSec) * durSec
+	start := time.Date(year, month, day, 0, 0, 0, 0, loc).Add(time.Duration(alignedSec) * time.Second)
 	end := start.Add(dur)
 	return start, end
 }
@@ -612,6 +754,9 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 }
 
 // finalizeMerge updates segment statuses to daily_merged after a successful merge.
+// When a TimelapseMergeStore is configured, it also upserts a row in the
+// timelapse_merges table for this output so the frontend can discover and
+// play the long-window timelapse video.
 func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []model.Recording, outputPath string) error {
 	ids := make([]string, len(segments))
 	for i, seg := range segments {
@@ -629,7 +774,7 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 	m.updateProgressBatch(ctx, segments, 100)
 
 	if m.updater != nil {
-		if err := m.updater.SetMergeStatus(ctx, ids, "daily_merged"); err != nil {
+		if err := m.updater.SetMergeStatus(ctx, ids, model.MergeStatusDailyMerged); err != nil {
 			slog.Warn(
 				"periodic merge: failed to update merge statuses",
 				"count", len(ids),
@@ -638,12 +783,162 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 		}
 	}
 
+	// Record this periodic-merge output in the timelapse_merges table (if a
+	// store is configured). Failures here are non-fatal — the merge itself
+	// succeeded; only the DB bookkeeping failed.
+	m.recordMergeRow(ctx, segments, outputPath)
+
+	// Prune intermediate rolling-merge .mp4 outputs (the files at
+	// recordings.merge_path) now that the segments have been folded into the
+	// long-window periodic output. The raw frame directories are preserved.
+	if !m.retainIntermediateMP4 {
+		m.pruneIntermediateMP4s(ctx, segments)
+	}
+
 	slog.Info(
 		"periodic merge: completed successfully",
 		"segments", len(segments),
 		"output_path", outputPath,
 	)
 	return nil
+}
+
+// recordMergeRow upserts (insert-or-complete) a timelapse_merges row for the
+// given output. Each finalizeMerge invocation corresponds to exactly one
+// output file (the per-codec path calls finalizeMerge once per codec group),
+// so one row is written per call. Failures are logged but do NOT fail the
+// merge — the MP4 on disk is the source of truth.
+//
+// Codec and frame count are read from the output via mediaprobe (pure-Go MP4
+// box parsing, no ffprobe). File size comes from os.Stat.
+func (m *PeriodicMergeManager) recordMergeRow(ctx context.Context, segments []model.Recording, outputPath string) {
+	if m.mergeStore == nil {
+		return // legacy mode: no DB recording
+	}
+	m.runCtxMu.Lock()
+	rc := m.runCtx
+	m.runCtxMu.Unlock()
+	if rc.cameraID == "" {
+		return // no Run context (shouldn't happen, but defend against misuse)
+	}
+
+	// Best-effort metadata probes. Failures degrade the row but don't skip it.
+	var fileSize int64
+	if st, err := os.Stat(outputPath); err == nil {
+		fileSize = st.Size()
+	}
+	frameCount := 0
+	codec := ""
+	if info, err := mediaprobe.ProbeMP4(outputPath); err == nil {
+		frameCount = info.FrameCount
+		// mediaprobe reports Codec as "h264" or "h265" (internal names), matching
+		// model.TimelapseMergeCodec* values directly. For mjpa outputs the probe
+		// returns the raw codec string — normalize empty/unknown to "mjpeg".
+		switch info.Codec {
+		case model.TimelapseMergeCodecH264, model.TimelapseMergeCodecH265:
+			codec = info.Codec
+		default:
+			codec = model.TimelapseMergeCodecMJPEG
+		}
+	}
+
+	sourceIDs := sourceSegmentIDsJSON(segments)
+
+	// Find-or-create: if a row already exists for this (camera, window,
+	// duration_label), complete it in place (re-merge of the same window);
+	// otherwise insert then complete. This handles both first-run and
+	// re-trigger (manual merge API) cleanly.
+	existing, err := m.mergeStore.FindTimelapseMergeByWindow(ctx, rc.cameraID, rc.startTime, rc.durationLabel)
+	if err != nil {
+		slog.Warn("periodic merge: find existing merge row failed",
+			"camera_id", rc.cameraID, "error", err)
+		return
+	}
+	if existing != nil {
+		if err := m.mergeStore.CompleteTimelapseMerge(ctx, existing.ID, outputPath, fileSize, frameCount, codec, sourceIDs); err != nil {
+			slog.Warn("periodic merge: complete existing merge row failed",
+				"merge_id", existing.ID, "error", err)
+		}
+		return
+	}
+	row := &model.TimelapseMerge{
+		CameraID:         rc.cameraID,
+		WindowStart:      rc.startTime,
+		WindowEnd:        rc.endTime,
+		DurationLabel:    rc.durationLabel,
+		OutputPath:       outputPath,
+		FileSize:         fileSize,
+		FrameCount:       frameCount,
+		Codec:            codec,
+		FPS:              m.fps,
+		SourceSegmentIDs: sourceIDs,
+		Status:           model.TimelapseMergeStatusCompleted,
+		CompletedAt:      time.Now().UTC(),
+	}
+	if _, err := m.mergeStore.InsertTimelapseMerge(ctx, row); err != nil {
+		slog.Warn("periodic merge: insert merge row failed",
+			"camera_id", rc.cameraID, "output_path", outputPath, "error", err)
+	}
+}
+
+// pruneIntermediateMP4s removes the per-segment rolling-merge .mp4 files (at
+// recordings.merge_path) for the given source segments and clears the DB
+// pointer. The raw frame directories (recordings.file_path) are preserved so
+// the periodic output can be regenerated.
+//
+// Failures are best-effort and logged — a missing file or DB error does NOT
+// fail the overall merge, which has already produced its output.
+func (m *PeriodicMergeManager) pruneIntermediateMP4s(ctx context.Context, segments []model.Recording) {
+	var clearedIDs []string
+	prunedCount := 0
+	for _, seg := range segments {
+		if seg.MergePath == "" {
+			continue
+		}
+		if err := os.Remove(seg.MergePath); err != nil {
+			if !os.IsNotExist(err) {
+				slog.Warn("periodic merge: prune intermediate mp4 failed",
+					"recording_id", seg.ID, "merge_path", seg.MergePath, "error", err)
+			}
+			// Even on error, clear the DB pointer — the file is either gone or
+			// unwritable; either way we don't want playback pointing at it.
+		} else {
+			prunedCount++
+		}
+		clearedIDs = append(clearedIDs, seg.ID)
+	}
+	if len(clearedIDs) == 0 {
+		return
+	}
+	if m.pruner != nil {
+		if err := m.pruner.ClearMergePathBatch(ctx, clearedIDs); err != nil {
+			slog.Warn("periodic merge: clear merge_path DB pointer failed",
+				"count", len(clearedIDs), "error", err)
+		}
+	}
+	if prunedCount > 0 {
+		slog.Info("periodic merge: pruned intermediate mp4 outputs",
+			"pruned", prunedCount, "cleared_db_pointers", len(clearedIDs))
+	}
+}
+
+// sourceSegmentIDsJSON renders the list of source recording IDs as a JSON
+// array string for the timelapse_merges.source_segment_ids column.
+func sourceSegmentIDsJSON(segments []model.Recording) string {
+	if len(segments) == 0 {
+		return "[]"
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, s := range segments {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		// strconv.Quote handles escaping.
+		b.WriteString(strconv.Quote(s.ID))
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 // markMergeFailed updates retry counts and marks segments as failed.

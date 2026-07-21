@@ -265,17 +265,30 @@ func computeNextRun(now time.Time, dur time.Duration, loc *time.Location) time.T
 	}
 
 	// Duration-based alignment: find next time-of-day boundary.
-	// For 24h: next midnight local
-	// For 12h: next midnight or noon local
-	// For 8h:  next 00:00/08:00/16:00 local
+	//   - 24h: next midnight local
+	//   - 12h: next midnight or noon local
+	//   - 8h:  next 00:00/08:00/16:00 local
+	//   - sub-hour / non-divisor-of-24: next wall-clock-second boundary
 	durHours := int(dur.Hours())
-	hour := now.Hour()
-	alignedHour := ((hour / durHours) + 1) * durHours
-	if alignedHour >= 24 {
-		// Roll over to next day
-		next := time.Date(year, month, day+1, 0, 0, 0, 0, loc)
+	if durHours > 0 && 24%durHours == 0 {
+		// Whole-hour duration that divides 24: integer-hour alignment.
+		hour := now.Hour()
+		alignedHour := ((hour / durHours) + 1) * durHours
+		if alignedHour >= 24 {
+			// Roll over to next day
+			next := time.Date(year, month, day+1, 0, 0, 0, 0, loc)
+			return next
+		}
+		next := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
 		return next
 	}
-	next := time.Date(year, month, day, alignedHour, 0, 0, 0, loc)
-	return next
+	// General case: next wall-clock-second boundary ≥ now.
+	secOfDay := now.Hour()*3600 + now.Minute()*60 + now.Second()
+	durSec := int(dur / time.Second)
+	if durSec <= 0 {
+		durSec = 1
+	}
+	boundarySec := ((secOfDay / durSec) + 1) * durSec
+	midnight := time.Date(year, month, day, 0, 0, 0, 0, loc)
+	return midnight.Add(time.Duration(boundarySec) * time.Second)
 }

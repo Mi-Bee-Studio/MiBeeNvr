@@ -153,6 +153,8 @@ export {
   getRecordingDownloadUrl,
   getRecordingVideoUrl,
   getMergedRecordingUrl,
+  probeMergedRecordingCodec,
+  clearMergedCodecCache,
   downloadRecording,
   listFrames,
   loadFrameBlob,
@@ -189,6 +191,21 @@ export type {
   TimelapseFrame,
   TimelapsePreviewFrame,
 } from './recordings';
+
+// Timelapse merges — periodic-merge outputs (8h / 12h / 24h / natural-day / 7d / 30d)
+export {
+  listTimelapseMerges,
+  getTimelapseMerge,
+  getTimelapseMergeDownloadUrl,
+  probeTimelapseMergeCodec,
+  deleteTimelapseMerge,
+} from './timelapse-merges';
+
+export type {
+  TimelapseMerge,
+  TimelapseMergeListResponse,
+  ListTimelapseMergesParams,
+} from './timelapse-merges';
 
 // Settings — cleanup, webdav, merge, features
 export {

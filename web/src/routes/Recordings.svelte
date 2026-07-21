@@ -7,8 +7,12 @@
     batchDeleteRecordings,
     downloadRecording,
     batchMergeTimelapse,
+    triggerTimelapseMerge,
+    subscribeTimelapseMergeProgress,
+    listTimelapseMerges,
     getRecordingDailySummary,
   } from '$lib/api';
+  import type { TimelapseMerge } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
@@ -148,6 +152,30 @@ function detectMergeChanges(recordingsList: Recording[]) {
 // ── Batch merge state ──
 let batchMergeDuration = $state('1h');
 let batchMerging = $state(false);
+
+// ── Timelapse preset-range state ──
+// Preset buttons (Today / Last 8h / Last 24h / This week / This month) appear
+// above the Timelapse view. Clicking one either plays an existing periodic
+// merge output covering that range, or offers to generate one on demand.
+let presetGenerating = $state(false);
+let presetMergeProgress = $state(0); // 0-100, polled during generation
+let presetMergeId = $state<number | null>(null); // merge id being polled
+let presetProgressAbort: AbortController | null = null;
+
+// Each preset maps to a (duration_label, window_start_fn, window_end_fn) tuple.
+// window_start/end are computed relative to NOW at click time, in the user's
+// local timezone — the backend aligns them to the named window via ParseMergeDuration.
+const timelapsePresets: Array<{ key: string; labelKey: string; duration: string }> = [
+  { key: 'today', labelKey: 'timelapseMerge.presetToday', duration: 'natural-day' },
+  { key: '8h', labelKey: 'timelapseMerge.preset8h', duration: '8h' },
+  { key: '24h', labelKey: 'timelapseMerge.preset24h', duration: '24h' },
+  { key: '7d', labelKey: 'timelapseMerge.preset7d', duration: '7d' },
+  { key: '30d', labelKey: 'timelapseMerge.preset30d', duration: '30d' },
+];
+
+// selectedPresetCamera is the camera the preset buttons act on. Defaults to
+// the URL ?camera= param or the first camera in the list.
+let selectedPresetCamera = $state<string>('');
 
 
   // ── Derived ──
@@ -551,6 +579,135 @@ let batchMerging = $state(false);
     }
   }
 
+  // ── Timelapse preset-range handler ──
+  // Given a preset (duration_label), find an existing periodic-merge output
+  // covering the current time window for the selected camera. If found, play
+  // it; otherwise offer to generate one on demand.
+  async function handlePresetClick(preset: { key: string; duration: string }) {
+    const cameraId = selectedPresetCamera || cameras[0]?.id;
+    if (!cameraId) {
+      showToast(t('timelapseMerge.noMergeForRange'), 'error');
+      return;
+    }
+    const now = new Date();
+    try {
+      // Look for a completed merge for this camera whose window_start is on
+      // or after the start of the named window (so e.g. "7d" matches a merge
+      // started within the last 7 days). The backend lists DESC by window_start.
+      const start = computePresetWindowStart(preset.duration, now);
+      const resp = await listTimelapseMerges({
+        camera_id: cameraId,
+        duration: preset.duration,
+        start: start.toISOString(),
+        status: 'completed',
+        limit: 1,
+      });
+      if (resp.merges.length > 0) {
+        // Play the most recent matching merge.
+        window.location.hash = `#/timelapse-merge/${resp.merges[0].id}`;
+        return;
+      }
+      // No existing merge → offer to generate one. Use confirm() for simplicity.
+      const ok = window.confirm(
+        `${t('timelapseMerge.noMergeForRange')}\n${t('timelapseMerge.generatePrompt')}\n\n` +
+        `camera: ${cameras.find(c => c.id === cameraId)?.name ?? cameraId}\n` +
+        `duration: ${preset.duration}`
+      );
+      if (!ok) return;
+      await generateAndPlayPreset(cameraId, preset.duration, now);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('common.error'), 'error');
+    }
+  }
+
+  // computePresetWindowStart returns the inclusive lower bound to pass as the
+  // `start` query when looking for an existing merge for the given window.
+  function computePresetWindowStart(duration: string, now: Date): Date {
+    switch (duration) {
+      case 'natural-day': {
+        // Start of today in local time.
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+      case '8h': return new Date(now.getTime() - 8 * 3600 * 1000);
+      case '24h': return new Date(now.getTime() - 24 * 3600 * 1000);
+      case '7d': return new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+      case '30d': return new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+      default: return new Date(now.getTime() - 24 * 3600 * 1000);
+    }
+  }
+
+  // generateAndPlayPreset triggers a merge for the given camera/duration and
+  // polls progress until completion, then navigates to the player route.
+  async function generateAndPlayPreset(cameraId: string, duration: string, refTime: Date) {
+    if (presetGenerating) return;
+    presetGenerating = true;
+    presetMergeProgress = 0;
+    presetMergeId = null;
+    try {
+      // triggerTimelapseMerge runs the merge for the window containing refTime.
+      // The handler returns 202 immediately; the merge runs in the background.
+      const dateStr = refTime.toISOString().slice(0, 10); // YYYY-MM-DD
+      await triggerTimelapseMerge(cameraId, dateStr, duration);
+      showToast(t('detail.mergeStarted'), 'success');
+      // Subscribe to SSE progress for this camera.
+      presetProgressAbort?.abort();
+      presetProgressAbort = new AbortController();
+      await new Promise<void>((resolve, reject) => {
+        const signal = presetProgressAbort!.signal;
+        const ac = subscribeTimelapseMergeProgress(
+          cameraId,
+          (data) => {
+            if (signal.aborted) return;
+            presetMergeProgress = data.progress ?? 0;
+            if (data.status === 'completed') {
+              // Find the merge row for this window+duration and navigate to it.
+              void findAndPlayMerge(cameraId, duration, refTime).then(resolve, reject);
+            } else if (data.status === 'failed') {
+              reject(new Error(data.error || t('timelapseMerge.statusFailed')));
+            }
+          },
+          (err) => {
+            if (!signal.aborted) reject(err);
+          },
+        );
+        // Stash the AbortController returned by subscribe so cleanup works.
+        presetProgressAbort = ac;
+      });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('common.error'), 'error');
+    } finally {
+      presetGenerating = false;
+      presetProgressAbort?.abort();
+      presetProgressAbort = null;
+    }
+  }
+
+  // findAndPlayMerge locates the timelapse_merges row for the just-completed
+  // window and navigates to the player. Retries a few times because the DB
+  // write happens just before the SSE 'completed' event.
+  async function findAndPlayMerge(cameraId: string, duration: string, refTime: Date) {
+    const start = computePresetWindowStart(duration, refTime);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const resp = await listTimelapseMerges({
+        camera_id: cameraId,
+        duration,
+        start: start.toISOString(),
+        status: 'completed',
+        limit: 1,
+      });
+      if (resp.merges.length > 0) {
+        window.location.hash = `#/timelapse-merge/${resp.merges[0].id}`;
+        return;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    // Fallback: couldn't find the row — send the user to the recordings list.
+    showToast(t('timelapseMerge.notReady'), 'warning');
+    window.location.hash = '#/recordings';
+  }
+
   // ── Deferred load timers ──
   let calLoadTimeout: number;
   let listLoadTimeout: number;
@@ -811,6 +968,43 @@ let batchMerging = $state(false);
             <p class="th-text-secondary">{t('common.loading')}</p>
           </div>
         {:else}
+          <!-- Preset range buttons: play (or generate) a long-window timelapse -->
+          <div class="card p-3 border th-border mb-3">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs th-text-tertiary mr-1">{t('timelapseMerge.title')}:</span>
+              <!-- Camera picker for presets -->
+              <select
+                class="input input-xs w-auto"
+                bind:value={selectedPresetCamera}
+                disabled={presetGenerating}
+                aria-label={t('timelapseMerge.camera')}
+              >
+                {#each cameras as cam}
+                  <option value={cam.id}>{cam.name || cam.id}</option>
+                {/each}
+              </select>
+              {#each timelapsePresets as preset}
+                <button
+                  class="btn btn-sm {presetGenerating ? 'btn-ghost' : 'btn-secondary'}"
+                  disabled={presetGenerating || cameras.length === 0}
+                  onclick={() => handlePresetClick(preset)}
+                  title={t(preset.labelKey)}
+                >
+                  {t(preset.labelKey)}
+                </button>
+              {/each}
+              {#if presetGenerating}
+                <span class="text-xs th-text-secondary flex items-center gap-1">
+                  <Hourglass size={12} class="animate-pulse" />
+                  {presetMergeProgress}%
+                </span>
+              {/if}
+            </div>
+            <p class="text-[10px] th-text-tertiary mt-2">
+              {t('timelapseMerge.generatePrompt')}
+            </p>
+          </div>
+
           <div class="card p-4 border th-border">
             <p class="text-xs th-text-tertiary mb-2">{t('library.timelapseOnly')}</p>
             <DayTimeline
@@ -878,10 +1072,12 @@ let batchMerging = $state(false);
         disabled={batchMerging}
       >
         <option value="1h">{t('timelapse.mergeDuration1h')}</option>
-        <option value="30m">{t('timelapse.mergeDuration30m')}</option>
-        <option value="15m">{t('timelapse.mergeDuration15m')}</option>
-        <option value="10m">{t('timelapse.mergeDuration10m')}</option>
-        <option value="5m">{t('timelapse.mergeDuration5m')}</option>
+        <option value="8h">{t('timelapse.mergeDuration8h')}</option>
+        <option value="12h">{t('timelapse.mergeDuration12h')}</option>
+        <option value="24h">{t('timelapse.mergeDuration24h')}</option>
+        <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
+        <option value="7d">{t('timelapse.mergeDuration7d')}</option>
+        <option value="30d">{t('timelapse.mergeDuration30d')}</option>
       </select>
       <button
         onclick={handleBatchMerge}

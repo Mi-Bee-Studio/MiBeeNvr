@@ -1,7 +1,7 @@
 /**
  * Recording API — list, download, frames, stats, archives
  */
-import { apiRequest, apiRequestBlob, getAuthHeader, API_BASE, ApiRequestError } from './client';
+import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, API_BASE, ApiRequestError } from './client';
 
 // --- Types ---
 
@@ -185,6 +185,33 @@ export function getRecordingVideoUrl(id: string): string {
 
 export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
+}
+
+// probeMergedRecordingCodec issues a HEAD request to the /merged endpoint and
+// returns the X-Timelapse-Codec header value ('h264' / 'h265' / 'mjpeg') so the
+// frontend can pick the right playback path: <video> for H.264/H.265 (browser-
+// playable), JPEG frame cycler for mjpeg/mjpa (browsers can't decode in <video>).
+//
+// Returns null when the merged file is absent (404) or the codec header is not
+// set. Cached per recordingId for the page lifetime to avoid repeated HEADs.
+const mergedCodecCache = new Map<string, string | null>();
+
+export async function probeMergedRecordingCodec(recordingId: string): Promise<string | null> {
+  const cached = mergedCodecCache.get(recordingId);
+  if (cached !== undefined) return cached;
+  const codec = await apiHeadHeader(`/recordings/${recordingId}/merged`, 'X-Timelapse-Codec');
+  mergedCodecCache.set(recordingId, codec);
+  return codec;
+}
+
+// clearMergedCodecCache invalidates the cached codec for a recording — call
+// after a merge completes or when the recording is re-loaded.
+export function clearMergedCodecCache(recordingId?: string): void {
+  if (recordingId) {
+    mergedCodecCache.delete(recordingId);
+  } else {
+    mergedCodecCache.clear();
+  }
 }
 
 export async function downloadRecording(

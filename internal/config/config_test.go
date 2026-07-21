@@ -1384,6 +1384,17 @@ func TestParseMergeDuration_Valid(t *testing.T) {
 		{"15m", 15 * time.Minute},
 		{"10m", 10 * time.Minute},
 		{"5m", 5 * time.Minute},
+		// Named windows — natively supported (Timelapse v3 lifted the 1h cap).
+		{"natural-day", 24 * time.Hour},
+		{"24h", 24 * time.Hour}, // alias of natural-day
+		{"8h", 8 * time.Hour},
+		{"12h", 12 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"30d", 30 * 24 * time.Hour},
+		// Arbitrary Go durations are also accepted (positive, ≤ 30d).
+		{"2h", 2 * time.Hour},
+		{"6h", 6 * time.Hour},
+		{"45m", 45 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1394,15 +1405,23 @@ func TestParseMergeDuration_Valid(t *testing.T) {
 	}
 }
 
-// TestParseMergeDuration_LegacyCapped verifies that legacy window values
-// (>1h, which spanned UTC day boundaries) are silently capped to 1h instead
-// of erroring, so existing deployed configs upgrade without breaking startup.
-func TestParseMergeDuration_LegacyCapped(t *testing.T) {
-	for _, legacy := range []string{"natural-day", "8h", "12h", "24h", "7d", "30d"} {
-		t.Run(legacy, func(t *testing.T) {
-			dur, err := ParseMergeDuration(legacy)
-			require.NoError(t, err, "legacy %q must not error (backward-compat)", legacy)
-			require.Equal(t, time.Hour, dur, "legacy %q must be capped to 1h", legacy)
+// TestParseMergeDuration_NamedWindows ensures the six canonical named windows
+// resolve to their full durations (not capped to 1h). These align in the
+// configured app timezone via timelapse.parseMergeRange / computeNextRun.
+func TestParseMergeDuration_NamedWindows(t *testing.T) {
+	cases := map[string]time.Duration{
+		"natural-day": 24 * time.Hour,
+		"24h":         24 * time.Hour,
+		"8h":          8 * time.Hour,
+		"12h":         12 * time.Hour,
+		"7d":          7 * 24 * time.Hour,
+		"30d":         30 * 24 * time.Hour,
+	}
+	for input, expected := range cases {
+		t.Run(input, func(t *testing.T) {
+			dur, err := ParseMergeDuration(input)
+			require.NoError(t, err)
+			require.Equal(t, expected, dur, "%s must resolve to full duration, not 1h", input)
 		})
 	}
 }
@@ -1411,16 +1430,20 @@ func TestParseMergeDuration_Invalid(t *testing.T) {
 	// Garbage input
 	_, err := ParseMergeDuration("invalid")
 	require.Error(t, err)
-	// New values >1h are rejected (only legacy strings are capped)
-	_, err = ParseMergeDuration("2h")
+	// Values >30d are rejected (30d is the largest named window / alignment cap).
+	_, err = ParseMergeDuration("744h") // 31d > 30d cap
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "≤ 1h")
+	require.Contains(t, err.Error(), "≤ 30d")
+	// Zero / negative are rejected
 	_, err = ParseMergeDuration("0")
+	require.Error(t, err)
+	_, err = ParseMergeDuration("-1h")
 	require.Error(t, err)
 }
 
 func TestValidateTimelapseMergeDuration_Valid(t *testing.T) {
-	for _, md := range []string{"1h", "30m", "15m", "10m", "5m"} {
+	// All six named windows + arbitrary Go durations ≤30d are valid.
+	for _, md := range []string{"1h", "8h", "12h", "24h", "natural-day", "7d", "30d", "30m", "6h"} {
 		cfg := &Config{
 			Cameras: []CameraConfig{{
 				ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
@@ -1430,9 +1453,29 @@ func TestValidateTimelapseMergeDuration_Valid(t *testing.T) {
 			}},
 		}
 		cfg.ApplyDefaults()
+		// Re-assert the value — ApplyDefaults must not overwrite an explicit MergeDuration.
+		require.Equal(t, md, cfg.Cameras[0].Timelapse.MergeDuration)
 		err := Validate(cfg)
 		require.NoError(t, err, "merge_duration=%s should be valid", md)
 	}
+}
+
+// TestApplyDefaults_TimelapseMergeDuration_Default verifies that a camera with
+// timelapse enabled but no explicit merge_duration gets the natural-day
+// default (24h, midnight-aligned) — matching the DB schema default and the
+// API handler fallbacks.
+func TestApplyDefaults_TimelapseMergeDuration_Default(t *testing.T) {
+	cfg := &Config{
+		Cameras: []CameraConfig{{
+			ID: "c1", Protocol: "rtsp", URL: "rtsp://192.168.1.10/stream",
+			Timelapse: &CameraTimelapseConfig{
+				Enabled: true,
+				// MergeDuration intentionally unset
+			},
+		}},
+	}
+	cfg.ApplyDefaults()
+	require.Equal(t, "natural-day", cfg.Cameras[0].Timelapse.MergeDuration)
 }
 
 func TestValidateTimelapseMergeDuration_Invalid(t *testing.T) {

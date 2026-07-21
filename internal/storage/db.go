@@ -648,6 +648,36 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='27' WHERE key='schema_version'")
 
+	// Migration v27 → v28: timelapse_merges table — one row per periodic-merge
+	// output (8h/12h/24h/natural-day/7d/30d window). Previously the periodic
+	// merger wrote the MP4 to disk but left no DB trace, so the frontend could
+	// not discover, play, or delete long-window timelapse videos. This table is
+	// the canonical record of those outputs.
+	//
+	// Rollback SQL:
+	//   DROP TABLE IF EXISTS timelapse_merges;
+	//   UPDATE schema_meta SET value='27' WHERE key='schema_version';
+	_, _ = d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS timelapse_merges (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		camera_id TEXT NOT NULL,
+		window_start TEXT NOT NULL,
+		window_end TEXT NOT NULL,
+		duration_label TEXT NOT NULL,
+		output_path TEXT NOT NULL,
+		file_size INTEGER DEFAULT 0,
+		frame_count INTEGER DEFAULT 0,
+		codec TEXT DEFAULT '',
+		fps INTEGER DEFAULT 30,
+		status TEXT NOT NULL DEFAULT 'pending',
+		error TEXT DEFAULT '',
+		source_segment_ids TEXT DEFAULT '',
+		created_at TEXT NOT NULL,
+		completed_at TEXT DEFAULT ''
+	)`)
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_timelapse_merges_camera_window ON timelapse_merges(camera_id, window_start)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='28' WHERE key='schema_version'")
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 

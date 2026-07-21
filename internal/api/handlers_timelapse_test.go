@@ -345,6 +345,41 @@ func TestTimelapseStatus_NoMergeManager(t *testing.T) {
 	}
 }
 
+// TestTimelapseStatus_SupportedMergeDurations verifies the status endpoint
+// exposes the canonical list of named merge-window values so the frontend can
+// dynamically populate dropdowns without hardcoding them.
+func TestTimelapseStatus_SupportedMergeDurations(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/status", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		SupportedMergeDurations []string `json:"supported_merge_durations"`
+	}
+	parseJSON(t, rr, &resp)
+
+	// Must include all six named long windows (the WS1 unlock).
+	want := map[string]bool{
+		"1h": true, "8h": true, "12h": true,
+		"24h": true, "natural-day": true, "7d": true, "30d": true,
+	}
+	if len(resp.SupportedMergeDurations) != len(want) {
+		t.Fatalf("expected %d supported_merge_durations, got %d: %v",
+			len(want), len(resp.SupportedMergeDurations), resp.SupportedMergeDurations)
+	}
+	for _, v := range resp.SupportedMergeDurations {
+		if !want[v] {
+			t.Errorf("unexpected duration %q in supported_merge_durations", v)
+		}
+	}
+}
+
 // --- Timelapse List tests ---
 
 func TestTimelapseList_Empty(t *testing.T) {

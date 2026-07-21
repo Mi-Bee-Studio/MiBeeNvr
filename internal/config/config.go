@@ -325,6 +325,24 @@ type CameraTimelapseConfig struct {
 	DailyMerge     *bool           `yaml:"daily_merge,omitempty" json:"daily_merge,omitempty"`         // default true
 	MergeDuration  string          `yaml:"merge_duration,omitempty" json:"merge_duration,omitempty"`
 	MergeOutputFPS int             `yaml:"merge_output_fps,omitempty" json:"merge_output_fps,omitempty"` // default 30, range 1-60
+	// RetainIntermediateMP4 controls whether the per-segment .mp4 files
+	// produced by rolling merge are kept after a periodic (8h/24h/7d/30d)
+	// merge has folded them into a long-window output. Defaults to false
+	// (clean up) to reclaim the ~1.5GB/day/camera we observed in production.
+	// Set to true to keep them for debugging or re-merge safety. The original
+	// raw frame directories (frame_*.h264 / .h265 / .jpg) are always preserved
+	// regardless of this flag — only the rolling-merge .mp4 outputs are pruned.
+	RetainIntermediateMP4 *bool `yaml:"retain_intermediate_mp4,omitempty" json:"retain_intermediate_mp4,omitempty"`
+}
+
+// RetainIntermediateMP4Value returns the effective bool value of
+// RetainIntermediateMP4, defaulting to false (clean up) when nil. Callers
+// must use this accessor rather than dereferencing the pointer directly.
+func (c *CameraTimelapseConfig) RetainIntermediateMP4Value() bool {
+	if c == nil || c.RetainIntermediateMP4 == nil {
+		return false
+	}
+	return *c.RetainIntermediateMP4
 }
 
 type AuthConfig struct {
@@ -1622,7 +1640,10 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Timelapse.MergeOutputFPS = 30
 			}
 			if cam.Timelapse.MergeDuration == "" {
-				cam.Timelapse.MergeDuration = "1h"
+				// Default to natural-day (midnight-aligned 24h window) to match the
+				// DB schema default (cameras.merge_duration DEFAULT 'natural-day')
+				// and the handleGetCameraTimelapse / handleTimelapseMerge fallbacks.
+				cam.Timelapse.MergeDuration = "natural-day"
 			}
 			// MergeEnabled defaults to nil (auto-detect)
 		}
@@ -1834,38 +1855,48 @@ func mergeTimeRanges(ranges []TimeRange) []TimeRange {
 	return result
 }
 
-// ParseMergeDuration parses a MergeDuration value and returns the corresponding time.Duration.
+// ParseMergeDuration parses a MergeDuration value and returns the corresponding
+// time.Duration used by the timelapse periodic-merge scheduler.
 //
-// The merge window is capped at 1h. Windows >1h (the legacy 8h/12h/24h/
-// natural-day/7d/30d) were removed because they align to local midnight and
-// therefore span a UTC day boundary — once storage/queries mix UTC and the
-// user's timezone, a multi-hour window both amplifies IO (it touches two UTC
-// day-partitions) and mis-buckets recordings across the boundary. A 1h window
-// never crosses a natural-day boundary regardless of timezone, so timezone
-// only shifts which hour-bucket a segment lands in — no IO amplification, no
-// cross-day bucketing. "Watch a whole day" is handled by client-side
-// continuous playback (RecordingDetail auto-advances to the next segment),
-// not by synthesizing a large file server-side.
+// Supported values (aligned in the configured app timezone by
+// internal/timelapse.parseMergeRange / computeNextRun):
 //
-// Valid input: any Go duration string (time.ParseDuration) in (0, 1h], e.g.
-// "1h", "30m", "15m", "10m", "5m". Empty string defaults to "1h".
+//   - ""            → default (time.Hour, "1h")
+//   - "natural-day" → 24h, aligned to local midnight (the calendar-day window)
+//   - "8h"          → 8h, aligned to 00:00 / 08:00 / 16:00 local
+//   - "12h"         → 12h, aligned to 00:00 / 12:00 local
+//   - "24h"         → 24h, aligned to local midnight (alias of natural-day)
+//   - "7d"          → 7×24h, aligned to Monday 00:00 local
+//   - "30d"         → 30×24h, aligned to the 1st of the month 00:00 local
 //
-// Backward compatibility: legacy values (8h/12h/24h/natural-day/7d/30d) do
-// NOT error — they are silently capped to 1h with a warning, so existing
-// config files upgrade without breaking. Removing them entirely would fail
-// startup on every deployed instance that set merge_duration.
+// Arbitrary Go duration strings (e.g. "30m", "2h", "6h") are also accepted as
+// long as they are positive and ≤ 30 days. Sub-hour durations align to
+// midnight in fractional-hour buckets.
+//
+// Windows >1h are supported because timelapse merge — unlike the recording
+// rolling-window merge — runs in the configured timezone (not UTC) and
+// stores output under per-camera directories (periodic-merge/<camera_id>/),
+// so crossing a UTC day boundary has no bucketing or IO-amplification cost.
+// The 1h cap that previously applied here was reverted in Timelapse v3.
 func ParseMergeDuration(s string) (time.Duration, error) {
-	// Legacy values: silently cap to 1h. Stored configs from older releases
-	// still carry these; erroring would block startup.
+	// Named windows — these are the canonical values exposed in the UI
+	// dropdowns and match the alignment rules in parseMergeRange /
+	// computeNextRun. "" is the "unset" default.
 	switch s {
-	case "", "natural-day", "8h", "12h", "24h", "7d", "30d":
-		if s != "" {
-			slog.Warn("timelapse merge_duration capped to 1h",
-				"configured", s,
-				"reason", "windows >1h span a UTC day boundary and were removed for timezone safety")
-		}
+	case "":
 		return time.Hour, nil
+	case "natural-day", "24h":
+		return 24 * time.Hour, nil
+	case "8h":
+		return 8 * time.Hour, nil
+	case "12h":
+		return 12 * time.Hour, nil
+	case "7d":
+		return 7 * 24 * time.Hour, nil
+	case "30d":
+		return 30 * 24 * time.Hour, nil
 	}
+	// Any other string must parse as a Go duration.
 	d, err := time.ParseDuration(s)
 	if err != nil {
 		return 0, fmt.Errorf("invalid merge duration %q: %w", s, err)
@@ -1873,8 +1904,9 @@ func ParseMergeDuration(s string) (time.Duration, error) {
 	if d <= 0 {
 		return 0, fmt.Errorf("invalid merge duration %q: must be a positive duration", s)
 	}
-	if d > time.Hour {
-		return 0, fmt.Errorf("invalid merge duration %q: must be ≤ 1h (e.g. \"1h\", \"30m\", \"15m\")", s)
+	const maxMergeDuration = 30 * 24 * time.Hour
+	if d > maxMergeDuration {
+		return 0, fmt.Errorf("invalid merge duration %q: must be ≤ 30d (the largest named window)", s)
 	}
 	return d, nil
 }
