@@ -153,6 +153,8 @@ export {
   getRecordingDownloadUrl,
   getRecordingVideoUrl,
   getMergedRecordingUrl,
+  probeMergedRecordingCodec,
+  clearMergedCodecCache,
   downloadRecording,
   listFrames,
   loadFrameBlob,

@@ -6,6 +6,8 @@
     downloadRecording as apiDownloadRecording,
     getRecordingVideoUrl,
     getMergedRecordingUrl,
+    probeMergedRecordingCodec,
+    clearMergedCodecCache,
     listRecordings,
     getTimelapseFrames,
     loadTimelapseFrameBlob,
@@ -201,6 +203,10 @@ function startMergeSse(cameraId: string, recordingId: string) {
           mergeEta = '';
           mergeAbortController = null;
           clearMergeState(cameraId);
+          // Invalidate the codec cache — the merge just produced a new file
+          // whose codec may differ from what we previously probed (or the
+          // file didn't exist before).
+          clearMergedCodecCache(cameraId);
           loadRecording();
           showToast(t('detail.mergeCompleted'), 'success');
         } else if (data.status === 'failed') {
@@ -284,13 +290,30 @@ function startMergeSse(cameraId: string, recordingId: string) {
         useFrameFallback = false; // Reset fallback on each recording load
 
         if (recording.format === 'mjpeg' || recording.format === 'timelapse') {
-          // MJPEG and timelapse recordings are JPEG frame sequences. The merged
-          // MP4 (if any) uses MJPEG-in-MP4 (mjpa codec) which browsers cannot
-          // play in a <video> element — only H.264/H.265 work there. So always
-          // use the frame viewer for playback. The merged MP4 is still available
-          // for download via the timelapse download button.
-          initTimelapsePlayer();
-          loadTimelapsePreview();
+          // Timelapse/MJPEG recordings can have one of two merge outputs:
+          //   - H.264/H.265 MP4 (when the camera produces rtsp_keyframe source
+          //     frames) — browser-playable in <video>.
+          //   - MJPEG-in-MP4 / mjpa (when the camera produces JPEG source
+          //     frames) — NOT browser-playable in <video>, needs the JPEG
+          //     frame cycler.
+          // Probe the merged file's codec via HEAD/X-Timelapse-Codec to pick
+          // the right path. Only probe when a merge output actually exists
+          // (merge_status === 'merged'); otherwise go straight to the frame
+          // cycler.
+          const hasMergedOutput = recording.merge_status === 'merged' && !!recording.merge_path;
+          if (hasMergedOutput) {
+            const codec = await probeMergedRecordingCodec(currentId);
+            if (codec === 'h264' || codec === 'h265') {
+              initVideoPlayer();
+            } else {
+              // mjpa, missing header, or HEAD failed → JPEG frame cycler.
+              initTimelapsePlayer();
+              loadTimelapsePreview();
+            }
+          } else {
+            initTimelapsePlayer();
+            loadTimelapsePreview();
+          }
         } else if (recording.format === 'h264' || recording.format === 'h265') {
           initVideoPlayer();
         }
@@ -541,14 +564,19 @@ function handleVideoError(e: Event) {
 
   videoLoading = false;
 
-  // For merged timelapse recordings, a network or decode error likely means
-  // the merged MP4 is missing or corrupt. Fall back to the JPEG frame viewer
-  // instead of showing a dead-end error overlay.
-  if (recording && recording.format === 'timelapse'
+  // For merged timelapse recordings, a network / decode / src-not-supported
+  // error likely means the merged MP4 is missing, corrupt, OR the browser
+  // cannot decode its codec (e.g. H.265 on Firefox/Linux Chrome). Fall back to
+  // the JPEG frame viewer instead of showing a dead-end error overlay.
+  if (recording && (recording.format === 'timelapse' || recording.format === 'mjpeg')
       && recording.merge_status === 'merged' && !useFrameFallback
-      && (code === MediaError.MEDIA_ERR_NETWORK || code === MediaError.MEDIA_ERR_DECODE)) {
-    console.warn('Merged MP4 playback failed, falling back to frame viewer', { format: recording.format, errorCode: code });
+      && (code === MediaError.MEDIA_ERR_NETWORK
+        || code === MediaError.MEDIA_ERR_DECODE
+        || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {
+    console.warn('Merged MP4 playback failed, falling back to frame viewer',
+      { format: recording.format, errorCode: code });
     useFrameFallback = true;
+    clearMergedCodecCache(recording.id);
     videoError = null;
     videoErrorMsg = '';
     initTimelapsePlayer();

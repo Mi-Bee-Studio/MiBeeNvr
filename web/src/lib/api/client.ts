@@ -184,6 +184,38 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
   return response.blob();
 }
 
+// HEAD request that returns a single response header value (or null when the
+// header is absent or the request fails). Used for cheap codec probing before
+// committing to a playback path — e.g. reading X-Timelapse-Codec to decide
+// between <video> (H.264/H.265) and the JPEG frame cycler (MJPEG/mjpa).
+//
+// Non-OK responses (including 404) resolve to null rather than throwing, so
+// callers can treat "unknown codec" and "no merged file" identically.
+export async function apiHeadHeader(
+  endpoint: string,
+  headerName: string,
+  options: RequestInit = {},
+): Promise<string | null> {
+  const url = `${API_BASE}${endpoint}`;
+  const headers: HeadersInit = {};
+  const authHeader = getAuthHeader();
+  if (authHeader) {
+    headers['Authorization'] = authHeader;
+  }
+  try {
+    const response = await fetch(url, {
+      ...options,
+      method: 'HEAD',
+      headers,
+      signal: options.signal ?? AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return null;
+    return response.headers.get(headerName);
+  } catch {
+    return null;
+  }
+}
+
 // Login endpoint
 export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
