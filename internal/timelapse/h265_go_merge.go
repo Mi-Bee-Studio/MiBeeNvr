@@ -709,15 +709,27 @@ func buildHvcC(vps, sps, pps []byte) []byte {
 	return buf.Bytes()
 }
 
-// writeHvcCArray writes one NAL array to the hvcC buffer.
+// writeHvcCArray writes one NAL array to the hvcC buffer per ISO 14496-15
+// section 8.3.3.1.2 (HEVC NAL Unit Array).
+//
+// Layout per array:
+//
+//	array_completeness(1) | reserved(0) | NAL_unit_type(6)   — 1 byte
+//	numNalus                                              — 2 bytes  (count of NALUs)
+//	for each NALU:
+//	  nalUnitLength                                       — 2 bytes
+//	  nalUnit                                             — nalUnitLength bytes
+//
+// We always write exactly one NALU per array (numNalus = 1), since each call
+// receives a single parameter set (VPS / SPS / PPS).
 func writeHvcCArray(buf *bytes.Buffer, nalType byte, nalu []byte) {
 	// array_completeness(1) | reserved(0) | NAL_unit_type(6)
 	buf.WriteByte(0x80 | (nalType & 0x3F))
-	// numNalus (16 bits)
-	naluLen := uint16(len(nalu))
-	buf.WriteByte(byte(naluLen >> 8))
-	buf.WriteByte(byte(naluLen))
+	// numNalus (16 bits) — one NALU in this array.
+	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)
 	// nalUnitLength (16 bits) + nalUnit data
+	naluLen := uint16(len(nalu))
 	buf.WriteByte(byte(naluLen >> 8))
 	buf.WriteByte(byte(naluLen))
 	buf.Write(nalu)

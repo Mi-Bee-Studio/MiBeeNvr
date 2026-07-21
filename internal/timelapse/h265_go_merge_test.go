@@ -766,6 +766,61 @@ func TestBuildHvcC(t *testing.T) {
 		len(hvcC), len(vps), len(sps), len(pps))
 }
 
+// TestBuildHvcC_ArrayNumNalusIsOne is a regression test for a bug where
+// writeHvcCArray wrote the NALU byte length into the numNalus field instead of
+// the value 1. Per ISO 14496-15 §8.3.3.1.2, each HEVC NAL array entry is:
+//
+//	[array_completeness|type (1)] [numNalus (2)] [nalUnitLength (2)] [nalUnit]
+//
+// With one NALU per array, numNalus must be exactly 1. The buggy code wrote
+// numNalus = len(nalu), so a 24-byte VPS produced numNalus=24 — parsers read
+// 24 NALUs, ran off the end of the array, and emitted "Invalid NAL unit size
+// in extradata", making every H.265 timelapse merge unplayable (merge_status
+// reported "merged" because the MP4 box bytes were syntactically valid).
+func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
+	vps := buildTestH265VPS()
+	sps := buildTestH265SPS(640, 480)
+	pps := buildTestH265PPS()
+	// Use parameter sets whose byte length is NOT 1, so a bug that confuses
+	// numNalus with the byte length is caught (len > 1 makes numNalus != 1).
+	if len(vps) <= 1 || len(sps) <= 1 || len(pps) <= 1 {
+		t.Fatalf("test param sets must be >1 byte: vps=%d sps=%d pps=%d", len(vps), len(sps), len(pps))
+	}
+
+	hvcC := buildHvcC(vps, sps, pps)
+
+	// Walk all 3 arrays and assert each numNalus == 1.
+	// Header is 23 bytes (configurationVersion(1) + profile/level(12) + misc(9) + numOfArrays(1)).
+	off := 23
+	if int(hvcC[22]) != 3 {
+		t.Fatalf("numOfArrays = %d, want 3", hvcC[22])
+	}
+	wantTypes := []byte{32, 33, 34} // VPS, SPS, PPS
+	wantNALUs := [][]byte{vps, sps, pps}
+	for i := range wantTypes {
+		if off+5 > len(hvcC) {
+			t.Fatalf("array %d: ran off end of hvcC at offset %d", i, off)
+		}
+		arrType := hvcC[off] & 0x3F
+		if arrType != wantTypes[i] {
+			t.Errorf("array %d: NAL_unit_type = %d, want %d", i, arrType, wantTypes[i])
+		}
+		// THE BUG: numNalus must be 1 (one NALU per array), NOT the NALU byte length.
+		numNalus := uint16(hvcC[off+1])<<8 | uint16(hvcC[off+2])
+		if numNalus != 1 {
+			t.Errorf("array %d (type %d): numNalus = %d, want 1 — "+
+				"this is the bug that made H.265 timelapse merges unplayable "+
+				"(ffprobe: 'Invalid NAL unit size in extradata')",
+				i, arrType, numNalus)
+		}
+		nalUnitLength := uint16(hvcC[off+3])<<8 | uint16(hvcC[off+4])
+		if int(nalUnitLength) != len(wantNALUs[i]) {
+			t.Errorf("array %d: nalUnitLength = %d, want %d", i, nalUnitLength, len(wantNALUs[i]))
+		}
+		off += 5 + len(wantNALUs[i])
+	}
+}
+
 func TestListH265FrameFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
