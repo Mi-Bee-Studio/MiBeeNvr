@@ -92,6 +92,13 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 	cm.configMu.Unlock()
 
 	for i := range cameras {
+		// Bail out promptly when the start context is cancelled (process shutdown
+		// or test teardown). Without this check, the loop continues issuing db
+		// calls after the caller has moved on, racing with db.Close() and crashing
+		// with "sql: database is closed".
+		if ctx.Err() != nil {
+			return
+		}
 		cam := cameras[i]
 		yamlStableID := strings.TrimSpace(cam.StableID)
 
