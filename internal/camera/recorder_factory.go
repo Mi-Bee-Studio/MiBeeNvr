@@ -114,6 +114,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			ONVIFEndpoint:  onvifEndpoint,
 			AVI:            cam.HTTPJPEGAVI,
 			EventBus:       cm.eventBus,
+			RecordEnabled:  cam.RecordingEnabled,
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d

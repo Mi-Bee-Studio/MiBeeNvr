@@ -872,3 +872,76 @@ func TestDetectEncoding_DESCRIBEFails_FallsBackToONVIF(t *testing.T) {
 	enc := r.detectEncoding(context.Background())
 	require.Equal(t, "H265", enc)
 }
+
+// TestONVIFRecorder_CreateDelegatePropagatesRecordEnabled is a regression test
+// for a bug where ONVIF cameras ignored recording_enabled=false: the
+// createDelegate path (H264/H265/MJPEG/HTTP-JPEG) built delegate recorder
+// configs WITHOUT forwarding ONVIFConfig.RecordEnabled, so the delegate always
+// recorded (RecordEnabled=nil => record). This is the exact bug that blocked
+// timelapse-only mode for ONVIF cameras (e.g. 工作室内 + H80-9楼楼顶): setting
+// recording_enabled=false had no effect, the camera kept writing h265 video
+// segments alongside the timelapse keyframe extractor.
+//
+// This test asserts that when ONVIFConfig.RecordEnabled points to false, the
+// delegate recorder produced by createDelegate carries that same *false pointer
+// in its BaseConfig — so the live-only drain path in writeFrames kicks in.
+func TestONVIFRecorder_CreateDelegatePropagatesRecordEnabled(t *testing.T) {
+	falseVal := false
+	trueVal := true
+
+	tests := []struct {
+		name           string
+		recordEnabled  *bool
+		streamEncoding string // config override; "" => ONVIF probe (mocked empty)
+		wantDelegate   string // "*recorder.H264Recorder" etc.
+	}{
+		{name: "H264 live-only", recordEnabled: &falseVal, streamEncoding: "H264", wantDelegate: "*recorder.H264Recorder"},
+		{name: "H264 recording", recordEnabled: &trueVal, streamEncoding: "H264", wantDelegate: "*recorder.H264Recorder"},
+		{name: "H265 live-only", recordEnabled: &falseVal, streamEncoding: "H265", wantDelegate: "*recorder.H265Recorder"},
+		{name: "H265 recording", recordEnabled: nil, streamEncoding: "H265", wantDelegate: "*recorder.H265Recorder"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Mock client with no profiles and no device info; detectEncoding
+			// falls back to the config StreamEncoding (no RTSP DESCRIBE since
+			// rtspURL is empty, no ONVIF profiles to consult).
+			client := &onvif.MockDeviceClient{}
+			cfg := ONVIFConfig{
+				CameraID:       "test-cam-onvif",
+				StreamEncoding: tc.streamEncoding,
+				RecordEnabled:  tc.recordEnabled,
+			}
+			r := NewONVIFRecorder(cfg, client, &mockSegmentStore{})
+
+			delegate := r.createDelegate("rtsp://1.2.3.4/stream")
+
+			// Inspect the delegate's BaseConfig.RecordEnabled via the embedded
+			// *baseRecorder on H264Recorder / H265Recorder.
+			var gotRecordEnabled *bool
+			switch d := delegate.(type) {
+			case *H264Recorder:
+				gotRecordEnabled = d.cfg.RecordEnabled
+			case *H265Recorder:
+				gotRecordEnabled = d.cfg.RecordEnabled
+			default:
+				t.Fatalf("unexpected delegate type %T for encoding %q", delegate, tc.streamEncoding)
+			}
+
+			// The pointer must be forwarded exactly (same value, same truthiness).
+			// nil => record (default); *false => live-only; *true => record.
+			if tc.recordEnabled == nil {
+				if gotRecordEnabled != nil {
+					t.Fatalf("expected nil RecordEnabled (record), got %v", *gotRecordEnabled)
+				}
+			} else {
+				if gotRecordEnabled == nil {
+					t.Fatalf("expected RecordEnabled=%v forwarded to delegate, got nil", *tc.recordEnabled)
+				}
+				if *gotRecordEnabled != *tc.recordEnabled {
+					t.Fatalf("RecordEnabled not propagated: delegate=%v, want=%v", *gotRecordEnabled, *tc.recordEnabled)
+				}
+			}
+		})
+	}
+}

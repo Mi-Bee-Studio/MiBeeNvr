@@ -36,6 +36,13 @@ type ONVIFConfig struct {
 	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
 	EventBus             *event.EventBus
 	AVI                  bool // when true, JPEG delegate writes AVI single-file
+	// RecordEnabled gates segment writes for all delegate recorders (H264/H265/
+	// MJPEG/HTTP-JPEG). nil => record (default); pointer to false => live-only
+	// (recorder stays connected for live preview/relay/health but writes nothing).
+	// Required because ONVIF cameras delegate to the codec-specific recorder at
+	// Start time — without this, recording_enabled=false had no effect on ONVIF
+	// cameras (the delegate always recorded).
+	RecordEnabled *bool
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -586,6 +593,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
+			RecordEnabled:        r.cfg.RecordEnabled,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -605,12 +613,13 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		}
 		mjpegRTSPURL = injectRTSPCredentials(mjpegRTSPURL, r.cfg.Username, r.cfg.Password)
 		mjpegCfg := MJPEGConfig{
-			CameraID:     r.cfg.CameraID,
-			RTSPURL:      mjpegRTSPURL,
-			SegmentDur:   r.cfg.SegmentDur,
-			DB:           r.cfg.DB,
-			EventBus:     r.cfg.EventBus,
-			AudioEnabled: r.cfg.AudioEnabled,
+			CameraID:      r.cfg.CameraID,
+			RTSPURL:       mjpegRTSPURL,
+			SegmentDur:    r.cfg.SegmentDur,
+			DB:            r.cfg.DB,
+			EventBus:      r.cfg.EventBus,
+			AudioEnabled:  r.cfg.AudioEnabled,
+			RecordEnabled: r.cfg.RecordEnabled,
 		}
 		mjpegRec := NewMJPEGRecorder(mjpegCfg, r.store, r.metrics)
 		mjpegRec.Hub = r.Hub
@@ -672,6 +681,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
+			RecordEnabled:        r.cfg.RecordEnabled,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -682,14 +692,15 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 // newHTTPJPEGRecorder creates an HTTPJPEGRecorder with the given URL.
 func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
 	cfg := HTTPJPEGConfig{
-		CameraID:   r.cfg.CameraID,
-		URL:        httpURL,
-		SegmentDur: r.cfg.SegmentDur,
-		Username:   r.cfg.Username,
-		Password:   r.cfg.Password,
-		DB:         r.cfg.DB,
-		EventBus:   r.cfg.EventBus,
-		AVI:        r.cfg.AVI,
+		CameraID:      r.cfg.CameraID,
+		URL:           httpURL,
+		SegmentDur:    r.cfg.SegmentDur,
+		Username:      r.cfg.Username,
+		Password:      r.cfg.Password,
+		DB:            r.cfg.DB,
+		EventBus:      r.cfg.EventBus,
+		AVI:           r.cfg.AVI,
+		RecordEnabled: r.cfg.RecordEnabled,
 	}
 	rec := NewHTTPJPEGRecorder(cfg, r.store, r.metrics)
 	rec.Hub = r.Hub
