@@ -31,6 +31,7 @@ export type MsgType = (typeof MsgType)[keyof typeof MsgType];
 export const CodecId = {
   H264: 'h264',
   H265: 'h265',
+  MJPEG: 'mjpeg',
 } as const;
 
 export type CodecId = (typeof CodecId)[keyof typeof CodecId];
@@ -39,7 +40,8 @@ export type CodecId = (typeof CodecId)[keyof typeof CodecId];
  * CodecInfo: codec configuration data sent once at stream start.
  * Binary wire format:
  *   {type:1}{codec:1}{profile:1}{level:1}{sps_len:2}{sps}{pps_len:2}{pps}[vps_len:2][vps]
- *   where codec byte is 4=H.264, 5=H.265.
+ *   where codec byte is 4=H.264, 5=H.265, 6=MJPEG.
+ * MJPEG sends only {type:1}{codec:1} (no SPS/PPS/VPS).
  */
 export interface CodecInfo {
   codec: CodecId;

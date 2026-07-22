@@ -51,23 +51,32 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		codec, sps, pps, vps := getCodecParams(rec)
+		// Normalize JPEG/MJPEG codec names for wsstream: both "jpeg" and "mjpeg"
+		// map to wsstream.CodecMJPEG ("mjpeg") since the wire protocol treats
+		// them identically (complete JPEG frames in VideoFrame.NALUs[0]).
+		if codec == model.EncJPEG {
+			codec = model.FormatMJPEG
+		}
 		slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
-		if sps == nil || pps == nil {
-			// Recorder is active but hasn't received a keyframe yet.
-			// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
-			const wsCodecWait = 5 * time.Second
-			const wsCodecPoll = 200 * time.Millisecond
-			deadline := time.Now().Add(wsCodecWait)
-			for sps == nil || pps == nil {
-				if time.Now().After(deadline) {
-					slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
-					WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
-					return
+		// MJPEG cameras don't have SPS/PPS — skip the keyframe wait.
+		if codec != model.FormatMJPEG {
+			if sps == nil || pps == nil {
+				// Recorder is active but hasn't received a keyframe yet.
+				// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
+				const wsCodecWait = 5 * time.Second
+				const wsCodecPoll = 200 * time.Millisecond
+				deadline := time.Now().Add(wsCodecWait)
+				for sps == nil || pps == nil {
+					if time.Now().After(deadline) {
+						slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
+						WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
+						return
+					}
+					time.Sleep(wsCodecPoll)
+					codec, sps, pps, vps = getCodecParams(rec)
 				}
-				time.Sleep(wsCodecPoll)
-				codec, sps, pps, vps = getCodecParams(rec)
+				slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 			}
-			slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 		}
 
 		hub := getStreamHub(rec)
