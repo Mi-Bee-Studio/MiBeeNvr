@@ -34,8 +34,12 @@ export class AudioPlayer {
     this._channels = channels || 1;
   }
 
-  get initialized(): boolean { return this._initialized; }
-  get muted(): boolean { return this._muted; }
+  get initialized(): boolean {
+    return this._initialized;
+  }
+  get muted(): boolean {
+    return this._muted;
+  }
 
   async init(): Promise<void> {
     if (this._initialized) return;
@@ -91,8 +95,18 @@ export class AudioPlayer {
   }
 
   destroy(): void {
-    if (this._gainNode) { try { this._gainNode.disconnect(); } catch {} this._gainNode = null; }
-    if (this._ctx) { try { this._ctx.close(); } catch {} this._ctx = null; }
+    if (this._gainNode) {
+      try {
+        this._gainNode.disconnect();
+      } catch {}
+      this._gainNode = null;
+    }
+    if (this._ctx) {
+      try {
+        this._ctx.close();
+      } catch {}
+      this._ctx = null;
+    }
     this._initialized = false;
   }
 }

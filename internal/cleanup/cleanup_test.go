@@ -52,15 +52,18 @@ func (e *testEnv) insertTestRecording(t *testing.T, id string, cameraID string, 
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), filePath)
 	rec := &model.Recording{
-		ID:        id,
-		CameraID:  cameraID,
-		FilePath:  fullPath,
-		Format:    model.FormatH264,
-		StartedAt: endedAt.Add(-time.Hour),
-		EndedAt:   endedAt,
-		Duration:  3600.0,
-		FileSize:  1024,
-		Merged:    merged,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    fullPath,
+		Format:      model.FormatH264,
+		StartedAt:   endedAt.Add(-time.Hour),
+		EndedAt:     endedAt,
+		Duration:    3600.0,
+		FileSize:    1024,
+		MergeStatus: model.MergeStatusPending,
+	}
+	if merged {
+		rec.MergeStatus = model.MergeStatusMerged
 	}
 	err := e.db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -77,15 +80,15 @@ func (e *testEnv) insertTimelapseRecording(t *testing.T, id string, cameraID str
 	ctx := context.Background()
 	fullPath := filepath.Join(e.store.RootDir(), cameraID, fileName)
 	rec := &model.Recording{
-		ID:        id,
-		CameraID:  cameraID,
-		FilePath:  fullPath,
-		Format:    "timelapse",
-		StartedAt: endedAt.Add(-time.Hour),
-		EndedAt:   endedAt,
-		Duration:  3600.0,
-		FileSize:  2048,
-		Merged:    false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    fullPath,
+		Format:      "timelapse",
+		StartedAt:   endedAt.Add(-time.Hour),
+		EndedAt:     endedAt,
+		Duration:    3600.0,
+		FileSize:    2048,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err := e.db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -102,8 +105,8 @@ func (e *testEnv) insertRecordingWithNullEnded(t *testing.T, id string) {
 	fullPath := filepath.Join(e.store.RootDir(), "still_recording.mp4")
 	_, err := e.db.DB().ExecContext(
 		ctx,
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
-		id, "cam1", fullPath, model.FormatH264, time.Now(), 0, 0, 0, false,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status) VALUES(?,?,?,?,?,NULL,?,?,?,?);`,
+		id, "cam1", fullPath, model.FormatH264, time.Now(), 0, 0, 0, model.MergeStatusPending,
 	)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(fullPath, []byte("still-recording-data"), 0o644))
@@ -342,15 +345,15 @@ func TestRunOnce_FileMissingFromDisk(t *testing.T) {
 
 	// Insert a recording in DB but don't create the file
 	rec := &model.Recording{
-		ID:        "no-file",
-		CameraID:  "cam1",
-		FilePath:  "/nonexistent.mp4",
-		Format:    model.FormatH264,
-		StartedAt: now.Add(-48 * time.Hour),
-		EndedAt:   now.Add(-47 * time.Hour),
-		Duration:  3600.0,
-		FileSize:  1024,
-		Merged:    false,
+		ID:          "no-file",
+		CameraID:    "cam1",
+		FilePath:    "/nonexistent.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   now.Add(-48 * time.Hour),
+		EndedAt:     now.Add(-47 * time.Hour),
+		Duration:    3600.0,
+		FileSize:    1024,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, env.db.InsertRecording(ctx, rec))
 
@@ -596,16 +599,16 @@ func TestTimeBasedCleanup_TimelapseDirectory(t *testing.T) {
 
 	// Insert as a direct DB recording with directory path.
 	rec := &model.Recording{
-		ID:         "tl-dir",
-		CameraID:   "cam1",
-		FilePath:   segDir,
-		Format:     model.FormatTimelapse,
-		StartedAt:  expiredTime.Add(-time.Hour),
-		EndedAt:    expiredTime,
-		Duration:   3600.0,
-		FileSize:   4096,
-		FrameCount: 10,
-		Merged:     false,
+		ID:          "tl-dir",
+		CameraID:    "cam1",
+		FilePath:    segDir,
+		Format:      model.FormatTimelapse,
+		StartedAt:   expiredTime.Add(-time.Hour),
+		EndedAt:     expiredTime,
+		Duration:    3600.0,
+		FileSize:    4096,
+		FrameCount:  10,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, env.db.InsertRecording(context.Background(), rec))
 

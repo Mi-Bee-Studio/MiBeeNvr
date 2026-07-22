@@ -72,7 +72,7 @@
           startSec,
           endSec,
           format: r.format,
-          merged: !!r.merged || r.merge_status === 'merged',
+          merged: r.merge_status === 'merged' || r.merge_status === 'daily_merged',
         });
         segs.push({ id: r.id, startSec, endSec });
         coverageSec += endSec - startSec;

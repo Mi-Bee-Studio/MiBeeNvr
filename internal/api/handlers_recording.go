@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
@@ -52,6 +53,15 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			filter.Limit = n
+		}
+	}
+	// Enforce a safe default + upper bound to prevent accidental full-table scans.
+	// Without this, omitting ?limit= returns the entire recordings table.
+	if filter.Limit == 0 || filter.Limit > 500 {
+		if filter.Limit > 500 {
+			filter.Limit = 500
+		} else {
+			filter.Limit = 50 // safe default
 		}
 	}
 
@@ -286,6 +296,56 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 
 	logger.Info("recording updated via API", "id", id, "source", middleware.APIKeyNameFromContext(r.Context()))
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "updated"})
+}
+
+// handleUpdateRecordingAIStatus allows MiBeeVision to update the AI processing
+// status of a recording. Requires API Key authentication.
+// PATCH /api/recordings/{id}/ai-status  body: {"ai_status":"completed", "ai_error":""}
+// Valid ai_status values: pending, processing, completed, failed.
+func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
+	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+		WriteError(w, http.StatusUnauthorized, "API key required")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		WriteError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	var body struct {
+		AIStatus string `json:"ai_status"`
+		AIError  string `json:"ai_error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate ai_status value.
+	switch body.AIStatus {
+	case "pending", "processing", "completed", "failed":
+		// ok
+	default:
+		WriteError(w, http.StatusBadRequest, "invalid ai_status; must be one of: pending, processing, completed, failed")
+		return
+	}
+
+	// Verify recording exists.
+	existing, err := h.db.GetRecording(r.Context(), id)
+	if err != nil || existing == nil {
+		WriteError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+
+	if err := h.db.UpdateRecordingAIStatus(r.Context(), id, body.AIStatus, body.AIError); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to update AI status")
+		return
+	}
+
+	logger.Info("recording AI status updated", "id", id, "ai_status", body.AIStatus,
+		"source", middleware.APIKeyNameFromContext(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "ai_status": body.AIStatus})
 }
 
 func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request) {
@@ -770,10 +830,27 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	}
 	// Surface the codec so the frontend player can pick the right path.
 	// HEAD requests also get the header (caller sets it before ServeFile).
-	if codec := probeTimelapseCodec(rec.MergePath); codec != "" {
+	if codec := probeTimelapseCodecCached(rec.MergePath); codec != "" {
 		w.Header().Set("X-Timelapse-Codec", codec)
 	}
 	http.ServeFile(w, r, rec.MergePath)
+}
+
+// timelapseCodecCache caches probe results by file path. Merge output files are
+// immutable (never modified after creation), so the codec never changes — caching
+// avoids re-parsing the MP4 box header on every playback request.
+var timelapseCodecCache sync.Map // path → string (codec)
+
+// probeTimelapseCodecCached returns the codec for a timelapse merge MP4, using
+// an in-memory cache keyed by file path. Since merge outputs are write-once,
+// the cache is permanent per path (no invalidation needed).
+func probeTimelapseCodecCached(path string) string {
+	if v, ok := timelapseCodecCache.Load(path); ok {
+		return v.(string)
+	}
+	codec := probeTimelapseCodec(path)
+	timelapseCodecCache.Store(path, codec)
+	return codec
 }
 
 // probeTimelapseCodec returns "h264" / "h265" / "mjpeg" for the MP4 at the

@@ -206,8 +206,21 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 	return d.readDB.Stats(), true
 }
 
+// Init initializes the database schema. 0.10.0 uses a "baseline" approach:
+// all tables are CREATE TABLE IF NOT EXISTS with the final column set inline,
+// replacing the 27 incremental ALTER TABLE migrations from v1–v28.
+//
+// Upgrade path: users on 0.9.x (schema v28) upgrade transparently — the IF NOT
+// EXISTS clauses skip existing tables, and the v28→v29 migration block handles
+// the only breaking change (dropping the redundant `merged` column now that
+// merge_status fully replaces it). Users below v28 must upgrade to 0.9.x first.
+//
+// The schema_meta table tracks the schema version for future migrations.
+const currentSchemaVersion = "29"
+
 func (d *DB) Init(ctx context.Context) error {
-	// create tables if not exist
+	// ── Tables (full baseline — new installs get the final schema in one step) ──
+
 	camSQL := `CREATE TABLE IF NOT EXISTS cameras (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -221,9 +234,27 @@ func (d *DB) Init(ctx context.Context) error {
         location TEXT DEFAULT '',
         brand TEXT DEFAULT '',
         model TEXT DEFAULT '',
-	serial_number TEXT DEFAULT '',
-	stable_id TEXT DEFAULT '',
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        serial_number TEXT DEFAULT '',
+        stable_id TEXT DEFAULT '',
+        retention_days INTEGER DEFAULT 0,
+        merge_enabled INTEGER,
+        merge_check_interval TEXT,
+        merge_window_size TEXT,
+        merge_batch_limit INTEGER,
+        merge_min_segment_age TEXT,
+        merge_min_segments_to_merge INTEGER,
+        onvif_endpoint TEXT DEFAULT '',
+        profile_token TEXT DEFAULT '',
+        stream_encoding TEXT DEFAULT '',
+        archived INTEGER DEFAULT 0,
+        archived_at DATETIME DEFAULT NULL,
+        archive_retention_days INTEGER DEFAULT 0,
+        activation_state TEXT DEFAULT 'active',
+        merge_duration TEXT DEFAULT 'natural-day',
+        stream_key TEXT DEFAULT '',
+        srt_passphrase TEXT DEFAULT '',
+        srt_stream_id TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 	recSQL := `CREATE TABLE IF NOT EXISTS recordings (
         id TEXT PRIMARY KEY,
@@ -235,135 +266,25 @@ func (d *DB) Init(ctx context.Context) error {
         duration REAL,
         file_size INTEGER DEFAULT 0,
         frame_count INTEGER DEFAULT 0,
-        merged INTEGER DEFAULT 0,
+        merge_status TEXT NOT NULL DEFAULT 'pending',
+        merge_path TEXT DEFAULT '',
+        merge_error TEXT DEFAULT '',
+        merge_tier TEXT DEFAULT '',
+        merge_progress INTEGER DEFAULT 0,
+        merge_quality TEXT DEFAULT 'complete',
+        archived INTEGER DEFAULT 0,
+        ai_status TEXT DEFAULT NULL,
+        ai_processed_at TEXT DEFAULT NULL,
+        ai_error TEXT DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
-	if _, err := d.db.ExecContext(ctx, camSQL); err != nil {
-		return err
-	}
-	if _, err := d.db.ExecContext(ctx, recSQL); err != nil {
-		return err
-	}
-	// indices
-	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
-	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`
-	// idx3 created after migration (merged column may not exist in older DBs)
-	if _, err := d.db.ExecContext(ctx, idx1); err != nil {
-		return err
-	}
-	if _, err := d.db.ExecContext(ctx, idx2); err != nil {
-		return err
-	}
-	// schema metadata
 	metaSQL := `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
-	if _, err := d.db.ExecContext(ctx, metaSQL); err != nil {
-		return err
-	}
-	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '2');")
-	// Migration v1 → v2: add camera metadata columns
-	var version string
-	if err := d.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version); err == nil && version == "1" {
-		columns := []string{
-			"ALTER TABLE cameras ADD COLUMN description TEXT DEFAULT ''",
-			"ALTER TABLE cameras ADD COLUMN location TEXT DEFAULT ''",
-			"ALTER TABLE cameras ADD COLUMN brand TEXT DEFAULT ''",
-			"ALTER TABLE cameras ADD COLUMN model TEXT DEFAULT ''",
-			"ALTER TABLE cameras ADD COLUMN serial_number TEXT DEFAULT ''",
-		}
-		for _, col := range columns {
-			_, _ = d.db.ExecContext(ctx, col) // ignore error if column already exists
-		}
-		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='2' WHERE key='schema_version'")
-	}
-	// Migration v2 → v3: add per-camera retention_days
-	if version == "2" {
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN retention_days INTEGER DEFAULT 0")
-		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='3' WHERE key='schema_version'")
-	}
-	// Migration v3 → v4: pinned → merged
-	if version == "3" || version == "2" {
-		// Check if pinned column exists
-		var pinnedExists int
-		_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='pinned'`).Scan(&pinnedExists)
-		if pinnedExists > 0 {
-			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN merged INTEGER DEFAULT 0")
-			_, _ = d.db.ExecContext(ctx, "UPDATE recordings SET merged = pinned")
-			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings DROP COLUMN pinned")
-			_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_pinned")
-			_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
-		} else {
-			// Fresh install or already migrated — just ensure merged column exists
-			_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN merged INTEGER DEFAULT 0")
-			_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
-		}
-		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='4' WHERE key='schema_version'")
-	}
-	// Migration v4 → v5: add per-camera merge config columns
-	var mergeColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_enabled'`).Scan(&mergeColExists)
-	if mergeColExists == 0 {
-		mergeColumns := []string{
-			`ALTER TABLE cameras ADD COLUMN merge_enabled INTEGER`,
-			`ALTER TABLE cameras ADD COLUMN merge_check_interval TEXT`,
-			`ALTER TABLE cameras ADD COLUMN merge_window_size TEXT`,
-			`ALTER TABLE cameras ADD COLUMN merge_batch_limit INTEGER`,
-			`ALTER TABLE cameras ADD COLUMN merge_min_segment_age TEXT`,
-			`ALTER TABLE cameras ADD COLUMN merge_min_segments_to_merge INTEGER`,
-		}
-		for _, col := range mergeColumns {
-			_, _ = d.db.ExecContext(ctx, col)
-		}
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='5' WHERE key='schema_version'")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merged ON recordings(merged)")
-	// Migration v5 → v6: add ONVIF columns
-	var onvifColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='onvif_endpoint'`).Scan(&onvifColExists)
-	if onvifColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN onvif_endpoint TEXT DEFAULT ''")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN profile_token TEXT DEFAULT ''")
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='6' WHERE key='schema_version'")
-	// Migration v6 → v7: add stream_encoding column
-	var streamEncColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stream_encoding'`).Scan(&streamEncColExists)
-	if streamEncColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN stream_encoding TEXT DEFAULT ''")
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='7' WHERE key='schema_version'")
-	// Migration v7 → v8: add archive columns
-	var archivedColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='archived'`).Scan(&archivedColExists)
-	if archivedColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN archived INTEGER DEFAULT 0")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN archived_at DATETIME DEFAULT NULL")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN archive_retention_days INTEGER DEFAULT 0")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE recordings ADD COLUMN archived INTEGER DEFAULT 0")
-		_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_cameras_archived ON cameras(archived)")
-		_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived ON recordings(archived)")
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='8' WHERE key='schema_version'")
-	// Migration v8 → v9: feature_flags table for protocol toggles
 	featSQL := `CREATE TABLE IF NOT EXISTS feature_flags (
 		key TEXT PRIMARY KEY,
 		value BOOLEAN NOT NULL DEFAULT FALSE,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := d.db.ExecContext(ctx, featSQL); err != nil {
-		return err
-	}
-	// Insert default protocol toggles if they don't exist
-	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags (key, value) VALUES
-		('protocol.xiaomi', 1),
-		('protocol.rtsp', 1),
-		('protocol.http', 1),
-		('protocol.onvif', 1);`)
-	// Migration v8 → v9: compound index for ListRecordings query pattern
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_time ON recordings(camera_id, started_at, ended_at, archived)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='9' WHERE key='schema_version'")
-
-	// Migration v9 → v10: camera_health_events table
 	healthSQL := `CREATE TABLE IF NOT EXISTS camera_health_events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		camera_id TEXT NOT NULL,
@@ -373,14 +294,6 @@ func (d *DB) Init(ctx context.Context) error {
 		metadata TEXT DEFAULT '{}',
 		created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 	);`
-	if _, err := d.db.ExecContext(ctx, healthSQL); err != nil {
-		return err
-	}
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_camera_id ON camera_health_events(camera_id)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_health_events_created_at ON camera_health_events(created_at)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='10' WHERE key='schema_version'")
-
-	// Migration v10 → v11: transcoding_tasks table
 	transcodeSQL := `CREATE TABLE IF NOT EXISTS transcoding_tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		camera_id TEXT NOT NULL,
@@ -395,92 +308,12 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at DATETIME NOT NULL,
 		started_at DATETIME,
 		completed_at DATETIME,
-		original_deleted BOOLEAN NOT NULL DEFAULT 0
+		original_deleted BOOLEAN NOT NULL DEFAULT 0,
+		framerate INTEGER DEFAULT 0,
+		bitrate TEXT DEFAULT '',
+		crf INTEGER DEFAULT 0
 	);`
-	if _, err := d.db.ExecContext(ctx, transcodeSQL); err != nil {
-		return err
-	}
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_tasks(status)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_created ON transcoding_tasks(created_at)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='11' WHERE key='schema_version'")
-
-	// Migration v11 → v12: transcoding_tasks indexes
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_camera ON transcoding_tasks(camera_id)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_recording ON transcoding_tasks(recording_id)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_status_created ON transcoding_tasks(status, created_at)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_transcoding_camera_status ON transcoding_tasks(camera_id, status)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='12' WHERE key='schema_version'")
-
-	// Migration: add encoding column if missing
-	d.db.Exec("ALTER TABLE cameras ADD COLUMN encoding TEXT NOT NULL DEFAULT ''")
-	// Migration: normalize legacy protocol values + populate encoding
-	// Migration v12 → v13: add merge_status TEXT column to recordings
-	var mergeStatusColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_status'`).Scan(&mergeStatusColExists)
-	if mergeStatusColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_status TEXT NOT NULL DEFAULT 'pending'`)
-		// Backfill: merged=1 → 'merged', merged=0 → 'pending'
-		_, _ = d.db.ExecContext(ctx, `UPDATE recordings SET merge_status = 'merged' WHERE merged = 1`)
-		_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='13' WHERE key='schema_version'")
-
-	// Migration: normalize legacy protocol values + populate encoding
-	d.migrateEncodings()
-
-	// Migration v13 → v14: add framerate column to transcoding_tasks
-	var framerateColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('transcoding_tasks') WHERE name='framerate'`).Scan(&framerateColExists)
-	if framerateColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN framerate INTEGER DEFAULT 0`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='14' WHERE key='schema_version'")
-
-	// Migration v14 → v15: add merge_path and merge_error columns to recordings
-	var mergePathColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_path'`).Scan(&mergePathColExists)
-	if mergePathColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT ''`)
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT ''`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='15' WHERE key='schema_version'") // Ensure merge_status index exists (for fresh DBs that may have skipped v13 migration)
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)")
-
-	// Migration v15 → v16: add merge_tier column to recordings
-	var mergeTierColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_tier'`).Scan(&mergeTierColExists)
-	if mergeTierColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_tier TEXT DEFAULT ''`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='16' WHERE key='schema_version'")
-
-	// Migration v16 → v17: add merge_duration column to cameras
-	var mergeDurColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='merge_duration'`).Scan(&mergeDurColExists)
-	if mergeDurColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN merge_duration TEXT DEFAULT 'natural-day'`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='17' WHERE key='schema_version'")
-
-	// Migration v17 → v18: add merge_progress column to recordings
-	var mergeProgressColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_progress'`).Scan(&mergeProgressColExists)
-	if mergeProgressColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_progress INTEGER DEFAULT 0`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
-
-	// Migration v18 → v19: add bitrate and crf columns to transcoding_tasks
-	var bitrateColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('transcoding_tasks') WHERE name='bitrate'`).Scan(&bitrateColExists)
-	if bitrateColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN bitrate TEXT DEFAULT ''`)
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE transcoding_tasks ADD COLUMN crf INTEGER DEFAULT 0`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='19' WHERE key='schema_version'")
-
-	// Migration v19 → v20: ai_events table (MiBeeVision collaboration)
-	_, _ = d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ai_events (
+	aiEventsSQL := `CREATE TABLE IF NOT EXISTS ai_events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		camera_id TEXT NOT NULL,
 		recording_id TEXT,
@@ -495,169 +328,8 @@ func (d *DB) Init(ctx context.Context) error {
 		snapshot_path TEXT,
 		metadata TEXT,
 		created_at TEXT DEFAULT (datetime('now'))
-	)`)
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_ai_events_camera_time ON ai_events(camera_id, created_at DESC)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_ai_events_recording ON ai_events(recording_id)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='20' WHERE key='schema_version'")
-
-	// Migration v20 → v21: add ai_status columns to recordings (MiBeeVision processing state)
-	var aiStatusColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='ai_status'`).Scan(&aiStatusColExists)
-	if aiStatusColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL`)
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL`)
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
-
-	// Migration v21 → v22: add push/ingest fields to cameras (SRT/RTMP cameras).
-	// RTMP uses stream_key; SRT uses srt_passphrase (AES) and srt_stream_id.
-	var streamKeyColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stream_key'`).Scan(&streamKeyColExists)
-	if streamKeyColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN stream_key TEXT DEFAULT ''")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_passphrase TEXT DEFAULT ''")
-		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT ''")
-	}
-	// Register the new protocols as feature flags so the Settings UI can gate them.
-	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.srt', 1)`)
-	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags(key, value) VALUES('protocol.rtmp', 1)`)
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
-
-	// Migration v22 → v23: enable auto_vacuum = INCREMENTAL for fresh databases.
-	// This pragma only affects new databases. For existing DBs, SQLite ignores it
-	// silently. We do NOT run VACUUM (blocks 24/7 recording inserts).
-	// Also drop redundant indexes that are superseded by optimized compound indexes.
-	var versAfter22 string
-	_ = d.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&versAfter22)
-	if versAfter22 == "22" {
-		_, _ = d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL")
-		// Drop redundant indexes superseded by compound indexes:
-		// - idx_recordings_camera superseded by idx_recordings_camera_time
-		// - idx_recordings_merged superseded by idx_recordings_archived_time
-		// - idx_recordings_archived superseded by idx_recordings_archived_time
-		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_camera")
-		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_merged")
-		_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_archived")
-		_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='23' WHERE key='schema_version'")
-		logger.Info("Enabled auto_vacuum = INCREMENTAL for new database, dropped redundant indexes (migration v23)")
-	}
-
-	// Performance: composite index for the dominant ListRecordings query pattern
-	// (WHERE archived=0 ORDER BY started_at DESC LIMIT n). Without this + ANALYZE stats,
-	// the planner picks idx_recordings_archived (zero selectivity -- archived=0 matches
-	// ALL rows) and does a full scan + temp B-tree sort on every list request.
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived_time ON recordings(archived, started_at DESC)")
-	// Covering index for GetAllLastRecordingTimes: SELECT camera_id, MAX(ended_at) FROM recordings
-	// GROUP BY camera_id. Without this, the 4-column idx_recordings_camera_time is scanned
-	// in full (71K+ entries) on every /api/cameras request -- was the #1 cause of 3s camera list.
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_ended ON recordings(camera_id, ended_at DESC)")
-	// Merge candidate lookup: WHERE camera_id=? AND merge_status='pending' AND ended_at IS NOT NULL
-	// AND started_at>=? AND started_at<? (ListMergeableSegments, ListSingletonPendingRecordings).
-	// Column order: camera_id (equality) → merge_status (equality, high selectivity) → started_at (range).
-	// Without this the planner falls back to idx_recordings_camera_time which cannot filter on
-	// merge_status, scanning all of a camera's recordings on every merge-scheduler tick.
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_camera_merge_status ON recordings(camera_id, merge_status, started_at)")
-	// Global retention/expiry scan: WHERE archived=0 AND ended_at IS NOT NULL AND ended_at < ?
-	// ORDER BY ended_at ASC (ListExpiredRecordings, ListOldestRecordings -- non-camera variants).
-	// idx_recordings_archived_time sorts by started_at, not ended_at, so the planner cannot use
-	// it to satisfy the ended_at range/sort and falls back to a full scan + sort at scale.
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_recordings_archived_ended ON recordings(archived, ended_at)")
-
-	// Unconditionally drop redundant single-column indexes that are superseded by the
-	// compound indexes above. The CREATE INDEX IF NOT EXISTS statements scattered through
-	// the migration history (idx_recordings_camera at line ~127, idx_recordings_merged at
-	// line ~197) run on EVERY startup regardless of schema version, but the v22→v23 DROP
-	// block above is gated on schema_version=='22' -- so DBs already at v23+ get these
-	// indexes silently recreated and never dropped again, causing write amplification on
-	// every INSERT (3 extra B-tree updates per row for zero query benefit).
-	// Dropping here is idempotent and makes the final index set deterministic.
-	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_camera")   // superseded by idx_recordings_camera_time
-	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_merged")   // superseded by idx_recordings_archived_time (merged tracked in merge_status)
-	_, _ = d.db.ExecContext(ctx, "DROP INDEX IF EXISTS idx_recordings_archived") // superseded by idx_recordings_archived_time
-
-	// Migration v24: add merge_quality column to recordings.
-	// Values: 'complete' (normal), 'fragmented' (has time gaps), 'short' (below min_duration).
-	var mergeQualityColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merge_quality'`).Scan(&mergeQualityColExists)
-	if mergeQualityColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN merge_quality TEXT DEFAULT 'complete'`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='24' WHERE key='schema_version'")
-
-	// Migration v24 → v25: repair recordings.archived column + index.
-	//
-	// Background: migration v7→v8 (the original "add archive columns" block above)
-	// gates the ENTIRE archive-column addition — for BOTH the cameras and recordings
-	// tables — on a single check: `pragma_table_info('cameras') WHERE name='archived'`.
-	// If cameras.archived already exists (e.g. a DB restored from a backup that
-	// pre-dated the split, or an earlier manual ALTER), the whole block is skipped
-	// and recordings.archived + idx_recordings_archived are NEVER created — even
-	// though schema_meta is bumped to v8+ regardless.
-	//
-	// Symptom: any query that SELECTs `archived` from recordings fails with
-	// "no such column: archived" → HTTP 500. This breaks archived-camera deletion
-	// (handleDeleteArchiveGroup calls ListRecordings with Archived filter) and
-	// every archived-recordings list. A production DB hit exactly this: cameras
-	// had the column, recordings did not, schema_version was already 25.
-	//
-	// Fix: check recordings.archived independently and add it if missing. This is
-	// idempotent and safe on DBs that already have the column (the check is 0→skip).
-	var recordingsArchivedColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='archived'`).Scan(&recordingsArchivedColExists)
-	if recordingsArchivedColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE recordings ADD COLUMN archived INTEGER DEFAULT 0`)
-	}
-	// Re-create the index unconditionally (CREATE IF NOT EXISTS). It may have been
-	// skipped alongside the column in the v7 block.
-	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recordings_archived ON recordings(archived)`)
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='25' WHERE key='schema_version'")
-
-	// Migration v25 → v26: add activation_state column to cameras.
-	// Values: 'active' (default — recorder starts normally) or
-	// 'pending_activation' (camera persisted + visible, but recorder NOT started;
-	// used by auto-discover for authenticated ONVIF devices awaiting credentials).
-	var activationStateColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='activation_state'`).Scan(&activationStateColExists)
-	if activationStateColExists == 0 {
-		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active'`)
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='26' WHERE key='schema_version'")
-
-	// Migration v26 → v27: add stable_id column to cameras table.
-	// stable_id is the ONVIF serial number used for IP self-healing (re-acquiring
-	// a camera after its IP changes). Previously YAML-only, now persisted in DB
-	// for dedup and rediscovery queries.
-	//
-	// Rollback SQL:
-	//   ALTER TABLE cameras DROP COLUMN stable_id;
-	//   UPDATE schema_meta SET value='26' WHERE key='schema_version';
-	var stableIDColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='stable_id'`).Scan(&stableIDColExists)
-	if stableIDColExists == 0 {
-		// Backup before schema mutation
-		backupPath := d.path + ".pre-v27-backup"
-		if backupErr := d.Backup(ctx, backupPath); backupErr != nil {
-			logger.Warn("failed to create pre-v27 backup", "path", backupPath, "error", backupErr)
-		}
-		if _, err := d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN stable_id TEXT DEFAULT ''`); err != nil {
-			logger.Error("failed to add stable_id column", "error", err)
-			return err
-		}
-		logger.Info("added stable_id column to cameras (migration v27)")
-	}
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='27' WHERE key='schema_version'")
-
-	// Migration v27 → v28: timelapse_merges table — one row per periodic-merge
-	// output (8h/12h/24h/natural-day/7d/30d window). Previously the periodic
-	// merger wrote the MP4 to disk but left no DB trace, so the frontend could
-	// not discover, play, or delete long-window timelapse videos. This table is
-	// the canonical record of those outputs.
-	//
-	// Rollback SQL:
-	//   DROP TABLE IF EXISTS timelapse_merges;
-	//   UPDATE schema_meta SET value='27' WHERE key='schema_version';
-	_, _ = d.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS timelapse_merges (
+	)`
+	timelapseMergesSQL := `CREATE TABLE IF NOT EXISTS timelapse_merges (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		camera_id TEXT NOT NULL,
 		window_start TEXT NOT NULL,
@@ -673,15 +345,106 @@ func (d *DB) Init(ctx context.Context) error {
 		source_segment_ids TEXT DEFAULT '',
 		created_at TEXT NOT NULL,
 		completed_at TEXT DEFAULT ''
-	)`)
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_timelapse_merges_camera_window ON timelapse_merges(camera_id, window_start)")
-	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)")
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='28' WHERE key='schema_version'")
+	)`
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL} {
+		if _, err := d.db.ExecContext(ctx, sql); err != nil {
+			return fmt.Errorf("create table: %w", err)
+		}
+	}
+
+	// Seed schema_meta + default feature flags for new databases.
+	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '"+currentSchemaVersion+"')")
+	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags (key, value) VALUES
+		('protocol.xiaomi', 1),
+		('protocol.rtsp', 1),
+		('protocol.http', 1),
+		('protocol.onvif', 1),
+		('protocol.srt', 1),
+		('protocol.rtmp', 1);`)
+
+	// ── v28 → v29 migration: drop the legacy `merged` column ──
+	// The `merged` bool was fully superseded by `merge_status` TEXT in v13.
+	// All write paths already set both; all read paths prefer merge_status.
+	// SQLite 3.35+ (modernc.org/sqlite v1.x) supports DROP COLUMN.
+	d.migrateV28ToV29(ctx)
+
+	// ── Indexes (final optimized set — all the compound/covering indexes) ──
+	indexes := []string{
+		// Recordings: the dominant query patterns
+		"CREATE INDEX IF NOT EXISTS idx_recordings_camera_time ON recordings(camera_id, started_at, ended_at, archived)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_merge_status ON recordings(merge_status)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_archived_time ON recordings(archived, started_at DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_camera_ended ON recordings(camera_id, ended_at DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_camera_merge_status ON recordings(camera_id, merge_status, started_at)",
+		"CREATE INDEX IF NOT EXISTS idx_recordings_archived_ended ON recordings(archived, ended_at)",
+		// Cameras
+		"CREATE INDEX IF NOT EXISTS idx_cameras_archived ON cameras(archived)",
+		// Health events
+		"CREATE INDEX IF NOT EXISTS idx_health_events_camera_id ON camera_health_events(camera_id)",
+		"CREATE INDEX IF NOT EXISTS idx_health_events_created_at ON camera_health_events(created_at)",
+		// Transcoding tasks
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_status ON transcoding_tasks(status)",
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_created ON transcoding_tasks(created_at)",
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_camera ON transcoding_tasks(camera_id)",
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_recording ON transcoding_tasks(recording_id)",
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_status_created ON transcoding_tasks(status, created_at)",
+		"CREATE INDEX IF NOT EXISTS idx_transcoding_camera_status ON transcoding_tasks(camera_id, status)",
+		// AI events
+		"CREATE INDEX IF NOT EXISTS idx_ai_events_camera_time ON ai_events(camera_id, created_at DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_ai_events_recording ON ai_events(recording_id)",
+		// Timelapse merges
+		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_camera_window ON timelapse_merges(camera_id, window_start)",
+		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)",
+	}
+	for _, idx := range indexes {
+		_, _ = d.db.ExecContext(ctx, idx)
+	}
+
+	// Drop legacy indexes superseded by compound indexes (idempotent).
+	for _, drop := range []string{
+		"DROP INDEX IF EXISTS idx_recordings_camera",   // superseded by idx_recordings_camera_time
+		"DROP INDEX IF EXISTS idx_recordings_merged",   // merged column removed; merge_status indexed separately
+		"DROP INDEX IF EXISTS idx_recordings_archived", // superseded by idx_recordings_archived_time
+		"DROP INDEX IF EXISTS idx_recordings_pinned",   // ancient (v3→v4 rename)
+	} {
+		_, _ = d.db.ExecContext(ctx, drop)
+	}
+
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='"+currentSchemaVersion+"' WHERE key='schema_version'")
+
+	// Enable auto_vacuum = INCREMENTAL for fresh databases (no-op for existing).
+	_, _ = d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL")
 
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
 	return nil
+}
+
+// migrateV28ToV29 drops the legacy `merged` bool column from recordings.
+// merge_status (TEXT, added in v13) fully replaces it. All write paths already
+// set merge_status; this is purely removing the redundant column.
+// Safe to call on fresh installs (column never existed) and on already-migrated DBs.
+func (d *DB) migrateV28ToV29(ctx context.Context) {
+	var mergedColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merged'`).Scan(&mergedColExists)
+	if mergedColExists == 0 {
+		return // fresh install or already migrated
+	}
+	// Safety net: ensure merge_status is populated for any row still at default
+	// 'pending' but with merged=1 (shouldn't happen, but prevents data loss).
+	_, _ = d.db.ExecContext(ctx, `UPDATE recordings SET merge_status = 'merged' WHERE merged = 1 AND merge_status = 'pending'`)
+	// Backup before destructive schema change (best-effort).
+	backupPath := d.path + ".pre-v29-backup"
+	if backupErr := d.Backup(ctx, backupPath); backupErr != nil {
+		logger.Warn("failed to create pre-v29 backup", "path", backupPath, "error", backupErr)
+	}
+	if _, err := d.db.ExecContext(ctx, `ALTER TABLE recordings DROP COLUMN merged`); err != nil {
+		logger.Error("failed to drop merged column (v29 migration)", "error", err)
+	} else {
+		logger.Info("dropped legacy merged column from recordings (migration v29)")
+	}
 }
 
 func (d *DB) Close() error {
@@ -694,32 +457,6 @@ func (d *DB) Close() error {
 		_ = d.readDB.Close()
 	}
 	return d.db.Close()
-}
-
-func (d *DB) migrateEncodings() {
-	rows, err := d.db.QueryContext(context.Background(), "SELECT id, protocol FROM cameras WHERE encoding = ''")
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id, protocol string
-		if err := rows.Scan(&id, &protocol); err != nil {
-			continue
-		}
-		proto, enc, err := model.ParseLegacyProtocol(protocol)
-		if err != nil {
-			continue
-		}
-		// Only update if protocol actually changed (was a combined format)
-		if proto != protocol {
-			d.db.ExecContext(context.Background(), "UPDATE cameras SET protocol = ?, encoding = ? WHERE id = ?", proto, enc, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return
-	}
 }
 
 // Backup creates a backup of the database using VACUUM INTO.
@@ -937,41 +674,25 @@ func formatTime(t time.Time) string {
 }
 
 // parseTime parses a SQLite timestamp string back into time.Time (UTC).
-// Supports multiple formats for backward compatibility with legacy data.
+// 0.10.0+: legacy Go time.Time.String() formats (monotonic clock suffix "m=+...",
+// timezone abbreviations like "CST") were removed — databases still containing
+// those formats must be upgraded via 0.9.x first. RFC3339 remains supported as
+// it is a standard interchange format used by external callers (e.g. MiBeeVision).
 func parseTime(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
-	// Canonical format (our new format)
+	// Canonical format (current)
 	if t, err := time.Parse(sqliteTimeFormat, s); err == nil {
 		return t, nil
 	}
-	// Without fractional seconds (SQLite CURRENT_TIMESTAMP)
+	// Without fractional seconds (SQLite CURRENT_TIMESTAMP / datetime('now'))
 	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
 		return t, nil
 	}
-	// RFC3339 variants
+	// RFC3339 (standard interchange format, used by external API callers)
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	// Legacy Go time.Time.String() format with monotonic clock:
-	// "2006-01-02 15:04:05.999999999 -0700 MST m=+123.456"
-	cleaned := s
-	if idx := strings.Index(cleaned, " m=+"); idx != -1 {
-		cleaned = cleaned[:idx]
-	}
-	// Strip timezone name (e.g., "CST") after offset: "+0800 CST" → "+0800"
-	fields := strings.Fields(cleaned)
-	if len(fields) >= 4 && len(fields[2]) == 5 && (fields[2][0] == '+' || fields[2][0] == '-') {
-		cleaned = fields[0] + " " + fields[1] + " " + fields[2]
-	}
-	for _, layout := range []string{
-		"2006-01-02 15:04:05.999999999 -0700",
-		"2006-01-02 15:04:05 -0700",
-	} {
-		if t, err := time.Parse(layout, cleaned); err == nil {
 			return t.UTC(), nil
 		}
 	}

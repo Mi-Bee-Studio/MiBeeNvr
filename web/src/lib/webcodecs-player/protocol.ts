@@ -68,9 +68,9 @@ export interface VideoFrame {
  *   codec byte: 0x01=G.711 μ-law, 0x02=G.711 A-law, 0x03=Opus, 0x04=AAC
  */
 export interface AudioCodecInfo {
-  codec: number;   // audio codec byte (0x01-0x04)
+  codec: number; // audio codec byte (0x01-0x04)
   sampleRate: number; // sample rate in Hz (e.g. 8000)
-  channels: number;   // number of audio channels (1=mono)
+  channels: number; // number of audio channels (1=mono)
 }
 
 /**
@@ -79,8 +79,8 @@ export interface AudioCodecInfo {
  *   {type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}
  */
 export interface AudioFrame {
-  pts: number;    // presentation timestamp in 90kHz clock
-  codec: number;  // audio codec byte
+  pts: number; // presentation timestamp in 90kHz clock
+  codec: number; // audio codec byte
   data: Uint8Array; // encoded audio data
 }
 

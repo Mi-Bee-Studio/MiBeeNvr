@@ -52,7 +52,7 @@ func TestPTZMoveNonOnvifRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"mode": "continuous", "pan": 0.5, "tilt": 0.0, "zoom": 0.0}`

@@ -873,7 +873,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 		Duration:     durSec,
 		FileSize:     fi.Size(),
 		FrameCount:   totalFrames,
-		Merged:       true,
+		MergeStatus:  model.MergeStatusMerged,
 		MergeQuality: ComputeMergeQuality(recs[0].StartedAt, recs[len(recs)-1].EndedAt, durSec, r.resolveRollingConfig(cameraID).MinDuration.Seconds()),
 	}
 
@@ -999,7 +999,7 @@ func (r *RollingMergeCoordinator) mergeBatchSegments(ctx context.Context, camera
 		return 0, fmt.Errorf("batch merge %s: %w", format, err)
 	}
 
-	mergedRec.Merged = true
+	mergedRec.MergeStatus = model.MergeStatusMerged
 
 	// Atomic DB replace: insert merged + delete sources.
 	ids := make([]string, len(recs))
@@ -1440,16 +1440,16 @@ func (r *RollingMergeCoordinator) createBucket(
 	// Create merged recording row and delete the source segment row.
 	mergedRecID = strconv.FormatInt(time.Now().UnixNano(), 10)
 	mergedRec := &model.Recording{
-		ID:         mergedRecID,
-		CameraID:   seg.cameraID,
-		FilePath:   finalPath,
-		Format:     model.Format(seg.format),
-		StartedAt:  seg.startedAt,
-		EndedAt:    seg.endedAt,
-		Duration:   info.TotalDuration.Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: info.SampleCount,
-		Merged:     true,
+		ID:          mergedRecID,
+		CameraID:    seg.cameraID,
+		FilePath:    finalPath,
+		Format:      model.Format(seg.format),
+		StartedAt:   seg.startedAt,
+		EndedAt:     seg.endedAt,
+		Duration:    info.TotalDuration.Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  info.SampleCount,
+		MergeStatus: model.MergeStatusMerged,
 	}
 
 	if err := storage.RetryOnBusy(ctx, func() error {
@@ -1522,16 +1522,16 @@ func (r *RollingMergeCoordinator) appendToBucket(
 
 	mergedRecID = bucket.mergedRecID
 	mergedRec := &model.Recording{
-		ID:         mergedRecID,
-		CameraID:   seg.cameraID,
-		FilePath:   finalPath,
-		Format:     model.Format(seg.format),
-		StartedAt:  bucket.windowStart,
-		EndedAt:    seg.endedAt,
-		Duration:   totalDurSec,
-		FileSize:   fi.Size(),
-		FrameCount: totalFrames,
-		Merged:     true,
+		ID:          mergedRecID,
+		CameraID:    seg.cameraID,
+		FilePath:    finalPath,
+		Format:      model.Format(seg.format),
+		StartedAt:   bucket.windowStart,
+		EndedAt:     seg.endedAt,
+		Duration:    totalDurSec,
+		FileSize:    fi.Size(),
+		FrameCount:  totalFrames,
+		MergeStatus: model.MergeStatusMerged,
 	}
 
 	// UPDATE the merged row + DELETE the source segment row, in one transaction.

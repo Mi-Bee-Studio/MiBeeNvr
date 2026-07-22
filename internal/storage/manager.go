@@ -667,16 +667,16 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 		}
 
 		cameraOrphans = append(cameraOrphans, model.Recording{
-			ID:         info.nanoID,
-			CameraID:   dirName,
-			FilePath:   filepath.Join(m.rootDir, dirName, name),
-			Format:     format,
-			StartedAt:  info.startedAt,
-			EndedAt:    info.startedAt,
-			Duration:   0,
-			FileSize:   totalSize,
-			FrameCount: frameCount,
-			Merged:     false,
+			ID:          info.nanoID,
+			CameraID:    dirName,
+			FilePath:    filepath.Join(m.rootDir, dirName, name),
+			Format:      format,
+			StartedAt:   info.startedAt,
+			EndedAt:     info.startedAt,
+			Duration:    0,
+			FileSize:    totalSize,
+			FrameCount:  frameCount,
+			MergeStatus: model.MergeStatusPending,
 		})
 	}
 

@@ -146,7 +146,7 @@ func TestRollingMerge_SingleSegment(t *testing.T) {
 	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "should have exactly 1 merged recording")
-	require.True(t, recs[0].Merged, "the recording should be marked merged")
+	require.True(t, recs[0].MergeStatus == model.MergeStatusMerged, "the recording should be marked merged")
 	require.NotEqual(t, "rec1", recs[0].ID, "should be a NEW merged recording ID, not the original")
 
 	// Verify the merged file exists and is parseable.
@@ -197,7 +197,7 @@ func TestRollingMerge_AppendMultiple(t *testing.T) {
 	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "should have exactly 1 merged recording after 3 appends")
-	require.True(t, recs[0].Merged)
+	require.True(t, recs[0].MergeStatus == model.MergeStatusMerged)
 
 	// Verify the merged file has 3x the samples of a single segment (2 each → 6 total).
 	info, err := ParseSegment(recs[0].FilePath)
@@ -233,7 +233,7 @@ func TestRollingMerge_DisabledByDefault(t *testing.T) {
 	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "original recording should still exist")
-	require.False(t, recs[0].Merged, "should not be merged")
+	require.NotEqual(t, model.MergeStatusMerged, recs[0].MergeStatus, "should not be merged")
 	require.Equal(t, "rec1", recs[0].ID)
 
 	// Verify: no bucket was created.
@@ -363,7 +363,7 @@ func TestBackfillCamera_HistoricalSegments(t *testing.T) {
 	recs, _, err = env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "should have exactly 1 merged recording after backfill")
-	require.True(t, recs[0].Merged)
+	require.True(t, recs[0].MergeStatus == model.MergeStatusMerged)
 
 	// Verify the merged file has all samples (2 per segment × 3 = 6).
 	info, err := ParseSegment(recs[0].FilePath)
@@ -431,7 +431,7 @@ func TestBackfillCamera_MultipleWindows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recs, 2, "should have 2 merged recordings (one per hour)")
 	for _, rec := range recs {
-		require.True(t, rec.Merged, "all recordings should be merged")
+		require.True(t, rec.MergeStatus == model.MergeStatusMerged, "all recordings should be merged")
 		// Each merged file should have 4 samples (2 segments × 2 samples each).
 		info, err := ParseSegment(rec.FilePath)
 		require.NoError(t, err)
@@ -714,7 +714,7 @@ func TestBackfillMP4_HistoricalSingletonPurged(t *testing.T) {
 	require.Len(t, recs, 1)
 	require.Equal(t, model.MergeStatusMerged, recs[0].MergeStatus,
 		"historical singleton should be retired (merge_status=merged)")
-	require.False(t, recs[0].Merged, "singleton purge does not set Merged=true (no real merge)")
+	require.Empty(t, recs[0].MergePath, "singleton purge does not produce a merge file (no merge_path)")
 
 	// And it must be gone from the pending queue.
 	pending, err := env.db.ListPendingSegmentsForRolling(context.Background(), cameraID, false, 0, time.Time{})
@@ -754,7 +754,7 @@ func TestBackfillMP4_RecentSingletonStaysPending(t *testing.T) {
 		model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
-	require.False(t, recs[0].Merged, "recent singleton must stay pending")
+	require.NotEqual(t, model.MergeStatusMerged, recs[0].MergeStatus, "recent singleton must stay pending")
 }
 
 // ---------------------------------------------------------------------------
@@ -794,7 +794,7 @@ func TestBackfillMP4_DenseWindowStillMerges(t *testing.T) {
 		model.RecordingFilter{CameraID: cameraID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "3 segments should collapse to 1 merged recording")
-	require.True(t, recs[0].Merged)
+	require.True(t, recs[0].MergeStatus == model.MergeStatusMerged)
 	require.NotEmpty(t, recs[0].FilePath, "dense window must produce a real merged file, not just status flip")
 
 	// Verify the merged file actually contains the samples (2 per segment × 3).
@@ -915,7 +915,7 @@ func TestBackfillHistorical_FairAcrossCameras(t *testing.T) {
 	require.Len(t, starvedRecs, 1,
 		"zzz-starved must be merged in the same cycle — proves fair scheduling "+
 			"(old impl would have starved this camera)")
-	require.True(t, starvedRecs[0].Merged)
+	require.True(t, starvedRecs[0].MergeStatus == model.MergeStatusMerged)
 	require.NotEmpty(t, starvedRecs[0].FilePath)
 }
 

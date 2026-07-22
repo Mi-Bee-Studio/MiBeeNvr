@@ -165,16 +165,16 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 	format := formatFromExtension(relPath)
 
 	recording := &model.Recording{
-		ID:         uuid.New().String(),
-		CameraID:   cameraID,
-		FilePath:   relPath,
-		Format:     format,
-		StartedAt:  info.ModTime(),
-		EndedAt:    info.ModTime(),
-		Duration:   0,
-		FileSize:   info.Size(),
-		FrameCount: 1,
-		Merged:     false,
+		ID:          uuid.New().String(),
+		CameraID:    cameraID,
+		FilePath:    relPath,
+		Format:      format,
+		StartedAt:   info.ModTime(),
+		EndedAt:     info.ModTime(),
+		Duration:    0,
+		FileSize:    info.Size(),
+		FrameCount:  1,
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if err := s.db.InsertRecording(ctx, recording); err != nil {
@@ -206,7 +206,7 @@ func (s *Server) resolveOrCreateCamera(ctx context.Context, name string) string 
 
 	// Create a new camera
 	id := camera.GenerateCameraID()
-	err = s.db.UpsertCamera(ctx, id, name, string(model.ProtoHTTPJPEG), "", "", "", "", "", "", "", "")
+	err = s.db.UpsertCamera(ctx, id, name, string(model.ProtoHTTP), string(model.EncJPEG), "", "", "", "", "", "", "")
 	if err != nil {
 		webdavLogger.Warn("failed to auto-create camera", "id", id, "name", name, "error", err)
 		return ""

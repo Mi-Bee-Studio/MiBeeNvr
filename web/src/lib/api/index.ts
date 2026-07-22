@@ -33,6 +33,7 @@ export type {
 // Cameras — CRUD, ONVIF, PTZ, protocols
 export {
   listCameras,
+  listCamerasSummary,
   createCamera,
   getCamera,
   updateCamera,
@@ -201,11 +202,7 @@ export {
   deleteTimelapseMerge,
 } from './timelapse-merges';
 
-export type {
-  TimelapseMerge,
-  TimelapseMergeListResponse,
-  ListTimelapseMergesParams,
-} from './timelapse-merges';
+export type { TimelapseMerge, TimelapseMergeListResponse, ListTimelapseMergesParams } from './timelapse-merges';
 
 // Settings — cleanup, webdav, merge, features
 export {

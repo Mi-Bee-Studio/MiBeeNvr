@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"hash/crc32"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -90,7 +92,12 @@ func getMjpegURLFromRecorder(rec interface{}) string {
 // The recorder captures frames continuously; this endpoint returns the latest one
 // without connecting to the camera (avoids ESP32 connection exhaustion).
 //
+// Supports ETag conditional requests: if the client sends If-None-Match with a
+// matching ETag, a 304 Not Modified is returned (0 bytes body). This dramatically
+// reduces bandwidth for polling when the frame hasn't changed.
+//
 // Response: raw JPEG image (Content-Type: image/jpeg)
+// or 304 if the frame is unchanged (ETag match)
 // or 404 if no frame is available.
 func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
@@ -105,8 +112,20 @@ func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate ETag from frame content hash (CRC32 is fast and sufficient for
+	// cache validation — not a security hash).
+	etag := fmt.Sprintf("\"%x\"", crc32.ChecksumIEEE(frame))
+	w.Header().Set("ETag", etag)
+
+	// Check conditional request: if the client already has this frame, skip the body.
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Length", strconv.Itoa(len(frame)))
 	w.Write(frame)
 }

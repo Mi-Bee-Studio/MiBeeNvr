@@ -49,16 +49,16 @@ func TestInsertAndGetRecording(t *testing.T) {
 
 	started := time.Now()
 	rec := &model.Recording{
-		ID:         "rec-001",
-		CameraID:   "cam1",
-		FilePath:   "/path/file.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    started.Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
-		Merged:     false,
+		ID:          "rec-001",
+		CameraID:    "cam1",
+		FilePath:    "/path/file.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     started.Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -211,13 +211,13 @@ func TestSetMerged(t *testing.T) {
 	got, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.True(t, got.Merged)
+	require.True(t, got.MergeStatus == model.MergeStatusMerged)
 
 	err = db.SetMerged(ctx, rec.ID, false)
 	require.NoError(t, err)
 	got2, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
-	require.False(t, got2.Merged)
+	require.NotEqual(t, model.MergeStatusMerged, got2.MergeStatus)
 }
 
 func TestCleanupIncomplete(t *testing.T) {
@@ -231,8 +231,8 @@ func TestCleanupIncomplete(t *testing.T) {
 	var err error
 	_, _ = db.db.ExecContext(
 		ctx,
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
-		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, model.MergeStatusPending,
 	)
 	err = db.CleanupIncomplete(ctx)
 	require.NoError(t, err)
@@ -277,7 +277,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	// Test insert new camera
 
-	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", "", "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp", "h264", "rtsp://localhost:554/stream", "user", "pass", "", "", "", "")
 
 	require.NoError(t, err)
 
@@ -293,7 +293,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	require.Equal(t, "Camera 1", cameras[0].Name)
 
-	require.Equal(t, "rtsp_h264", cameras[0].Protocol)
+	require.Equal(t, "rtsp", cameras[0].Protocol)
 
 	require.Equal(t, "rtsp://localhost:554/stream", cameras[0].URL)
 
@@ -302,7 +302,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	// Test update existing camera
 
-	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp_mjpeg", "", "rtsp://localhost:555/stream", "newuser", "newpass", "", "", "", "")
+	err = db.UpsertCamera(ctx, "cam1", "Updated Camera 1", "rtsp", "mjpeg", "rtsp://localhost:555/stream", "newuser", "newpass", "", "", "", "")
 
 	require.NoError(t, err)
 
@@ -318,7 +318,7 @@ func TestUpsertCamera(t *testing.T) {
 
 	require.Equal(t, "Updated Camera 1", cameras2[0].Name)
 
-	require.Equal(t, "rtsp_mjpeg", cameras2[0].Protocol)
+	require.Equal(t, "rtsp", cameras2[0].Protocol)
 
 	require.Equal(t, "rtsp://localhost:555/stream", cameras2[0].URL)
 
@@ -337,7 +337,7 @@ func TestGetCamera(t *testing.T) {
 	defer db.Close()
 
 	// Insert a camera first
-	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp_h264", "", "rtsp://localhost:554/stream", "user", "pass", "", "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp", "h264", "rtsp://localhost:554/stream", "user", "pass", "", "", "", "")
 	require.NoError(t, err)
 
 	// Get the camera
@@ -346,7 +346,7 @@ func TestGetCamera(t *testing.T) {
 	require.NotNil(t, cam)
 	require.Equal(t, "cam1", cam.ID)
 	require.Equal(t, "Camera 1", cam.Name)
-	require.Equal(t, "rtsp_h264", cam.Protocol)
+	require.Equal(t, "rtsp", cam.Protocol)
 	require.Equal(t, "rtsp://localhost:554/stream", cam.URL)
 	require.Equal(t, "user", cam.Username)
 	require.True(t, cam.HasPassword)
@@ -375,11 +375,11 @@ func TestListCameras_CredentialMetadata(t *testing.T) {
 	defer db.Close()
 
 	// Camera with username and password
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "With Creds", "rtsp_h264", "", "rtsp://host/stream", "admin", "secret", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "With Creds", "rtsp", "h264", "rtsp://host/stream", "admin", "secret", "", "", "", ""))
 	// Camera with username only (no password)
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Password", "rtsp_h264", "", "rtsp://host/stream2", "viewer", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Password", "rtsp", "h264", "rtsp://host/stream2", "viewer", "", "", "", "", ""))
 	// Camera with no credentials
-	require.NoError(t, db.UpsertCamera(ctx, "cam3", "No Creds", "rtsp_h264", "", "rtsp://host/stream3", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam3", "No Creds", "rtsp", "h264", "rtsp://host/stream3", "", "", "", "", "", ""))
 
 	cameras, err := db.ListCameras(ctx)
 	require.NoError(t, err)
@@ -408,7 +408,7 @@ func TestGetCamera_CredentialMetadata(t *testing.T) {
 	defer db.Close()
 
 	// Camera with credentials
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cred Cam", "rtsp_h264", "", "rtsp://host/stream", "user1", "pass1", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cred Cam", "rtsp", "h264", "rtsp://host/stream", "user1", "pass1", "", "", "", ""))
 
 	cam, err := db.GetCamera(ctx, "cam1")
 	require.NoError(t, err)
@@ -417,7 +417,7 @@ func TestGetCamera_CredentialMetadata(t *testing.T) {
 	require.True(t, cam.HasPassword)
 
 	// Camera without password
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Pass", "rtsp_h264", "", "rtsp://host/stream2", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "No Pass", "rtsp", "h264", "rtsp://host/stream2", "", "", "", "", "", ""))
 
 	cam2, err := db.GetCamera(ctx, "cam2")
 	require.NoError(t, err)
@@ -437,16 +437,16 @@ func TestTimestampRoundTrip(t *testing.T) {
 	started := time.Date(2026, 4, 30, 15, 30, 0, 123456789, time.UTC)
 	ended := started.Add(time.Minute)
 	rec := &model.Recording{
-		ID:         "rt-1",
-		CameraID:   "camRT",
-		FilePath:   "/rt.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    ended,
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
-		Merged:     false,
+		ID:          "rt-1",
+		CameraID:    "camRT",
+		FilePath:    "/rt.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     ended,
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -562,13 +562,13 @@ func TestListExpiredRecordings(t *testing.T) {
 
 	// 3. Old recording (no special protection now — merged doesn't protect from cleanup)
 	oldRec2 := &model.Recording{
-		ID:        "exp-old2",
-		CameraID:  "cam1",
-		FilePath:  "/old2.mp4",
-		Format:    model.FormatH264,
-		StartedAt: oldEnded.Add(-time.Hour),
-		EndedAt:   oldEnded,
-		Merged:    true,
+		ID:          "exp-old2",
+		CameraID:    "cam1",
+		FilePath:    "/old2.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   oldEnded.Add(-time.Hour),
+		EndedAt:     oldEnded,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	require.NoError(t, db.InsertRecording(ctx, oldRec2))
 
@@ -580,8 +580,9 @@ func TestListExpiredRecordings(t *testing.T) {
 	require.Len(t, expired, 2)
 }
 
-func TestParseTimeLegacyFormat(t *testing.T) {
-	// Verify parseTime handles the old time.Time.String() format with monotonic clock
+func TestParseTimeFormat(t *testing.T) {
+	// 0.10.0+: canonical SQLite formats + RFC3339 are supported.
+	// Legacy Go time.Time.String() formats (monotonic clock, tz abbreviations) were removed.
 	tests := []struct {
 		name    string
 		input   string
@@ -591,10 +592,9 @@ func TestParseTimeLegacyFormat(t *testing.T) {
 		{"without fractional", "2026-04-30 15:30:00", false},
 		{"RFC3339", "2026-04-30T15:30:00Z", false},
 		{"RFC3339 with offset", "2026-04-30T15:30:00+08:00", false},
-		{"legacy Go format", "2026-04-30 22:52:10.109803985 +0800 CST m=+32.026969936", false},
-		{"legacy without mono", "2026-04-30 22:52:10.109803985 +0800 CST", false},
 		{"empty string", "", false},
 		{"garbage", "not a time", true},
+		{"legacy Go format now rejected", "2026-04-30 22:52:10.109803985 +0800 CST m=+32.026969936", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -741,7 +741,7 @@ func TestUpsertCameraMerge_RoundTrip(t *testing.T) {
 	defer db.Close()
 
 	// Insert a camera first
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Merge Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Merge Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Set per-camera merge config
 	mergeEnabled := true
@@ -781,7 +781,7 @@ func TestUpsertCameraMerge_NilKeepsExisting(t *testing.T) {
 	_ = db.Init(ctx)
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Nil Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Nil Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Set merge config
 	mergeEnabled := false
@@ -815,9 +815,9 @@ func TestListCameras_WithMergeConfig(t *testing.T) {
 	defer db.Close()
 
 	// Camera with no merge config
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "No Merge", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "No Merge", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 	// Camera with merge config
-	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp_h264", "", "rtsp://host/stream2", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam2", "With Merge", "rtsp", "h264", "rtsp://host/stream2", "", "", "", "", "", ""))
 	mergeEnabled := true
 	batchLimit := 100
 	require.NoError(t, db.UpsertCameraMerge(ctx, "cam2", &mergeEnabled, nil, nil, nil, &batchLimit, nil))
@@ -846,7 +846,7 @@ func TestClearCameraMerge_ResetsAllOverrides(t *testing.T) {
 	_ = db.Init(ctx)
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Clear Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Clear Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Set a per-camera override first.
 	enabled := false
@@ -886,7 +886,7 @@ func TestUpsertCameraMerge_AllFalseValues(t *testing.T) {
 	_ = db.Init(ctx)
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "False Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "False Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Set merge_enabled to false — must not be confused with nil
 	mergeEnabled := false
@@ -937,7 +937,7 @@ func TestUpsertCamera_OnvifFieldsEmptyDefaults(t *testing.T) {
 	defer db.Close()
 
 	// Insert camera without ONVIF fields (backward compat)
-	err := db.UpsertCamera(ctx, "cam1", "No ONVIF", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", "")
+	err := db.UpsertCamera(ctx, "cam1", "No ONVIF", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
 	cam, err := db.GetCamera(ctx, "cam1")
@@ -957,7 +957,7 @@ func TestUpsertCamera_OnvifUpdateExisting(t *testing.T) {
 	defer db.Close()
 
 	// Insert without ONVIF
-	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cam", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Cam", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	// Update with ONVIF fields
 	err := db.UpsertCamera(ctx, "cam1", "Cam Updated", "onvif", "", "rtsp://host/stream2", "admin", "pass", "http://host/onvif", "prof_2", "", "")
@@ -1024,17 +1024,17 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
-		ID:         "mt-001",
-		CameraID:   "cam1",
-		FilePath:   "/test.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now().Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
-		Merged:     false,
-		MergeTier:  "ffmpeg",
+		ID:          "mt-001",
+		CameraID:    "cam1",
+		FilePath:    "/test.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now().Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
+		MergeStatus: model.MergeStatusPending,
+		MergeTier:   "ffmpeg",
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec))
 
@@ -1046,16 +1046,16 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 
 	// Verify merge_tier default is empty string for unset values
 	rec2 := &model.Recording{
-		ID:         "mt-002",
-		CameraID:   "cam1",
-		FilePath:   "/test2.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now().Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   2048,
-		FrameCount: 30,
-		Merged:     false,
+		ID:          "mt-002",
+		CameraID:    "cam1",
+		FilePath:    "/test2.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now().Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    2048,
+		FrameCount:  30,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec2))
 
@@ -1076,16 +1076,16 @@ func TestInsertRecordingWithRetry_Success(t *testing.T) {
 
 	started := time.Now()
 	rec := &model.Recording{
-		ID:         "retry-001",
-		CameraID:   "cam1",
-		FilePath:   "/path/retry.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    started.Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
-		Merged:     false,
+		ID:          "retry-001",
+		CameraID:    "cam1",
+		FilePath:    "/path/retry.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     started.Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err = db.InsertRecordingWithRetry(ctx, rec, 3, 10*time.Millisecond)
 	require.NoError(t, err)
@@ -1127,15 +1127,15 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 
 	// Merge and replace
 	merged := &model.Recording{
-		ID:        "merged-001",
-		CameraID:  "camMerge",
-		FilePath:  "/merge/merged.mp4",
-		Format:    model.FormatH264,
-		StartedAt: now,
-		EndedAt:   now.Add(5 * time.Minute),
-		Duration:  300.0,
-		FileSize:  5120,
-		Merged:    true,
+		ID:          "merged-001",
+		CameraID:    "camMerge",
+		FilePath:    "/merge/merged.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   now,
+		EndedAt:     now.Add(5 * time.Minute),
+		Duration:    300.0,
+		FileSize:    5120,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	err = db.MergeAndReplaceRecordings(ctx, merged, oldIDs)
 	require.NoError(t, err)
@@ -1151,7 +1151,7 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 	got, err := db.GetRecording(ctx, merged.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.True(t, got.Merged)
+	require.True(t, got.MergeStatus == model.MergeStatusMerged)
 	require.Equal(t, "/merge/merged.mp4", got.FilePath)
 }
 
@@ -1315,8 +1315,8 @@ func TestListCamerasExcludesArchived(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp_h264", "", "rtsp://host/stream1", "", "", "", "", "", ""))
-	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp_h264", "", "rtsp://host/stream2", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp", "h264", "rtsp://host/stream1", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp", "h264", "rtsp://host/stream2", "", "", "", "", "", ""))
 	// Mark one as archived
 	_, err = db.db.ExecContext(ctx, "UPDATE cameras SET archived=1 WHERE id=?", "cam-archived")
 	require.NoError(t, err)
@@ -1336,8 +1336,8 @@ func TestListArchivedCameras(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 
-	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp_h264", "", "rtsp://host/stream1", "", "", "", "", "", ""))
-	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp_h264", "", "rtsp://host/stream2", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-active", "Active Cam", "rtsp", "h264", "rtsp://host/stream1", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp", "h264", "rtsp://host/stream2", "", "", "", "", "", ""))
 	_, err = db.db.ExecContext(ctx, "UPDATE cameras SET archived=1 WHERE id=?", "cam-archived")
 	require.NoError(t, err)
 
@@ -1360,12 +1360,12 @@ func TestListRecordingsArchivedFilter(t *testing.T) {
 	// Insert non-archived recording
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-normal", CameraID: "cam1", FilePath: "/f/normal.mp4", Format: model.FormatH264,
-		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 100, Merged: false,
+		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 100, MergeStatus: model.MergeStatusPending,
 	}))
 	// Insert archived recording
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-archived", CameraID: "cam1", FilePath: "/f/archived.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(time.Minute), EndedAt: now.Add(2 * time.Minute), Duration: 60, FileSize: 200, Merged: false,
+		StartedAt: now.Add(time.Minute), EndedAt: now.Add(2 * time.Minute), Duration: 60, FileSize: 200, MergeStatus: model.MergeStatusPending,
 	}))
 	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-archived")
 	require.NoError(t, err)
@@ -1404,14 +1404,14 @@ func TestListOldestRecordingsExcludesArchived(t *testing.T) {
 	// Insert archived (oldest)
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-old-archived", CameraID: "cam1", FilePath: "/f/old.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(-2 * time.Hour), EndedAt: now.Add(-2*time.Hour + time.Minute), Duration: 60, FileSize: 100, Merged: false,
+		StartedAt: now.Add(-2 * time.Hour), EndedAt: now.Add(-2*time.Hour + time.Minute), Duration: 60, FileSize: 100, MergeStatus: model.MergeStatusPending,
 	}))
 	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-old-archived")
 	require.NoError(t, err)
 	// Insert non-archived (newer)
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-new", CameraID: "cam1", FilePath: "/f/new.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Hour + time.Minute), Duration: 60, FileSize: 200, Merged: false,
+		StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Hour + time.Minute), Duration: 60, FileSize: 200, MergeStatus: model.MergeStatusPending,
 	}))
 
 	recs, err := db.ListOldestRecordings(ctx, 10)

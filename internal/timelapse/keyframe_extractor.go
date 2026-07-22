@@ -477,16 +477,16 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 		})
 
 		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   k.cameraID,
-			FilePath:   finalPath,
-			Format:     model.FormatTimelapse,
-			StartedAt:  segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: frameCount,
-			FileSize:   totalSize,
-			Merged:     false,
+			ID:          strconv.FormatInt(now.UnixNano(), 10),
+			CameraID:    k.cameraID,
+			FilePath:    finalPath,
+			Format:      model.FormatTimelapse,
+			StartedAt:   segStart,
+			EndedAt:     now,
+			Duration:    duration,
+			FrameCount:  frameCount,
+			FileSize:    totalSize,
+			MergeStatus: model.MergeStatusPending,
 		}
 
 		if err := k.db.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {

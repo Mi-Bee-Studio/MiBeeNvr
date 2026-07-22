@@ -178,7 +178,7 @@ func TestFileUpload(t *testing.T) {
 	assert.Equal(t, "cam01", rec.CameraID)
 	assert.Equal(t, model.FormatH264, rec.Format, "mp4 should map to h264 format")
 	assert.Equal(t, int64(len(data)), rec.FileSize)
-	assert.False(t, rec.Merged)
+	assert.NotEqual(t, model.MergeStatusMerged, rec.MergeStatus)
 	assert.NotEmpty(t, rec.ID, "recording ID should be a valid UUID")
 	assert.False(t, rec.StartedAt.IsZero())
 	assert.False(t, rec.EndedAt.IsZero())

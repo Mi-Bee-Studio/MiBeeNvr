@@ -128,8 +128,28 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // cameraIDFromEventData attempts to extract a camera ID from event data.
-// It handles common types by JSON round-tripping and checking known keys.
+// Uses fast type assertion for known event types (avoids JSON round-trip on
+// the hot SSE path). Falls back to JSON reflection for unknown types.
 func cameraIDFromEventData(data interface{}) string {
+	// Fast path: type-assert known event structs (zero allocation).
+	switch d := data.(type) {
+	case event.SegmentCompleted:
+		return d.CameraID
+	case event.SegmentDeleted:
+		return d.CameraID
+	case event.StorageHealthChanged:
+		return d.CameraID
+	case event.AIDetectionEvent:
+		return d.CameraID
+	case map[string]interface{}:
+		for _, key := range []string{"camera_id", "CameraID", "camera", "Camera"} {
+			if id, ok := d[key].(string); ok && id != "" {
+				return id
+			}
+		}
+		return ""
+	}
+	// Fallback: JSON round-trip for ad-hoc types.
 	b, err := json.Marshal(data)
 	if err != nil {
 		return ""

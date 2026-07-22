@@ -47,7 +47,6 @@ type Recording struct {
 	Duration      float64   `json:"duration"`
 	FileSize      int64     `json:"file_size"`
 	FrameCount    int       `json:"frame_count"`
-	Merged        bool      `json:"merged"`
 	MergeStatus   string    `json:"merge_status"`
 	MergePath     string    `json:"merge_path"`
 	MergeTier     string    `json:"merge_tier"`
@@ -56,6 +55,11 @@ type Recording struct {
 	MergeQuality  string    `json:"merge_quality"` // complete, fragmented, short
 	RetryCount    int       `json:"retry_count"`
 	Archived      bool      `json:"archived"`
+	// AI processing state (MiBeeVision integration). DB columns exist since v21
+	// but were previously not mapped to Go — this fixes the断层.
+	AIStatus      string    `json:"ai_status,omitempty"` // pending, processing, completed, failed
+	AIProcessedAt time.Time `json:"ai_processed_at,omitempty"`
+	AIError       string    `json:"ai_error,omitempty"`
 }
 
 // TimelapseMerge represents one periodic-merge output for a camera — the
@@ -104,7 +108,7 @@ type RecordingFilter struct {
 	EndTime   time.Time
 	Format    Format
 	Formats   []Format
-	Merged    *bool // nil = all, true = merged only, false = unmerged only
+	Merged    *bool // nil = all, true = merged only, false = unmerged only (translates to merge_status filter)
 	Search    string
 	Limit     int
 	Offset    int
@@ -196,21 +200,14 @@ type HealthReporter interface {
 	ReportHealth(cameraID string, event HealthEvent)
 }
 
-// Protocol implementations
+// Protocol constants (transport-only). 0.10.0+: combined protocol strings
+// like "rtsp_h264" are no longer used. protocol and encoding are always separate.
 const (
-	ProtoRTSPH264  Protocol = "rtsp_h264"
-	ProtoRTSPMJPEG Protocol = "rtsp_mjpeg"
-	ProtoHTTPJPEG  Protocol = "http_jpeg"
-	ProtoRTSPH265  Protocol = "rtsp_h265"
 	ProtoONVIF     Protocol = "onvif"
 	ProtoXiaomi    Protocol = "xiaomi"
 	ProtoTimelapse Protocol = "timelapse"
-)
-
-// Transport-only protocol constants
-const (
-	ProtoRTSP Protocol = "rtsp"
-	ProtoHTTP Protocol = "http"
+	ProtoRTSP      Protocol = "rtsp"
+	ProtoHTTP      Protocol = "http"
 	// Push/ingest protocols: a remote publisher pushes the stream TO the NVR
 	// (SRT listener, RTMP server). Unlike the pull protocols above, the NVR does
 	// not dial out; frames arrive via the ingest server callbacks.
@@ -319,26 +316,6 @@ var ValidEncodingsForProtocol = map[string][]string{
 	// RTMP is H.264 only (the classic RTMP spec; Enhanced-RTMP H.265 is rare).
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
 	string(ProtoRTMP): {string(FormatH264)},
-}
-
-// ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
-func ParseLegacyProtocol(old string) (protocol, encoding string, err error) {
-	switch old {
-	case "rtsp_h264":
-		return "rtsp", "h264", nil
-	case "rtsp_h265":
-		return "rtsp", "h265", nil
-	case "rtsp_mjpeg":
-		return "rtsp", "mjpeg", nil
-	case "http_jpeg":
-		return "http", "jpeg", nil
-	case "onvif":
-		return "onvif", "", nil
-	case "timelapse":
-		return "timelapse", "", nil
-	default:
-		return "", "", fmt.Errorf("unknown legacy protocol: %s", old)
-	}
 }
 
 // ValidateProtocolEncoding checks if the protocol+encoding combination is valid.

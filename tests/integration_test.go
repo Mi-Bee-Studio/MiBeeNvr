@@ -106,16 +106,19 @@ func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cam
 	require.NoError(t, os.WriteFile(filePath, data, 0o644))
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   filePath,
-		Format:     model.Format(format),
-		StartedAt:  time.Now().UTC().Truncate(time.Second),
-		EndedAt:    time.Now().UTC().Truncate(time.Second).Add(5 * time.Minute),
-		Duration:   300.0,
-		FileSize:   int64(len(data)),
-		FrameCount: 150,
-		Merged:     merged,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    filePath,
+		Format:      model.Format(format),
+		StartedAt:   time.Now().UTC().Truncate(time.Second),
+		EndedAt:     time.Now().UTC().Truncate(time.Second).Add(5 * time.Minute),
+		Duration:    300.0,
+		FileSize:    int64(len(data)),
+		FrameCount:  150,
+		MergeStatus: model.MergeStatusPending,
+	}
+	if merged {
+		rec.MergeStatus = model.MergeStatusMerged
 	}
 	require.NoError(t, db.InsertRecording(context.Background(), rec))
 	return rec
@@ -269,8 +272,8 @@ func TestCrashRecovery(t *testing.T) {
 	// Note: Go's zero time.Time marshals as "0001-01-01T00:00:00Z", not SQL NULL.
 	// We must use raw SQL to insert NULL ended_at to simulate a crash.
 	_, err = db.DB().Exec(
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
-		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, 0,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
+		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, model.MergeStatusPending,
 	)
 	require.NoError(t, err)
 
@@ -487,7 +490,7 @@ func TestHTTPUploadAndAPIQuery(t *testing.T) {
 
 	cameraID := "cam-upload"
 	// Insert camera via DB so upload handler can validate it
-	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http_jpeg", "", "http://example.com/stream", "", "", "", "", "", "")
+	err := db.UpsertCamera(context.Background(), cameraID, "Upload Camera", "http", "jpeg", "http://example.com/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
 	// 1. Create upload handler with chi router
@@ -618,8 +621,8 @@ func TestRecordingMergedField(t *testing.T) {
 	}
 	require.Contains(t, byID, "rec-merged")
 	require.Contains(t, byID, "rec-unmerged")
-	require.True(t, byID["rec-merged"].Merged, "rec-merged should have merged=true")
-	require.False(t, byID["rec-unmerged"].Merged, "rec-unmerged should have merged=false")
+	require.True(t, byID["rec-merged"].MergeStatus == model.MergeStatusMerged, "rec-merged should have merged=true")
+	require.NotEqual(t, model.MergeStatusMerged, byID["rec-unmerged"].MergeStatus, "rec-unmerged should have merged=false")
 
 	// Filter by merged=true
 	rr = do(t, h.Routes(), "GET", "/api/recordings?merged=true", nil)
@@ -647,12 +650,12 @@ func TestCameraCredentialDisplay(t *testing.T) {
 	h := newAPI(db, store)
 
 	// Insert camera with credentials
-	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp_h264", "",
+	err := db.UpsertCamera(context.Background(), "cam-cred", "Cred Camera", "rtsp", "h264",
 		"rtsp://192.168.1.1/stream", "admin", "secret123", "", "", "", "")
 	require.NoError(t, err)
 
 	// Insert camera without credentials
-	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http_jpeg", "",
+	err = db.UpsertCamera(context.Background(), "cam-nocred", "No Cred Camera", "http", "jpeg",
 		"http://192.168.1.2/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
@@ -686,7 +689,7 @@ func TestPTZProtocolRejection(t *testing.T) {
 	h := newAPI(db, store)
 
 	// Insert a non-ONVIF camera
-	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp_h264", "",
+	err := db.UpsertCamera(context.Background(), "cam-h264", "H264 Camera", "rtsp", "h264",
 		"rtsp://192.168.1.1/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
@@ -805,7 +808,7 @@ func TestPerCameraMergeConfig(t *testing.T) {
 
 	// Insert a camera
 	cameraID := "cam-merge-test"
-	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp_h264", "",
+	err := db.UpsertCamera(context.Background(), cameraID, "Merge Test", "rtsp", "h264",
 		"rtsp://192.168.1.1/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
@@ -890,7 +893,7 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	// 2. Insert H264 camera into DB
-	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264", "",
+	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp", "h264",
 		"rtsp://192.168.1.1/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
@@ -902,7 +905,7 @@ func TestMultiStreamHLS(t *testing.T) {
 	require.Contains(t, errResp["error"], "HLS not available")
 
 	// 4. Insert MJPEG camera — same 500 (camMgr is nil, checked before protocol)
-	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg", "",
+	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp", "mjpeg",
 		"rtsp://192.168.1.2/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-mjpeg/stream/index.m3u8", nil)
@@ -1451,7 +1454,7 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	// --- Step 2: Insert H264 camera into DB ---
 	cameraID := "cam-ws-int"
 	err := db.UpsertCamera(context.Background(), cameraID, "WS Test Camera",
-		"rtsp_h264", "", "rtsp://192.168.1.1/stream", "", "", "", "", "", "")
+		"rtsp", "h264", "rtsp://192.168.1.1/stream", "", "", "", "", "", "")
 	require.NoError(t, err)
 
 	// --- Step 3: Pre-register wsstream with mock H264 data ---

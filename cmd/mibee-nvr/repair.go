@@ -47,8 +47,6 @@ func runRepair() int {
 		return runRepairDeleteByFormat()
 	case "prune-intermediate-mp4":
 		return runRepairPruneIntermediateMP4()
-	case "remerge-h265":
-		return runRepairRemergeH265()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -69,12 +67,8 @@ type repairOpts struct {
 	// delete-by-format specific
 	keepFormat string        // format value to PRESERVE (e.g. "timelapse"); all other formats are deleted
 	olderThan  time.Duration // 0 = no age filter (delete all matching regardless of age)
-	// prune-intermediate-mp4 / remerge-h265 specific
+	// prune-intermediate-mp4 specific
 	before string // YYYY-MM-DD — only act on recordings started before this date (UTC)
-	after  string // YYYY-MM-DD — only act on recordings started after this date (UTC) (remerge-h265 only)
-	// remerge-h265 specific
-	force bool // skip hvcC bug detection, re-merge every H.265 timelapse
-	fps   int  // FPS for the re-merge (default 10, set by subcommand if 0)
 }
 
 func parseRepairFlags(startIdx int) repairOpts {
@@ -117,16 +111,6 @@ func parseRepairFlags(startIdx int) repairOpts {
 		case arg == "--before" && i+1 < len(os.Args):
 			i++
 			opts.before = os.Args[i]
-		case arg == "--after" && i+1 < len(os.Args):
-			i++
-			opts.after = os.Args[i]
-		case arg == "--force":
-			opts.force = true
-		case arg == "--fps" && i+1 < len(os.Args):
-			i++
-			if n, err := parseInt(os.Args[i]); err == nil && n > 0 {
-				opts.fps = n
-			}
 		case arg == "--help", arg == "-h":
 			opts.configPath = "__help__"
 		}
@@ -432,26 +416,13 @@ func runRepairFragments() int {
 	// Parse fragments-specific flags (in addition to the shared flags already
 	// parsed by parseRepairFlags: --execute/--dry-run/--camera/--limit/--config).
 	var statusStr string
-	var retry, forceDelete, resetFakeMerged bool
-	var maxDurationSec float64
+	var retry, forceDelete bool
 	for i := 3; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--retry":
 			retry = true
 		case "--force-delete":
 			forceDelete = true
-		case "--reset-fake-merged":
-			resetFakeMerged = true
-		case "--max-duration":
-			if i+1 < len(os.Args) {
-				i++
-				if v, err := parseFloat(os.Args[i]); err == nil && v > 0 {
-					maxDurationSec = v
-				} else {
-					fmt.Fprintf(os.Stderr, "Error: invalid --max-duration %q (must be a positive number of seconds)\n", os.Args[i])
-					return 1
-				}
-			}
 		case "--status":
 			if i+1 < len(os.Args) {
 				i++
@@ -461,18 +432,6 @@ func runRepairFragments() int {
 			printRepairFragmentsUsage()
 			return 0
 		}
-	}
-
-	// --reset-fake-merged is a distinct operation mode: it targets segments
-	// marked merged but never actually merged (empty merge_path), resetting
-	// them to pending so the merge engine re-queues them. It does not use
-	// --status/--retry/--force-delete.
-	if resetFakeMerged {
-		if statusStr != "" || retry || forceDelete {
-			fmt.Fprintln(os.Stderr, "Error: --reset-fake-merged cannot be combined with --status/--retry/--force-delete.")
-			return 1
-		}
-		return runRepairFragmentsResetFakeMerged(opts, maxDurationSec)
 	}
 
 	// Default status: incompatible (the most common debris). Comma-separated list allowed.
@@ -645,121 +604,6 @@ func runRepairFragments() int {
 	fmt.Println()
 	fmt.Printf("Summary: %d deleted (%.2f GB freed), %d failed (of %d total)\n",
 		deleted, float64(freedBytes)/1024/1024/1024, deleteFailed, len(recs))
-	return 0
-}
-
-// runRepairFragmentsResetFakeMerged handles `repair fragments --reset-fake-merged`:
-// finds segments marked merge_status='merged' but with an empty merge_path (the
-// rolling merge singleton fast-path marked them merged without actually merging),
-// and resets them to pending so the merge engine re-queues them for a real merge.
-//
-// This is the cleanup companion to the singleton-bug fix in rolling.go: existing
-// deployments already have thousands of these fake-merged fragments accumulated
-// before the fix. After resetting, a service restart (or waiting for periodic
-// merge) will re-merge them into proper long recordings.
-func runRepairFragmentsResetFakeMerged(opts repairOpts, maxDurationSec float64) int {
-	db, _, err := openDBFromConfig(opts.configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	defer db.Close()
-
-	ctx, cancel := setupSignalHandler()
-	defer cancel()
-
-	mode := "DRY RUN (no changes)"
-	if !opts.dryRun {
-		mode = "EXECUTE"
-	}
-	fmt.Printf("repair fragments --reset-fake-merged — %s\n", mode)
-	fmt.Printf("  target: merge_status='merged' with empty merge_path (never actually merged)\n")
-	if maxDurationSec > 0 {
-		fmt.Printf("  max-duration: %.0fs (only short singleton fragments; long recordings left alone)\n", maxDurationSec)
-	}
-	if opts.cameraID != "" {
-		fmt.Printf("  camera: %s\n", opts.cameraID)
-	}
-	if opts.limit > 0 {
-		fmt.Printf("  limit:  %d\n", opts.limit)
-	}
-	fmt.Println()
-
-	recs, err := db.ListFakeMergedRecordings(ctx, opts.cameraID, opts.limit, maxDurationSec)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error listing fake-merged recordings: %v\n", err)
-		return 1
-	}
-	if len(recs) == 0 {
-		fmt.Println("No fake-merged recordings found. Nothing to do.")
-		return 0
-	}
-
-	// Per-camera summary (count / total duration / total size).
-	type camStat struct {
-		count int
-		dur   float64
-		size  int64
-	}
-	byCam := map[string]*camStat{}
-	var totalDur float64
-	var totalSize int64
-	for _, r := range recs {
-		s := byCam[r.CameraID]
-		if s == nil {
-			s = &camStat{}
-			byCam[r.CameraID] = s
-		}
-		s.count++
-		s.dur += r.Duration
-		s.size += r.FileSize
-		totalDur += r.Duration
-		totalSize += r.FileSize
-	}
-	fmt.Printf("Found %d fake-merged recordings across %d camera(s):\n\n", len(recs), len(byCam))
-	for cam, s := range byCam {
-		fmt.Printf("  %-40s %4d segments  %7.1f min  %6.2f GB\n", cam, s.count, s.dur/60, float64(s.size)/1024/1024/1024)
-	}
-	fmt.Printf("  %-40s %4d segments  %7.1f min  %6.2f GB\n", "TOTAL", len(recs), totalDur/60, float64(totalSize)/1024/1024/1024)
-	fmt.Println()
-
-	if opts.dryRun {
-		fmt.Println("Dry run — no changes made. Re-run with --execute to reset these to pending.")
-		fmt.Println("After resetting, restart the service (or wait for periodic merge) to re-merge them.")
-		return 0
-	}
-
-	// Reset to pending in chunks (SetMergeStatus batches internally).
-	ids := make([]string, len(recs))
-	for i, r := range recs {
-		ids[i] = r.ID
-	}
-	const chunkSize = 500
-	reset := 0
-	failed := 0
-	for start := 0; start < len(ids); start += chunkSize {
-		if ctx.Err() != nil {
-			break
-		}
-		end := start + chunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		if err := db.SetMergeStatus(ctx, chunk, model.MergeStatusPending); err != nil {
-			fmt.Fprintf(os.Stderr, "  reset failed for batch [%d:%d]: %v\n", start, end, err)
-			failed += len(chunk)
-			continue
-		}
-		reset += len(chunk)
-		fmt.Printf("  reset %d/%d to pending\n", reset, len(ids))
-	}
-	fmt.Println()
-	fmt.Printf("Summary: %d reset to pending, %d failed (of %d total)\n", reset, failed, len(recs))
-	if reset > 0 {
-		fmt.Println("Restart the service (or wait for the next periodic merge cycle) to re-merge these")
-		fmt.Println("into proper long recordings. They will now appear as pending on the timeline.")
-	}
 	return 0
 }
 
@@ -1254,10 +1098,6 @@ Subcommands:
                          (e.g. delete regular video while keeping every timelapse segment)
   prune-intermediate-mp4 Bulk-remove per-segment rolling-merge .mp4 outputs that have
                          already been folded into a periodic (8h/24h/7d/30d) merge output
-  remerge-h265          Re-merge H.265 timelapse recordings whose merged MP4 carries the
-                         buggy hvcC header (tier=1 + profile_idc=1) that Windows Edge
-                         refuses to play. Reads each recording's original frame_*.h265
-                         dir, re-runs the now-fixed merger, atomically swaps the .mp4.
 
 Common options:
   --dry-run      Report what would change without modifying (default)
@@ -1353,31 +1193,11 @@ Examples:
 Live merge states (pending/merged/merging) are NEVER matched by --status — the
 tool refuses values that the merge engine is still actively processing.
 
---reset-fake-merged is a separate operation mode for a different class of debris:
-recordings marked merge_status='merged' but with an empty merge_path. These were
-marked "merged" by the rolling merge singleton fast-path (a batch with <2 valid
-segments) without actually being merged, permanently ejecting them from the merge
-queue. They show up as thousands of un-merged short fragments on the timeline.
-Resetting them to pending re-queues them for a real merge.
-
-  # Find fake-merged fragments (merged but never actually merged)
-  mibee-nvr repair fragments --reset-fake-merged
-
-  # Reset them to pending, then restart the service to re-merge
-  mibee-nvr repair fragments --reset-fake-merged --execute
-  sudo systemctl restart mibee-nvr
-
 Options:
   --execute              Actually apply the action (default: dry-run, report only)
   --dry-run              Report only, no changes (default)
   --retry                Reset matched segments to pending (merge engine retries)
   --force-delete         Delete DB row + file permanently (mutually exclusive with --retry)
-  --reset-fake-merged    Reset merged-but-not-actually-merged segments to pending
-                         (separate mode; cannot combine with --status/--retry/--force-delete)
-  --max-duration <sec>   Only match segments shorter than this (with --reset-fake-merged).
-                         Targets singleton fragments while leaving long already-merged
-                         recordings (which legitimately have an empty merge_path) untouched.
-                         Recommended: 300 (5min) — singleton fragments are typically ≤60s.
   --status <list>        Comma-separated merge statuses to match
                          (default: incompatible; allowed: incompatible, failed, dark)
   --camera <id>          Only process this camera
@@ -1480,11 +1300,4 @@ func parseInt(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)
 	return n, err
-}
-
-// parseFloat parses a float (e.g. "300" seconds) without importing strconv.
-func parseFloat(s string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(s, "%f", &f)
-	return f, err
 }

@@ -24,19 +24,19 @@ func TestDeriveSnapshotURL(t *testing.T) {
 		{
 			name:      "rtsp_h264 protocol",
 			streamURL: "rtsp://192.168.1.100:554/stream1",
-			protocol:  "rtsp_h264",
+			protocol:  "rtsp",
 			want:      "http://192.168.1.100:554/cgi-bin/snapshot.cgi",
 		},
 		{
 			name:      "rtsp_h265 protocol",
 			streamURL: "rtsp://192.168.1.100:554/stream1",
-			protocol:  "rtsp_h265",
+			protocol:  "rtsp",
 			want:      "http://192.168.1.100:554/cgi-bin/snapshot.cgi",
 		},
 		{
 			name:      "rtsp_mjpeg protocol",
 			streamURL: "rtsp://192.168.1.100:554/live.sdp",
-			protocol:  "rtsp_mjpeg",
+			protocol:  "rtsp",
 			want:      "http://192.168.1.100:554/cgi-bin/snapshot.cgi",
 		},
 		{
@@ -68,7 +68,7 @@ func TestDeriveSnapshotURL(t *testing.T) {
 		{
 			name:      "http_jpeg protocol",
 			streamURL: "http://192.168.1.100:8080/video",
-			protocol:  "http_jpeg",
+			protocol:  "http",
 			want:      "http://192.168.1.100:8080/video",
 		},
 		{
@@ -158,7 +158,7 @@ func TestSnapshotCandidates(t *testing.T) {
 		{
 			name:      "RTSP with path adds path-relative candidates",
 			streamURL: "rtsp://camera.local:554/onvif/media",
-			protocol:  "rtsp_h264",
+			protocol:  "rtsp",
 			wantLen:   7,
 			wantFirst: "http://camera.local:554/cgi-bin/snapshot.cgi",
 		},
@@ -240,7 +240,7 @@ func TestDeriveSnapshotURL_RTSP_RealWorld(t *testing.T) {
 		{
 			name:  "Dahua RTSP",
 			url:   "rtsp://192.168.1.100:554/cam/realmonitor?channel=1&subtype=0",
-			proto: "rtsp_h264",
+			proto: "rtsp",
 			want:  "http://192.168.1.100:554/cgi-bin/snapshot.cgi",
 		},
 		{

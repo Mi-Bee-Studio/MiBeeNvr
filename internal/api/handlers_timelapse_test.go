@@ -817,14 +817,14 @@ func TestTimelapseDelete_Success(t *testing.T) {
 
 	rec := &model.Recording{
 		ID: "rec-tl-del", CameraID: "cam-1",
-		FilePath:   segDir,
-		Format:     model.Format("timelapse"),
-		StartedAt:  now,
-		EndedAt:    now.Add(30 * time.Second),
-		Duration:   30.0,
-		FileSize:   1000,
-		FrameCount: 3,
-		Merged:     true,
+		FilePath:    segDir,
+		Format:      model.Format("timelapse"),
+		StartedAt:   now,
+		EndedAt:     now.Add(30 * time.Second),
+		Duration:    30.0,
+		FileSize:    1000,
+		FrameCount:  3,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	seedRecording(t, db, rec)
 	// Set merge result to populate merge_path and merge_status
@@ -906,14 +906,14 @@ func TestTimelapseDownload_Merged(t *testing.T) {
 
 	rec := &model.Recording{
 		ID: "rec-tl-dl", CameraID: "cam-1",
-		FilePath:   segDir,
-		Format:     model.Format("timelapse"),
-		StartedAt:  now,
-		EndedAt:    now.Add(30 * time.Second),
-		Duration:   30.0,
-		FileSize:   int64(len(mergeData)),
-		FrameCount: 3,
-		Merged:     true,
+		FilePath:    segDir,
+		Format:      model.Format("timelapse"),
+		StartedAt:   now,
+		EndedAt:     now.Add(30 * time.Second),
+		Duration:    30.0,
+		FileSize:    int64(len(mergeData)),
+		FrameCount:  3,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	seedRecording(t, db, rec)
 	// Set merge result to populate merge_path and merge_status

@@ -9,11 +9,15 @@ vi.mock('$lib/audio-player', () => {
     pushFrame: vi.fn(),
     setMuted: vi.fn(),
     set muted(v) {},
-    get muted() { return false; },
+    get muted() {
+      return false;
+    },
     destroy: vi.fn(),
   };
   return {
-    AudioPlayer: vi.fn().mockImplementation(function() { return mockPlayer; }),
+    AudioPlayer: vi.fn().mockImplementation(function () {
+      return mockPlayer;
+    }),
     AudioCodec: { MuLaw: 0x01, ALaw: 0x02, Opus: 0x03, AAC: 0x04 },
   };
 });
@@ -54,7 +58,9 @@ describe('AviPlayback', () => {
       this.sentMessages.push(data);
     }
 
-    static get OPEN() { return 1; }
+    static get OPEN() {
+      return 1;
+    }
 
     sendBinaryFrame(type, pts, data) {
       const buf = new ArrayBuffer(13 + data.length);
@@ -110,9 +116,7 @@ describe('AviPlayback', () => {
     await vi.waitFor(() => {
       expect(mockSocket).toBeTruthy();
       expect(mockSocket.sentMessages.length).toBeGreaterThan(0);
-      const playMsg = mockSocket.sentMessages.find(
-        (m) => typeof m === 'string' && m.includes('"play"')
-      );
+      const playMsg = mockSocket.sentMessages.find((m) => typeof m === 'string' && m.includes('"play"'));
       expect(playMsg).toBeTruthy();
     });
   });
@@ -132,7 +136,7 @@ describe('AviPlayback', () => {
     });
 
     // Send a minimal MJPEG frame (SOI + EOI markers)
-    const jpegBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xD9]);
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
     mockSocket.sendBinaryFrame(0x01, 0, jpegBytes);
 
     await vi.waitFor(() => {
@@ -222,7 +226,7 @@ describe('AviPlayback', () => {
     await fireEvent.click(btn);
     await vi.waitFor(() => expect(mockSocket).toBeTruthy());
 
-    const jpegBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xD9]);
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
     mockSocket.sendBinaryFrame(0x01, 0, jpegBytes);
 
     await vi.waitFor(() => {

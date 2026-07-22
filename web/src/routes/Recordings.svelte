@@ -89,6 +89,7 @@
   // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
   let timelineRecordings = $state<Recording[]>([]);
   let timelineLoading = $state(false);
+  let timelineTruncated = $state(false);
   let timelineAbortController: AbortController | null = null;
 
   // Slices of the day's recordings keyed off the active view: the Timeline tab
@@ -363,20 +364,23 @@ let selectedPresetCamera = $state<string>('');
     try {
       const dayStart = new Date(selectedDate + 'T00:00:00');
       const dayEnd = new Date(selectedDate + 'T23:59:59.999');
-      // A badly-fragmented day (e.g. Xiaomi cameras reconnecting every few
-      // seconds) can produce thousands of short segments — 5000+/day observed
-      // in production. A low cap here silently truncates the day: since we sort
-      // asc, only the earliest segments load and the afternoon appears empty on
-      // the timeline. 10000 covers the worst observed fragmentation with headroom.
+      // 0.10.1: reduced from 10000 to 500 — the backend now enforces a default
+      // limit clamp of 50 and max 500. For most days this covers the full day.
+      // For badly-fragmented days (Xiaomi reconnection storms, 5000+/day), the
+      // timeline will show the first 500 segments. Users can switch to list
+      // view for pagination. This trades edge-case completeness for a 20×
+      // bandwidth reduction on every timeline refresh (~5MB → ~250KB per day).
       const response = await listRecordings({
         start: dayStart.toISOString(),
         end: dayEnd.toISOString(),
         sort_by: 'started_at',
         order: 'asc',
-        limit: 10000,
+        limit: 500,
         signal: timelineAbortController.signal,
       });
       timelineRecordings = response.recordings;
+      // If there are more recordings than the limit, show a notice.
+      timelineTruncated = response.total > response.recordings.length;
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
       // Non-fatal: timeline stays stale on error

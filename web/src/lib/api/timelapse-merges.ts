@@ -46,9 +46,7 @@ export interface ListTimelapseMergesParams {
  * List periodic-merge outputs with optional filters. Returns newest-first
  * (window_start DESC).
  */
-export async function listTimelapseMerges(
-  params: ListTimelapseMergesParams = {},
-): Promise<TimelapseMergeListResponse> {
+export async function listTimelapseMerges(params: ListTimelapseMergesParams = {}): Promise<TimelapseMergeListResponse> {
   const queryParams = new URLSearchParams();
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
   if (params.start) queryParams.set('start', params.start);

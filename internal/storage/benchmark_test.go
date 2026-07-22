@@ -88,16 +88,19 @@ func BenchmarkListRecordings(b *testing.B) {
 				startedAt := baseTime.Add(time.Duration(slot) * 30 * time.Minute)
 				endedAt := startedAt.Add(30 * time.Minute)
 				rec := &model.Recording{
-					ID:         fmt.Sprintf("rec-%06d", seq),
-					CameraID:   camID,
-					FilePath:   fmt.Sprintf("/recordings/%s/%s/seg-%06d.mp4", camID, startedAt.Format("2006-01-02"), seq),
-					Format:     model.FormatH264,
-					StartedAt:  startedAt,
-					EndedAt:    endedAt,
-					Duration:   30.0,
-					FileSize:   int64(30+seq%100) * 1024 * 1024,
-					FrameCount: 30 * 30, // 30fps * 30min
-					Merged:     seq%10 == 0,
+					ID:          fmt.Sprintf("rec-%06d", seq),
+					CameraID:    camID,
+					FilePath:    fmt.Sprintf("/recordings/%s/%s/seg-%06d.mp4", camID, startedAt.Format("2006-01-02"), seq),
+					Format:      model.FormatH264,
+					StartedAt:   startedAt,
+					EndedAt:     endedAt,
+					Duration:    30.0,
+					FileSize:    int64(30+seq%100) * 1024 * 1024,
+					FrameCount:  30 * 30, // 30fps * 30min
+					MergeStatus: model.MergeStatusPending,
+				}
+				if seq%10 == 0 {
+					rec.MergeStatus = model.MergeStatusMerged
 				}
 				if err := db.InsertRecording(ctx, rec); err != nil {
 					b.Fatal(err)

@@ -73,16 +73,16 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 
@@ -400,7 +400,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 	recsAfter, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
 	require.NoError(t, err)
 	require.Len(t, recsAfter, 1)
-	require.True(t, recsAfter[0].Merged)
+	require.True(t, recsAfter[0].MergeStatus == model.MergeStatusMerged)
 }
 
 // insertMergeableMJPEGRecording creates a MJPEG segment directory with fake JPEG files and inserts a recording into the DB.
@@ -432,16 +432,16 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 	}
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatMJPEG,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   totalSize,
-		FrameCount: frameCount,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatMJPEG,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    totalSize,
+		FrameCount:  frameCount,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 
@@ -488,7 +488,7 @@ func TestRunOnce_MJPEGIntegration(t *testing.T) {
 	merged := recsAfter[0]
 	require.Equal(t, cameraID, merged.CameraID)
 	require.Equal(t, model.FormatMJPEG, merged.Format)
-	require.True(t, merged.Merged)
+	require.True(t, merged.MergeStatus == model.MergeStatusMerged)
 	require.False(t, merged.StartedAt.IsZero())
 	require.False(t, merged.EndedAt.IsZero())
 	require.Greater(t, merged.FileSize, int64(0))
@@ -558,16 +558,16 @@ func (e *mergeTestEnv) insertBrokenRecording(t *testing.T, id, cameraID string, 
 	t.Helper()
 	ctx := context.Background()
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   filepath.Join(e.dir, "nonexistent", id+".mp4"),
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   100,
-		FrameCount: 2,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    filepath.Join(e.dir, "nonexistent", id+".mp4"),
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    100,
+		FrameCount:  2,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 }
@@ -594,16 +594,16 @@ func (e *mergeTestEnv) insertMergeableH264WithCustomParams(t *testing.T, id, cam
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 	return finalPath
@@ -719,16 +719,16 @@ func (e *mergeTestEnv) insertTimelapseRecording(t *testing.T, id string, cameraI
 	})
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatTimelapse,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   totalSize,
-		FrameCount: 3,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatTimelapse,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    totalSize,
+		FrameCount:  3,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 	return finalPath
@@ -883,7 +883,7 @@ func TestMJPEGDeferredDelete_OnDBFailure(t *testing.T) {
 	recs, err := env.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
-	require.True(t, recs[0].Merged)
+	require.True(t, recs[0].MergeStatus == model.MergeStatusMerged)
 }
 
 func TestMergeStatusRace(t *testing.T) {
@@ -964,14 +964,16 @@ func TestRunOnce_BatchLimitTruncation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recsAfter, 2)
 
-	// One recording should be the merged file (Merged=true)
-	var mergedCount int
+	// One recording should be the true merged output (a NEW recording ID, not rec1/rec2/rec3).
+	// The singleton (rec3) is also marked merge_status='merged' but retains its original ID.
+	originalIDs := map[string]bool{"rec1": true, "rec2": true, "rec3": true}
+	var newMergedCount int
 	for _, r := range recsAfter {
-		if r.Merged {
-			mergedCount++
+		if r.MergeStatus == model.MergeStatusMerged && !originalIDs[r.ID] {
+			newMergedCount++
 		}
 	}
-	require.Equal(t, 1, mergedCount, "expected exactly 1 merged recording")
+	require.Equal(t, 1, newMergedCount, "expected exactly 1 newly-created merged recording")
 
 	// Second pass should be no-op (everything already processed)
 	require.NoError(t, mgr.RunOnce(ctx))
@@ -1005,11 +1007,13 @@ func TestRunOnce_MJPEGNotEnoughSegments(t *testing.T) {
 	mgr := newTestMergeManager(env.db, env.store, cfg, []config.CameraConfig{{ID: cameraID}})
 	require.NoError(t, mgr.RunOnce(ctx))
 
-	// Recording should still exist (not enough segments to merge)
+	// Recording should still exist (not enough segments to merge).
+	// It may be marked merge_status='merged' as a singleton, but it should NOT
+	// have a merge_path (no actual merge file was produced).
 	rec, err := env.db.GetRecording(ctx, "rec1")
 	require.NoError(t, err)
 	require.NotNil(t, rec)
-	require.False(t, rec.Merged)
+	require.Empty(t, rec.MergePath, "recording should not have been merged (no merge_path)")
 }
 
 // insertMergeableH265Recording creates a real H.265 MP4 file and inserts a recording into the DB.
@@ -1034,16 +1038,16 @@ func (e *mergeTestEnv) insertMergeableH265Recording(t *testing.T, id string, cam
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH265,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH265,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 
@@ -1108,7 +1112,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		merged := recsAfter[0]
 		require.Equal(t, cameraID, merged.CameraID)
 		require.Equal(t, model.FormatH264, merged.Format)
-		require.True(t, merged.Merged)
+		require.True(t, merged.MergeStatus == model.MergeStatusMerged)
 		require.False(t, merged.StartedAt.IsZero())
 		require.False(t, merged.EndedAt.IsZero())
 		require.Greater(t, merged.FileSize, int64(0))
@@ -1167,7 +1171,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		merged := recsAfter[0]
 		require.Equal(t, cameraID, merged.CameraID)
 		require.Equal(t, model.FormatH265, merged.Format)
-		require.True(t, merged.Merged)
+		require.True(t, merged.MergeStatus == model.MergeStatusMerged)
 		require.False(t, merged.StartedAt.IsZero())
 		require.False(t, merged.EndedAt.IsZero())
 		require.Greater(t, merged.FileSize, int64(0))
@@ -1226,7 +1230,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		merged := recsAfter[0]
 		require.Equal(t, cameraID, merged.CameraID)
 		require.Equal(t, model.FormatMJPEG, merged.Format)
-		require.True(t, merged.Merged)
+		require.True(t, merged.MergeStatus == model.MergeStatusMerged)
 		require.False(t, merged.StartedAt.IsZero())
 		require.False(t, merged.EndedAt.IsZero())
 		require.Greater(t, merged.FileSize, int64(0))
@@ -1310,7 +1314,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 		recs, err := concEnv.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID})
 		require.NoError(t, err)
 		require.Len(t, recs, 1)
-		require.True(t, recs[0].Merged)
+		require.True(t, recs[0].MergeStatus == model.MergeStatusMerged)
 	})
 }
 
@@ -1337,16 +1341,16 @@ func (e *mergeTestEnv) insertMergeableAVIRecording(t *testing.T, id string, came
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatAVI,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: numFrames,
-		Merged:     false,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatAVI,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  numFrames,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
 
@@ -1393,7 +1397,7 @@ func TestRunOnce_AVIIntegration(t *testing.T) {
 	merged := recsAfter[0]
 	require.Equal(t, cameraID, merged.CameraID)
 	require.Equal(t, model.FormatAVI, merged.Format)
-	require.True(t, merged.Merged)
+	require.True(t, merged.MergeStatus == model.MergeStatusMerged)
 	require.False(t, merged.StartedAt.IsZero())
 	require.False(t, merged.EndedAt.IsZero())
 	require.Greater(t, merged.FileSize, int64(0))

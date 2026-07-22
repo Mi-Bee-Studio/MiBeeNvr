@@ -175,7 +175,9 @@ export class Decoder {
         await this._configureWasm(ci);
         this._mode = 'wasm';
       } catch (wasmErr: any) {
-        throw new Error(`H.265 decode failed: WebCodecs unsupported, WASM fallback failed: ${wasmErr?.message || wasmErr}`);
+        throw new Error(
+          `H.265 decode failed: WebCodecs unsupported, WASM fallback failed: ${wasmErr?.message || wasmErr}`,
+        );
       }
     }
   }
@@ -211,7 +213,11 @@ export class Decoder {
         this._decoder.reset();
         this._configured = false;
       } catch {
-        try { this._decoder.close(); } catch { /* ignore */ }
+        try {
+          this._decoder.close();
+        } catch {
+          /* ignore */
+        }
         this._decoder = null;
         this._configured = false;
       }
@@ -222,7 +228,11 @@ export class Decoder {
     if (this._backpressured) {
       this._backpressured = false;
       if (this._backpressureCallback) {
-        try { this._backpressureCallback(false); } catch { /* ignore */ }
+        try {
+          this._backpressureCallback(false);
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
@@ -237,7 +247,11 @@ export class Decoder {
     this._mode = null;
 
     if (this._decoder) {
-      try { this._decoder.close(); } catch { /* already closed */ }
+      try {
+        this._decoder.close();
+      } catch {
+        /* already closed */
+      }
       this._decoder = null;
     }
     if (this._wasmDecoder) {
@@ -247,7 +261,11 @@ export class Decoder {
 
     // Clean up pending frames
     for (const f of this._pendingFrames) {
-      try { f.close(); } catch { /* already closed */ }
+      try {
+        f.close();
+      } catch {
+        /* already closed */
+      }
     }
     this._pendingFrames.clear();
     this._pendingDecodeCount = 0;
@@ -293,7 +311,6 @@ export class Decoder {
   get isWasm(): boolean {
     return this._mode === 'wasm';
   }
-
 
   // ─── Internal ──────────────────────────────────────────────────────────
 
@@ -352,7 +369,11 @@ export class Decoder {
       if (!this._backpressured) {
         this._backpressured = true;
         if (this._backpressureCallback) {
-          try { this._backpressureCallback(true); } catch { /* ignore */ }
+          try {
+            this._backpressureCallback(true);
+          } catch {
+            /* ignore */
+          }
         }
       }
       return;
@@ -379,7 +400,11 @@ export class Decoder {
       if (!this._backpressured) {
         this._backpressured = true;
         if (this._backpressureCallback) {
-          try { this._backpressureCallback(true); } catch { /* ignore */ }
+          try {
+            this._backpressureCallback(true);
+          } catch {
+            /* ignore */
+          }
         }
       }
       return;

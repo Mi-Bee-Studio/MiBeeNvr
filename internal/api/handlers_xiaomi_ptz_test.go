@@ -135,7 +135,7 @@ func TestXiaomiPTZNonXiaomi(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	ctx := t.Context()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"direction":"left","speed":5}`

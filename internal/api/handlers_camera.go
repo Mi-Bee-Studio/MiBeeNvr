@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"net/url"
@@ -120,6 +121,66 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Summary view: return only the fields needed for grid/dashboard display.
+	// Reduces response body ~60% for pages that only show status badges.
+	// Supports ETag conditional requests: 304 Not Modified when status unchanged.
+	if r.URL.Query().Get("view") == "summary" {
+		type cameraSummary struct {
+			ID          string  `json:"id"`
+			Name        string  `json:"name"`
+			Status      string  `json:"status"`
+			Encoding    string  `json:"encoding,omitempty"`
+			Protocol    string  `json:"protocol,omitempty"`
+			IsRecording bool    `json:"is_recording"`
+			LastSeen    *string `json:"last_seen,omitempty"`
+			ErrorCode   *string `json:"error_code,omitempty"`
+		}
+		summaries := make([]cameraSummary, len(cameras))
+		// Build ETag from camera status signatures (cheap — no JSON serialization).
+		var etagHash uint32
+		for i, c := range cameras {
+			summaries[i] = cameraSummary{
+				ID:          c.ID,
+				Name:        c.Name,
+				Status:      string(c.Status),
+				Encoding:    string(c.Encoding),
+				Protocol:    c.Protocol,
+				IsRecording: c.Status == model.StatusRecording,
+			}
+			if c.LastSeen != nil && !c.LastSeen.IsZero() {
+				ts := c.LastSeen.Format(time.RFC3339)
+				summaries[i].LastSeen = &ts
+				etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(ts))
+			}
+			if c.ErrorType != nil {
+				summaries[i].ErrorCode = c.ErrorType
+				etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(*c.ErrorType))
+			}
+			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.ID+string(c.Status)))
+		}
+		etag := fmt.Sprintf(`"s%d-%d"`, len(summaries), etagHash)
+		w.Header().Set("ETag", etag)
+		if match := r.Header.Get("If-None-Match"); match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		writeJSON(w, http.StatusOK, summaries)
+		return
+	}
+	// ETag for full list: based on camera count + status signatures (cheap).
+	var fullEtagHash uint32
+	for _, c := range cameras {
+		fullEtagHash = crc32.Update(fullEtagHash, crc32.IEEETable, []byte(c.ID+string(c.Status)))
+		if c.LastSeen != nil {
+			fullEtagHash = crc32.Update(fullEtagHash, crc32.IEEETable, []byte(c.LastSeen.Format(time.RFC3339)))
+		}
+	}
+	fullEtag := fmt.Sprintf(`"f%d-%d"`, len(cameras), fullEtagHash)
+	w.Header().Set("ETag", fullEtag)
+	if match := r.Header.Get("If-None-Match"); match == fullEtag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	writeJSON(w, http.StatusOK, cameras)
 }
 
@@ -136,11 +197,6 @@ var validProtocols = map[string]bool{
 	// Plugin protocols
 	"xiaomi":    true,
 	"timelapse": true,
-	// Legacy combined protocols (accepted, will be normalized)
-	"rtsp_h264":  true,
-	"rtsp_h265":  true,
-	"rtsp_mjpeg": true,
-	"http_jpeg":  true,
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
@@ -225,19 +281,13 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
-	// Normalize protocol — handle legacy combined formats
+	// 0.10.0+: combined protocol strings are no longer accepted.
 	proto := body.Protocol
 	enc := body.Encoding
 	if strings.Contains(proto, "_") {
-		parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
-		if err != nil {
-			WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q", proto))
-			return
-		}
-		proto = parsedProto
-		if enc == "" {
-			enc = parsedEnc
-		}
+		WriteError(w, http.StatusBadRequest,
+			fmt.Sprintf("protocol %q: combined format is no longer supported; use separate protocol and encoding fields", proto))
+		return
 	}
 	// Set default encoding if still empty
 	if enc == "" {

@@ -97,7 +97,8 @@ export class WasmH265Decoder {
 
       if (!this._module.isOk(result.error)) {
         // ERROR_WAITING_FOR_INPUT_DATA is normal — need more NALs
-        if (result.error === 13) { // ERROR_WAITING_FOR_INPUT_DATA
+        if (result.error === 13) {
+          // ERROR_WAITING_FOR_INPUT_DATA
           break;
         }
         // Other errors — stop
