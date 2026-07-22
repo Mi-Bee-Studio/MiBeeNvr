@@ -67,15 +67,7 @@ export async function fetchSnapshot({
  * @param {(id: string) => void} opts.onUnsupported
  */
 export function createSnapshotManager(opts) {
-  const {
-    intervalMs = 3000,
-    getCredentials,
-    onUrlUpdate,
-    onUrlRevoke,
-    onLoadingChange,
-    onErrorChange,
-    onUnsupported,
-  } = opts;
+  const { intervalMs = 3000, getCredentials, onUrlUpdate, onUrlRevoke, onLoadingChange, onErrorChange } = opts;
 
   const intervals = {};
   const noSnapshotSet = new Set();
