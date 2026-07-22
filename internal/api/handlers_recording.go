@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
@@ -829,10 +830,27 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	}
 	// Surface the codec so the frontend player can pick the right path.
 	// HEAD requests also get the header (caller sets it before ServeFile).
-	if codec := probeTimelapseCodec(rec.MergePath); codec != "" {
+	if codec := probeTimelapseCodecCached(rec.MergePath); codec != "" {
 		w.Header().Set("X-Timelapse-Codec", codec)
 	}
 	http.ServeFile(w, r, rec.MergePath)
+}
+
+// timelapseCodecCache caches probe results by file path. Merge output files are
+// immutable (never modified after creation), so the codec never changes — caching
+// avoids re-parsing the MP4 box header on every playback request.
+var timelapseCodecCache sync.Map // path → string (codec)
+
+// probeTimelapseCodecCached returns the codec for a timelapse merge MP4, using
+// an in-memory cache keyed by file path. Since merge outputs are write-once,
+// the cache is permanent per path (no invalidation needed).
+func probeTimelapseCodecCached(path string) string {
+	if v, ok := timelapseCodecCache.Load(path); ok {
+		return v.(string)
+	}
+	codec := probeTimelapseCodec(path)
+	timelapseCodecCache.Store(path, codec)
+	return codec
 }
 
 // probeTimelapseCodec returns "h264" / "h265" / "mjpeg" for the MP4 at the

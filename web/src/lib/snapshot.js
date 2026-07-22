@@ -32,7 +32,7 @@ export async function fetchSnapshot({
   }
 
   try {
-    const response = await fetch(`/api/cameras/${cameraId}/snapshot?_=${Date.now()}`, { headers });
+    const response = await fetch(`/api/cameras/${cameraId}/snapshot`, { headers });
     if (response.status === 404) {
       onUnsupported(cameraId);
       return;

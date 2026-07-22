@@ -36,12 +36,18 @@
   const reconnectDelays = [2000, 4000, 8000, 16000, 32000];
   const FROZEN_TIMEOUT_MS = 15000;
   const FROZEN_CHECK_INTERVAL_MS = 3000;
-  const POLL_INTERVAL_MS = 500;
+  // 0.10.1: poll every 1000ms instead of 500ms — the server now supports ETag
+  // conditional requests (304 Not Modified when frame unchanged), so bandwidth
+  // is near-zero when the scene is static. 1s = 1fps live preview, sufficient
+  // for MJPEG cameras (ESP32 MiBeeCam typically delivers 2-5fps anyway).
+  const POLL_INTERVAL_MS = 1000;
   let lastLoadTime = 0;
   let frozenCheckTimer: ReturnType<typeof setInterval> | null = null;
   let currentBlobUrl: string | null = null;
   let consecutiveErrors = 0;
   const MAX_CONSECUTIVE_ERRORS = 3;
+  // Track the last ETag to send If-None-Match on subsequent polls.
+  let lastEtag: string | null = null;
 
   function revokeBlobUrl() {
     if (currentBlobUrl) {
@@ -57,24 +63,35 @@
       const authHeader = getAuthHeader();
       const headers: Record<string, string> = {};
       if (authHeader) headers['Authorization'] = authHeader;
+      // Send ETag from last successful fetch — server returns 304 if unchanged.
+      if (lastEtag) headers['If-None-Match'] = lastEtag;
 
       const resp = await fetch(`${API_BASE}/cameras/${cameraId}/latest-frame`, {
         headers,
-        cache: 'no-store',
+        cache: 'no-cache',
       });
 
       if (destroyed) return;
 
+      // 304 Not Modified — frame unchanged, keep current image, just update timestamp.
+      if (resp.status === 304) {
+        consecutiveErrors = 0;
+        lastLoadTime = Date.now();
+        return;
+      }
+
       if (!resp.ok) {
         consecutiveErrors++;
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          // Transient failure — retry with backoff instead of dying for good.
-          // (scheduleReconnect gives up -> permanent 'error' only after 5 cycles.)
           consecutiveErrors = 0;
           scheduleReconnect();
         }
         return;
       }
+
+      // Save ETag for next poll's conditional request.
+      const etag = resp.headers.get('ETag');
+      if (etag) lastEtag = etag;
 
       const blob = await resp.blob();
       if (destroyed || blob.size === 0) return;
@@ -108,6 +125,7 @@
   function startPolling() {
     stopPolling();
     consecutiveErrors = 0;
+    lastEtag = null; // Reset ETag on new polling session
     // Immediate first poll, then interval
     pollFrame();
     pollTimer = setInterval(pollFrame, POLL_INTERVAL_MS);
