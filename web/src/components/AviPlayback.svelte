@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AudioPlayer, AudioCodec } from '$lib/audio-player';
   import { getAuthHeader } from '$lib/api';
+  import { t } from '$lib/i18n';
 
   let {
     recordingId = '',
@@ -99,7 +100,7 @@
 
   function connectWs() {
     if (!recordingId) {
-      error = 'No recording ID provided';
+      error = t('avi.error.noId');
       return;
     }
     try {
@@ -113,7 +114,7 @@
       socket.onmessage = handleWsMessage;
 
       socket.onerror = () => {
-        error = 'WebSocket connection error';
+        error = t('avi.error.wsConn');
       };
 
       socket.onclose = () => {
@@ -123,7 +124,7 @@
 
       ws = socket;
     } catch (e) {
-      error = 'Failed to create WebSocket';
+      error = t('avi.error.wsCreate');
     }
   }
 
@@ -169,22 +170,22 @@
 <div class="avi-playback">
   <div class="mjpeg-container">
     {#if frameSrc}
-      <img src={frameSrc} alt="MJPEG playback frame" class="mjpeg-render" />
+      <img src={frameSrc} alt={t('avi.title')} class="mjpeg-render" />
     {:else}
       <div class="placeholder">
-        <span class="placeholder-text">No frame</span>
+        <span class="placeholder-text">{t('avi.noFrame')}</span>
       </div>
     {/if}
   </div>
 
   <div class="controls">
     <button onclick={togglePlay} class="play-btn">
-      {playing ? '⏸ Pause' : '▶ Play'}
+      {playing ? '⏸ ' + t('common.pause') : '▶ ' + t('common.play')}
     </button>
 
     {#if audioReady}
       <span class="audio-indicator badge badge-info" data-testid="audio-indicator">
-        🔊 Audio: {SAMPLE_RATE}Hz
+        🔊 {t('avi.audioHz', { rate: SAMPLE_RATE })}
       </span>
     {/if}
 

@@ -101,7 +101,7 @@
 
   // Build enriched camera health entries (camera info + health detail)
   let cameraHealthEntries = $derived.by(() => {
-    const entries: { id: string; name: string; status: string; score: number; factors?: Record<string, number> }[] = [];
+    const entries: { id: string; name: string; status: string; score: number; factors?: Record<string, number>; recording_enabled?: boolean | null }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
       entries.push({
@@ -110,6 +110,7 @@
         status: detail?.latest_status || cam.status || 'unknown',
         score: detail?.score ?? -1,
         factors: detail?.score_factors,
+        recording_enabled: cam.recording_enabled,
       });
     }
     // Sort: unhealthy first (lowest score), then by name
@@ -127,9 +128,12 @@
     return 'var(--color-danger)';
   }
 
-  function statusLabel(status: string): string {
+  function statusLabel(status: string, recordingEnabled?: boolean | null): string {
     const s = status.toLowerCase();
-    if (s === 'recording' || s === 'active') return t('cameras.statusRecording');
+    if (s === 'recording' || s === 'active') {
+      // Distinguish live-only (recording disabled) from active disk recording.
+      return recordingEnabled === false ? t('cameras.statusLive') : t('cameras.statusRecording');
+    }
     if (s === 'reconnecting') return t('health.status.reconnecting');
     if (s === 'error' || s === 'failed') return t('cameras.statusError');
     if (s === 'stopped') return t('cameras.statusStopped');
@@ -227,7 +231,7 @@
     await tick();
     const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
     if (ctx) {
-      trendChart = createTrendChart(ChartJs, ctx, trends);
+      trendChart = createTrendChart(ChartJs, ctx, trends, t('dashboard.perDay'));
     }
   }
 
@@ -431,7 +435,7 @@
               <span class="text-sm th-text-primary flex-1 truncate">{cam.name}</span>
 
               <!-- Status badge -->
-              <span class="text-xs th-text-secondary hidden sm:inline">{statusLabel(cam.status)}</span>
+              <span class="text-xs th-text-secondary hidden sm:inline">{statusLabel(cam.status, cam.recording_enabled)}</span>
 
               <!-- Health score -->
               {#if cam.score >= 0}

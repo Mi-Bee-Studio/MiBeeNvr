@@ -79,9 +79,10 @@ export function getChartThemeColors() {
  * @param {import('chart.js')} Chart - Chart constructor
  * @param {HTMLCanvasElement} canvas
  * @param {{ date: string; total_size: number; camera_sizes?: Record<string, number> }[]} trends
+ * @param {string} [unitSuffix] - localized suffix for the y-axis title (e.g. "/day")
  * @returns {import('chart.js').Chart | null}
  */
-export function createTrendChart(Chart, canvas, trends) {
+export function createTrendChart(Chart, canvas, trends, unitSuffix = '/day') {
   if (!canvas) return null;
 
   const { gridColor, textColor } = getChartThemeColors();
@@ -130,7 +131,7 @@ export function createTrendChart(Chart, canvas, trends) {
           grid: { color: gridColor },
           ticks: { color: textColor },
           beginAtZero: true,
-          title: { display: true, text: `${chartUnit.unit}/day`, color: textColor },
+          title: { display: true, text: `${chartUnit.unit}${unitSuffix}`, color: textColor },
         },
       },
     },

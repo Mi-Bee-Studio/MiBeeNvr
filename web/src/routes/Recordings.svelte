@@ -1170,7 +1170,7 @@ let selectedPresetCamera = $state<string>('');
       onclick={(e) => e.stopPropagation()}
     >
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-lg font-semibold th-text-primary">AVI Playback</h3>
+        <h3 class="text-lg font-semibold th-text-primary">{t('avi.title')}</h3>
         <button
           onclick={() => showAviPlayback = false}
           class="btn btn-ghost btn-sm"
