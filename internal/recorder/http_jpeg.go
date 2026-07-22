@@ -412,6 +412,10 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		// readers treat it as immutable.
 		dp := data
 		r.latestFrame.Store(&dp)
+		// Broadcast to StreamHub for wsstream live preview (HTTP JPEG cameras).
+		if r.Hub != nil {
+			r.Hub.Broadcast(time.Now().UnixNano()/1e6*90, [][]byte{data}, true)
+		}
 
 		// Live-only mode: keep the latest-frame cache (so MJPEG live preview via
 		// /latest-frame polling works) but skip all segment I/O.

@@ -52,22 +52,25 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 
 		codec, sps, pps, vps := getCodecParams(rec)
 		slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
-		if sps == nil || pps == nil {
-			// Recorder is active but hasn't received a keyframe yet.
-			// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
-			const wsCodecWait = 5 * time.Second
-			const wsCodecPoll = 200 * time.Millisecond
-			deadline := time.Now().Add(wsCodecWait)
-			for sps == nil || pps == nil {
-				if time.Now().After(deadline) {
-					slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
-					WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
-					return
+		// MJPEG/JPEG cameras don't have SPS/PPS — skip the keyframe wait.
+		if codec != model.FormatMJPEG && codec != model.EncJPEG {
+			if sps == nil || pps == nil {
+				// Recorder is active but hasn't received a keyframe yet.
+				// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
+				const wsCodecWait = 5 * time.Second
+				const wsCodecPoll = 200 * time.Millisecond
+				deadline := time.Now().Add(wsCodecWait)
+				for sps == nil || pps == nil {
+					if time.Now().After(deadline) {
+						slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
+						WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
+						return
+					}
+					time.Sleep(wsCodecPoll)
+					codec, sps, pps, vps = getCodecParams(rec)
 				}
-				time.Sleep(wsCodecPoll)
-				codec, sps, pps, vps = getCodecParams(rec)
+				slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 			}
-			slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 		}
 
 		hub := getStreamHub(rec)

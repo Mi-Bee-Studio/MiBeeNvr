@@ -48,6 +48,8 @@
   const MAX_CONSECUTIVE_ERRORS = 3;
   // Track the last ETag to send If-None-Match on subsequent polls.
   let lastEtag: string | null = null;
+  let wsConnection: WebSocket | null = null;
+  let useWebSocket = true; // Try WebSocket first, fall back to HTTP polling
 
   function revokeBlobUrl() {
     if (currentBlobUrl) {
@@ -122,6 +124,119 @@
     }
   }
 
+  // ── WebSocket streaming (preferred over HTTP polling) ──────────────────
+  // Connects to the wsstream WebSocket endpoint, which pushes JPEG frames
+  // in real-time. Falls back to HTTP polling if WebSocket fails.
+  function startWebSocket() {
+    stopWebSocket();
+    if (!cameraId) return;
+
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const authHeader = getAuthHeader();
+    // wsstream endpoint accepts ?token= for auth (base64 user:pass)
+    let wsUrl = `${proto}//${window.location.host}${API_BASE}/cameras/${cameraId}/stream/ws`;
+    if (authHeader) {
+      // Extract credentials from Basic auth header
+      const b64 = authHeader.replace('Basic ', '');
+      wsUrl += `?token=${b64}`;
+    }
+
+    try {
+      wsConnection = new WebSocket(wsUrl);
+    } catch {
+      useWebSocket = false;
+      startPolling();
+      return;
+    }
+
+    wsConnection.binaryType = 'arraybuffer';
+
+    wsConnection.onopen = () => {
+      consecutiveErrors = 0;
+    };
+
+    wsConnection.onmessage = async (event) => {
+      if (destroyed || !(event.data instanceof ArrayBuffer)) return;
+      const data = new Uint8Array(event.data);
+      if (data.length < 1) return;
+
+      const msgType = data[0];
+      // Video frame (0x02): nalus[0] contains the complete JPEG
+      if (msgType === 0x02 && data.length >= 12) {
+        const naluCount = (data[10] << 8) | data[11];
+        if (naluCount < 1) return;
+        let off = 12;
+        const naluLen = (data[off] << 24) | (data[off + 1] << 16) | (data[off + 2] << 8) | data[off + 3];
+        off += 4;
+        if (off + naluLen > data.length) return;
+        const jpegData = data.slice(off, off + naluLen);
+
+        try {
+          const blob = new Blob([jpegData], { type: 'image/jpeg' });
+          revokeBlobUrl();
+          currentBlobUrl = URL.createObjectURL(blob);
+          if (imgEl) imgEl.src = currentBlobUrl;
+
+          lastLoadTime = Date.now();
+          if (streamState === 'loading' || streamState === 'frozen') {
+            streamState = 'playing';
+            reconnectAttempts = 0;
+            startFrozenDetection();
+            onLoad?.();
+          }
+        } catch {
+          // Corrupt JPEG — skip
+        }
+      }
+    };
+
+    wsConnection.onerror = () => {
+      // WebSocket failed — fall back to HTTP polling
+      if (useWebSocket) {
+        useWebSocket = false;
+        stopWebSocket();
+        startPolling();
+      }
+    };
+
+    wsConnection.onclose = () => {
+      if (destroyed || !useWebSocket) return;
+      // Reconnect with backoff (same pattern as polling)
+      consecutiveErrors++;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        consecutiveErrors = 0;
+        useWebSocket = false;
+        stopWebSocket();
+        startPolling();
+      } else {
+        scheduleWsReconnect();
+      }
+    };
+  }
+
+  function stopWebSocket() {
+    if (wsConnection) {
+      wsConnection.onopen = null;
+      wsConnection.onmessage = null;
+      wsConnection.onerror = null;
+      wsConnection.onclose = null;
+      try {
+        wsConnection.close();
+      } catch { /* already closed */ }
+      wsConnection = null;
+    }
+  }
+
+  function scheduleWsReconnect() {
+    const base = reconnectDelays[Math.min(reconnectAttempts - 1, reconnectDelays.length - 1)];
+    const delay = Math.round(base * (0.75 + Math.random() * 0.5));
+    streamState = 'loading';
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (useWebSocket) startWebSocket();
+    }, delay);
+  }
+
   function startPolling() {
     stopPolling();
     consecutiveErrors = 0;
@@ -159,32 +274,30 @@
   }
 
   function scheduleReconnect() {
-    // Always retry — see note on reconnectDelays above. The 'error' state is
-    // reachable only via the manual 'Retry' button or by destroying the
-    // component, not by exhausting automatic retries.
     reconnectAttempts++;
     const base = reconnectDelays[Math.min(reconnectAttempts - 1, reconnectDelays.length - 1)];
-    // ±25% jitter desynchronizes cameras that died together after a shared
-    // transient backend hiccup, avoiding a thundering-herd retry stampede.
     const delay = Math.round(base * (0.75 + Math.random() * 0.5));
     streamState = 'loading';
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      startPolling();
+      if (useWebSocket) startWebSocket();
+      else startPolling();
     }, delay);
   }
 
   function handleReconnect() {
     stopFrozenDetection();
     stopPolling();
+    stopWebSocket();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
     reconnectAttempts = 0;
     consecutiveErrors = 0;
+    useWebSocket = true;
     streamState = 'loading';
-    startPolling();
+    startWebSocket();
   }
 
   function handleFrozenRetry() {
@@ -199,6 +312,7 @@
     if (!_id) return;
 
     stopPolling();
+    stopWebSocket();
     stopFrozenDetection();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -206,12 +320,16 @@
     }
     reconnectAttempts = 0;
     consecutiveErrors = 0;
+    useWebSocket = true;
     streamState = 'loading';
 
-    // Stagger the first poll across cameras (100-500ms) so the fixed 500ms poll
+    // Stagger the first poll across cameras (100-500ms) so the fixed poll
     // cycles stay phase-offset: a short backend hiccup won't push every camera
     // past the consecutive-error threshold in the same window.
-    const timer = setTimeout(() => startPolling(), 100 + Math.random() * 400);
+    const timer = setTimeout(() => {
+      if (useWebSocket) startWebSocket();
+      else startPolling();
+    }, 100 + Math.random() * 400);
     return () => {
       clearTimeout(timer);
     };
@@ -220,6 +338,7 @@
   onDestroy(() => {
     destroyed = true;
     stopPolling();
+    stopWebSocket();
     stopFrozenDetection();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);

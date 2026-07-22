@@ -27,6 +27,7 @@ import { Decoder } from './decoder';
 
 let decoder: any = null;
 let pendingFrames: { frame: any }[] = [];
+let isMjpegMode = false;
 
 // ─── Message handler ──────────────────────────────────────────────────────
 
@@ -67,6 +68,15 @@ async function handleCodecInfo(data: {
     decoder.close();
     decoder = null;
   }
+
+  // MJPEG mode: no WebCodecs decoder needed. JPEG frames are decoded via
+  // createImageBitmap in handleVideoFrame, bypassing the Decoder entirely.
+  if (data.codec === 'mjpeg') {
+    isMjpegMode = true;
+    self.postMessage({ type: 'codec-ready' });
+    return;
+  }
+  isMjpegMode = false;
 
   // Create new decoder
   decoder = new Decoder();
@@ -133,6 +143,21 @@ async function handleCodecInfo(data: {
 }
 
 function handleVideoFrame(data: { pts: number; isKeyframe: boolean; nalus: Uint8Array[] }): void {
+  // MJPEG mode: decode JPEG via createImageBitmap (no WebCodecs decoder needed).
+  // nalus[0] contains the complete JPEG image bytes.
+  if (isMjpegMode) {
+    if (data.nalus.length === 0 || data.nalus[0].length === 0) return;
+    const jpegData = data.nalus[0];
+    createImageBitmap(new Blob([jpegData], { type: 'image/jpeg' }))
+      .then((bitmap) => {
+        self.postMessage({ type: 'frame', data: { bitmap, pts: data.pts } }, [bitmap] as any);
+      })
+      .catch(() => {
+        // Corrupt JPEG — silently skip (common during camera reconnection)
+      });
+    return;
+  }
+
   if (!decoder) return;
 
   try {
@@ -149,6 +174,7 @@ function handleReset(): void {
 }
 
 function handleClose(): void {
+  isMjpegMode = false;
   if (decoder) {
     decoder.close();
     decoder = null;

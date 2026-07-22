@@ -384,7 +384,7 @@ export class ConnectionManager {
 // ─── Inline CodecInfo decoder (avoids circular import, reuses protocol format) ───
 
 function decodeCodecInfoInline(data: ArrayBuffer): CodecInfo {
-  if (data.byteLength < 5) {
+  if (data.byteLength < 2) {
     throw new Error(`CodecInfo too short: ${data.byteLength} bytes`);
   }
 
@@ -394,6 +394,15 @@ function decodeCodecInfoInline(data: ArrayBuffer): CodecInfo {
   }
 
   const codecByte = dv.getUint8(1);
+  // MJPEG: only type + codec byte, no SPS/PPS/VPS.
+  if (codecByte === 6) {
+    return { codec: 'mjpeg', profile: 0, level: 0, sps: new Uint8Array(0), pps: new Uint8Array(0) };
+  }
+
+  if (data.byteLength < 5) {
+    throw new Error(`CodecInfo too short: ${data.byteLength} bytes`);
+  }
+
   const codec = codecByte === 5 ? 'h265' : 'h264';
   const profile = dv.getUint8(2);
   const level = dv.getUint8(3);

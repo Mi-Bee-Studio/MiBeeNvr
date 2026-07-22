@@ -14,6 +14,8 @@ func codecByte(codec string) (byte, error) {
 		return 4, nil
 	case CodecH265:
 		return 5, nil
+	case CodecMJPEG:
+		return 6, nil
 	default:
 		return 0, fmt.Errorf("wsstream: unknown codec %q", codec)
 	}
@@ -25,6 +27,8 @@ func codecFromByte(b byte) (string, error) {
 		return CodecH264, nil
 	case 5:
 		return CodecH265, nil
+	case 6:
+		return CodecMJPEG, nil
 	default:
 		return "", fmt.Errorf("wsstream: unknown codec byte 0x%02x", b)
 	}
@@ -39,8 +43,9 @@ func codecFromByte(b byte) (string, error) {
 //	{type:1}{codec:1}{profile:1}{level:1}{sps_len:2}{sps}{pps_len:2}{pps}[vps_len:2][vps]
 //
 // All multi-byte integers are big-endian.
-// codec byte: 4 = H.264, 5 = H.265.
+// codec byte: 4 = H.264, 5 = H.265, 6 = MJPEG.
 // vps fields are only present for H.265.
+// MJPEG sends only type + codec (no SPS/PPS/VPS).
 func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 	if ci == nil {
 		return nil, errors.New("wsstream: nil CodecInfo")
@@ -49,6 +54,11 @@ func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 	cb, err := codecByte(ci.Codec)
 	if err != nil {
 		return nil, err
+	}
+
+	// MJPEG: minimal CodecInfo — just type + codec byte.
+	if ci.Codec == CodecMJPEG {
+		return []byte{MsgTypeCodecInfo, cb}, nil
 	}
 
 	// type + codec + profile + level + sps_len + sps + pps_len + pps
@@ -96,7 +106,7 @@ func EncodeCodecInfo(ci *CodecInfo) ([]byte, error) {
 
 // decodeCodecInfo decodes binary wire format into a CodecInfo.
 func decodeCodecInfo(data []byte) (*CodecInfo, error) {
-	if len(data) < 5 {
+	if len(data) < 2 {
 		return nil, fmt.Errorf("wsstream: codec info too short: %d bytes", len(data))
 	}
 
@@ -107,6 +117,15 @@ func decodeCodecInfo(data []byte) (*CodecInfo, error) {
 	codec, err := codecFromByte(data[1])
 	if err != nil {
 		return nil, err
+	}
+
+	// MJPEG: only type + codec byte, no SPS/PPS/VPS.
+	if codec == CodecMJPEG {
+		return &CodecInfo{Codec: codec}, nil
+	}
+
+	if len(data) < 5 {
+		return nil, fmt.Errorf("wsstream: codec info too short: %d bytes", len(data))
 	}
 
 	ci := &CodecInfo{

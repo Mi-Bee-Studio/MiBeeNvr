@@ -12,19 +12,20 @@ const (
 
 // Codec string constants.
 const (
-	CodecH264 = "h264"
-	CodecH265 = "h265"
+	CodecH264  = "h264"
+	CodecH265  = "h265"
+	CodecMJPEG = "mjpeg" // JPEG frames: VideoFrame.NALUs[0] contains a complete JPEG image
 )
 
 // CodecInfo contains codec configuration data sent once at stream start.
 // This is the binary equivalent of AVCDecoderConfigurationRecord /
 // HEVCDecoderConfigurationRecord, but simplified for WebSocket transport.
 type CodecInfo struct {
-	Codec   string // "h264" or "h265"
-	Profile byte   // profile indication from SPS
-	Level   byte   // level indication from SPS
-	SPS     []byte // sequence parameter set
-	PPS     []byte // picture parameter set
+	Codec   string // "h264", "h265", or "mjpeg"
+	Profile byte   // profile indication from SPS (0 for MJPEG)
+	Level   byte   // level indication from SPS (0 for MJPEG)
+	SPS     []byte // sequence parameter set (nil for MJPEG)
+	PPS     []byte // picture parameter set (nil for MJPEG)
 	VPS     []byte // video parameter set (H.265 only)
 }
 

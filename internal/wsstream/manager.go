@@ -259,7 +259,10 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	}
 
 	isKeyframe := false
-	if len(au) > 0 && len(au[0]) > 0 {
+	if entry.codec == model.FormatMJPEG {
+		// MJPEG: every frame is independently decodable (like an IDR).
+		isKeyframe = true
+	} else if len(au) > 0 && len(au[0]) > 0 {
 		var naluType int
 		if entry.codec == model.FormatH265 {
 			// H.265: forbidden(1) | nal_unit_type(6) | ...

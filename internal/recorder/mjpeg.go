@@ -374,6 +374,13 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 		// returns a freshly allocated slice, so storing the pointer is safe.
 		dp := jpeg
 		r.latestFrame.Store(&dp)
+		// Broadcast to StreamHub for wsstream live preview (MJPEG cameras).
+		// Each JPEG frame is wrapped as a single-element [][]byte to match
+		// the FrameCallback signature. wsstream treats every MJPEG frame as
+		// a keyframe (independently decodable).
+		if r.Hub != nil {
+			r.Hub.Broadcast(int64(pkt.Timestamp), [][]byte{jpeg}, true)
+		}
 		select {
 		case r.frameCh <- jpeg:
 		default:
