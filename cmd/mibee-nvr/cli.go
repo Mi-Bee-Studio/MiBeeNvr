@@ -20,28 +20,62 @@ var (
 // CLI subcommands
 // ---------------------------------------------------------------------------
 
-func cmdHealth() {
+// resolveHealthAddr determines the address the health probe should target.
+//
+// Precedence: explicit --addr > --config <path> > Docker auto-detected config >
+// ":9090" default.
+//
+// The Docker auto-detection reads the config at the data dir (default /data,
+// overridable via NVR_DATA_DIR) so the HEALTHCHECK command can stay bare
+// (`mibee-nvr health`) and still probe the real server.listen — required for
+// host-network mode where operators change server.listen (e.g. :9191) to avoid
+// a host-port conflict. A missing/unreadable auto-detected config is non-fatal
+// and falls through to the default addr.
+func resolveHealthAddr(args []string) (string, error) {
 	addr := ":9090"
-	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
+	addrExplicit := false   // --addr given: skip all config-based resolution
+	configExplicit := false // --config given: skip Docker auto-detection
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
 		case "--addr":
+			addrExplicit = true
 			i++
-			if i < len(os.Args) {
-				addr = os.Args[i]
+			if i < len(args) {
+				addr = args[i]
 			}
 		case "--config":
+			configExplicit = true
 			i++
-			if i < len(os.Args) {
-				cfg, err := config.Load(os.Args[i])
+			if i < len(args) {
+				cfg, err := config.Load(args[i])
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-					os.Exit(1)
+					return "", err
 				}
 				if cfg.Server.Listen != "" {
 					addr = cfg.Server.Listen
 				}
 			}
 		}
+	}
+	// Auto-detect config in Docker environments only when neither --addr nor
+	// --config was given.
+	if !addrExplicit && !configExplicit {
+		if dir := dockerStorageDir(); dir != "" {
+			if cfg, err := config.Load(dir + "/mibee-nvr.yaml"); err == nil {
+				if cfg.Server.Listen != "" {
+					addr = cfg.Server.Listen
+				}
+			}
+		}
+	}
+	return addr, nil
+}
+
+func cmdHealth() {
+	addr, err := resolveHealthAddr(os.Args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
 	}
 	resp, err := http.Get("http://localhost" + addr + "/api/health")
 	if err != nil {

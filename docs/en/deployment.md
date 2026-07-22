@@ -320,7 +320,7 @@ ONVIF auto-discovery uses WS-Discovery (UDP multicast to `239.255.255.250:3702`)
 
 Solutions:
 
-1. **Host networking** (recommended for discovery): Uncomment `network_mode: host` in `docker-compose.yml` and remove the `ports` section. The container shares the host's network stack, enabling multicast.
+1. **Host networking** (recommended for discovery): Uncomment `network_mode: host` in `docker-compose.yml` and remove the `ports` section. The container shares the host's network stack, enabling multicast. If the host's port 9090 is already in use (e.g. Synology DSM), set `server.listen: ":9191"` (or any free port) in `mibee-nvr.yaml` — the container binds that host port directly. The health check (`mibee-nvr health`) auto-detects the configured listen port, so no extra setup is needed.
 
 2. **Manual probe** (works in any network mode): In the Web UI camera page, use the "Manual Probe" section to enter a device IP address directly. This bypasses multicast and works in any Docker configuration.
 
@@ -461,6 +461,29 @@ The Raspberry Pi 3B has 905MB RAM. For stable operation:
 - **Memory limit**: Uncomment `MemoryMax=512M` in `deploy/mibee-nvr.service` to prevent OOM kills.
 - **Storage**: Use an external USB disk (ext4) for recordings. The SD card will wear out quickly with continuous writes.
 - **Cameras**: Limit to 2-3 concurrent H.264/H.265 streams depending on resolution and bitrate.
+
+## NAS / Large-Memory Optimization (tmpfs buffer)
+
+On hosts with ample RAM (NAS boxes, x86 mini-PCs with 8 GB+), the frequent small-segment writes keep mechanical drives from spinning down and accelerate SD/eMMC wear. A **zero-code-change** mitigation is to use a Linux `tmpfs` as the NVR's temporary recording directory: small segments are written to RAM first, then the background merge task flushes the large merged file to the mechanical disk in one sequential write.
+
+```bash
+# 1. Mount a tmpfs (tune size to available RAM; stay under 25-30% of total)
+sudo mount -t tmpfs -o size=2G tmpfs /mnt/nvr-tmp
+
+# 2. Point storage.root_dir at the tmpfs mount in mibee-nvr.yaml
+#    storage:
+#      root_dir: /mnt/nvr-tmp
+#
+# Then route final archive output (the mechanical disk) via the merge output
+# path or a scheduled mv to persistent storage.
+```
+
+Caveats:
+
+- **Power loss loses tmpfs data.** tmpfs is only suitable as a rolling-segment buffer; the merged large files must be moved to persistent storage promptly. Mains power is generally reliable, but add a small UPS if you are cautious.
+- **Size within reason.** tmpfs consumes real RAM — an oversized mount starves the NVR process, HLS streaming, and browser rendering. 2 GB is a sensible starting point on most 8 GB hosts.
+- **v0.9.0+ adaptive segment duration** already reduces write frequency: low-memory devices (≤2 GB) use 30s, high-memory hosts (>2 GB) auto-use up to 2m, halving fragment count. tmpfs further eliminates the remaining small-write churn on top of this.
+- **Approaches NOT adopted** (they conflict with the project's design constraints): a resident in-memory ring buffer needs a large constant RAM allocation, incompatible with the RPi 3B's 1 GB target; enlarging the muxer write buffer risks losing hundreds of MB on power loss and corrupts the MP4 moov atom, violating the atomic-write (temp → rename) crash-safety principle. The project therefore sticks with the memory-friendly "small segments + async merge + optional tmpfs (deployment layer)" approach.
 
 ## Updating
 
