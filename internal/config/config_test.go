@@ -880,25 +880,13 @@ func TestApplyDefaultsFTP(t *testing.T) {
 	require.True(t, *cfg.FTP.Enabled)
 }
 
-func TestCameraProtocolNormalization_RtspH264(t *testing.T) {
-	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_h264", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.ApplyDefaults()
-	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
-	require.Equal(t, "h264", cfg.Cameras[0].Encoding)
-}
-
-func TestCameraProtocolNormalization_RtspMjpeg(t *testing.T) {
-	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "rtsp_mjpeg", URL: "rtsp://192.168.1.10/stream"}}}
-	cfg.ApplyDefaults()
-	require.Equal(t, "rtsp", cfg.Cameras[0].Protocol)
-	require.Equal(t, "mjpeg", cfg.Cameras[0].Encoding)
-}
-
-func TestCameraProtocolNormalization_HttpJpeg(t *testing.T) {
-	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "http_jpeg", URL: "http://192.168.1.10/capture"}}}
-	cfg.ApplyDefaults()
-	require.Equal(t, "http", cfg.Cameras[0].Protocol)
-	require.Equal(t, "jpeg", cfg.Cameras[0].Encoding)
+// 0.10.0+: combined protocol strings are rejected by Validate.
+func TestCameraProtocolCombined_Rejected(t *testing.T) {
+	for _, proto := range []string{"rtsp_h264", "rtsp_mjpeg", "http_jpeg", "rtsp_h265"} {
+		cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: proto, URL: "rtsp://192.168.1.10/stream"}}}
+		err := Validate(cfg)
+		require.Error(t, err, "combined protocol %q should be rejected", proto)
+	}
 }
 
 func TestCameraEncodingDefault_Rtsp(t *testing.T) {

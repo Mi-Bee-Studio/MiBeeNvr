@@ -225,19 +225,13 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
-	// Normalize protocol — handle legacy combined formats
+	// 0.10.0+: combined protocol strings are no longer accepted.
 	proto := body.Protocol
 	enc := body.Encoding
 	if strings.Contains(proto, "_") {
-		parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
-		if err != nil {
-			WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q", proto))
-			return
-		}
-		proto = parsedProto
-		if enc == "" {
-			enc = parsedEnc
-		}
+		WriteError(w, http.StatusBadRequest,
+			fmt.Sprintf("protocol %q: combined format is no longer supported; use separate protocol and encoding fields", proto))
+		return
 	}
 	// Set default encoding if still empty
 	if enc == "" {

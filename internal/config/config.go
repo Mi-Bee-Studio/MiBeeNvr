@@ -784,17 +784,12 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("camera[%d].onvif_endpoint has invalid format: %s", i, c.ONVIFEndpoint)
 			}
 		}
-		// Accept both old combined format and new separate format
+		// 0.10.0+: combined protocol strings (e.g. "rtsp_h264") are no longer
+		// accepted. protocol and encoding must be specified separately.
 		proto := c.Protocol
 		enc := c.Encoding
 		if strings.Contains(proto, "_") {
-			// Old combined format like "rtsp_h264" — parse and validate
-			parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
-			if err != nil {
-				return fmt.Errorf("camera[%d].protocol invalid: %s", i, proto)
-			}
-			proto = parsedProto
-			enc = parsedEnc
+			return fmt.Errorf("camera[%d].protocol %q: combined format is no longer supported in 0.10.0+; split into separate protocol (%q) and encoding fields", i, proto, strings.SplitN(proto, "_", 2)[0])
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
@@ -1579,17 +1574,9 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.RemoteLog.Format == "" {
 		cfg.RemoteLog.Format = "jsonline"
 	}
-	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
+	// Camera protocol/encoding normalization
 	for i := range cfg.Cameras {
 		cam := &cfg.Cameras[i]
-		// If encoding is empty but protocol looks like old combined format (e.g. "rtsp_h264")
-		if cam.Encoding == "" && strings.Contains(cam.Protocol, "_") {
-			proto, enc, err := model.ParseLegacyProtocol(cam.Protocol)
-			if err == nil {
-				cam.Protocol = proto
-				cam.Encoding = enc
-			}
-		}
 		// If encoding is still empty for known transport-only protocols, set sensible defaults
 		if cam.Encoding == "" {
 			switch cam.Protocol {

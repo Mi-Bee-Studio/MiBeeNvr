@@ -8,32 +8,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseLegacyProtocol(t *testing.T) {
+func TestValidateProtocolEncoding(t *testing.T) {
 	t.Parallel()
+	// 0.10.0+: protocol and encoding are always separate fields.
 	tests := []struct {
-		input     string
-		wantProto string
-		wantEnc   string
-		wantErr   bool
+		proto    string
+		enc      string
+		wantErr  bool
 	}{
-		{"rtsp_h264", "rtsp", "h264", false},
-		{"rtsp_h265", "rtsp", "h265", false},
-		{"rtsp_mjpeg", "rtsp", "mjpeg", false},
-		{"http_jpeg", "http", "jpeg", false},
-		{"onvif", "onvif", "", false},
-		{"unknown", "", "", true},
-		{"", "", "", true},
+		{"rtsp", "h264", false},
+		{"rtsp", "h265", false},
+		{"rtsp", "mjpeg", false},
+		{"http", "jpeg", false},
+		{"onvif", "", false},
+		{"unknown", "", true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			proto, enc, err := ParseLegacyProtocol(tt.input)
+		t.Run(tt.proto+"_"+tt.enc, func(t *testing.T) {
+			err := ValidateProtocolEncoding(tt.proto, tt.enc)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.wantProto, proto)
-			require.Equal(t, tt.wantEnc, enc)
 		})
 	}
 }

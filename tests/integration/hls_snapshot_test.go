@@ -85,10 +85,8 @@ func TestProtocolConstants_Snapshot(t *testing.T) {
 		got      model.Protocol
 		expected string
 	}{
-		{"RTSP_H264", model.ProtoRTSPH264, "rtsp_h264"},
-		{"RTSP_H265", model.ProtoRTSPH265, "rtsp_h265"},
-		{"RTSP_MJPEG", model.ProtoRTSPMJPEG, "rtsp_mjpeg"},
-		{"HTTP_JPEG", model.ProtoHTTPJPEG, "http_jpeg"},
+		{"RTSP", model.ProtoRTSP, "rtsp"},
+		{"HTTP", model.ProtoHTTP, "http"},
 		{"ONVIF", model.ProtoONVIF, "onvif"},
 		{"Xiaomi", model.ProtoXiaomi, "xiaomi"},
 	}
