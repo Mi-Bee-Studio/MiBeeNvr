@@ -47,6 +47,8 @@ func runRepair() int {
 		return runRepairDeleteByFormat()
 	case "prune-intermediate-mp4":
 		return runRepairPruneIntermediateMP4()
+	case "remerge-h265":
+		return runRepairRemergeH265()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -67,8 +69,12 @@ type repairOpts struct {
 	// delete-by-format specific
 	keepFormat string        // format value to PRESERVE (e.g. "timelapse"); all other formats are deleted
 	olderThan  time.Duration // 0 = no age filter (delete all matching regardless of age)
-	// prune-intermediate-mp4 specific
-	before string // YYYY-MM-DD — only prune recordings started before this date (UTC)
+	// prune-intermediate-mp4 / remerge-h265 specific
+	before string // YYYY-MM-DD — only act on recordings started before this date (UTC)
+	after  string // YYYY-MM-DD — only act on recordings started after this date (UTC) (remerge-h265 only)
+	// remerge-h265 specific
+	force bool // skip hvcC bug detection, re-merge every H.265 timelapse
+	fps   int  // FPS for the re-merge (default 10, set by subcommand if 0)
 }
 
 func parseRepairFlags(startIdx int) repairOpts {
@@ -111,6 +117,16 @@ func parseRepairFlags(startIdx int) repairOpts {
 		case arg == "--before" && i+1 < len(os.Args):
 			i++
 			opts.before = os.Args[i]
+		case arg == "--after" && i+1 < len(os.Args):
+			i++
+			opts.after = os.Args[i]
+		case arg == "--force":
+			opts.force = true
+		case arg == "--fps" && i+1 < len(os.Args):
+			i++
+			if n, err := parseInt(os.Args[i]); err == nil && n > 0 {
+				opts.fps = n
+			}
 		case arg == "--help", arg == "-h":
 			opts.configPath = "__help__"
 		}
@@ -1238,6 +1254,10 @@ Subcommands:
                          (e.g. delete regular video while keeping every timelapse segment)
   prune-intermediate-mp4 Bulk-remove per-segment rolling-merge .mp4 outputs that have
                          already been folded into a periodic (8h/24h/7d/30d) merge output
+  remerge-h265          Re-merge H.265 timelapse recordings whose merged MP4 carries the
+                         buggy hvcC header (tier=1 + profile_idc=1) that Windows Edge
+                         refuses to play. Reads each recording's original frame_*.h265
+                         dir, re-runs the now-fixed merger, atomically swaps the .mp4.
 
 Common options:
   --dry-run      Report what would change without modifying (default)
