@@ -882,7 +882,7 @@ func TestApplyDefaultsFTP(t *testing.T) {
 
 // 0.10.0+: combined protocol strings are rejected by Validate.
 func TestCameraProtocolCombined_Rejected(t *testing.T) {
-	for _, proto := range []string{"rtsp_h264", "rtsp_mjpeg", "http_jpeg", "rtsp_h265"} {
+	for _, proto := range []string{"rtsp", "h264", "rtsp", "mjpeg", "http", "jpeg", "rtsp_h265"} {
 		cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: proto, URL: "rtsp://192.168.1.10/stream"}}}
 		err := Validate(cfg)
 		require.Error(t, err, "combined protocol %q should be rejected", proto)

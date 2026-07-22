@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -109,6 +110,10 @@ func buildRouter(
 	r.Use(chimiddleware.Recoverer)
 	r.Use(authmw.SecurityHeaders)
 	r.Use(authmw.COOPHeaders)
+	// Streaming gzip compression for all JSON/HTML/text responses.
+	// SSE (text/event-stream) is also compressed but flushed per-event.
+	// Already-compressed content (video, images) is auto-skipped.
+	r.Use(authmw.StreamingGzip(5))
 
 	// API Key middleware — validates Bearer mbv_* tokens for MiBeeVision.
 	// Runs before authMW: if the request has an API Key Bearer token, it's
@@ -166,6 +171,10 @@ func buildRouter(
 		path := r.URL.Path
 		if path == "/" || path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		} else if strings.HasPrefix(path, "/assets/") {
+			// Vite produces content-hash filenames (e.g. Cameras-CjnyKwd-.js).
+			// Content changes → filename changes → safe to cache immutably.
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		fileServer.ServeHTTP(w, r)
 	}))
@@ -773,8 +782,13 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	httpServer := &http.Server{
-		Addr:    cfg.Server.Listen,
-		Handler: r,
+		Addr:              cfg.Server.Listen,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout is intentionally not set: SSE endpoints, large file
+		// downloads (ServeFile), and video streaming need long-lived connections.
+		// Setting it would kill legitimate long responses.
 	}
 
 	// ---- Create App and register services ----

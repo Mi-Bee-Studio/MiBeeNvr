@@ -279,7 +279,7 @@ func TestCreateCamera_LegacyProtocol(t *testing.T) {
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	body := `{"name":"Test","protocol":"rtsp_h264","url":"rtsp://192.168.1.10/stream"}`
+	body := `{"name":"Test","protocol":"rtsp","encoding":"h264","url":"rtsp://192.168.1.10/stream"}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", bytes.NewReader([]byte(body)), "", "")
 	// Will fail because camMgr is nil, but protocol parsing should succeed
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
@@ -465,7 +465,7 @@ func TestUpdateCamera_InvalidURL(t *testing.T) {
 
 func TestValidProtocols(t *testing.T) {
 	t.Parallel()
-	for _, proto := range []string{"rtsp", "http", "onvif", "xiaomi", "rtsp_h264", "rtsp_h265", "rtsp_mjpeg", "http_jpeg"} {
+	for _, proto := range []string{"rtsp", "http", "onvif", "xiaomi", "srt", "rtmp", "timelapse"} {
 		require.True(t, validProtocols[proto], "expected %q to be valid", proto)
 	}
 	require.False(t, validProtocols["ftp"])

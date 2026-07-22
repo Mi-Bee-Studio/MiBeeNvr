@@ -19,19 +19,19 @@ type CameraRow struct {
 	ID            string               `json:"id"`
 	Name          string               `json:"name"`
 	Protocol      string               `json:"protocol"`
-	Encoding      string               `json:"encoding"`
+	Encoding      string               `json:"encoding,omitempty"`
 	URL           string               `json:"url"`
-	Description   string               `json:"description"`
-	Location      string               `json:"location"`
-	Brand         string               `json:"brand"`
-	Model         string               `json:"model"`
-	SerialNumber  string               `json:"serial_number"`
-	RetentionDays int                  `json:"retention_days"`
+	Description   string               `json:"description,omitempty"`
+	Location      string               `json:"location,omitempty"`
+	Brand         string               `json:"brand,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	SerialNumber  string               `json:"serial_number,omitempty"`
+	RetentionDays int                  `json:"retention_days,omitempty"`
 	Status        model.RecorderStatus `json:"status"`
-	ErrorType     *string              `json:"error_type"`
-	ErrorDetail   *string              `json:"error_detail"`
+	ErrorType     *string              `json:"error_type,omitempty"`
+	ErrorDetail   *string              `json:"error_detail,omitempty"`
 	LastSeen      *time.Time           `json:"last_seen,omitempty"`
-	Username      string               `json:"username"`
+	Username      string               `json:"username,omitempty"`
 	HasPassword   bool                 `json:"has_password"`
 	// Per-camera merge config (nil = use global)
 	MergeEnabled            *bool      `json:"merge_enabled,omitempty"`
@@ -40,12 +40,12 @@ type CameraRow struct {
 	MergeBatchLimit         *int       `json:"merge_batch_limit,omitempty"`
 	MergeMinSegmentAge      *string    `json:"merge_min_segment_age,omitempty"`
 	MergeMinSegmentsToMerge *int       `json:"merge_min_segments_to_merge,omitempty"`
-	ONVIFEndpoint           string     `json:"onvif_endpoint"`
-	ProfileToken            string     `json:"profile_token"`
-	StreamEncoding          string     `json:"stream_encoding"`
+	ONVIFEndpoint           string     `json:"onvif_endpoint,omitempty"`
+	ProfileToken            string     `json:"profile_token,omitempty"`
+	StreamEncoding          string     `json:"stream_encoding,omitempty"`
 	Archived                bool       `json:"archived"`
 	ArchivedAt              *time.Time `json:"archived_at,omitempty"`
-	ArchiveRetentionDays    int        `json:"archive_retention_days"`
+	ArchiveRetentionDays    int        `json:"archive_retention_days,omitempty"`
 	// Transcoding config injected from YAML at API response time
 	Transcoding *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 	// Channel injected from YAML at API response time (Xiaomi dual-lens)

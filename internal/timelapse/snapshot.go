@@ -31,11 +31,11 @@ func DeriveSnapshotURL(streamURL, protocol string) string {
 		// This is a placeholder — callers should use the ONVIF client directly.
 		return ""
 
-	case "http", "http_jpeg":
+	case "http":
 		// HTTP cameras already serve frames via HTTP; return URL as-is.
 		return streamURL
 
-	case "rtsp", "rtsp_h264", "rtsp_h265", "rtsp_mjpeg":
+	case "rtsp":
 		return deriveSnapshotFromRTSP(streamURL)
 
 	default:
@@ -97,9 +97,9 @@ func SnapshotCandidates(streamURL, protocol string) []string {
 	}
 
 	switch protocol {
-	case "rtsp", "rtsp_h264", "rtsp_h265", "rtsp_mjpeg":
+	case "rtsp":
 		return snapshotCandidatesFromRTSP(streamURL)
-	case "http", "http_jpeg":
+	case "http":
 		return []string{streamURL}
 	default:
 		return nil

@@ -662,8 +662,8 @@ func TestGetSettings_WithConfig(t *testing.T) {
 			DiskThresholdPercent: 80,
 		},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "Front Door", Protocol: "rtsp_h264", URL: "rtsp://camera1/stream"},
-			{ID: "cam-2", Name: "Backyard", Protocol: "http_jpeg", URL: "http://camera2/stream"},
+			{ID: "cam-1", Name: "Front Door", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://camera1/stream"},
+			{ID: "cam-2", Name: "Backyard", Protocol: "http", Encoding: "jpeg", URL: "http://camera2/stream"},
 		},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
@@ -783,7 +783,7 @@ func TestUpdateSettings_Success(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
-		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp_h264", URL: "rtsp://x"}},
+		Cameras: []config.CameraConfig{{ID: "cam-1", Name: "Cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://x"}},
 	}
 	h := newHandlerWithConfig(db, store, cfg)
 
@@ -1579,7 +1579,7 @@ func TestHandleCreateCamera(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
-	body := strings.NewReader(`{"name":"Front Door","protocol":"rtsp_h264","url":"rtsp://camera1/stream"}`)
+	body := strings.NewReader(`{"name":"Front Door","protocol":"rtsp","encoding":"h264","url":"rtsp://camera1/stream"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
@@ -1606,8 +1606,8 @@ func TestHandleCreateCamera_MissingFields(t *testing.T) {
 		body    string
 		wantErr string
 	}{
-		{"missing name", `{"protocol":"rtsp_h264","url":"rtsp://x"}`, "name is required"},
-		{"missing url", `{"name":"Cam","protocol":"rtsp_h264"}`, "url is required"},
+		{"missing name", `{"protocol":"rtsp","encoding":"h264","url":"rtsp://x"}`, "name is required"},
+		{"missing url", `{"name":"Cam","protocol":"rtsp","encoding":"h264"}`, "url is required"},
 		{"missing protocol", `{"name":"Cam","url":"rtsp://x"}`, "protocol is required"},
 	}
 	for _, tc := range cases {
@@ -1646,7 +1646,7 @@ func TestHandleGetCamera(t *testing.T) {
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera first
-	body := strings.NewReader(`{"name":"Test","protocol":"http_jpeg","url":"http://cam/snap"}`)
+	body := strings.NewReader(`{"name":"Test","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("setup: expected 201, got %d", rr.Code)
@@ -1684,7 +1684,7 @@ func TestHandleUpdateCamera(t *testing.T) {
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera
-	body := strings.NewReader(`{"name":"Original","protocol":"http_jpeg","url":"http://cam/snap"}`)
+	body := strings.NewReader(`{"name":"Original","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("setup: expected 201, got %d", rr.Code)
@@ -1721,7 +1721,7 @@ func TestHandleDeleteCamera(t *testing.T) {
 	h, _, _ := newTestCamHandler(t)
 
 	// Create a camera
-	body := strings.NewReader(`{"name":"To Delete","protocol":"http_jpeg","url":"http://cam/snap"}`)
+	body := strings.NewReader(`{"name":"To Delete","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("setup: expected 201, got %d", rr.Code)
@@ -1940,7 +1940,7 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 			{
 				ID:          cameraID,
 				Name:        "SnapCam",
-				Protocol:    "http_jpeg",
+				Protocol: "http", Encoding: "jpeg",
 				URL:         snapshotServer.URL + "/stream",
 				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
 			},
@@ -1955,7 +1955,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp_h264", URL: "rtsp://x"},
+			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://x"},
 		},
 	}
 	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
@@ -2346,7 +2346,7 @@ func TestUpdateCameraMergeConfig_Success(t *testing.T) {
 
 	// Seed a camera
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp", "h264", "rtsp://camera/stream")
 
 	body := strings.NewReader(`{"enabled":true,"batch_limit":20}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2368,7 +2368,7 @@ func TestUpdateCameraMergeConfig_InvalidDuration(t *testing.T) {
 	h := newHandlerWithConfig(db, store, cfg)
 
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp", "h264", "rtsp://camera/stream")
 
 	body := strings.NewReader(`{"check_interval":"bad"}`)
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam1/merge-config", body, "", "")
@@ -2400,7 +2400,7 @@ func TestDeleteCameraMergeConfig_Success(t *testing.T) {
 
 	// Seed a camera
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp", "h264", "rtsp://camera/stream")
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/cam1/merge-config", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -2436,7 +2436,7 @@ func TestGetCameraMergeConfig_Success(t *testing.T) {
 	// Seed a camera
 	var err error
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-		"cam1", "Test Cam", "rtsp_h264", "rtsp://camera/stream")
+		"cam1", "Test Cam", "rtsp", "h264", "rtsp://camera/stream")
 
 	// Set per-camera merge config
 	mergeEnabled := true
@@ -2473,7 +2473,7 @@ func TestGetCameraMergeConfig_NoConfig(t *testing.T) {
 
 	// Seed a camera with NO merge config
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
-		"cam2", "No Merge", "rtsp_h264", "rtsp://camera/stream")
+		"cam2", "No Merge", "rtsp", "h264", "rtsp://camera/stream")
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/merge-config", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -2570,7 +2570,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 	cfg := &config.Config{
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{
-			{ID: "cam-1", Name: "Test", Protocol: "rtsp_h264", URL: "rtsp://x"},
+			{ID: "cam-1", Name: "Test", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://x"},
 		},
 	}
 	mergeMgr := merge.NewMergeManager(

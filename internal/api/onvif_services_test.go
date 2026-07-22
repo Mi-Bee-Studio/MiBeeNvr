@@ -62,7 +62,7 @@ func TestSnapshotGetUri_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 
@@ -358,7 +358,7 @@ func TestONVIFReboot_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 
@@ -373,7 +373,7 @@ func TestONVIFGetNetwork_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 
@@ -388,7 +388,7 @@ func TestONVIFGetUsers_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 
@@ -405,7 +405,7 @@ func TestImagingGetSettings_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 
@@ -420,7 +420,7 @@ func TestImagingSetSettings_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 	body := `{"brightness": 0.5}`
@@ -437,7 +437,7 @@ func TestImagingGetOptions_NonONVIFRejected(t *testing.T) {
 	t.Parallel()
 	db, store := setupPTZTestDB(t)
 	ctx := context.Background()
-	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp_h264", "", "rtsp://host/stream", "", "", "", "", "", ""))
+	require.NoError(t, db.UpsertCamera(ctx, "rtsp-cam", "RTSP Camera", "rtsp", "h264", "rtsp://host/stream", "", "", "", "", "", ""))
 
 	h := TestHandler(db, store)
 

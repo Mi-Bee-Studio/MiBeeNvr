@@ -10,33 +10,6 @@ import (
 
 func TestValidateProtocolEncoding(t *testing.T) {
 	t.Parallel()
-	// 0.10.0+: protocol and encoding are always separate fields.
-	tests := []struct {
-		proto    string
-		enc      string
-		wantErr  bool
-	}{
-		{"rtsp", "h264", false},
-		{"rtsp", "h265", false},
-		{"rtsp", "mjpeg", false},
-		{"http", "jpeg", false},
-		{"onvif", "", false},
-		{"unknown", "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.proto+"_"+tt.enc, func(t *testing.T) {
-			err := ValidateProtocolEncoding(tt.proto, tt.enc)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-}
-
-func TestValidateProtocolEncoding(t *testing.T) {
-	t.Parallel()
 	validCombos := []struct{ proto, enc string }{
 		{"rtsp", "h264"},
 		{"rtsp", "h265"},

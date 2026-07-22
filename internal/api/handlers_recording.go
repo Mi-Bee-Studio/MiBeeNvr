@@ -54,6 +54,15 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 			filter.Limit = n
 		}
 	}
+	// Enforce a safe default + upper bound to prevent accidental full-table scans.
+	// Without this, omitting ?limit= returns the entire recordings table.
+	if filter.Limit == 0 || filter.Limit > 500 {
+		if filter.Limit > 500 {
+			filter.Limit = 500
+		} else {
+			filter.Limit = 50 // safe default
+		}
+	}
 
 	if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {

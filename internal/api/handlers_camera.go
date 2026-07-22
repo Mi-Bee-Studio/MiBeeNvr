@@ -120,6 +120,40 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Summary view: return only the fields needed for grid/dashboard display.
+	// Reduces response body ~60% for pages that only show status badges.
+	if r.URL.Query().Get("view") == "summary" {
+		type cameraSummary struct {
+			ID          string  `json:"id"`
+			Name        string  `json:"name"`
+			Status      string  `json:"status"`
+			Encoding    string  `json:"encoding,omitempty"`
+			Protocol    string  `json:"protocol,omitempty"`
+			IsRecording bool    `json:"is_recording"`
+			LastSeen    *string `json:"last_seen,omitempty"`
+			ErrorCode   *string `json:"error_code,omitempty"`
+		}
+		summaries := make([]cameraSummary, len(cameras))
+		for i, c := range cameras {
+			summaries[i] = cameraSummary{
+				ID:          c.ID,
+				Name:        c.Name,
+				Status:      string(c.Status),
+				Encoding:    string(c.Encoding),
+				Protocol:    c.Protocol,
+				IsRecording: c.Status == model.StatusRecording,
+			}
+			if c.LastSeen != nil && !c.LastSeen.IsZero() {
+				ts := c.LastSeen.Format(time.RFC3339)
+				summaries[i].LastSeen = &ts
+			}
+			if c.ErrorType != nil {
+				summaries[i].ErrorCode = c.ErrorType
+			}
+		}
+		writeJSON(w, http.StatusOK, summaries)
+		return
+	}
 	writeJSON(w, http.StatusOK, cameras)
 }
 
@@ -136,11 +170,6 @@ var validProtocols = map[string]bool{
 	// Plugin protocols
 	"xiaomi":    true,
 	"timelapse": true,
-	// Legacy combined protocols (accepted, will be normalized)
-	"rtsp_h264":  true,
-	"rtsp_h265":  true,
-	"rtsp_mjpeg": true,
-	"http_jpeg":  true,
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
