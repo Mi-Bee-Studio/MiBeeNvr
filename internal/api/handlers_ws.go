@@ -51,9 +51,15 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		codec, sps, pps, vps := getCodecParams(rec)
+		// Normalize JPEG/MJPEG codec names for wsstream: both "jpeg" and "mjpeg"
+		// map to wsstream.CodecMJPEG ("mjpeg") since the wire protocol treats
+		// them identically (complete JPEG frames in VideoFrame.NALUs[0]).
+		if codec == model.EncJPEG {
+			codec = model.FormatMJPEG
+		}
 		slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
-		// MJPEG/JPEG cameras don't have SPS/PPS — skip the keyframe wait.
-		if codec != model.FormatMJPEG && codec != model.EncJPEG {
+		// MJPEG cameras don't have SPS/PPS — skip the keyframe wait.
+		if codec != model.FormatMJPEG {
 			if sps == nil || pps == nil {
 				// Recorder is active but hasn't received a keyframe yet.
 				// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
