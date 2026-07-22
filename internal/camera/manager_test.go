@@ -693,6 +693,63 @@ func TestUpdateCamera_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// TestUpdateCamera_ToggleRecordingEnabled_Restarts verifies that toggling
+// recording_enabled triggers a recorder restart in ALL cases — including the
+// previously-broken nil→false transition (issue #73). Before the fix, a camera
+// whose recording_enabled was never explicitly persisted (nil = default record)
+// would NOT restart when set to false, so the old recorder kept writing
+// segments to disk despite the user disabling recording.
+func TestUpdateCamera_ToggleRecordingEnabled_Restarts(t *testing.T) {
+	tests := []struct {
+		name    string
+		oldVal  *bool // camera's recording_enabled before the update
+		newVal  bool  // value sent in the update
+		restart bool  // expect a recorder restart?
+	}{
+		{"nil_to_false_restarts", nil, false, true},  // the bug: previously no restart
+		{"nil_to_true_no_restart", nil, true, false}, // true→true (effective)
+		{"true_to_false_restarts", ptrBool(true), false, true},
+		{"true_to_true_no_restart", ptrBool(true), true, false},
+		{"false_to_true_restarts", ptrBool(false), true, true},
+		{"false_to_false_no_restart", ptrBool(false), false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, _, _, _ := newTestManager(t)
+			// Set the camera's initial recording_enabled before start.
+			for i, c := range mgr.cfg.Cameras {
+				if c.ID == "cam-h264" {
+					mgr.cfg.Cameras[i].RecordingEnabled = tc.oldVal
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			require.NoError(t, mgr.Start(ctx))
+			require.Equal(t, 4, mgr.RecorderCount())
+
+			// Snapshot the recorder identity before the update.
+			recBefore := mgr.snapshotRecorder("cam-h264")
+
+			_, err := mgr.UpdateCamera(ctx, "cam-h264", CameraUpdate{RecordingEnabled: &tc.newVal})
+			require.NoError(t, err)
+
+			recAfter := mgr.snapshotRecorder("cam-h264")
+			if tc.restart {
+				// A restart replaces the recorder instance.
+				if fmt.Sprintf("%p", recBefore) == fmt.Sprintf("%p", recAfter) {
+					t.Errorf("expected recorder to be restarted when recording_enabled changes effectively (same pointer %p)", recAfter)
+				}
+			} else {
+				if fmt.Sprintf("%p", recBefore) != fmt.Sprintf("%p", recAfter) {
+					t.Errorf("expected NO recorder restart when recording_enabled is effectively unchanged (before=%p after=%p)", recBefore, recAfter)
+				}
+			}
+		})
+	}
+}
+
 func TestRestartRecorder(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())

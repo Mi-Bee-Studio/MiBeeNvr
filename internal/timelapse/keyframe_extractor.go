@@ -364,6 +364,22 @@ func (k *KeyframeExtractor) captureFrame() {
 		}
 	}
 
+	// Skip the capture if no parameter sets are available. A frame file without
+	// SPS/PPS cannot be merged into a valid MP4 and would poison the segment with
+	// a permanent "frames missing SPS" failure (issue #90). Waiting for the next
+	// tick is preferable to writing an unusable frame.
+	if len(paramSets) == 0 {
+		kfeLogger.Warn(
+			"skipping keyframe capture: no codec parameter sets available yet",
+			"camera_id", k.cameraID,
+			"frame", frameCount,
+		)
+		k.mu.Lock()
+		k.frameCount--
+		k.mu.Unlock()
+		return
+	}
+
 	// Concatenate parameter sets + frame NALUs with Annex B start codes.
 	var data []byte
 	for _, nalu := range paramSets {

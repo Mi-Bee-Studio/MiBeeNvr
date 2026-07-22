@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +129,17 @@ func TestProtocols(t *testing.T) {
 	protocols, ok := resp["protocols"].([]interface{})
 	require.True(t, ok, "expected protocols array")
 	require.Len(t, protocols, 6) // rtsp, http, onvif, xiaomi, srt, rtmp
+
+	// Xiaomi cameras authenticate via cloud account token, not per-camera
+	// username/password — auth must be false so the form hides credentials.
+	for _, p := range protocols {
+		pm := p.(map[string]interface{})
+		if pm["id"] == "xiaomi" {
+			caps := pm["capabilities"].(map[string]interface{})
+			assert.False(t, caps["auth"].(bool),
+				"xiaomi protocol must have auth=false (cloud-token auth, not per-camera credentials)")
+		}
+	}
 }
 
 // --- handleBackup tests ---

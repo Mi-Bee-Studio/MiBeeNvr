@@ -792,11 +792,14 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 		{
-			ID:           "xiaomi",
-			Label:        "Xiaomi",
-			Encodings:    []string{"h264", "h265"},
-			BuiltIn:      true,
-			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
+			ID:        "xiaomi",
+			Label:     "Xiaomi",
+			Encodings: []string{"h264", "h265"},
+			BuiltIn:   true,
+			// Xiaomi cameras authenticate via Xiaomi cloud account token, NOT
+			// per-camera username/password. auth=false hides the credential
+			// fields in the add/edit form (issue #73).
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": false},
 		},
 		{
 			ID:           "srt",

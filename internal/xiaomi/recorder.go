@@ -71,6 +71,11 @@ type XiaomiRecorderConfig struct {
 	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 	Quality      string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
 	EventBus     *event.EventBus
+	// RecordEnabled gates disk writes. nil or true = record normally;
+	// false = "live-only" mode — the stream stays connected (for live preview /
+	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
+	// semantics so recording_enabled=false takes effect on Xiaomi cameras.
+	RecordEnabled *bool
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -586,6 +591,13 @@ func (r *XiaomiRecorder) processNALU(nalu []byte, timestamp uint64, lastTimestam
 	}
 }
 
+// recordDisabled reports whether this recorder is in live-only mode (no disk
+// writes). Mirrors baseRecorder.RecordEnabled semantics: nil/true = record,
+// false = live-only.
+func (r *XiaomiRecorder) recordDisabled() bool {
+	return r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled
+}
+
 // processH264NALU handles an H.264 NAL unit.
 func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
 	naluType := nalu[0] & 0x1F
@@ -611,6 +623,13 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	if r.sps == nil || r.pps == nil {
+		return
+	}
+
+	// Live-only mode: keep the stream alive for live preview (forwardHLS) but
+	// skip all disk writes (segment creation + WriteSample + rotation).
+	if r.recordDisabled() {
+		r.forwardHLS(nalu)
 		return
 	}
 
@@ -709,6 +728,13 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	if r.vps == nil || r.sps == nil || r.pps == nil {
+		return
+	}
+
+	// Live-only mode: keep the stream alive for live preview (forwardHLS) but
+	// skip all disk writes (segment creation + WriteSample + rotation).
+	if r.recordDisabled() {
+		r.forwardHLS(nalu)
 		return
 	}
 

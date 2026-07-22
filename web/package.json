@@ -12,28 +12,28 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@tailwindcss/vite": "^4.3.2",
-    "@testing-library/svelte": "^5.3.1",
-    "eslint": "^10.6.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/svelte": "^5.4.2",
+    "eslint": "^10.7.0",
     "jsdom": "^29.1.1",
-    "prettier": "^3.9.4",
-    "svelte": "^5.55.4",
-    "tailwindcss": "^4.3.2",
-    "vite": "^8.0.10",
+    "prettier": "^3.9.6",
+    "svelte": "^5.56.7",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
   "dependencies": {
     "@yume-chan/libde265": "^1.0.0",
     "chart.js": "^4.5.1",
     "hls.js": "^1.6.16",
-    "lucide-svelte": "^0.577.0",
+    "lucide-svelte": "^1.0.1",
     "mpegts.js": "^1.8.0",
-    "onnxruntime-web": "^1.26.0"
+    "onnxruntime-web": "^1.27.0"
   },
   "overrides": {
     "js-yaml": "^4.2.0",
     "undici": "^7.28.0",
-    "protobufjs": "^7.6.3"
+    "protobufjs": "^7.6.5"
   }
 }

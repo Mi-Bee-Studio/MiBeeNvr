@@ -524,15 +524,19 @@ func TestFrameDropCounter(t *testing.T) {
 	logOutput := logBuf.String()
 	t.Logf("log output:\n%s", logOutput)
 
-	// Verify warning log was emitted every 100 drops
-	lines := strings.Split(logOutput, "\n")
-	var warnLines int
-	for _, line := range lines {
-		if strings.Contains(line, "frames dropped") {
-			warnLines++
+	// Verify warning log was emitted every 100 drops. Only assert when enough
+	// drops actually crossed a 100-boundary; in -short mode far fewer than 100
+	// drops occur (buf=5, 100 frames) so the modulo-based warning never fires.
+	if cnt >= 100 {
+		lines := strings.Split(logOutput, "\n")
+		var warnLines int
+		for _, line := range lines {
+			if strings.Contains(line, "frames dropped") {
+				warnLines++
+			}
 		}
+		require.GreaterOrEqual(t, warnLines, 1, "expected at least 1 warning log line (every 100 drops)")
 	}
-	require.GreaterOrEqual(t, warnLines, 1, "expected at least 1 warning log line (every 100 drops)")
 }
 
 func TestIdleTimeout(t *testing.T) {

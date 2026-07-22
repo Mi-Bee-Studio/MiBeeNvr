@@ -306,7 +306,9 @@ let healthShowWarningIcon = $derived(
        {/if}
      </div>
    {/if}
-   {#if camera.status === 'recording'}
+   {#if camera.status === 'recording' && camera.recording_enabled === false}
+        <span class="badge badge-info">{t('cameras.statusLive')}</span>
+      {:else if camera.status === 'recording'}
         <span class="badge badge-success">{t('cameras.statusRecording')}</span>
       {:else if camera.status === 'error'}
         <span class="badge badge-error">{t('cameras.statusError')}</span>

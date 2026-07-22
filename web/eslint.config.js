@@ -25,6 +25,10 @@ export default [
         IntersectionObserver: true,
         btoa: true,
         atob: true,
+        Event: true,
+        MessageEvent: true,
+        CustomEvent: true,
+        HTMLElement: true,
       },
     },
     rules: {
