@@ -41,6 +41,7 @@ backoff.go       # Shared exponential backoff with jitter
 ## CONVENTIONS
 
 - **Shared architecture**: All recorders follow same pattern: `New*Recorder()` → `Start(ctx)` → `run()` loop → `connectAndRecord()` → `writeFrames()` goroutine
+- **Recording gate (`RecordEnabled`)**: `baseRecorder` reads `cfg.RecordEnabled` in `writeFrames()` (nil/true = record, false = live-only — stream stays alive, no disk writes). H264/H265/MJPEG/HTTPJPEG/ONVIF inherit this via `baseRecorder`. **Plugin-style recorders do NOT**: `XiaomiRecorder` gates its own writes via `recordDisabled()` (see `internal/xiaomi/AGENTS.md`), and `IngestRecorder` (SRT/RTMP push-in) does NOT honor `RecordEnabled` yet (push-in streams rarely need live-only mode; file an issue if needed). When adding a new recorder that writes segments, either inherit `baseRecorder` or add a `RecordEnabled` gate to every disk-write path — otherwise `recording_enabled=false` silently keeps recording (issue #73).
 - **Ring buffer pattern** (H264/H265): RTP decode → `frameCh` channel (cap=100) → `writeFrames()` goroutine. Non-blocking send drops frames when full
 - **Auto-reconnect**: `run()` wraps `connectAndRecord()` with exponential backoff + jitter. Backoff starts at `InitBackoff`, doubles + jitter, caps at `MaxBackoff`
 - **Panic recovery**: `writeFrames()` and `run()` have `defer recover()` with stack logging — never crash the goroutine

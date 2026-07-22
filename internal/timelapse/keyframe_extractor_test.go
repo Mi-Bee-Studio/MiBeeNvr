@@ -333,6 +333,11 @@ func TestKeyframeExtractor_FallsBackToPFrame(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
+	// Broadcast SPS/PPS so the extractor caches parameter sets (a real camera
+	// sends these before any frame). Without them the extractor now correctly
+	// skips capture rather than writing an un-mergeable frame (issue #90).
+	hub.Broadcast(0, makeH264AU(7, 8), false)
+
 	// Broadcast only P-frames (no IDRs).
 	for i := range 5 {
 		au := makeH264AU(1)
@@ -347,6 +352,44 @@ func TestKeyframeExtractor_FallsBackToPFrame(t *testing.T) {
 		t.Fatal("expected at least one captured frame file via P-frame fallback")
 	}
 	t.Logf("P-frame fallback files: %v", files)
+}
+
+// TestKeyframeExtractor_SkipsCaptureWithoutParamSets verifies the issue #90
+// fix: when no SPS/PPS are available (neither inline-cached nor via the
+// provider), the extractor skips the capture instead of writing a frame file
+// that the merger would reject as "frames missing SPS".
+func TestKeyframeExtractor_SkipsCaptureWithoutParamSets(t *testing.T) {
+	store := newMockSegmentStore(t)
+	hub := model.NewStreamHub()
+	hub.SetCameraID("cam-1")
+
+	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
+		CameraID:   "cam-1",
+		Interval:   50 * time.Millisecond,
+		SegmentDur: time.Hour,
+		Store:      store,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ext.Start(ctx, hub)
+	defer ext.Stop()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Broadcast only P-frames with no parameter sets and no provider.
+	for i := range 5 {
+		au := makeH264AU(1)
+		hub.Broadcast(int64(i), au, false)
+	}
+
+	// Wait for capture tick — should skip (no param sets).
+	time.Sleep(100 * time.Millisecond)
+
+	files := listSegmentFiles(store)
+	if len(files) != 0 {
+		t.Fatalf("expected no frame files (skipped capture without param sets), got %d: %v", len(files), files)
+	}
 }
 
 func TestKeyframeExtractor_H265IDRDetection(t *testing.T) {

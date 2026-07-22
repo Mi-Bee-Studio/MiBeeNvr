@@ -309,6 +309,74 @@ func TestXiaomiRecorderCodecDetectionH265(t *testing.T) {
 	require.NotNil(t, r.pps)
 }
 
+// --- Recording-enabled gate tests (issue #73) ---
+
+// countingSegmentStore counts CreateSegment calls to verify whether disk writes occur.
+type countingSegmentStore struct {
+	creates int
+	mu      sync.Mutex
+}
+
+func (s *countingSegmentStore) CreateSegment(cameraID string, format string) (string, string, error) {
+	s.mu.Lock()
+	s.creates++
+	s.mu.Unlock()
+	return "", "", nil
+}
+func (s *countingSegmentStore) CloseSegment(tempPath, finalPath string) error { return nil }
+func (s *countingSegmentStore) Creates() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.creates
+}
+
+// TestXiaomiRecorderRecordDisabledNoSegment verifies that when RecordEnabled=false
+// (live-only mode), processing an IDR frame does NOT create a disk segment.
+// The recorder stays connected (forwardHLS still runs) but writes nothing.
+func TestXiaomiRecorderRecordDisabledNoSegment(t *testing.T) {
+	t.Helper()
+	falseVal := false
+	store := &countingSegmentStore{}
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID:      "test-cam",
+		DID:           "test-device",
+		RecordEnabled: &falseVal,
+	}, store)
+	r.codec = model.FormatH264
+	r.codecOK = true
+
+	var lastTS uint64
+	// Feed SPS, PPS, then an IDR frame.
+	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS) // SPS (type 7)
+	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS) // PPS (type 8)
+	// IDR frame (type 5): should NOT create a segment in live-only mode.
+	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00, 0x33, 0x00, 0x00}, 1, &lastTS)
+
+	require.Equal(t, 0, store.Creates(),
+		"CreateSegment must not be called when RecordEnabled=false (live-only mode)")
+}
+
+// TestXiaomiRecorderRecordEnabledCreatesSegment verifies that with recording
+// enabled (nil or true), processing an IDR frame DOES create a segment.
+func TestXiaomiRecorderRecordEnabledCreatesSegment(t *testing.T) {
+	t.Helper()
+	store := &countingSegmentStore{}
+	r := NewXiaomiRecorder(XiaomiRecorderConfig{
+		CameraID: "test-cam", // RecordEnabled nil = record (default)
+		DID:      "test-device",
+	}, store)
+	r.codec = model.FormatH264
+	r.codecOK = true
+
+	var lastTS uint64
+	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS) // SPS
+	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS) // PPS
+	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00}, 1, &lastTS) // IDR
+
+	require.GreaterOrEqual(t, store.Creates(), 1,
+		"CreateSegment must be called when recording is enabled (default)")
+}
+
 // --- HLSProvider tests ---
 
 func TestXiaomiRecorderHLSProviderInterface(t *testing.T) {

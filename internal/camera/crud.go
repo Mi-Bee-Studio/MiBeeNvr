@@ -575,9 +575,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.RecordingEnabled != nil {
 		// Toggling live-only mode requires a recorder restart to take effect
 		// (the writeFrames loop reads RecordEnabled once at Start).
-		oldVal := cam.RecordingEnabled
-		newVal := *updates.RecordingEnabled
-		if (oldVal == nil) != !newVal || (oldVal != nil && *oldVal != newVal) {
+		// Compare the EFFECTIVE old value (nil defaults to true = record) against
+		// the new value. The previous expression mishandled the nil→false case,
+		// so disabling recording on a camera whose recording_enabled was never
+		// explicitly persisted left the old recorder writing segments to disk.
+		oldEffective := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		if oldEffective != *updates.RecordingEnabled {
 			needsRestart = true
 		}
 		cam.RecordingEnabled = updates.RecordingEnabled

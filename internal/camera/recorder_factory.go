@@ -346,21 +346,33 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 		cm.startTimelapseScheduleMonitor(ctx, cam.ID, rec, *cam.Timelapse)
 	}
 
-	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config
+	// Start keyframe extractor for recorders with rtsp_keyframe timelapse config.
+	// When recording is enabled (nil or true), timelapse frames are extracted from
+	// recorded segments by PeriodicMergeManager (RecordingFrameExtractor) — no
+	// dedicated live capturer is needed. Starting the KeyframeExtractor here in
+	// that case is redundant and, for cameras that send parameter sets only inline
+	// with IDR frames (e.g. Xiaomi H.264), produces frame files without SPS/PPS
+	// that the merger later rejects as "frames missing SPS" (issue #90).
 	if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
+		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
 		// Runtime override: an ONVIF camera with empty encoding may have resolved
 		// to rtsp_keyframe statically but actually be a JPEG device. Use a frame
 		// poller instead.
-		if isRecorderJPEG(rec) {
+		if isRecorderJPEG(rec) && !recordingEnabled {
 			if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 				logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
 			} else if poller != nil {
 				cm.setFramePoller(cam.ID, poller)
 			}
-		} else if hub := getRecorderHub(rec); hub != nil {
-			if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
-				logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+		} else if !recordingEnabled {
+			if hub := getRecorderHub(rec); hub != nil {
+				if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
+					logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+				}
 			}
+		} else {
+			logger.Debug("timelapse keyframe extractor skipped: recording enabled (frames from PeriodicMergeManager)",
+				"camera_id", cam.ID)
 		}
 	} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
 		if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
