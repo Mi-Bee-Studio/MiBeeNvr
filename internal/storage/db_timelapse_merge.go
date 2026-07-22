@@ -39,7 +39,8 @@ func (d *DB) InsertTimelapseMerge(ctx context.Context, m *model.TimelapseMerge) 
 		file_size, frame_count, codec, fps, status, error, source_segment_ids,
 		created_at, completed_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
-	result, err := d.db.ExecContext(ctx, q,
+	result, err := d.db.ExecContext(
+		ctx, q,
 		m.CameraID, timeToDB(m.WindowStart), timeToDB(m.WindowEnd),
 		m.DurationLabel, m.OutputPath, m.FileSize, m.FrameCount,
 		m.Codec, m.FPS, status, m.Error, m.SourceSegmentIDs,
@@ -82,7 +83,8 @@ func (d *DB) CompleteTimelapseMerge(ctx context.Context, id int64, outputPath st
 	q := `UPDATE timelapse_merges
 		SET status=?, output_path=?, file_size=?, frame_count=?, codec=?, source_segment_ids=?, error='', completed_at=?
 		WHERE id=?;`
-	_, err := d.db.ExecContext(ctx, q,
+	_, err := d.db.ExecContext(
+		ctx, q,
 		model.TimelapseMergeStatusCompleted,
 		outputPath, fileSize, frameCount, codec, sourceSegmentIDs,
 		timeToDB(time.Now().UTC()),

@@ -80,7 +80,8 @@ func TestMarkStartFailed_Idempotent(t *testing.T) {
 	mgr := NewCameraManager(cfg, nil, nil, "")
 	// Configure the cameras under test — statusSnapshot only surfaces
 	// failedStarts entries for cameras that still exist in config.
-	cfg.Cameras = append(cfg.Cameras,
+	cfg.Cameras = append(
+		cfg.Cameras,
 		config.CameraConfig{ID: "cam-1", Protocol: "onvif"},
 		config.CameraConfig{ID: "cam-2", Protocol: "onvif"},
 	)

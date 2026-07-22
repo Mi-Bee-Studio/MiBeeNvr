@@ -49,15 +49,15 @@ func TestInsertAndGetRecording(t *testing.T) {
 
 	started := time.Now()
 	rec := &model.Recording{
-		ID:         "rec-001",
-		CameraID:   "cam1",
-		FilePath:   "/path/file.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    started.Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
+		ID:          "rec-001",
+		CameraID:    "cam1",
+		FilePath:    "/path/file.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     started.Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
 		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
@@ -437,15 +437,15 @@ func TestTimestampRoundTrip(t *testing.T) {
 	started := time.Date(2026, 4, 30, 15, 30, 0, 123456789, time.UTC)
 	ended := started.Add(time.Minute)
 	rec := &model.Recording{
-		ID:         "rt-1",
-		CameraID:   "camRT",
-		FilePath:   "/rt.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    ended,
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
+		ID:          "rt-1",
+		CameraID:    "camRT",
+		FilePath:    "/rt.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     ended,
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
 		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
@@ -562,12 +562,12 @@ func TestListExpiredRecordings(t *testing.T) {
 
 	// 3. Old recording (no special protection now — merged doesn't protect from cleanup)
 	oldRec2 := &model.Recording{
-		ID:        "exp-old2",
-		CameraID:  "cam1",
-		FilePath:  "/old2.mp4",
-		Format:    model.FormatH264,
-		StartedAt: oldEnded.Add(-time.Hour),
-		EndedAt:   oldEnded,
+		ID:          "exp-old2",
+		CameraID:    "cam1",
+		FilePath:    "/old2.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   oldEnded.Add(-time.Hour),
+		EndedAt:     oldEnded,
 		MergeStatus: model.MergeStatusMerged,
 	}
 	require.NoError(t, db.InsertRecording(ctx, oldRec2))
@@ -1024,17 +1024,17 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 
 	// Verify insert with merge_tier works and stores correctly
 	rec := &model.Recording{
-		ID:         "mt-001",
-		CameraID:   "cam1",
-		FilePath:   "/test.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now().Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
+		ID:          "mt-001",
+		CameraID:    "cam1",
+		FilePath:    "/test.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now().Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
 		MergeStatus: model.MergeStatusPending,
-		MergeTier:  "ffmpeg",
+		MergeTier:   "ffmpeg",
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec))
 
@@ -1046,15 +1046,15 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 
 	// Verify merge_tier default is empty string for unset values
 	rec2 := &model.Recording{
-		ID:         "mt-002",
-		CameraID:   "cam1",
-		FilePath:   "/test2.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now().Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   2048,
-		FrameCount: 30,
+		ID:          "mt-002",
+		CameraID:    "cam1",
+		FilePath:    "/test2.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now().Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    2048,
+		FrameCount:  30,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec2))
@@ -1076,15 +1076,15 @@ func TestInsertRecordingWithRetry_Success(t *testing.T) {
 
 	started := time.Now()
 	rec := &model.Recording{
-		ID:         "retry-001",
-		CameraID:   "cam1",
-		FilePath:   "/path/retry.mp4",
-		Format:     model.FormatH264,
-		StartedAt:  started,
-		EndedAt:    started.Add(time.Minute),
-		Duration:   60.0,
-		FileSize:   1024,
-		FrameCount: 60,
+		ID:          "retry-001",
+		CameraID:    "cam1",
+		FilePath:    "/path/retry.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   started,
+		EndedAt:     started.Add(time.Minute),
+		Duration:    60.0,
+		FileSize:    1024,
+		FrameCount:  60,
 		MergeStatus: model.MergeStatusPending,
 	}
 	err = db.InsertRecordingWithRetry(ctx, rec, 3, 10*time.Millisecond)
@@ -1127,14 +1127,14 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 
 	// Merge and replace
 	merged := &model.Recording{
-		ID:        "merged-001",
-		CameraID:  "camMerge",
-		FilePath:  "/merge/merged.mp4",
-		Format:    model.FormatH264,
-		StartedAt: now,
-		EndedAt:   now.Add(5 * time.Minute),
-		Duration:  300.0,
-		FileSize:  5120,
+		ID:          "merged-001",
+		CameraID:    "camMerge",
+		FilePath:    "/merge/merged.mp4",
+		Format:      model.FormatH264,
+		StartedAt:   now,
+		EndedAt:     now.Add(5 * time.Minute),
+		Duration:    300.0,
+		FileSize:    5120,
 		MergeStatus: model.MergeStatusMerged,
 	}
 	err = db.MergeAndReplaceRecordings(ctx, merged, oldIDs)

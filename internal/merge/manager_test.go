@@ -73,15 +73,15 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -432,15 +432,15 @@ func (e *mergeTestEnv) insertMergeableMJPEGRecording(t *testing.T, id string, ca
 	}
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatMJPEG,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   totalSize,
-		FrameCount: frameCount,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatMJPEG,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    totalSize,
+		FrameCount:  frameCount,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -558,15 +558,15 @@ func (e *mergeTestEnv) insertBrokenRecording(t *testing.T, id, cameraID string, 
 	t.Helper()
 	ctx := context.Background()
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   filepath.Join(e.dir, "nonexistent", id+".mp4"),
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   100,
-		FrameCount: 2,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    filepath.Join(e.dir, "nonexistent", id+".mp4"),
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    100,
+		FrameCount:  2,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -594,15 +594,15 @@ func (e *mergeTestEnv) insertMergeableH264WithCustomParams(t *testing.T, id, cam
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH264,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH264,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -719,15 +719,15 @@ func (e *mergeTestEnv) insertTimelapseRecording(t *testing.T, id string, cameraI
 	})
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatTimelapse,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   totalSize,
-		FrameCount: 3,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatTimelapse,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    totalSize,
+		FrameCount:  3,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -1038,15 +1038,15 @@ func (e *mergeTestEnv) insertMergeableH265Recording(t *testing.T, id string, cam
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH265,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: 2,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH265,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  2,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))
@@ -1341,15 +1341,15 @@ func (e *mergeTestEnv) insertMergeableAVIRecording(t *testing.T, id string, came
 	require.NoError(t, err)
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatAVI,
-		StartedAt:  startedAt,
-		EndedAt:    endedAt,
-		Duration:   endedAt.Sub(startedAt).Seconds(),
-		FileSize:   fi.Size(),
-		FrameCount: numFrames,
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatAVI,
+		StartedAt:   startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(startedAt).Seconds(),
+		FileSize:    fi.Size(),
+		FrameCount:  numFrames,
 		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, e.db.InsertRecording(ctx, rec))

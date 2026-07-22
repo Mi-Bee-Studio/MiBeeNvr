@@ -452,7 +452,8 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 	// video frames in the merge (parity with the scheduled path in run.go).
 	// Also wire the intermediate-.mp4 pruner so manual merges reclaim the
 	// same disk the scheduled path does.
-	mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
+	mgr := timelapse.NewPeriodicMergeManager(
+		h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
 		timelapse.WithMergeStore(h.db),
 		timelapse.WithDurationLabel(durationStr),
 		timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
@@ -865,7 +866,8 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 			}
 		}
 
-		mgr := timelapse.NewPeriodicMergeManager(h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
+		mgr := timelapse.NewPeriodicMergeManager(
+			h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
 			timelapse.WithMergeStore(h.db),
 			timelapse.WithDurationLabel(body.Duration),
 			timelapse.WithRetainIntermediateMP4(retainMP4),

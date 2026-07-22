@@ -476,14 +476,14 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 
 		// Insert new recording.
 		mergedRec := &model.Recording{
-			ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
-			CameraID:   cameraID,
-			FilePath:   finalPath,
-			Format:     model.Format(format),
-			StartedAt:  recStartTime,
-			EndedAt:    recEndTime,
-			Duration:   totalDuration,
-			FileSize:   fi.Size(),
+			ID:          strconv.FormatInt(time.Now().UnixNano(), 10),
+			CameraID:    cameraID,
+			FilePath:    finalPath,
+			Format:      model.Format(format),
+			StartedAt:   recStartTime,
+			EndedAt:     recEndTime,
+			Duration:    totalDuration,
+			FileSize:    fi.Size(),
 			FrameCount:  totalFrames,
 			MergeStatus: model.MergeStatusMerged,
 		}
