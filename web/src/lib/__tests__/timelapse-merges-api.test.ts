@@ -22,9 +22,7 @@ describe('listTimelapseMerges', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it('builds a query string from all provided filters', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ merges: [], total: 0 }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockJSONResponse({ merges: [], total: 0 }));
     await listTimelapseMerges({
       camera_id: 'cam-1',
       start: '2026-07-21T00:00:00Z',
@@ -44,9 +42,7 @@ describe('listTimelapseMerges', () => {
   });
 
   it('omits the query string when no filters are provided', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ merges: [], total: 0 }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockJSONResponse({ merges: [], total: 0 }));
     await listTimelapseMerges();
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/timelapse/merges');
   });
@@ -69,9 +65,9 @@ describe('getTimelapseMerge', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it('GETs /timelapse/merges/{id} and returns the parsed row', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ id: 7, camera_id: 'cam-a', codec: 'h265', status: 'completed' }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(mockJSONResponse({ id: 7, camera_id: 'cam-a', codec: 'h265', status: 'completed' }));
     const merge = await getTimelapseMerge(7);
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/timelapse/merges/7');
     expect(merge.id).toBe(7);
@@ -79,9 +75,7 @@ describe('getTimelapseMerge', () => {
   });
 
   it('accepts string ids (route params are strings)', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ id: 7, camera_id: 'cam-a' }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockJSONResponse({ id: 7, camera_id: 'cam-a' }));
     await getTimelapseMerge('7');
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/timelapse/merges/7');
   });
@@ -101,18 +95,14 @@ describe('deleteTimelapseMerge', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it('issues a DELETE request to /timelapse/merges/{id}', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ status: 'deleted' }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockJSONResponse({ status: 'deleted' }));
     await deleteTimelapseMerge(99);
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/timelapse/merges/99');
     expect(fetchSpy.mock.calls[0][1]).toMatchObject({ method: 'DELETE' });
   });
 
   it('throws on non-OK response', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      mockJSONResponse({ error: 'not found' }, false, 404),
-    );
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockJSONResponse({ error: 'not found' }, false, 404));
     await expect(deleteTimelapseMerge(99)).rejects.toThrow('not found');
   });
 });

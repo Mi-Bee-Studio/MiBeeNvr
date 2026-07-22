@@ -201,11 +201,7 @@ export {
   deleteTimelapseMerge,
 } from './timelapse-merges';
 
-export type {
-  TimelapseMerge,
-  TimelapseMergeListResponse,
-  ListTimelapseMergesParams,
-} from './timelapse-merges';
+export type { TimelapseMerge, TimelapseMergeListResponse, ListTimelapseMergesParams } from './timelapse-merges';
 
 // Settings — cleanup, webdav, merge, features
 export {

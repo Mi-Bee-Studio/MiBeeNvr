@@ -87,14 +87,22 @@ async function handleCodecInfo(data: {
         // WASM frame: post without transfer list (structured clone copy)
         self.postMessage({ type: 'frame', data: frame });
         // Worker created the synthetic frame — close our reference after sending copy
-        try { frame.close(); } catch { /* already closed */ }
+        try {
+          frame.close();
+        } catch {
+          /* already closed */
+        }
       } else {
         // WebCodecs frame: transfer ownership (zero-copy)
         self.postMessage({ type: 'frame', data: frame }, [frame] as any);
       }
     } catch {
       // postMessage failed — frame still owned by worker, must close to prevent leak
-      try { frame.close(); } catch { /* already closed */ }
+      try {
+        frame.close();
+      } catch {
+        /* already closed */
+      }
       throw new Error('Failed to send frame to main thread');
     }
   });

@@ -10,11 +10,7 @@ export type HealthStatus = 'healthy' | 'warning' | 'error' | 'unknown';
 
 // Health event type values
 export type HealthEventType =
-  | 'connection_lost'
-  | 'connection_restored'
-  | 'stream_anomaly'
-  | 'freeze_detected'
-  | 'freeze_recovered';
+  'connection_lost' | 'connection_restored' | 'stream_anomaly' | 'freeze_detected' | 'freeze_recovered';
 
 // A single health event
 export interface HealthEvent {

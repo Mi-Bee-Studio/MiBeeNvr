@@ -15,8 +15,7 @@ export interface Recording {
   duration: number;
   file_size: number;
   frame_count: number;
-  merged: boolean;
-  merge_status?: 'pending' | 'merged' | 'failed';
+  merge_status: 'pending' | 'merged' | 'failed' | 'incompatible' | 'dark' | 'daily_merged' | 'merging';
   merge_progress?: number; // 0-100, persisted to DB
   merge_path?: string;
   archived?: boolean;

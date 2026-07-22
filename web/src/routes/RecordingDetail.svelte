@@ -1660,7 +1660,7 @@ $effect(() => {
               </p>
             </div>
             <div class="flex gap-2">
-              {#if recording.merged}
+              {#if recording.merge_status === 'merged' || recording.merge_status === 'daily_merged'}
                 <span class="badge badge-success">{t('recordings.merged')}</span>
               {:else}
                 <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
