@@ -17,7 +17,7 @@ func TestStreamingGzip_JSONResponse(t *testing.T) {
 		w.Write([]byte(`{"cameras":[{"id":"cam1","name":"Front Door","protocol":"rtsp","encoding":"h264","url":"rtsp://192.168.1.10/stream"},{"id":"cam2","name":"Back Yard","protocol":"rtsp","encoding":"h265","url":"rtsp://192.168.1.11/stream"},{"id":"cam3","name":"Garage","protocol":"http","encoding":"jpeg","url":"http://192.168.1.12/capture"}]}`))
 	}))
 
-	req := httptest.NewRequest("GET", "/api/cameras", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -37,7 +37,7 @@ func TestStreamingGzip_NoAcceptEncoding(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	// No Accept-Encoding header
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -49,11 +49,11 @@ func TestStreamingGzip_NoAcceptEncoding(t *testing.T) {
 func TestStreamingGzip_SkipsVideo(t *testing.T) {
 	handler := StreamingGzip(5)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "video/mp4")
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("fake-video-data-that-should-not-be-compressed"))
 	}))
 
-	req := httptest.NewRequest("GET", "/api/recordings/abc/download", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/recordings/abc/download", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -74,7 +74,7 @@ func TestStreamingGzip_SSEFlush(t *testing.T) {
 		flusher.Flush()
 	}))
 
-	req := httptest.NewRequest("GET", "/api/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -89,7 +89,7 @@ func TestStreamingGzip_WebSocketSkipped(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 
-	req := httptest.NewRequest("GET", "/ws", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("Upgrade", "websocket")
 	rec := httptest.NewRecorder()

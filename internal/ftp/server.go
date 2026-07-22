@@ -404,13 +404,13 @@ func (u *uploadFileTransfer) Close() error {
 
 	endedAt := time.Now()
 	recording := &model.Recording{
-		ID:        uuid.New().String(),
-		CameraID:  u.cameraID,
-		FilePath:  u.filePath,
-		Format:    u.format,
-		StartedAt: u.startedAt,
-		EndedAt:   endedAt,
-		Duration:  endedAt.Sub(u.startedAt).Seconds(),
+		ID:          uuid.New().String(),
+		CameraID:    u.cameraID,
+		FilePath:    u.filePath,
+		Format:      u.format,
+		StartedAt:   u.startedAt,
+		EndedAt:     endedAt,
+		Duration:    endedAt.Sub(u.startedAt).Seconds(),
 		FileSize:    u.size,
 		MergeStatus: model.MergeStatusPending,
 	}

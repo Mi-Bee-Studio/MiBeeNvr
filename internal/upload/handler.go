@@ -88,13 +88,13 @@ func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec := &model.Recording{
-		ID:         uuid.New().String(),
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatMJPEG,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now(),
-		Duration:   0,
+		ID:          uuid.New().String(),
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatMJPEG,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now(),
+		Duration:    0,
 		FileSize:    int64(len(data)),
 		FrameCount:  1,
 		MergeStatus: model.MergeStatusPending,
@@ -178,8 +178,8 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec := &model.Recording{
-		ID:         uuid.New().String(),
-		CameraID:   cameraID,
+		ID:          uuid.New().String(),
+		CameraID:    cameraID,
 		FilePath:    finalPath,
 		Format:      model.FormatMJPEG,
 		StartedAt:   time.Now(),
@@ -254,13 +254,13 @@ func (h *Handler) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec := &model.Recording{
-		ID:         uuid.New().String(),
-		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatH264,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now(),
-		Duration:   0,
+		ID:          uuid.New().String(),
+		CameraID:    cameraID,
+		FilePath:    finalPath,
+		Format:      model.FormatH264,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now(),
+		Duration:    0,
 		FileSize:    int64(len(data)),
 		FrameCount:  1,
 		MergeStatus: model.MergeStatusPending,

@@ -1338,15 +1338,15 @@ func TestInsertOrphanRecordingsBatching(t *testing.T) {
 	var recs []*model.Recording
 	for i := range 1200 {
 		recs = append(recs, &model.Recording{
-			ID:         fmt.Sprintf("batch-rec-%d", i),
-			CameraID:   "batch-cam",
-			FilePath:   fmt.Sprintf("/path/file_%d.mp4", i),
-			Format:     model.FormatH264,
-			StartedAt:  time.Now(),
-			EndedAt:    time.Now().Add(time.Minute),
-			Duration:   60,
-			FileSize:   1024,
-			FrameCount: 30,
+			ID:          fmt.Sprintf("batch-rec-%d", i),
+			CameraID:    "batch-cam",
+			FilePath:    fmt.Sprintf("/path/file_%d.mp4", i),
+			Format:      model.FormatH264,
+			StartedAt:   time.Now(),
+			EndedAt:     time.Now().Add(time.Minute),
+			Duration:    60,
+			FileSize:    1024,
+			FrameCount:  30,
 			MergeStatus: model.MergeStatusPending,
 		})
 	}

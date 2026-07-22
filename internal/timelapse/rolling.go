@@ -200,7 +200,8 @@ func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, camera
 	// from destroying frames when the MP4 is unusable.
 	if info, err := os.Stat(outputPath); err != nil || info.Size() == 0 {
 		mergeErr := fmt.Errorf("post-merge verification failed: output file missing or empty (path=%s)", outputPath)
-		slog.Error("rolling merge: merge reported success but output file is missing/empty",
+		slog.Error(
+			"rolling merge: merge reported success but output file is missing/empty",
 			"camera_id", cameraID,
 			"output_path", outputPath,
 			"stat_error", err,

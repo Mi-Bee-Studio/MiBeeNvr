@@ -165,14 +165,14 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 	format := formatFromExtension(relPath)
 
 	recording := &model.Recording{
-		ID:         uuid.New().String(),
-		CameraID:   cameraID,
-		FilePath:   relPath,
-		Format:     format,
-		StartedAt:  info.ModTime(),
-		EndedAt:    info.ModTime(),
-		Duration:   0,
-		FileSize:   info.Size(),
+		ID:          uuid.New().String(),
+		CameraID:    cameraID,
+		FilePath:    relPath,
+		Format:      format,
+		StartedAt:   info.ModTime(),
+		EndedAt:     info.ModTime(),
+		Duration:    0,
+		FileSize:    info.Size(),
 		FrameCount:  1,
 		MergeStatus: model.MergeStatusPending,
 	}

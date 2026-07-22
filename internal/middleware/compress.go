@@ -12,9 +12,9 @@ import (
 // is flushed on every explicit Write or Flush call so that SSE events reach
 // the client immediately instead of being buffered in the compressor.
 type compressWriter struct {
-	w            http.ResponseWriter
-	gz           *gzip.Writer
-	contentType  string // detected from first WriteHeader
+	w             http.ResponseWriter
+	gz            *gzip.Writer
+	contentType   string // detected from first WriteHeader
 	headerWritten bool
 }
 

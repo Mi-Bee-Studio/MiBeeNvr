@@ -449,7 +449,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			if cam.Timelapse.MergeOutputFPS > 0 {
 				fps = cam.Timelapse.MergeOutputFPS
 			}
-			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc,
+			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(
+				db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc,
 				timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
 					cam := camMgr.GetCameraConfig(cameraID)
 					if cam == nil || cam.RecordingEnabled == nil {
@@ -503,7 +504,8 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			webrtc.WithMetrics(metrics),
 			webrtc.WithICEServers(webrtcICEServers(cfg.Streaming.WebRTC.ICEServers)),
 		)
-		slog.Info("WebRTC manager initialized",
+		slog.Info(
+			"WebRTC manager initialized",
 			"max_viewers", cfg.Streaming.WebRTC.MaxViewers,
 			"ice_servers", len(cfg.Streaming.WebRTC.ICEServers),
 		)

@@ -106,14 +106,14 @@ func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cam
 	require.NoError(t, os.WriteFile(filePath, data, 0o644))
 
 	rec := &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   filePath,
-		Format:     model.Format(format),
-		StartedAt:  time.Now().UTC().Truncate(time.Second),
-		EndedAt:    time.Now().UTC().Truncate(time.Second).Add(5 * time.Minute),
-		Duration:   300.0,
-		FileSize:   int64(len(data)),
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    filePath,
+		Format:      model.Format(format),
+		StartedAt:   time.Now().UTC().Truncate(time.Second),
+		EndedAt:     time.Now().UTC().Truncate(time.Second).Add(5 * time.Minute),
+		Duration:    300.0,
+		FileSize:    int64(len(data)),
 		FrameCount:  150,
 		MergeStatus: model.MergeStatusPending,
 	}

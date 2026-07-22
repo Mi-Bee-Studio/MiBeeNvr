@@ -57,9 +57,9 @@ type Recording struct {
 	Archived      bool      `json:"archived"`
 	// AI processing state (MiBeeVision integration). DB columns exist since v21
 	// but were previously not mapped to Go — this fixes the断层.
-	AIStatus     string    `json:"ai_status,omitempty"`      // pending, processing, completed, failed
+	AIStatus      string    `json:"ai_status,omitempty"` // pending, processing, completed, failed
 	AIProcessedAt time.Time `json:"ai_processed_at,omitempty"`
-	AIError      string    `json:"ai_error,omitempty"`
+	AIError       string    `json:"ai_error,omitempty"`
 }
 
 // TimelapseMerge represents one periodic-merge output for a camera — the

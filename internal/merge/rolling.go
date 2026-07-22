@@ -1440,14 +1440,14 @@ func (r *RollingMergeCoordinator) createBucket(
 	// Create merged recording row and delete the source segment row.
 	mergedRecID = strconv.FormatInt(time.Now().UnixNano(), 10)
 	mergedRec := &model.Recording{
-		ID:         mergedRecID,
-		CameraID:   seg.cameraID,
-		FilePath:   finalPath,
-		Format:     model.Format(seg.format),
-		StartedAt:  seg.startedAt,
-		EndedAt:    seg.endedAt,
-		Duration:   info.TotalDuration.Seconds(),
-		FileSize:   fi.Size(),
+		ID:          mergedRecID,
+		CameraID:    seg.cameraID,
+		FilePath:    finalPath,
+		Format:      model.Format(seg.format),
+		StartedAt:   seg.startedAt,
+		EndedAt:     seg.endedAt,
+		Duration:    info.TotalDuration.Seconds(),
+		FileSize:    fi.Size(),
 		FrameCount:  info.SampleCount,
 		MergeStatus: model.MergeStatusMerged,
 	}
@@ -1522,14 +1522,14 @@ func (r *RollingMergeCoordinator) appendToBucket(
 
 	mergedRecID = bucket.mergedRecID
 	mergedRec := &model.Recording{
-		ID:         mergedRecID,
-		CameraID:   seg.cameraID,
-		FilePath:   finalPath,
-		Format:     model.Format(seg.format),
-		StartedAt:  bucket.windowStart,
-		EndedAt:    seg.endedAt,
-		Duration:   totalDurSec,
-		FileSize:   fi.Size(),
+		ID:          mergedRecID,
+		CameraID:    seg.cameraID,
+		FilePath:    finalPath,
+		Format:      model.Format(seg.format),
+		StartedAt:   bucket.windowStart,
+		EndedAt:     seg.endedAt,
+		Duration:    totalDurSec,
+		FileSize:    fi.Size(),
 		FrameCount:  totalFrames,
 		MergeStatus: model.MergeStatusMerged,
 	}

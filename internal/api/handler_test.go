@@ -1938,8 +1938,8 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
 		Cameras: []config.CameraConfig{
 			{
-				ID:          cameraID,
-				Name:        "SnapCam",
+				ID:       cameraID,
+				Name:     "SnapCam",
 				Protocol: "http", Encoding: "jpeg",
 				URL:         snapshotServer.URL + "/stream",
 				SnapshotURL: snapshotServer.URL + "/snapshot.jpg",
