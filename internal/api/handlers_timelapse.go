@@ -417,9 +417,18 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		}
 	}
 
-	// Load display timezone
+	// Load display timezone. "Local" (the config default) means use the
+	// server's local timezone — time.LoadLocation("Local") fails, so handle
+	// it explicitly via time.Local. Without this, the merge window is
+	// computed in UTC and natural-day merges return "no segments found"
+	// because the window misses the camera's local-day segments.
 	loc := time.UTC
-	if h.config.Timezone != "" && h.config.Timezone != "UTC" {
+	switch {
+	case h.config.Timezone == "" || h.config.Timezone == "UTC":
+		// keep UTC
+	case h.config.Timezone == "Local":
+		loc = time.Local
+	default:
 		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
 			loc = l
 		}
@@ -809,9 +818,15 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Load timezone
+	// Load timezone — handle "Local" explicitly (time.LoadLocation("Local")
+	// fails, which would silently fall back to UTC and misalign the window).
 	loc := time.UTC
-	if h.config.Timezone != "" && h.config.Timezone != "UTC" {
+	switch {
+	case h.config.Timezone == "" || h.config.Timezone == "UTC":
+		// keep UTC
+	case h.config.Timezone == "Local":
+		loc = time.Local
+	default:
 		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
 			loc = l
 		}
