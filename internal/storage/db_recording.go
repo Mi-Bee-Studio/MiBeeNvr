@@ -11,7 +11,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-// scanRecording scans the standard recording columns (with merge_status) from a row.
+// scanRecording scans the standard recording columns from a row. It handles the
+// time fields and merge_status defaulting that are common across all SELECT paths.
+// AI fields (ai_status, ai_processed_at, ai_error) are scanned separately by each
+// caller that includes them in the SELECT column list.
 func scanRecording(r *model.Recording, startedAtStr, endedAtStr, mergeStatusStr sql.NullString) {
 	r.StartedAt = scanTime(startedAtStr)
 	r.EndedAt = scanTime(endedAtStr)
@@ -19,6 +22,18 @@ func scanRecording(r *model.Recording, startedAtStr, endedAtStr, mergeStatusStr 
 		r.MergeStatus = mergeStatusStr.String
 	} else if r.MergeStatus == "" {
 		r.MergeStatus = model.MergeStatusPending
+	}
+}
+
+// scanAIFields scans the AI processing columns into a Recording. Called after
+// the main Scan for SELECTs that include ai_status/ai_processed_at/ai_error.
+func scanAIFields(r *model.Recording, aiStatus, aiProcessedAt, aiError sql.NullString) {
+	if aiStatus.Valid {
+		r.AIStatus = aiStatus.String
+	}
+	r.AIProcessedAt = scanTime(aiProcessedAt)
+	if aiError.Valid {
+		r.AIError = aiError.String
 	}
 }
 
@@ -76,11 +91,12 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE id=?;`, id)
+	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error FROM recordings WHERE id=?;`, id)
 	var r model.Recording
 	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 	var mergeProgress sql.NullInt64
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived); err != nil {
+	var aiStatus, aiProcessedAt, aiError sql.NullString
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &aiStatus, &aiProcessedAt, &aiError); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -108,6 +124,7 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	if r.MergeStatus == "" {
 		r.MergeStatus = model.MergeStatusPending
 	}
+	scanAIFields(&r, aiStatus, aiProcessedAt, aiError)
 	return &r, nil
 }
 

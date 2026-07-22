@@ -201,6 +201,7 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/", h.handleGetRecording)
 				r.Delete("/", h.handleDeleteRecording)
 				r.Patch("/", h.handleUpdateRecording)
+				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
 				r.Get("/frames", h.handleListFrames)
 				r.Get("/playback", h.handlePlayback)
 				r.Get("/timelapse-frames", h.handleTimelapseFrames)
