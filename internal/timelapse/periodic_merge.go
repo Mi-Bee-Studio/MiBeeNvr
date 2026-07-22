@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -655,11 +656,18 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 }
 
 // goMergeSegments merges segments using the Go merger.
+//
+// This is codec-aware: it collects frame files of ANY extension produced by
+// the keyframe extractor (.jpg/.jpeg for snapshot cameras, .h264 for H.264
+// cameras, .h265 for H.265 cameras) and preserves the original extension
+// when copying into the temp dir. The actual merger is chosen by
+// AutoDetectMerger based on the frame extension — H265GoMerger for .h265,
+// H264GoMerger for .h264, GoMerger (JPEG) otherwise.
+//
+// This fixes a bug where H.265 timelapse cameras could never produce a
+// periodic merge: the old code hardcoded .jpg collection + JPEG merger, so
+// H.265 frame dirs were always reported as "no frames found in segments".
 func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []model.Recording, outputPath string) error {
-	if m.merger == nil {
-		return fmt.Errorf("periodic merge: no merger available")
-	}
-
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
@@ -670,6 +678,22 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// isFrameFile reports whether a directory entry is a timelapse frame.
+	// Frame files are named frame_NNNNNN.{jpg,jpeg,h264,h265} by the keyframe
+	// extractor / snapshot capturer. We match on the "frame_" prefix to avoid
+	// picking up non-frame files (README, .DS_Store, etc.) that might live in
+	// the segment dir, while accepting any codec extension.
+	isFrameFile := func(name string) bool {
+		if !strings.HasPrefix(name, "frame_") {
+			return false
+		}
+		lower := strings.ToLower(name)
+		return strings.HasSuffix(lower, ".jpg") ||
+			strings.HasSuffix(lower, ".jpeg") ||
+			strings.HasSuffix(lower, ".h264") ||
+			strings.HasSuffix(lower, ".h265")
+	}
+
 	// Count total frames for progress estimation.
 	totalFrames := 0
 	for _, seg := range segments {
@@ -678,12 +702,16 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 			return fmt.Errorf("periodic merge: read segment dir %s: %w", seg.ID, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".jpg") || strings.HasSuffix(entry.Name(), ".jpeg")) {
+			if !entry.IsDir() && isFrameFile(entry.Name()) {
 				totalFrames++
 			}
 		}
 	}
 
+	// Copy frames into tmpDir with sequential numbering, preserving the
+	// original extension so AutoDetectMerger can pick the right codec path.
+	// All frames in a periodic window come from the same camera, so they
+	// share one extension — but we preserve per-file just in case.
 	frameIndex := 0
 	framesCopied := 0
 	for _, seg := range segments {
@@ -692,8 +720,15 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 			return fmt.Errorf("periodic merge: read segment dir %s: %w", seg.ID, err)
 		}
 
+		// Sort entries for deterministic frame ordering. ReadDir returns
+		// entries in directory order which is usually creation order on
+		// ext4, but not guaranteed.
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+
 		for _, entry := range entries {
-			if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".jpg") && !strings.HasSuffix(entry.Name(), ".jpeg")) {
+			if entry.IsDir() || !isFrameFile(entry.Name()) {
 				continue
 			}
 
@@ -704,7 +739,9 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 
 			frameIndex++
 			framesCopied++
-			frameName := fmt.Sprintf("frame_%06d.jpg", frameIndex)
+			// Preserve the original extension (e.g. .h265, .h264, .jpg).
+			ext := filepath.Ext(entry.Name())
+			frameName := fmt.Sprintf("frame_%06d%s", frameIndex, ext)
 			dst, err := os.Create(filepath.Join(tmpDir, frameName))
 			if err != nil {
 				src.Close()
@@ -738,7 +775,12 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 		return fmt.Errorf("periodic merge: no frames found in segments")
 	}
 
-	result, err := m.merger.Merge(ctx, tmpDir, outputPath, m.fps)
+	// Use AutoDetectMerger so H.265/H.264/JPEG frames are dispatched to the
+	// matching codec merger. The injected m.merger may be JPEG-only
+	// (NewGoMerger) in production wiring — AutoDetectMerger wraps all three
+	// and picks based on the frame extension in tmpDir.
+	merger := NewAutoDetectMerger()
+	result, err := merger.Merge(ctx, tmpDir, outputPath, m.fps)
 	if err != nil {
 		return fmt.Errorf("periodic merge: merge failed: %w", err)
 	}
@@ -943,17 +985,46 @@ func sourceSegmentIDsJSON(segments []model.Recording) string {
 
 // markMergeFailed updates retry counts and marks segments as failed.
 // Segments are retried up to 3 times before being permanently marked as failed.
+//
+// Only segments that do NOT already have a usable merged .mp4 file are marked
+// failed. Segments that were previously merged (have a non-empty merge_path
+// pointing to an existing, non-empty file) are left untouched — the periodic
+// merge failure is in the aggregation step, not in the per-segment merge, so
+// those segments remain individually playable. Without this guard, a single
+// bad segment in a window would poison all the good ones to "failed",
+// creating a vicious cycle where the next periodic merge retry excludes them
+// via filterEligibleSegments (which only admits "failed" segments under the
+// retry-count cap, reset on process restart).
 func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []model.Recording, mergeErr error) error {
-	ids := make([]string, len(segments))
-	for i, seg := range segments {
-		ids[i] = seg.ID
+	// Partition: only mark segments that lack a usable merged output.
+	var ids []string
+	var failedSegments []model.Recording
+	for _, seg := range segments {
+		if seg.MergePath != "" {
+			if info, err := os.Stat(seg.MergePath); err == nil && info.Size() > 0 {
+				// This segment has a good .mp4 — leave its status alone.
+				continue
+			}
+		}
+		ids = append(ids, seg.ID)
+		failedSegments = append(failedSegments, seg)
+	}
+
+	if len(ids) == 0 {
+		// All segments already have usable outputs — nothing to mark failed.
+		slog.Warn(
+			"periodic merge: aggregation failed but all segments have usable merged output; leaving statuses unchanged",
+			"segments", len(segments),
+			"error", mergeErr,
+		)
+		return nil
 	}
 
 	// Increment retry counts and check if any segment has exhausted retries.
 	m.retryMu.Lock()
 	maxRetriesReached := false
 	now := time.Now()
-	for _, seg := range segments {
+	for _, seg := range failedSegments {
 		info := m.retryCounts[seg.ID]
 		info.count++
 		info.timestamp = now
@@ -965,7 +1036,7 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	m.retryMu.Unlock()
 
 	// Update progress to 0 for failed merge.
-	m.updateProgressBatch(ctx, segments, 0)
+	m.updateProgressBatch(ctx, failedSegments, 0)
 
 	if m.updater != nil {
 		if err := m.updater.SetMergeStatus(ctx, ids, model.MergeStatusFailed); err != nil {
@@ -981,18 +1052,18 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	if maxRetriesReached {
 		slog.Error(
 			"periodic merge: permanently failed after 3 retries",
-			"segments", len(segments),
+			"segments", len(failedSegments),
 			"error", mergeErr,
 		)
 	} else {
 		slog.Warn(
 			"periodic merge: failed, will retry on next cycle",
-			"segments", len(segments),
+			"segments", len(failedSegments),
 			"retry_count", func() int {
 				m.retryMu.Lock()
 				defer m.retryMu.Unlock()
-				if len(segments) > 0 {
-					return m.retryCounts[segments[0].ID].count
+				if len(failedSegments) > 0 {
+					return m.retryCounts[failedSegments[0].ID].count
 				}
 				return 0
 			}(),
