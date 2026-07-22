@@ -79,18 +79,22 @@ type recordingsResponse struct {
 }
 
 func makeRecording(id, cameraID, format string, startedAt time.Time, merged bool) *model.Recording {
-	return &model.Recording{
-		ID:         id,
-		CameraID:   cameraID,
-		FilePath:   "/tmp/" + id + ".mp4",
-		Format:     model.Format(format),
-		StartedAt:  startedAt,
-		EndedAt:    startedAt.Add(5 * time.Minute),
-		Duration:   300.0,
-		FileSize:   1024,
-		FrameCount: 150,
-		Merged:     merged,
+	rec := &model.Recording{
+		ID:          id,
+		CameraID:    cameraID,
+		FilePath:    "/tmp/" + id + ".mp4",
+		Format:      model.Format(format),
+		StartedAt:   startedAt,
+		EndedAt:     startedAt.Add(5 * time.Minute),
+		Duration:    300.0,
+		FileSize:    1024,
+		FrameCount:  150,
+		MergeStatus: model.MergeStatusPending,
 	}
+	if merged {
+		rec.MergeStatus = model.MergeStatusMerged
+	}
+	return rec
 }
 
 // --- Health endpoint tests ---
@@ -279,7 +283,7 @@ func TestListRecordings_FilterByMerged(t *testing.T) {
 	if len(resp.Recordings) != 1 {
 		t.Fatalf("expected 1 recording, got %d", len(resp.Recordings))
 	}
-	if !resp.Recordings[0].Merged {
+	if resp.Recordings[0].MergeStatus != model.MergeStatusMerged {
 		t.Fatal("expected recording to be merged")
 	}
 }

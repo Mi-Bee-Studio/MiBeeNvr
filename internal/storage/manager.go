@@ -676,7 +676,7 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 			Duration:   0,
 			FileSize:   totalSize,
 			FrameCount: frameCount,
-			Merged:     false,
+			MergeStatus: model.MergeStatusPending,
 		})
 	}
 

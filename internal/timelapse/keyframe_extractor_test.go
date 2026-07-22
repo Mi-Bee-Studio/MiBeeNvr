@@ -773,7 +773,7 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 		if rec.Format != model.FormatTimelapse {
 			t.Errorf("expected format %q, got %q", model.FormatTimelapse, rec.Format)
 		}
-		if rec.Merged {
+		if rec.MergeStatus == model.MergeStatusMerged {
 			t.Errorf("expected Merged=false (merge not yet run) for keyframe recording %q", rec.ID)
 		}
 		if rec.FrameCount == 0 {

@@ -47,7 +47,6 @@ type Recording struct {
 	Duration      float64   `json:"duration"`
 	FileSize      int64     `json:"file_size"`
 	FrameCount    int       `json:"frame_count"`
-	Merged        bool      `json:"merged"`
 	MergeStatus   string    `json:"merge_status"`
 	MergePath     string    `json:"merge_path"`
 	MergeTier     string    `json:"merge_tier"`
@@ -104,7 +103,7 @@ type RecordingFilter struct {
 	EndTime   time.Time
 	Format    Format
 	Formats   []Format
-	Merged    *bool // nil = all, true = merged only, false = unmerged only
+	Merged    *bool // nil = all, true = merged only, false = unmerged only (translates to merge_status filter)
 	Search    string
 	Limit     int
 	Offset    int

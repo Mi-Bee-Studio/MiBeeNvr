@@ -411,8 +411,8 @@ func (u *uploadFileTransfer) Close() error {
 		StartedAt: u.startedAt,
 		EndedAt:   endedAt,
 		Duration:  endedAt.Sub(u.startedAt).Seconds(),
-		FileSize:  u.size,
-		Merged:    false,
+		FileSize:    u.size,
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if u.server.db != nil {

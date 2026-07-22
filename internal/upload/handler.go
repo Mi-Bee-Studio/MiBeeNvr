@@ -95,9 +95,9 @@ func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 		StartedAt:  time.Now(),
 		EndedAt:    time.Now(),
 		Duration:   0,
-		FileSize:   int64(len(data)),
-		FrameCount: 1,
-		Merged:     false,
+		FileSize:    int64(len(data)),
+		FrameCount:  1,
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
@@ -180,14 +180,14 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 	rec := &model.Recording{
 		ID:         uuid.New().String(),
 		CameraID:   cameraID,
-		FilePath:   finalPath,
-		Format:     model.FormatMJPEG,
-		StartedAt:  time.Now(),
-		EndedAt:    time.Now(),
-		Duration:   0,
-		FileSize:   totalSize,
-		FrameCount: len(files),
-		Merged:     false,
+		FilePath:    finalPath,
+		Format:      model.FormatMJPEG,
+		StartedAt:   time.Now(),
+		EndedAt:     time.Now(),
+		Duration:    0,
+		FileSize:    totalSize,
+		FrameCount:  len(files),
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
@@ -261,9 +261,9 @@ func (h *Handler) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 		StartedAt:  time.Now(),
 		EndedAt:    time.Now(),
 		Duration:   0,
-		FileSize:   int64(len(data)),
-		FrameCount: 1,
-		Merged:     false,
+		FileSize:    int64(len(data)),
+		FrameCount:  1,
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {

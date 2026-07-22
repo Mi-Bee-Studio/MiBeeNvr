@@ -484,8 +484,8 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			EndedAt:    recEndTime,
 			Duration:   totalDuration,
 			FileSize:   fi.Size(),
-			FrameCount: totalFrames,
-			Merged:     true,
+			FrameCount:  totalFrames,
+			MergeStatus: model.MergeStatusMerged,
 		}
 
 		// Atomic: insert merged recording + delete old recordings in single transaction
@@ -593,7 +593,7 @@ func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, rec
 	}
 
 	// Mark as merged.
-	mergedRec.Merged = true
+	mergedRec.MergeStatus = model.MergeStatusMerged
 
 	// Atomic: insert merged recording + delete old recordings in single transaction.
 	ids := make([]string, len(recs))
@@ -667,7 +667,7 @@ func (m *MergeManager) mergeAVIGroup(ctx context.Context, cameraID string, recs 
 		return 0, 0, 0
 	}
 
-	mergedRec.Merged = true
+	mergedRec.MergeStatus = model.MergeStatusMerged
 
 	// Atomic: insert merged recording + delete old recordings in single transaction.
 	ids := make([]string, len(recs))

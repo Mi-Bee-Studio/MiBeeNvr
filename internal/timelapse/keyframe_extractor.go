@@ -485,8 +485,8 @@ func (k *KeyframeExtractor) closeCurrentSegment() {
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: frameCount,
-			FileSize:   totalSize,
-			Merged:     false,
+			FileSize:    totalSize,
+			MergeStatus: model.MergeStatusPending,
 		}
 
 		if err := k.db.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {

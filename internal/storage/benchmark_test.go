@@ -96,8 +96,11 @@ func BenchmarkListRecordings(b *testing.B) {
 					EndedAt:    endedAt,
 					Duration:   30.0,
 					FileSize:   int64(30+seq%100) * 1024 * 1024,
-					FrameCount: 30 * 30, // 30fps * 30min
-					Merged:     seq%10 == 0,
+					FrameCount:  30 * 30, // 30fps * 30min
+					MergeStatus: model.MergeStatusPending,
+				}
+				if seq%10 == 0 {
+					rec.MergeStatus = model.MergeStatusMerged
 				}
 				if err := db.InsertRecording(ctx, rec); err != nil {
 					b.Fatal(err)

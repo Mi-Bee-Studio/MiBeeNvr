@@ -114,8 +114,11 @@ func seedRecording(t *testing.T, db *storage.DB, store *storage.Manager, id, cam
 		EndedAt:    time.Now().UTC().Truncate(time.Second).Add(5 * time.Minute),
 		Duration:   300.0,
 		FileSize:   int64(len(data)),
-		FrameCount: 150,
-		Merged:     merged,
+		FrameCount:  150,
+		MergeStatus: model.MergeStatusPending,
+	}
+	if merged {
+		rec.MergeStatus = model.MergeStatusMerged
 	}
 	require.NoError(t, db.InsertRecording(context.Background(), rec))
 	return rec
@@ -269,8 +272,8 @@ func TestCrashRecovery(t *testing.T) {
 	// Note: Go's zero time.Time marshals as "0001-01-01T00:00:00Z", not SQL NULL.
 	// We must use raw SQL to insert NULL ended_at to simulate a crash.
 	_, err = db.DB().Exec(
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
-		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, 0,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status) VALUES(?,?,?,?,?,NULL,?,?,?,?)`,
+		"crash-rec-1", cameraID, completedFile, "h264", time.Now().UTC(), 0.0, 100, 30, model.MergeStatusPending,
 	)
 	require.NoError(t, err)
 
@@ -618,8 +621,8 @@ func TestRecordingMergedField(t *testing.T) {
 	}
 	require.Contains(t, byID, "rec-merged")
 	require.Contains(t, byID, "rec-unmerged")
-	require.True(t, byID["rec-merged"].Merged, "rec-merged should have merged=true")
-	require.False(t, byID["rec-unmerged"].Merged, "rec-unmerged should have merged=false")
+	require.True(t, byID["rec-merged"].MergeStatus == model.MergeStatusMerged, "rec-merged should have merged=true")
+	require.NotEqual(t, model.MergeStatusMerged, byID["rec-unmerged"].MergeStatus, "rec-unmerged should have merged=false")
 
 	// Filter by merged=true
 	rr = do(t, h.Routes(), "GET", "/api/recordings?merged=true", nil)

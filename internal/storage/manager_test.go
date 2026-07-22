@@ -928,7 +928,7 @@ func TestReconcileOrphanedFiles_MJPEGDirs(t *testing.T) {
 		require.Equal(t, model.FormatMJPEG, got.Format)
 		require.Equal(t, 3, got.FrameCount)
 		require.Equal(t, int64(60), got.FileSize) // 3 * 20 bytes per frame
-		require.Equal(t, false, got.Merged)
+		require.NotEqual(t, model.MergeStatusMerged, got.MergeStatus)
 	}
 }
 
@@ -1347,7 +1347,7 @@ func TestInsertOrphanRecordingsBatching(t *testing.T) {
 			Duration:   60,
 			FileSize:   1024,
 			FrameCount: 30,
-			Merged:     false,
+			MergeStatus: model.MergeStatusPending,
 		})
 	}
 

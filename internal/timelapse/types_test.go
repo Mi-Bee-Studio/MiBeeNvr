@@ -113,7 +113,7 @@ func testMergeStatusUniqueness(t *testing.T) {
 	vals := map[MergeStatus]bool{
 		MergeStatusNone:    true,
 		MergeStatusMerging: true,
-		MergeStatusMerged:  true,
+		MergeStatusMerged: true,
 		MergeStatusFailed:  true,
 	}
 	if len(vals) != 4 {

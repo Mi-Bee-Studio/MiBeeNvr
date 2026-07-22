@@ -58,7 +58,7 @@ func TestInsertAndGetRecording(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Merged:     false,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -211,13 +211,13 @@ func TestSetMerged(t *testing.T) {
 	got, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.True(t, got.Merged)
+	require.True(t, got.MergeStatus == model.MergeStatusMerged)
 
 	err = db.SetMerged(ctx, rec.ID, false)
 	require.NoError(t, err)
 	got2, err := db.GetRecording(ctx, rec.ID)
 	require.NoError(t, err)
-	require.False(t, got2.Merged)
+	require.NotEqual(t, model.MergeStatusMerged, got2.MergeStatus)
 }
 
 func TestCleanupIncomplete(t *testing.T) {
@@ -231,8 +231,8 @@ func TestCleanupIncomplete(t *testing.T) {
 	var err error
 	_, _ = db.db.ExecContext(
 		ctx,
-		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merged) VALUES(?,?,?,?,NULL,?,?,?,?);`,
-		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, false,
+		`INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status) VALUES(?,?,?,?,NULL,?,?,?,?);`,
+		"inc-1", "camC", "/c.mp4", model.FormatH264, time.Now(), 0, 0, 0, model.MergeStatusPending,
 	)
 	err = db.CleanupIncomplete(ctx)
 	require.NoError(t, err)
@@ -446,7 +446,7 @@ func TestTimestampRoundTrip(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Merged:     false,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err := db.InsertRecording(ctx, rec)
 	require.NoError(t, err)
@@ -568,7 +568,7 @@ func TestListExpiredRecordings(t *testing.T) {
 		Format:    model.FormatH264,
 		StartedAt: oldEnded.Add(-time.Hour),
 		EndedAt:   oldEnded,
-		Merged:    true,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	require.NoError(t, db.InsertRecording(ctx, oldRec2))
 
@@ -580,8 +580,9 @@ func TestListExpiredRecordings(t *testing.T) {
 	require.Len(t, expired, 2)
 }
 
-func TestParseTimeLegacyFormat(t *testing.T) {
-	// Verify parseTime handles the old time.Time.String() format with monotonic clock
+func TestParseTimeFormat(t *testing.T) {
+	// 0.10.0+: canonical SQLite formats + RFC3339 are supported.
+	// Legacy Go time.Time.String() formats (monotonic clock, tz abbreviations) were removed.
 	tests := []struct {
 		name    string
 		input   string
@@ -591,10 +592,9 @@ func TestParseTimeLegacyFormat(t *testing.T) {
 		{"without fractional", "2026-04-30 15:30:00", false},
 		{"RFC3339", "2026-04-30T15:30:00Z", false},
 		{"RFC3339 with offset", "2026-04-30T15:30:00+08:00", false},
-		{"legacy Go format", "2026-04-30 22:52:10.109803985 +0800 CST m=+32.026969936", false},
-		{"legacy without mono", "2026-04-30 22:52:10.109803985 +0800 CST", false},
 		{"empty string", "", false},
 		{"garbage", "not a time", true},
+		{"legacy Go format now rejected", "2026-04-30 22:52:10.109803985 +0800 CST m=+32.026969936", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1033,7 +1033,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Merged:     false,
+		MergeStatus: model.MergeStatusPending,
 		MergeTier:  "ffmpeg",
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec))
@@ -1055,7 +1055,7 @@ func TestMigrationV15ToV16_MergeTierColumn(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   2048,
 		FrameCount: 30,
-		Merged:     false,
+		MergeStatus: model.MergeStatusPending,
 	}
 	require.NoError(t, db.InsertRecording(ctx, rec2))
 
@@ -1085,7 +1085,7 @@ func TestInsertRecordingWithRetry_Success(t *testing.T) {
 		Duration:   60.0,
 		FileSize:   1024,
 		FrameCount: 60,
-		Merged:     false,
+		MergeStatus: model.MergeStatusPending,
 	}
 	err = db.InsertRecordingWithRetry(ctx, rec, 3, 10*time.Millisecond)
 	require.NoError(t, err)
@@ -1135,7 +1135,7 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 		EndedAt:   now.Add(5 * time.Minute),
 		Duration:  300.0,
 		FileSize:  5120,
-		Merged:    true,
+		MergeStatus: model.MergeStatusMerged,
 	}
 	err = db.MergeAndReplaceRecordings(ctx, merged, oldIDs)
 	require.NoError(t, err)
@@ -1151,7 +1151,7 @@ func TestMergeAndReplaceRecordings(t *testing.T) {
 	got, err := db.GetRecording(ctx, merged.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.True(t, got.Merged)
+	require.True(t, got.MergeStatus == model.MergeStatusMerged)
 	require.Equal(t, "/merge/merged.mp4", got.FilePath)
 }
 
@@ -1360,12 +1360,12 @@ func TestListRecordingsArchivedFilter(t *testing.T) {
 	// Insert non-archived recording
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-normal", CameraID: "cam1", FilePath: "/f/normal.mp4", Format: model.FormatH264,
-		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 100, Merged: false,
+		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 100, MergeStatus: model.MergeStatusPending,
 	}))
 	// Insert archived recording
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-archived", CameraID: "cam1", FilePath: "/f/archived.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(time.Minute), EndedAt: now.Add(2 * time.Minute), Duration: 60, FileSize: 200, Merged: false,
+		StartedAt: now.Add(time.Minute), EndedAt: now.Add(2 * time.Minute), Duration: 60, FileSize: 200, MergeStatus: model.MergeStatusPending,
 	}))
 	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-archived")
 	require.NoError(t, err)
@@ -1404,14 +1404,14 @@ func TestListOldestRecordingsExcludesArchived(t *testing.T) {
 	// Insert archived (oldest)
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-old-archived", CameraID: "cam1", FilePath: "/f/old.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(-2 * time.Hour), EndedAt: now.Add(-2*time.Hour + time.Minute), Duration: 60, FileSize: 100, Merged: false,
+		StartedAt: now.Add(-2 * time.Hour), EndedAt: now.Add(-2*time.Hour + time.Minute), Duration: 60, FileSize: 100, MergeStatus: model.MergeStatusPending,
 	}))
 	_, err = db.db.ExecContext(ctx, "UPDATE recordings SET archived=1 WHERE id=?", "rec-old-archived")
 	require.NoError(t, err)
 	// Insert non-archived (newer)
 	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
 		ID: "rec-new", CameraID: "cam1", FilePath: "/f/new.mp4", Format: model.FormatH264,
-		StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Hour + time.Minute), Duration: 60, FileSize: 200, Merged: false,
+		StartedAt: now.Add(-time.Hour), EndedAt: now.Add(-time.Hour + time.Minute), Duration: 60, FileSize: 200, MergeStatus: model.MergeStatusPending,
 	}))
 
 	recs, err := db.ListOldestRecordings(ctx, 10)

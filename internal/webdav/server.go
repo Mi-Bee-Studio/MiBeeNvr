@@ -173,8 +173,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 		EndedAt:    info.ModTime(),
 		Duration:   0,
 		FileSize:   info.Size(),
-		FrameCount: 1,
-		Merged:     false,
+		FrameCount:  1,
+		MergeStatus: model.MergeStatusPending,
 	}
 
 	if err := s.db.InsertRecording(ctx, recording); err != nil {
