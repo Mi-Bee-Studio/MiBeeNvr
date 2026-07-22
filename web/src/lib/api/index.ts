@@ -33,6 +33,7 @@ export type {
 // Cameras — CRUD, ONVIF, PTZ, protocols
 export {
   listCameras,
+  listCamerasSummary,
   createCamera,
   getCamera,
   updateCamera,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"net/url"
@@ -122,6 +123,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	}
 	// Summary view: return only the fields needed for grid/dashboard display.
 	// Reduces response body ~60% for pages that only show status badges.
+	// Supports ETag conditional requests: 304 Not Modified when status unchanged.
 	if r.URL.Query().Get("view") == "summary" {
 		type cameraSummary struct {
 			ID          string  `json:"id"`
@@ -134,6 +136,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			ErrorCode   *string `json:"error_code,omitempty"`
 		}
 		summaries := make([]cameraSummary, len(cameras))
+		// Build ETag from camera status signatures (cheap — no JSON serialization).
+		var etagHash uint32
 		for i, c := range cameras {
 			summaries[i] = cameraSummary{
 				ID:          c.ID,
@@ -146,12 +150,35 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			if c.LastSeen != nil && !c.LastSeen.IsZero() {
 				ts := c.LastSeen.Format(time.RFC3339)
 				summaries[i].LastSeen = &ts
+				etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(ts))
 			}
 			if c.ErrorType != nil {
 				summaries[i].ErrorCode = c.ErrorType
+				etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(*c.ErrorType))
 			}
+			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.ID+string(c.Status)))
+		}
+		etag := fmt.Sprintf(`"s%d-%d"`, len(summaries), etagHash)
+		w.Header().Set("ETag", etag)
+		if match := r.Header.Get("If-None-Match"); match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
 		}
 		writeJSON(w, http.StatusOK, summaries)
+		return
+	}
+	// ETag for full list: based on camera count + status signatures (cheap).
+	var fullEtagHash uint32
+	for _, c := range cameras {
+		fullEtagHash = crc32.Update(fullEtagHash, crc32.IEEETable, []byte(c.ID+string(c.Status)))
+		if c.LastSeen != nil {
+			fullEtagHash = crc32.Update(fullEtagHash, crc32.IEEETable, []byte(c.LastSeen.Format(time.RFC3339)))
+		}
+	}
+	fullEtag := fmt.Sprintf(`"f%d-%d"`, len(cameras), fullEtagHash)
+	w.Header().Set("ETag", fullEtag)
+	if match := r.Header.Get("If-None-Match"); match == fullEtag {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	writeJSON(w, http.StatusOK, cameras)

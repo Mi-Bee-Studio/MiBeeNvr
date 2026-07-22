@@ -1,7 +1,7 @@
 /**
  * Camera API — CRUD, ONVIF discovery, PTZ, protocols, per-camera merge config
  */
-import { apiRequest, getAuthHeader, API_BASE } from './client';
+import { apiRequest, getAuthHeader, clearCredentials, API_BASE } from './client';
 
 // --- Types ---
 
@@ -295,8 +295,80 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
 
 // --- Camera CRUD ---
 
+// ETag cache for the full camera list. Avoids re-downloading the body when
+// camera statuses haven't changed between polls (304 Not Modified from server).
+// The Dashboard polls every 30s; without this, each poll re-downloads the full
+// list even when nothing changed.
+let fullListEtag: string | null = null;
+let cachedFullList: Camera[] | null = null;
+
 export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
-  return apiRequest<Camera[]>('/cameras', { signal });
+  const headers: Record<string, string> = {};
+  if (fullListEtag) headers['If-None-Match'] = fullListEtag;
+  const authHeader = getAuthHeader();
+  if (authHeader) headers['Authorization'] = authHeader;
+
+  const resp = await fetch(`${API_BASE}/cameras`, {
+    headers,
+    signal: signal ?? AbortSignal.timeout(30000),
+  });
+  if (resp.status === 304 && cachedFullList) {
+    return cachedFullList; // unchanged — return cached copy
+  }
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      clearCredentials();
+      window.location.hash = '#/login';
+    }
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  const newEtag = resp.headers.get('ETag');
+  if (newEtag) fullListEtag = newEtag;
+  const data = (await resp.json()) as Camera[];
+  cachedFullList = data;
+  return data;
+}
+
+// ETag cache for summary view — avoids re-downloading the body when camera
+// statuses haven't changed between polls (304 Not Modified from server).
+let summaryEtag: string | null = null;
+let cachedSummary: CameraSummary[] | null = null;
+
+export interface CameraSummary {
+  id: string;
+  name: string;
+  status: string;
+  encoding?: string;
+  protocol?: string;
+  is_recording: boolean;
+  last_seen?: string;
+  error_code?: string;
+}
+
+/** Lightweight camera list for Dashboard/grid views (~60% smaller than full list).
+ *  Supports ETag conditional requests: returns null on 304 (unchanged) so the
+ *  caller knows to keep existing data. */
+export async function listCamerasSummary(signal?: AbortSignal): Promise<CameraSummary[] | null> {
+  const headers: Record<string, string> = {};
+  if (summaryEtag) headers['If-None-Match'] = summaryEtag;
+  const authHeader = getAuthHeader();
+  if (authHeader) headers['Authorization'] = authHeader;
+
+  const resp = await fetch(`${API_BASE}/cameras?view=summary`, {
+    headers,
+    signal: signal ?? AbortSignal.timeout(30000),
+  });
+  if (resp.status === 304 && cachedSummary) {
+    return cachedSummary; // unchanged — return cached copy
+  }
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  const newEtag = resp.headers.get('ETag');
+  if (newEtag) summaryEtag = newEtag;
+  const data = (await resp.json()) as CameraSummary[];
+  cachedSummary = data;
+  return data;
 }
 
 export async function createCamera(data: CreateCameraRequest, signal?: AbortSignal): Promise<Camera> {
