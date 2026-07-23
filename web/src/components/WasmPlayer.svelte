@@ -352,6 +352,11 @@ function handleWebGpuLost() {
           if (cm) {
             cm.setPaused(msg.paused);
           }
+        } else if (msg.type === 'codec-ready') {
+          // Decoder configured — resume frame delivery (paused in onCodecInfo).
+          if (cm) {
+            cm.setPaused(false);
+          }
         }
       };
 
@@ -396,6 +401,12 @@ function handleWebGpuLost() {
       },
       onCodecInfo: (ci) => {
         if (!worker) return;
+        // Pause frame delivery until the worker signals codec-ready. The decoder
+        // configure (esp. libde265 WASM init on HTTP) is async; frames arriving
+        // before it finishes are silently dropped by the worker. Holding here
+        // avoids wasting bandwidth and ensures the next IDR after resume is the
+        // first frame decoded (no partial-state black screen).
+        cm?.setPaused(true);
         worker.postMessage({
           type: 'codec-info',
           data: {

@@ -137,6 +137,7 @@ async function handleCodecInfo(data: {
       vps: data.vps,
     });
     isWasmMode = decoder.isWasm;
+    self.postMessage({ type: "codec-ready" });
   } catch (err: any) {
     self.postMessage({ type: 'error', error: err?.message || 'Codec configuration failed' });
   }
