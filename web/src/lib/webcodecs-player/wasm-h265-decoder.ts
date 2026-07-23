@@ -21,6 +21,22 @@ import { yuv420ToRgba } from './yuv-rgba';
 
 const START_CODE = new Uint8Array([0x00, 0x00, 0x00, 0x01]);
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+/**
+ * A decoded H.265 frame as raw RGBA pixels — used when WebCodecs VideoFrame is
+ * unavailable (plain HTTP, non-localhost). The caller renders it via Canvas2D
+ * putImageData instead of the WebGL2/WebGPU VideoFrame pipeline.
+ */
+export interface WasmFrame {
+  /** RGBA pixel data (width * height * 4 bytes). */
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+  /** Presentation timestamp (same units as the input PTS). */
+  pts: number;
+}
+
 // ─── WasmH265Decoder ─────────────────────────────────────────────────────────
 
 export class WasmH265Decoder {
@@ -70,10 +86,13 @@ export class WasmH265Decoder {
   /**
    * Decode a frame from raw NAL units.
    *
-   * @returns VideoFrame (synthetic, from RGBA data) or null if no frame available yet.
-   *          Caller owns the VideoFrame and must call .close() when done.
+   * @returns Decoded frame, or null if no frame is available yet.
+   *          When WebCodecs is available, returns a synthetic VideoFrame (RGBA).
+   *          When WebCodecs is unavailable (HTTP non-localhost), returns a
+   *          WasmFrame (raw RGBA + dimensions) so the caller can render via
+   *          Canvas2D putImageData without depending on the VideoFrame API.
    */
-  decode(nalus: Uint8Array[], pts: number, _isKeyframe: boolean): VideoFrame | null {
+  decode(nalus: Uint8Array[], pts: number, _isKeyframe: boolean): VideoFrame | WasmFrame | null {
     if (!this._initialized || !this._decoder || !this._module) return null;
 
     // Push each NAL unit with start codes
@@ -89,7 +108,7 @@ export class WasmH265Decoder {
     this._decoder.pushEndOfFrame();
 
     // Decode and extract frame
-    let frame: VideoFrame | null = null;
+    let frame: VideoFrame | WasmFrame | null = null;
     let more = true;
     while (more) {
       const result = this._decoder.decode();
@@ -122,15 +141,22 @@ export class WasmH265Decoder {
         // Convert YUV420P → RGBA
         const rgba = yuv420ToRgba(y.bytes, u.bytes, v.bytes, this._width, this._height);
 
-        // Create synthetic VideoFrame from RGBA pixel data
-        // This VideoFrame is CPU-backed (not GPU) — compatible with
-        // WebGL2 texImage2D, createImageBitmap, and VideoFrame cloning.
-        frame = new VideoFrame(rgba, {
-          codedWidth: this._width,
-          codedHeight: this._height,
-          timestamp: pts,
-          format: 'RGBA',
-        });
+        if (typeof VideoFrame !== 'undefined') {
+          // WebCodecs available (HTTPS/localhost): wrap in a synthetic VideoFrame
+          // for compatibility with the WebGL2/WebGPU rendering pipeline.
+          frame = new VideoFrame(rgba, {
+            codedWidth: this._width,
+            codedHeight: this._height,
+            timestamp: pts,
+            format: 'RGBA',
+          });
+        } else {
+          // WebCodecs unavailable (plain HTTP): return raw RGBA for Canvas2D
+          // rendering. This is the HTTP H.265 playback path — libde265 WASM
+          // decodes fine without a secure context; only the VideoFrame wrapper
+          // was blocking it.
+          frame = { rgba, width: this._width, height: this._height, pts };
+        }
       }
 
       // Must delete image to prevent ERROR_IMAGE_BUFFER_FULL

@@ -15,7 +15,7 @@
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
-  import { detectMSEH265, detectWebCodecs } from '$lib/webcodecs-player/capabilities';
+  import { detectMSEH265, detectWebCodecs, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
   import { pickCameraMode, nextAfter, isAudioCapable, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
 
@@ -83,10 +83,14 @@
   // once on mount and fed into pickCameraMode so it can promote/demote wasm.
   let browserSupportsWebCodecs = $state(false);
 
+  // libde265 WASM H.265 soft-decoder availability — enables H.265 on plain HTTP
+  // (where WebCodecs is unavailable) via Canvas2D rendering.
+  let browserSupportsWasmH265 = $state(false);
+
   // Snapshot of the browser caps consumed by pickCameraMode. Recomputed from
-  // the two $state flags above so the picker stays a pure function.
+  // the $state flags above so the picker stays a pure function.
   function browserCaps(): BrowserCaps {
-    return { h265MSE: browserSupportsH265MSE, webCodecs: browserSupportsWebCodecs };
+    return { h265MSE: browserSupportsH265MSE, webCodecs: browserSupportsWebCodecs, wasmH265: browserSupportsWasmH265 };
   }
 
   // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
@@ -318,6 +322,7 @@
     // can auto-degrade (H.265 FLV→HLS without MSE) or promote (wasm with WebCodecs).
     browserSupportsH265MSE = detectMSEH265();
     browserSupportsWebCodecs = detectWebCodecs();
+    browserSupportsWasmH265 = detectWasmH265();
     try {
       const fetched = await getDashboardCameras();
       const activeFetched = fetched;
@@ -626,8 +631,10 @@
                 <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
+                  codec={(camera.encoding || camera.stream_encoding || '').toLowerCase()}
                   expanded={expandedCameraId === camera.id}
                   tabVisible={tabVisible}
+                  onFallbackNeeded={() => handleProtocolFailed(camera.id)}
                 />
               {:else if wasmPlayerLoading}
                 <div class="absolute inset-0 flex items-center justify-center bg-black/80">

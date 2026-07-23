@@ -18,12 +18,16 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   let {
     cameraId,
     cameraName,
+    codec = 'h264',
     expanded = false,
     tabVisible = true,
     onFallbackNeeded,
   }: {
     cameraId: string;
     cameraName: string;
+    /** Camera codec ('h264' | 'h265' | 'mjpeg'). Determines whether the WASM
+     *  libde265 fallback path is available on plain HTTP (no WebCodecs). */
+    codec?: string;
     expanded?: boolean;
     tabVisible?: boolean;
     onFallbackNeeded?: (fallback: 'hls') => void;
@@ -290,6 +294,26 @@ let webgpuRenderer: WebGPURenderer | null = null;
     }
   }
 
+  /**
+   * Render a raw RGBA frame (WASM libde265 output) via Canvas2D putImageData.
+   * Used on plain HTTP where WebCodecs VideoFrame is unavailable — this is the
+   * HTTP H.265 playback path. Falls back to a 2D context on the same canvas
+   * element used for WebGL2 (mutually exclusive: only one context per canvas).
+   */
+  function renderWasmFrame(frame: { rgba: Uint8Array; width: number; height: number }) {
+    if (!canvasEl) return;
+    const ctx = canvasEl.getContext('2d');
+    if (!ctx) return;
+    if (canvasEl.width !== frame.width || canvasEl.height !== frame.height) {
+      canvasEl.width = frame.width;
+      canvasEl.height = frame.height;
+      canvasWidth = frame.width;
+      canvasHeight = frame.height;
+    }
+    const imageData = new ImageData(new Uint8ClampedArray(frame.rgba.buffer, frame.rgba.byteOffset, frame.rgba.byteLength), frame.width, frame.height);
+    ctx.putImageData(imageData, 0, 0);
+  }
+
 function handleWebGpuLost() {
   if (!webgpuRenderer) return;
   webgpuRenderer.destroy();
@@ -333,6 +357,12 @@ function handleWebGpuLost() {
             renderFrame(frame);
             frame.close(); // Memory safety — always close after rendering
           }
+          if (streamState !== 'playing') {
+            updateState('playing');
+          }
+        } else if (msg.type === 'wasm-frame' && msg.data) {
+          // HTTP H.265 path: raw RGBA from libde265 WASM (no VideoFrame).
+          renderWasmFrame(msg.data);
           if (streamState !== 'playing') {
             updateState('playing');
           }
@@ -540,9 +570,17 @@ function handleWebGpuLost() {
   function checkTier(): string | null {
     const tier = getPlaybackTier();
     if (tier === 'tier3') {
-      // Trigger auto-fallback to HLS instead of showing error
-      onFallbackNeeded?.('hls');
-      return null; // Don't set error state — parent will switch protocol
+      // No WebCodecs (plain HTTP, non-localhost). The WASM libde265 decoder can
+      // still decode H.265 via Canvas2D putImageData — allow it for H.265 so
+      // HTTP environments aren't forced to HLS (which can't play H.265 either).
+      // H.264 on tier3 has no working decode path (needs WebCodecs), so fall back.
+      if (codec !== 'h265') {
+        onFallbackNeeded?.('hls');
+        return null; // Don't set error state — parent will switch protocol
+      }
+      // H.265 + tier3: proceed with WASM-only rendering (Canvas2D). WebGL2/WebGPU
+      // are unavailable here, but Canvas2D putImageData needs no special context.
+      return null;
     }
     if (!detectWebGL2()) {
       return 'WebGL2 is required for rendering';
@@ -563,8 +601,11 @@ function handleWebGpuLost() {
       streamState = 'error';
       return;
     }
-    // If checkTier() triggered fallback, stop initialization
-    if (!detectWebCodecs()) {
+    // If checkTier() triggered fallback, stop initialization.
+    // On tier3 (no WebCodecs) for H.265, we proceed — the WASM libde265 path
+    // renders via Canvas2D (no WebGL2/WebGPU needed). For all other tier3
+    // cases checkTier already triggered the HLS fallback above.
+    if (!detectWebCodecs() && codec !== 'h265') {
       return;
     }
     unsupportedMsg = null;
@@ -597,8 +638,11 @@ function handleWebGpuLost() {
         }
       }
 
-      // WebGL2 fallback (or tier 2 direct)
-      if (!webgpuRenderer) {
+      // WebGL2 fallback (or tier 2 direct). On tier3 + H.265 (plain HTTP) we
+      // skip WebGL2 entirely — the WASM libde265 path renders via Canvas2D
+      // putImageData, which needs no WebGL context.
+      const isTier3Wasm = getPlaybackTier() === 'tier3' && codec === 'h265';
+      if (!webgpuRenderer && !isTier3Wasm) {
         if (!initWebGL2()) {
           console.error('[WasmPlayer] WebGL2 init failed — canvas context types:', canvasEl ? (canvasEl as unknown as Record<string, unknown>).__svelte_context || 'unknown' : 'no canvas');
           unsupportedMsg = 'Failed to initialize WebGL2';

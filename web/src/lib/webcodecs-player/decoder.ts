@@ -138,6 +138,8 @@ export class Decoder {
   private _configured = false;
   private _lastCodecInfo: CodecInfo | null = null;
   private _frameCallback: ((frame: VideoFrame) => void) | null = null;
+  private _wasmFrameCallback:
+    ((frame: { rgba: Uint8Array; width: number; height: number; pts: number }) => void) | null = null;
   private _errorCallback: ((error: Error) => void) | null = null;
   private _errorCount = 0;
   private static readonly MAX_RECOVERY_ATTEMPTS = 3;
@@ -297,6 +299,16 @@ export class Decoder {
     this._backpressureCallback = callback;
   }
 
+  /**
+   * Register a callback for decoded WasmFrames (raw RGBA).
+   * Used ONLY when WebCodecs VideoFrame is unavailable (plain HTTP) — the
+   * caller renders these via Canvas2D putImageData instead of the WebGL2
+   * VideoFrame pipeline.
+   */
+  onWasmFrame(callback: (frame: { rgba: Uint8Array; width: number; height: number; pts: number }) => void): void {
+    this._wasmFrameCallback = callback;
+  }
+
   /** Number of decode requests currently in the WebCodecs pipeline. */
   get pendingDecodeCount(): number {
     return this._pendingDecodeCount;
@@ -390,7 +402,7 @@ export class Decoder {
     this._decoder.decode(chunk);
   }
 
-  /** Decode via WASM — synchronous, outputs VideoFrame immediately. */
+  /** Decode via WASM — synchronous, outputs a frame immediately. */
   private _decodeWasm(nalus: Uint8Array[], pts: number, isKeyframe: boolean): void {
     if (!this._wasmDecoder) return;
 
@@ -413,8 +425,28 @@ export class Decoder {
     const frame = this._wasmDecoder.decode(nalus, pts, isKeyframe);
     if (frame) {
       this._pendingDecodeCount++;
-      // Fire frame callback — WASM decoder produces frame synchronously
-      this.handleOutput(frame, this._decoderEpoch);
+      // Backpressure recovery (WASM decodes synchronously, count decremented below)
+      if (this._backpressured && this._pendingDecodeCount < BACKPRESSURE_THRESHOLD) {
+        this._backpressured = false;
+        if (this._backpressureCallback) {
+          try {
+            this._backpressureCallback(false);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      // Route WasmFrame (HTTP, no VideoFrame) vs VideoFrame (HTTPS).
+      if (typeof VideoFrame !== 'undefined') {
+        this.handleOutput(frame as VideoFrame, this._decoderEpoch);
+      } else if (this._wasmFrameCallback) {
+        this._pendingDecodeCount--;
+        try {
+          this._wasmFrameCallback(frame as any);
+        } catch {
+          /* callback failed — frame is plain data, no close() needed */
+        }
+      }
     }
   }
 
