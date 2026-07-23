@@ -48,12 +48,14 @@ export interface ProtocolsResponse {
 export interface BrowserCaps {
   /** MSE can decode H.265 — when false, FLV renders black on H.265 streams. */
   h265MSE: boolean;
-  /** WebCodecs VideoDecoder present — enables the WASM player. */
+  /** WebCodecs VideoDecoder present — enables the WebCodecs player (HTTPS/localhost). */
   webCodecs: boolean;
+  /** libde265 WASM soft-decoder available — enables H.265 on plain HTTP via Canvas2D. */
+  wasmH265: boolean;
 }
 
 /** Empty (most-conservative) browser capability set — used as a safe fallback. */
-export const EMPTY_CAPS: BrowserCaps = { h265MSE: false, webCodecs: false };
+export const EMPTY_CAPS: BrowserCaps = { h265MSE: false, webCodecs: false, wasmH265: false };
 
 /**
  * Ordered preference of real-time streaming protocols for runtime fallback.
@@ -180,9 +182,11 @@ export function pickCameraMode(
   }
 
   if (candidate === 'wasm') {
-    // WASM player needs WebCodecs; without it, fall to HLS.
-    if (!caps.webCodecs) return 'hls';
-    return 'wasm';
+    // WebCodecs player (HTTPS/localhost) for any codec, OR libde265 WASM
+    // fallback for H.265 on plain HTTP. Without either, fall to HLS.
+    if (caps.webCodecs) return 'wasm';
+    if (enc === 'h265' && caps.wasmH265) return 'wasm';
+    return 'hls';
   }
 
   // Unknown candidate — safest universal default.
@@ -207,8 +211,8 @@ export function isProtocolUsable(
   if (p === 'webrtc') return enc !== 'h265';
   // FLV: H.265 needs MSE H.265, else black screen.
   if (p === 'flv') return enc !== 'h265' || caps.h265MSE;
-  // WASM: needs WebCodecs.
-  if (p === 'wasm') return caps.webCodecs;
+  // WebCodecs (HTTPS) for any codec, or libde265 WASM fallback for H.265 (HTTP).
+  if (p === 'wasm') return caps.webCodecs || (enc === 'h265' && caps.wasmH265);
   // MJPEG: only for JPEG/MJPEG streams.
   if (p === 'mjpeg') return enc === 'mjpeg' || enc === 'jpeg';
   // HLS / LL-HLS: universally usable for H.264/H.265 (browsers decode natively).

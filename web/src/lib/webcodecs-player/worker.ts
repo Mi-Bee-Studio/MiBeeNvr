@@ -12,6 +12,7 @@
  *
  * Message protocol (worker → main):
  *   { type: 'frame', data: VideoFrame }        — frame for rendering (transferable if GPU-backed)
+ *   { type: 'wasm-frame', data: {rgba,width,height,pts} } — raw RGBA frame (HTTP, no VideoFrame)
  *   { type: 'error', error: string }            — error notification
  *
  * NOTE: WASM-decoded frames are CPU-backed (synthetic VideoFrame from RGBA).
@@ -86,8 +87,13 @@ async function handleCodecInfo(data: {
   }
 
   // Set frame output callback — forward to main thread
-  // Tracks whether frames are from WASM (CPU-backed, not transferable)
+  // Tracks whether frames are from WASM (CPU backed, not transferable)
   let isWasmMode = false;
+
+  // WASM RGBA frame callback (HTTP, no VideoFrame) — forward raw pixels.
+  decoder.onWasmFrame((frame: { rgba: Uint8Array; width: number; height: number; pts: number }) => {
+    self.postMessage({ type: 'wasm-frame', data: frame });
+  });
 
   decoder.onFrame((frame: any) => {
     try {

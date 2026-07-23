@@ -18,12 +18,16 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   let {
     cameraId,
     cameraName,
+    codec = 'h264',
     expanded = false,
     tabVisible = true,
     onFallbackNeeded,
   }: {
     cameraId: string;
     cameraName: string;
+    /** Camera codec ('h264' | 'h265' | 'mjpeg'). Determines whether the WASM
+     *  libde265 fallback path is available on plain HTTP (no WebCodecs). */
+    codec?: string;
     expanded?: boolean;
     tabVisible?: boolean;
     onFallbackNeeded?: (fallback: 'hls') => void;
@@ -44,6 +48,14 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   let glProgram: WebGLProgram | null = null;
   let glTexture: WebGLTexture | null = null;
   let glVao: WebGLVertexArrayObject | null = null;
+
+  // Dedicated Canvas2D context for the WASM (libde265) H.265 path on plain HTTP.
+  // A canvas can only hold ONE context type — if WebGL2 was ever acquired on it
+  // (e.g. from a prior protocol session or a probe), getContext('2d') returns
+  // null forever. So on the WASM path we lazily create a FRESH 2D context the
+  // first time we need it, and reuse it for every frame. This decouples WASM
+  // rendering from any WebGL2 state on the main canvas.
+  let wasm2d: CanvasRenderingContext2D | null = null;
 
 // WebGPU renderer (tier 1)
 let webgpuRenderer: WebGPURenderer | null = null;
@@ -290,6 +302,65 @@ let webgpuRenderer: WebGPURenderer | null = null;
     }
   }
 
+  /**
+   * Render a raw RGBA frame (WASM libde265 output) via Canvas2D putImageData.
+   * Used on plain HTTP where WebCodecs VideoFrame is unavailable — this is the
+   * HTTP H.265 playback path.
+   *
+   * A canvas element can hold only ONE context type for its lifetime. If the
+   * main canvas ever acquired a WebGL2 context (prior protocol session, a
+   * capability probe, etc.), getContext('2d') permanently returns null. To stay
+   * robust against that, we lazily create a DEDICATED offscreen 2D canvas for
+   * WASM rendering, then blit it onto whatever context the main canvas currently
+   * exposes (2d if available, else WebGL2). This decouples WASM decoding from
+   * main-canvas context ownership entirely.
+   */
+  function renderWasmFrame(frame: { rgba: Uint8Array; width: number; height: number }) {
+    if (!canvasEl) return;
+
+    // Lazily create the offscreen 2D canvas for WASM frames (done once).
+    if (!wasm2dCanvas) wasm2dCanvas = document.createElement('canvas');
+    if (wasm2dCanvas.width !== frame.width || wasm2dCanvas.height !== frame.height) {
+      wasm2dCanvas.width = frame.width;
+      wasm2dCanvas.height = frame.height;
+      canvasWidth = frame.width;
+      canvasHeight = frame.height;
+    }
+    // Draw RGBA → offscreen 2D canvas
+    const offCtx = wasm2dCanvas.getContext('2d');
+    if (!offCtx) return;
+    const imageData = new ImageData(
+      new Uint8ClampedArray(frame.rgba.buffer, frame.rgba.byteOffset, frame.rgba.byteLength),
+      frame.width,
+      frame.height,
+    );
+    offCtx.putImageData(imageData, 0, 0);
+
+    // Blit onto the main canvas. Prefer its 2D context; if a WebGL2 context
+    // owns the canvas, upload the offscreen canvas as a texture instead.
+    if (canvasEl.width !== frame.width || canvasEl.height !== frame.height) {
+      canvasEl.width = frame.width;
+      canvasEl.height = frame.height;
+      if (gl) gl.viewport(0, 0, canvasEl.width, canvasEl.height);
+    }
+    const main2d = canvasEl.getContext('2d');
+    if (main2d) {
+      main2d.drawImage(wasm2dCanvas, 0, 0);
+    } else if (gl && glProgram && glTexture && glVao) {
+      // WebGL2 path — reuse the existing program/texture to draw the frame.
+      gl.useProgram(glProgram);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, glTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, wasm2dCanvas);
+      gl.bindVertexArray(glVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bindVertexArray(null);
+    }
+  }
+
+  // Dedicated offscreen 2D canvas for WASM frame rendering (see renderWasmFrame).
+  let wasm2dCanvas: HTMLCanvasElement | null = null;
+
 function handleWebGpuLost() {
   if (!webgpuRenderer) return;
   webgpuRenderer.destroy();
@@ -333,6 +404,12 @@ function handleWebGpuLost() {
             renderFrame(frame);
             frame.close(); // Memory safety — always close after rendering
           }
+          if (streamState !== 'playing') {
+            updateState('playing');
+          }
+        } else if (msg.type === 'wasm-frame' && msg.data) {
+          // HTTP H.265 path: raw RGBA from libde265 WASM (no VideoFrame).
+          renderWasmFrame(msg.data);
           if (streamState !== 'playing') {
             updateState('playing');
           }
@@ -540,9 +617,17 @@ function handleWebGpuLost() {
   function checkTier(): string | null {
     const tier = getPlaybackTier();
     if (tier === 'tier3') {
-      // Trigger auto-fallback to HLS instead of showing error
-      onFallbackNeeded?.('hls');
-      return null; // Don't set error state — parent will switch protocol
+      // No WebCodecs (plain HTTP, non-localhost). The WASM libde265 decoder can
+      // still decode H.265 via Canvas2D putImageData — allow it for H.265 so
+      // HTTP environments aren't forced to HLS (which can't play H.265 either).
+      // H.264 on tier3 has no working decode path (needs WebCodecs), so fall back.
+      if (codec !== 'h265') {
+        onFallbackNeeded?.('hls');
+        return null; // Don't set error state — parent will switch protocol
+      }
+      // H.265 + tier3: proceed with WASM-only rendering (Canvas2D). WebGL2/WebGPU
+      // are unavailable here, but Canvas2D putImageData needs no special context.
+      return null;
     }
     if (!detectWebGL2()) {
       return 'WebGL2 is required for rendering';
@@ -563,8 +648,11 @@ function handleWebGpuLost() {
       streamState = 'error';
       return;
     }
-    // If checkTier() triggered fallback, stop initialization
-    if (!detectWebCodecs()) {
+    // If checkTier() triggered fallback, stop initialization.
+    // On tier3 (no WebCodecs) for H.265, we proceed — the WASM libde265 path
+    // renders via Canvas2D (no WebGL2/WebGPU needed). For all other tier3
+    // cases checkTier already triggered the HLS fallback above.
+    if (!detectWebCodecs() && codec !== 'h265') {
       return;
     }
     unsupportedMsg = null;
@@ -597,15 +685,26 @@ function handleWebGpuLost() {
         }
       }
 
-      // WebGL2 fallback (or tier 2 direct)
+      // WebGL2 initialization. We initialize WebGL2 for ALL paths where it's
+      // available, including the tier3 + H.265 (WASM libde265) path: the WASM
+      // decoder produces RGBA, which we blit onto the main canvas via an
+      // offscreen 2D canvas. If the main canvas has WebGL2, we upload the frame
+      // as a texture (GPU blit); if it only has 2D, we drawImage. Either way the
+      // main canvas needs a context, so try WebGL2 first (best quality/scaling)
+      // and let renderWasmFrame adapt to whatever context the canvas exposes.
+      const isTier3Wasm = getPlaybackTier() === 'tier3' && codec === 'h265';
       if (!webgpuRenderer) {
         if (!initWebGL2()) {
-          console.error('[WasmPlayer] WebGL2 init failed — canvas context types:', canvasEl ? (canvasEl as unknown as Record<string, unknown>).__svelte_context || 'unknown' : 'no canvas');
-          unsupportedMsg = 'Failed to initialize WebGL2';
-          streamState = 'error';
-          return;
+          // WebGL2 unavailable — on the WASM path this is fine (renderWasmFrame
+          // falls back to a 2D context). For WebCodecs paths WebGL2 is required.
+          if (!isTier3Wasm) {
+            if (import.meta.env.DEV) console.error('[WasmPlayer] WebGL2 init failed');
+            unsupportedMsg = 'Failed to initialize WebGL2';
+            streamState = 'error';
+            return;
+          }
+          if (import.meta.env.DEV) console.warn('[WasmPlayer] WebGL2 init failed on WASM path — using 2D blit');
         }
-        if (import.meta.env.DEV) console.log('[WasmPlayer] WebGL2 init success');
       }
 
       if (!initWorker()) {

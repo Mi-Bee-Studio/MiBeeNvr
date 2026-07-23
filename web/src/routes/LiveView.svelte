@@ -265,17 +265,10 @@
                 <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
+                  codec={(camera.encoding || camera.stream_encoding || '').toLowerCase()}
                   expanded={true}
                   onFallbackNeeded={handleWasmFallback}
                 />
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
-                    <div class="flex flex-col items-center gap-2">
-                      <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-                      <span class="text-white/50 text-xs">{t('live.loadingWasmPlayer')}</span>
-                    </div>
-                  </div>
-                </div>
               {:else}
                 <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
                   <div class="absolute inset-0 flex items-center justify-center">

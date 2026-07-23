@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { apiRequest } from '$lib/api';
   import { showToast } from '$lib/toast';
-  import { detectWebCodecs, getWebCodecsUnavailableReason } from '$lib/webcodecs-player/capabilities';
+  import { detectWebCodecs, getWebCodecsUnavailableReason, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
   import { getCameraProtocolOverride, setCameraProtocolOverride } from '$lib/preferences';
 
   export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg';
@@ -49,6 +49,7 @@
 
   let isH265 = $derived((cameraEncoding || '').toLowerCase() === 'h265');
   let browserSupportsWasm = $state(false);
+  let browserSupportsWasmH265 = $state(false);
   let wasmUnavailableReason: string | null = $state(null);
 
   let protocolOptions = [
@@ -68,16 +69,19 @@
   let visibleOptions = $derived(protocolOptions);
 
   function isAvailable(protocol: StreamingProtocol): boolean {
-    // Wasm requires browser WebCodecs support
-    if (protocol === 'wasm' && !browserSupportsWasm) return false;
+    // WebCodecs (HTTPS) for any codec, OR libde265 WASM fallback for H.265 (HTTP)
+    if (protocol === 'wasm' && !browserSupportsWasm && !(isH265 && browserSupportsWasmH265)) return false;
     // H.265 cameras cannot use WebRTC
     if (protocol === 'webrtc' && isH265) return false;
     return availableProtocols.includes(protocol);
   }
 
   function getUnavailableReason(protocol: StreamingProtocol): string | null {
-    if (protocol === 'wasm' && !browserSupportsWasm) {
-      return wasmUnavailableReason || 'Browser does not support WebCodecs';
+    if (protocol === 'wasm' && !browserSupportsWasm && !(isH265 && browserSupportsWasmH265)) {
+      // Only show the WebCodecs reason when WASM H.265 fallback also can't help
+      if (!isH265 || !browserSupportsWasmH265) {
+        return wasmUnavailableReason || 'Browser does not support WebCodecs';
+      }
     }
     if (protocol === 'webrtc' && isH265) {
       return t('live.protocol.tooltip.h265Note');
@@ -187,6 +191,7 @@
 
   onMount(() => {
     browserSupportsWasm = detectWebCodecs();
+    browserSupportsWasmH265 = detectWasmH265();
     if (!browserSupportsWasm) {
       wasmUnavailableReason = getWebCodecsUnavailableReason();
     }

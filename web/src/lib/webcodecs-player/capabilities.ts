@@ -150,7 +150,7 @@ export function detectWasmSimd(): boolean {
  * Determine playback tier based on available capabilities.
  *
  *   tier1 — WebCodecs + WebGPU        (best performance)
- *   tier2 — WebCodecs + (WebGL2 | OffscreenCanvas)  (good performance)
+ *   tier2 — WebCodecs + (WebGL2 | OffscreenCanvas)  (good playback)
  *   tier3 — fallback                   (basic playback)
  */
 export function getPlaybackTier(): PlaybackTier {
@@ -161,4 +161,20 @@ export function getPlaybackTier(): PlaybackTier {
     return 'tier2';
   }
   return 'tier3';
+}
+
+/**
+ * Check whether H.265 can be played via the libde265 WASM soft-decoder.
+ *
+ * Unlike WebCodecs (which needs HTTPS/localhost), libde265 is pure WASM and
+ * works on plain HTTP. It renders via Canvas2D putImageData (no WebGL needed).
+ * This is the fallback path that enables H.265 live playback in HTTP
+ * environments where HLS/FLV/WebRTC all fail (browsers can't decode HEVC via
+ * MSE or native <video> on Linux/no-HEVC-extension).
+ *
+ * Returns true whenever WebAssembly is available (libde265 loads lazily on
+ * first decode; we don't probe the module here to avoid a network fetch).
+ */
+export function detectWasmH265(): boolean {
+  return typeof WebAssembly !== 'undefined' && typeof CanvasRenderingContext2D !== 'undefined';
 }
