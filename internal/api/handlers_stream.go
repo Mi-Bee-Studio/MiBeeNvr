@@ -406,28 +406,20 @@ type ConditionalHandler interface {
 // LLHLSStreamHandler implements StreamHandler for Low-Latency HLS.
 // It wraps HLSStreamHandler but is registered separately in the StreamRegistry
 // so the frontend can discover LL-HLS as a distinct protocol.
-// When low-latency is disabled, it appears as unavailable with a reason.
+//
+// LL-HLS is always advertised as available (H.264/H.265) — the backend muxer
+// supports low-latency fMP4 unconditionally. Whether the browser can actually
+// play it (e.g. H.265 via MSE) is a frontend capability concern, gated by the
+// same browser-probe logic as HLS/FLV.
 type LLHLSStreamHandler struct {
 	HLSStreamHandler
-	LowLatencyEnabled bool
 }
 
 func (h *LLHLSStreamHandler) Name() string { return "ll-hls" }
 
-// CanHandle returns true only when low-latency is actually enabled.
-// When disabled, the ConditionalHandler interface provides the "greyed out" UX.
+// CanHandle returns true for H.264 and H.265 — LL-HLS is always available.
 func (h *LLHLSStreamHandler) CanHandle(codec model.Format) bool {
-	return h.LowLatencyEnabled && (codec == model.FormatH264 || codec == model.FormatH265)
-}
-
-// SupportedCodec returns true for codecs that LL-HLS would support if enabled.
-func (h *LLHLSStreamHandler) SupportedCodec(codec model.Format) bool {
 	return codec == model.FormatH264 || codec == model.FormatH265
-}
-
-// UnavailabilityReason returns why LL-HLS is not available.
-func (h *LLHLSStreamHandler) UnavailabilityReason(_ model.Format) string {
-	return "Enable low-latency HLS in Settings"
 }
 
 // --- WSStreamHandler ---

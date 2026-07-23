@@ -488,11 +488,11 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// Step 7: HLS manager
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
 	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, metrics)
-	// Configure Low-Latency HLS if enabled
-	if cfg.HLS.LowLatency {
-		partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
-		hlsMgr.SetLowLatency(true, partDur)
-	}
+	// Low-Latency HLS is always enabled — the muxer supports fMP4 LL mode
+	// unconditionally. Whether a given browser can play a given codec over
+	// LL-HLS is a frontend concern (same browser-probe as HLS/FLV).
+	partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
+	hlsMgr.SetLowLatency(true, partDur)
 
 	// Step 7.5: WebRTC manager (H.264 only)
 	var webrtcMgr *webrtc.Manager
@@ -733,10 +733,9 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: hlsMgr})
-	// Always register LL-HLS so it appears as greyed-out when disabled
+	// LL-HLS is always available (low-latency fMP4 muxer always enabled).
 	reg.Register(&api.LLHLSStreamHandler{
-		HLSStreamHandler:  api.HLSStreamHandler{Mgr: hlsMgr},
-		LowLatencyEnabled: cfg.HLS.LowLatency,
+		HLSStreamHandler: api.HLSStreamHandler{Mgr: hlsMgr},
 	})
 	if webrtcMgr != nil {
 		reg.Register(&api.WebRTCStreamHandler{})
