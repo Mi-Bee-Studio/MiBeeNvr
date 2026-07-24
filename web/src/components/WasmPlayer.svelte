@@ -124,7 +124,12 @@ let webgpuRenderer: WebGPURenderer | null = null;
   }
   // Decode error tracking for mid-stream fallback
   let decodeErrorCount = 0;
-  const MAX_DECODE_ERRORS = 10;
+  // Raised from 10→50: H.265 WebCodecs decoding can produce intermittent
+  // errors (corrupted NALU, profile quirks) without the stream being
+  // fundamentally broken. 10 errors in 5s was too aggressive and demoted
+  // working WebCodecs streams to HLS (which can't play H.265 reliably).
+  // 50 errors in 10s means only a truly broken decoder triggers fallback.
+  const MAX_DECODE_ERRORS = 50;
   let decodeErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ─── Freeze frame helpers ──────────────────────────────────────────────
@@ -429,7 +434,7 @@ function handleWebGpuLost() {
           decodeErrorCount++;
           // Reset counter window on each error
           if (decodeErrorTimer) clearTimeout(decodeErrorTimer);
-          decodeErrorTimer = setTimeout(() => { decodeErrorCount = 0; }, 5000);
+          decodeErrorTimer = setTimeout(() => { decodeErrorCount = 0; }, 10000);
           // Persistent decode errors → fallback to HLS
           if (decodeErrorCount >= MAX_DECODE_ERRORS) {
             if (import.meta.env.DEV) console.warn('[WasmPlayer] Max decode errors reached, falling back to HLS');
