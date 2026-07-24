@@ -66,6 +66,13 @@
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 5;
   const reconnectDelays = [2000, 4000, 8000, 16000, 32000];
+  // Connection-establishment timeout: if a PeerConnection doesn't reach a real
+  // frame (firstFramePlayed) within CONNECT_TIMEOUT_MS, treat it as failed and
+  // scheduleReconnect(). Covers the case where ICE/WHEP succeeds enough to not
+  // error, but no media ever flows (Xiaomi CS2), and neither zombie (needs
+  // connected) nor WHEP-abort (needs hang) catches it.
+  let connectTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  const CONNECT_TIMEOUT_MS = 15000;
   // True only after a real video frame has actually played. ICE 'connected'
   // fires even when the backend has no media to send (e.g. Xiaomi CS2 cameras
   // where the WHEP handler accepts the PeerConnection but produces no frames),
@@ -233,6 +240,10 @@ let destroyed = false;
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    if (connectTimeoutTimer) {
+      clearTimeout(connectTimeoutTimer);
+      connectTimeoutTimer = null;
+    }
     if (zombieInterval) {
       clearInterval(zombieInterval);
       zombieInterval = null;
@@ -310,6 +321,18 @@ let destroyed = false;
     streamState = 'loading';
     webrtcState = 'connecting';
 
+    // Arm the connection-establishment timeout: if no real frame arrives within
+    // CONNECT_TIMEOUT_MS, abort and reconnect. Cleared on first frame or when
+    // the connection fails (both lead to scheduleReconnect or success).
+    if (connectTimeoutTimer) { clearTimeout(connectTimeoutTimer); connectTimeoutTimer = null; }
+    connectTimeoutTimer = setTimeout(() => {
+      connectTimeoutTimer = null;
+      if (!firstFramePlayed && !destroyed) {
+        webrtcState = 'failed';
+        scheduleReconnect();
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     try {
       const iceServers: RTCConfiguration = {
         iceServers: [], // WHEP typically uses no STUN/TURN for LAN
@@ -335,6 +358,8 @@ let destroyed = false;
           const onPlaying = () => {
             firstFramePlayed = true;
             reconnectAttempts = 0;
+            // A real frame arrived — clear the connection-establishment timeout.
+            if (connectTimeoutTimer) { clearTimeout(connectTimeoutTimer); connectTimeoutTimer = null; }
             videoEl?.removeEventListener('playing', onPlaying);
           };
           videoEl.addEventListener('playing', onPlaying);
@@ -401,11 +426,24 @@ let destroyed = false;
       };
       if (authHeader) headers['Authorization'] = authHeader;
 
-      const response = await fetch(`/api/cameras/${cameraId}/stream/webrtc`, {
-        method: 'POST',
-        headers,
-        body: peerConnection.localDescription!.sdp,
-      });
+      // Send SDP offer to WHEP endpoint. Abort after 10s — without this, a
+      // backend that hangs on the WHEP POST (or accepts it but never responds)
+      // leaves initWebRTC() awaiting forever: no onconnectionstatechange, no
+      // zombie detector, no reconnect → silent permanent black screen (the
+      // user-reported "WebRTC badge but black, no errors, no degradation").
+      const whepAbort = new AbortController();
+      const whepTimeout = setTimeout(() => whepAbort.abort(), 10000);
+      let response: Response;
+      try {
+        response = await fetch(`/api/cameras/${cameraId}/stream/webrtc`, {
+          method: 'POST',
+          headers,
+          body: peerConnection.localDescription!.sdp,
+          signal: whepAbort.signal,
+        });
+      } finally {
+        clearTimeout(whepTimeout);
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
