@@ -254,7 +254,22 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	select {
 	case status := <-done:
 		if status == http.StatusOK {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			// Credentials validated by the middleware (BasicAuth path). Mint a
+			// stateless signed session token so the browser can stop carrying the
+			// reversible base64(user:pass). The username comes from the request's
+			// BasicAuth header (just validated); the bcrypt hash from config drives
+			// the HMAC key, so a later password change invalidates this token.
+			username := h.config.Auth.Username
+			if u, _, ok := r.BasicAuth(); ok && u != "" {
+				username = u
+			}
+			hash := h.config.Auth.PasswordHash
+			token, expiresAt := middleware.SignSessionToken(username, hash, time.Now())
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status":     "ok",
+				"token":      token,
+				"expires_at": expiresAt.UTC().Format(time.RFC3339),
+			})
 		}
 	default:
 		// Forward the middleware's captured response (503 SETUP_REQUIRED, 401, etc.)

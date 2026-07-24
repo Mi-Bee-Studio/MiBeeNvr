@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendTelemetry, optInTelemetry, isTelemetryOptedIn, __resetOptIn } from '$lib/telemetry';
 
-const AUTH_KEY = 'mibee_nvr_auth';
-const TEST_CRED = btoa('admin:admin123');
+// Session token storage key (must match web/src/lib/api/client.ts). The value
+// is a JSON {token, expiresAt} blob, exactly what getToken()/getTokenForUrl()
+// reads from localStorage.
+const TOKEN_KEY = 'mibee_nvr_token';
+const TEST_TOKEN = 'mbs_testtokenvalue.signaturesuffix';
 
 function mockSendBeacon(): ReturnType<typeof vi.fn> {
   const spy = vi.fn().mockReturnValue(true);
@@ -22,13 +25,21 @@ function removeSendBeacon(): void {
   });
 }
 
+function seedSessionToken(token: string = TEST_TOKEN): void {
+  localStorage.setItem(
+    TOKEN_KEY,
+    JSON.stringify({ token, expiresAt: Date.now() + 2 * 60 * 60 * 1000 }),
+  );
+}
+
 beforeEach(() => {
-  sessionStorage.setItem(AUTH_KEY, TEST_CRED);
+  seedSessionToken();
   __resetOptIn();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  localStorage.clear();
   sessionStorage.clear();
 });
 
@@ -59,7 +70,7 @@ describe('sendTelemetry in dev mode', () => {
     const [url] = sendBeacon.mock.calls[0];
     expect(url).toContain('/api/telemetry');
     expect(url).toContain('token=');
-    expect(url).toContain(encodeURIComponent(TEST_CRED));
+    expect(url).toContain(encodeURIComponent(TEST_TOKEN));
   });
 
   it('should call navigator.sendBeacon with a Blob payload', () => {
@@ -109,7 +120,7 @@ describe('sendTelemetry in dev mode', () => {
   });
 
   it('should silently skip if auth credentials are missing', () => {
-    sessionStorage.clear();
+    localStorage.removeItem(TOKEN_KEY);
     const sendBeacon = mockSendBeacon();
 
     sendTelemetry('playback_start', 'cam-1');

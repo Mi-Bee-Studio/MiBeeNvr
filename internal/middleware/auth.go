@@ -111,10 +111,51 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 				return
 			}
 
+			// --- Signed session token (mbs_...) ---
+			// Tried BEFORE BasicAuth so already-logged-in browsers (which send a
+			// Bearer token) skip the bcrypt path entirely. The token is validated
+			// purely by recomputing the HMAC against the current bcrypt hash, so a
+			// password change naturally invalidates old tokens.
+			if tok := bearerSessionToken(r); tok != "" {
+				claims, err := VerifySessionToken(tok, currentHash, time.Now())
+				if err != nil {
+					recordAuthAttempt("failure")
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				// Username must match the configured account. (A token signed under
+				// an old username after the admin renamed the account is rejected.)
+				if claims.Sub != currentUsername {
+					recordAuthAttempt("failure")
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				// Sliding renewal: if little lifetime remains, mint a fresh token
+				// and hand it back in the response header. The frontend swaps it in.
+				expiresAt := time.Unix(claims.EXP, 0)
+				if NeedsRenewal(expiresAt, time.Now()) {
+					newTok, newExp := SignSessionToken(claims.Sub, currentHash, time.Now())
+					_ = newExp
+					// It is safe to set the header before calling next: headers are
+					// flushed only when the first Write/WriteHeader happens downstream.
+					w.Header().Set(RenewedTokenHeader, newTok)
+				}
+				recordAuthAttempt("success")
+				if rateLimit.Enabled {
+					authFailures.Delete(ip)
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			user, pass, ok := r.BasicAuth()
 			if !ok {
-				// Fallback: check ?token= query parameter (for WebSocket which cannot set headers)
-				if tok := r.URL.Query().Get("token"); tok != "" {
+				// Fallback: check ?token= query parameter.
+				// Session tokens (mbs_) are validated above via the Bearer path; the
+				// ?token= variant for WS/sendBeacon is also handled by bearerSessionToken.
+				// Anything left here is the legacy base64(user:pass) form, kept only
+				// for migration compatibility.
+				if tok := r.URL.Query().Get("token"); tok != "" && !IsSessionToken(tok) {
 					decoded, err := base64.StdEncoding.DecodeString(tok)
 					if err == nil {
 						parts := strings.SplitN(string(decoded), ":", 2)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -164,10 +164,10 @@
 
   function downloadRecording(rec: Recording) {
     const url = `/api/archives/${expandedArchiveId}/recordings/${rec.id}/download`;
-    const encoded = localStorage.getItem('mibee_nvr_auth');
-    if (encoded) {
+    const authHeader = getAuthHeader();
+    if (authHeader) {
       fetch(url, {
-        headers: { 'Authorization': `Basic ${encoded}` }
+        headers: { 'Authorization': authHeader }
       })
         .then(res => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);

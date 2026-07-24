@@ -9,7 +9,7 @@
  *
  * @param {object} opts
  * @param {string} opts.cameraId
- * @param {() => { username: string; password: string } | null} opts.getCredentials
+ * @param {() => string | null} opts.getAuthHeader - Returns "Bearer <token>" or null
  * @param {(id: string, url: string) => void} opts.onUrlUpdate - Called with new blob URL
  * @param {(id: string) => void} opts.onUrlRevoke - Called before URL update to revoke old URL
  * @param {(id: string, loading: boolean) => void} opts.onLoadingChange
@@ -18,17 +18,17 @@
  */
 export async function fetchSnapshot({
   cameraId,
-  getCredentials,
+  getAuthHeader,
   onUrlUpdate,
   onUrlRevoke,
   onLoadingChange,
   onErrorChange,
   onUnsupported,
 }) {
-  const creds = getCredentials();
+  const authHeader = getAuthHeader();
   const headers = {};
-  if (creds) {
-    headers['Authorization'] = 'Basic ' + btoa(`${creds.username}:${creds.password}`);
+  if (authHeader) {
+    headers['Authorization'] = authHeader;
   }
 
   try {
@@ -59,7 +59,7 @@ export async function fetchSnapshot({
  *
  * @param {object} opts
  * @param {number} [opts.intervalMs=3000] - Refresh interval in milliseconds
- * @param {() => { username: string; password: string } | null} opts.getCredentials
+ * @param {() => string | null} opts.getAuthHeader - Returns "Bearer <token>" or null
  * @param {(id: string, url: string) => void} opts.onUrlUpdate
  * @param {(id: string) => void} opts.onUrlRevoke
  * @param {(id: string, loading: boolean) => void} opts.onLoadingChange
@@ -67,7 +67,7 @@ export async function fetchSnapshot({
  * @param {(id: string) => void} opts.onUnsupported
  */
 export function createSnapshotManager(opts) {
-  const { intervalMs = 3000, getCredentials, onUrlUpdate, onUrlRevoke, onLoadingChange, onErrorChange } = opts;
+  const { intervalMs = 3000, getAuthHeader, onUrlUpdate, onUrlRevoke, onLoadingChange, onErrorChange } = opts;
 
   const intervals = {};
   const noSnapshotSet = new Set();
@@ -77,7 +77,7 @@ export function createSnapshotManager(opts) {
 
     const fetchOpts = {
       cameraId,
-      getCredentials,
+      getAuthHeader,
       onUrlUpdate,
       onUrlRevoke,
       onLoadingChange,

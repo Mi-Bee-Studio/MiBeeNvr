@@ -1,11 +1,11 @@
 package api
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -96,11 +96,13 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	h.config.Auth.PasswordHash = hash
 	h.config.Storage.RootDir = dataDir
 
-	// Generate basic auth token for auto-login
-	token := base64.StdEncoding.EncodeToString([]byte(req.Username + ":" + req.Password))
+	// Issue a stateless signed session token (same scheme as /api/auth/login) so
+	// the just-initialized browser session never carries a reversible password.
+	token, expiresAt := middleware.SignSessionToken(req.Username, hash, time.Now())
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"token":  token,
+		"status":     "ok",
+		"token":      token,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }

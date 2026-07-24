@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getCredentials, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
+  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras } from '$lib/api';
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -45,7 +45,7 @@
   // Snapshot manager — handles fetch, interval, and cleanup lifecycle
   const snapshotMgr = createSnapshotManager({
     intervalMs: 3000,
-    getCredentials,
+    getAuthHeader,
     onUrlUpdate: (id, url) => { snapshotUrls[id] = url; },
     onUrlRevoke: (id) => {
       if (snapshotUrls[id]) { URL.revokeObjectURL(snapshotUrls[id]); delete snapshotUrls[id]; }
