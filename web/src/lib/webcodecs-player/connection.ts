@@ -71,6 +71,11 @@ const MAX_ZOMBIE_RECONNECTS = 3;
  * retries, then demote.
  */
 const MAX_CONNECT_FAILURES = 5;
+/**
+ * Absolute wall-clock budget: if no frame has arrived within this many ms of
+ * the CM's FIRST connect, force offline regardless of reconnect cycles.
+ */
+const NO_MEDIA_TOTAL_MS = 20000;
 
 // ─── ConnectionManager ───────────────────────────────────────────────────
 
@@ -95,6 +100,15 @@ export class ConnectionManager {
   private _zombieCheckTimer: ReturnType<typeof setInterval> | null = null;
   private _lastFrameTime = 0;
   private _zombieMissCount = 0;
+  // Wall-clock guard: the epoch ms when this CM first connected. If no frame
+  // has arrived within NO_MEDIA_TOTAL_MS of that timestamp (across ALL reconnect
+  // cycles), force offline. Unlike the per-cycle zombie/handshake counters,
+  // this can't be reset by a reconnect — it's the absolute time since the first
+  // connect attempt. This is the reliable last-resort guard against cameras
+  // whose WS opens but never produces media (the reconnect loop that the
+  // zombie/handshake counters failed to stop reliably).
+  private _firstConnectTime = 0;
+  private _everReceivedFrame = false;
   // Count of consecutive zombie-triggered reconnects with NO frame delivered
   // between them. When this exceeds MAX_ZOMBIE_RECONNECTS we stop reconnecting
   // and report the camera offline (failed health), so the Player Orchestrator
@@ -163,6 +177,9 @@ export class ConnectionManager {
   connect(): void {
     if (this._destroyed) return;
     if (!this._opts.url) return;
+
+    // Stamp the first-connect time for the wall-clock no-media guard.
+    if (this._firstConnectTime === 0) this._firstConnectTime = Date.now();
 
     // Idempotent: if a socket is already open or mid-handshake, don't open a
     // second one. This is the defensive fix for the WS reconnect storm — even
@@ -314,6 +331,20 @@ export class ConnectionManager {
           }
         }
 
+        // Wall-clock no-media guard (the RELIABLE last resort): if we've been
+        // trying to connect for NO_MEDIA_TOTAL_MS since the FIRST connect and
+        // NOT A SINGLE frame has ever arrived, this protocol cannot serve media
+        // for this camera. Stop reconnecting and report offline so the
+        // orchestrator demotes. Unlike the zombie/handshake counters above,
+        // this check is immune to reconnect-cycle resets — _firstConnectTime is
+        // stamped once and _everReceivedFrame is never cleared by a reconnect.
+        if (!this._everReceivedFrame && this._firstConnectTime > 0 &&
+            Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS) {
+          this._setState('offline');
+          this._opts.onCameraOffline?.();
+          return; // do NOT reconnect — let the orchestrator demote
+        }
+
         this._scheduleCoordinatedReconnect();
       };
 
@@ -335,6 +366,12 @@ export class ConnectionManager {
     this._closeWebSocket();
     this._stopZombieDetection();
     this._paused = false;
+    // Reset the wall-clock no-media guard so a fresh connect() session starts
+    // clean (e.g. orchestrator reconnects after a mode switch).
+    this._firstConnectTime = 0;
+    this._everReceivedFrame = false;
+    this._connectFailCount = 0;
+    this._zombieReconnectCount = 0;
   }
 
   /** Manual reconnect — disconnects and reconnects. */
@@ -451,6 +488,17 @@ export class ConnectionManager {
         // or a recorder whose WS opens but produces no media). Stop the cycle
         // and report offline so the orchestrator demotes to the next protocol.
         this._zombieMissCount = 0;
+
+        // Wall-clock guard also applies here (OPEN + no frames).
+        if (!this._everReceivedFrame && this._firstConnectTime > 0 &&
+            Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS) {
+          this._stopZombieDetection();
+          this._setState('offline');
+          this._opts.onCameraOffline?.();
+          try { if (this._ws) this._ws.close(1000); } catch { /* closed */ }
+          return;
+        }
+
         this._zombieReconnectCount++;
         if (this._zombieReconnectCount > MAX_ZOMBIE_RECONNECTS) {
           this._stopZombieDetection();
@@ -479,6 +527,7 @@ export class ConnectionManager {
   private _recordFrameDelivery(): void {
     this._lastFrameTime = Date.now();
     this._zombieMissCount = 0;
+    this._everReceivedFrame = true;
     // A frame arrived — this protocol works. Reset the frameless-reconnect cap.
     this._zombieReconnectCount = 0;
   }
