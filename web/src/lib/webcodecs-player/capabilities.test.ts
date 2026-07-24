@@ -6,8 +6,6 @@ import {
   detectWebGPU,
   detectWebGL2,
   detectOffscreenCanvas,
-  detectSharedArrayBuffer,
-  detectWasmSimd,
   getPlaybackTier,
   type PlaybackTier,
 } from './capabilities';
@@ -192,53 +190,6 @@ describe('detectOffscreenCanvas', () => {
   it('should return false when OffscreenCanvas is not available', () => {
     vi.stubGlobal('OffscreenCanvas', undefined);
     expect(detectOffscreenCanvas()).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// detectSharedArrayBuffer
-// ---------------------------------------------------------------------------
-describe('detectSharedArrayBuffer', () => {
-  it('should return true when SharedArrayBuffer is available', () => {
-    vi.stubGlobal('SharedArrayBuffer', class Mock {});
-    expect(detectSharedArrayBuffer()).toBe(true);
-  });
-
-  it('should return false when SharedArrayBuffer is not available', () => {
-    vi.stubGlobal('SharedArrayBuffer', undefined);
-    expect(detectSharedArrayBuffer()).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// detectWasmSimd
-// ---------------------------------------------------------------------------
-describe('detectWasmSimd', () => {
-  it('should return true when WebAssembly.validate succeeds with SIMD binary', () => {
-    vi.spyOn(WebAssembly, 'validate').mockReturnValue(true);
-    expect(detectWasmSimd()).toBe(true);
-  });
-
-  it('should return false when WebAssembly.validate fails', () => {
-    vi.spyOn(WebAssembly, 'validate').mockReturnValue(false);
-    expect(detectWasmSimd()).toBe(false);
-  });
-
-  it('should return false when WebAssembly is not available', () => {
-    vi.stubGlobal('WebAssembly', undefined);
-    expect(detectWasmSimd()).toBe(false);
-  });
-
-  it('should return false when WebAssembly.validate is not a function', () => {
-    vi.stubGlobal('WebAssembly', { validate: 'not-a-function' });
-    expect(detectWasmSimd()).toBe(false);
-  });
-
-  it('should return false on error during validation', () => {
-    vi.spyOn(WebAssembly, 'validate').mockImplementation(() => {
-      throw new Error('validation error');
-    });
-    expect(detectWasmSimd()).toBe(false);
   });
 });
 

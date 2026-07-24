@@ -6,6 +6,7 @@ import {
   resolveEncoding,
   isProtocolUsable,
   isAudioCapable,
+  buildCandidateChain,
   EMPTY_CAPS,
   type ProtocolsResponse,
 } from '$lib/stream-selection';
@@ -212,5 +213,63 @@ describe('isAudioCapable', () => {
   it('returns true for H.264/H.265 cameras with audio_enabled', () => {
     expect(isAudioCapable(makeCamera({ encoding: 'h264', audio_enabled: true }))).toBe(true);
     expect(isAudioCapable(makeCamera({ encoding: 'h265', audio_enabled: true }))).toBe(true);
+  });
+});
+
+describe('buildCandidateChain', () => {
+  it('returns a single-element mjpeg chain for JPEG cameras', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'jpeg' });
+    const chain = buildCandidateChain(cam, null, FULL_CAPS);
+    expect(chain.map((c) => c.mode)).toEqual(['mjpeg']);
+    expect(chain[0].pinned).toBe(false);
+  });
+
+  it('orders by latency (wasm > webrtc > flv > hls) for H.264 with full caps', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, H264_RESP, FULL_CAPS);
+    // Full caps → wasm leads (frontend-only, gated on webCodecs), then the
+    // backend-advertised real-time modes in preference order.
+    expect(chain.map((c) => c.mode)).toEqual(['wasm', 'webrtc', 'flv', 'hls']);
+  });
+
+  it('excludes webrtc and flv for H.265 without MSE (codec gate)', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    const chain = buildCandidateChain(cam, H265_RESP, { h265MSE: false, webCodecs: true, wasmH265: true });
+    // wasm (WebCodecs can decode H.265 here) + hls only — webrtc/flv blocked.
+    expect(chain.map((c) => c.mode)).toEqual(['wasm', 'hls']);
+  });
+
+  it('excludes wasm when neither WebCodecs nor libde265 WASM is available', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, H264_RESP, { h265MSE: true, webCodecs: false, wasmH265: false });
+    expect(chain.map((c) => c.mode)).toEqual(['webrtc', 'flv', 'hls']);
+    expect(chain.find((c) => c.mode === 'wasm')).toBeUndefined();
+  });
+
+  it('pins a single-element chain for a valid user override', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, H264_RESP, FULL_CAPS, { override: 'flv' });
+    expect(chain.map((c) => c.mode)).toEqual(['flv']);
+    expect(chain[0].pinned).toBe(true);
+  });
+
+  it('ignores an unusable override and falls through to auto-selection', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    // webrtc is unusable for h265 → override rejected → full auto chain.
+    const chain = buildCandidateChain(cam, H265_RESP, FULL_CAPS, { override: 'webrtc' });
+    expect(chain.find((c) => c.mode === 'webrtc')).toBeUndefined();
+    expect(chain.every((c) => !c.pinned)).toBe(true);
+  });
+
+  it('returns an empty chain for non-HLS-capable protocols', () => {
+    const cam = makeCamera({ protocol: 'rtmp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, null, EMPTY_CAPS, { isHlsCapable: false });
+    expect(chain).toEqual([]);
+  });
+
+  it('falls back to the legacy default as a single-element chain when backend is null', () => {
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, null, EMPTY_CAPS, { legacyDefault: 'flv' });
+    expect(chain.map((c) => c.mode)).toEqual(['flv']);
   });
 });

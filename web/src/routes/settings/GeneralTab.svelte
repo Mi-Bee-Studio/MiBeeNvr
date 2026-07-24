@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getStreamingSettings, updateStreamingSettings, getStats } from '$lib/api';
+  import { getSettings, updateSettings, getStats } from '$lib/api';
   import type { SettingsConfig, StorageStats } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '$lib/preferences';
   import { t } from '$lib/i18n';
@@ -31,7 +31,12 @@
   ]);
   let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
-  let streamingDefaultProtocol = $state('hls');
+  // NOTE: the "fallback protocol" selector was removed — the Player Orchestrator
+  // now auto-selects the best protocol per camera (codec + browser caps), so
+  // there's nothing for a new user to configure here. The backend
+  // `streaming.default_protocol` field is preserved for backward compat but no
+  // longer has a UI (the orchestrator's buildCandidateChain ignores it, falling
+  // back to the universal HLS candidate when /protocols is unreachable).
 
   // Disk info from stats API
   let diskInfo = $state<StorageStats | null>(null);
@@ -55,7 +60,6 @@
     if (loading) return false;
     const current = JSON.stringify({
       retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
-      streamingDefaultProtocol,
     });
     return current !== originalSnapshot;
   });
@@ -103,7 +107,6 @@
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
       retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
-      streamingDefaultProtocol,
     });
     originalRetentionDays = retentionDays;
   }
@@ -131,12 +134,8 @@
     } catch (e) { /* non-critical */ }
   }
 
-  async function loadStreamingConfig() {
-    try {
-      const config = await getStreamingSettings();
-      streamingDefaultProtocol = config.default_protocol || 'hls';
-    } catch (e) { console.warn('Failed to load default protocol:', e); }
-  }
+  // loadStreamingConfig() removed — the fallback-protocol selector is gone
+  // (the orchestrator auto-selects). No streaming state to load here anymore.
 
   async function save() {
     if (!validate()) return;
@@ -160,10 +159,6 @@
         timezone: selectedTimezone,
       };
       await updateSettings(payload);
-
-      // Save streaming default protocol
-      const existingConfig = await getStreamingSettings();
-      await updateStreamingSettings({ ...existingConfig, default_protocol: streamingDefaultProtocol });
 
       // Refresh state
       settings = await getSettings();
@@ -219,7 +214,6 @@
   onMount(() => {
     loadSettings();
     loadDiskInfo();
-    loadStreamingConfig();
     window.addEventListener('hashchange', handleHashChange);
   });
 
@@ -359,27 +353,11 @@
     </div>
   </div>
 
-  <!-- Fallback Protocol Selector.
-       The surveillance grid now auto-selects the best protocol per camera
-       (codec-aware), so this is only a fallback used when the per-camera
-       /protocols endpoint can't be reached. It's no longer the primary choice. -->
-  <div class="card p-8 border th-border">
-    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.streaming.fallbackProtocol')}</h3>
-    <p class="text-sm th-text-tertiary mb-8">{t('settings.streaming.fallbackProtocolHint')}</p>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <div>
-        <label for="defaultProtocol" class="input-label">{t('settings.streaming.fallbackProtocol')}</label>
-        <select id="defaultProtocol" class="input" bind:value={streamingDefaultProtocol}>
-          <option value="webrtc">WebRTC</option>
-          <option value="flv">HTTP-FLV</option>
-          <option value="hls">HLS</option>
-          <option value="ll-hls">LL-HLS</option>
-        </select>
-        <p class="text-xs th-text-tertiary mt-1">{t('settings.streaming.fallbackProtocolHint')}</p>
-      </div>
-    </div>
-  </div>
+  <!-- Fallback Protocol selector removed — the Player Orchestrator now
+       auto-selects the best protocol per camera based on codec + browser
+       capabilities. There is no streaming protocol for a user to pick on this
+       page; per-camera overrides remain available via the Protocol Switcher on
+       each camera's live view. -->
 
   <!-- Save button -->
   <div class="flex items-center gap-4 pt-2">

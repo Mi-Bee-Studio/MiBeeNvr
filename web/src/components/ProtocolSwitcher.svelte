@@ -4,9 +4,9 @@
   import { apiRequest } from '$lib/api';
   import { showToast } from '$lib/toast';
   import { detectWebCodecs, getWebCodecsUnavailableReason, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
-  import { getCameraProtocolOverride, setCameraProtocolOverride } from '$lib/preferences';
+  import { setCameraProtocolOverride, clearCameraProtocolOverride } from '$lib/preferences';
 
-  export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg';
+  export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg' | 'auto';
 
   interface ProtocolOption {
     id: StreamingProtocol;
@@ -31,13 +31,17 @@
   let {
     cameraId,
     cameraEncoding = '',
-    selected = 'hls',
+    selected = 'auto',
     onchange,
   }: {
     cameraId: string;
     cameraEncoding?: string;
     selected?: StreamingProtocol;
-    onchange?: (protocol: StreamingProtocol) => void;
+    /** Fired on explicit user selection. `null` (clears the override → back to
+     *  auto) is only emitted for the 'auto' option; protocol picks emit the
+     *  protocol id. The initial auto-selection is owned by the Player
+     *  Orchestrator, so this component does NOT emit onchange on mount. */
+    onchange?: (protocol: StreamingProtocol | null) => void;
   } = $props();
 
   let availableProtocols = $state<string[]>([]);
@@ -53,6 +57,11 @@
   let wasmUnavailableReason: string | null = $state(null);
 
   let protocolOptions = [
+    // 'auto' is the default and recommended choice — the Player Orchestrator
+    // picks the lowest-latency protocol the browser+codec can handle and
+    // adapts at runtime. Selecting a specific protocol below pins it (disables
+    // auto-degrade/upgrade) for users who want explicit control.
+	{ id: 'auto', label: t('live.protocol.auto') || 'Auto', latency: t('live.protocol.autoLatency') || 'adaptive', viewers: '', resource: '' },
 	{ id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
 	{ id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
 	{ id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
@@ -62,13 +71,15 @@
   ];
 
   let currentOption = $derived(
-    protocolOptions.find(p => p.id === selected) || protocolOptions.find(p => p.id === 'hls') || protocolOptions[0],
+    protocolOptions.find(p => p.id === selected) || protocolOptions.find(p => p.id === 'auto') || protocolOptions[0],
   );
 
   // Always show all options — wasm is marked unavailable with tooltip instead of hidden
   let visibleOptions = $derived(protocolOptions);
 
   function isAvailable(protocol: StreamingProtocol): boolean {
+    // 'auto' is always available — it delegates to the orchestrator.
+    if (protocol === 'auto') return true;
     // WebCodecs (HTTPS) for any codec, OR libde265 WASM fallback for H.265 (HTTP)
     if (protocol === 'wasm' && !browserSupportsWasm && !(isH265 && browserSupportsWasmH265)) return false;
     // H.265 cameras cannot use WebRTC
@@ -77,6 +88,7 @@
   }
 
   function getUnavailableReason(protocol: StreamingProtocol): string | null {
+    if (protocol === 'auto') return null;
     if (protocol === 'wasm' && !browserSupportsWasm && !(isH265 && browserSupportsWasmH265)) {
       // Only show the WebCodecs reason when WASM H.265 fallback also can't help
       if (!isH265 || !browserSupportsWasmH265) {
@@ -109,20 +121,13 @@
         }
       }
       protocolReasons = reasons;
-      // Resolve the protocol to show. Priority:
-      //   1. A stored per-camera override (the user's last manual choice) — but
-      //      only if it's still available for this camera's current codec.
-      //   2. The backend's codec-aware default.
-      // A stored override wins because it represents explicit user intent; the
-      // backend default is only a starting point. We never silently overwrite a
-      // valid override with the backend default.
-      const stored = getCameraProtocolOverride(cameraId);
-      if (stored && stored !== selected && isAvailable(stored as StreamingProtocol)) {
-        onchange?.(stored as StreamingProtocol);
-      } else if (!stored && result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
-        // No override — apply the backend default once.
-        onchange?.(result.default as StreamingProtocol);
-      }
+      // NOTE: we no longer emit onchange here. The Player Orchestrator owns the
+      // initial protocol selection (it built the candidate chain from this same
+      // /protocols response + browser caps). This component only emits onchange
+      // on an explicit user click in selectProtocol() — so the dropdown reflects
+      // the orchestrator's current mode (passed in via `selected`), and a click
+      // pins/clears the override. Emitting onchange on mount would re-pin the
+      // backend default and disable the orchestrator's adaptive degrade/upgrade.
     } catch (e) {
       console.warn('Failed to load protocols:', e);
       const encoding = (cameraEncoding || '').toLowerCase();
@@ -140,24 +145,21 @@
       }
     } finally {
       loading = false;
-      // Auto-fallback: if H.265 and selected is WebRTC, switch to FLV or HLS
-      if (isH265 && selected === 'webrtc') {
-        handleH265Fallback();
-      }
+      // The H.265-on-WebRTC guard previously fired onchange here to demote an
+      // invalid selection. With the orchestrator owning selection, that demote
+      // is handled at chain-build time (WebRTC is never in an H.265 chain), so
+      // there's nothing to do here.
     }
   }
 
-  function handleH265Fallback() {
-    const fallbackProtocol: StreamingProtocol = availableProtocols.includes('flv') ? 'flv' : 'hls';
-    const protocolLabel = fallbackProtocol === 'flv' ? 'HTTP-FLV' : 'HLS';
-    showToast(
-      t('live.h265.fallbackMessage', { protocol: protocolLabel }),
-      'warning',
-    );
-    onchange?.(fallbackProtocol);
-  }
-
   function selectProtocol(protocol: StreamingProtocol) {
+    // 'auto' clears any per-camera override → back to orchestrator auto-selection.
+    if (protocol === 'auto') {
+      open = false;
+      clearCameraProtocolOverride(cameraId);
+      onchange?.(null);
+      return;
+    }
     if (!isAvailable(protocol)) {
       // Show H.265 fallback info if user clicks WebRTC on H.265 camera
       if (protocol === 'webrtc' && isH265) {
@@ -167,9 +169,8 @@
     }
     open = false;
     // Persist the user's explicit manual choice so it survives navigation and
-    // is honored by the surveillance grid (per-camera override). Note: this is
-    // the ONLY writer — runtime auto-fallbacks must NOT persist, otherwise a
-    // transient failure would permanently pin a worse protocol.
+    // is honored by the orchestrator (pins the chain — disables auto-degrade/
+    // upgrade to respect the explicit selection). This is the ONLY writer.
     setCameraProtocolOverride(cameraId, protocol);
     onchange?.(protocol);
   }

@@ -730,21 +730,23 @@ function handleWebGpuLost() {
     };
   });
 
-  // Coordinated visibility — pause when tab hidden, resume when visible
-  // Supplements ConnectionManager's internal visibility handling
+  // Visibility: pause when the tab is hidden, resume when visible. This effect
+  // MUST depend ONLY on `tabVisible` — never on `streamState`. The previous
+  // version read `streamState !== 'loading'` too, and since cm.connect() sets
+  // state to 'loading' internally, the effect re-ran in a loop: connect→loading
+  // →(state change to buffering)→effect re-run→connect again→"WebSocket closed
+  // before the connection is established" storm (92k+ log lines). The
+  // ConnectionManager.connect() is now idempotent (no-op if already
+  // OPEN/CONNECTING), so it's safe to call on every visibility transition
+  // without re-checking streamState.
   $effect(() => {
     const visible = tabVisible;
+    if (destroyed || !cm) return;
     if (!visible) {
-      // Tab hidden — disconnect WebSocket to release resources
-      if (cm && !destroyed) {
-        cm.disconnect();
-      }
+      cm.disconnect();
     } else {
-      // Tab visible — reconnect if we were playing
-      if (!destroyed && cm && streamState !== 'loading') {
-        captureFreezeFrame();
-        cm.connect();
-      }
+      captureFreezeFrame();
+      cm.connect();
     }
   });
 

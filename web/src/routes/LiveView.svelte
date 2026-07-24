@@ -1,15 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
+  import { onMount, onDestroy, setContext } from 'svelte';
+  import { getCamera, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import TwoWayAudioButton from '../components/TwoWayAudioButton.svelte';
-  import VideoPlayer from '../components/VideoPlayer.svelte';
-  import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
-  import FlvPlayer from '../components/FlvPlayer.svelte';
-  import MjpegLivePlayer from '../components/MjpegLivePlayer.svelte';
-  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
+  import CameraPlayer from '../components/CameraPlayer.svelte';
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import SnapshotButton from '../components/SnapshotButton.svelte';
@@ -18,6 +14,10 @@
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
+  import { probeCaps } from '$lib/player/capabilities-cache';
+  import { getCameraProtocolOverride } from '$lib/preferences';
+  import type { ProtocolsResponse } from '$lib/stream-selection';
   let { cameraId = '' }: { cameraId?: string } = $props();
 
   let camera = $state<Camera | null>(null);
@@ -26,29 +26,23 @@
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
-  let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
 
-  // Lazy-loaded WasmPlayer component
-  let WasmPlayerComponent = $state<any>(null);
-  let wasmPlayerLoading = $state(false);
-  let wasmPlayerError = $state('');
-
-  async function loadWasmPlayer() {
-    if (WasmPlayerComponent || wasmPlayerLoading) return;
-    wasmPlayerLoading = true;
-    wasmPlayerError = '';
-    try {
-      const mod = await import('../components/WasmPlayer.svelte');
-      WasmPlayerComponent = mod.default;
-    } catch (e) {
-      console.error('Failed to load WasmPlayer:', e);
-      wasmPlayerError = String(e);
-      showToast(t('live.wasmPlayerFailed'), 'error');
-    } finally {
-      wasmPlayerLoading = false;
+  // Player orchestrator — owns the candidate chain + adaptive degrade/upgrade
+  // for this single camera. Provided to CameraPlayer via context.
+  const orchestrator: PlayerOrchestrator = createPlayerOrchestrator();
+  setContext('player-orchestrator', orchestrator);
+  const _orchUnsub = orchestrator.onModeChange((_id, _from, to, reason) => {
+    if (reason === 'upgrade-reverted') {
+      showToast(t('surveillance.upgradeReverted', { camera: '', protocol: to }) || `Reverted to ${to}`, 'warning');
+    } else if (reason.startsWith('upgrade')) {
+      showToast(t('surveillance.upgraded', { camera: '', protocol: to }) || `Upgraded to ${to}`, 'success');
+    } else {
+      showToast(t('surveillance.protocolFallback', { protocol: to }), 'info');
     }
-  }
+  });
+  // The active mode the player renders, read reactively from the orchestrator.
+  let activeMode = $derived(camera ? orchestrator.activeMode(camera.id) : null);
 
   // ONVIF capabilities
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
@@ -61,7 +55,9 @@
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
   }
   function canStream(cam: Camera): boolean {
-    return isHlsSupported(cam) || streamingProtocol === 'mjpeg';
+    // The camera can stream if the orchestrator has any real-time mode for it
+    // (mjpeg included). This drives the protocol switcher / PTZ visibility.
+    return orchestrator.activeMode(cam.id) !== null;
   }
 
   function isPtzSupported(cam: Camera): boolean {
@@ -97,6 +93,26 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      // Probe caps + fetch the per-camera protocol ranking, then register the
+      // camera with the orchestrator so it can build the candidate chain and
+      // drive adaptive selection. A per-camera user override (from a prior
+      // ProtocolSwitcher selection) is honored and pins the chain.
+      await probeCaps();
+      let resp: ProtocolsResponse | null = null;
+      try {
+        resp = (await getCameraProtocols(cameraId)) as unknown as ProtocolsResponse;
+      } catch {
+        resp = null; // /protocols unreachable — orchestrator falls back to HLS
+      }
+      if (camera) {
+        orchestrator.registerCamera(
+          makeRegistration(camera, resp, {
+            override: getCameraProtocolOverride(camera.id),
+            isHlsCapable: isHlsSupported(camera),
+            isUnsupported: false,
+          }),
+        );
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : t('live.failedLoadCamera');
       camera = null;
@@ -126,24 +142,19 @@
     isFullscreen = !!document.fullscreenElement;
   }
 
-  function handleProtocolChange(protocol: StreamingProtocol) {
+  // The ProtocolSwitcher reports the user's manual choice. We pin it via the
+  // orchestrator (which rebuilds the chain to a single-element pinned list,
+  // disabling auto-degrade/upgrade to respect the explicit selection). Passing
+  // null clears the override → back to auto-selection. ProtocolSwitcher handles
+  // the localStorage persistence itself (setCameraProtocolOverride).
+  function handleProtocolChange(protocol: StreamingProtocol | null) {
     switchingProtocol = true;
-    streamingProtocol = protocol;
+    if (camera) {
+      orchestrator.setOverride(camera.id, protocol);
+    }
     // Brief delay to show switching state, then mount new player
     setTimeout(() => { switchingProtocol = false; }, 100);
   }
-
-  function handleWasmFallback() {
-    showToast(t('live.wasm.fallbackToHls') || 'WebCodecs unavailable, switching to HLS', 'warning');
-    handleProtocolChange('hls');
-  }
-
-  // Preload WasmPlayer when user selects 'wasm' protocol
-  $effect(() => {
-    if (streamingProtocol === 'wasm') {
-      loadWasmPlayer();
-    }
-  });
 
   // Fetch capabilities when camera loads
   $effect(() => {
@@ -161,14 +172,27 @@
 
     loadCamera();
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    // Load protocol capabilities
+    // Load protocol capabilities, then re-register the camera so the
+    // orchestrator's chain reflects the (possibly now-non-HLS-capable) protocol.
     listProtocols().then(list => {
       if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
+      if (camera) {
+        orchestrator.registerCamera(
+          makeRegistration(camera, null, {
+            override: getCameraProtocolOverride(camera.id),
+            isHlsCapable: isHlsSupported(camera),
+            isUnsupported: false,
+          }),
+        );
+      }
     }).catch((e) => { console.warn('Failed to load protocols:', e); });
   });
 
   onDestroy(() => {
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    _orchUnsub();
+    if (camera) orchestrator.unregisterCamera(camera.id);
+    orchestrator.dispose();
   });
 </script>
 
@@ -223,11 +247,13 @@
 
           {#if canStream(camera)}
             <div class="flex-1"></div>
-            <!-- Protocol Switcher -->
+            <!-- Protocol Switcher. `selected` reflects the orchestrator's current
+                 active mode (auto-selected by default); the user's manual choice
+                 pins the chain via setOverride. -->
             <ProtocolSwitcher
               cameraId={camera.id}
               cameraEncoding={camera.encoding || camera.stream_encoding || ''}
-              selected={streamingProtocol}
+              selected={(activeMode ?? 'auto') as StreamingProtocol}
               onchange={handleProtocolChange}
             />
             <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
@@ -258,55 +284,15 @@
                   </div>
                 </div>
               </div>
-            {:else if streamingProtocol === 'wasm'}
-
-              {#if WasmPlayerComponent}
-                {@const WasmPlayer = WasmPlayerComponent}
-                <WasmPlayer
-                  cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
-                  codec={(camera.encoding || camera.stream_encoding || '').toLowerCase()}
-                  expanded={true}
-                  onFallbackNeeded={handleWasmFallback}
-                />
-              {:else}
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
-                    <div class="flex flex-col items-center gap-2">
-                      <AlertCircle size={20} class="text-red-400/60" />
-                      <span class="text-white/50 text-xs">{t('live.wasmPlayerLoadError')}</span>
-                      <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
-                    </div>
-                  </div>
-                </div>
-              {/if}
-
-            {:else if streamingProtocol === 'webrtc'}
-              <WebRTCPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={true}
-              />
-            {:else if streamingProtocol === 'flv'}
-              <FlvPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={true}
-              />
-            {:else if streamingProtocol === 'mjpeg'}
-              <MjpegLivePlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={true}
-              />
             {:else}
-              <VideoPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
-                cameraProtocol={camera.protocol}
-                protocol={streamingProtocol}
+              <!-- CameraPlayer reads the orchestrator's active mode and renders
+                   the matching player. The orchestrator owns degrade/upgrade;
+                   ProtocolSwitcher pins the chain on manual selection. -->
+              <CameraPlayer
+                {camera}
                 expanded={true}
+                tabVisible={true}
+                streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
               />
             {/if}
           </div>
