@@ -75,6 +75,14 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let frozenFrameUrl: string | null = $state(null);
   let showFrozenFrame = $state(false);
   let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+  // Hard no-media timeout: if the WS connects but no video frame arrives within
+  // NO_MEDIA_TIMEOUT_MS, give up on this protocol and fall back to HLS. This is
+  // a belt-and-suspenders guard on TOP of the ConnectionManager's zombie/handshake
+  // caps — simpler and more reliable than counting reconnects. Covers cameras
+  // whose WS handshake succeeds (200 OK) but the recorder never feeds media
+  // (Xiaomi CS2, some H.265 ONVIF) — the exact scenario that caused the storm.
+  let noMediaTimer: ReturnType<typeof setTimeout> | null = null;
+  const NO_MEDIA_TIMEOUT_MS = 10000;
   // AI detection overlay state
   let detections: Detection[] = $state([]);
   let aiOverlayVisible = $derived(detections.length > 0);
@@ -508,6 +516,8 @@ function handleWebGpuLost() {
       },
       onFrame: (data: ArrayBuffer) => {
         if (!worker) return;
+        // Media is flowing — clear the no-media watchdog.
+        if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
         try {
           const frame = decodeVideoFrame(data);
           worker.postMessage({
@@ -534,9 +544,21 @@ function handleWebGpuLost() {
       cameraId,
     });
     cm.connect();
+    // Arm the no-media watchdog: if no frame arrives within NO_MEDIA_TIMEOUT_MS
+    // after connecting, this protocol can't serve media for this camera → fall
+    // back to HLS. Cleared in onFrame/onCodecInfo (media flowing) and on disconnect.
+    if (noMediaTimer) clearTimeout(noMediaTimer);
+    noMediaTimer = setTimeout(() => {
+      noMediaTimer = null;
+      if (!destroyed) {
+        if (import.meta.env.DEV) console.warn('[WasmPlayer] no media within 10s, falling back to HLS');
+        onFallbackNeeded?.('hls');
+      }
+    }, NO_MEDIA_TIMEOUT_MS);
   }
 
   function disconnectConnection() {
+    if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
     if (cm) {
       cm.disconnect();
       cm = null;
@@ -765,6 +787,7 @@ onDestroy(() => {
     destroyed = true;
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
+    if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
     if (frozenFrameUrl) { URL.revokeObjectURL(frozenFrameUrl); frozenFrameUrl = null; }
     if (webgpuRenderer) { webgpuRenderer.destroy(); webgpuRenderer = null; }
     if (cm) { cm.destroy(); cm = null; }
