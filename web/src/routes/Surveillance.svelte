@@ -6,17 +6,12 @@
   import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
-  import VideoPlayer from '../components/VideoPlayer.svelte';
-  import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
-  import FlvPlayer from '../components/FlvPlayer.svelte';
-  import MjpegLivePlayer from '../components/MjpegLivePlayer.svelte';
-  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
-  import { getStreamingSettings } from '$lib/api/settings';
+  import CameraPlayer from '../components/CameraPlayer.svelte';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
-  import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
-  import { detectMSEH265, probeMSEH265, detectWebCodecs, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
-  import { pickCameraMode, nextAfter, isAudioCapable, resolveEncoding, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
+  import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
+  import { probeCaps } from '$lib/player/capabilities-cache';
+  import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
 
   let cameras = $state<Camera[]>([]);
@@ -59,65 +54,46 @@
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   const STORAGE_KEY = 'dashboard-selected-cameras';
 
-  // Default streaming protocol from settings — used ONLY as a legacy fallback
-  // when the per-camera /protocols endpoint can't be reached. The primary
-  // selection now comes from the backend's codec-aware per-camera ranking.
-  let defaultProtocol = $state<string>('flv');
-
   // Per-camera protocol responses from GET /api/cameras/{id}/protocols.
   // Keyed by camera id. Fetched in parallel on mount and whenever the grid
   // selection changes; null means "not yet fetched or fetch failed" (the
-  // picker then falls back to the legacy global default). This is what lets
-  // the grid auto-select the best protocol PER CAMERA instead of applying
-  // one global protocol to a mixed fleet.
+  // orchestrator's buildCandidateChain then falls back to the universal HLS
+  // candidate). This is what lets the grid auto-select the best protocol PER
+  // CAMERA instead of applying one global protocol to a mixed fleet.
   let cameraProtocols = $state<Map<string, CameraProtocolsResponse | null>>(new Map());
 
-  // H.265/HEVC MSE support — detected once on mount. When the browser's
-  // MediaSource cannot decode H.265 (common on Linux desktop, or Windows
-  // without the HEVC Video Extensions pack), FLV players connect but render
-  // a black screen. We use this to auto-degrade H.265 cameras to HLS, which
-  // has broader native H.265 support on modern browsers.
-  let browserSupportsH265MSE = $state(true);
+  // Player orchestrator — owns per-camera protocol chains, adaptive degrade/
+  // upgrade decisions, and the reconnect coordinator (thundering-herd control).
+  // Provided to CameraPlayer (and thus every player component) via context.
+  // WasmPlayer is now lazy-loaded INSIDE CameraPlayer on first wasm mount, so
+  // this route no longer manages the chunk import.
+  const orchestrator: PlayerOrchestrator = createPlayerOrchestrator();
+  setContext('player-orchestrator', orchestrator);
 
-  // WebCodecs (VideoDecoder) availability — enables the WASM player. Detected
-  // once on mount and fed into pickCameraMode so it can promote/demote wasm.
-  let browserSupportsWebCodecs = $state(false);
+  // Surface orchestrator mode changes (degrade/upgrade) as toasts so the user
+  // understands why a camera's protocol just changed.
+  const _orchUnsub = orchestrator.onModeChange((cameraId, _from, to, reason) => {
+    const cam = allCameras.find((c) => c.id === cameraId);
+    const name = cam?.name || cameraId;
+    if (reason === 'upgrade-reverted') {
+      showToast(t('surveillance.upgradeReverted', { camera: name, protocol: protocolLabel(to) }), 'warning');
+    } else if (reason.startsWith('upgrade')) {
+      showToast(t('surveillance.upgraded', { camera: name, protocol: protocolLabel(to) }), 'success');
+    } else {
+      showToast(t('surveillance.protocolFallback', { protocol: protocolLabel(to) }), 'info');
+    }
+  });
 
-  // libde265 WASM H.265 soft-decoder availability — enables H.265 on plain HTTP
-  // (where WebCodecs is unavailable) via Canvas2D rendering.
-  let browserSupportsWasmH265 = $state(false);
-
-  // Snapshot of the browser caps consumed by pickCameraMode. Recomputed from
-  // the $state flags above so the picker stays a pure function.
-  function browserCaps(): BrowserCaps {
-    return { h265MSE: browserSupportsH265MSE, webCodecs: browserSupportsWebCodecs, wasmH265: browserSupportsWasmH265 };
-  }
-
-  // Lazy-loaded WasmPlayer component (only loads when 'wasm' protocol is selected)
-  let WasmPlayerComponent = $state<any>(null);
-  let wasmPlayerLoading = $state(false);
-  let wasmPlayerError = $state('');
-
-  async function loadWasmPlayer() {
-    if (WasmPlayerComponent || wasmPlayerLoading) return;
-    wasmPlayerLoading = true;
-    wasmPlayerError = '';
-    try {
-      const mod = await import('../components/WasmPlayer.svelte');
-      WasmPlayerComponent = mod.default;
-    } catch (e) {
-      console.error('Failed to load WasmPlayer:', e);
-      wasmPlayerError = String(e);
-      showToast(t('dashboard.wasmPlayerFailed'), 'error');
-    } finally {
-      wasmPlayerLoading = false;
+  function protocolLabel(mode: string): string {
+    switch (mode) {
+      case 'wasm': return 'WebCodecs';
+      case 'webrtc': return 'WebRTC';
+      case 'flv': return 'FLV';
+      case 'hls': return 'HLS';
+      case 'mjpeg': return 'MJPEG';
+      default: return mode;
     }
   }
-
-  // Reconnection coordinator — limits concurrent reconnects, global exponential backoff,
-  // and backend pressure detection (HTTP 503 triggers 10s global cooldown)
-  const reconnectCoordinator = createReconnectCoordinator();
-  setContext('reconnect-coordinator', reconnectCoordinator);
 
   function loadSavedCameraIds(): string[] {
     try {
@@ -150,12 +126,18 @@
       .map(id => available.get(id))
       .filter((c): c is Camera => c !== undefined);
     cameras = filtered;
-    // Clear per-camera runtime fallbacks when the grid selection changes, so a
-    // camera that was demoted during a previous session starts fresh.
-    runtimeFallback = {};
     configOpen = false;
+    // Unregister cameras that left the grid (clears their orchestrator timers/
+    // cooldowns) and register the new set fresh. A camera demoted in a prior
+    // session starts at the head of its chain again.
+    const newIds = new Set(filtered.map((c) => c.id));
+    for (const id of [...selectedCameraIds, ...pendingCameraIds]) {
+      if (!newIds.has(id)) orchestrator.unregisterCamera(id);
+    }
+    syncOrchestrator();
     // Fetch per-camera protocol rankings for the newly selected cameras. This
     // is what drives auto-selection; runs in parallel and never blocks render.
+    // (refreshCameraProtocols calls syncOrchestrator again once responses land.)
     void refreshCameraProtocols(filtered.map((c) => c.id));
   }
 
@@ -196,62 +178,30 @@
     return getProtocolCapabilities(camera.protocol, protocolsMap).hls;
   }
 
-  // Per-camera protocol override forced at runtime by a failed-player fallback.
-  // When a player exhausts its reconnect attempts, the grid demotes that camera
-  // to the next available protocol in its backend-provided chain (webrtc→flv→
-  // hls→mjpeg) rather than dropping straight to a static snapshot. Keyed by
-  // camera id; cleared when the grid selection changes.
-  let runtimeFallback = $state<Record<string, CameraMode>>({});
-
-  // The primary per-camera mode resolver. Delegates to the pure pickCameraMode
-  // helper (src/lib/stream-selection.ts), passing the cached backend protocol
-  // ranking + browser caps. Falls back to the legacy global default when the
-  // backend response isn't available (camera still connecting, endpoint down).
-  function getCameraMode(camera: Camera): CameraMode {
-    // A runtime fallback takes precedence over the auto-selected mode — the
-    // camera already proved the primary choice unworkable.
-    if (runtimeFallback[camera.id]) {
-      return runtimeFallback[camera.id];
-    }
-    const resp = cameraProtocols.get(camera.id) ?? null;
-    // A per-camera user override (set via the LiveView ProtocolSwitcher) wins
-    // over the backend default, as long as it's still usable for this codec.
-    const override = getCameraProtocolOverride(camera.id);
-    return pickCameraMode(camera, resp as ProtocolsResponse | null, browserCaps(), {
-      override,
-      legacyDefault: defaultProtocol,
-      isHlsCapable: isHlsSupported(camera),
-      isUnsupported: snapshotMgr.isUnsupported(camera.id),
-    });
-  }
-
-  // Called by a player when it has exhausted reconnects and would otherwise
-  // fall back to a static snapshot. Instead, demote to the next real-time
-  // protocol in the camera's backend-provided chain; only when the chain is
-  // exhausted do we let the snapshot fallback take over (return false).
-  function handleProtocolFailed(cameraId: string, current: CameraMode): boolean {
-    const resp = cameraProtocols.get(cameraId) ?? null;
-    const next = nextAfter(current, resp as ProtocolsResponse | null);
-    if (next && next !== current) {
-      runtimeFallback = { ...runtimeFallback, [cameraId]: next };
-      showToast(
-        t('surveillance.protocolFallback', { protocol: protocolLabel(next) }),
-        'info',
+  // Register (or refresh) every selected camera with the orchestrator. Called
+  // after caps are probed and after each /protocols fetch resolves. The
+  // orchestrator rebuilds each camera's candidate chain and owns degrade/
+  // upgrade from here on.
+  function syncOrchestrator(): void {
+    for (const cam of cameras) {
+      const resp = (cameraProtocols.get(cam.id) ?? null) as ProtocolsResponse | null;
+      orchestrator.registerCamera(
+        makeRegistration(cam, resp, {
+          override: getCameraProtocolOverride(cam.id),
+          isHlsCapable: isHlsSupported(cam),
+          isUnsupported: snapshotMgr.isUnsupported(cam.id),
+        }),
       );
-      return true; // tell the player the grid is handling it (don't snapshot yet)
     }
-    return false; // chain exhausted — player may fall back to snapshot
   }
 
-  function protocolLabel(mode: CameraMode): string {
-    switch (mode) {
-      case 'wasm': return 'WebCodecs';
-      case 'webrtc': return 'WebRTC';
-      case 'flv': return 'FLV';
-      case 'hls': return 'HLS';
-      case 'mjpeg': return 'MJPEG';
-      default: return mode;
-    }
+  // The per-camera mode for the grid dispatcher. Real-time modes come from the
+  // orchestrator; when it reports none (empty chain), we fall to snapshot or
+  // unsupported — exactly the legacy behavior, now driven by the orchestrator.
+  function getCameraMode(camera: Camera): 'wasm' | 'webrtc' | 'flv' | 'hls' | 'mjpeg' | 'snapshot' | 'unsupported' {
+    const mode = orchestrator.activeMode(camera.id);
+    if (mode) return mode;
+    return snapshotMgr.isUnsupported(camera.id) ? 'unsupported' : 'snapshot';
   }
 
   // Fetch per-camera protocol rankings for the given camera ids, in parallel,
@@ -267,14 +217,12 @@
       next.set(id, r.status === 'fulfilled' ? r.value : null);
     }
     cameraProtocols = next;
+    // Rebuild chains now that we have fresh backend rankings.
+    syncOrchestrator();
   }
 
-  // Preload WasmPlayer when any camera would use 'wasm' mode
-  $effect(() => {
-    if (cameras.some((c) => getCameraMode(c) === 'wasm')) {
-      loadWasmPlayer();
-    }
-  });
+  // (WasmPlayer preloading is handled by CameraPlayer, which lazy-imports the
+  // WebCodecs/AI chunk on first wasm mount. No preload effect needed here.)
 
   // --- Expand / shrink ---
 
@@ -318,15 +266,6 @@
   // --- Lifecycle ---
 
   onMount(async () => {
-    // Detect browser playback capabilities once — fed into pickCameraMode so it
-    // can auto-degrade (H.265 FLV→HLS without MSE) or promote (wasm with WebCodecs).
-    // probeMSEH265() is authoritative: isTypeSupported('hvc1') is a known false
-    // positive on Chromium/Edge (MSE accepts the bytes but never buffers them →
-    // black screen), so we probe by appending a real hvc1 init segment. Until the
-    // probe resolves, detectMSEH265() conservatively returns false.
-    browserSupportsH265MSE = await probeMSEH265();
-    browserSupportsWebCodecs = detectWebCodecs();
-    browserSupportsWasmH265 = detectWasmH265();
     try {
       const fetched = await getDashboardCameras();
       const activeFetched = fetched;
@@ -344,9 +283,18 @@
         selectedCameraIds = cameras.map(c => c.id);
       }
       pendingCameraIds = [...selectedCameraIds];
+      // Probe device caps once (cached in sessionStorage) so the orchestrator
+      // can build latency-optimal chains (WebCodecs/wasm lead when available).
+      // This MUST happen before syncOrchestrator() reads the caps.
+      await probeCaps();
+      // Register the initial cameras with the orchestrator so the grid has a
+      // real-time mode (or snapshot fallback) to render immediately, before the
+      // per-camera /protocols responses arrive.
+      syncOrchestrator();
       // Fetch per-camera protocol rankings so the grid can auto-select the best
-      // protocol per camera. Non-blocking: cameras render immediately with the
-      // legacy global default and re-resolve once the responses arrive.
+      // protocol per camera. Non-blocking: cameras render immediately and
+      // re-resolve once the responses arrive (refreshCameraProtocols calls
+      // syncOrchestrator again with the fresh rankings).
       void refreshCameraProtocols(cameras.map((c) => c.id));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -364,38 +312,36 @@
     } catch (e) {
       console.warn('Failed to load camera health scores:', e);
     }
-    // Load protocol capabilities
+    // Load protocol capabilities — needed for isHlsSupported(); re-sync the
+    // orchestrator once known so non-HLS-capable cameras get an empty chain.
     try {
       const list = await listProtocols();
       if (list && list.length > 0) {
         protocolsMap = buildProtocolsMap(list);
+        syncOrchestrator();
       }
     } catch (e) {
       console.warn('Failed to load protocol capabilities:', e);
     }
-    // Load default streaming protocol from settings
-    try {
-      const config = await getStreamingSettings();
-      if (config.default_protocol) {
-        defaultProtocol = config.default_protocol;
-      }
-    } catch (e) {
-      console.warn('Failed to load streaming settings:', e);
-    }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
-    // Page Visibility API: pause players when tab hidden, resume when visible
+    // Page Visibility API: tell the orchestrator when the tab hides/shows so it
+    // can pause players (release WS/RTCPeerConnection) and attempt upgrades on
+    // return. The orchestrator owns visibility now — NOT the per-player effects
+    // (those caused the WS reconnect storm).
     const visibilityHandler = () => {
       tabVisible = !document.hidden;
+      orchestrator.setTabVisible(tabVisible);
     };
     document.addEventListener('visibilitychange', visibilityHandler);
 
-    // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown)
+    // Intercept fetch to detect backend pressure (HTTP 503 → global cooldown).
+    // The orchestrator owns the reconnect coordinator, so forward 503s to it.
     const originalFetch = window.fetch;
     window.fetch = async function (...args: Parameters<typeof fetch>): Promise<Response> {
       const response = await originalFetch.apply(this, args);
       if (response.status === 503) {
-        reconnectCoordinator.reportBackendPressure();
+        orchestrator.coordinator.reportBackendPressure();
       }
       return response;
     };
@@ -405,7 +351,8 @@
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('visibilitychange', visibilityHandler);
       window.fetch = originalFetch;
-      reconnectCoordinator.dispose();
+      _orchUnsub();
+      orchestrator.dispose();
     };
   });
 
@@ -591,74 +538,8 @@
                 </div>
               </div>
 
-            {:else if mode === 'hls'}
-              <VideoPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                streamUrl={getStreamUrl(camera.id)}
-                cameraProtocol={camera.protocol}
-                protocol={defaultProtocol}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-                hasAudio={isAudioCapable(camera)}
-              />
-
-            {:else if mode === 'webrtc'}
-              <WebRTCPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-                hasAudio={isAudioCapable(camera)}
-                onProtocolFailed={() => handleProtocolFailed(camera.id, 'webrtc')}
-              />
-
-            {:else if mode === 'flv'}
-              <FlvPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-                {tabVisible}
-                hasAudio={isAudioCapable(camera)}
-                onProtocolFailed={() => handleProtocolFailed(camera.id, 'flv')}
-              />
-
-            {:else if mode === 'mjpeg'}
-              <MjpegLivePlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={expandedCameraId === camera.id}
-              />
-            {:else if mode === 'wasm'}
-              {#if WasmPlayerComponent}
-                {@const WasmPlayer = WasmPlayerComponent}
-                <WasmPlayer
-                  cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
-                  codec={resolveEncoding(camera, (cameraProtocols.get(camera.id) ?? null) as ProtocolsResponse | null)}
-                  expanded={expandedCameraId === camera.id}
-                  tabVisible={tabVisible}
-                  onFallbackNeeded={() => handleProtocolFailed(camera.id)}
-                />
-              {:else if wasmPlayerLoading}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-                  <div class="flex flex-col items-center gap-2">
-                    <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-                    <span class="text-white/50 text-xs">{t('dashboard.loadingWasmPlayer')}</span>
-                  </div>
-                </div>
-              {:else}
-                <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-                  <div class="flex flex-col items-center gap-2">
-                    <AlertCircle size={20} class="text-red-400/60" />
-                    <span class="text-white/50 text-xs">{t('dashboard.wasmPlayerLoadError')}</span>
-                    <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
-                  </div>
-                </div>
-              {/if}
-
-            {:else}
-              <!-- Unsupported protocol (no snapshot, no HLS) -->
+            {:else if mode === 'unsupported'}
+              <!-- Unsupported protocol (no snapshot, no real-time chain) -->
               <div class="absolute inset-0 flex items-center justify-center">
                 <div class="flex flex-col items-center gap-2 text-center px-4">
                   <VideoOff size={24} class="text-white/40" />
@@ -676,12 +557,23 @@
                   <span class="text-white text-sm font-medium truncate">{camera.name || camera.id}</span>
                 </div>
               </div>
+            {:else}
+              <!-- Real-time mode (hls/webrtc/flv/wasm/mjpeg). CameraPlayer reads
+                   the active mode from the orchestrator (context) and renders the
+                   matching player, bridging its health back for adaptive degrade/
+                   upgrade. The orchestrator owns all protocol-switching decisions. -->
+              <CameraPlayer
+                {camera}
+                expanded={expandedCameraId === camera.id}
+                {tabVisible}
+                streamUrl={getStreamUrl(camera.id)}
+              />
             {/if}
 
             <!-- Streaming protocol badge -->
-            {#if mode !== 'unsupported'}
-              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'LL-HLS' : 'HLS') : mode === 'mjpeg' ? 'MJPEG' : 'JPEG'}
-              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? (defaultProtocol === 'll-hls' ? 'bg-purple-500/60' : 'bg-blue-500/60') : mode === 'mjpeg' ? 'bg-amber-500/60' : 'bg-gray-500/60'}
+            {#if mode !== 'unsupported' && mode !== 'snapshot'}
+              {@const protocolLabel = mode === 'wasm' ? 'WebCodecs' : mode === 'webrtc' ? 'WebRTC' : mode === 'flv' ? 'FLV' : mode === 'hls' ? 'HLS' : mode === 'mjpeg' ? 'MJPEG' : 'JPEG'}
+              {@const protocolColor = mode === 'wasm' ? 'bg-cyan-500/60' : mode === 'webrtc' ? 'bg-green-500/60' : mode === 'flv' ? 'bg-orange-500/60' : mode === 'hls' ? 'bg-blue-500/60' : mode === 'mjpeg' ? 'bg-amber-500/60' : 'bg-gray-500/60'}
               <span class="absolute top-2 right-2 z-10 {protocolColor} text-white text-[10px] font-medium px-2 py-0.5 rounded-full pointer-events-none select-none">
                 {protocolLabel}
               </span>

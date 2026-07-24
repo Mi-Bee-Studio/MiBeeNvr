@@ -75,6 +75,17 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let frozenFrameUrl: string | null = $state(null);
   let showFrozenFrame = $state(false);
   let freezeClearTimer: ReturnType<typeof setTimeout> | null = null;
+  // Hard no-media timeout: if the WS connects but no video frame arrives within
+  // NO_MEDIA_TIMEOUT_MS, give up on this protocol and fall back to HLS. This is
+  // a belt-and-suspenders guard on TOP of the ConnectionManager's zombie/handshake
+  // caps — simpler and more reliable than counting reconnects. Covers cameras
+  // whose WS handshake succeeds (200 OK) but the recorder never feeds media
+  // (Xiaomi CS2, some H.265 ONVIF) — the exact scenario that caused the storm.
+  let noMediaTimer: ReturnType<typeof setTimeout> | null = null;
+  // 30s for the no-media watchdog. Xiaomi CS2 cameras need time to establish
+  // the P2P connection before frames flow — 10s was too aggressive and caused
+  // premature demotion to HLS (which can't play H.265 in most browsers → black).
+  const NO_MEDIA_TIMEOUT_MS = 30000;
   // AI detection overlay state
   let detections: Detection[] = $state([]);
   let aiOverlayVisible = $derived(detections.length > 0);
@@ -113,7 +124,12 @@ let webgpuRenderer: WebGPURenderer | null = null;
   }
   // Decode error tracking for mid-stream fallback
   let decodeErrorCount = 0;
-  const MAX_DECODE_ERRORS = 10;
+  // Raised from 10→50: H.265 WebCodecs decoding can produce intermittent
+  // errors (corrupted NALU, profile quirks) without the stream being
+  // fundamentally broken. 10 errors in 5s was too aggressive and demoted
+  // working WebCodecs streams to HLS (which can't play H.265 reliably).
+  // 50 errors in 10s means only a truly broken decoder triggers fallback.
+  const MAX_DECODE_ERRORS = 50;
   let decodeErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ─── Freeze frame helpers ──────────────────────────────────────────────
@@ -387,37 +403,22 @@ function handleWebGpuLost() {
 
         if (msg.type === 'frame' && msg.data instanceof VideoFrame) {
           const frame = msg.data;
-          // If we're tearing down, or the renderer isn't ready, the frame would
-          // leak (GC warning: "VideoFrame was garbage collected without being
-          // closed"). ALWAYS close frames we don't render. This is the hot path
-          // during navigation away — worker may still deliver in-flight frames
-          // after cleanupWebGL2() nulled `gl`.
-          if (destroyed || !canvasEl) {
-            frame.close();
-            return;
-          }
           // Track canvas dimensions for AI overlay
-          if (canvasWidth !== frame.displayWidth || canvasHeight !== frame.displayHeight) {
-            canvasWidth = frame.displayWidth;
-            canvasHeight = frame.displayHeight;
+          if (canvasEl) {
+            if (canvasWidth !== frame.displayWidth || canvasHeight !== frame.displayHeight) {
+              canvasWidth = frame.displayWidth;
+              canvasHeight = frame.displayHeight;
+            }
           }
-          // AI detection — must happen before frame.close(). processAiDetection
-          // clones the frame internally, so closing the original here is safe.
+          // AI detection — must happen before frame.close()
           if (aiDetector) {
             processAiDetection(frame);
           }
-          try {
-            if (webgpuRenderer) {
-              webgpuRenderer.render(frame); // Takes ownership and closes frame
-            } else {
-              renderFrame(frame);
-            }
-          } catch {
-            // Rendering threw — never leak the frame.
-          } finally {
-            // renderFrame/WebGPURenderer.render may not close on early-return
-            // (e.g. gl was nulled by a concurrent cleanup). close() is idempotent.
-            try { frame.close(); } catch { /* already closed */ }
+          if (webgpuRenderer) {
+            webgpuRenderer.render(frame); // Takes ownership and closes frame
+          } else {
+            renderFrame(frame);
+            frame.close(); // Memory safety — always close after rendering
           }
           if (streamState !== 'playing') {
             updateState('playing');
@@ -433,7 +434,7 @@ function handleWebGpuLost() {
           decodeErrorCount++;
           // Reset counter window on each error
           if (decodeErrorTimer) clearTimeout(decodeErrorTimer);
-          decodeErrorTimer = setTimeout(() => { decodeErrorCount = 0; }, 5000);
+          decodeErrorTimer = setTimeout(() => { decodeErrorCount = 0; }, 10000);
           // Persistent decode errors → fallback to HLS
           if (decodeErrorCount >= MAX_DECODE_ERRORS) {
             if (import.meta.env.DEV) console.warn('[WasmPlayer] Max decode errors reached, falling back to HLS');
@@ -523,6 +524,8 @@ function handleWebGpuLost() {
       },
       onFrame: (data: ArrayBuffer) => {
         if (!worker) return;
+        // Media is flowing — clear the no-media watchdog.
+        if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
         try {
           const frame = decodeVideoFrame(data);
           worker.postMessage({
@@ -549,9 +552,21 @@ function handleWebGpuLost() {
       cameraId,
     });
     cm.connect();
+    // Arm the no-media watchdog: if no frame arrives within NO_MEDIA_TIMEOUT_MS
+    // after connecting, this protocol can't serve media for this camera → fall
+    // back to HLS. Cleared in onFrame/onCodecInfo (media flowing) and on disconnect.
+    if (noMediaTimer) clearTimeout(noMediaTimer);
+    noMediaTimer = setTimeout(() => {
+      noMediaTimer = null;
+      if (!destroyed) {
+        if (import.meta.env.DEV) console.warn('[WasmPlayer] no media within 10s, falling back to HLS');
+        onFallbackNeeded?.('hls');
+      }
+    }, NO_MEDIA_TIMEOUT_MS);
   }
 
   function disconnectConnection() {
+    if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
     if (cm) {
       cm.disconnect();
       cm = null;
@@ -578,27 +593,11 @@ function handleWebGpuLost() {
 
   async function initAiDetection() {
     if (aiDetector || aiInitializing) return;
-    const settings = getAiSettings();
-    if (!settings.enabled) return;
-
     aiInitializing = true;
     aiError = null;
     try {
-      // Fetch zones FIRST and gate on them: the ONNX model is ~5 MB, so only
-      // download it when this camera actually has AI configured (≥1 zone).
-      // Without this gate, a user toggling AI on globally (localStorage) forces
-      // every camera to fetch /models/yolo11n.onnx — a 404 on deployments that
-      // never ran `mibee-nvr download-model`, surfacing as a scary console error
-      // on every camera even though no detection is configured for them.
-      try {
-        const data = await getAIZones();
-        aiZones = data.zones || [];
-      } catch {
-        // Zones endpoint unreachable — treat as "no zones configured".
-        aiZones = [];
-      }
-      const hasZoneForThisCamera = aiZones.some((z) => z.camera_id === cameraId);
-      if (!hasZoneForThisCamera) return;
+      const settings = getAiSettings();
+      if (!settings.enabled) return;
 
       aiRuntime = new AiRuntime();
       await aiRuntime.init(undefined, {
@@ -611,15 +610,17 @@ function handleWebGpuLost() {
       });
     } catch (e) {
       // AI is a non-fatal overlay — never abort the video. The most common
-      // failure is the model file missing (HTTP 404 on /models/yolo11n.onnx),
-      // which means `mibee-nvr download-model` hasn't been run on the server.
-      // That's a deployment step, not a bug, so log it quietly (dev only) rather
-      // than a prominent console.warn with a stack trace.
+      // failures are deployment issues, not bugs:
+      //  - HTTP 404 on /models/yolo11n.onnx → `mibee-nvr download-model` not run
+      //  - ERROR_CODE 7 "protobuf parsing failed" → model file present but
+      //    corrupt/wrong-format, or an ONNX Runtime Web version mismatch.
+      // Both are deployment steps, so log quietly (dev only) rather than a
+      // prominent console.warn with a full stack trace that alarms users.
       const msg = e instanceof Error ? e.message : 'AI init failed';
-      const isModelMissing = /Model download failed: 404/.test(msg);
+      const isDeployIssue = /Model download failed: 404|protobuf parsing failed|ERROR_CODE: 7/i.test(msg);
       if (import.meta.env.DEV) {
-        if (isModelMissing) {
-          console.info('[WasmPlayer] AI model not found (run "mibee-nvr download-model" on the server) — AI disabled.');
+        if (isDeployIssue) {
+          console.info('[WasmPlayer] AI model unavailable (' + msg + ') — AI disabled. Run "mibee-nvr download-model" or re-download a valid model.');
         } else {
           console.warn('[WasmPlayer] AI init failed:', e);
         }
@@ -631,22 +632,27 @@ function handleWebGpuLost() {
     } finally {
       aiInitializing = false;
     }
+
+    // Fetch zones for filtering (non-fatal)
+    try {
+      const data = await getAIZones();
+      aiZones = data.zones || [];
+    } catch {
+      // Zones are non-critical
+    }
   }
 
   async function processAiDetection(frame: VideoFrame) {
     if (!aiDetector) return;
-    // Clone frame because detect() is async and the original frame may be closed
-    // by the render path immediately after this returns. The clone MUST be closed
-    // regardless of whether detect() succeeds — otherwise it leaks (VideoFrame GC).
-    const cloned = new VideoFrame(frame);
     try {
+      // Clone frame because detect() is async and frame may be closed
+      const cloned = new VideoFrame(frame);
       const newDetections = await aiDetector.detect(cloned);
+      cloned.close();
       detections = filterDetectionsByZones(newDetections);
     } catch (e) {
       // Non-fatal — keep showing last detections
       if (import.meta.env.DEV) console.warn('[WasmPlayer] AI detection error:', e);
-    } finally {
-      cloned.close();
     }
   }
 
@@ -769,23 +775,19 @@ function handleWebGpuLost() {
     };
   });
 
-  // Coordinated visibility — pause when tab hidden, resume when visible
-  // Supplements ConnectionManager's internal visibility handling
-  $effect(() => {
-    const visible = tabVisible;
-    if (!visible) {
-      // Tab hidden — disconnect WebSocket to release resources
-      if (cm && !destroyed) {
-        cm.disconnect();
-      }
-    } else {
-      // Tab visible — reconnect if we were playing
-      if (!destroyed && cm && streamState !== 'loading') {
-        captureFreezeFrame();
-        cm.connect();
-      }
-    }
-  });
+  // Visibility: REMOVED. There used to be a $effect here that read `tabVisible`
+  // and called cm.disconnect()/cm.connect() on every visibility change. But
+  // that created a multi-way conflict:
+  //   1. this effect (tabVisible prop → cm.disconnect/connect)
+  //   2. ConnectionManager's own _bindVisibility (document.visibilitychange)
+  //   3. the Player Orchestrator's setTabVisible (attemptUpgrade on all cameras)
+  // All three fired on the same visibilitychange event, each closing/reopening
+  // the WS or switching protocols → reactive loop → "closed before established"
+  // storm + console freeze. Visibility is now owned SOLELY by the orchestrator
+  // (Surveillance.svelte's visibilityHandler calls orchestrator.setTabVisible,
+  // which pauses/resumes via protocol-level decisions, not per-player WS
+  // toggling). ConnectionManager._bindVisibility was also removed. Do NOT
+  // re-add per-player visibility handling.
 
   // ─── Cleanup ───────────────────────────────────────────────────────────
 
@@ -793,6 +795,7 @@ onDestroy(() => {
     destroyed = true;
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
+    if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
     if (frozenFrameUrl) { URL.revokeObjectURL(frozenFrameUrl); frozenFrameUrl = null; }
     if (webgpuRenderer) { webgpuRenderer.destroy(); webgpuRenderer = null; }
     if (cm) { cm.destroy(); cm = null; }

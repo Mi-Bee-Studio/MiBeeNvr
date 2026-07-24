@@ -154,8 +154,7 @@ const codecString = `hvc1.${profile_idc}.6.${tier}${level}.B0`;
 
 ### 内存管理
 
-- **每条帧路径都必须 `VideoFrame.close()`** — 否则触发 GC 警告 "A VideoFrame was garbage collected without being closed" 并导致主线程 stall。WasmPlayer 的 `onmessage` 处理用一个 `try/finally` 包裹渲染调用：销毁中（`destroyed` 或 `canvasEl` 为空）、或渲染早退（`gl` 已被 `cleanupWebGL2()` 置空）的帧都会在 `finally` 里 `close()`。导航离开时 worker 仍有在途帧，这个兜底尤其关键。
-- **AI 检测克隆帧必须关闭** — `processAiDetection` 克隆一份帧给异步 `detect()`，克隆帧在 `finally` 里 `close()`，避免 `detect()` 抛错时泄漏。
+- 每帧后调用 `VideoFrame.close()` 确保 GPU 内存安全
 - Worker 管理的帧池，最小化分配
 - worker 终止或解码器重置时自动清理
 
@@ -276,11 +275,12 @@ device.lost.then((info: GPUDeviceLostInfo) => {
 });
 ```
 
-**ConnectionManager 处理**重连（经 `ReconnectCoordinator` 协调，防止多摄像头同时重连的惊群）：
-- 初始退避：1 秒，每次 ×2，封顶 30 秒；最多 2 个并发重连槽
-- 后端压力（HTTP 503）→ 10 秒全局冷却 + 加倍退避
+**重连与 WS 风暴修复：** 重连分两层：
 
-**主动关闭不触发重连**（`_intentionalClose` 标志）：`disconnect()`/`destroy()`/重连轮换调用 `close()` 不带 code，产生的 `CloseEvent.code` 是 1005（无状态），既不是 1000 也不是 1001。旧逻辑把这种关闭当崩溃去 `_scheduleCoordinatedReconnect()`，导致**导航离开监控大屏时每个摄像头又自动重连**，且重连的 socket 在 `onopen` 时发现已销毁被关掉（"WebSocket closed before connection is established" 刷屏），同时 coordinator 重连槽永久泄漏。修复：`_closeWebSocket()` 置 `_intentionalClose=true`，`onclose` 检测到就直接返回不重连；销毁中途的 `onopen` 也会 `completeReconnect()` 释放槽位。
+1. **单协议内** — `ConnectionManager`（`web/src/lib/webcodecs-player/connection.ts`）持有 WebCodecs 播放器的 WebSocket 生命周期与重连逻辑。它是**幂等**的（`connect()` 若已有 OPEN/CONNECTING 的 socket 则 no-op），并用 `_intentionalClose` 标志区分主动关闭（`disconnect()`/`destroy()` 调 `close()` 不带 code → `CloseEvent.code 1005`）与真正的崩溃。这个标志正是**修复 WS 重连风暴**的关键：之前每次导航/切 tab 的关闭都被当成失败、重新排到一个已销毁的 coordinator 上，产生 "WebSocket closed before the connection is established" 日志刷屏（实测 9 万+ 行）。
+2. **跨协议** — **Player Orchestrator**（`web/src/lib/player/orchestrator.svelte.ts`）决定是否整个换协议。WasmPlayer 通过 DOM `statechange` 事件上报健康度；当上报 `failed`（或 `degraded` 超 8s），orchestrator 把该摄像头切到候选链的下一档（如 wasm → hls）。见 `streaming-protocol-selection.md` 第 3 层。
+
+重连退避（经 coordinator 协调时）：初始 1s，倍增，封顶 30s，后端 HTTP 503 压力后 10s 全局冷却。tab 可见性由 orchestrator 持有（`setTabVisible`），不再是 per-player `$effect`。
 
 ### 浏览器支持矩阵
 

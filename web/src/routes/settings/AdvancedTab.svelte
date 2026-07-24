@@ -30,7 +30,10 @@
   let streamingWebrtcIdleTimeout = $state('5m');
   let streamingFlvEnabled = $state(true);
   let streamingFlvMaxViewers = $state(10);
-  let streamingHlsLlHls = $state(false);
+  // NOTE: streamingHlsLlHls (LL-HLS toggle) removed — HLS is always low-latency
+  // now (hls-config.ts lowLatencyMode:true is on for every HLS mount, and the
+  // LL-HLS/HLS buffer distinction was collapsed). The backend hls.low_latency
+  // field is still saved (hard-coded true below) for backward compat.
   let streamingRtmpEnabled = $state(false);
   let streamingRtmpPort = $state(1935);
   let streamingSrtEnabled = $state(false);
@@ -67,7 +70,7 @@
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
-      streamingHlsLlHls, streamingRtmpEnabled,
+      streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
     });
@@ -92,7 +95,7 @@
       webdavEnabled, webdavPathPrefix, webdavReadWrite,
       streamingWebrtcEnabled, streamingWebrtcMaxViewers,
       streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
-      streamingHlsLlHls, streamingRtmpEnabled,
+      streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
     });
@@ -120,7 +123,8 @@
       streamingWebrtcIdleTimeout = config.webrtc?.idle_timeout || '5m';
       streamingFlvEnabled = config.flv?.enabled ?? true;
       streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
-      streamingHlsLlHls = config.hls?.low_latency ?? false;
+      // LL-HLS toggle removed — HLS is always low-latency now. (hls.low_latency
+      // is hard-coded true on save for backward compat with the backend field.)
       streamingRtmpEnabled = config.rtmp?.enabled ?? false;
       streamingRtmpPort = config.rtmp?.port ?? 1935;
       const rtmpKeys = config.rtmp?.stream_keys;
@@ -181,7 +185,10 @@
           max_viewers: streamingFlvMaxViewers,
           idle_timeout: '5m',
         },
-        hls: { low_latency: streamingHlsLlHls },
+        // HLS is always low-latency now (the LL-HLS/HLS distinction was
+        // collapsed — hls-config.ts uses lowLatencyMode:true for every mount).
+        // Persist true so the backend field stays consistent.
+        hls: { low_latency: true },
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,
@@ -427,22 +434,9 @@
     />
   </SettingsCard>
 
-  <!-- HLS -->
-  <SettingsCard
-    title={t('settings.streaming.hls')}
-    subtitle={t('settings.advanced.streaming.description')}
-    defaultOpen={false}
-  >
-    <SettingsStreamingCard
-      title={t('settings.streaming.hls')}
-      protocol="hls"
-      enabled={true}
-      onEnabledChange={() => {}}
-      showToggle={false}
-      llHls={streamingHlsLlHls}
-      onLlHlsChange={(val) => streamingHlsLlHls = val}
-    />
-  </SettingsCard>
+  <!-- HLS card removed — HLS is always low-latency now and has no user-facing
+       knobs (low_latency:true is hard-coded on save; hls-config.ts uses
+       lowLatencyMode:true for every mount). The backend hls handler stays on. -->
 
   <!-- RTMP Ingest -->
   <SettingsCard

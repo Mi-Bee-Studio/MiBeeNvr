@@ -121,6 +121,13 @@ export function nextAfter(current: CameraMode, resp: ProtocolsResponse | null): 
  *     - WebCodecs selected/available only when browser supports it.
  *  5. Backend default unavailable or fetch failed → legacy global default.
  *
+ * This function returns a SINGLE mode (the historically-tested product
+ * behavior: honor the backend default, then override, then legacy). The newer
+ * {@link buildCandidateChain} returns the FULL ordered chain the adaptive
+ * orchestrator walks; they share the codec/capability gating via
+ * {@link isProtocolUsable} but are intentionally separate so this function's
+ * exact semantics stay stable.
+ *
  * @param override  Per-camera user override from localStorage, or null.
  * @param legacyDefault  The global `streaming.default_protocol` (fallback only).
  */
@@ -205,6 +212,164 @@ export function pickCameraMode(
 
   // Unknown candidate — safest universal default.
   return 'hls';
+}
+
+/**
+ * A single playable protocol in a camera's candidate chain.
+ *
+ * `mode` is the concrete render mode the grid branches on. `pinned` marks a
+ * user-forced override — when true the orchestrator MUST NOT auto-degrade or
+ * auto-upgrade (respect the explicit choice), so the chain is effectively a
+ * single element.
+ */
+export interface Candidate {
+  mode: CameraMode;
+  /** Backend protocol name that backs this mode, if any (for telemetry/toasts). */
+  backendProtocol?: string;
+  /** True when this entry is a user override — disables auto-adaptation. */
+  pinned?: boolean;
+}
+
+/**
+ * Latency-optimal preference order for the adaptive candidate chain.
+ *
+ * This is the SUPERSET order the orchestrator walks when building a camera's
+ * chain — the highest-quality/lowest-latency playable mode first, the most
+ * compatible last. It differs from {@link FALLBACK_ORDER} (which is the
+ * runtime-degrade-only order, excluding `wasm` because wasm-to-hls is an
+ * internal WasmPlayer signal, not a grid-level demotion) in that it includes
+ * `wasm` at the head and `mjpeg` at the tail.
+ *
+ * `snapshot` and `unsupported` are never chain members — they are terminal
+ * fallbacks the dispatcher uses when the chain is empty.
+ */
+const PREFERENCE_ORDER: readonly CameraMode[] = ['wasm', 'webrtc', 'flv', 'hls', 'mjpeg'] as const;
+
+/**
+ * Build the ordered candidate chain for a camera: every playable mode for its
+ * codec + browser caps, latency-optimal first. The head is what the grid
+ * renders initially; subsequent entries are degrade targets the orchestrator
+ * can demote to at runtime. An empty chain means "no real-time mode works"
+ * (caller degrades to snapshot/unsupported).
+ *
+ * Rules:
+ *  - JPEG/MJPEG cameras → single-element `['mjpeg']` chain.
+ *  - Non-HLS-capable backend protocol → empty chain (snapshot/unsupported).
+ *  - A valid user override wins and PINs the chain to that single mode
+ *    (disables auto-adaptation — the user explicitly chose it).
+ *  - Otherwise the chain is the {@link PREFERENCE_ORDER} modes that (a) the
+ *    backend reports Available AND (b) pass the codec/capability gate via
+ *    {@link isProtocolUsable}. `wasm` additionally requires browser support
+ *    (WebCodecs for any codec, or libde265 WASM for H.265 on HTTP).
+ *  - HLS is always included when any real-time protocol works (universal
+ *    fallback); it is removed only for JPEG/MJPEG cameras.
+ *
+ * NOTE: this is a NEW entry point consumed by the PlayerOrchestrator. The
+ * legacy single-mode {@link pickCameraMode} keeps its exact semantics (honor
+ * backend default → override → legacy) and its tests; the two functions share
+ * the codec/capability gating but diverge on candidate selection (chain walks
+ * all usable modes; pickCameraMode stops at the first preferred candidate).
+ */
+export function buildCandidateChain(
+  camera: Camera,
+  resp: ProtocolsResponse | null,
+  caps: BrowserCaps,
+  opts: {
+    override?: string | null;
+    isHlsCapable?: boolean;
+    isUnsupported?: boolean;
+    /** Legacy global default — used as a last-resort single candidate when the
+     *  backend response is null AND no caps are known (mirrors pickCameraMode). */
+    legacyDefault?: string;
+  } = {},
+): Candidate[] {
+  const proto = (camera.protocol || '').toLowerCase();
+  const enc = resolveEncoding(camera, resp);
+
+  // (1) JPEG/MJPEG short-circuit — same guard as pickCameraMode.
+  if (proto === 'http' || enc === 'mjpeg' || enc === 'jpeg') {
+    return [{ mode: 'mjpeg', backendProtocol: 'mjpeg', pinned: false }];
+  }
+
+  // (2) Non-HLS-capable backend protocol → no real-time chain.
+  const isHlsCapable = opts.isHlsCapable ?? true;
+  if (!isHlsCapable) {
+    return [];
+  }
+
+  const available = new Set(resp ? resp.protocols.filter((p) => p.Available).map((p) => p.Protocol.toLowerCase()) : []);
+
+  // (3) User override pins the chain to a single mode (if still usable).
+  if (opts.override && isProtocolUsable(opts.override, enc, caps, available)) {
+    return [
+      { mode: normalizeBackendProtocol(opts.override), backendProtocol: opts.override.toLowerCase(), pinned: true },
+    ];
+  }
+
+  // (4) Walk the preference order, keeping modes that are usable here.
+  // When the backend response is null (the /protocols call failed), we have NO
+  // authoritative knowledge of which protocols the server can serve — so we do
+  // NOT guess from browser caps alone (a browser can "use" webrtc but the
+  // server may not run the WHEP handler). Fall straight to the legacy default
+  // if one was supplied, mirroring pickCameraMode's behavior in the same boat.
+  if (!resp) {
+    if (opts.legacyDefault) {
+      return [
+        {
+          mode: normalizeBackendProtocol(opts.legacyDefault),
+          backendProtocol: opts.legacyDefault.toLowerCase(),
+          pinned: false,
+        },
+      ];
+    }
+    // No legacy default either — HLS is the universal last resort.
+    return [{ mode: 'hls', backendProtocol: 'hls', pinned: false }];
+  }
+
+  const chain: Candidate[] = [];
+  for (const mode of PREFERENCE_ORDER) {
+    const backendProto = modeToBackendProtocol(mode);
+    // `wasm` is a frontend-only mode — the backend doesn't advertise it. Gate
+    // purely on browser capability (WebCodecs, or libde265 WASM for H.265).
+    const usable =
+      mode === 'wasm'
+        ? caps.webCodecs || (enc === 'h265' && caps.wasmH265)
+        : isProtocolUsable(mode, enc, caps, available);
+    if (usable) {
+      chain.push({ mode, backendProtocol: backendProto, pinned: false });
+    }
+  }
+
+  return chain;
+}
+
+/** Map a backend protocol string to a concrete render mode. */
+function normalizeBackendProtocol(p: string): CameraMode {
+  const s = p.toLowerCase();
+  if (s === 'll-hls' || s === 'hls') return 'hls';
+  if (s === 'mjpeg') return 'mjpeg';
+  if (s === 'webrtc') return 'webrtc';
+  if (s === 'flv') return 'flv';
+  if (s === 'wasm') return 'wasm';
+  return 'hls';
+}
+
+/** Inverse: render mode → backend protocol name (best guess). */
+function modeToBackendProtocol(mode: CameraMode): string | undefined {
+  switch (mode) {
+    case 'hls':
+      return 'll-hls';
+    case 'mjpeg':
+      return 'mjpeg';
+    case 'webrtc':
+      return 'webrtc';
+    case 'flv':
+      return 'flv';
+    case 'wasm':
+      return undefined; // frontend-only
+    default:
+      return undefined;
+  }
 }
 
 /**

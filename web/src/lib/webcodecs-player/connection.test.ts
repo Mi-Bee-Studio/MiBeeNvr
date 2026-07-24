@@ -334,12 +334,8 @@ describe('destroy', () => {
     expect((cm as { _zombieCheckTimer: ReturnType<typeof setInterval> | null })._zombieCheckTimer).toBeNull();
   });
 
-  it('should remove visibility handler', () => {
-    const cm = createManager();
-    cm.connect();
-    cm.destroy();
-    expect(document.removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
-  });
+  // 'should remove visibility handler' removed — ConnectionManager no longer
+  // binds a visibilitychange listener (visibility owned by the orchestrator).
 
   it('should prevent any further operations', () => {
     const cm = createManager();
@@ -568,6 +564,54 @@ describe('reconnect behavior (no coordinator)', () => {
     simulateError(getLastWS());
     expect(fn).not.toHaveBeenCalledWith('error');
   });
+
+  it('should cap handshake-failure reconnects (closed-before-established storm) → report offline', () => {
+    // Regression test for the 10k+/min WS storm: a camera whose WS handshake
+    // is rejected by the server (recorder can't serve WS stream) loops
+    // connect→close(before open)→reconnect→connect forever, bypassing the
+    // zombie detector (which only runs after OPEN). After MAX_CONNECT_FAILURES
+    // consecutive closes-without-open, stop and report offline so the
+    // orchestrator demotes to the next protocol.
+    const onCameraOffline = vi.fn();
+    const onStateChange = vi.fn();
+    const cm = createManager({ onCameraOffline, onStateChange });
+    cm.connect();
+
+    // Simulate MAX_CONNECT_FAILURES+1 handshake rejections: close each socket
+    // WITHOUT ever calling onopen (so _socketOpened stays false).
+    for (let i = 0; i <= 5; i++) {
+      const ws = mockWSInstances[mockWSInstances.length - 1];
+      // never simulateOpen — handshake fails
+      simulateClose(ws, 1006);
+      vi.advanceTimersByTime(2000); // coordinator-less reconnect is immediate, but advance any timers
+    }
+
+    // After the cap, offline reported — orchestrator demotes.
+    expect(onCameraOffline).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenLastCalledWith('offline');
+    // And critically: no further reconnect attempts beyond the cap.
+    const attemptsAtCap = mockWSInstances.length;
+    vi.advanceTimersByTime(30000);
+    expect(mockWSInstances.length).toBe(attemptsAtCap);
+  });
+
+  it('should reset handshake-failure count when a connection finally opens', () => {
+    const onCameraOffline = vi.fn();
+    const cm = createManager({ onCameraOffline });
+    cm.connect();
+    // A few handshake failures...
+    simulateClose(getLastWS(), 1006);
+    cm.connect(); // immediate reconnect (no coordinator)
+    simulateClose(getLastWS(), 1006);
+    cm.connect();
+    // ...then a successful handshake — resets the counter.
+    simulateOpen();
+    // A later normal drop should NOT immediately hit the offline cap.
+    simulateClose(getLastWS(), 1006);
+    cm.connect();
+    simulateOpen();
+    expect(onCameraOffline).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Reconnect behavior (with coordinator) ──────────────────────────────────
@@ -793,82 +837,68 @@ describe('zombie detection', () => {
     vi.advanceTimersByTime(6000);
     expect(mockWSInstances.length).toBe(1);
   });
+
+  it('should give up (report offline) after MAX_ZOMBIE_RECONNECTS frameless reconnects — stops the WS storm', () => {
+    // Regression test for the WS reconnect storm: a camera whose WS opens but
+    // never delivers frames (H.265 on plain HTTP, or a recorder that accepts
+    // the WS but produces no media) previously looped zombie→reconnect forever.
+    // Now after MAX_ZOMBIE_RECONNECTS (3) frameless reconnects it reports
+    // offline via onCameraOffline so the orchestrator can demote.
+    const onCameraOffline = vi.fn();
+    const onStateChange = vi.fn();
+    const cm = createManager({
+      onCameraOffline,
+      onStateChange,
+      zombieCheckInterval: 2000,
+      zombieMaxMisses: 3,
+    });
+    cm.connect();
+    simulateOpen();
+
+    // Drive 4 zombie cycles (each = 3 misses × 2s = 6s). The first 3 trigger
+    // reconnects; the 4th exceeds the cap → offline, no further reconnect.
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersByTime(6000); // one zombie window
+      if (mockWSInstances.length > i + 1) simulateOpen(getLastWS()); // open each new socket
+    }
+
+    expect(onCameraOffline).toHaveBeenCalledTimes(1);
+    // Final state is 'offline' (failed health → orchestrator demotes).
+    expect(onStateChange).toHaveBeenLastCalledWith('offline');
+  });
+
+  it('should reset the zombie-reconnect cap when a frame finally arrives', () => {
+    const onCameraOffline = vi.fn();
+    const cm = createManager({
+      onCameraOffline,
+      zombieCheckInterval: 2000,
+      zombieMaxMisses: 3,
+    });
+    cm.connect();
+    simulateOpen();
+
+    // One zombie cycle (reconnect #1)...
+    vi.advanceTimersByTime(6000);
+    simulateOpen(getLastWS());
+    // ...then frames start arriving — the protocol works after all.
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    vi.advanceTimersByTime(2000);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+
+    // A few more zombie cycles should NOT trip the cap, because frames reset it.
+    vi.advanceTimersByTime(6000);
+    simulateOpen(getLastWS());
+    vi.advanceTimersByTime(6000);
+    expect(onCameraOffline).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Visibility change ──────────────────────────────────────────────────────
 
-describe('visibility change', () => {
-  it('should reconnect when tab becomes visible after being hidden', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    expect(mockWSInstances.length).toBe(1);
-
-    const firstWS = getLastWS();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-    expect(firstWS.close).toHaveBeenCalled();
-    expect(mockWSInstances.length).toBe(2);
-  });
-
-  it('should call onFreezeFrame when tab returns to visible', () => {
-    const fn = vi.fn();
-    const cm = createManager({ onFreezeFrame: fn });
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(fn).toHaveBeenCalled();
-  });
-
-  it('should not reconnect if tab was never hidden', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(mockWSInstances.length).toBe(1);
-  });
-
-  it('should not reconnect when tab becomes visible after destroy', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-    cm.destroy();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(mockWSInstances.length).toBe(1);
-  });
-});
+// 'visibility change' describe block removed — ConnectionManager no longer
+// binds a visibilitychange listener. Visibility pause/resume is owned by the
+// Player Orchestrator (setTabVisible). These tests verified the old per-CM
+// visibility behavior that caused the three-way conflict + WS storm.
 
 // ─── Edge cases ─────────────────────────────────────────────────────────────
 

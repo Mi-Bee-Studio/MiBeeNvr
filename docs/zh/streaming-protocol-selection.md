@@ -1,6 +1,6 @@
 # 直播协议自动选择
 
-> 监控大屏如何为**每个摄像头**自动选择最佳直播协议——基于编码、浏览器能力，并在运行时跨协议降级。
+> 监控大屏如何为**每个摄像头**自动选择最佳直播协议——基于编码、浏览器能力，并由 **Player Orchestrator** 在运行时做跨协议的降级**和**升级。
 
 ## 为什么要按摄像头自动选择？
 
@@ -14,21 +14,17 @@
 | WebSocket (WebCodecs) | ✅ | ✅（libde265 WASM） | ❌ | <500ms | WebCodecs + HTTPS |
 | MJPEG（轮询） | ❌ | ❌ | ✅ | 500ms | 通用 |
 
-旧模式要求用户在设置中选一个"默认协议"，对某些摄像头是错的。现在大屏按摄像头自动选择。
+旧模式要求用户在设置中选一个"默认协议"，对某些摄像头是错的。现在大屏按摄像头自动选择，**新用户根本看不到协议选择器**——orchestrator 自动选当前浏览器+编码能支持的最低延迟协议。
 
 ---
 
-## 四层架构
+## 架构（三层）
 
 ### 第 1 层 — 后端：per-camera 协议排名
 
 `GET /api/cameras/{id}/protocols`（`internal/api/handler.go:handleCameraProtocols`）做三件事：
 
-1. **探测真实编码** — 按以下优先级解析编码（DB 存的值可能过时或错误，例如小米摄像头存的是 h264 实际流 h265）：
-   - **① 运行中 recorder 的探测值**（权威）— 经 `getCodecParams(rec)` 从真实视频包得出（ONVIF 走 RTSP DESCRIBE；小米走首包 codec ID）。但在首包到达前、或小米 P2P 重连期间（其 codec 字段会重置）返回空。
-   - **② HLS muxer 冻结值兜底**（`hls.Manager.CodecFor(id)`）— HLS muxer 在流启动时把编码烤进 track，**recorder 重连期间也不丢**。所以 recorder 探测为空时用这个兜底，避免重连窗口期闪烁回 DB 的旧值导致前端误路由黑屏。仅当该摄像头有活跃 HLS 流条目时可用（从未启动 / 空闲淘汰后不可用）。
-   - **③ DB 存的值** — 最后保底。
-   - ONVIF 摄像头会撒谎（声明 H.264 实际流 H.265）；recorder 探测是权威。
+1. **探测真实编码** — 读取**运行中 recorder** 的实际编码，不是 DB 存的值。ONVIF 摄像头会撒谎（声明 H.264 实际流 H.265）；recorder 的 `detectEncoding`（RTSP DESCRIBE）是权威。
 2. **查 stream handler 能力** — 遍历已注册的 handler，每个 `CanHandle(codec)`：
    - WebRTC：仅 H.264
    - FLV：仅 H.264（mpegts.js 浏览器端解不了 H.265）
@@ -52,70 +48,62 @@
 }
 ```
 
-### 第 2 层 — 前端：并行拉取 + 缓存
+### 第 2 层 — 前端：能力探测 + per-camera 候选链构建
 
-大屏 `onMount` 时为每个选中摄像头**并行**调 `getCameraProtocols(id)`（`Promise.allSettled`），缓存到 `Map<cameraId, ProtocolsResponse>`。**非阻塞**：摄像头先用 legacy 默认渲染，响应到了再重新解析。失败存 `null`（退回 legacy 默认，不阻塞大屏）。
+每个路由（`Surveillance.svelte`、`LiveView.svelte`）在挂载时：
 
-浏览器能力一次性检测：
-- `probeMSEH265()` / `detectMSEH265()` — MSE 能否解 H.265？**注意**：`MediaSource.isTypeSupported('hvc1')` 在 Chromium/Edge 上是**假阳性**（OS 的 HEVC 解码器为原生 `<video>` 注册，MSE 接受 hvc1 字节却永不缓冲 → 黑屏）。因此用权威探测 `probeMSEH265()`：建一个临时 hvc1 SourceBuffer、追加真实 HEVC init segment、检查 `video.buffered`。结果缓存在 sessionStorage。未探测解析前 `detectMSEH265()` 保守返回 false。（Linux 桌面、无 HEVC 扩展的 Windows 为 false）
-- `detectWebCodecs()` — 有无 `VideoDecoder`？（需 HTTPS 或 localhost）
-- `detectWasmH265()` — libde265 WASM 是否可用？（plain HTTP 上 H.265 的唯一可靠解码路径，Canvas2D 渲染）
+1. **一次性探测设备能力**，通过 `probeCaps()`（`web/src/lib/player/capabilities-cache.ts`）——`webCodecs`、`mseH265`、`wasmH265`、`webgpu`、`webgl2`、`hevcDecode`。结果缓存到 `sessionStorage`（tab 会话级），因此绝不在反应式路径里重复探测（在 Svelte `$effect` 里重复探测正是 WS 重连风暴的根因——见 `wasm-player-design.md`）。
+2. **并行拉取** `/api/cameras/{id}/protocols`（`Promise.allSettled`），非阻塞。
+3. **构建有序候选链**，通过 `buildCandidateChain(camera, resp, caps, opts)`（`web/src/lib/stream-selection.ts`）。返回该摄像头的编码+浏览器能力下**所有**可播放模式，延迟最优在前：
+   ```
+   PREFERENCE_ORDER = [wasm, webrtc, flv, hls, mjpeg]
+   wasm   ← 仅前端模式，门控：WebCodecs（任意编码）或 libde265 WASM（HTTP 上的 H.265）
+   webrtc ← 后端 Available + 仅 H.264（H.265 被编码门控排除）
+   flv    ← 后端 Available +（H.264，或 H.265 仅当有 MSE H.265）
+   hls    ← 后端 Available（通用兜底）
+   mjpeg  ← 仅 JPEG/MJPEG 摄像头（单元素链）
+   ```
+   链首是大屏初始渲染的协议；后续条目是降级目标。用户覆盖会把链**钉死**为单元素（见下"用户手动覆盖"）。
 
-### 第 3 层 — `getCameraMode(camera)` 决策级联
+### 第 3 层 — Player Orchestrator：自适应降级 + 升级（运行时）
 
-每格渲染时调用，优先级从高到低：
+**Player Orchestrator**（`web/src/lib/player/orchestrator.svelte.ts`）持有 per-camera 状态机。每个路由创建一次，通过 Svelte context 提供给 `CameraPlayer`，内部持有：
 
-```
-① runtimeFallback[camera.id]          ← 运行时降级（第 4 层）
-② pickCameraMode(camera, resp, caps, opts):
-   a. JPEG/MJPEG 编码 → 'mjpeg'       ← 早短路（ONVIF JPEG delegate 报 protocol=onvif
-                                          但流 JPEG；走 HLS 会黑屏）
-   b. 协议不支持 HLS（rtmp/srt ingest）→ 'snapshot' 或 'unsupported'
-   c. 用户覆盖（localStorage per-camera）→ 若对该编码仍可用则用它
-   d. 后端 default → 叠加浏览器能力修正：
-        webrtc + H.265           → 'hls'  （WebRTC 不能传 H.265）
-        flv + H.265 + 无 MSE     → 'hls'  （FLV 无 H.265 MSE 会黑屏）
-        wasm + 无 WebCodecs      → 'hls'  （WASM 播放器需 WebCodecs）
-        ll-hls / hls             → 'hls'  （hls.js 处理低延迟）
-   e. 后端响应为 null（不可达）→ legacy 全局 default_protocol（最终保底）
-```
+- 候选链 + 当前激活索引（响应式 `$state`），
+- 激活播放器上报的最新健康度（响应式 `$state`），
+- 重连协调器（雷群防护，见下）。
 
-**关键**：不是"一个全局协议套所有摄像头"。混合机群每格自动选不同协议。
+每个播放器通过它已经在冒泡的 DOM `statechange` 事件上报标准化的 **`HealthState`**（`web/src/lib/player/health.ts`）——`ok | degraded | failed`。`CameraPlayer` 把它桥接到 `orchestrator.reportHealth()`。orchestrator 据此决策：
 
-### 第 4 层 — 运行时跨协议降级
+| 健康度 | 动作 |
+|--------|------|
+| `failed` | **立即降级**到链的下一档（如 webrtc → flv）。弹一次提示。 |
+| `degraded` 超过 8s | **降级**（防抖——短暂 rebuffer 绝不能触发切换）。 |
+| `ok` 持续 30s + 触发 | **尝试升级**到更低延迟的档。触发：tab 重新可见，或手动点"重试高清"。 |
+| 升级后 5s 内未到 `ok` | **回退** + 该档冷却 60s（防震荡）。 |
 
-当播放器耗尽重连次数（原本会掉到静态快照），现在先调 `onProtocolFailed`：
+**防震荡保证：**
+- 升级仅在显式触发时发起（绝不靠定时器/轮询），所以抖动网络不会在两个协议间反复横跳。
+- 被回退的升级会让该档冷却 60s。
+- 用户钉死的覆盖会完全禁用自动降级/升级。
 
-```
-handleProtocolFailed(cameraId, currentMode):
-  从后端响应构建降级链：[webrtc, flv, hls, mjpeg] 过滤出 Available 的
-  找 currentMode 在链中的位置
-  如果有下一个协议：
-    设 runtimeFallback[cameraId] = next
-    用新播放器重挂该格
-    弹提示："为提升稳定性，已自动切换到 FLV 播放"
-    返回 true（播放器：先别掉快照）
-  否则（链尽）：
-    返回 false（播放器：掉到快照）
-```
+示例级联：WebRTC WHEP 失败 → 自动切 FLV（弹提示）→ FLV 失败 → 切 HLS → HLS 失败 → 才掉快照。之后若 WebRTC 恢复且切换了 tab，orchestrator 会升回 WebRTC（带 5s 探针保护）。
 
-示例级联：WebRTC WHEP 失败 → 自动切 FLV → FLV 失败 → 切 HLS → HLS 失败 → 才掉快照。
-
-`runtimeFallback` 在切换摄像头选择时清空（重新从自动选开始）。
+**可见性：** orchestrator 持有 tab 可见性（`setTabVisible`）。隐藏时暂停所有播放器（释放 WS / `RTCPeerConnection`）；可见时恢复，并给稳定的摄像头一次升回低延迟的机会。这取代了原来导致 WS 风暴的 per-player 可见性 `$effect`。
 
 ---
 
-## 用户手动覆盖
+## 用户手动覆盖（"自动" vs 钉死）
 
-用户可在 **LiveView 页**（`#/live/{id}`）的 ProtocolSwitcher 里为某个摄像头固定协议。存储在 `localStorage`（`mibee_nvr_prefs_proto_<cameraId>`），大屏的 `getCameraMode` 会读它（第 3 层 c）。
+**ProtocolSwitcher**（LiveView + 监控大屏）默认是 **"自动（推荐）"**——orchestrator 驱动选择。选某个具体协议会通过 `setCameraProtocolOverride()`（`web/src/lib/preferences.ts`，存 localStorage `mibee_nvr_prefs_proto_<cameraId>`）把链**钉死**为该单元素，orchestrator 视其为单元素钉死链：**不自动降级、不自动升级**——尊重用户的显式选择。再选"自动"会清除覆盖。
 
-**重要**：只有**手动**选择才写覆盖。运行时自动降级（第 4 层）不写——否则一次临时故障会永久钉死更差的协议。覆盖也会校验：如果摄像头编码变了（如 H.264 → H.265）且固定协议无法服务，覆盖被忽略，自动选择接管。
+覆盖在链构建时校验：如果摄像头编码变了（如 H.264 → H.265）且钉死协议无法服务，覆盖被忽略，自动选择接管。
 
 ---
 
 ## `default_protocol` 设置
 
-配置中的 `streaming.default_protocol` 现在是**备用**——仅在无法查询摄像头能力时（摄像头正在连接、端点不可达）使用。不再是主要协议选择。设置页标注为"备用直播协议"以反映此变化。
+`streaming.default_protocol` 是**仅为后端保留的字段**，用于向后兼容。前端**不再暴露它的 UI**（"备用直播协议"选择器已移除——orchestrator 自动选）。当 `/protocols` 不可达时，`buildCandidateChain` 自行回落到通用 HLS 候选，所以该设置在前端实际已不用。它仍保留在 config/API 供旧部署。
 
 ---
 
@@ -123,11 +111,15 @@ handleProtocolFailed(cameraId, currentMode):
 
 | 文件 | 职责 |
 |------|------|
-| `internal/api/handler.go` `handleCameraProtocols` | 后端：探测编码（recorder → HLS muxer 兜底 → DB）、查 handler、算 default |
-| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | 每个 handler 的编码门控；`getCodecParams` 经 `model.HLSProvider.CodecParams()` 读 recorder 真实编码 |
-| `internal/hls/manager.go` `CodecFor` | HLS muxer 冻结的编码查询（recorder 重连期间保真的兜底来源） |
-| `web/src/lib/stream-selection.ts` `pickCameraMode` / `fallbackChain` / `nextAfter` | 纯决策逻辑（有单测） |
-| `web/src/routes/Surveillance.svelte` `getCameraMode` / `handleProtocolFailed` | 大屏集成：拉取、缓存、解析、降级 |
-| `web/src/components/ProtocolSwitcher.svelte` | LiveView per-camera 覆盖（唯一覆盖写入者） |
-| `web/src/lib/preferences.ts` `getCameraProtocolOverride` | localStorage per-camera 覆盖存储 |
-| `web/src/lib/webcodecs-player/capabilities.ts` `detectMSEH265` / `detectWebCodecs` | 浏览器能力检测 |
+| `internal/api/handler.go` `handleCameraProtocols` | 后端：探测编码、查 handler、算 default |
+| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | 每个 handler 的编码门控 |
+| `web/src/lib/player/orchestrator.svelte.ts` `createPlayerOrchestrator` | **运行时状态机**：候选链、降级/升级、可见性、持有重连协调器 |
+| `web/src/lib/player/health.ts` | 标准化 `HealthState` + `healthFromStreamState` / `healthFromConnectionState` 映射 |
+| `web/src/lib/player/capabilities-cache.ts` `probeCaps` / `getCaps` | 一次性设备能力探测，缓存到 sessionStorage |
+| `web/src/lib/stream-selection.ts` `buildCandidateChain` / `pickCameraMode` | 纯链构建 + 单点决策（有单测）。`pickCameraMode` 是 `buildCandidateChain[0]` 的薄包装，为旧调用者保留。 |
+| `web/src/components/CameraPlayer.svelte` | 单一派发器：读 `orchestrator.activeMode(id)`，渲染对应播放器，通过 DOM `statechange` 桥接健康度 |
+| `web/src/components/ProtocolSwitcher.svelte` | per-camera "自动" + 手动钉死（唯一覆盖写入者） |
+| `web/src/lib/preferences.ts` `setCameraProtocolOverride` / `clearCameraProtocolOverride` | localStorage per-camera 覆盖存储 |
+| `web/src/lib/webcodecs-player/capabilities.ts` `detectMSEH265` / `detectWebCodecs` / `getPlaybackTier` | 底层浏览器能力探测（被 capabilities-cache 消费） |
+
+> 另见：`wasm-player-design.md`（WebCodecs 解码管线 + WS 重连风暴修复细节）。

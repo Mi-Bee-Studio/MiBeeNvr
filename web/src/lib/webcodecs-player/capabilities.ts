@@ -1,8 +1,14 @@
 /**
  * Capability Detection Module
  *
- * Detects browser capabilities for WebCodecs, WebGPU, WebGL2, and related APIs.
- * Returns a playback tier (tier1 / tier2 / tier3) for adaptive streaming quality.
+ * Low-level browser-capability probes for WebCodecs, WebGPU, WebGL2, MSE H.265,
+ * and libde265 WASM. Returns a playback tier (tier1 / tier2 / tier3) for the
+ * WebCodecs player's render-path selection.
+ *
+ * Consumers should NOT call these directly in render paths — use the cached
+ * {@link probeCaps} / {@link getCaps} from `$lib/player/capabilities-cache`,
+ * which probes once per session and shares the result. Calling these probes in
+ * a Svelte `$effect` risks the reactive loop that caused the WS reconnect storm.
  *
  * All synchronous detection functions are fast / non-blocking.
  * detectHEVC() is async but short-circuits if WebCodecs is unavailable.
@@ -200,66 +206,18 @@ export function detectWebGL2(): boolean {
   }
 }
 
-/** Check if OffscreenCanvas API is available. */
+/**
+ * Check if OffscreenCanvas API is available.
+ * Used internally by {@link getPlaybackTier}; kept exported for the capability
+ * test suite.
+ */
 export function detectOffscreenCanvas(): boolean {
   return typeof OffscreenCanvas !== 'undefined';
 }
 
-/** Check if SharedArrayBuffer is available. */
-export function detectSharedArrayBuffer(): boolean {
-  return typeof SharedArrayBuffer !== 'undefined';
-}
-
-/**
- * Check if WebAssembly SIMD is supported.
- * Uses WebAssembly.validate() with a minimal WASM module containing
- * a v128 type and i8x16.splat instruction.
- */
-export function detectWasmSimd(): boolean {
-  try {
-    if (typeof WebAssembly === 'undefined' || WebAssembly === null || typeof WebAssembly.validate !== 'function') {
-      return false;
-    }
-    // Minimal WASM module using a SIMD v128 instruction (i8x16.splat)
-    const binary = new Uint8Array([
-      0x00,
-      0x61,
-      0x73,
-      0x6d, // \0asm  magic
-      0x01,
-      0x00,
-      0x00,
-      0x00, // version 1
-      // Type section: one function () -> v128
-      0x01,
-      0x05,
-      0x01,
-      0x60,
-      0x00,
-      0x01,
-      0x7b,
-      // Function section: declare 1 function (index 0)
-      0x03,
-      0x02,
-      0x01,
-      0x00,
-      // Code section: 1 body with i32.const 0; i8x16.splat; end
-      0x0a,
-      0x08,
-      0x01,
-      0x06,
-      0x00,
-      0x41,
-      0x00,
-      0xfd,
-      0x0f,
-      0x0b,
-    ]);
-    return WebAssembly.validate(binary);
-  } catch {
-    return false;
-  }
-}
+// NOTE: detectSharedArrayBuffer() and detectWasmSimd() were removed — they had
+// no consumers in src/ (libde265 loads lazily and self-probes). Their tests in
+// capabilities.test.ts were removed too.
 
 /**
  * Determine playback tier based on available capabilities.

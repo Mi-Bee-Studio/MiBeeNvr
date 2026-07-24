@@ -154,8 +154,7 @@ const codecString = `hvc1.${profile_idc}.6.${tier}${level}.B0`;
 
 ### Memory Management
 
-- **Every frame path MUST `VideoFrame.close()`** — otherwise the GC warning "A VideoFrame was garbage collected without being closed" fires and stalls the main thread. WasmPlayer's `onmessage` handler wraps the render call in `try/finally`: frames that arrive during teardown (`destroyed` or `canvasEl` is null), or on a render early-return (`gl` already nulled by `cleanupWebGL2()`), are still `close()`d in `finally`. This guard is especially load-bearing on navigation away, when the worker still has in-flight frames.
-- **AI-detection cloned frames must be closed** — `processAiDetection` clones a frame for the async `detect()`; the clone is `close()`d in `finally` so a throw from `detect()` can't leak it.
+- `VideoFrame.close()` called after every frame for GPU memory safety
 - Worker-managed frame pool to minimize allocations
 - Automatic cleanup on worker termination or decoder reset
 
@@ -276,11 +275,12 @@ device.lost.then((info: GPUDeviceLostInfo) => {
 });
 ```
 
-**ConnectionManager handles** reconnection (coordinated via `ReconnectCoordinator` to prevent a thundering herd when many cameras reconnect at once):
-- Initial backoff: 1 second, doubling each round, capped at 30 seconds; at most 2 concurrent reconnect slots
-- Backend pressure (HTTP 503) → 10s global cooldown + doubled backoff
+**Reconnection & the WS storm fix:** reconnection happens at two layers:
 
-**Intentional closes do NOT trigger reconnect** (`_intentionalClose` flag): `disconnect()`/`destroy()`/reconnect-rotation call `close()` without a code, so the resulting `CloseEvent.code` is 1005 ("no status"), which is neither 1000 nor 1001. The old logic treated this as a crash and called `_scheduleCoordinatedReconnect()` — so **navigating away from the surveillance grid made every camera auto-reconnect**, and the reconnecting socket was closed in `onopen` once destroyed ("WebSocket closed before connection is established" spam), while the coordinator reconnect slot leaked permanently. Fix: `_closeWebSocket()` sets `_intentionalClose=true`; `onclose` returns early without rescheduling when it sees it; and an `onopen` reached mid-destroy calls `completeReconnect()` to release the slot.
+1. **Within one protocol** — `ConnectionManager` (`web/src/lib/webcodecs-player/connection.ts`) owns the WebSocket lifecycle and reconnect logic for the WebCodecs player. It is **idempotent** (`connect()` no-ops if a socket is already OPEN/CONNECTING) and uses an `_intentionalClose` flag so an initiated teardown (`disconnect()`/`destroy()`, which call `close()` without a code → `CloseEvent.code 1005`) is not mistaken for a crash to recover from. This flag is what stopped the **WS reconnect storm**: previously every navigation/tab-toggle close was treated as a failure and rescheduled onto a destroyed coordinator, producing the "WebSocket closed before the connection is established" log spam (90k+ lines observed).
+2. **Across protocols** — the **Player Orchestrator** (`web/src/lib/player/orchestrator.svelte.ts`) decides whether to demote to a different protocol entirely. The WasmPlayer reports health via the DOM `statechange` event; when it reports `failed` (or `degraded` for >8s), the orchestrator switches the camera to the next entry in its candidate chain (e.g. wasm → hls). See `streaming-protocol-selection.md` Layer 3.
+
+Reconnect backoff (when the coordinator is consulted): initial 1s, doubling, capped at 30s, with a 10s global cooldown after backend HTTP 503 pressure. Tab visibility is owned by the orchestrator (`setTabVisible`), not a per-player `$effect`.
 
 ### Browser Support Matrix
 

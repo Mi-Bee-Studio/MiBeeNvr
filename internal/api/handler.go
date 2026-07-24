@@ -567,36 +567,26 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
-	// Probe the running recorder for the actual codec. The recorder's value is
-	// authoritative — it is derived from real video packets (RTSP DESCRIBE for
-	// ONVIF; first-packet codec ID for xiaomi/ingest) — while the stored
-	// `encoding`/`stream_encoding` columns are user-configured and can be stale
-	// or wrong. A common case: a xiaomi camera configured (stored) as h264 whose
-	// stream is actually h265. Returning the stale h264 here routes the frontend
-	// to MSE-based HLS/FLV, which can't buffer hvc1 on Chromium → black screen.
+	// Probe the running recorder for the actual codec. The recorder reads the
+	// REAL codec from the live stream (RTSP DESCRIBE for ONVIF/RTSP, MISS
+	// CodecID for Xiaomi, etc.), which is authoritative over the DB-stored
+	// encoding. The stored encoding may be stale or wrong — e.g. Xiaomi CS2
+	// cameras that were initially configured as h264 but actually stream h265
+	// (the recorder detects codec=h265, but DB still says h264). Without this
+	// probe, /protocols returns the wrong encoding, the frontend picks protocols
+	// that can't handle the actual codec (WebRTC for H.265, FLV without MSE
+	// H.265), and EVERY protocol renders black.
 	//
-	// The recorder returns an empty codec only before it has parsed the first
-	// real packet (its codec-OK flag is false), OR while it is mid-reconnect
-	// (xiaomi P2P resets its codec field on disconnect). The `codec != ""` guard
-	// preserves the stored value through that window — unless the HLS muxer can
-	// tell us the real codec, which it can: it freezes the codec at stream-start
-	// and keeps it across recorder reconnects (see hls.Manager.CodecFor). So when
-	// the recorder probe is empty, fall back to the HLS muxer's last-known codec
-	// before settling for the stored value. This keeps /protocols returning the
-	// correct h265 for an unstable xiaomi cam even during its P2P blips.
-	probedCodec := ""
+	// Previously this probe was gated to ONVIF + empty-encoding only, out of
+	// fear that a runtime probe might mislabel a correctly-configured camera.
+	// But the recorder's codec detection is reliable (it reads actual stream
+	// data), and the cost of a wrong DB encoding (all-protocols-black-screen)
+	// is far worse than an occasional over-correction. Trust the recorder.
 	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
 			if codec, _, _, _ := getCodecParams(rec); codec != "" {
-				probedCodec = string(codec)
+				encoding = string(codec)
 			}
-		}
-	}
-	if probedCodec != "" {
-		encoding = probedCodec
-	} else if h.hlsMgr != nil {
-		if codec, ok := h.hlsMgr.CodecFor(id); ok && codec != "" {
-			encoding = string(codec)
 		}
 	}
 

@@ -2,14 +2,19 @@
  * Shared hls.js configuration optimized for RPi.
  *
  * Conservative buffer sizes for 512MB RAM. enableWorker disabled for Web Worker compat.
+ *
+ * HLS is ALWAYS low-latency now (the LL-HLS/HLS distinction was collapsed —
+ * lowLatencyMode:true is on for every mount, and the smaller LL-HLS buffer
+ * sizes are the single config). The `protocol` argument is retained for
+ * backward-compat with existing callers but no longer changes the output.
  */
 
 import { getCredentials } from '$lib/api';
 import type Hls from 'hls.js';
 
-/** RPi-optimized hls.js configuration. When protocol is 'll-hls', returns LL-HLS tuned config. */
-export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
-  const baseConfig = {
+/** RPi-optimized hls.js configuration. Always low-latency. */
+export function createHlsConfig(_protocol: string = 'hls'): Partial<Hls.Config> {
+  return {
     enableWorker: false,
     liveDurationInfinity: true,
     progressive: true,
@@ -71,28 +76,14 @@ export function createHlsConfig(protocol: string = 'hls'): Partial<Hls.Config> {
       }
       return new Request(context.url, initParams);
     },
-  };
-
-  if (protocol === 'll-hls') {
-    return {
-      ...baseConfig,
-      lowLatencyMode: true,
-      maxBufferLength: 10,
-      maxMaxBufferLength: 12,
-      maxBufferSize: 10 * 1024 * 1024,
-      backBufferLength: 2.0,
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 5,
-    };
-  }
-
-  return {
-    ...baseConfig,
+    // Low-latency buffer tuning (formerly the 'll-hls' branch). Tighter buffers
+    // give ~2-5s glass-to-glass latency on a home NVR with no CDN; RPi 3B's
+    // 512MB RAM handles the smaller back-buffer fine.
     maxBufferLength: 10,
-    maxMaxBufferLength: 20,
-    maxBufferSize: 15 * 1024 * 1024, // 15 MB
-    backBufferLength: 3,
+    maxMaxBufferLength: 12,
+    maxBufferSize: 10 * 1024 * 1024, // 10 MB
+    backBufferLength: 2.0,
     liveSyncDurationCount: 3,
-    liveMaxLatencyDurationCount: 7,
+    liveMaxLatencyDurationCount: 5,
   };
 }
