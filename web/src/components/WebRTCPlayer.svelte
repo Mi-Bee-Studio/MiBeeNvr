@@ -259,12 +259,16 @@ let destroyed = false;
       if (videoEl.readyState === 0) {
         zombieCount++;
         if (zombieCount >= 4) {
-          // ~20s stuck — reconnect
+          // ~20s stuck — reconnect. Route through scheduleReconnect() so this
+          // counts toward reconnectAttempts and eventually triggers
+          // enterSnapshotMode() → onProtocolFailed() → orchestrator demote.
+          // (Previously this reset zombieCount but never incremented
+          // reconnectAttempts, so a camera WebRTC can't serve — e.g. a Xiaomi
+          // CS2 camera where the WHEP endpoint 404s — looped here forever,
+          // ~90 "zombie detected" logs and never degraded.)
           console.warn(`WebRTC zombie detected for ${cameraId}, reconnecting`);
           zombieCount = 0;
-          captureFreezeFrame();
-          destroyPeerConnection();
-          initWebRTC();
+          scheduleReconnect();
           return;
         }
       } else if (videoEl.currentTime !== lastPlaybackTime) {
@@ -273,13 +277,10 @@ let destroyed = false;
       } else {
         zombieCount++;
         if (zombieCount >= 12) {
-          // ~60s no progress — reconnect
+          // ~60s no progress — reconnect (also counts toward the limit).
           console.warn(`WebRTC zombie (no progress) for ${cameraId}, reconnecting`);
           zombieCount = 0;
-          reconnectAttempts = 0;
-          captureFreezeFrame();
-          destroyPeerConnection();
-          initWebRTC();
+          scheduleReconnect();
           return;
         }
       }

@@ -56,6 +56,13 @@ export interface ConnectionManagerOptions {
 
 const DEFAULT_ZOMBIE_CHECK_INTERVAL = 2000;
 const DEFAULT_ZOMBIE_MAX_MISSES = 3;
+/**
+ * Max consecutive zombie-triggered reconnects with NO frame delivered between
+ * them before we give up on this protocol and report offline (failed health).
+ * 3 reconnects × (~6s zombie window) ≈ 18s of no frames → demote. This caps
+ * the WS storm for a camera whose socket opens but never produces media.
+ */
+const MAX_ZOMBIE_RECONNECTS = 3;
 
 // ─── ConnectionManager ───────────────────────────────────────────────────
 
@@ -80,6 +87,15 @@ export class ConnectionManager {
   private _zombieCheckTimer: ReturnType<typeof setInterval> | null = null;
   private _lastFrameTime = 0;
   private _zombieMissCount = 0;
+  // Count of consecutive zombie-triggered reconnects with NO frame delivered
+  // between them. When this exceeds MAX_ZOMBIE_RECONNECTS we stop reconnecting
+  // and report the camera offline (failed health), so the Player Orchestrator
+  // can demote to the next protocol (e.g. wasm → hls). Without this cap a
+  // camera whose WS connects but never delivers frames (H.265 on plain HTTP
+  // where WebCodecs can't decode, or a recorder that accepted the WS but
+  // produces no media) loops forever — the "closed before connection is
+  // established" WS storm (thousands of log lines). Reset on any frame.
+  private _zombieReconnectCount = 0;
 
   // Visibility
   private _wasHidden = false;
@@ -383,8 +399,25 @@ export class ConnectionManager {
       }
 
       if (this._zombieMissCount >= this._opts.zombieMaxMisses!) {
-        // Zombie detected — reconnect via coordinator
+        // Zombie detected — reconnect via coordinator. But cap consecutive
+        // frameless reconnects: if we've reconnected MAX_ZOMBIE_RECONNECTS
+        // times without a single frame arriving, the protocol is unusable for
+        // this camera (e.g. H.265 on plain HTTP where WebCodecs can't decode,
+        // or a recorder whose WS opens but produces no media). Stop the cycle
+        // and report offline so the orchestrator demotes to the next protocol.
         this._zombieMissCount = 0;
+        this._zombieReconnectCount++;
+        if (this._zombieReconnectCount > MAX_ZOMBIE_RECONNECTS) {
+          this._stopZombieDetection();
+          this._setState('offline');
+          this._opts.onCameraOffline?.();
+          try {
+            if (this._ws) this._ws.close(1000);
+          } catch {
+            /* already closed */
+          }
+          return;
+        }
         this._scheduleCoordinatedReconnect();
       }
     }, this._opts.zombieCheckInterval!);
@@ -401,6 +434,8 @@ export class ConnectionManager {
   private _recordFrameDelivery(): void {
     this._lastFrameTime = Date.now();
     this._zombieMissCount = 0;
+    // A frame arrived — this protocol works. Reset the frameless-reconnect cap.
+    this._zombieReconnectCount = 0;
   }
 
   // ─── Internal: Visibility ────────────────────────────────────────────

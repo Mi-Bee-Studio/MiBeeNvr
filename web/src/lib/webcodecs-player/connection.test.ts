@@ -793,6 +793,60 @@ describe('zombie detection', () => {
     vi.advanceTimersByTime(6000);
     expect(mockWSInstances.length).toBe(1);
   });
+
+  it('should give up (report offline) after MAX_ZOMBIE_RECONNECTS frameless reconnects — stops the WS storm', () => {
+    // Regression test for the WS reconnect storm: a camera whose WS opens but
+    // never delivers frames (H.265 on plain HTTP, or a recorder that accepts
+    // the WS but produces no media) previously looped zombie→reconnect forever.
+    // Now after MAX_ZOMBIE_RECONNECTS (3) frameless reconnects it reports
+    // offline via onCameraOffline so the orchestrator can demote.
+    const onCameraOffline = vi.fn();
+    const onStateChange = vi.fn();
+    const cm = createManager({
+      onCameraOffline,
+      onStateChange,
+      zombieCheckInterval: 2000,
+      zombieMaxMisses: 3,
+    });
+    cm.connect();
+    simulateOpen();
+
+    // Drive 4 zombie cycles (each = 3 misses × 2s = 6s). The first 3 trigger
+    // reconnects; the 4th exceeds the cap → offline, no further reconnect.
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersByTime(6000); // one zombie window
+      if (mockWSInstances.length > i + 1) simulateOpen(getLastWS()); // open each new socket
+    }
+
+    expect(onCameraOffline).toHaveBeenCalledTimes(1);
+    // Final state is 'offline' (failed health → orchestrator demotes).
+    expect(onStateChange).toHaveBeenLastCalledWith('offline');
+  });
+
+  it('should reset the zombie-reconnect cap when a frame finally arrives', () => {
+    const onCameraOffline = vi.fn();
+    const cm = createManager({
+      onCameraOffline,
+      zombieCheckInterval: 2000,
+      zombieMaxMisses: 3,
+    });
+    cm.connect();
+    simulateOpen();
+
+    // One zombie cycle (reconnect #1)...
+    vi.advanceTimersByTime(6000);
+    simulateOpen(getLastWS());
+    // ...then frames start arriving — the protocol works after all.
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+    vi.advanceTimersByTime(2000);
+    simulateMessage(getLastWS(), buildVideoFrameBuffer());
+
+    // A few more zombie cycles should NOT trip the cap, because frames reset it.
+    vi.advanceTimersByTime(6000);
+    simulateOpen(getLastWS());
+    vi.advanceTimersByTime(6000);
+    expect(onCameraOffline).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Visibility change ──────────────────────────────────────────────────────

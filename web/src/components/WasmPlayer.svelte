@@ -579,8 +579,23 @@ function handleWebGpuLost() {
         frameSkip: settings.frameSkip,
       });
     } catch (e) {
-      console.warn('[WasmPlayer] AI init failed:', e);
-      aiError = e instanceof Error ? e.message : 'AI init failed';
+      // AI is a non-fatal overlay — never abort the video. The most common
+      // failures are deployment issues, not bugs:
+      //  - HTTP 404 on /models/yolo11n.onnx → `mibee-nvr download-model` not run
+      //  - ERROR_CODE 7 "protobuf parsing failed" → model file present but
+      //    corrupt/wrong-format, or an ONNX Runtime Web version mismatch.
+      // Both are deployment steps, so log quietly (dev only) rather than a
+      // prominent console.warn with a full stack trace that alarms users.
+      const msg = e instanceof Error ? e.message : 'AI init failed';
+      const isDeployIssue = /Model download failed: 404|protobuf parsing failed|ERROR_CODE: 7/i.test(msg);
+      if (import.meta.env.DEV) {
+        if (isDeployIssue) {
+          console.info('[WasmPlayer] AI model unavailable (' + msg + ') — AI disabled. Run "mibee-nvr download-model" or re-download a valid model.');
+        } else {
+          console.warn('[WasmPlayer] AI init failed:', e);
+        }
+      }
+      aiError = msg;
       aiRuntime?.dispose();
       aiRuntime = null;
       aiDetector = null;
