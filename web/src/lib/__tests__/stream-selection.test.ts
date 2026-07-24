@@ -260,11 +260,12 @@ describe('buildCandidateChain', () => {
     expect(chain.map((c) => c.mode)).toEqual(['wasm', 'webrtc', 'flv', 'hls']);
   });
 
-  it('excludes webrtc and flv for H.265 without MSE (codec gate)', () => {
+  it('excludes webrtc, flv AND hls for H.265 without MSE (codec gate)', () => {
     const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
     const chain = buildCandidateChain(cam, H265_RESP, { h265MSE: false, webCodecs: true, wasmH265: true });
-    // wasm (WebCodecs can decode H.265 here) + hls only — webrtc/flv blocked.
-    expect(chain.map((c) => c.mode)).toEqual(['wasm', 'hls']);
+    // wasm only — webrtc/flv/hls all blocked for H.265 without MSE H.265.
+    // (HLS via MSE can't decode H.265 on most browsers → black screen.)
+    expect(chain.map((c) => c.mode)).toEqual(['wasm']);
   });
 
   it('excludes wasm when neither WebCodecs nor libde265 WASM is available', () => {
