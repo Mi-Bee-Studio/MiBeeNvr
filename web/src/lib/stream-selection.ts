@@ -164,7 +164,17 @@ export function pickCameraMode(
 
   // Map backend protocol names to a concrete mode, applying browser caps.
   // ll-hls and hls both map to the HLS player (hls.js handles low-latency).
-  if (candidate === 'll-hls' || candidate === 'hls') return 'hls';
+  //
+  // H.265 caveat: HLS/LL-HLS run through hls.js → MSE. Chromium/Edge's MSE
+  // claims to support hvc1 (isTypeSupported) but silently drops the appended
+  // fMP4 bytes → permanent black screen. So for an H.265 camera, if MSE
+  // can't really play it (caps.h265MSE is the PROBED, authoritative result),
+  // prefer the wasm/WebCodecs player (libde265) which always works, and only
+  // fall back to HLS if wasm isn't available either.
+  if (candidate === 'll-hls' || candidate === 'hls') {
+    if (enc === 'h265' && !caps.h265MSE && available.has('wasm') && (caps.webCodecs || caps.wasmH265)) return 'wasm';
+    return 'hls';
+  }
   if (candidate === 'mjpeg') return 'mjpeg';
 
   if (candidate === 'webrtc') {
@@ -176,8 +186,12 @@ export function pickCameraMode(
   }
 
   if (candidate === 'flv') {
-    // H.265 + no MSE H.265 → FLV renders black (mpegts.js can't decode). Degrade.
-    if (enc === 'h265' && !caps.h265MSE) return 'hls';
+    // H.265 + no MSE H.265 → FLV renders black (mpegts.js can't decode).
+    // Prefer the wasm/WebCodecs player when available; only fall back to HLS.
+    if (enc === 'h265' && !caps.h265MSE) {
+      if (available.has('wasm') && (caps.webCodecs || caps.wasmH265)) return 'wasm';
+      return 'hls';
+    }
     return 'flv';
   }
 
@@ -215,8 +229,10 @@ export function isProtocolUsable(
   if (p === 'wasm') return caps.webCodecs || (enc === 'h265' && caps.wasmH265);
   // MJPEG: only for JPEG/MJPEG streams.
   if (p === 'mjpeg') return enc === 'mjpeg' || enc === 'jpeg';
-  // HLS / LL-HLS: universally usable for H.264/H.265 (browsers decode natively).
-  if (p === 'hls' || p === 'll-hls') return true;
+  // HLS / LL-HLS: H.264 plays natively; H.265 needs real MSE H.265 support
+  // (NOT the isTypeSupported false positive — see capabilities.probeMSEH265).
+  // Without it, hls.js connects via MSE but renders a permanent black screen.
+  if (p === 'hls' || p === 'll-hls') return enc !== 'h265' || caps.h265MSE;
 
   // If the backend explicitly listed it as available, trust it.
   return available.has(p);

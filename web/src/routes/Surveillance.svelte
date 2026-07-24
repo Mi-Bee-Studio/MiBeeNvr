@@ -15,7 +15,7 @@
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
-  import { detectMSEH265, detectWebCodecs, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
+  import { detectMSEH265, probeMSEH265, detectWebCodecs, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
   import { pickCameraMode, nextAfter, isAudioCapable, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
 
@@ -320,7 +320,11 @@
   onMount(async () => {
     // Detect browser playback capabilities once — fed into pickCameraMode so it
     // can auto-degrade (H.265 FLV→HLS without MSE) or promote (wasm with WebCodecs).
-    browserSupportsH265MSE = detectMSEH265();
+    // probeMSEH265() is authoritative: isTypeSupported('hvc1') is a known false
+    // positive on Chromium/Edge (MSE accepts the bytes but never buffers them →
+    // black screen), so we probe by appending a real hvc1 init segment. Until the
+    // probe resolves, detectMSEH265() conservatively returns false.
+    browserSupportsH265MSE = await probeMSEH265();
     browserSupportsWebCodecs = detectWebCodecs();
     browserSupportsWasmH265 = detectWasmH265();
     try {
