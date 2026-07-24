@@ -82,7 +82,10 @@ let webgpuRenderer: WebGPURenderer | null = null;
   // whose WS handshake succeeds (200 OK) but the recorder never feeds media
   // (Xiaomi CS2, some H.265 ONVIF) — the exact scenario that caused the storm.
   let noMediaTimer: ReturnType<typeof setTimeout> | null = null;
-  const NO_MEDIA_TIMEOUT_MS = 10000;
+  // 30s for the no-media watchdog. Xiaomi CS2 cameras need time to establish
+  // the P2P connection before frames flow — 10s was too aggressive and caused
+  // premature demotion to HLS (which can't play H.265 in most browsers → black).
+  const NO_MEDIA_TIMEOUT_MS = 30000;
   // AI detection overlay state
   let detections: Detection[] = $state([]);
   let aiOverlayVisible = $derived(detections.length > 0);

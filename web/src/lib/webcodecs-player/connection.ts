@@ -251,13 +251,18 @@ export class ConnectionManager {
             // parse error — ignore
           }
         } else if (msgType === MsgType.VideoFrame) {
-          // Backpressure: skip incoming frames when decoder is overloaded
+          // Even when paused (decoder still initializing / backpressure), the
+          // fact that a VideoFrame arrived proves the WS stream is alive and
+          // delivering media. Record it so the zombie/wall-clock guards don't
+          // mistakenly demote a working stream just because the decoder hasn't
+          // signaled codec-ready yet (libde265 WASM init can take seconds).
+          this._recordFrameDelivery();
+          // Backpressure: skip passing the frame to the decoder when paused
           if (this._paused) {
             this._frameDropCount++;
             this._opts.onFrameDrop?.(this._frameDropCount);
             return;
           }
-          this._recordFrameDelivery();
           this._opts.onFrame(data);
           if (this._currentState !== 'playing') {
             this._setState('playing');
