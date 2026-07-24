@@ -275,10 +275,12 @@ device.lost.then((info: GPUDeviceLostInfo) => {
 });
 ```
 
-**ConnectionManager 处理**指数退避重连：
-- 初始：2 秒
-- 后续：[2, 4, 8, 16, 32] 秒
-- 最大延迟：32 秒，防止过度等待
+**重连与 WS 风暴修复：** 重连分两层：
+
+1. **单协议内** — `ConnectionManager`（`web/src/lib/webcodecs-player/connection.ts`）持有 WebCodecs 播放器的 WebSocket 生命周期与重连逻辑。它是**幂等**的（`connect()` 若已有 OPEN/CONNECTING 的 socket 则 no-op），并用 `_intentionalClose` 标志区分主动关闭（`disconnect()`/`destroy()` 调 `close()` 不带 code → `CloseEvent.code 1005`）与真正的崩溃。这个标志正是**修复 WS 重连风暴**的关键：之前每次导航/切 tab 的关闭都被当成失败、重新排到一个已销毁的 coordinator 上，产生 "WebSocket closed before the connection is established" 日志刷屏（实测 9 万+ 行）。
+2. **跨协议** — **Player Orchestrator**（`web/src/lib/player/orchestrator.svelte.ts`）决定是否整个换协议。WasmPlayer 通过 DOM `statechange` 事件上报健康度；当上报 `failed`（或 `degraded` 超 8s），orchestrator 把该摄像头切到候选链的下一档（如 wasm → hls）。见 `streaming-protocol-selection.md` 第 3 层。
+
+重连退避（经 coordinator 协调时）：初始 1s，倍增，封顶 30s，后端 HTTP 503 压力后 10s 全局冷却。tab 可见性由 orchestrator 持有（`setTabVisible`），不再是 per-player `$effect`。
 
 ### 浏览器支持矩阵
 

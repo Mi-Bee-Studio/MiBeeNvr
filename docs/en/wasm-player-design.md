@@ -275,10 +275,12 @@ device.lost.then((info: GPUDeviceLostInfo) => {
 });
 ```
 
-**ConnectionManager handles** reconnection with exponential backoff:
-- Initial: 2 seconds
-- Subsequent: [2, 4, 8, 16, 32] seconds
-- Maximum delay: 32 seconds to prevent excessive wait times
+**Reconnection & the WS storm fix:** reconnection happens at two layers:
+
+1. **Within one protocol** — `ConnectionManager` (`web/src/lib/webcodecs-player/connection.ts`) owns the WebSocket lifecycle and reconnect logic for the WebCodecs player. It is **idempotent** (`connect()` no-ops if a socket is already OPEN/CONNECTING) and uses an `_intentionalClose` flag so an initiated teardown (`disconnect()`/`destroy()`, which call `close()` without a code → `CloseEvent.code 1005`) is not mistaken for a crash to recover from. This flag is what stopped the **WS reconnect storm**: previously every navigation/tab-toggle close was treated as a failure and rescheduled onto a destroyed coordinator, producing the "WebSocket closed before the connection is established" log spam (90k+ lines observed).
+2. **Across protocols** — the **Player Orchestrator** (`web/src/lib/player/orchestrator.svelte.ts`) decides whether to demote to a different protocol entirely. The WasmPlayer reports health via the DOM `statechange` event; when it reports `failed` (or `degraded` for >8s), the orchestrator switches the camera to the next entry in its candidate chain (e.g. wasm → hls). See `streaming-protocol-selection.md` Layer 3.
+
+Reconnect backoff (when the coordinator is consulted): initial 1s, doubling, capped at 30s, with a 10s global cooldown after backend HTTP 503 pressure. Tab visibility is owned by the orchestrator (`setTabVisible`), not a per-player `$effect`.
 
 ### Browser Support Matrix
 
