@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { apiRequest } from '$lib/api';
   import { showToast } from '$lib/toast';
-  import { detectWebCodecs, getWebCodecsUnavailableReason, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
+  import { detectWebCodecs, getWebCodecsUnavailableReason, detectWasmH265, probeMSEH265 } from '$lib/webcodecs-player/capabilities';
   import { getCameraProtocolOverride, setCameraProtocolOverride } from '$lib/preferences';
 
   export type StreamingProtocol = 'wasm' | 'hls' | 'll-hls' | 'webrtc' | 'flv' | 'mjpeg';
@@ -47,9 +47,21 @@
   let tooltipId = $state<string | null>(null);
   let dropdownEl: HTMLDivElement | undefined = $state();
 
-  let isH265 = $derived((cameraEncoding || '').toLowerCase() === 'h265');
+  // The backend's runtime-probed encoding (authoritative — it read the live
+  // recorder). The stored metadata `cameraEncoding` can be stale/wrong (e.g. an
+  // ONVIF camera configured as h264 whose actual stream is h265). Until the
+  // /protocols response arrives this is null and we fall back to the prop.
+  let probedEncoding: string | null = $state(null);
+  let isH265 = $derived(
+    (probedEncoding ?? cameraEncoding ?? '').toLowerCase() === 'h265',
+  );
   let browserSupportsWasm = $state(false);
   let browserSupportsWasmH265 = $state(false);
+  // Whether MSE can actually buffer hvc1 (probed, not isTypeSupported — see
+  // capabilities.ts). When false on an H.265 camera, HLS/LL-HLS/FLV render black
+  // (they all run through MSE/hls.js or mpegts.js), so they must be marked
+  // unavailable and the default must not land on them.
+  let browserSupportsH265MSE = $state(false);
   let wasmUnavailableReason: string | null = $state(null);
 
   let protocolOptions = [
@@ -73,6 +85,12 @@
     if (protocol === 'wasm' && !browserSupportsWasm && !(isH265 && browserSupportsWasmH265)) return false;
     // H.265 cameras cannot use WebRTC
     if (protocol === 'webrtc' && isH265) return false;
+    // H.265 over HLS/LL-HLS/FLV needs real MSE H.265 support. isTypeSupported
+    // lies on Chromium/Edge, so gate on the probed result. Without it these
+    // protocols connect but render a permanent black screen.
+    if (isH265 && (protocol === 'hls' || protocol === 'll-hls' || protocol === 'flv') && !browserSupportsH265MSE) {
+      return false;
+    }
     return availableProtocols.includes(protocol);
   }
 
@@ -86,6 +104,9 @@
     if (protocol === 'webrtc' && isH265) {
       return t('live.protocol.tooltip.h265Note');
     }
+    if (isH265 && (protocol === 'hls' || protocol === 'll-hls' || protocol === 'flv') && !browserSupportsH265MSE) {
+      return 'Browser MSE cannot decode H.265';
+    }
     if (!availableProtocols.includes(protocol)) {
       const backendReason = protocolReasons[protocol];
       if (backendReason) return backendReason;
@@ -98,6 +119,12 @@
     loading = true;
     try {
       const result = await apiRequest<ProtocolsResponse>(`/cameras/${cameraId}/protocols`);
+      // The backend probed the REAL codec from the live recorder. This outranks
+      // the stored metadata (cameraEncoding), which can be stale/wrong — e.g. an
+      // ONVIF camera configured as h264 whose stream is actually h265. Using the
+      // stale value here defeats the H.265 MSE gate below and lets FLV/HLS be
+      // selected → permanent black screen.
+      if (result.encoding) probedEncoding = result.encoding;
       availableProtocols = result.protocols
         .filter(p => p.Available)
         .map(p => p.Protocol);
@@ -119,9 +146,23 @@
       const stored = getCameraProtocolOverride(cameraId);
       if (stored && stored !== selected && isAvailable(stored as StreamingProtocol)) {
         onchange?.(stored as StreamingProtocol);
-      } else if (!stored && result.default && result.default !== selected && isAvailable(result.default as StreamingProtocol)) {
-        // No override — apply the backend default once.
-        onchange?.(result.default as StreamingProtocol);
+      } else if (!stored) {
+        // No override — pick the default to show. Prefer the backend's
+        // codec-aware default, but only if it's actually playable in THIS
+        // browser (isAvailable folds in the MSE H.265 gate). If the backend
+        // default isn't playable here (e.g. H.265 + Chromium where HLS/FLV
+        // can't decode via MSE), fall back through a latency-ordered list to
+        // the first available protocol — otherwise the cell stays on the
+        // initial HLS/MSE player and renders a permanent black screen.
+        const backendDefault = result.default as StreamingProtocol | undefined;
+        const fallbackOrder: StreamingProtocol[] = ['wasm', 'flv', 'll-hls', 'hls', 'webrtc', 'mjpeg'];
+        let chosen: StreamingProtocol | undefined;
+        if (backendDefault && isAvailable(backendDefault)) {
+          chosen = backendDefault;
+        } else {
+          chosen = fallbackOrder.find((p) => isAvailable(p));
+        }
+        if (chosen && chosen !== selected) onchange?.(chosen);
       }
     } catch (e) {
       console.warn('Failed to load protocols:', e);
@@ -189,12 +230,17 @@
     tooltipId = tooltipId === id ? null : id;
   }
 
-  onMount(() => {
+  onMount(async () => {
     browserSupportsWasm = detectWebCodecs();
     browserSupportsWasmH265 = detectWasmH265();
     if (!browserSupportsWasm) {
       wasmUnavailableReason = getWebCodecsUnavailableReason();
     }
+    // Authoritative MSE H.265 probe BEFORE loadProtocols() — the default-protocol
+    // selection below calls isAvailable(), which must know whether MSE can really
+    // buffer hvc1 (false on Chromium/Edge) to avoid defaulting an H.265 camera to
+    // HLS/FLV (black screen). Cached in sessionStorage, so near-instant on repeat.
+    browserSupportsH265MSE = await probeMSEH265();
     loadProtocols();
     document.addEventListener('click', handleClickOutside);
     return () => {

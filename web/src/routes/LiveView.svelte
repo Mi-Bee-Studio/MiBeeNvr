@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, apiRequest } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -28,6 +28,11 @@
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   let streamingProtocol = $state<StreamingProtocol>('hls');
   let switchingProtocol = $state(false);
+  // Backend-runtime-probed codec (authoritative). The stored camera.encoding can
+  // be stale/wrong (e.g. an ONVIF camera configured as h264 whose stream is
+  // actually h265); this is what the WasmPlayer codec prop and the
+  // ProtocolSwitcher H.265 gate must use, or H.265 gets misrouted to FLV/HLS.
+  let probedEncoding = $state<string>('');
 
   // Lazy-loaded WasmPlayer component
   let WasmPlayerComponent = $state<any>(null);
@@ -97,6 +102,16 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      // Fetch the backend's runtime-probed codec so the WasmPlayer codec prop
+      // and the ProtocolSwitcher H.265 gate use the REAL codec, not the stored
+      // (possibly stale/wrong) camera.encoding. Non-fatal: if this fails we fall
+      // back to the metadata, which is correct for most cameras.
+      try {
+        const resp = await apiRequest<{ encoding?: string }>(`/cameras/${cameraId}/protocols`);
+        if (resp.encoding) probedEncoding = resp.encoding.toLowerCase();
+      } catch {
+        // keep probedEncoding = '' → callers fall back to camera.encoding
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : t('live.failedLoadCamera');
       camera = null;
@@ -226,7 +241,7 @@
             <!-- Protocol Switcher -->
             <ProtocolSwitcher
               cameraId={camera.id}
-              cameraEncoding={camera.encoding || camera.stream_encoding || ''}
+              cameraEncoding={probedEncoding || camera.encoding || camera.stream_encoding || ''}
               selected={streamingProtocol}
               onchange={handleProtocolChange}
             />
@@ -265,7 +280,7 @@
                 <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
-                  codec={(camera.encoding || camera.stream_encoding || '').toLowerCase()}
+                  codec={(probedEncoding || camera.encoding || camera.stream_encoding || '').toLowerCase()}
                   expanded={true}
                   onFallbackNeeded={handleWasmFallback}
                 />

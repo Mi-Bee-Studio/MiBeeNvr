@@ -24,7 +24,11 @@ Requiring the user to pick one "default protocol" in Settings that's wrong for s
 
 `GET /api/cameras/{id}/protocols` (`internal/api/handler.go:handleCameraProtocols`) does three things:
 
-1. **Probes the real codec** — reads the *running recorder's* actual codec, not the DB-stored value. ONVIF cameras lie (e.g. advertise H.264 but stream H.265); the recorder's `detectEncoding` (RTSP DESCRIBE) is authoritative.
+1. **Probes the real codec** — resolved in this priority order (the DB-stored value can be stale/wrong, e.g. a xiaomi camera stored as h264 that actually streams h265):
+   - **① Running recorder's probed value** (authoritative) — from real video packets via `getCodecParams(rec)` (RTSP DESCRIBE for ONVIF; first-packet codec ID for xiaomi). But returns empty before the first packet arrives, and during a xiaomi P2P reconnect (its codec field resets).
+   - **② HLS muxer frozen value fallback** (`hls.Manager.CodecFor(id)`) — the HLS muxer bakes the codec into the track at stream-start and **keeps it across recorder reconnects**. So when the recorder probe is empty, this covers the reconnect window and prevents the frontend from flickering back to the stale DB value and misrouting to a black screen. Available only while an HLS stream entry exists for the camera (not after it was never started / idle-evicted).
+   - **③ DB-stored value** — last resort.
+   - ONVIF cameras lie (e.g. advertise H.264 but stream H.265); the recorder probe is authoritative.
 2. **Checks stream handler capabilities** — asks each registered handler `CanHandle(codec)`:
    - WebRTC: H.264 only
    - FLV: H.264 only (mpegts.js can't decode H.265 in the browser)
@@ -53,8 +57,9 @@ Requiring the user to pick one "default protocol" in Settings that's wrong for s
 On mount, `Surveillance.svelte` fetches `/api/cameras/{id}/protocols` for each selected camera **in parallel** (`Promise.allSettled`), caching results in a `Map<cameraId, ProtocolsResponse>`. This is **non-blocking**: cameras render immediately with the legacy default and re-resolve once responses arrive. Failures store `null` (fall back to legacy default, never block the grid).
 
 Browser capabilities are detected once:
-- `detectMSEH265()` — can MediaSource decode H.265? (false on Linux desktop, Windows without HEVC extensions)
+- `probeMSEH265()` / `detectMSEH265()` — can MediaSource decode H.265? **Note**: `MediaSource.isTypeSupported('hvc1')` is a **false positive** on Chromium/Edge (the OS HEVC decoder is registered for native `<video>` playback, so MSE accepts hvc1 bytes but never buffers them → black screen). So we use the authoritative probe `probeMSEH265()`: create a throwaway hvc1 SourceBuffer, append a real HEVC init segment, check `video.buffered`. Result cached in sessionStorage. Until the probe resolves, `detectMSEH265()` conservatively returns false. (false on Linux desktop, Windows without HEVC extensions)
 - `detectWebCodecs()` — is `VideoDecoder` available? (requires HTTPS or localhost)
+- `detectWasmH265()` — is libde265 WASM available? (the only reliable H.265 decode path on plain HTTP, rendered via Canvas2D)
 
 ### Layer 3 — `getCameraMode(camera)` decision cascade
 
@@ -118,8 +123,9 @@ A user can pin a specific protocol to one camera via the **ProtocolSwitcher** on
 
 | File | Role |
 |------|------|
-| `internal/api/handler.go` `handleCameraProtocols` | Backend: probes codec, checks handlers, computes default |
-| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | Per-handler codec gating |
+| `internal/api/handler.go` `handleCameraProtocols` | Backend: probes codec (recorder → HLS muxer fallback → DB), checks handlers, computes default |
+| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | Per-handler codec gating; `getCodecParams` reads the recorder's real codec via `model.HLSProvider.CodecParams()` |
+| `internal/hls/manager.go` `CodecFor` | Query the HLS muxer's frozen codec (the reconnect-safe fallback source) |
 | `web/src/lib/stream-selection.ts` `pickCameraMode` / `fallbackChain` / `nextAfter` | Pure decision logic (unit-tested) |
 | `web/src/routes/Surveillance.svelte` `getCameraMode` / `handleProtocolFailed` | Grid integration: fetch, cache, resolve, demote |
 | `web/src/components/ProtocolSwitcher.svelte` | LiveView per-camera override (the only override writer) |

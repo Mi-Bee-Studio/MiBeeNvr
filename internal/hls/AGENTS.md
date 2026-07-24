@@ -11,6 +11,7 @@ On-demand HLS streaming for live camera preview. Manages gohlslib muxers per cam
 | Start/stop HLS stream | `manager.go` `StartStream()`/`StopStream()` | Creates muxer, starts idle watchdog goroutine |
 | Write frames to HLS | `WriteH264()`/`WriteH265()` | Non-blocking send to channel; drops if buffer full |
 | Proxy HLS requests | `Handle()` | Forwards HTTP request to gohlslib muxer |
+| Query frozen codec | `CodecFor(cameraID)` | Returns the codec baked into the muxer at stream-start. Persists across recorder reconnects (unlike the recorder's `CodecParams()`, which resets on a xiaomi P2P blip). `ok=false` if no stream entry (never started / idle-evicted). Used by `handleCameraProtocols` as a fallback when the recorder probe is empty |
 | Sub-stream fallback | `StartSubStreamReader()` | Separate RTSP connection for low-bandwidth preview |
 | Change stream limits | Constants at top of file | `defaultMaxStreams=4`, `defaultIdleTimeout=60s`, `writeBufSize=180` |
 | Error types | `errors.go` | `ErrStreamNotFound`, `ErrMaxStreams` |

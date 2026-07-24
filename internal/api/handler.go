@@ -567,22 +567,36 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
-	// Probe the running recorder for the actual codec ONLY when the stored
-	// encoding is empty (auto-detect) or for ONVIF cameras that may misreport
-	// their codec (some Hisilicon OEM devices report H264 via ONVIF but stream
-	// H265; their recorder's detectEncoding corrects this via RTSP DESCRIBE).
+	// Probe the running recorder for the actual codec. The recorder's value is
+	// authoritative — it is derived from real video packets (RTSP DESCRIBE for
+	// ONVIF; first-packet codec ID for xiaomi/ingest) — while the stored
+	// `encoding`/`stream_encoding` columns are user-configured and can be stale
+	// or wrong. A common case: a xiaomi camera configured (stored) as h264 whose
+	// stream is actually h265. Returning the stale h264 here routes the frontend
+	// to MSE-based HLS/FLV, which can't buffer hvc1 on Chromium → black screen.
 	//
-	// We deliberately do NOT unconditionally override the stored encoding: for
-	// non-ONVIF cameras (xiaomi, rtsp, ingest) the user-configured encoding is
-	// authoritative and a runtime probe can mislabel it (e.g. a Xiaomi camera
-	// configured as h264 but momentarily probing h265 during codec auto-detect),
-	// which collapses the protocol list and forces HLS — the playback
-	// black-screen regression (see git blame on this block, pre-67fc4ee9).
-	if h.camMgr != nil && (encoding == "" || strings.EqualFold(cam.Protocol, "onvif")) {
+	// The recorder returns an empty codec only before it has parsed the first
+	// real packet (its codec-OK flag is false), OR while it is mid-reconnect
+	// (xiaomi P2P resets its codec field on disconnect). The `codec != ""` guard
+	// preserves the stored value through that window — unless the HLS muxer can
+	// tell us the real codec, which it can: it freezes the codec at stream-start
+	// and keeps it across recorder reconnects (see hls.Manager.CodecFor). So when
+	// the recorder probe is empty, fall back to the HLS muxer's last-known codec
+	// before settling for the stored value. This keeps /protocols returning the
+	// correct h265 for an unstable xiaomi cam even during its P2P blips.
+	probedCodec := ""
+	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
 			if codec, _, _, _ := getCodecParams(rec); codec != "" {
-				encoding = string(codec)
+				probedCodec = string(codec)
 			}
+		}
+	}
+	if probedCodec != "" {
+		encoding = probedCodec
+	} else if h.hlsMgr != nil {
+		if codec, ok := h.hlsMgr.CodecFor(id); ok && codec != "" {
+			encoding = string(codec)
 		}
 	}
 

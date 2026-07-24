@@ -24,7 +24,11 @@
 
 `GET /api/cameras/{id}/protocols`（`internal/api/handler.go:handleCameraProtocols`）做三件事：
 
-1. **探测真实编码** — 读取**运行中 recorder** 的实际编码，不是 DB 存的值。ONVIF 摄像头会撒谎（声明 H.264 实际流 H.265）；recorder 的 `detectEncoding`（RTSP DESCRIBE）是权威。
+1. **探测真实编码** — 按以下优先级解析编码（DB 存的值可能过时或错误，例如小米摄像头存的是 h264 实际流 h265）：
+   - **① 运行中 recorder 的探测值**（权威）— 经 `getCodecParams(rec)` 从真实视频包得出（ONVIF 走 RTSP DESCRIBE；小米走首包 codec ID）。但在首包到达前、或小米 P2P 重连期间（其 codec 字段会重置）返回空。
+   - **② HLS muxer 冻结值兜底**（`hls.Manager.CodecFor(id)`）— HLS muxer 在流启动时把编码烤进 track，**recorder 重连期间也不丢**。所以 recorder 探测为空时用这个兜底，避免重连窗口期闪烁回 DB 的旧值导致前端误路由黑屏。仅当该摄像头有活跃 HLS 流条目时可用（从未启动 / 空闲淘汰后不可用）。
+   - **③ DB 存的值** — 最后保底。
+   - ONVIF 摄像头会撒谎（声明 H.264 实际流 H.265）；recorder 探测是权威。
 2. **查 stream handler 能力** — 遍历已注册的 handler，每个 `CanHandle(codec)`：
    - WebRTC：仅 H.264
    - FLV：仅 H.264（mpegts.js 浏览器端解不了 H.265）
@@ -53,8 +57,9 @@
 大屏 `onMount` 时为每个选中摄像头**并行**调 `getCameraProtocols(id)`（`Promise.allSettled`），缓存到 `Map<cameraId, ProtocolsResponse>`。**非阻塞**：摄像头先用 legacy 默认渲染，响应到了再重新解析。失败存 `null`（退回 legacy 默认，不阻塞大屏）。
 
 浏览器能力一次性检测：
-- `detectMSEH265()` — MSE 能否解 H.265？（Linux 桌面、无 HEVC 扩展的 Windows 为 false）
+- `probeMSEH265()` / `detectMSEH265()` — MSE 能否解 H.265？**注意**：`MediaSource.isTypeSupported('hvc1')` 在 Chromium/Edge 上是**假阳性**（OS 的 HEVC 解码器为原生 `<video>` 注册，MSE 接受 hvc1 字节却永不缓冲 → 黑屏）。因此用权威探测 `probeMSEH265()`：建一个临时 hvc1 SourceBuffer、追加真实 HEVC init segment、检查 `video.buffered`。结果缓存在 sessionStorage。未探测解析前 `detectMSEH265()` 保守返回 false。（Linux 桌面、无 HEVC 扩展的 Windows 为 false）
 - `detectWebCodecs()` — 有无 `VideoDecoder`？（需 HTTPS 或 localhost）
+- `detectWasmH265()` — libde265 WASM 是否可用？（plain HTTP 上 H.265 的唯一可靠解码路径，Canvas2D 渲染）
 
 ### 第 3 层 — `getCameraMode(camera)` 决策级联
 
@@ -118,8 +123,9 @@ handleProtocolFailed(cameraId, currentMode):
 
 | 文件 | 职责 |
 |------|------|
-| `internal/api/handler.go` `handleCameraProtocols` | 后端：探测编码、查 handler、算 default |
-| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | 每个 handler 的编码门控 |
+| `internal/api/handler.go` `handleCameraProtocols` | 后端：探测编码（recorder → HLS muxer 兜底 → DB）、查 handler、算 default |
+| `internal/api/handlers_stream.go` `getCodecParams` + `CanHandle` | 每个 handler 的编码门控；`getCodecParams` 经 `model.HLSProvider.CodecParams()` 读 recorder 真实编码 |
+| `internal/hls/manager.go` `CodecFor` | HLS muxer 冻结的编码查询（recorder 重连期间保真的兜底来源） |
 | `web/src/lib/stream-selection.ts` `pickCameraMode` / `fallbackChain` / `nextAfter` | 纯决策逻辑（有单测） |
 | `web/src/routes/Surveillance.svelte` `getCameraMode` / `handleProtocolFailed` | 大屏集成：拉取、缓存、解析、降级 |
 | `web/src/components/ProtocolSwitcher.svelte` | LiveView per-camera 覆盖（唯一覆盖写入者） |
