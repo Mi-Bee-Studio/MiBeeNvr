@@ -47,7 +47,14 @@
   let tooltipId = $state<string | null>(null);
   let dropdownEl: HTMLDivElement | undefined = $state();
 
-  let isH265 = $derived((cameraEncoding || '').toLowerCase() === 'h265');
+  // The backend's runtime-probed encoding (authoritative — it read the live
+  // recorder). The stored metadata `cameraEncoding` can be stale/wrong (e.g. an
+  // ONVIF camera configured as h264 whose actual stream is h265). Until the
+  // /protocols response arrives this is null and we fall back to the prop.
+  let probedEncoding: string | null = $state(null);
+  let isH265 = $derived(
+    (probedEncoding ?? cameraEncoding ?? '').toLowerCase() === 'h265',
+  );
   let browserSupportsWasm = $state(false);
   let browserSupportsWasmH265 = $state(false);
   // Whether MSE can actually buffer hvc1 (probed, not isTypeSupported — see
@@ -112,6 +119,12 @@
     loading = true;
     try {
       const result = await apiRequest<ProtocolsResponse>(`/cameras/${cameraId}/protocols`);
+      // The backend probed the REAL codec from the live recorder. This outranks
+      // the stored metadata (cameraEncoding), which can be stale/wrong — e.g. an
+      // ONVIF camera configured as h264 whose stream is actually h265. Using the
+      // stale value here defeats the H.265 MSE gate below and lets FLV/HLS be
+      // selected → permanent black screen.
+      if (result.encoding) probedEncoding = result.encoding;
       availableProtocols = result.protocols
         .filter(p => p.Available)
         .map(p => p.Protocol);

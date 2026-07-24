@@ -16,7 +16,7 @@
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { detectMSEH265, probeMSEH265, detectWebCodecs, detectWasmH265 } from '$lib/webcodecs-player/capabilities';
-  import { pickCameraMode, nextAfter, isAudioCapable, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
+  import { pickCameraMode, nextAfter, isAudioCapable, resolveEncoding, type CameraMode, type BrowserCaps, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
 
   let cameras = $state<Camera[]>([]);
@@ -635,7 +635,7 @@
                 <WasmPlayer
                   cameraId={camera.id}
                   cameraName={camera.name || camera.id}
-                  codec={(camera.encoding || camera.stream_encoding || '').toLowerCase()}
+                  codec={resolveEncoding(camera, (cameraProtocols.get(camera.id) ?? null) as ProtocolsResponse | null)}
                   expanded={expandedCameraId === camera.id}
                   tabVisible={tabVisible}
                   onFallbackNeeded={() => handleProtocolFailed(camera.id)}

@@ -935,6 +935,26 @@ func (m *Manager) IsActive(cameraID string) bool {
 	return ok
 }
 
+// CodecFor returns the video codec frozen into the HLS muxer for the given
+// camera at stream-start time. Unlike the recorder's CodecParams(), this value
+// persists across recorder reconnects (the muxer track is not torn down on a
+// P2P blip), so callers that need the codec while a recorder is mid-reconnect
+// (e.g. /protocols routing, which otherwise falls back to a stale DB value)
+// get the correct answer. ok is false when no HLS stream entry exists for the
+// camera (never started, idle-evicted, or server just restarted with no viewer).
+func (m *Manager) CodecFor(cameraID string) (codec model.Format, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, found := m.streams[cameraID]
+	if !found {
+		return "", false
+	}
+	if entry.isH265 {
+		return model.FormatH265, true
+	}
+	return model.FormatH264, true
+}
+
 // GetStreamStatus returns whether a stream is active for the given camera.
 // Returns (active, nil) — use IsActive() for simple boolean check.
 // This method is designed for API responses that include stream metadata.
