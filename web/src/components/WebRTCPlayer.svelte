@@ -66,6 +66,13 @@
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 5;
   const reconnectDelays = [2000, 4000, 8000, 16000, 32000];
+  // True only after a real video frame has actually played. ICE 'connected'
+  // fires even when the backend has no media to send (e.g. Xiaomi CS2 cameras
+  // where the WHEP handler accepts the PeerConnection but produces no frames),
+  // so we MUST NOT reset reconnectAttempts / restart the zombie detector on
+  // 'connected' alone — that reset is what made the zombie loop infinite
+  // (connected→reset→zombie→reconnect→connected→reset…). Reset only on a frame.
+  let firstFramePlayed = false;
 
   // Zombie detection
   let zombieInterval: ReturnType<typeof setInterval> | null = null;
@@ -156,6 +163,10 @@ let destroyed = false;
 
     const doReconnect = () => {
       reconnectTimer = null;
+      // Reset the frame flag for the new connection — a fresh PeerConnection
+      // hasn't delivered a frame yet. firstFramePlayed is set true again only
+      // when videoEl fires 'playing' for this new stream.
+      firstFramePlayed = false;
       destroyPeerConnection();
       initWebRTC();
     };
@@ -316,6 +327,17 @@ let destroyed = false;
       peerConnection.ontrack = (event) => {
         if (event.streams && event.streams[0] && videoEl) {
           videoEl.srcObject = event.streams[0];
+          // A frame actually playing is the ONLY reliable signal that this
+          // protocol works for this camera. Mark firstFramePlayed so the zombie
+          // detector + reconnectAttempts reset can proceed. ICE 'connected'
+          // alone is NOT sufficient (Xiaomi CS2: PeerConnection connects but
+          // the backend never produces media).
+          const onPlaying = () => {
+            firstFramePlayed = true;
+            reconnectAttempts = 0;
+            videoEl?.removeEventListener('playing', onPlaying);
+          };
+          videoEl.addEventListener('playing', onPlaying);
           videoEl.play().catch(() => {});
         }
       };
@@ -326,7 +348,14 @@ let destroyed = false;
         switch (state) {
           case 'connected':
             webrtcState = 'connected';
-            reconnectAttempts = 0;
+            // Do NOT reset reconnectAttempts or start zombie detection here —
+            // 'connected' fires even with no media (Xiaomi CS2). Wait for a
+            // real frame (firstFramePlayed, set in ontrack's 'playing' handler)
+            // before trusting the connection. Start zombie detection anyway so
+            // a frame-less 'connected' gets caught and demoted.
+            if (firstFramePlayed) {
+              reconnectAttempts = 0;
+            }
             startZombieDetector();
             break;
           case 'disconnected':
