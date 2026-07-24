@@ -75,17 +75,18 @@ func downloadModelFile(modelDir, filename string) {
 		fmt.Fprintf(os.Stderr, "Error creating file: %v\n", err)
 		os.Exit(1)
 	}
-	out.Close()
+	// NOTE: do NOT close `out` here — it is written to in the loop below.
+	// (A premature out.Close() here previously left a 0-byte file and caused
+	// "file already closed" on the first Write.)
+	defer out.Close()
 
 	resp, err := http.Get(modelURL)
 	if err != nil {
-		out.Close()
 		fmt.Fprintf(os.Stderr, "Error downloading model: %v\n", err)
 		os.Exit(1)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		out.Close()
 		fmt.Fprintf(os.Stderr, "Download failed: HTTP %d\n", resp.StatusCode)
 		os.Exit(1)
 	}
