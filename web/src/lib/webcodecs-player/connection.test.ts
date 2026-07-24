@@ -568,6 +568,54 @@ describe('reconnect behavior (no coordinator)', () => {
     simulateError(getLastWS());
     expect(fn).not.toHaveBeenCalledWith('error');
   });
+
+  it('should cap handshake-failure reconnects (closed-before-established storm) → report offline', () => {
+    // Regression test for the 10k+/min WS storm: a camera whose WS handshake
+    // is rejected by the server (recorder can't serve WS stream) loops
+    // connect→close(before open)→reconnect→connect forever, bypassing the
+    // zombie detector (which only runs after OPEN). After MAX_CONNECT_FAILURES
+    // consecutive closes-without-open, stop and report offline so the
+    // orchestrator demotes to the next protocol.
+    const onCameraOffline = vi.fn();
+    const onStateChange = vi.fn();
+    const cm = createManager({ onCameraOffline, onStateChange });
+    cm.connect();
+
+    // Simulate MAX_CONNECT_FAILURES+1 handshake rejections: close each socket
+    // WITHOUT ever calling onopen (so _socketOpened stays false).
+    for (let i = 0; i <= 5; i++) {
+      const ws = mockWSInstances[mockWSInstances.length - 1];
+      // never simulateOpen — handshake fails
+      simulateClose(ws, 1006);
+      vi.advanceTimersByTime(2000); // coordinator-less reconnect is immediate, but advance any timers
+    }
+
+    // After the cap, offline reported — orchestrator demotes.
+    expect(onCameraOffline).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenLastCalledWith('offline');
+    // And critically: no further reconnect attempts beyond the cap.
+    const attemptsAtCap = mockWSInstances.length;
+    vi.advanceTimersByTime(30000);
+    expect(mockWSInstances.length).toBe(attemptsAtCap);
+  });
+
+  it('should reset handshake-failure count when a connection finally opens', () => {
+    const onCameraOffline = vi.fn();
+    const cm = createManager({ onCameraOffline });
+    cm.connect();
+    // A few handshake failures...
+    simulateClose(getLastWS(), 1006);
+    cm.connect(); // immediate reconnect (no coordinator)
+    simulateClose(getLastWS(), 1006);
+    cm.connect();
+    // ...then a successful handshake — resets the counter.
+    simulateOpen();
+    // A later normal drop should NOT immediately hit the offline cap.
+    simulateClose(getLastWS(), 1006);
+    cm.connect();
+    simulateOpen();
+    expect(onCameraOffline).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Reconnect behavior (with coordinator) ──────────────────────────────────

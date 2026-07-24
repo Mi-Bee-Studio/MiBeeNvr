@@ -63,6 +63,14 @@ const DEFAULT_ZOMBIE_MAX_MISSES = 3;
  * the WS storm for a camera whose socket opens but never produces media.
  */
 const MAX_ZOMBIE_RECONNECTS = 3;
+/**
+ * Max consecutive connect attempts whose socket CLOSES before reaching OPEN
+ * (handshake rejected by server) before we give up and report offline. Caps the
+ * "closed before connection is established" storm for cameras whose recorder
+ * can't serve a WS stream. 5 failures ≈ a few seconds of coordinator-throttled
+ * retries, then demote.
+ */
+const MAX_CONNECT_FAILURES = 5;
 
 // ─── ConnectionManager ───────────────────────────────────────────────────
 
@@ -96,6 +104,21 @@ export class ConnectionManager {
   // produces no media) loops forever — the "closed before connection is
   // established" WS storm (thousands of log lines). Reset on any frame.
   private _zombieReconnectCount = 0;
+  // Count of consecutive connect attempts whose socket CLOSED before ever
+  // reaching OPEN (handshake rejected by the server — e.g. a camera whose
+  // recorder doesn't speak the WS stream protocol, so the WHEP/WS handler
+  // rejects/drops the upgrade). Without a cap this loops forever:
+  // connect→handshake-fail→onclose(non-1000)→_scheduleCoordinatedReconnect→
+  // connect→... — and crucially it bypasses the zombie detector (which only
+  // runs after OPEN), so the zombieReconnectCount cap never trips. This is the
+  // "WebSocket closed before the connection is established" storm (10k+/min).
+  // Capped at MAX_CONNECT_FAILURES → report offline (failed) → orchestrator
+  // demotes to the next protocol (e.g. wasm→hls). Reset on a successful OPEN.
+  private _connectFailCount = 0;
+  // Whether the current socket's onopen fired (handshake completed). Reset at
+  // the start of each connect(); checked in onclose to distinguish a handshake
+  // rejection (never opened) from a post-open drop (zombie/reconnect territory).
+  private _socketOpened = false;
 
   // Visibility
   private _wasHidden = false;
@@ -154,6 +177,7 @@ export class ConnectionManager {
     // A fresh connect means the previous socket (if any) is being superseded;
     // any onclose it fires is part of the rotation, not a crash to recover from.
     this._intentionalClose = false;
+    this._socketOpened = false;
 
     let url = this._opts.url;
     if (this._opts.authToken) {
@@ -181,6 +205,11 @@ export class ConnectionManager {
         }
         this._setState('buffering');
         this._startZombieDetection();
+        this._socketOpened = true;
+        // Handshake succeeded — this protocol's transport works at the WS layer.
+        // Reset the handshake-failure counter (frames-not-arriving is the zombie
+        // detector's job, tracked separately).
+        this._connectFailCount = 0;
         // Notify coordinator that reconnect succeeded
         if (this._opts.coordinator && this._opts.cameraId && this._coordinatedReconnectActive) {
           this._opts.coordinator.completeReconnect(this._opts.cameraId);
@@ -266,6 +295,22 @@ export class ConnectionManager {
             this._setState('disconnected');
           }
           return;
+        }
+
+        // Handshake-rejection storm guard: if this socket CLOSED before its
+        // onopen ever fired (server rejected the WS upgrade — e.g. a camera
+        // whose recorder can't serve the WS stream protocol), the loop below
+        // (_scheduleCoordinatedReconnect → connect → handshake-fail → here)
+        // would run forever and bypass the zombie detector (which only runs
+        // after OPEN). Cap consecutive handshake failures; on exceed, report
+        // offline so the orchestrator demotes to the next protocol.
+        if (!this._socketOpened) {
+          this._connectFailCount++;
+          if (this._connectFailCount > MAX_CONNECT_FAILURES) {
+            this._setState('offline');
+            this._opts.onCameraOffline?.();
+            return; // do NOT reconnect — let the orchestrator demote
+          }
         }
 
         this._scheduleCoordinatedReconnect();
