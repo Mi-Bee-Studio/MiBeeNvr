@@ -1182,6 +1182,7 @@
   "surveillance.upgraded": "已升级到 {protocol}（更低延迟）",
   "surveillance.upgradeReverted": "已回退到 {protocol}（升级后不稳定）",
   "surveillance.title": "监控大屏",
+  "surveillance.dragToReorder": "拖动以调整顺序",
   "timelapse.batchMerge": "批量合并",
   "timelapse.dailyMerge": "每日合并",
   "timelapse.deleteOriginal": "转换后删除原始帧",

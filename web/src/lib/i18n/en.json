@@ -1182,6 +1182,7 @@
   "surveillance.upgraded": "Upgraded to {protocol} for lower latency",
   "surveillance.upgradeReverted": "Reverted to {protocol} (upgrade was unstable)",
   "surveillance.title": "Surveillance",
+  "surveillance.dragToReorder": "Drag to reorder",
   "timelapse.batchMerge": "Batch Merge",
   "timelapse.dailyMerge": "Daily Merge",
   "timelapse.deleteOriginal": "Delete original frames after conversion",

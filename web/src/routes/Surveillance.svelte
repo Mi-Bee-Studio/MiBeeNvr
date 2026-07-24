@@ -4,7 +4,7 @@
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, GripVertical } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import CameraPlayer from '../components/CameraPlayer.svelte';
   import { formatDate } from '$lib/format';
@@ -18,6 +18,17 @@
   let loading = $state(true);
   let error = $state('');
   let expandedCameraId = $state<string | null>(null);
+
+  // Drag-and-drop reorder state. We use a handle-initiated drag so it
+  // doesn't collide with click/dblclick-to-expand. draggedIndex marks the
+  // cell being dragged; dragOverIndex marks the cell under the cursor (for
+  // the drop-target highlight). Both null when no drag is in progress.
+  let draggedIndex = $state<number | null>(null);
+  let dragOverIndex = $state<number | null>(null);
+  // handleDragIndex is the cell whose drag-handle is currently held down.
+  // Only that cell becomes draggable=true, so the rest of the cell body keeps
+  // click/dblclick-to-expand working (dragging doesn't swallow clicks).
+  let handleDragIndex = $state<number | null>(null);
 
   // Page Visibility — pause/resume all players when tab hidden/visible
   let tabVisible = $state(true);
@@ -233,6 +244,71 @@
   function shrinkToGrid() {
     expandedCameraId = null;
   }
+
+  // --- Drag-and-drop reorder ---
+
+  // Swapping two cells = swapping their position in the `cameras` array
+  // (render order) AND the `selectedCameraIds` array (persisted order).
+  // Camera identity is camera.id, so no player/orchestrator state is touched.
+  function reorderCameras(from: number, to: number) {
+    if (from === to || from < 0 || to < 0 || from >= cameras.length || to >= cameras.length) return;
+    const next = [...cameras];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    cameras = next;
+    // Keep selectedCameraIds in the same new order so persistence reflects it.
+    selectedCameraIds = next.map((c) => c.id);
+    saveCameraIds(selectedCameraIds);
+  }
+
+  function handleDragStart(index: number, e: DragEvent) {
+    draggedIndex = index;
+    // Required by some browsers for the drag to actually start / carry data.
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Firefox/Chrome need data set, or the drag is cancelled.
+      e.dataTransfer.setData('text/plain', String(index));
+    }
+  }
+
+  function handleDragOver(index: number, e: DragEvent) {
+    if (draggedIndex === null) return;
+    e.preventDefault(); // allow drop
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== index) dragOverIndex = index;
+  }
+
+  function handleDrop(index: number, e: DragEvent) {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) {
+      draggedIndex = null;
+      dragOverIndex = null;
+      return;
+    }
+    reorderCameras(draggedIndex, index);
+    draggedIndex = null;
+    dragOverIndex = null;
+  }
+
+  function handleDragEnd() {
+    draggedIndex = null;
+    dragOverIndex = null;
+    handleDragIndex = null;
+  }
+
+  // Grip handle: pressing it makes its cell draggable; releasing clears it.
+  // stopPropagation so the press never reaches the cell's click→expand handler.
+  function handleGripDown(index: number, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    handleDragIndex = index;
+  }
+
+  function handleGripUp(e: MouseEvent) {
+    e.stopPropagation();
+    handleDragIndex = null;
+  }
+
 
   function handleFullscreenChange() {
     if (!document.fullscreenElement) {
@@ -476,14 +552,14 @@
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
-        {#each cameras as camera, index}
+        {#each cameras as camera, index (camera.id)}
 {@const status = getStatusBadge(camera)}
           {@const mode = getCameraMode(camera)}
           {@const StatusIcon = status.icon}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)}"
+            class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)} {dragOverIndex === index && draggedIndex !== null && draggedIndex !== index ? 'cell-drop-target' : ''}"
             class:cell-expanded={expandedCameraId === camera.id}
             style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
             role="button"
@@ -492,6 +568,11 @@
             onclick={() => handleCellClick(camera, index)}
             onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
             ondblclick={() => handleCellDblClick(camera)}
+            draggable={handleDragIndex === index}
+            ondragstart={(e: DragEvent) => handleDragStart(index, e)}
+            ondragover={(e: DragEvent) => handleDragOver(index, e)}
+            ondrop={(e: DragEvent) => handleDrop(index, e)}
+            ondragend={handleDragEnd}
           >
             {#if mode === 'snapshot'}
               <!-- Snapshot thumbnail mode (HTTP_JPEG cameras) -->
@@ -579,6 +660,25 @@
               </span>
             {/if}
 
+            <!-- Drag handle — only in multi-cell, non-expanded mode. Pressing
+                 the handle makes this cell draggable (see handleDragIndex), so
+                 dragging never steals clicks from the cell body's expand. -->
+            {#if cameras.length > 1 && !expandedCameraId}
+              <button
+                type="button"
+                class="drag-handle absolute bottom-2 right-2 z-10 p-1 rounded-md bg-black/60 text-white/70 hover:text-white hover:bg-black/90 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
+                title={t('surveillance.dragToReorder')}
+                aria-label={t('surveillance.dragToReorder')}
+                onmousedown={(e: MouseEvent) => handleGripDown(index, e)}
+                onmouseup={handleGripUp}
+                onmouseleave={handleGripUp}
+                draggable="true"
+                ondragstart={(e: DragEvent) => { e.preventDefault(); }}
+              >
+                <GripVertical size={14} />
+              </button>
+            {/if}
+
             <!-- Health indicator dot + score -->
             {#if healthScores[camera.id] !== undefined}
               {@const hs = healthScores[camera.id]}
@@ -627,6 +727,18 @@
   /* Subtle hover lift on grid cells */
   .camera-grid-cell:not(.hidden):hover {
     opacity: 0.92;
+  }
+
+  /* Drop target highlight during drag — outline, not fill, so it stays visible
+     over any video content. */
+  .camera-grid-cell.cell-drop-target {
+    outline: 2px dashed var(--color-primary, #8b5cf6);
+    outline-offset: -4px;
+  }
+
+  /* The cell being dragged fades so the user sees it "lift". */
+  .camera-grid-cell[draggable='true']:active {
+    opacity: 0.5;
   }
 
   /* Fade-in + scale-up when a cell expands */
