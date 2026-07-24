@@ -64,16 +64,131 @@ export async function detectHEVC(): Promise<boolean> {
  * "HEVC Video Extensions" pack — FLV/HLS players connect but render a black
  * screen. Detecting this lets the caller auto-degrade to a working protocol.
  *
- * Synchronous and side-effect free. Returns false when MediaSource is absent.
+ * IMPORTANT: this is a *fast* check and historically relied on
+ * `MediaSource.isTypeSupported('hvc1')`. That is a KNOWN FALSE POSITIVE on
+ * Chromium/Edge: `isTypeSupported('hvc1')` returns true (because the OS HEVC
+ * decoder is registered for *native* `<video>` playback) but the MSE
+ * SourceBuffer silently drops the appended fMP4 bytes — `video.buffered`
+ * stays empty and hls.js/FLV render a permanent black screen for H.265.
+ *
+ * To avoid the false positive, this sync function returns the result of the
+ * authoritative async probe once it has run (cached). Before the probe runs
+ * it falls back to false (conservative: route H.265 to the wasm/WebCodecs
+ * player, which always works), never to the isTypeSupported lie. Callers that
+ * can await should use probeMSEH265() once at startup and read the cached
+ * value afterwards via detectMSEH265().
  */
 export function detectMSEH265(): boolean {
   if (typeof MediaSource === 'undefined' || MediaSource === null) return false;
-  try {
-    // hvc1.1.6.L93.B0 = HEVC Main profile, level 3.1 — a widely testable codec string.
-    return MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"');
-  } catch {
+  return cachedMSEH265Probe;
+}
+
+// Cached result of probeMSEH265(). Starts false (conservative) so that before
+// the async probe completes, H.265 is NOT assumed to work over MSE.
+let cachedMSEH265Probe = false;
+let mseH265ProbePromise: Promise<boolean> | null = null;
+
+// Minimal static HEVC (hvc1) fMP4 init segment — ftyp + moov(hvc1 + hvcC).
+// Used only to test whether a SourceBuffer actually retains appended hvc1
+// data. Codec profile/level are irrelevant to the buffer-acceptance test.
+const H265_INIT_SEGMENT_B64 =
+  'AAAAIGZ0eXBtcDQyAAAAAW1wNDFtcDQyaXNvbWhsc2YAAALVbW9vdgAAAGxtdmhkAAAA' +
+  'AAAAAAAAAAAAAAAAAAAD6AAAAAAAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAA' +
+  'AAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+  'AP////8AAAAI5dHJhawAAAFx0a2hkAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAA' +
+  'AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAQAAAAAo' +
+  'AAAAFoAAAABAABHVbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAFfkAAAAABVxAAAAAAAA' +
+  'LWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABgG1pbmYA' +
+  'AAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwg' +
+  'AAAAAQAAAUBzdGJsAAAA9HN0c2QAAAAAAAAAAQAAAORodmMxAAAAAAAAAAEAAAAAAAAA' +
+  'AAAAAAAAAAACgAFoABIAAAASAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+  'AAAAAAAAAAAGP//AAAAemh2Y0MBAUAAAAADAJAAAAOW8AD8/fj4AAATAyAAAQAYQAEMA' +
+  'f//IUAAAAMAkAAAAwAAAwCWJQJAIQABAC1CAQEhQAAAAwCQAAADAAADAJagAUAgBaFnr' +
+  'uRKFzUBAQEEAAADAAQAAAMAUCAiAAEAB0QBwPfA5tkAAAAUYnRydAAAAAAAD0JAAA9CQ' +
+  'AAAABBzdHRzAAAAAAAAAAAAAAAQc3RzYwAAAAAAAAAAAAAAFHN0c3oAAAAAAAAAAAAA' +
+  'AAAAAAAAQc3RjbwAAAAAAAAAAAAAAKG12ZXgAAAAgdHJleAAAAAAAAAABAAAAAQAAAA' +
+  'AAAAAAAAAA';
+
+/**
+ * Authoritative MSE H.265 probe. Creates a throwaway MediaSource + hvc1
+ * SourceBuffer, appends a real HEVC init segment, and checks whether the
+ * video element gains a buffered range. On Chromium/Edge the appendBuffer
+ * call completes without error but produces no buffered range → returns
+ * false (the isTypeSupported false positive). On Safari and any environment
+ * with genuine MSE H.265 support, a range appears → returns true.
+ *
+ * Result is cached for the page lifetime (and in sessionStorage so a reload
+ * within the session is free). Safe to call repeatedly; only the first call
+ * does the actual probe.
+ *
+ * @returns true iff MSE can actually buffer/play hvc1 data.
+ */
+export async function probeMSEH265(force = false): Promise<boolean> {
+  if (typeof MediaSource === 'undefined' || MediaSource === null) {
+    cachedMSEH265Probe = false;
     return false;
   }
+  // Fast path: isTypeSupported must at least claim it; if it doesn't, skip.
+  let claimed = false;
+  try { claimed = MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"'); } catch { claimed = false; }
+  if (!claimed) { cachedMSEH265Probe = false; return false; }
+
+  if (!force) {
+    // Session-cached result from a previous probe this session.
+    try {
+      const sc = sessionStorage.getItem('mibee_mse_h265_probe');
+      if (sc === '1') { cachedMSEH265Probe = true; return true; }
+      if (sc === '0') { cachedMSEH265Probe = false; return false; }
+    } catch { /* sessionStorage may be unavailable */ }
+    if (mseH265ProbePromise) return mseH265ProbePromise;
+  }
+
+  mseH265ProbePromise = (async () => {
+    let result = false;
+    let ms: MediaSource | null = null;
+    let sb: SourceBuffer | null = null;
+    let video: HTMLVideoElement | null = null;
+    let objectUrl = '';
+    try {
+      ms = new MediaSource();
+      video = document.createElement('video');
+      video.muted = true;
+      objectUrl = URL.createObjectURL(ms);
+      video.src = objectUrl;
+      // Await sourceopen.
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('sourceopen timeout')), 2000);
+        ms!.addEventListener('sourceopen', () => { clearTimeout(t); resolve(); }, { once: true });
+      });
+      sb = ms.addSourceBuffer('video/mp4; codecs="hvc1.1.6.L93.B0"');
+      // Decode the init segment and append; wait for updateend (or error).
+      const bin = atob(H265_INIT_SEGMENT_B64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        sb!.addEventListener('updateend', done, { once: true });
+        sb!.addEventListener('error', done, { once: true });
+        try { sb!.appendBuffer(bytes); } catch { done(); }
+        setTimeout(done, 1500);
+      });
+      // The decisive test: did MSE actually retain the hvc1 data as a
+      // buffered range? An empty range (Chromium/Edge false positive) → false.
+      let bufferedLength = 0;
+      try { bufferedLength = video.buffered.length; } catch { /* ignore */ }
+      result = bufferedLength > 0;
+    } catch {
+      result = false;
+    } finally {
+      try { if (sb && ms && ms.readyState === 'open') ms.removeSourceBuffer(sb); } catch { /* ignore */ }
+      try { if (video) video.src = ''; } catch { /* ignore */ }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+    cachedMSEH265Probe = result;
+    try { sessionStorage.setItem('mibee_mse_h265_probe', result ? '1' : '0'); } catch { /* ignore */ }
+    return result;
+  })();
+  return mseH265ProbePromise;
 }
 
 /** Check if WebGPU API is available. */

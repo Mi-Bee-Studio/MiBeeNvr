@@ -76,40 +76,53 @@ describe('detectHEVC', () => {
 });
 
 // ---------------------------------------------------------------------------
-// detectMSEH265
+// detectMSEH265 / probeMSEH265
 // ---------------------------------------------------------------------------
+// detectMSEH265() is now a thin sync accessor over the cached result of the
+// authoritative async probeMSEH265() — it must NOT trust isTypeSupported
+// (which is a known false positive for MSE H.265 on Chromium/Edge). Until the
+// probe runs it conservatively returns false so H.265 is routed to the wasm
+// player rather than to the black-screen HLS/MSE path.
 describe('detectMSEH265', () => {
-  it('should return true when MediaSource.isTypeSupported returns true', () => {
+  beforeEach(() => {
+    // Reset the in-module cache between tests by reloading — but the module
+    // caches at module scope, so we accept the default-false baseline here and
+    // test the cached-accessor semantics.
     vi.stubGlobal('MediaSource', {
       isTypeSupported: vi.fn().mockReturnValue(true),
     });
-    expect(detectMSEH265()).toBe(true);
   });
 
-  it('should return false when MediaSource.isTypeSupported returns false', () => {
-    vi.stubGlobal('MediaSource', {
-      isTypeSupported: vi.fn().mockReturnValue(false),
-    });
+  it('returns false before any probe has run (conservative — avoids HLS black screen)', () => {
+    // isTypeSupported claims true, but detectMSEH265 must NOT reflect that lie
+    // until probeMSEH265() has confirmed MSE actually buffers hvc1.
     expect(detectMSEH265()).toBe(false);
   });
 
-  it('should return false when MediaSource is undefined', () => {
+  it('returns false when MediaSource is undefined', () => {
     vi.stubGlobal('MediaSource', undefined);
     expect(detectMSEH265()).toBe(false);
   });
 
-  it('should return false when MediaSource is null', () => {
+  it('returns false when MediaSource is null', () => {
     vi.stubGlobal('MediaSource', null);
     expect(detectMSEH265()).toBe(false);
   });
+});
 
-  it('should return false when isTypeSupported throws', () => {
+describe('probeMSEH265', () => {
+  it('returns false when MediaSource is undefined', async () => {
+    vi.stubGlobal('MediaSource', undefined);
+    const { probeMSEH265 } = await import('./capabilities');
+    expect(await probeMSEH265(true)).toBe(false);
+  });
+
+  it('returns false when isTypeSupported returns false (fast path)', async () => {
     vi.stubGlobal('MediaSource', {
-      isTypeSupported: vi.fn().mockImplementation(() => {
-        throw new Error('not supported');
-      }),
+      isTypeSupported: vi.fn().mockReturnValue(false),
     });
-    expect(detectMSEH265()).toBe(false);
+    const { probeMSEH265 } = await import('./capabilities');
+    expect(await probeMSEH265(true)).toBe(false);
   });
 });
 

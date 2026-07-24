@@ -42,7 +42,7 @@ const H265_RESP: ProtocolsResponse = {
   ],
 };
 
-const FULL_CAPS = { h265MSE: true, webCodecs: true };
+const FULL_CAPS = { h265MSE: true, webCodecs: true, wasmH265: true };
 
 describe('pickCameraMode', () => {
   it('short-circuits JPEG cameras to mjpeg before any HLS gate', () => {
@@ -88,6 +88,27 @@ describe('pickCameraMode', () => {
     const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
     const resp: ProtocolsResponse = { ...H265_RESP, default: 'flv' };
     expect(pickCameraMode(cam, resp, FULL_CAPS, { override: 'flv' })).toBe('flv');
+  });
+
+  it('routes H.265 HLS/LL-HLS default to wasm when MSE cannot play it (the Chromium/Edge fix)', () => {
+    // Regression guard: isTypeSupported('hvc1') is a false positive on
+    // Chromium/Edge, so h265MSE=false even though the browser "claims" support.
+    // The backend default (hls/ll-hls) would render a permanent black screen via
+    // MSE; the player must auto-degrade to the wasm (libde265) path instead.
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    expect(pickCameraMode(cam, H265_RESP, { h265MSE: false, webCodecs: false, wasmH265: true })).toBe('wasm');
+    const llResp: ProtocolsResponse = { ...H265_RESP, default: 'll-hls' };
+    expect(pickCameraMode(cam, llResp, { h265MSE: false, webCodecs: false, wasmH265: true })).toBe('wasm');
+  });
+
+  it('keeps H.265 on HLS when MSE truly supports it', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    expect(pickCameraMode(cam, H265_RESP, FULL_CAPS)).toBe('hls');
+  });
+
+  it('keeps H.265 on HLS when MSE lacks it AND wasm is unavailable (no better option)', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    expect(pickCameraMode(cam, H265_RESP, { h265MSE: false, webCodecs: false, wasmH265: false })).toBe('hls');
   });
 
   it('ignores a wasm override when WebCodecs is unavailable (falls to backend default)', () => {
@@ -191,9 +212,16 @@ describe('isProtocolUsable', () => {
     expect(isProtocolUsable('mjpeg', 'h264', EMPTY_CAPS, avail)).toBe(false);
   });
 
-  it('always allows hls/ll-hls', () => {
-    expect(isProtocolUsable('hls', 'h265', EMPTY_CAPS, avail)).toBe(true);
+  it('gates hls/ll-hls H.265 on real MSE support (isTypeSupported is a false positive)', () => {
+    // H.264 over HLS is always playable (native decode).
     expect(isProtocolUsable('ll-hls', 'h264', EMPTY_CAPS, avail)).toBe(true);
+    expect(isProtocolUsable('hls', 'h264', EMPTY_CAPS, avail)).toBe(true);
+    // H.265 over HLS needs real MSE H.265 support — without it hls.js connects
+    // via MSE but the SourceBuffer silently drops hvc1 bytes (black screen).
+    expect(isProtocolUsable('hls', 'h265', EMPTY_CAPS, avail)).toBe(false);
+    expect(isProtocolUsable('ll-hls', 'h265', EMPTY_CAPS, avail)).toBe(false);
+    expect(isProtocolUsable('hls', 'h265', FULL_CAPS, avail)).toBe(true);
+    expect(isProtocolUsable('ll-hls', 'h265', FULL_CAPS, avail)).toBe(true);
   });
 });
 
