@@ -120,14 +120,9 @@ export class ConnectionManager {
   // rejection (never opened) from a post-open drop (zombie/reconnect territory).
   private _socketOpened = false;
 
-  // Visibility
-  private _wasHidden = false;
-  private _visibilityHandler: (() => void) | null = null;
   // Backpressure
   private _paused = false;
   private _frameDropCount = 0;
-
-  // Visibility
 
   constructor(opts: ConnectionManagerOptions) {
     this._opts = {
@@ -135,7 +130,13 @@ export class ConnectionManager {
       zombieMaxMisses: DEFAULT_ZOMBIE_MAX_MISSES,
       ...opts,
     };
-    this._bindVisibility();
+    // NOTE: visibility is NOT handled here. There used to be a _bindVisibility
+    // that listened to document.visibilitychange directly — but that created a
+    // THREE-way conflict with WasmPlayer's tabVisible $effect AND the Player
+    // Orchestrator's setTabVisible, all firing on the same event, each closing
+    // / reopening the WS → reactive loop → "closed before established" storm +
+    // console freeze. Visibility is now owned solely by the orchestrator
+    // (setTabVisible → route pauses/resumes players). Do not re-add it here.
   }
 
   // ─── Public API ────────────────────────────────────────────────────────
@@ -350,7 +351,6 @@ export class ConnectionManager {
     this._cancelCoordinatorRequest();
     this._closeWebSocket();
     this._stopZombieDetection();
-    this._unbindVisibility();
     this._paused = false;
   }
 
@@ -484,31 +484,10 @@ export class ConnectionManager {
   }
 
   // ─── Internal: Visibility ────────────────────────────────────────────
-
-  private _bindVisibility(): void {
-    this._visibilityHandler = () => {
-      if (this._destroyed) return;
-
-      if (document.hidden) {
-        this._wasHidden = true;
-      } else if (this._wasHidden) {
-        this._wasHidden = false;
-        this._opts.onFreezeFrame();
-        this._stopCoordinatedTimer();
-        this._closeWebSocket();
-        this._stopZombieDetection();
-        this.connect();
-      }
-    };
-    document.addEventListener('visibilitychange', this._visibilityHandler);
-  }
-
-  private _unbindVisibility(): void {
-    if (this._visibilityHandler) {
-      document.removeEventListener('visibilitychange', this._visibilityHandler);
-      this._visibilityHandler = null;
-    }
-  }
+  // REMOVED: ConnectionManager no longer binds its own visibilitychange
+  // listener. Visibility pause/resume is owned by the Player Orchestrator
+  // (setTabVisible) to avoid the three-way conflict that caused the WS storm.
+  // See the constructor note for the full rationale.
 }
 
 // ─── Inline CodecInfo decoder (avoids circular import, reuses protocol format) ───

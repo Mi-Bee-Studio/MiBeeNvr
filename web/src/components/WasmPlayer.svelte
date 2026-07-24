@@ -745,25 +745,19 @@ function handleWebGpuLost() {
     };
   });
 
-  // Visibility: pause when the tab is hidden, resume when visible. This effect
-  // MUST depend ONLY on `tabVisible` — never on `streamState`. The previous
-  // version read `streamState !== 'loading'` too, and since cm.connect() sets
-  // state to 'loading' internally, the effect re-ran in a loop: connect→loading
-  // →(state change to buffering)→effect re-run→connect again→"WebSocket closed
-  // before the connection is established" storm (92k+ log lines). The
-  // ConnectionManager.connect() is now idempotent (no-op if already
-  // OPEN/CONNECTING), so it's safe to call on every visibility transition
-  // without re-checking streamState.
-  $effect(() => {
-    const visible = tabVisible;
-    if (destroyed || !cm) return;
-    if (!visible) {
-      cm.disconnect();
-    } else {
-      captureFreezeFrame();
-      cm.connect();
-    }
-  });
+  // Visibility: REMOVED. There used to be a $effect here that read `tabVisible`
+  // and called cm.disconnect()/cm.connect() on every visibility change. But
+  // that created a multi-way conflict:
+  //   1. this effect (tabVisible prop → cm.disconnect/connect)
+  //   2. ConnectionManager's own _bindVisibility (document.visibilitychange)
+  //   3. the Player Orchestrator's setTabVisible (attemptUpgrade on all cameras)
+  // All three fired on the same visibilitychange event, each closing/reopening
+  // the WS or switching protocols → reactive loop → "closed before established"
+  // storm + console freeze. Visibility is now owned SOLELY by the orchestrator
+  // (Surveillance.svelte's visibilityHandler calls orchestrator.setTabVisible,
+  // which pauses/resumes via protocol-level decisions, not per-player WS
+  // toggling). ConnectionManager._bindVisibility was also removed. Do NOT
+  // re-add per-player visibility handling.
 
   // ─── Cleanup ───────────────────────────────────────────────────────────
 

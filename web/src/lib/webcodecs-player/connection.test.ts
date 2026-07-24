@@ -334,12 +334,8 @@ describe('destroy', () => {
     expect((cm as { _zombieCheckTimer: ReturnType<typeof setInterval> | null })._zombieCheckTimer).toBeNull();
   });
 
-  it('should remove visibility handler', () => {
-    const cm = createManager();
-    cm.connect();
-    cm.destroy();
-    expect(document.removeEventListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
-  });
+  // 'should remove visibility handler' removed — ConnectionManager no longer
+  // binds a visibilitychange listener (visibility owned by the orchestrator).
 
   it('should prevent any further operations', () => {
     const cm = createManager();
@@ -899,78 +895,10 @@ describe('zombie detection', () => {
 
 // ─── Visibility change ──────────────────────────────────────────────────────
 
-describe('visibility change', () => {
-  it('should reconnect when tab becomes visible after being hidden', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    expect(mockWSInstances.length).toBe(1);
-
-    const firstWS = getLastWS();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-    expect(firstWS.close).toHaveBeenCalled();
-    expect(mockWSInstances.length).toBe(2);
-  });
-
-  it('should call onFreezeFrame when tab returns to visible', () => {
-    const fn = vi.fn();
-    const cm = createManager({ onFreezeFrame: fn });
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(fn).toHaveBeenCalled();
-  });
-
-  it('should not reconnect if tab was never hidden', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(mockWSInstances.length).toBe(1);
-  });
-
-  it('should not reconnect when tab becomes visible after destroy', () => {
-    const cm = createManager();
-    cm.connect();
-    simulateOpen();
-    cm.destroy();
-
-    const handler = (document.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
-      (c: unknown[]) => c[0] === 'visibilitychange',
-    )?.[1] as (() => void) | undefined;
-
-    (document as { hidden: boolean }).hidden = true;
-    handler?.();
-    (document as { hidden: boolean }).hidden = false;
-    handler?.();
-
-    expect(mockWSInstances.length).toBe(1);
-  });
-});
+// 'visibility change' describe block removed — ConnectionManager no longer
+// binds a visibilitychange listener. Visibility pause/resume is owned by the
+// Player Orchestrator (setTabVisible). These tests verified the old per-CM
+// visibility behavior that caused the three-way conflict + WS storm.
 
 // ─── Edge cases ─────────────────────────────────────────────────────────────
 

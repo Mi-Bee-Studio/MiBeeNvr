@@ -393,10 +393,14 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
   function setTabVisible(visible: boolean): void {
     if (tabVisible === visible) return;
     tabVisible = visible;
-    if (visible) {
-      // Tab came back — give every stable camera a chance to reclaim low-latency.
-      for (const [id] of internal) attemptUpgrade(id, 'tab-visible');
-    }
+    // NOTE: we do NOT auto-upgrade on tab-visible anymore. The previous
+    // attemptUpgrade(id, 'tab-visible') for every camera caused mode-flapping
+    // (HLS stable → upgrade to wasm/webrtc → fails → degrade → repeat) which,
+    // combined with the now-removed per-player visibility effects, produced the
+    // console-freezing reactive loop. Mode changes now happen ONLY on explicit
+    // health reports (degrade on failure) or manual requestUpgrade. When the
+    // tab is hidden the browser pauses <video> automatically; WS connections
+    // sit idle (harmless). This is the simplest correct behavior.
   }
 
   function activeMode(cameraId: string): CameraMode | null {

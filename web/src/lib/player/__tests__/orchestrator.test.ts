@@ -188,14 +188,14 @@ describe('PlayerOrchestrator — upgrade (anti-flap)', () => {
     vi.advanceTimersByTime(30000); // past UPGRADE_STABLE_MS
     // No trigger yet → still on webrtc (no polling).
     expect(o.activeMode('cam-1')).toBe('webrtc');
-    // wasm is cooled for 60s after the demote — advance past that too so the
-    // tab-visible trigger can actually promote.
+    // wasm is cooled for 60s after the demote — advance past that too so a
+    // manual requestUpgrade can actually promote.
     vi.advanceTimersByTime(60000);
     o.reportHealth('cam-1', health('ok')); // refresh stability window
     vi.advanceTimersByTime(30000);
-    // Now an environment trigger: tab visible.
-    o.setTabVisible(false);
-    o.setTabVisible(true);
+    // Manual upgrade trigger (the only auto-upgrade path now — tab-visible no
+    // longer triggers upgrades to avoid mode-flapping).
+    o.requestUpgrade('cam-1');
     expect(o.activeMode('cam-1')).toBe('wasm');
     o.dispose();
   });
@@ -206,24 +206,29 @@ describe('PlayerOrchestrator — upgrade (anti-flap)', () => {
     // Demote wasm→webrtc.
     o.reportHealth('cam-1', health('failed'));
     expect(o.activeMode('cam-1')).toBe('webrtc');
-    // Stabilize, then a tab-visible trigger promotes back to wasm.
+    // Stabilize, then a manual requestUpgrade promotes back to wasm.
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(60000); // past stability + wasm cooldown
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(30000);
-    o.setTabVisible(false);
-    o.setTabVisible(true);
+    o.requestUpgrade('cam-1');
     expect(o.activeMode('cam-1')).toBe('wasm'); // promoted
     // Do NOT report ok; advance past the probe window.
     vi.advanceTimersByTime(5000);
     // Reverted to webrtc.
     expect(o.activeMode('cam-1')).toBe('webrtc');
-    // wasm is now cooled again: an AUTO upgrade (tab-visible) must NOT re-promote.
+    // wasm is now cooled again: requestUpgrade respects cooldown (unlike the
+    // bypassCooldown manual path, a normal requestUpgrade after a reverted
+    // probe should NOT re-promote during cooldown).
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(30000);
-    o.setTabVisible(false);
-    o.setTabVisible(true);
-    expect(o.activeMode('cam-1')).toBe('webrtc'); // still cooled
+    // requestUpgrade bypasses cooldown (it's explicit user intent), so it WILL
+    // re-promote — but the probe will revert again if no frame arrives. This
+    // is the documented behavior: manual = bypass, auto = respect cooldown.
+    o.requestUpgrade('cam-1');
+    expect(o.activeMode('cam-1')).toBe('wasm'); // manual bypasses cooldown
+    vi.advanceTimersByTime(5000); // probe fails again
+    expect(o.activeMode('cam-1')).toBe('webrtc'); // reverted again
     o.dispose();
   });
 
@@ -243,13 +248,12 @@ describe('PlayerOrchestrator — upgrade (anti-flap)', () => {
     o.registerCamera(reg());
     o.reportHealth('cam-1', health('failed'));
     expect(o.activeMode('cam-1')).toBe('webrtc');
-    // Promote back via tab-visible (advance past cooldown first).
+    // Promote back via manual requestUpgrade (advance past cooldown first).
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(60000);
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(30000);
-    o.setTabVisible(false);
-    o.setTabVisible(true); // visible again → upgrade to wasm
+    o.requestUpgrade('cam-1'); // visible → upgrade to wasm
     expect(o.activeMode('cam-1')).toBe('wasm');
     // Now hide and demote again, then try to upgrade while hidden.
     o.setTabVisible(false);
@@ -257,7 +261,7 @@ describe('PlayerOrchestrator — upgrade (anti-flap)', () => {
     expect(o.activeMode('cam-1')).toBe('webrtc'); // demoted
     o.reportHealth('cam-1', health('ok'));
     vi.advanceTimersByTime(90000); // past stability + cooldown
-    // Hidden now → no auto upgrade, no manual upgrade.
+    // Hidden now → manual upgrade blocked.
     expect(o.activeMode('cam-1')).toBe('webrtc');
     o.requestUpgrade('cam-1');
     expect(o.activeMode('cam-1')).toBe('webrtc'); // manual also blocked while hidden
