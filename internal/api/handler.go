@@ -567,18 +567,22 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		encoding = strings.ToLower(cam.StreamEncoding)
 	}
 
-	// Probe the running recorder for the actual codec ONLY when the stored
-	// encoding is empty (auto-detect) or for ONVIF cameras that may misreport
-	// their codec (some Hisilicon OEM devices report H264 via ONVIF but stream
-	// H265; their recorder's detectEncoding corrects this via RTSP DESCRIBE).
+	// Probe the running recorder for the actual codec. The recorder reads the
+	// REAL codec from the live stream (RTSP DESCRIBE for ONVIF/RTSP, MISS
+	// CodecID for Xiaomi, etc.), which is authoritative over the DB-stored
+	// encoding. The stored encoding may be stale or wrong — e.g. Xiaomi CS2
+	// cameras that were initially configured as h264 but actually stream h265
+	// (the recorder detects codec=h265, but DB still says h264). Without this
+	// probe, /protocols returns the wrong encoding, the frontend picks protocols
+	// that can't handle the actual codec (WebRTC for H.265, FLV without MSE
+	// H.265), and EVERY protocol renders black.
 	//
-	// We deliberately do NOT unconditionally override the stored encoding: for
-	// non-ONVIF cameras (xiaomi, rtsp, ingest) the user-configured encoding is
-	// authoritative and a runtime probe can mislabel it (e.g. a Xiaomi camera
-	// configured as h264 but momentarily probing h265 during codec auto-detect),
-	// which collapses the protocol list and forces HLS — the playback
-	// black-screen regression (see git blame on this block, pre-67fc4ee9).
-	if h.camMgr != nil && (encoding == "" || strings.EqualFold(cam.Protocol, "onvif")) {
+	// Previously this probe was gated to ONVIF + empty-encoding only, out of
+	// fear that a runtime probe might mislabel a correctly-configured camera.
+	// But the recorder's codec detection is reliable (it reads actual stream
+	// data), and the cost of a wrong DB encoding (all-protocols-black-screen)
+	// is far worse than an occasional over-correction. Trust the recorder.
+	if h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
 			if codec, _, _, _ := getCodecParams(rec); codec != "" {
 				encoding = string(codec)
