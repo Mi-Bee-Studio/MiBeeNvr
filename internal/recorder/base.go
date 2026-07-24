@@ -385,14 +385,13 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	defer close(done)
 
 	for data := range b.frameCh {
-		// Live-only mode: drain the frame channel (so the RTP callback's
-		// non-blocking send never blocks) but perform no segment I/O at all.
-		// The StreamHub fan-out already happened in the RTP callback before the
-		// send to frameCh, so live preview, relay, and health keep working.
-		// nil => recording enabled (default); pointer to false => live-only.
-		if b.cfg.RecordEnabled != nil && !*b.cfg.RecordEnabled {
-			continue
-		}
+		// Always parse NALUs to capture codec parameter sets (VPS/SPS/PPS), even
+		// in live-only mode (RecordEnabled=false). Live preview (HLS/WebRTC/WS)
+		// needs these via getCodecParams(); if we skip parsing here, SPS()/VPS()/
+		// PPS() stay nil and every live-preview endpoint returns 503 "waiting for
+		// video stream" → permanent grey/black screen for cameras with recording
+		// disabled. (Only the SDP pre-seed in connectAndRecord runs otherwise,
+		// which is empty for cameras that send params in-band only.)
 		if len(data) < b.driver.minNALUDataLen() {
 			continue
 		}
@@ -404,6 +403,17 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			if b.driver.handleParamSet(b, nalu, typ) {
 				b.closeCurrentSegment()
 			}
+			continue
+		}
+
+		// Live-only mode: drain the frame channel (so the RTP callback's
+		// non-blocking send never blocks) but perform no segment I/O at all.
+		// The StreamHub fan-out already happened in the RTP callback before the
+		// send to frameCh, so live preview, relay, and health keep working.
+		// nil => recording enabled (default); pointer to false => live-only.
+		// (Reached AFTER parameter-set capture above, so live preview still has
+		// the codec params it needs.)
+		if b.cfg.RecordEnabled != nil && !*b.cfg.RecordEnabled {
 			continue
 		}
 
