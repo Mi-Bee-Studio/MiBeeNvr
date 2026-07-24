@@ -223,8 +223,37 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     const it = internal.get(cameraId);
     if (!slot || !it) return; // unknown camera — ignore
     if (slot.pinned) {
-      // Pinned (user override) — record health but never auto-adapt.
+      // Pinned (user override) — record health. If the pinned protocol reports
+      // a terminal failure (e.g. WebRTC 503 for a Xiaomi CS2 camera that can't
+      // be served via WHEP), staying pinned means a permanent black screen.
+      // Fall back to the FULL auto-selection chain (as if no override) so the
+      // camera finds a working protocol. The user's override is preserved in
+      // localStorage; we just stop forcing it while it's broken. They can
+      // re-pin via the ProtocolSwitcher once the protocol works again.
       setSlot(cameraId, { health: h }, slot);
+      if (h.status === 'failed') {
+        // Rebuild the chain WITHOUT the override → full auto-selection chain,
+        // then jump to a workable entry. The pinned protocol just proved
+        // broken; staying on it = permanent black screen. Find the most-
+        // compatible fallback (HLS is universal) in the full chain and switch
+        // to it. The user's localStorage override is preserved so they can
+        // re-pin once the protocol works; we just stop forcing a broken one.
+        const fullChain = buildChain({ ...it.lastRegistration, override: null });
+        // Prefer HLS (universal fallback); else the last entry (most compatible).
+        const hlsIdx = fullChain.findIndex(c => c.mode === 'hls');
+        const fallbackIdx = hlsIdx >= 0 ? hlsIdx : fullChain.length - 1;
+        if (fullChain.length > 1 && fallbackIdx > 0) {
+          const from = slot.chain[slot.activeIndex]?.mode ?? 'pinned';
+          const to = fullChain[fallbackIdx].mode;
+          setSlot(cameraId, {
+            chain: fullChain,
+            activeIndex: fallbackIdx,
+            pinned: false,
+            health: health('ok'),
+          }, slot);
+          emit(cameraId, from, to, h.reason ?? 'pinned-protocol-failed');
+        }
+      }
       return;
     }
 

@@ -78,14 +78,32 @@ describe('PlayerOrchestrator — registration & active mode', () => {
     o.dispose();
   });
 
-  it('a user override pins the chain (single element) and disables adaptation', () => {
+  it('a user override pins the chain but falls back to HLS on terminal failure', () => {
+    // A pinned protocol that CANNOT work (e.g. WebRTC 503 for a Xiaomi CS2
+    // camera) must NOT leave the user on a permanent black screen. The
+    // orchestrator preserves the localStorage override but switches the active
+    // mode to a workable fallback (HLS) so the camera keeps showing something.
     const o = createPlayerOrchestrator();
     o.registerCamera(reg(H264_CAMERA, H264_RESP, 'flv'));
     expect(o.activeMode('cam-1')).toBe('flv');
     expect(o.slot('cam-1')?.pinned).toBe(true);
-    // Even a failed health report must NOT demote a pinned chain.
+    // failed → fall back to HLS (universal), not stuck on the broken pinned flv.
     o.reportHealth('cam-1', health('failed', 'fatal-error'));
+    expect(o.activeMode('cam-1')).toBe('hls');
+    expect(o.slot('cam-1')?.pinned).toBe(false);
+    o.dispose();
+  });
+
+  it('a pinned protocol that reports ok/degraded stays pinned (only failed escapes)', () => {
+    const o = createPlayerOrchestrator();
+    o.registerCamera(reg(H264_CAMERA, H264_RESP, 'flv'));
+    // ok and degraded must NOT escape the pin (only a terminal failure does).
+    o.reportHealth('cam-1', health('ok'));
     expect(o.activeMode('cam-1')).toBe('flv');
+    expect(o.slot('cam-1')?.pinned).toBe(true);
+    o.reportHealth('cam-1', health('degraded', 'buffering'));
+    expect(o.activeMode('cam-1')).toBe('flv');
+    expect(o.slot('cam-1')?.pinned).toBe(true);
     o.dispose();
   });
 });
