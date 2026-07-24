@@ -387,22 +387,37 @@ function handleWebGpuLost() {
 
         if (msg.type === 'frame' && msg.data instanceof VideoFrame) {
           const frame = msg.data;
-          // Track canvas dimensions for AI overlay
-          if (canvasEl) {
-            if (canvasWidth !== frame.displayWidth || canvasHeight !== frame.displayHeight) {
-              canvasWidth = frame.displayWidth;
-              canvasHeight = frame.displayHeight;
-            }
+          // If we're tearing down, or the renderer isn't ready, the frame would
+          // leak (GC warning: "VideoFrame was garbage collected without being
+          // closed"). ALWAYS close frames we don't render. This is the hot path
+          // during navigation away — worker may still deliver in-flight frames
+          // after cleanupWebGL2() nulled `gl`.
+          if (destroyed || !canvasEl) {
+            frame.close();
+            return;
           }
-          // AI detection — must happen before frame.close()
+          // Track canvas dimensions for AI overlay
+          if (canvasWidth !== frame.displayWidth || canvasHeight !== frame.displayHeight) {
+            canvasWidth = frame.displayWidth;
+            canvasHeight = frame.displayHeight;
+          }
+          // AI detection — must happen before frame.close(). processAiDetection
+          // clones the frame internally, so closing the original here is safe.
           if (aiDetector) {
             processAiDetection(frame);
           }
-          if (webgpuRenderer) {
-            webgpuRenderer.render(frame); // Takes ownership and closes frame
-          } else {
-            renderFrame(frame);
-            frame.close(); // Memory safety — always close after rendering
+          try {
+            if (webgpuRenderer) {
+              webgpuRenderer.render(frame); // Takes ownership and closes frame
+            } else {
+              renderFrame(frame);
+            }
+          } catch {
+            // Rendering threw — never leak the frame.
+          } finally {
+            // renderFrame/WebGPURenderer.render may not close on early-return
+            // (e.g. gl was nulled by a concurrent cleanup). close() is idempotent.
+            try { frame.close(); } catch { /* already closed */ }
           }
           if (streamState !== 'playing') {
             updateState('playing');
@@ -563,11 +578,27 @@ function handleWebGpuLost() {
 
   async function initAiDetection() {
     if (aiDetector || aiInitializing) return;
+    const settings = getAiSettings();
+    if (!settings.enabled) return;
+
     aiInitializing = true;
     aiError = null;
     try {
-      const settings = getAiSettings();
-      if (!settings.enabled) return;
+      // Fetch zones FIRST and gate on them: the ONNX model is ~5 MB, so only
+      // download it when this camera actually has AI configured (≥1 zone).
+      // Without this gate, a user toggling AI on globally (localStorage) forces
+      // every camera to fetch /models/yolo11n.onnx — a 404 on deployments that
+      // never ran `mibee-nvr download-model`, surfacing as a scary console error
+      // on every camera even though no detection is configured for them.
+      try {
+        const data = await getAIZones();
+        aiZones = data.zones || [];
+      } catch {
+        // Zones endpoint unreachable — treat as "no zones configured".
+        aiZones = [];
+      }
+      const hasZoneForThisCamera = aiZones.some((z) => z.camera_id === cameraId);
+      if (!hasZoneForThisCamera) return;
 
       aiRuntime = new AiRuntime();
       await aiRuntime.init(undefined, {
@@ -579,35 +610,43 @@ function handleWebGpuLost() {
         frameSkip: settings.frameSkip,
       });
     } catch (e) {
-      console.warn('[WasmPlayer] AI init failed:', e);
-      aiError = e instanceof Error ? e.message : 'AI init failed';
+      // AI is a non-fatal overlay — never abort the video. The most common
+      // failure is the model file missing (HTTP 404 on /models/yolo11n.onnx),
+      // which means `mibee-nvr download-model` hasn't been run on the server.
+      // That's a deployment step, not a bug, so log it quietly (dev only) rather
+      // than a prominent console.warn with a stack trace.
+      const msg = e instanceof Error ? e.message : 'AI init failed';
+      const isModelMissing = /Model download failed: 404/.test(msg);
+      if (import.meta.env.DEV) {
+        if (isModelMissing) {
+          console.info('[WasmPlayer] AI model not found (run "mibee-nvr download-model" on the server) — AI disabled.');
+        } else {
+          console.warn('[WasmPlayer] AI init failed:', e);
+        }
+      }
+      aiError = msg;
       aiRuntime?.dispose();
       aiRuntime = null;
       aiDetector = null;
     } finally {
       aiInitializing = false;
     }
-
-    // Fetch zones for filtering (non-fatal)
-    try {
-      const data = await getAIZones();
-      aiZones = data.zones || [];
-    } catch {
-      // Zones are non-critical
-    }
   }
 
   async function processAiDetection(frame: VideoFrame) {
     if (!aiDetector) return;
+    // Clone frame because detect() is async and the original frame may be closed
+    // by the render path immediately after this returns. The clone MUST be closed
+    // regardless of whether detect() succeeds — otherwise it leaks (VideoFrame GC).
+    const cloned = new VideoFrame(frame);
     try {
-      // Clone frame because detect() is async and frame may be closed
-      const cloned = new VideoFrame(frame);
       const newDetections = await aiDetector.detect(cloned);
-      cloned.close();
       detections = filterDetectionsByZones(newDetections);
     } catch (e) {
       // Non-fatal — keep showing last detections
       if (import.meta.env.DEV) console.warn('[WasmPlayer] AI detection error:', e);
+    } finally {
+      cloned.close();
     }
   }
 

@@ -66,6 +66,14 @@ export class ConnectionManager {
   private _coordinatedReconnectActive = false;
   private _destroyed = false;
   private _currentState: ConnectionState = 'disconnected';
+  // True when the current socket was closed intentionally (disconnect/destroy/
+  // reconnect-rotation). Used by onclose to suppress the auto-reconnect that
+  // would otherwise fire on EVERY close — including the ones WE initiated.
+  // Without this, navigating away from the grid closes each camera's WS, but
+  // `close()` without a code yields CloseEvent.code === 1005, which is neither
+  // 1000 nor 1001, so onclose treated it as a crash and rescheduled a reconnect
+  // onto a destroyed coordinator → "closed before connection established" storm.
+  private _intentionalClose = false;
 
   // Zombie detection
   private _zombieCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -117,6 +125,9 @@ export class ConnectionManager {
 
     this._setState('loading');
     this._stopCoordinatedTimer();
+    // A fresh connect means the previous socket (if any) is being superseded;
+    // any onclose it fires is part of the rotation, not a crash to recover from.
+    this._intentionalClose = false;
 
     let url = this._opts.url;
     if (this._opts.authToken) {
@@ -130,6 +141,15 @@ export class ConnectionManager {
 
       socket.onopen = () => {
         if (this._destroyed) {
+          // We were destroyed while the handshake was in flight. The error
+          // console spam ("closed before connection is established") comes from
+          // closing here, but it's correct. The important part: if this connect
+          // had consumed a coordinator reconnect slot, release it so queued
+          // cameras aren't starved forever.
+          if (this._opts.coordinator && this._opts.cameraId && this._coordinatedReconnectActive) {
+            this._opts.coordinator.completeReconnect(this._opts.cameraId);
+            this._coordinatedReconnectActive = false;
+          }
           socket.close();
           return;
         }
@@ -198,6 +218,20 @@ export class ConnectionManager {
       socket.onclose = (event: CloseEvent) => {
         if (this._destroyed) return;
         this._stopZombieDetection();
+
+        // We initiated this close (disconnect/reconnect-rotation/destroy). It is
+        // NOT a failure to recover from — do not schedule a reconnect. This is
+        // what stops the post-navigation WS storm: navigating away calls
+        // disconnect()→close(), whose CloseEvent.code is 1005 (no status), which
+        // previously fell through to _scheduleCoordinatedReconnect() because it's
+        // neither 1000 nor 1001.
+        if (this._intentionalClose) {
+          this._intentionalClose = false;
+          if (this._currentState !== 'offline') {
+            this._setState('disconnected');
+          }
+          return;
+        }
 
         // Normal close (1000) or going away (1001) — don't reconnect
         if (event.code === 1000 || event.code === 1001) {
@@ -305,6 +339,12 @@ export class ConnectionManager {
 
   private _closeWebSocket(): void {
     if (this._ws) {
+      // Mark this close as intentional so the socket's onclose handler does not
+      // treat the resulting CloseEvent (code 1005 "no status", since we call
+      // close() without a code) as a crash to reconnect from. Every call here is
+      // an initiated teardown (disconnect / destroy / reconnect-rotation /
+      // visibility-driven); the next connect()/reconnect path decides recovery.
+      this._intentionalClose = true;
       try {
         this._ws.close();
       } catch {
