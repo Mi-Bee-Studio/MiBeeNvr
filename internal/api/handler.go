@@ -194,6 +194,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
 			r.Get("/daily-summary", h.handleDailyRecordingSummary)
+			r.Get("/timeline", h.handleTimelineSegments)
 			r.Post("/", h.handleCreateRecording)
 			r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
 			r.Post("/batch-delete", h.handleBatchDeleteRecordings)

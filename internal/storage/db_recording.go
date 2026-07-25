@@ -436,6 +436,73 @@ func (d *DB) CountRecordingsWithFilter(ctx context.Context, filter model.Recordi
 	return count, err
 }
 
+// maxTimelineSegments is the row ceiling for ListRecordingTimelineSegments. It
+// is deliberately much higher than the 500-row cap on handleListRecordings
+// because each timeline row carries only 7 small columns (~10x smaller than a
+// full Recording), so shipping a whole fragmented day in one response is cheap
+// and avoids the silent afternoon-truncation bug (issue #115). 10k covers the
+// worst observed fragmentation (Xiaomi reconnect storms ~5k/day) with headroom.
+const maxTimelineSegments = 10000
+
+// ListRecordingTimelineSegments returns the lightweight timeline projection of
+// recordings matching the filter. It reuses recordingsFilterWhere (so camera_id
+// / start / end / format / merged / archived all work) but selects only the 7
+// columns a timeline needs, forces ORDER BY started_at ASC (timelines always
+// render left-to-right), and caps at maxTimelineSegments.
+//
+// Returns (segments, total) where total is the unfiltered-by-limit match count
+// (via the cached CountRecordingsWithFilter) so the caller can set a truncated
+// flag. The cache key already omits Limit/Offset/Sort, so the count is correct
+// regardless of the 10k cap.
+func (d *DB) ListRecordingTimelineSegments(ctx context.Context, filter model.RecordingFilter) ([]model.TimelineSegment, int, error) {
+	defer d.observeQuery("ListRecordingTimelineSegments", time.Now())
+	where, args := recordingsFilterWhere(filter)
+
+	// 7-column projection — omit file_path/merge_*/file_size/frame_count/etc.
+	sqlstr := "SELECT id, camera_id, started_at, ended_at, duration, format, merge_status FROM recordings"
+	if len(where) > 0 {
+		sqlstr += " WHERE " + strings.Join(where, " AND ")
+	}
+	// Timeline always renders left→right; ignore caller SortBy/SortOrder.
+	sqlstr += " ORDER BY started_at ASC"
+	sqlstr += fmt.Sprintf(" LIMIT %d", maxTimelineSegments)
+	sqlstr += ";"
+
+	rows, err := d.readConn().QueryContext(ctx, sqlstr, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	res := make([]model.TimelineSegment, 0, 64)
+	for rows.Next() {
+		var s model.TimelineSegment
+		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+		if err := rows.Scan(&s.ID, &s.CameraID, &startedAtStr, &endedAtStr, &s.Duration, &s.Format, &mergeStatusStr); err != nil {
+			return nil, 0, err
+		}
+		s.StartedAt = scanTime(startedAtStr)
+		s.EndedAt = scanTime(endedAtStr)
+		if mergeStatusStr.Valid && mergeStatusStr.String != "" {
+			s.MergeStatus = mergeStatusStr.String
+		} else {
+			s.MergeStatus = model.MergeStatusPending
+		}
+		res = append(res, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Total (uncapped) so the handler can flag truncation. Best-effort: a failed
+	// count must not fail the timeline render — mirror ListRecordingsWithTotal.
+	total, err := d.countRecordingsCached(ctx, filter)
+	if err != nil {
+		return res, len(res), nil
+	}
+	return res, total, nil
+}
+
 // DailyRecordingSummary returns per-day recording counts and format categories for the
 // given filter, grouped by local date. tzOffsetMinutes is the client's signed UTC offset
 // in minutes (e.g. 480 for UTC+8, -300 for UTC-5); 0 groups by UTC date. The result is

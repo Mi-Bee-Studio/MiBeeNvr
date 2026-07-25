@@ -539,6 +539,7 @@
   "library.viewTimelapse": "延时摄影",
   "library.timelapseOnly": "仅延时摄影录像",
   "library.videoOnly": "仅视频录像",
+  "library.timelineTruncated": "当天录像段数超过时间轴上限，仅显示前 {count} 段，完整数据请使用列表视图。",
   "live.backToCameras": "返回摄像头",
   "live.cameraIdRequired": "摄像头 ID 为必填项",
   "live.error": "流错误",

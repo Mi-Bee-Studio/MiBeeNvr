@@ -177,6 +177,7 @@ export {
   fetchTimelapsePreview,
   recordTimelineSeek,
   getRecordingDailySummary,
+  getRecordingsTimeline,
 } from './recordings';
 
 export type {
@@ -192,6 +193,8 @@ export type {
   ArchiveListResponse,
   TimelapseFrame,
   TimelapsePreviewFrame,
+  RecordingTimelineSegment,
+  RecordingTimelineResponse,
 } from './recordings';
 
 // Timelapse merges — periodic-merge outputs (8h / 12h / 24h / natural-day / 7d / 30d)
