@@ -12,7 +12,7 @@
    *   - Hit a segment → onSeek(recordingId, offsetSecondsWithinSegment)
    *   - Hit a gap (no recording) → snap to nearest segment edge + warn
    */
-  import { listRecordings, type Recording } from '$lib/api';
+  import { getRecordingsTimeline, type Recording, type RecordingTimelineSegment } from '$lib/api';
   import { listAIEvents, type AIEvent } from '$lib/api/ai-events';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
@@ -34,7 +34,12 @@
     showEvents?: boolean;
   } = $props();
 
-  let segments = $state<Array<{ rec: Recording; startSec: number; endSec: number }>>([]);
+  // Each segment carries the lightweight RecordingTimelineSegment projection
+  // (7 fields) from /api/recordings/timeline — issue #115. The old path used
+  // /api/recordings with limit=10000, but the backend clamped that to 500 full
+  // rows, silently dropping the afternoon on fragmented cameras. The lightweight
+  // endpoint caps at 10k and the rows are ~10x smaller.
+  let segments = $state<Array<{ rec: RecordingTimelineSegment; startSec: number; endSec: number }>>([]);
   let aiEvents = $state<AIEvent[]>([]);
   let loading = $state(false);
   let error = $state('');
@@ -135,22 +140,19 @@
       // Local-midnight range (see loadAIEvents comment).
       const startISO = new Date(y, m - 1, dd, 0, 0, 0).toISOString();
       const endISO = new Date(y, m - 1, dd, 23, 59, 59).toISOString();
-      const resp = await listRecordings({
+      // Lightweight timeline endpoint (issue #115): the old /api/recordings call
+      // with limit=10000 was silently clamped to 500 full rows by the backend,
+      // dropping the afternoon on fragmented cameras. This endpoint caps at 10k
+      // 7-column rows and ships ~10x less data per day.
+      const resp = await getRecordingsTimeline({
         camera_id: cid,
         start: startISO,
         end: endISO,
-        sort_by: 'started_at',
-        order: 'asc',
-        // Same fragmentation cap as Recordings.svelte loadTimelineData (10000):
-        // a single badly-fragmented camera can produce thousands of short
-        // segments/day. asc + a low cap silently truncates the day so the
-        // afternoon appears empty on this per-camera DVR bar.
-        limit: 10000,
       });
 
       const dayStartMs = new Date(y, m - 1, dd).getTime();
 
-      segments = resp.recordings
+      segments = resp.segments
         .map((rec) => {
           const sMs = Date.parse(rec.started_at);
           const eMs = rec.ended_at ? Date.parse(rec.ended_at) : sMs + rec.duration * 1000;
@@ -162,7 +164,7 @@
             endSec: eMs,
           };
         })
-        .filter((x): x is { rec: Recording; startSec: number; endSec: number } => x !== null);
+        .filter((x): x is { rec: RecordingTimelineSegment; startSec: number; endSec: number } => x !== null);
 
       // --- Auto-compute visible window ---
       if (segments.length > 0) {

@@ -539,6 +539,7 @@
   "library.viewTimelapse": "Timelapse",
   "library.timelapseOnly": "Timelapse recordings only",
   "library.videoOnly": "Video recordings only",
+  "library.timelineTruncated": "This day has more recordings than the timeline cap — only the first {count} are shown. Use list view for the complete set.",
   "live.backToCameras": "Back to Cameras",
   "live.cameraIdRequired": "Camera ID is required",
   "live.error": "Stream error",

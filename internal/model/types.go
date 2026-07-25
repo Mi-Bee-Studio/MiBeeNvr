@@ -87,6 +87,29 @@ type TimelapseMerge struct {
 	CompletedAt      time.Time `json:"completed_at,omitempty"`
 }
 
+// TimelineSegment is the lightweight projection of a Recording used only for
+// timeline rendering (the recordings-page day strip + the player DVR bar).
+// It omits file_path/merge_*/file_size/etc. to minimize bandwidth when a day
+// has thousands of segments — a full-day window for a fragmentation-prone
+// camera (Xiaomi AVI reconnect storms, ~5000+ segments/day) is ~10x smaller
+// than the full Recording projection. Issue #115: the full-row endpoint caps
+// at 500 rows and silently truncated the afternoon; this endpoint caps at
+// maxTimelineSegments (10k) and the rows are cheap enough to ship in bulk.
+//
+// Fields are exactly what DayTimeline.svelte / TimelineBar.svelte read:
+// id (seek navigation), camera_id + started_at + ended_at (band position),
+// duration (fallback when ended_at is null on the in-progress last segment),
+// format (color band), merge_status (pending "(N ⚠)" counter).
+type TimelineSegment struct {
+	ID          string    `json:"id"`
+	CameraID    string    `json:"camera_id"`
+	StartedAt   time.Time `json:"started_at"`
+	EndedAt     time.Time `json:"ended_at"`
+	Duration    float64   `json:"duration"`
+	Format      Format    `json:"format"`
+	MergeStatus string    `json:"merge_status"`
+}
+
 type Segment struct {
 	ID         string
 	CameraID   string

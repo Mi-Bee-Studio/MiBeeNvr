@@ -14,9 +14,18 @@
   import { t } from '$lib/i18n';
   import { Clock } from 'lucide-svelte';
 
+  // Minimal shape DayTimeline actually reads from each recording. Accepting this
+  // subset (instead of the full Recording) lets the page pass the lightweight
+  // RecordingTimelineSegment[] from /api/recordings/timeline (issue #115) without
+  // a cast — both Recording and RecordingTimelineSegment satisfy it.
+  type TimelineRecording = Pick<
+    Recording,
+    'id' | 'camera_id' | 'started_at' | 'ended_at' | 'duration' | 'format' | 'merge_status'
+  >;
+
   interface Props {
     cameras: Camera[];
-    recordings: Recording[];
+    recordings: TimelineRecording[];
     selectedDate: string; // YYYY-MM-DD
     onseek: (recordingId: string, offsetSeconds: number) => void;
     aiEvents?: unknown[]; // reserved for stage E (AI event markers)
@@ -46,7 +55,7 @@
 
   const rows = $derived.by<CameraRow[]>(() => {
     // Group recordings by camera
-    const byCam = new Map<string, Recording[]>();
+    const byCam = new Map<string, TimelineRecording[]>();
     for (const r of recordings) {
       const list = byCam.get(r.camera_id) ?? [];
       list.push(r);

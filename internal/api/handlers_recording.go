@@ -108,6 +108,53 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTimelineSegments returns the lightweight timeline projection of a day's
+// recordings for the recordings-page day strip and the player DVR bar. Unlike
+// handleListRecordings (capped at 500 full rows), this selects only 7 small
+// columns per row and caps at maxTimelineSegments (10k), so a full fragmented
+// day ships in one response without silently truncating the afternoon.
+//
+// Query params mirror handleListRecordings: start/end (RFC3339), camera_id,
+// format, merged. Sorting is fixed to started_at ASC (timelines render L→R).
+// Response: {segments: [...], total: N, truncated: bool}. Issue #115.
+//
+// GET /api/recordings/timeline
+func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request) {
+	filter := model.RecordingFilter{
+		CameraID: r.URL.Query().Get("camera_id"),
+		Format:   model.Format(r.URL.Query().Get("format")),
+	}
+	if v := r.URL.Query().Get("merged"); v != "" {
+		merged := v == "true" || v == "1"
+		filter.Merged = &merged
+	}
+	if v := r.URL.Query().Get("start"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.StartTime = t
+		}
+	}
+	if v := r.URL.Query().Get("end"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.EndTime = t
+		}
+	}
+
+	segments, total, err := h.db.ListRecordingTimelineSegments(r.Context(), filter)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to list timeline segments")
+		return
+	}
+	if segments == nil {
+		segments = []model.TimelineSegment{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"segments":  segments,
+		"total":     total,
+		"truncated": total > len(segments),
+	})
+}
+
 // handleDailyRecordingSummary returns per-day recording counts and format categories for
 // calendar rendering. Unlike handleListRecordings, this is a lightweight GROUP BY query
 // with no row-level limit — the result is bounded by the number of days in the range.

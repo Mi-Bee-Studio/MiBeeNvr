@@ -159,6 +159,58 @@ export async function getRecording(id: string, signal?: AbortSignal): Promise<Re
   return apiRequest<Recording>(`/recordings/${id}`, { signal });
 }
 
+// RecordingTimelineSegment is the lightweight projection of a Recording used
+// for timeline rendering only. It carries the 7 fields the timeline components
+// (DayTimeline / TimelineBar) actually read — omitting file_path/merge_*/
+// file_size/frame_count etc. — so a full fragmented day (~5000 segments for a
+// Xiaomi reconnect storm) ships in ~10x less bandwidth than a full Recording
+// list and never hits the 500-row cap that truncated the afternoon (issue #115).
+//
+// Named "Recording..." (not "TimelineSegment") to avoid colliding with the
+// local TimelineSegment type inside TimelineBar.svelte.
+export interface RecordingTimelineSegment {
+  id: string;
+  camera_id: string;
+  started_at: string;
+  ended_at: string;
+  duration: number;
+  format: Recording['format'];
+  merge_status: Recording['merge_status'];
+}
+
+export interface RecordingTimelineResponse {
+  segments: RecordingTimelineSegment[];
+  total: number;
+  truncated: boolean; // true when the day exceeded the backend cap (maxTimelineSegments)
+}
+
+// getRecordingsTimeline fetches the lightweight day-window timeline for the
+// recordings-page day strip and the player DVR bar. Sorting is fixed to
+// started_at ASC server-side; the cap (10k) is also server-side, so this client
+// takes no limit/sort_by/order params. Issue #115.
+export async function getRecordingsTimeline(
+  params: {
+    camera_id?: string;
+    format?: string;
+    merged?: boolean;
+    start?: string; // RFC3339 day-start
+    end?: string; // RFC3339 day-end
+    signal?: AbortSignal;
+  } = {},
+): Promise<RecordingTimelineResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.camera_id) queryParams.set('camera_id', params.camera_id);
+  if (params.format) queryParams.set('format', params.format);
+  if (params.merged !== undefined) queryParams.set('merged', String(params.merged));
+  if (params.start) queryParams.set('start', params.start);
+  if (params.end) queryParams.set('end', params.end);
+
+  const query = queryParams.toString();
+  const endpoint = query ? `/recordings/timeline?${query}` : '/recordings/timeline';
+  const { signal } = params;
+  return apiRequest<RecordingTimelineResponse>(endpoint, { signal });
+}
+
 export async function deleteRecording(id: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/recordings/${id}`, {
     method: 'DELETE',
