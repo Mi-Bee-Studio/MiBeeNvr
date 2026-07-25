@@ -191,7 +191,8 @@ describe('resolveEncoding', () => {
 });
 
 describe('isProtocolUsable', () => {
-  const avail = new Set(['webrtc', 'flv', 'hls']);
+  // All protocols advertised as available — isolates the codec/caps gate.
+  const avail = new Set(['webrtc', 'flv', 'hls', 'll-hls', 'mjpeg']);
 
   it('rejects webrtc for h265', () => {
     expect(isProtocolUsable('webrtc', 'h265', FULL_CAPS, avail)).toBe(false);
@@ -222,6 +223,26 @@ describe('isProtocolUsable', () => {
     expect(isProtocolUsable('ll-hls', 'h265', EMPTY_CAPS, avail)).toBe(false);
     expect(isProtocolUsable('hls', 'h265', FULL_CAPS, avail)).toBe(true);
     expect(isProtocolUsable('ll-hls', 'h265', FULL_CAPS, avail)).toBe(true);
+  });
+
+  // ─── Backend availability gate (issue #112) ───────────────────────────────
+  // A named real-time protocol is usable ONLY if the backend reports it as
+  // Available. Without this gate, an empty /protocols response (device down,
+  // recorder not started) would still yield [webrtc,flv,hls] from codec reasoning
+  // alone, mounting players that storm the backend with requests it can't serve.
+  it('rejects every named protocol when the backend reports nothing available', () => {
+    const empty = new Set<string>();
+    expect(isProtocolUsable('webrtc', 'h264', FULL_CAPS, empty)).toBe(false);
+    expect(isProtocolUsable('flv', 'h264', FULL_CAPS, empty)).toBe(false);
+    expect(isProtocolUsable('hls', 'h264', FULL_CAPS, empty)).toBe(false);
+    expect(isProtocolUsable('ll-hls', 'h264', FULL_CAPS, empty)).toBe(false);
+    expect(isProtocolUsable('mjpeg', 'jpeg', FULL_CAPS, empty)).toBe(false);
+  });
+
+  it('accepts hls mode when the backend advertises ll-hls (and vice versa)', () => {
+    // Backend advertises HLS as 'll-hls'; the hls render mode must still match.
+    expect(isProtocolUsable('hls', 'h264', FULL_CAPS, new Set(['ll-hls']))).toBe(true);
+    expect(isProtocolUsable('ll-hls', 'h264', FULL_CAPS, new Set(['hls']))).toBe(true);
   });
 });
 
@@ -288,6 +309,37 @@ describe('buildCandidateChain', () => {
     const chain = buildCandidateChain(cam, H265_RESP, FULL_CAPS, { override: 'webrtc' });
     expect(chain.find((c) => c.mode === 'webrtc')).toBeUndefined();
     expect(chain.every((c) => !c.pinned)).toBe(true);
+  });
+
+  // ─── Issue #112: empty /protocols must not fabricate a chain ───────────────
+  // The root cause of the protocol storm: an ONVIF camera whose recorder is
+  // briefly down returns {protocols:[]} + encoding="". Without the availability
+  // gate, buildCandidateChain fabricated [webrtc,flv,hls] and mounted players
+  // that stormed the backend. Now the empty list yields an empty chain → the
+  // grid falls to snapshot (with re-fetch backoff, see Surveillance.svelte).
+  it('returns an empty chain when the backend reports no available protocols', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: '' });
+    const emptyResp: ProtocolsResponse = { protocols: [], encoding: '', default: '' };
+    const chain = buildCandidateChain(cam, emptyResp, FULL_CAPS);
+    expect(chain).toEqual([]);
+  });
+
+  it('returns an empty chain for an h264 camera when the backend reports nothing available', () => {
+    // Even with a known codec, if the backend says it can't serve any protocol,
+    // don't mount a real-time player — the stream doesn't exist right now.
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h264' });
+    const emptyResp: ProtocolsResponse = { protocols: [], encoding: 'h264', default: '' };
+    const chain = buildCandidateChain(cam, emptyResp, FULL_CAPS);
+    expect(chain).toEqual([]);
+  });
+
+  it('rejects a user override when the backend reports no available protocols', () => {
+    // A stale pinned override (e.g. 'hls' from when the camera was healthy)
+    // must not force a player onto a camera the backend says it can't serve.
+    const cam = makeCamera({ protocol: 'onvif', encoding: '' });
+    const emptyResp: ProtocolsResponse = { protocols: [], encoding: '', default: '' };
+    const chain = buildCandidateChain(cam, emptyResp, FULL_CAPS, { override: 'hls' });
+    expect(chain).toEqual([]);
   });
 
   it('returns an empty chain for non-HLS-capable protocols', () => {

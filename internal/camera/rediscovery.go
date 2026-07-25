@@ -370,7 +370,12 @@ func (cm *CameraManager) ensureEncoding(cameraID string) {
 		if err := cm.persistConfig(); err != nil {
 			logger.Warn("failed to persist resolved encoding", "camera_id", cameraID, "encoding", encLower, "error", err)
 		} else {
-			logger.Info("auto-persisted encoding for camera", "camera_id", cameraID, "encoding", encLower, "stream_encoding", resolved)
+			// Only log stream_encoding when we actually wrote it (H264/H265 only).
+			logArgs := []any{"camera_id", cameraID, "encoding", encLower}
+			if resolved == "H264" || resolved == "H265" {
+				logArgs = append(logArgs, "stream_encoding", resolved)
+			}
+			logger.Info("auto-persisted encoding for camera", logArgs...)
 		}
 		// Best-effort DB persist. Single-column UPDATEs (not full-row upsert) so
 		// they can't be clobbered by a concurrent UpsertCamera rebuilding the row.

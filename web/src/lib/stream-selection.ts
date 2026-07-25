@@ -300,10 +300,20 @@ export function buildCandidateChain(
   const available = new Set(resp ? resp.protocols.filter((p) => p.Available).map((p) => p.Protocol.toLowerCase()) : []);
 
   // (3) User override pins the chain to a single mode (if still usable).
-  if (opts.override && isProtocolUsable(opts.override, enc, caps, available)) {
-    return [
-      { mode: normalizeBackendProtocol(opts.override), backendProtocol: opts.override.toLowerCase(), pinned: true },
-    ];
+  // When the backend response is null (fetch failed, NOT "empty list"), we have
+  // no authoritative knowledge of availability, so validate the override with a
+  // permissive "all protocols available" set (codec gate still applies). When
+  // the backend responded — even with an empty list — honor the hard "no": a
+  // pinned protocol the backend says it can't serve would just storm. This
+  // preserves the override's value during a transient /protocols fetch failure
+  // while still protecting against the issue #112 empty-list storm.
+  if (opts.override) {
+    const overrideAvailable = resp ? available : new Set(['webrtc', 'flv', 'hls', 'll-hls', 'mjpeg', 'wasm']);
+    if (isProtocolUsable(opts.override, enc, caps, overrideAvailable)) {
+      return [
+        { mode: normalizeBackendProtocol(opts.override), backendProtocol: opts.override.toLowerCase(), pinned: true },
+      ];
+    }
   }
 
   // (4) Walk the preference order, keeping modes that are usable here.
@@ -329,13 +339,12 @@ export function buildCandidateChain(
   const chain: Candidate[] = [];
   for (const mode of PREFERENCE_ORDER) {
     const backendProto = modeToBackendProtocol(mode);
-    // `wasm` is a frontend-only mode — the backend doesn't advertise it. Gate
-    // purely on browser capability (WebCodecs, or libde265 WASM for H.265).
-    const usable =
-      mode === 'wasm'
-        ? caps.webCodecs || (enc === 'h265' && caps.wasmH265)
-        : isProtocolUsable(mode, enc, caps, available);
-    if (usable) {
+    // All modes (including wasm) consult isProtocolUsable, which gates on BOTH
+    // backend availability AND codec/caps. wasm is advertised by the backend as
+    // the "wasm" protocol (WSStreamHandler), so when the backend reports an
+    // empty protocol list, wasm is correctly excluded too — a wasm player would
+    // still hit the WS endpoint the backend says it can't serve (issue #112).
+    if (isProtocolUsable(mode, enc, caps, available)) {
       chain.push({ mode, backendProtocol: backendProto, pinned: false });
     }
   }
@@ -373,8 +382,27 @@ function modeToBackendProtocol(mode: CameraMode): string | undefined {
 }
 
 /**
- * Is a given protocol actually usable given codec + browser caps?
- * Used to validate a user override before honoring it.
+ * Is a given protocol actually usable given codec + browser caps + backend
+ * availability?
+ *
+ * Two gates, BOTH must pass for the named real-time protocols:
+ *  1. The backend must report the protocol as Available (consulted via the
+ *     `available` set built from /protocols). Without this, the frontend would
+ *     fabricate a chain of protocols the server cannot serve — e.g. an ONVIF
+ *     camera whose recorder is down reports `{protocols:[]}`, and a codec-only
+ *     gate would still return [webrtc,flv,hls], mounting players that storm the
+ *     backend with requests it rejects (issue #112).
+ *  2. The codec must be decodable in this browser (H.265 paths need MSE H.265
+ *     or wasm; WebRTC is H.264-only).
+ *
+ * `wasm` is the exception: it's a frontend-only mode the backend doesn't
+ * advertise, so it's gated purely on browser capability (handled by the caller
+ * via caps, not here).
+ *
+ * NOTE: when `available` is empty AND resp was null (fetch failed, not "empty
+ * list"), the caller (buildCandidateChain) short-circuits to a legacy default
+ * BEFORE reaching the preference walk — so an empty set here means "backend
+ * responded but listed nothing", which is a hard "no".
  */
 export function isProtocolUsable(
   protocol: string,
@@ -385,6 +413,16 @@ export function isProtocolUsable(
   const p = protocol.toLowerCase();
   const enc = encoding.toLowerCase();
 
+  // Backend availability gate (named real-time protocols only). The backend
+  // reports protocol names; HLS is advertised as 'll-hls' (see
+  // modeToBackendProtocol), so accept either spelling for the hls mode.
+  const backendAdvertised =
+    available.has(p) ||
+    (p === 'hls' && (available.has('ll-hls') || available.has('hls'))) ||
+    (p === 'll-hls' && (available.has('hls') || available.has('ll-hls')));
+  if (!backendAdvertised) return false;
+
+  // Codec / capability gate (the original behavior, now as a second filter).
   // WebRTC: H.264 only (backend handler enforces this, but the override path
   // may not have consulted the backend).
   if (p === 'webrtc') return enc !== 'h265';
@@ -399,6 +437,7 @@ export function isProtocolUsable(
   // Without it, hls.js connects via MSE but renders a permanent black screen.
   if (p === 'hls' || p === 'll-hls') return enc !== 'h265' || caps.h265MSE;
 
-  // If the backend explicitly listed it as available, trust it.
-  return available.has(p);
+  // Unknown protocol — fall back to the explicit listing (already checked
+  // backendAdvertised above, so this is just defensive).
+  return true;
 }

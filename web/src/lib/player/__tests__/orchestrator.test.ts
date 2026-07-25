@@ -16,6 +16,11 @@ const H264_RESP: ProtocolsResponse = {
     { Protocol: 'flv', Available: true, Reason: '' },
     { Protocol: 'll-hls', Available: true, Reason: '' },
     { Protocol: 'hls', Available: true, Reason: '' },
+    // wasm is advertised by the backend's WSStreamHandler (always registered,
+    // see pkg/app/run.go). Including it here matches real /protocols output so
+    // the wasm mode (gated on caps AND availability) can lead the chain when
+    // the browser supports WebCodecs.
+    { Protocol: 'wasm', Available: true, Reason: '' },
   ],
 };
 
