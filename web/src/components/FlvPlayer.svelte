@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
-  import { getAuthHeader } from '$lib/api';
+  import { getAuthHeader, getTokenForUrl } from '$lib/api';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
@@ -164,10 +164,10 @@ let videoEventAc: AbortController | null = null;
   }
 
   function refreshSnapshot() {
-    const authHeader = getAuthHeader();
     let url = getSnapshotUrl(cameraId);
-    if (authHeader) {
-      const token = authHeader.replace('Basic ', '');
+    // ?token= carries the bare session token (mbs_...), NOT a "Bearer ..." header.
+    const token = getTokenForUrl();
+    if (token) {
       url += `?token=${encodeURIComponent(token)}`;
     }
     snapshotSrc = `${url}&_t=${Date.now()}`;

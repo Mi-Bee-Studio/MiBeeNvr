@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
-  import { getAuthHeader, API_BASE } from '$lib/api';
+  import { getAuthHeader, getTokenForUrl, API_BASE } from '$lib/api';
 
   interface Props {
     cameraId: string;
@@ -132,13 +132,12 @@
     if (!cameraId) return;
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const authHeader = getAuthHeader();
-    // wsstream endpoint accepts ?token= for auth (base64 user:pass)
+    // wsstream endpoint accepts ?token= for auth. The token is the bare session
+    // token (mbs_...), NOT a "Bearer ..." header value.
     let wsUrl = `${proto}//${window.location.host}${API_BASE}/cameras/${cameraId}/stream/ws`;
-    if (authHeader) {
-      // Extract credentials from Basic auth header
-      const b64 = authHeader.replace('Basic ', '');
-      wsUrl += `?token=${b64}`;
+    const token = getTokenForUrl();
+    if (token) {
+      wsUrl += `?token=${encodeURIComponent(token)}`;
     }
 
     try {
