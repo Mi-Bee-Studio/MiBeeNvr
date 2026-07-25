@@ -24,7 +24,8 @@ vi.mock('$lib/audio-player', () => {
 
 vi.mock('$lib/api', () => {
   return {
-    getAuthHeader: vi.fn(() => 'Basic dGVzdDp0ZXN0'),
+    getAuthHeader: vi.fn(() => 'Bearer mbs_testtoken.sig'),
+    getTokenForUrl: vi.fn(() => 'mbs_testtoken.sig'),
     apiRequest: vi.fn(),
     API_BASE: '/api',
   };

@@ -4,9 +4,10 @@
 
 // Client — auth, base fetch wrappers
 export {
-  storeCredentials,
-  getCredentials,
-  clearCredentials,
+  storeToken,
+  getToken,
+  clearToken,
+  getTokenForUrl,
   isAuthenticated,
   login,
   logout,

@@ -9,7 +9,7 @@
  * backward-compat with existing callers but no longer changes the output.
  */
 
-import { getCredentials } from '$lib/api';
+import { getAuthHeader } from '$lib/api';
 import type Hls from 'hls.js';
 
 /** RPi-optimized hls.js configuration. Always low-latency. */
@@ -57,21 +57,21 @@ export function createHlsConfig(_protocol: string = 'hls'): Partial<Hls.Config> 
       },
     },
     xhrSetup: (xhr: XMLHttpRequest, url: string) => {
-      const creds = getCredentials();
-      if (creds) {
+      const authHeader = getAuthHeader();
+      if (authHeader) {
         if (!xhr.readyState) {
           xhr.open('GET', url, true);
         }
-        xhr.setRequestHeader('Authorization', 'Basic ' + btoa(`${creds.username}:${creds.password}`));
+        xhr.setRequestHeader('Authorization', authHeader);
       }
     },
     // HLS.js 1.6+ uses fetch by default; xhrSetup alone doesn't add auth to fetch requests.
     fetchSetup: (context, initParams) => {
-      const creds = getCredentials();
-      if (creds) {
+      const authHeader = getAuthHeader();
+      if (authHeader) {
         initParams.headers = {
           ...initParams.headers,
-          Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+          Authorization: authHeader,
         };
       }
       return new Request(context.url, initParams);

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setupApi, storeCredentials } from '$lib/api';
+  import { setupApi, storeToken } from '$lib/api';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
@@ -103,10 +103,9 @@
     try {
       const res = await setupApi(username, password, language, storagePath);
 
-      // Decode token to get credentials and store them
-      const decoded = atob(res.token);
-      const [user, pass] = decoded.split(':');
-      storeCredentials(user, pass);
+      // Store the signed session token returned by the server. The browser
+      // never carries the plaintext password again after setup.
+      storeToken(res.token, res.expires_at);
 
       // Show completion toast
       const protocolLabel = bestProtocol === 'llhls' ? 'LL-HLS'

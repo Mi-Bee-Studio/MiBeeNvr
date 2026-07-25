@@ -2,8 +2,22 @@
  * Base HTTP client — auth, generic fetch wrappers
  */
 
-// Auth credentials storage (sessionStorage — cleared on browser close)
-const AUTH_KEY = 'mibee_nvr_auth';
+// Session token storage.
+//
+// The browser holds a stateless HMAC-signed session token (issued by
+// /api/auth/login or /api/setup). It is kept in localStorage (NOT sessionStorage)
+// so that opening a new tab or restarting the browser does NOT force a re-login.
+// localStorage is shared across same-origin tabs, which is exactly the behavior
+// users expect from an NVR dashboard.
+//
+// The token NEVER contains the password — only a username + expiry, signed by
+// the server with a per-process pepper. See internal/middleware/token.go for the
+// signing/verification scheme. Sliding renewal happens transparently: when the
+// server sees a token nearing expiry it returns a fresh one in the
+// X-Renewed-Token response header, and apiRequest swaps it in here.
+const TOKEN_KEY = 'mibee_nvr_token';
+// Renewed-token response header (must match internal/middleware/token.go).
+const RENEWED_TOKEN_HEADER = 'X-Renewed-Token';
 
 export interface AuthCredentials {
   username: string;
@@ -12,6 +26,8 @@ export interface AuthCredentials {
 
 export interface LoginResponse {
   status: string;
+  token?: string;
+  expires_at?: string;
 }
 
 export interface ApiError {
@@ -60,44 +76,92 @@ export interface SystemStats {
   timestamp: number;
 }
 
-// Store credentials in sessionStorage (cleared on browser close)
-export function storeCredentials(username: string, password: string): void {
-  const encoded = btoa(`${username}:${password}`);
-  sessionStorage.setItem(AUTH_KEY, encoded);
+// --- Session token storage (localStorage) ---------------------------------
+
+interface StoredSession {
+  token: string;
+  expiresAt: number; // epoch ms
 }
 
-// Get credentials from sessionStorage
-export function getCredentials(): AuthCredentials | null {
-  const encoded = sessionStorage.getItem(AUTH_KEY);
-  if (!encoded) return null;
-
+function readSession(): StoredSession | null {
   try {
-    const decoded = atob(encoded);
-    const [username, password] = decoded.split(':');
-    return { username, password };
+    const raw = localStorage.getItem(TOKEN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredSession;
+    if (!parsed || typeof parsed.token !== 'string' || typeof parsed.expiresAt !== 'number') {
+      return null;
+    }
+    return parsed;
   } catch (e) {
-    console.warn('Failed to decode credentials:', e);
+    console.warn('Failed to parse stored session:', e);
     return null;
   }
 }
 
-// Clear credentials
-export function clearCredentials(): void {
-  sessionStorage.removeItem(AUTH_KEY);
+// Store the session token returned by /api/auth/login (or /api/setup). The
+// token is kept in localStorage so the session survives new tabs and browser
+// restarts. expiresAt is the absolute epoch-ms expiry (from the server's
+// expires_at RFC3339 field, or Date.now()+fallback if absent).
+export function storeToken(token: string, expiresAtIso?: string): void {
+  let expiresAt: number;
+  if (expiresAtIso) {
+    const t = Date.parse(expiresAtIso);
+    expiresAt = Number.isNaN(t) ? Date.now() + 2 * 60 * 60 * 1000 : t;
+  } else {
+    expiresAt = Date.now() + 2 * 60 * 60 * 1000;
+  }
+  const session: StoredSession = { token, expiresAt };
+  localStorage.setItem(TOKEN_KEY, JSON.stringify(session));
 }
 
-// Check if user is authenticated
+// Get the raw session token, or null if absent/expired. Expired tokens are
+// purged on read so a stale localStorage entry doesn't fool isAuthenticated().
+export function getToken(): string | null {
+  const s = readSession();
+  if (!s) return null;
+  if (Date.now() >= s.expiresAt) {
+    // Locally expired — clear it so the next navigation goes to login cleanly.
+    localStorage.removeItem(TOKEN_KEY);
+    return null;
+  }
+  return s.token;
+}
+
+// Clear the stored session token (logout).
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// Silently swap in a renewed token delivered via the X-Renewed-Token response
+// header, preserving the original expiry scheme. No-op when the header is absent
+// or the value looks invalid.
+function maybeApplyRenewedToken(response: Response): void {
+  const renewed = response.headers.get(RENEWED_TOKEN_HEADER);
+  if (!renewed) return;
+  const s = readSession();
+  // Preserve existing expiry (the server renewed near the same lifetime); if we
+  // somehow have no session, fall back to +TTL from now.
+  const expiresAt = s?.expiresAt ?? Date.now() + 2 * 60 * 60 * 1000;
+  localStorage.setItem(TOKEN_KEY, JSON.stringify({ token: renewed, expiresAt } as StoredSession));
+}
+
+// Check if user is authenticated (has a non-expired session token).
 export function isAuthenticated(): boolean {
-  return getCredentials() !== null;
+  return getToken() !== null;
 }
 
-// Get Basic Auth header value
+// Get the Authorization header value for API calls: "Bearer <session-token>".
 export function getAuthHeader(): string | null {
-  const creds = getCredentials();
-  if (!creds) return null;
+  const token = getToken();
+  if (!token) return null;
+  return `Bearer ${token}`;
+}
 
-  const encoded = btoa(`${creds.username}:${creds.password}`);
-  return `Basic ${encoded}`;
+// Get just the session token, for use as a ?token= query parameter where
+// headers cannot be set (WebSocket upgrades, sendBeacon telemetry). The backend
+// auth middleware accepts ?token=mbs_... on the same path as the Bearer header.
+export function getTokenForUrl(): string | null {
+  return getToken();
 }
 
 // API base URL (relative path for embedded static files)
@@ -139,10 +203,14 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
     window.dispatchEvent(new CustomEvent('nvr-api-offline'));
   }
 
+  // Sliding renewal: a token nearing expiry causes the middleware to mint a
+  // fresh one and return it here. Swap it into localStorage transparently.
+  maybeApplyRenewedToken(response);
+
   if (!response.ok) {
     // 401 → session expired or invalid credentials → force re-login
     if (response.status === 401) {
-      clearCredentials();
+      clearToken();
       window.location.hash = '#/login';
       throw new ApiRequestError('Session expired', 'AUTH_EXPIRED');
     }
@@ -173,9 +241,11 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
     }
     throw e;
   }
+  // Sliding renewal applies to blob responses too (e.g. snapshot downloads).
+  maybeApplyRenewedToken(response);
   if (!response.ok) {
     if (response.status === 401) {
-      clearCredentials();
+      clearToken();
       window.location.hash = '#/login';
       throw new Error('Session expired');
     }
@@ -216,7 +286,13 @@ export async function apiHeadHeader(
   }
 }
 
-// Login endpoint
+// Login endpoint.
+//
+// The request itself still uses BasicAuth (the server validates user:pass via
+// bcrypt), but on success the server returns a stateless signed session token
+// which we persist — the browser then NEVER holds the password again. This is
+// the core security improvement over the old base64(user:pass)-in-sessionStorage
+// scheme.
 export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
 
@@ -237,17 +313,20 @@ export async function login(username: string, password: string, signal?: AbortSi
     throw new Error((errorData as ApiError).error || 'Invalid credentials');
   }
 
-  const data = await response.json();
+  const data = (await response.json()) as LoginResponse;
 
-  // Store credentials on success
-  storeCredentials(username, password);
+  // Store the signed session token (NOT the password). expires_at drives local
+  // expiry so isAuthenticated() can short-circuit without a round-trip.
+  if (data.token) {
+    storeToken(data.token, data.expires_at);
+  }
 
-  return data as LoginResponse;
+  return data;
 }
 
 // Logout
 export function logout(): void {
-  clearCredentials();
+  clearToken();
   window.location.hash = '#/login';
 }
 
@@ -266,6 +345,7 @@ export async function getSystemStats(signal?: AbortSignal): Promise<SystemStats>
 export interface SetupResponse {
   status: string;
   token: string;
+  expires_at?: string;
 }
 
 // First-time setup endpoint (no auth required)

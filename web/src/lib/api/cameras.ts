@@ -1,7 +1,7 @@
 /**
  * Camera API — CRUD, ONVIF discovery, PTZ, protocols, per-camera merge config
  */
-import { apiRequest, getAuthHeader, clearCredentials, API_BASE } from './client';
+import { apiRequest, getAuthHeader, clearToken, API_BASE } from './client';
 
 // --- Types ---
 
@@ -317,7 +317,7 @@ export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   }
   if (!resp.ok) {
     if (resp.status === 401) {
-      clearCredentials();
+      clearToken();
       window.location.hash = '#/login';
     }
     throw new Error(`HTTP ${resp.status}`);

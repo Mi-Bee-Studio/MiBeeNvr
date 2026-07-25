@@ -6,7 +6,8 @@
  * delivery that survives page unload.
  */
 
-const AUTH_KEY = 'mibee_nvr_auth';
+import { getTokenForUrl } from '$lib/api/client';
+
 const TELEMETRY_ENDPOINT = '/api/telemetry';
 
 /** Whether user has explicitly opted into telemetry in production mode. */
@@ -37,28 +38,11 @@ interface TelemetryEvent {
   details?: object;
 }
 
-/** Get stored BasicAuth credentials from sessionStorage. */
-function getAuthCredentials(): { username: string; password: string } | null {
-  try {
-    const encoded = sessionStorage.getItem(AUTH_KEY);
-    if (!encoded) return null;
-    const decoded = atob(encoded);
-    const colonIdx = decoded.indexOf(':');
-    if (colonIdx === -1) return null;
-    return {
-      username: decoded.substring(0, colonIdx),
-      password: decoded.substring(colonIdx + 1),
-    };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Send a telemetry event to the backend using navigator.sendBeacon.
  *
- * Gracefully degrades: if sendBeacon is unavailable or auth credentials
- * are missing, silently skips. Never throws.
+ * Gracefully degrades: if sendBeacon is unavailable or no session token
+ * is present, silently skips. Never throws.
  *
  * @param event      Event type (e.g., "playback_start", "playback_error")
  * @param cameraId   Camera identifier
@@ -71,8 +55,8 @@ export function sendTelemetry(event: string, cameraId: string, durationMs?: numb
 
   if (typeof navigator?.sendBeacon !== 'function') return;
 
-  const creds = getAuthCredentials();
-  if (!creds) return;
+  const token = getTokenForUrl();
+  if (!token) return;
 
   const payload: TelemetryEvent = {
     event,
@@ -81,15 +65,9 @@ export function sendTelemetry(event: string, cameraId: string, durationMs?: numb
     ...(details && { details }),
   };
 
-  // sendBeacon cannot set headers directly. Use Blob + FormData to pass
-  // BasicAuth. The server's BasicAuth middleware also accepts ?token= for
-  // WebSocket, but for POST we use Blob with the right Content-Type and
-  // embed auth in a custom header via the fetch-with-keepalive fallback
-  // when sendBeacon can't carry the auth header.
-
-  // Build BasicAuth token as query param — the auth middleware supports
-  // this fallback (originally for WebSocket).
-  const token = btoa(`${creds.username}:${creds.password}`);
+  // sendBeacon cannot set headers, so pass the session token as a ?token= query
+  // param — the auth middleware accepts ?token=mbs_... on the same path as the
+  // Bearer header. The token is already the signed "mbs_..." string.
   const url = `${TELEMETRY_ENDPOINT}?token=${encodeURIComponent(token)}`;
 
   const blob = new Blob([JSON.stringify(payload)], {
