@@ -84,6 +84,14 @@ func newTestManager(t *testing.T) (*CameraManager, *storage.Manager, *storage.DB
 	t.Cleanup(func() { store.CleanupTempFiles() })
 
 	mgr := NewCameraManager(cfg, store, db, configPath)
+	// Stop the manager BEFORE the db.Close() / t.TempDir() cleanups run (LIFO
+	// order: this is registered last, so it runs first). Stop() waits on
+	// backfillWg, ensuring the startup backfill goroutines (backfillStableIDs,
+	// backfillEncoding — both touch cm.db) have fully exited before the DB file
+	// is closed and the temp dir is deleted. Without this, a test that calls
+	// Start() races the goroutine against t.TempDir() cleanup →
+	// "directory not empty" / "disk I/O error" (flaky under -race, see #112).
+	t.Cleanup(func() { _ = mgr.Stop() })
 	return mgr, store, db, configPath
 }
 
