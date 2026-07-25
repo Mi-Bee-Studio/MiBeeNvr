@@ -134,8 +134,9 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 				// and hand it back in the response header. The frontend swaps it in.
 				expiresAt := time.Unix(claims.EXP, 0)
 				if NeedsRenewal(expiresAt, time.Now()) {
-					newTok, newExp := SignSessionToken(claims.Sub, currentHash, time.Now())
-					_ = newExp
+					// Mint a fresh token; its expiry is carried inside the token
+					// itself, so we discard the returned expiresAt here.
+					newTok, _ := SignSessionToken(claims.Sub, currentHash, time.Now())
 					// It is safe to set the header before calling next: headers are
 					// flushed only when the first Write/WriteHeader happens downstream.
 					w.Header().Set(RenewedTokenHeader, newTok)
