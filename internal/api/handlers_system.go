@@ -301,7 +301,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	// Camera count from the in-memory config (O(1)) — avoids a redundant
 	// ListCameras DB round-trip on every 30s Dashboard poll.
-	cameraCount := 0
+	var cameraCount int
 	if h.camMgr != nil {
 		cameraCount = h.camMgr.CameraCount()
 	} else {

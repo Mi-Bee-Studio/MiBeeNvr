@@ -212,5 +212,3 @@ func bearerSessionToken(r *http.Request) string {
 	}
 	return ""
 }
-
-

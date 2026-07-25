@@ -238,7 +238,7 @@ func TestAuthMiddlewareRenewsExpiringToken(t *testing.T) {
 	}))
 
 	// Sign a token that is about to expire (5s of life left, well under RenewThreshold).
-	issuedAt := time.Now().Add(-(TokenTTL - 5 * time.Second))
+	issuedAt := time.Now().Add(-(TokenTTL - 5*time.Second))
 	token, _ := SignSessionToken("admin", hash, issuedAt)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

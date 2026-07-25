@@ -465,7 +465,12 @@ func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "", middleware.AuthRateLimitConfig{})
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
+	// handleLogin signs a session token using config.Auth (username + bcrypt
+	// hash), so the test handler must carry a populated config — not nil.
+	cfg := &config.Config{
+		Auth: config.AuthConfig{Username: username, PasswordHash: passwordHash},
+	}
+	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil)
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.
