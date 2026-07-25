@@ -326,6 +326,46 @@ func (d *DB) GetCameraStableID(ctx context.Context, cameraID string) (string, er
 	return stableID, nil
 }
 
+// UpdateCameraEncoding updates the encoding column for a camera.
+//
+// encoding is the resolved video codec (lowercase: "h264"/"h265"/"mjpeg"/"jpeg")
+// persisted at runtime after the recorder probes the real stream. This is the
+// single-column runtime backfill that complements UpsertCamera (which overwrites
+// the whole row and would otherwise clobber a just-resolved value when an
+// unrelated field is updated). Mirrors UpdateCameraStableID. Idempotent: does
+// nothing if cameraID does not exist (0 rows affected). See issue #112.
+func (d *DB) UpdateCameraEncoding(ctx context.Context, cameraID, encoding string) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET encoding=? WHERE id=?;`, encoding, cameraID)
+	return err
+}
+
+// UpdateCameraStreamEncoding updates the stream_encoding column for a camera.
+//
+// stream_encoding is the ONVIF-specific uppercase codec ("H264"/"H265") used by
+// the ONVIF recorder's claimedEncoding/detectEncoding path. Persisted alongside
+// encoding so both fields stay consistent across recorder restarts. Mirrors
+// UpdateCameraEncoding. See issue #112.
+func (d *DB) UpdateCameraStreamEncoding(ctx context.Context, cameraID, streamEncoding string) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET stream_encoding=? WHERE id=?;`, streamEncoding, cameraID)
+	return err
+}
+
+// GetCameraEncoding retrieves the encoding for a camera.
+// Returns empty string if camera not found or encoding is not set.
+// Used by the startup backfill (YAML→DB) and by ensureEncoding to decide
+// whether a runtime probe is needed.
+func (d *DB) GetCameraEncoding(ctx context.Context, cameraID string) (string, error) {
+	var encoding string
+	err := d.readConn().QueryRowContext(ctx, `SELECT COALESCE(encoding, '') FROM cameras WHERE id=? LIMIT 1`, cameraID).Scan(&encoding)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return encoding, nil
+}
+
 // CameraExistsByStableID reports whether any camera row (including archived)
 // has the given stable_id. Used for dedup when enrolling a device by its
 // ONVIF serial number.

@@ -415,6 +415,13 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.ProfileToken) == "" {
 		go cm.ensureProfileToken(cam.ID)
 	}
+	// For ONVIF cameras without a resolved encoding, persist the probe result
+	// (RTSP DESCRIBE / ONVIF profile) so a later device outage doesn't leave
+	// encoding="" — which makes the frontend lose the codec and storm through
+	// the protocol chain. Mirrors ensureStableID/ensureProfileToken. See #112.
+	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.Encoding) == "" {
+		go cm.ensureEncoding(cam.ID)
+	}
 	return nil
 }
 

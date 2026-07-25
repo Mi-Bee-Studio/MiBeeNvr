@@ -68,6 +68,13 @@ type ONVIFRecorder struct {
 	delegate    model.Recorder
 	rtspURL     string // Cached RTSP URL from ONVIF
 	httpJPEGURL string // Cached MJPEG HTTP URL (protected by mu)
+	// resolvedEncoding is the video codec resolved by detectEncoding during
+	// Start (e.g. "H264", "H265", "MJPEG", "JPEG"). Empty before Start completes
+	// or when detection failed. Exposed via ResolvedEncoding() so the camera
+	// manager can persist it (mirroring ResolvedProfileToken) — see issue #112.
+	// Without persistence, ONVIF auto-detect cameras carry encoding="" in DB/YAML
+	// and a brief device outage makes the frontend lose the codec → protocol storm.
+	resolvedEncoding string
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -181,6 +188,15 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 
 	// 4. Create delegate recorder based on encoding (createDelegate may do an
 	//    RTSP DESCRIBE probe + HTTP MJPEG probes — all unlocked).
+	// Probe the encoding ONCE here and stash it on the struct so createDelegate
+	// can reuse it without re-probing (detectEncoding has side effects on
+	// r.rtspURL via resolveJPEGEncoding — calling it twice would double-probe
+	// and potentially mutate state). The stashed value is also what
+	// ResolvedEncoding() exposes for the camera manager to persist (issue #112).
+	detected := r.detectEncoding(ctx)
+	r.mu.Lock()
+	r.resolvedEncoding = detected
+	r.mu.Unlock()
 	delegate := r.newRecorder(rtspURL)
 
 	// 5. Start delegate (network dial — unlocked).
@@ -244,6 +260,30 @@ func (r *ONVIFRecorder) ResolvedProfileToken() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cfg.ProfileToken
+}
+
+// ResolvedEncoding returns the video codec resolved during Start (e.g. "H264",
+// "H265", "MJPEG", "JPEG"). Empty if Start hasn't run yet or detection failed.
+// Used by the camera manager to persist the resolved encoding so a later device
+// outage doesn't leave the camera with an empty encoding in DB/YAML — which
+// would make the frontend lose the codec and thrash through the protocol chain
+// (issue #112). Mirrors ResolvedProfileToken's accessor pattern.
+func (r *ONVIFRecorder) ResolvedEncoding() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.resolvedEncoding
+}
+
+// SetResolvedEncodingForTest sets the resolved encoding AND the recorder status
+// (so ensureEncoding's Status()==StatusRecording gate passes) for unit tests
+// that inject a recorder via CameraManager.SetTestRecorder without running a
+// real Start(). Test-only: production code populates these fields in Start.
+// The delegate is intentionally left nil so Status() reports r.status directly.
+func (r *ONVIFRecorder) SetResolvedEncodingForTest(enc string, status model.RecorderStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolvedEncoding = enc
+	r.status = status
 }
 
 // Delegate returns the internal H264/H265 recorder delegate.
@@ -579,7 +619,20 @@ func (r *ONVIFRecorder) guessMJPEGURL() string {
 
 // createDelegate creates the appropriate internal recorder based on encoding.
 func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
-	encoding := r.detectEncoding(context.Background())
+	// Start() probed the encoding once and stashed it on r.resolvedEncoding;
+	// reuse it here instead of re-probing. detectEncoding has side effects
+	// (resolveJPEGEncoding mutates r.rtspURL) so it must run exactly once.
+	// Fall back to a fresh probe only if Start somehow didn't populate it
+	// (defensive — keeps createDelegate usable from tests that skip Start).
+	r.mu.Lock()
+	encoding := r.resolvedEncoding
+	r.mu.Unlock()
+	if encoding == "" {
+		encoding = r.detectEncoding(context.Background())
+		r.mu.Lock()
+		r.resolvedEncoding = encoding
+		r.mu.Unlock()
+	}
 	switch encoding {
 	case "H265":
 		cfg := H265Config{

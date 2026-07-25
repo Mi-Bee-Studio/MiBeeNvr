@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 )
 
 // TestEnsureStableIDWritesDB verifies that ensureStableID writes stable_id
@@ -267,4 +269,124 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// TestEnsureEncodingWritesBoth verifies that ensureEncoding persists the
+// recorder-resolved encoding to BOTH YAML config and DB (the dual-write that
+// makes the value race-safe against UpsertCamera's full-row overwrite). This is
+// the core fix for issue #112: without persistence, an ONVIF auto-detect camera
+// (ESP32 MiBeeCam) carries encoding="" and a brief outage makes the frontend
+// lose the codec → protocol storm.
+func TestEnsureEncodingWritesBoth(t *testing.T) {
+	mgr, _, db, configPath := newTestManager(t)
+	ctx := context.Background()
+	cameraID := "cam-enc-onvif"
+	mgr.cfg.Cameras = append(mgr.cfg.Cameras, config.CameraConfig{
+		ID:       cameraID,
+		Name:     "Enc ONVIF Cam",
+		Protocol: "onvif",
+		// Encoding intentionally empty — ensureEncoding should populate it.
+	})
+	mgr.reseedSnapshotConfigs()
+
+	// Insert a DB row (empty encoding) so UpdateCameraEncoding has a target.
+	require.NoError(t, db.UpsertCamera(ctx, cameraID, "Enc ONVIF Cam", "onvif", "",
+		"", "", "", "", "", "", ""))
+
+	// Inject an ONVIF recorder that reports a resolved encoding + recording
+	// status, the way a real recorder would after Start() probes RTSP DESCRIBE.
+	rec := recorder.NewONVIFRecorder(
+		recorder.ONVIFConfig{CameraID: cameraID},
+		&onvif.MockDeviceClient{},
+		nil, // store unused — recorder never runs a real Start here
+	)
+	rec.SetResolvedEncodingForTest("H265", model.StatusRecording)
+	mgr.SetTestRecorder(cameraID, rec)
+
+	// Act.
+	mgr.ensureEncoding(cameraID)
+
+	// Assert: YAML config updated (lowercase; MJPEG→jpeg normalization).
+	camCfg := mgr.GetCameraConfig(cameraID)
+	require.NotNil(t, camCfg)
+	assert.Equal(t, "h265", camCfg.Encoding, "ensureEncoding should populate YAML config encoding (lowercase)")
+	assert.Equal(t, "H265", camCfg.StreamEncoding, "ensureEncoding should populate YAML config stream_encoding (uppercase)")
+
+	// Assert: DB updated.
+	dbEnc, err := db.GetCameraEncoding(ctx, cameraID)
+	require.NoError(t, err)
+	assert.Equal(t, "h265", dbEnc, "ensureEncoding should write encoding to DB")
+
+	// Assert: YAML persisted to disk.
+	loadedCfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	var found bool
+	for _, cam := range loadedCfg.Cameras {
+		if cam.ID == cameraID {
+			assert.Equal(t, "h265", cam.Encoding, "encoding persisted to YAML on disk")
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "camera present in persisted YAML")
+}
+
+// TestEnsureEncoding_NormalizesMJPEGToJPEG confirms the MJPEG-over-RTSP case
+// (internal code "MJPEG") is persisted as "jpeg" so the frontend's MJPEG
+// player short-circuit (which keys on encoding=="jpeg"|"mjpeg") selects the
+// right player even when the device is later unreachable. This is the exact
+// scenario from issue #112 (MiBeeCam-S3).
+func TestEnsureEncoding_NormalizesMJPEGToJPEG(t *testing.T) {
+	mgr, _, db, _ := newTestManager(t)
+	ctx := context.Background()
+	cameraID := "cam-mjpeg-rtsp"
+	mgr.cfg.Cameras = append(mgr.cfg.Cameras, config.CameraConfig{
+		ID: cameraID, Name: "MJPEG Cam", Protocol: "onvif",
+	})
+	mgr.reseedSnapshotConfigs()
+	require.NoError(t, db.UpsertCamera(ctx, cameraID, "MJPEG Cam", "onvif", "", "", "", "", "", "", "", ""))
+
+	rec := recorder.NewONVIFRecorder(
+		recorder.ONVIFConfig{CameraID: cameraID},
+		&onvif.MockDeviceClient{}, nil,
+	)
+	// detectEncoding returns "MJPEG" for MJPEG-over-RTSP (ESP32 RTSP-AVI firmware).
+	rec.SetResolvedEncodingForTest("MJPEG", model.StatusRecording)
+	mgr.SetTestRecorder(cameraID, rec)
+
+	mgr.ensureEncoding(cameraID)
+
+	camCfg := mgr.GetCameraConfig(cameraID)
+	require.NotNil(t, camCfg)
+	assert.Equal(t, "jpeg", camCfg.Encoding, "MJPEG should normalize to jpeg for player selection")
+	// MJPEG-over-RTSP does NOT populate stream_encoding (only H264/H265 do).
+	assert.Equal(t, "", camCfg.StreamEncoding)
+}
+
+// TestEnsureEncoding_IdempotentWhenAlreadySet confirms ensureEncoding is a
+// no-op when the camera already has an encoding (mirrors ensureStableID's
+// already-set guard). This prevents re-probe races and unnecessary writes.
+func TestEnsureEncoding_IdempotentWhenAlreadySet(t *testing.T) {
+	mgr, _, db, _ := newTestManager(t)
+	ctx := context.Background()
+	cameraID := "cam-already-set"
+	mgr.cfg.Cameras = append(mgr.cfg.Cameras, config.CameraConfig{
+		ID: cameraID, Name: "Already Set", Protocol: "onvif", Encoding: "h264",
+	})
+	mgr.reseedSnapshotConfigs()
+	require.NoError(t, db.UpsertCamera(ctx, cameraID, "Already Set", "onvif", "h264", "", "", "", "", "", "", ""))
+
+	rec := recorder.NewONVIFRecorder(
+		recorder.ONVIFConfig{CameraID: cameraID},
+		&onvif.MockDeviceClient{}, nil,
+	)
+	// Recorder would resolve h265, but since config already says h264 we keep it.
+	rec.SetResolvedEncodingForTest("H265", model.StatusRecording)
+	mgr.SetTestRecorder(cameraID, rec)
+
+	mgr.ensureEncoding(cameraID)
+
+	camCfg := mgr.GetCameraConfig(cameraID)
+	require.NotNil(t, camCfg)
+	assert.Equal(t, "h264", camCfg.Encoding, "existing encoding must not be overwritten")
 }
