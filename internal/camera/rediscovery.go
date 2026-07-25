@@ -150,6 +150,59 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 	}
 }
 
+// backfillEncoding is the startup counterpart of ensureEncoding: it syncs the
+// encoding/stream_encoding columns from YAML to DB for cameras whose YAML
+// already has a value but DB doesn't (e.g. cameras that resolved encoding in a
+// prior run via ensureEncoding — YAML was written — but the DB write lagged or
+// the DB was restored from a backup).
+//
+// Cameras with empty YAML encoding are NOT handled here: they need a live
+// recorder probe (ensureEncoding), which is triggered asynchronously from
+// startRecorderLocked when the recorder starts. Running that probe here would
+// block startup on per-camera network round-trips. See issue #112.
+func (cm *CameraManager) backfillEncoding(ctx context.Context) {
+	if cm.db == nil {
+		return
+	}
+	// Snapshot under configMu (same rationale as backfillStableIDs).
+	cm.configMu.Lock()
+	cameras := make([]config.CameraConfig, len(cm.cfg.Cameras))
+	copy(cameras, cm.cfg.Cameras)
+	cm.configMu.Unlock()
+
+	for i := range cameras {
+		if ctx.Err() != nil {
+			return
+		}
+		cam := cameras[i]
+		yamlEnc := strings.TrimSpace(cam.Encoding)
+		if yamlEnc == "" {
+			continue // nothing to backfill; runtime probe (ensureEncoding) owns this
+		}
+		dbEnc, err := cm.db.GetCameraEncoding(ctx, cam.ID)
+		if err != nil {
+			logger.Warn("backfill: failed to read db encoding", "camera_id", cam.ID, "error", err)
+			continue
+		}
+		if strings.TrimSpace(dbEnc) == "" {
+			if err := cm.db.UpdateCameraEncoding(ctx, cam.ID, yamlEnc); err != nil {
+				logger.Warn("backfill: failed to write encoding to db", "camera_id", cam.ID, "encoding", yamlEnc, "error", err)
+			} else {
+				logger.Info("backfill: wrote encoding to db from yaml", "camera_id", cam.ID, "encoding", yamlEnc)
+			}
+		}
+		// stream_encoding (ONVIF uppercase form) — same YAML→DB sync.
+		yamlStreamEnc := strings.TrimSpace(cam.StreamEncoding)
+		if yamlStreamEnc != "" {
+			// No dedicated GetCameraStreamEncoding reader; a cheap UPDATE is
+			// idempotent and harmless if DB already matches.
+			if err := cm.db.UpdateCameraStreamEncoding(ctx, cam.ID, yamlStreamEnc); err != nil {
+				logger.Warn("backfill: failed to write stream_encoding to db", "camera_id", cam.ID, "stream_encoding", yamlStreamEnc, "error", err)
+			}
+		}
+	}
+}
+
 // ensureProfileToken persists the profile token that the ONVIF recorder
 // auto-selected during Start (via onvif.SelectMainProfile). Without this, every
 // NVR restart re-runs GetProfiles to re-select — a redundant round-trip that
@@ -213,6 +266,128 @@ func (cm *CameraManager) ensureProfileToken(cameraID string) {
 			logger.Warn("failed to persist auto-selected profile_token", "camera_id", cameraID, "error", err)
 		} else {
 			logger.Info("auto-persisted profile_token for camera", "camera_id", cameraID, "profile_token", token)
+		}
+		return
+	}
+}
+
+// ensureEncoding persists the video codec resolved by the ONVIF recorder
+// (via RTSP DESCRIBE / ONVIF profile probing) back to config (YAML) and DB.
+//
+// This closes the "encoding resolved at runtime, never persisted" gap that
+// caused the protocol-storm bug (issue #112): ONVIF auto-detect cameras (e.g.
+// ESP32 MiBeeCam) carry encoding="" in YAML/DB because encoding is "resolved at
+// runtime by the recorder". When the device is briefly unreachable the recorder
+// can't probe, encoding stays empty, and the frontend's MJPEG short-circuit
+// (which keys on encoding) fails — the camera then storms through HLS/WebRTC/WS
+// against a stream the backend can't serve. Persisting the resolved encoding
+// (the same "probe once, persist forever" pattern as stable_id) means a later
+// outage leaves the cached encoding in place, so the frontend keeps selecting
+// the correct player.
+//
+// Dual-write is REQUIRED for race safety: UpsertCamera is a full-row overwrite,
+// so a config-only write would be clobbered by the next UpsertCamera caller
+// (UpdateCamera, RediscoverAndReconnect, startup Start) that rebuilds the row
+// from the config slice. Writing BOTH cm.cfg.Cameras[i].Encoding AND the DB
+// ensures the resolved value flows forward through every subsequent upsert.
+//
+// Best-effort and non-blocking: waits up to 15s for the recorder to reach
+// StatusRecording, reads ResolvedEncoding(), and persists if the camera didn't
+// already have an encoding. No-op if encoding is already set or can't be
+// resolved. Mirrors ensureProfileToken's polling shape.
+func (cm *CameraManager) ensureEncoding(cameraID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return // recorder didn't come online in time — skip silently
+		case <-ticker.C:
+		}
+		rec := cm.GetRecorder(cameraID)
+		if rec == nil {
+			continue
+		}
+		if rec.Status() != model.StatusRecording {
+			continue // still connecting
+		}
+		onvifRec, ok := rec.(*recorder.ONVIFRecorder)
+		if !ok {
+			return // not an ONVIF recorder
+		}
+		resolved := onvifRec.ResolvedEncoding()
+		if resolved == "" {
+			return // nothing resolved
+		}
+		// detectEncoding returns uppercase ("H264"/"H265"/"MJPEG"/"JPEG").
+		// Encoding column stores lowercase (config-wide convention, e.g. rtsp
+		// cameras store "h264"/"h265"). StreamEncoding stores the uppercase
+		// ONVIF form (what claimedEncoding/detectEncoding consume).
+		encLower := strings.ToLower(resolved)
+		// MJPEG-over-RTSP is recorded as a distinct encoding internally but for
+		// persistence/player-selection purposes it's a JPEG-class camera; the
+		// frontend's MJPEG short-circuit keys on "mjpeg"/"jpeg". Normalize
+		// MJPEG→jpeg so the cached value selects the right player even when the
+		// device is later unreachable.
+		if encLower == "mjpeg" {
+			encLower = "jpeg"
+		}
+
+		// Check if config already has a non-empty encoding — avoid unnecessary
+		// writes (idempotent, like ensureProfileToken/ensureStableID).
+		cm.configMu.Lock()
+		alreadySet := false
+		for i := range cm.cfg.Cameras {
+			if cm.cfg.Cameras[i].ID == cameraID {
+				if strings.TrimSpace(cm.cfg.Cameras[i].Encoding) != "" {
+					alreadySet = true
+				}
+				break
+			}
+		}
+		if alreadySet {
+			cm.configMu.Unlock()
+			return
+		}
+		// Dual-write the config slice (so subsequent UpsertCamera calls carry
+		// the resolved value forward) AND persist to disk.
+		for i := range cm.cfg.Cameras {
+			if cm.cfg.Cameras[i].ID == cameraID {
+				cm.cfg.Cameras[i].Encoding = encLower
+				// StreamEncoding is the ONVIF uppercase form; only fill if empty
+				// (don't overwrite a user's manual override) and only for the
+				// H.264/H.265 cases it actually applies to.
+				if strings.TrimSpace(cm.cfg.Cameras[i].StreamEncoding) == "" &&
+					(resolved == "H264" || resolved == "H265") {
+					cm.cfg.Cameras[i].StreamEncoding = resolved
+				}
+				break
+			}
+		}
+		cm.configMu.Unlock()
+		if err := cm.persistConfig(); err != nil {
+			logger.Warn("failed to persist resolved encoding", "camera_id", cameraID, "encoding", encLower, "error", err)
+		} else {
+			// Only log stream_encoding when we actually wrote it (H264/H265 only).
+			logArgs := []any{"camera_id", cameraID, "encoding", encLower}
+			if resolved == "H264" || resolved == "H265" {
+				logArgs = append(logArgs, "stream_encoding", resolved)
+			}
+			logger.Info("auto-persisted encoding for camera", logArgs...)
+		}
+		// Best-effort DB persist. Single-column UPDATEs (not full-row upsert) so
+		// they can't be clobbered by a concurrent UpsertCamera rebuilding the row.
+		if cm.db != nil {
+			if err := cm.db.UpdateCameraEncoding(ctx, cameraID, encLower); err != nil {
+				logger.Warn("failed to persist encoding to db", "camera_id", cameraID, "encoding", encLower, "error", err)
+			}
+			if resolved == "H264" || resolved == "H265" {
+				if err := cm.db.UpdateCameraStreamEncoding(ctx, cameraID, resolved); err != nil {
+					logger.Warn("failed to persist stream_encoding to db", "camera_id", cameraID, "stream_encoding", resolved, "error", err)
+				}
+			}
 		}
 		return
 	}

@@ -42,6 +42,7 @@ import {
   type ProtocolsResponse,
 } from '$lib/stream-selection';
 import { getCaps } from './capabilities-cache';
+import { clearCameraProtocolOverride } from '$lib/preferences';
 import { health, type HealthState } from './health';
 
 // ─── Timing constants (tuned for a home NVR; not user-facing) ───────────────
@@ -236,8 +237,15 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
         // then jump to a workable entry. The pinned protocol just proved
         // broken; staying on it = permanent black screen. Find the most-
         // compatible fallback (HLS is universal) in the full chain and switch
-        // to it. The user's localStorage override is preserved so they can
-        // re-pin once the protocol works; we just stop forcing a broken one.
+        // to it.
+        //
+        // Issue #112: we also CLEAR the localStorage override (previously it was
+        // only ignored for the session, so a stale pin re-asserted on the next
+        // route mount — e.g. a 'hls' override pinned when an MJPEG camera was
+        // briefly unreachable kept forcing HLS across sessions). The override
+        // has now demonstrably failed; clearing it lets auto-selection take
+        // over permanently. The user can re-pin via ProtocolSwitcher anytime.
+        clearCameraProtocolOverride(cameraId);
         const fullChain = buildChain({ ...it.lastRegistration, override: null });
         // Prefer HLS (universal fallback); else the last entry (most compatible).
         const hlsIdx = fullChain.findIndex(c => c.mode === 'hls');

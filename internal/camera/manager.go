@@ -450,6 +450,18 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			cm.backfillStableIDs(ctx)
 		}()
 	}
+	// Backfill encoding from YAML config to DB (one-way sync for cameras whose
+	// YAML has an encoding but DB doesn't — e.g. after a partial migration, or
+	// when the column was added). Cameras with empty YAML encoding are handled
+	// at runtime by ensureEncoding (triggered from startRecorderLocked when the
+	// recorder probes the real codec). See issue #112.
+	if cm.db != nil {
+		cm.backfillWg.Add(1)
+		go func() {
+			defer cm.backfillWg.Done()
+			cm.backfillEncoding(ctx)
+		}()
+	}
 	return nil
 }
 

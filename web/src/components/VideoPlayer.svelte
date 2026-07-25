@@ -71,6 +71,11 @@
   let zombieCleanup: (() => void) | null = null;
   let autoRetry: ReturnType<typeof createAutoRetryScheduler> | null = null;
   let destroyed = false;
+  // streamGaveUp: the auto-retry budget was exhausted for this stream URL.
+  // Until the streamUrl/camera changes, we do NOT rebuild HLS — doing so on
+  // every visibilitychange (tab refocus) reset recreateAttempts and restarted
+  // the death-loop against a stream the backend can't serve (issue #112).
+  let streamGaveUp = false;
 
   // Freeze frame — prevents black flash during reconnection
   let frozenFrameUrl: string | null = $state(null);
@@ -180,11 +185,21 @@
           return;
         }
         if (!autoRetry) {
-          autoRetry = createAutoRetryScheduler(() => {
-            streamState = 'loading';
-            destroyCurrentHls();
-            initHls();
-          });
+          autoRetry = createAutoRetryScheduler(
+            () => {
+              streamState = 'loading';
+              destroyCurrentHls();
+              initHls();
+            },
+            () => {
+              // Retry budget exhausted — give up for this stream URL so a later
+              // visibilitychange doesn't reset recreateAttempts and restart the
+              // loop. The streamState stays 'error', which CameraPlayer reports
+              // to the orchestrator as a fatal failure (demote to next chain
+              // entry, or snapshot if the chain is exhausted).
+              streamGaveUp = true;
+            },
+          );
         }
         autoRetry.schedule();
       },
@@ -261,6 +276,10 @@ streamState = 'error';
     const hlsProtocols = ['rtsp_h264', 'rtsp_h265', 'onvif', 'rtsp', 'xiaomi'];
     if (!hlsProtocols.includes(_proto)) return;
 
+    // New stream URL = fresh retry budget. Reset the give-up flag so a camera
+    // that previously exhausted retries (e.g. was unreachable, now recovered
+    // and got a new stream URL) gets a clean slate.
+    streamGaveUp = false;
     destroyCurrentHls();
     streamState = 'loading';
 
@@ -287,8 +306,12 @@ streamState = 'error';
         if (zombieCleanup) { zombieCleanup(); zombieCleanup = null; }
       }
     } else {
-      // Tab visible — resume: rebuild HLS stream
-      if (!destroyed && streamState !== 'loading' && !hlsInstance) {
+      // Tab visible — resume: rebuild HLS stream. BUT not if this stream already
+      // exhausted its retry budget (streamGaveUp) — rebuilding would reset
+      // recreateAttempts and restart the death-loop (issue #112). Only a
+      // streamUrl/camera change legitimately resets streamGaveUp (see the
+      // streamUrl $effect prelude).
+      if (!destroyed && !streamGaveUp && streamState !== 'loading' && !hlsInstance) {
         captureFreezeFrame();
         recreateAttempts.value = 0;
         streamState = 'loading';

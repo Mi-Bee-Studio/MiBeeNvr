@@ -218,14 +218,74 @@
     if (ids.length === 0) return;
     const results = await Promise.allSettled(ids.map((id) => getCameraProtocols(id)));
     const next = new Map(cameraProtocols);
+    // Track which cameras returned an EMPTY protocol list — these are the
+    // "device temporarily unreachable / recorder not started" cases that need a
+    // backoff re-fetch (issue #112). Without re-fetch, the orchestrator would
+    // keep the camera on snapshot forever even after the device recovers.
+    const emptyIds: string[] = [];
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       const r = results[i];
-      next.set(id, r.status === 'fulfilled' ? r.value : null);
+      const value = r.status === 'fulfilled' ? r.value : null;
+      next.set(id, value);
+      // Only an explicitly-empty response (resp non-null but protocols empty)
+      // triggers re-fetch. A null resp (fetch threw) is handled by the
+      // orchestrator's !resp legacy-default path and re-fetches naturally on
+      // the next camera-list poll.
+      if (value && value.protocols.length === 0) {
+        emptyIds.push(id);
+      }
     }
     cameraProtocols = next;
     // Rebuild chains now that we have fresh backend rankings.
     syncOrchestrator();
+    // Arm backoff re-fetch for cameras whose backend reported nothing available.
+    // They render as snapshot in the meantime (no real-time player, no storm).
+    for (const id of emptyIds) {
+      scheduleEmptyProtocolsRecheck(id);
+    }
+  }
+
+  // ─── Empty-protocols backoff re-fetch (issue #112) ─────────────────────────
+  // When /protocols returns an empty list (device down / recorder starting),
+  // re-fetch with exponential backoff so the camera recovers automatically once
+  // the backend can serve it again. Per-camera timers; cleared on unmount or
+  // when a non-empty response arrives. Mirrors the auto-retry cadence used by
+  // the HLS error handler (5s/10s/20s/40s, max 4 attempts).
+  const PROTOCOLS_RECHECK_DELAYS = [5000, 10000, 20000, 40000];
+  let protocolsRecheckTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+  function scheduleEmptyProtocolsRecheck(cameraId: string, attempt = 0): void {
+    // Clear any existing timer for this camera (idempotent re-arm).
+    const existing = protocolsRecheckTimers[cameraId];
+    if (existing) clearTimeout(existing);
+    if (attempt >= PROTOCOLS_RECHECK_DELAYS.length) return; // exhausted
+    const delay = PROTOCOLS_RECHECK_DELAYS[attempt];
+    protocolsRecheckTimers[cameraId] = setTimeout(async () => {
+      delete protocolsRecheckTimers[cameraId];
+      try {
+        const resp = await getCameraProtocols(cameraId);
+        cameraProtocols = new Map(cameraProtocols).set(cameraId, resp);
+        syncOrchestrator();
+        // If still empty, schedule the next backoff tick. A non-empty response
+        // means recovery — stop re-fetching for this camera.
+        if (resp && resp.protocols.length === 0) {
+          scheduleEmptyProtocolsRecheck(cameraId, attempt + 1);
+        }
+      } catch {
+        // Fetch failed — treat like an empty response and keep backing off.
+        cameraProtocols = new Map(cameraProtocols).set(cameraId, null);
+        syncOrchestrator();
+        scheduleEmptyProtocolsRecheck(cameraId, attempt + 1);
+      }
+    }, delay);
+  }
+
+  function clearProtocolsRechecks(): void {
+    for (const id of Object.keys(protocolsRecheckTimers)) {
+      clearTimeout(protocolsRecheckTimers[id]);
+    }
+    protocolsRecheckTimers = {};
   }
 
   // (WasmPlayer preloading is handled by CameraPlayer, which lazy-imports the
@@ -409,6 +469,7 @@
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('visibilitychange', visibilityHandler);
       window.fetch = originalFetch;
+      clearProtocolsRechecks();
       _orchUnsub();
       orchestrator.dispose();
     };
