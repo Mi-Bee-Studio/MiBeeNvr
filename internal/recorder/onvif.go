@@ -187,16 +187,9 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	r.mu.Unlock()
 
 	// 4. Create delegate recorder based on encoding (createDelegate may do an
-	//    RTSP DESCRIBE probe + HTTP MJPEG probes — all unlocked).
-	// Probe the encoding ONCE here and stash it on the struct so createDelegate
-	// can reuse it without re-probing (detectEncoding has side effects on
-	// r.rtspURL via resolveJPEGEncoding — calling it twice would double-probe
-	// and potentially mutate state). The stashed value is also what
-	// ResolvedEncoding() exposes for the camera manager to persist (issue #112).
-	detected := r.detectEncoding(ctx)
-	r.mu.Lock()
-	r.resolvedEncoding = detected
-	r.mu.Unlock()
+	//    RTSP DESCRIBE probe + HTTP MJPEG probes — all unlocked). createDelegate
+	//    also stashes the resolved encoding on r.resolvedEncoding so the camera
+	//    manager can persist it via ResolvedEncoding() (issue #112).
 	delegate := r.newRecorder(rtspURL)
 
 	// 5. Start delegate (network dial — unlocked).
@@ -618,21 +611,15 @@ func (r *ONVIFRecorder) guessMJPEGURL() string {
 }
 
 // createDelegate creates the appropriate internal recorder based on encoding.
+// It probes the encoding once (via detectEncoding, which has side effects on
+// r.rtspURL when the device serves JPEG over RTSP — see resolveJPEGEncoding —
+// so it must run exactly once) and stashes the result on r.resolvedEncoding so
+// the camera manager can persist it via ResolvedEncoding() (issue #112).
 func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
-	// Start() probed the encoding once and stashed it on r.resolvedEncoding;
-	// reuse it here instead of re-probing. detectEncoding has side effects
-	// (resolveJPEGEncoding mutates r.rtspURL) so it must run exactly once.
-	// Fall back to a fresh probe only if Start somehow didn't populate it
-	// (defensive — keeps createDelegate usable from tests that skip Start).
+	encoding := r.detectEncoding(context.Background())
 	r.mu.Lock()
-	encoding := r.resolvedEncoding
+	r.resolvedEncoding = encoding
 	r.mu.Unlock()
-	if encoding == "" {
-		encoding = r.detectEncoding(context.Background())
-		r.mu.Lock()
-		r.resolvedEncoding = encoding
-		r.mu.Unlock()
-	}
 	switch encoding {
 	case "H265":
 		cfg := H265Config{
