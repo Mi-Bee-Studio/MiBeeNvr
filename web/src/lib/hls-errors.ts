@@ -29,14 +29,27 @@ export const AUTO_RETRY_DELAYS = [5000, 10000, 20000, 40000];
 export const MAX_AUTO_RETRIES = 4;
 
 /** Create an auto-retry scheduler for error state recovery.
- *  Returns { schedule, clear, getCount } for lifecycle management. */
-export function createAutoRetryScheduler(onRetry: () => void) {
+ *
+ * Issue #112: when the retry budget is exhausted, `onGiveUp` fires ONCE so the
+ * caller can mark the stream permanently failed for this session. Without this,
+ * a visibilitychange (tab refocus) reset recreateAttempts and restarted the
+ * loop from scratch, producing an unbounded /stream/index.m3u8 death-loop
+ * against a camera the backend can't serve.
+ *
+ * Returns { schedule, clear, getCount, hasGivenUp } for lifecycle management. */
+export function createAutoRetryScheduler(onRetry: () => void, onGiveUp?: () => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let count = 0;
+  let gaveUp = false;
 
   return {
     schedule() {
-      if (count >= MAX_AUTO_RETRIES) return;
+      if (gaveUp) return; // exhausted this session — don't restart
+      if (count >= MAX_AUTO_RETRIES) {
+        gaveUp = true;
+        onGiveUp?.();
+        return;
+      }
       const delay = AUTO_RETRY_DELAYS[count] ?? AUTO_RETRY_DELAYS[AUTO_RETRY_DELAYS.length - 1];
       count++;
       timer = setTimeout(() => {
@@ -50,9 +63,15 @@ export function createAutoRetryScheduler(onRetry: () => void) {
         timer = null;
       }
       count = 0;
+      // NOTE: gaveUp is intentionally NOT reset by clear() — only a fresh
+      // streamUrl / camera change should reset it (the caller controls that by
+      // building a new scheduler). This is what stops the visibilitychange loop.
     },
     getCount() {
       return count;
+    },
+    hasGivenUp() {
+      return gaveUp;
     },
   };
 }

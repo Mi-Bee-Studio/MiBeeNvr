@@ -152,11 +152,43 @@ export function clearAllCameraProtocolOverrides(): void {
 // runtime auto-fallback (Surveillance demoting webrtc->flv->hls on failure)
 // must NOT write an override, or a transient failure would permanently pin a
 // worse protocol.
+//
+// Issue #112: overrides carry a TTL (PROTOCOL_OVERRIDE_TTL_MS). A stale pin
+// (e.g. 'hls' set when the camera was briefly unreachable) could otherwise
+// force a non-MJPEG protocol onto an MJPEG camera indefinitely, keeping the
+// protocol storm alive across sessions. After the TTL the override is treated
+// as expired and auto-selection takes over again.
 const PROTOCOL_OVERRIDE_PREFIX = `${PREFIX}proto_`;
+/** Override shelf life. 24h — long enough to survive a day of viewing, short
+ *  enough that a stale pin from a prior outage doesn't outlive its usefulness. */
+export const PROTOCOL_OVERRIDE_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface StoredOverride {
+  protocol: string;
+  ts: number;
+}
 
 export function getCameraProtocolOverride(cameraId: string): string | null {
   try {
-    return localStorage.getItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`);
+    const raw = localStorage.getItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`);
+    if (raw === null) return null;
+    // Backward compat: legacy entries stored a bare protocol string. Migrate
+    // on read by re-storing in the new {protocol, ts} shape, treated as just
+    // set (no expiry on this read). A subsequent setCameraProtocolOverride
+    // call will stamp a real timestamp.
+    if (!raw.startsWith('{')) {
+      return raw;
+    }
+    const parsed = JSON.parse(raw) as Partial<StoredOverride>;
+    if (typeof parsed.protocol !== 'string' || typeof parsed.ts !== 'number') {
+      return null;
+    }
+    if (Date.now() - parsed.ts > PROTOCOL_OVERRIDE_TTL_MS) {
+      // Expired — clear it so it stops influencing selection, and return null.
+      localStorage.removeItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`);
+      return null;
+    }
+    return parsed.protocol;
   } catch {
     return null;
   }
@@ -164,7 +196,8 @@ export function getCameraProtocolOverride(cameraId: string): string | null {
 
 export function setCameraProtocolOverride(cameraId: string, protocol: string): void {
   try {
-    localStorage.setItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`, protocol);
+    const value: StoredOverride = { protocol, ts: Date.now() };
+    localStorage.setItem(`${PROTOCOL_OVERRIDE_PREFIX}${cameraId}`, JSON.stringify(value));
   } catch (error) {
     console.error('Failed to set protocol override:', error);
   }

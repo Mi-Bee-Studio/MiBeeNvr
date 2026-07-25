@@ -98,4 +98,45 @@ describe('createAutoRetryScheduler', () => {
   it('should have MAX_AUTO_RETRIES of 4', () => {
     expect(MAX_AUTO_RETRIES).toBe(4);
   });
+
+  // ─── Issue #112: permanent give-up terminal state ─────────────────────────
+  it('fires onGiveUp once when the retry budget is exhausted', () => {
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    const onGiveUp = vi.fn();
+    const scheduler = createAutoRetryScheduler(onRetry, onGiveUp);
+    // Exhaust the budget: schedule + advance for each of the MAX_AUTO_RETRIES
+    // retries, then one more schedule() that should trip onGiveUp.
+    for (let i = 0; i < MAX_AUTO_RETRIES; i++) {
+      scheduler.schedule();
+      vi.advanceTimersByTime(AUTO_RETRY_DELAYS[i]);
+    }
+    expect(onGiveUp).not.toHaveBeenCalled();
+    scheduler.schedule(); // this is the (MAX_AUTO_RETRIES+1)th call → give up
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    expect(scheduler.hasGivenUp()).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('does NOT reset give-up on clear() (only a fresh scheduler resets it)', () => {
+    // This is the key anti-flap invariant: visibilitychange clears/rebuilds,
+    // but a cleared scheduler that had given up must not silently restart.
+    // The caller must construct a NEW scheduler (which VideoPlayer does on
+    // streamUrl change) to get a fresh budget.
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    const onGiveUp = vi.fn();
+    const scheduler = createAutoRetryScheduler(onRetry, onGiveUp);
+    for (let i = 0; i < MAX_AUTO_RETRIES; i++) {
+      scheduler.schedule();
+      vi.advanceTimersByTime(AUTO_RETRY_DELAYS[i]);
+    }
+    scheduler.schedule(); // give up
+    expect(scheduler.hasGivenUp()).toBe(true);
+    scheduler.clear();
+    expect(scheduler.hasGivenUp()).toBe(true, 'clear() must not reset give-up');
+    scheduler.schedule(); // no-op after give-up
+    expect(onRetry).toHaveBeenCalledTimes(MAX_AUTO_RETRIES);
+    vi.useRealTimers();
+  });
 });
