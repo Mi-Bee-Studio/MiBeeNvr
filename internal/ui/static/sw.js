@@ -2,16 +2,8 @@
 // App Shell: Cache First (fast loads, works offline for UI)
 // API: Network First (fresh data, fallback to cache when offline)
 // Media streams (HLS/FLV/WebRTC): Never cached (always network)
-//
-// CACHE_VERSION is rewritten at build time by the vite sw-version plugin to a
-// unique per-build value (timestamp). This is CRITICAL: without a new version
-// per deploy, the SW keeps serving stale JS chunks (WasmPlayer/orchestrator)
-// from the old cache even after a new binary ships — a user's browser would
-// run the OLD frontend indefinitely, masking all frontend fixes.
-//
-// During `vite dev` the placeholder is NOT rewritten, so we fall back to a
-// dev-only random version (each reload is a new cache — fine for dev).
-const CACHE_VERSION = 'mibee-nvr-1784990857239';
+
+const CACHE_VERSION = 'mibee-nvr-v2';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -27,17 +19,14 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: clean up ALL caches that aren't the current build's version.
-// (Previously this only deleted caches with a *different known* name, but
-// since CACHE_VERSION now changes every build, any older cache — including the
-// old 'mibee-nvr-v2' and any prior build's timestamped cache — must be purged,
-// otherwise stale chunks survive and the user runs old code.)
+// Activate: clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    )
   );
+  self.clients.claim();
 });
 
 // Fetch: strategy depends on request type
