@@ -259,6 +259,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// reversible base64(user:pass). The username comes from the request's
 			// BasicAuth header (just validated); the bcrypt hash from config drives
 			// the HMAC key, so a later password change invalidates this token.
+			// Tests use a nil-config handler, so guard against that here.
+			if h.config == nil {
+				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+				return
+			}
 			username := h.config.Auth.Username
 			if u, _, ok := r.BasicAuth(); ok && u != "" {
 				username = u

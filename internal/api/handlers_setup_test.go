@@ -2,13 +2,13 @@ package api
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -160,11 +160,18 @@ func TestHandleSetup_TokenIsValid(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 
-	// Verify token matches expected BasicAuth encoding
-	decoded, err := base64.StdEncoding.DecodeString(resp["token"])
-	require.NoError(t, err)
-	require.Equal(t, username+":"+password, string(decoded))
+	// Setup now returns a stateless HMAC-signed session token (mbs_...) instead
+	// of the legacy base64(user:pass). Verify it carries the mbs_ prefix and
+	// validates against the bcrypt hash just stored in config.
+	tok := resp["token"]
+	require.NotEmpty(t, tok)
+	require.True(t, middleware.IsSessionToken(tok), "token must carry the mbs_ prefix")
 
 	// Verify the hashed password actually validates via bcrypt
 	require.True(t, middleware.CheckPassword(password, h.config.Auth.PasswordHash))
+
+	// And the signed token must verify under that same hash.
+	claims, err := middleware.VerifySessionToken(tok, h.config.Auth.PasswordHash, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, username, claims.Sub)
 }
