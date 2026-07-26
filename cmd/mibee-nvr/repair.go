@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -1087,7 +1088,10 @@ func runRepairReclaimOrphanMerges() int {
 		// (YYYYMM/DD/HH/) level are candidates — that is where merge_path lives.
 		walkErr := filepath.WalkDir(camRoot, func(path string, d os.DirEntry, werr error) error {
 			if werr != nil {
-				return nil // tolerate FS errors (e.g. a vanished file), keep scanning
+				// Tolerate per-entry FS errors (e.g. a file vanished mid-scan)
+				// by reporting and continuing the walk, rather than aborting.
+				fmt.Fprintf(os.Stderr, "  WARN: walk error at %s: %v\n", path, werr)
+				return nil
 			}
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".mp4") {
 				return nil
@@ -1124,7 +1128,7 @@ func runRepairReclaimOrphanMerges() int {
 			time.Sleep(20 * time.Millisecond) // friendly to USB HDD
 			return nil
 		})
-		if walkErr != nil && walkErr != filepath.SkipDir {
+		if walkErr != nil && !errors.Is(walkErr, filepath.SkipDir) {
 			fmt.Fprintf(os.Stderr, "  WARN: walk %s: %v\n", camRoot, walkErr)
 		}
 	}
