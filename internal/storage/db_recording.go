@@ -879,6 +879,30 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 	return result, nil
 }
 
+// PathIsRecordingFile reports whether the given on-disk path is still
+// referenced by any recording row for the camera — either as the source
+// file_path or the merged-output merge_path. Both the full path and its
+// basename are checked, because merge_path is sometimes stored as a full path
+// and sometimes relative to the storage root. Used by the orphan scanner
+// (repair reclaim-orphan-merges) to avoid reclaiming files that still belong
+// to a live recording.
+func (d *DB) PathIsRecordingFile(ctx context.Context, cameraID, fullpath string) (bool, error) {
+	base := filepath.Base(fullpath)
+	var exists int
+	err := d.readConn().QueryRowContext(ctx, `
+		SELECT 1 FROM recordings
+		WHERE camera_id=?
+		  AND (file_path=? OR merge_path=? OR file_path=? OR merge_path=?)
+		LIMIT 1;`, cameraID, fullpath, fullpath, base, base).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // ListPendingMJPEGRecordings returns recordings for a camera where format IN ('mjpeg','jpeg')
 // AND merge_status='pending' AND ended_at IS NOT NULL.
 func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([]model.Recording, error) {
