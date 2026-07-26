@@ -332,7 +332,19 @@ export function buildCandidateChain(
         },
       ];
     }
-    // No legacy default either — HLS is the universal last resort.
+    // No legacy default either. HLS is the universal last resort for H.264, but
+    // for an H.265 camera it is a DEATH SENTENCE in most browsers: hls.js feeds
+    // hvc1 to MSE which claims isTypeSupported but silently fails to decode →
+    // permanent black screen + the loading↔buffering state-oscillation that
+    // froze consoles in issue #107. When the browser can actually decode H.265
+    // (WebCodecs on HTTPS, or libde265 WASM on HTTP), prefer the wasm mode —
+    // the WS endpoint exists in every NVR build (WSStreamHandler is always
+    // registered) and a single-element chain avoids the demote-to-HLS trap.
+    // Only fall back to HLS if the browser genuinely can't decode H.265 (the
+    // user will see a black screen either way, but at least no oscillation).
+    if (enc === 'h265' && (caps.webCodecs || caps.wasmH265)) {
+      return [{ mode: 'wasm', backendProtocol: undefined, pinned: false }];
+    }
     return [{ mode: 'hls', backendProtocol: 'hls', pinned: false }];
   }
 

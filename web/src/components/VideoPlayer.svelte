@@ -14,6 +14,7 @@
   import type { StreamState } from '$lib/hls-errors';
   import { captureFrame } from '$lib/freeze-frame';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { createStateDispatcher } from '$lib/player/dispatch';
 
   let {
     cameraId,
@@ -101,19 +102,30 @@
   }
 
   function dispatchStateChange(state: StreamState | 'loading') {
-    // Svelte 5 custom events via bubbling — parent reads detail from DOM event
+    // Svelte 5 custom events via bubbling — parent reads detail from DOM event.
+    // Routes through the debounced+deduped dispatcher so hls.js's sub-second
+    // buffering↔playing oscillation (issue #107) collapses to ~1 event/window
+    // instead of thousands/sec that froze the console.
+    stateDispatcher.report(state);
+  }
+
+  // Watch streamState changes and dispatch. The dispatcher itself dedupes
+  // identical states and debounces non-recovery states, so even though this
+  // effect re-runs on every assignment, the actual DOM dispatch is bounded.
+  // (Assignment-side dedupe in updateState below prevents most re-runs.)
+  $effect(() => {
+    const _state = streamState;
+    dispatchStateChange(_state);
+  });
+
+  // Per-instance dispatcher. Emits the real CustomEvent on the component root.
+  // Trailing-edge debounce is cleared on destroy so no stale event fires post-unmount.
+  const stateDispatcher = createStateDispatcher((state) => {
     const event = new CustomEvent('statechange', {
       bubbles: true,
       detail: { cameraId, state },
     });
-    // Dispatch on the component's root element if available
     videoEl?.parentElement?.dispatchEvent(event);
-  }
-
-  // Watch streamState changes and dispatch
-  $effect(() => {
-    const _state = streamState;
-    dispatchStateChange(_state);
   });
 
   function updateState(cameraId_: string, state: StreamState) {
@@ -134,6 +146,13 @@
         coordinator.completeReconnect(cameraId);
         hasActiveCoordinatedReconnect = false;
       }
+      // NOTE: no manual dedupe guard here — Svelte 5 treats reassigning an
+      // identical primitive to a $state as a no-op (no effect re-run), so
+      // redundant hls.js callbacks don't churn the dispatcher. An earlier
+      // revision added `if (state === streamState) return;` here, but that
+      // changed timing in a way that contributed to effect_update_depth_exceeded
+      // when combined with the dispatcher; main has no guard and works, so we
+      // keep main's behavior and let Svelte's primitive equality do the dedupe.
       streamState = state;
     }
   }
@@ -326,6 +345,7 @@ streamState = 'error';
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
+    stateDispatcher.dispose();
     destroyCurrentHls();
     destroyCurrentHls();
   });

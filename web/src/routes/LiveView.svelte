@@ -27,6 +27,16 @@
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
   let switchingProtocol = $state(false);
+  // Probed per-camera protocol response (the authoritative encoding lives here,
+  // corrected from the live recorder — NOT the possibly-stale DB `camera.encoding`).
+  // Hoisted to component scope so the ProtocolSwitcher's H.265 UI reads the
+  // REAL codec (issue #108: an H.265 camera stored as h264 in the DB must still
+  // show the H.265 badge / hide WebRTC etc.).
+  let cameraProtocolsResp = $state<ProtocolsResponse | null>(null);
+  // True once loadCamera() has attempted its first registerCamera — guards the
+  // protocolsMap re-registration below from firing before the primary
+  // registration (with the real resp) has happened.
+  let cameraRegistered = false;
 
   // Player orchestrator — owns the candidate chain + adaptive degrade/upgrade
   // for this single camera. Provided to CameraPlayer via context.
@@ -104,7 +114,11 @@
       } catch {
         resp = null; // /protocols unreachable — orchestrator falls back to HLS
       }
+      // Persist the probed response so the ProtocolSwitcher can read the REAL
+      // (recorder-probed) encoding instead of the possibly-stale DB value.
+      cameraProtocolsResp = resp;
       if (camera) {
+        cameraRegistered = true;
         orchestrator.registerCamera(
           makeRegistration(camera, resp, {
             override: getCameraProtocolOverride(camera.id),
@@ -172,13 +186,28 @@
 
     loadCamera();
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    // Load protocol capabilities, then re-register the camera so the
-    // orchestrator's chain reflects the (possibly now-non-HLS-capable) protocol.
+    // Fetch the GLOBAL protocol capability list (does this NVR build offer
+    // webrtc/flv/hls/mjpeg for this protocol type?) — feeds isHlsSupported() /
+    // PTZ gating via protocolsMap. This is SEPARATE from the per-camera
+    // /protocols ranking (already fetched in loadCamera with the authoritative
+    // encoding) and must NOT re-register the camera: re-registering with
+    // resp=null collapses the orchestrator's chain to a forced single-`hls`
+    // candidate (buildCandidateChain's !resp branch), which for an H.265 camera
+    // means HLS gets selected against the codec gate → black screen / state
+    // oscillation (issue #108). The two fetches race (loadCamera does 3 awaits,
+    // this does 1), so the null-registration often landed LAST and clobbered
+    // the good chain. The protocolsMap it builds is enough on its own.
     listProtocols().then(list => {
       if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
-      if (camera) {
+      // protocolsMap drives isHlsSupported(); if the global list changed the
+      // camera's HLS capability vs. the DEFAULT_PROTOCOLS seed used during the
+      // first registration in loadCamera, re-register now with the SAME probed
+      // resp (NOT null — null would collapse the chain to forced HLS, issue
+      // #108). Guarded by cameraRegistered so we don't re-register before
+      // loadCamera's primary registration has happened.
+      if (cameraRegistered && camera) {
         orchestrator.registerCamera(
-          makeRegistration(camera, null, {
+          makeRegistration(camera, cameraProtocolsResp, {
             override: getCameraProtocolOverride(camera.id),
             isHlsCapable: isHlsSupported(camera),
             isUnsupported: false,
@@ -252,7 +281,7 @@
                  pins the chain via setOverride. -->
             <ProtocolSwitcher
               cameraId={camera.id}
-              cameraEncoding={camera.encoding || camera.stream_encoding || ''}
+              cameraEncoding={cameraProtocolsResp?.encoding || camera.encoding || camera.stream_encoding || ''}
               selected={(activeMode ?? 'auto') as StreamingProtocol}
               onchange={handleProtocolChange}
             />

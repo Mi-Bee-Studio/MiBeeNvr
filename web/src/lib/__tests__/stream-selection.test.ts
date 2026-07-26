@@ -353,4 +353,40 @@ describe('buildCandidateChain', () => {
     const chain = buildCandidateChain(cam, null, EMPTY_CAPS, { legacyDefault: 'flv' });
     expect(chain.map((c) => c.mode)).toEqual(['flv']);
   });
+
+  // ─── Issue #107: !resp must not collapse H.265 onto HLS ────────────────────
+  // When /protocols transiently fails (resp=null) the old code returned a forced
+  // single-`hls` chain REGARDLESS of codec. For an H.265 camera that's a death
+  // sentence: hls.js feeds hvc1 to MSE, which claims isTypeSupported but silently
+  // fails to decode → permanent black screen + the loading↔buffering state
+  // oscillation that froze browsers. When the browser can actually decode H.265
+  // (WebCodecs/wasm), prefer the wasm mode instead — a single-element chain that
+  // can't demote into the HLS trap.
+  it('returns a single-element wasm chain for H.265 + WebCodecs when resp is null (no HLS trap)', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    const chain = buildCandidateChain(cam, null, { h265MSE: false, webCodecs: true, wasmH265: false });
+    expect(chain.map((c) => c.mode)).toEqual(['wasm']);
+  });
+
+  it('returns a single-element wasm chain for H.265 + libde265 WASM when resp is null', () => {
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    const chain = buildCandidateChain(cam, null, { h265MSE: false, webCodecs: false, wasmH265: true });
+    expect(chain.map((c) => c.mode)).toEqual(['wasm']);
+  });
+
+  it('falls back to HLS for H.265 when resp is null AND no H.265 decode path exists', () => {
+    // No WebCodecs, no wasm → there is no good option. HLS at least avoids the
+    // oscillation (the player will fail fast). This preserves pre-fix behavior
+    // for the rare browser that can't decode H.265 at all.
+    const cam = makeCamera({ protocol: 'onvif', encoding: 'h265' });
+    const chain = buildCandidateChain(cam, null, { h265MSE: false, webCodecs: false, wasmH265: false });
+    expect(chain.map((c) => c.mode)).toEqual(['hls']);
+  });
+
+  it('still returns HLS for H.264 when resp is null (unchanged behavior)', () => {
+    // Regression guard: the !resp H.265 fix must NOT change H.264 behavior.
+    const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
+    const chain = buildCandidateChain(cam, null, EMPTY_CAPS);
+    expect(chain.map((c) => c.mode)).toEqual(['hls']);
+  });
 });

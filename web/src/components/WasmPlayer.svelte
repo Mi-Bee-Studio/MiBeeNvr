@@ -9,6 +9,7 @@
   import { ConnectionManager, type ConnectionState } from '$lib/webcodecs-player/connection';
   import { AudioPlayer } from '$lib/audio-player';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { createStateDispatcher } from '$lib/player/dispatch';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
   import { AiRuntime } from '$lib/ai-detection/runtime';
@@ -157,12 +158,21 @@ let webgpuRenderer: WebGPURenderer | null = null;
   // ─── State dispatch ────────────────────────────────────────────────────
 
   function dispatchStateChange(state: PlayerState) {
+    // Routes through the debounced+deduped dispatcher so a burst of
+    // connection-state transitions collapses to one event per window
+    // (issue #107). 'playing' (recovery) still flushes immediately.
+    stateDispatcher.report(state);
+  }
+
+  // Per-instance dispatcher. Emits the real CustomEvent on the canvas root;
+  // trailing-edge debounce is cleared on destroy.
+  const stateDispatcher = createStateDispatcher((state) => {
     const event = new CustomEvent('statechange', {
       bubbles: true,
       detail: { cameraId, state },
     });
     canvasEl?.parentElement?.dispatchEvent(event);
-  }
+  });
 
   $effect(() => {
     dispatchStateChange(streamState);
@@ -177,6 +187,11 @@ let webgpuRenderer: WebGPURenderer | null = null;
     if (newState === 'playing' && frozenFrameUrl) {
       clearFreezeFrame();
     }
+    // NOTE: no manual dedupe guard — Svelte 5 treats reassigning an identical
+    // primitive to a $state as a no-op (no effect re-run). An earlier revision
+    // added `if (newState === streamState) return;` but that altered timing in
+    // a way that contributed to effect_update_depth_exceeded when combined with
+    // the dispatcher. Keep main's behavior; let Svelte dedupe primitives.
     streamState = newState;
   }
 
@@ -798,6 +813,7 @@ onDestroy(() => {
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     if (decodeErrorTimer) { clearTimeout(decodeErrorTimer); decodeErrorTimer = null; }
     if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
+    stateDispatcher.dispose();
     if (frozenFrameUrl) { URL.revokeObjectURL(frozenFrameUrl); frozenFrameUrl = null; }
     if (webgpuRenderer) { webgpuRenderer.destroy(); webgpuRenderer = null; }
     if (cm) { cm.destroy(); cm = null; }

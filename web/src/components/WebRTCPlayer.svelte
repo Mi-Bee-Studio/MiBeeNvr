@@ -9,6 +9,7 @@
   import { sendTelemetry } from '$lib/telemetry';
   import type { StreamState } from '$lib/hls-errors';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { createStateDispatcher } from '$lib/player/dispatch';
 
   let {
     cameraId,
@@ -119,12 +120,20 @@ let destroyed = false;
   }
 
   function dispatchStateChange(state: StreamState | 'loading') {
+    // Routes through the debounced+deduped dispatcher so a burst of ICE state
+    // transitions collapses to one event per window (issue #107).
+    stateDispatcher.report(state);
+  }
+
+  // Per-instance dispatcher. Emits the real CustomEvent on the component root;
+  // trailing-edge debounce is cleared on destroy.
+  const stateDispatcher = createStateDispatcher((state) => {
     const event = new CustomEvent('statechange', {
       bubbles: true,
       detail: { cameraId, state },
     });
     videoEl?.parentElement?.dispatchEvent(event);
-  }
+  });
 
   $effect(() => {
     dispatchStateChange(streamState);
@@ -132,23 +141,28 @@ let destroyed = false;
 
   function updateStreamState() {
     const prevState = streamState;
+    let next: StreamState | 'loading';
     if (webrtcState === 'connected') {
-      streamState = 'playing';
+      next = 'playing';
+    } else if (webrtcState === 'connecting' || webrtcState === 'disconnected') {
+      next = 'buffering';
+    } else {
+      next = 'error';
+    }
+    // NOTE: no manual dedupe guard (`if (next === prevState) return;`). Svelte 5
+    // treats reassigning an identical primitive to a $state as a no-op, so a
+    // redundant ICE callback doesn't churn the dispatcher. An earlier revision
+    // added the guard but it altered timing in a way that contributed to
+    // effect_update_depth_exceeded; keep main's behavior.
+    if (prevState === 'playing' && next !== 'playing') captureFreezeFrame();
+    if (next === 'playing') {
       if (prevState !== 'playing' && frozenFrameUrl) clearFreezeFrame();
       if (coordinator && hasActiveCoordinatedReconnect) {
         coordinator.completeReconnect(cameraId);
         hasActiveCoordinatedReconnect = false;
       }
-    } else if (webrtcState === 'connecting') {
-      if (prevState === 'playing') captureFreezeFrame();
-      streamState = 'buffering';
-    } else if (webrtcState === 'disconnected') {
-      if (prevState === 'playing') captureFreezeFrame();
-      streamState = 'buffering';
-    } else {
-      if (prevState === 'playing') captureFreezeFrame();
-      streamState = 'error';
     }
+    streamState = next;
   }
 
   $effect(() => {
@@ -535,6 +549,7 @@ let destroyed = false;
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
+    stateDispatcher.dispose();
     destroyPeerConnection();
   });
 

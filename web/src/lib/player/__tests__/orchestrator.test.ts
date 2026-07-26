@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createPlayerOrchestrator, makeRegistration, type CameraRegistration } from '$lib/player/orchestrator.svelte';
 import { health } from '$lib/player/health';
+import { invalidateCaps } from '$lib/player/capabilities-cache';
 import type { Camera, ProtocolsResponse } from '$lib/stream-selection';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -59,6 +60,11 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  // Clear the in-memory caps cache so a test that called probeCaps() with
+  // custom caps (e.g. the H80 regression test forcing mseH265=false) doesn't
+  // leak into subsequent tests. beforeEach re-seeds sessionStorage; clearing
+  // inMemory here makes getCaps() pick up the fresh seed next time.
+  invalidateCaps();
   try {
     sessionStorage.removeItem('mibee_nvr_device_caps');
   } catch {
@@ -167,6 +173,114 @@ describe('PlayerOrchestrator — degrade', () => {
     expect(o.activeMode('cam-1')).toBe('hls');
     o.reportHealth('cam-1', health('failed'));
     expect(o.activeMode('cam-1')).toBe('hls'); // chain exhausted
+    o.dispose();
+  });
+
+  // ─── Issue #107/#108 H80 regression: no slots churn on repeated equal health ─
+  // An H.265 camera whose WS returns 401 never reaches steady-state 'playing'.
+  // It repeatedly reports 'failed' (noMediaTimer / connect-failures / onFallback).
+  // healthFromStreamState('error') returns a NEW object each call (since=now),
+  // so a reference equality check would NOT short-circuit. Before this fix,
+  // every report reassigned the reactive `slots` map → every $derived(mode)
+  // consumer re-ran → player $effects that read mode re-entered →
+  // effect_update_depth_exceeded froze the whole page. The fix: skip the slots
+  // write when (status, reason) are unchanged.
+  it('does NOT rewrite slots when the same (status, reason) is reported repeatedly (H80 regression)', () => {
+    // Build a single-element wasm chain (H.265 + no MSE → only wasm usable),
+    // mirroring cam-608e6966's real topology. Force mseH265=false (and keep
+    // webCodecs/wasmH265 true) so HLS/FLV are excluded by the codec gate while
+    // wasm stays usable → chain=['wasm']. We seed sessionStorage and invalidate
+    // the in-memory cache so getCaps() (called inside makeRegistration) picks
+    // up our values; we do NOT call probeCaps() because it would re-run the
+    // real detect* probes and overwrite our seed.
+    invalidateCaps();
+    try {
+      sessionStorage.setItem(
+        'mibee_nvr_device_caps',
+        JSON.stringify({
+          webCodecs: true, hevcDecode: true, webgpu: true, webgl2: true,
+          mseH265: false, wasmH265: true, probedAt: Date.now(),
+        }),
+      );
+    } catch { /* sessionStorage may be unavailable */ }
+    const o = createPlayerOrchestrator();
+    const H265_CAM: Camera = { id: 'cam-h80', name: 'H80', protocol: 'onvif', encoding: 'h265' } as Camera;
+    const H265_RESP: ProtocolsResponse = {
+      encoding: 'h265',
+      default: 'hls',
+      protocols: [
+        { Protocol: 'hls', Available: true, Reason: '' },
+        { Protocol: 'll-hls', Available: true, Reason: '' },
+        { Protocol: 'wasm', Available: true, Reason: '' },
+        { Protocol: 'webrtc', Available: false, Reason: 'H.265' },
+        { Protocol: 'flv', Available: false, Reason: 'H.265' },
+      ],
+    };
+    // No MSE H.265 → only wasm is usable → single-element chain, like H80.
+    o.registerCamera(
+      makeRegistration(H265_CAM, H265_RESP, {
+        override: null,
+        isHlsCapable: true,
+        isUnsupported: false,
+      }),
+    );
+    expect(o.activeMode('cam-h80')).toBe('wasm');
+
+    // First 'failed' report: demote attempts, chain exhausted, returns false.
+    // The slot IS written once (health changed from initial 'ok' to 'failed').
+    o.reportHealth('cam-h80', health('failed', 'fatal-error'));
+    expect(o.activeMode('cam-h80')).toBe('wasm'); // still wasm (exhausted)
+    const slotAfterFirst = o.slot('cam-h80')!;
+
+    // Repeated identical (status, reason) reports — healthFromStreamState would
+    // produce new objects with different `since` timestamps in production. The
+    // orchestrator must treat these as equal and NOT rewrite the slot object.
+    for (let i = 0; i < 50; i++) {
+      // New object each iteration (mimics since=Date.now() differing).
+      o.reportHealth('cam-h80', health('failed', 'fatal-error'));
+    }
+    const slotAfterLoop = o.slot('cam-h80')!;
+    expect(o.activeMode('cam-h80')).toBe('wasm'); // never changed
+    // The slot object reference must be STABLE across repeated equal reports —
+    // a new reference would churn every $derived(mode) dependent (the root cause
+    // of effect_update_depth_exceeded).
+    expect(slotAfterLoop).toBe(slotAfterFirst);
+    o.dispose();
+  });
+
+  // ─── Issue #107 regression: the orchestrator must survive a state storm ───
+  // Before the dispatch debounce, hls.js's buffering↔playing oscillation fed
+  // thousands of reportHealth calls per second. This test proves the orchestrator
+  // itself does NOT cascade-demote under that load: the degrade debounce timer
+  // arms once (not per call) and a return to 'ok' cancels it. Combined with the
+  // dispatcher's dedupe/debounce at the component layer, the storm is bounded.
+  it('does NOT demote during a high-frequency buffering↔playing oscillation that returns to ok', () => {
+    const o = createPlayerOrchestrator();
+    o.registerCamera(reg());
+    // Simulate 1 second of sub-second oscillation, never staying degraded long
+    // enough to cross DEGRADE_THRESHOLD_MS (8000ms), ending healthy.
+    for (let i = 0; i < 100; i++) {
+      o.reportHealth('cam-1', health('degraded', 'buffering'));
+      vi.advanceTimersByTime(5);
+      o.reportHealth('cam-1', health('ok'));
+      vi.advanceTimersByTime(5);
+    }
+    expect(o.activeMode('cam-1')).toBe('wasm'); // never demoted
+    o.dispose();
+  });
+
+  it('does NOT arm multiple degrade timers for repeated degraded reports (debounce is idempotent)', () => {
+    const o = createPlayerOrchestrator();
+    o.registerCamera(reg());
+    // Spam degraded — only the first arms a timer; subsequent calls are no-ops
+    // until it fires (the reportHealth degraded branch checks `!it.degradeTimer`).
+    for (let i = 0; i < 50; i++) {
+      o.reportHealth('cam-1', health('degraded', 'buffering'));
+    }
+    // Still in the debounce window → still on the head of the chain.
+    expect(o.activeMode('cam-1')).toBe('wasm');
+    vi.advanceTimersByTime(8000); // threshold elapses → single demotion
+    expect(o.activeMode('cam-1')).toBe('webrtc');
     o.dispose();
   });
 });
