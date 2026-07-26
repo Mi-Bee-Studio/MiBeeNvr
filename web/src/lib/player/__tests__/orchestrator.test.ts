@@ -169,6 +169,42 @@ describe('PlayerOrchestrator — degrade', () => {
     expect(o.activeMode('cam-1')).toBe('hls'); // chain exhausted
     o.dispose();
   });
+
+  // ─── Issue #107 regression: the orchestrator must survive a state storm ───
+  // Before the dispatch debounce, hls.js's buffering↔playing oscillation fed
+  // thousands of reportHealth calls per second. This test proves the orchestrator
+  // itself does NOT cascade-demote under that load: the degrade debounce timer
+  // arms once (not per call) and a return to 'ok' cancels it. Combined with the
+  // dispatcher's dedupe/debounce at the component layer, the storm is bounded.
+  it('does NOT demote during a high-frequency buffering↔playing oscillation that returns to ok', () => {
+    const o = createPlayerOrchestrator();
+    o.registerCamera(reg());
+    // Simulate 1 second of sub-second oscillation, never staying degraded long
+    // enough to cross DEGRADE_THRESHOLD_MS (8000ms), ending healthy.
+    for (let i = 0; i < 100; i++) {
+      o.reportHealth('cam-1', health('degraded', 'buffering'));
+      vi.advanceTimersByTime(5);
+      o.reportHealth('cam-1', health('ok'));
+      vi.advanceTimersByTime(5);
+    }
+    expect(o.activeMode('cam-1')).toBe('wasm'); // never demoted
+    o.dispose();
+  });
+
+  it('does NOT arm multiple degrade timers for repeated degraded reports (debounce is idempotent)', () => {
+    const o = createPlayerOrchestrator();
+    o.registerCamera(reg());
+    // Spam degraded — only the first arms a timer; subsequent calls are no-ops
+    // until it fires (the reportHealth degraded branch checks `!it.degradeTimer`).
+    for (let i = 0; i < 50; i++) {
+      o.reportHealth('cam-1', health('degraded', 'buffering'));
+    }
+    // Still in the debounce window → still on the head of the chain.
+    expect(o.activeMode('cam-1')).toBe('wasm');
+    vi.advanceTimersByTime(8000); // threshold elapses → single demotion
+    expect(o.activeMode('cam-1')).toBe('webrtc');
+    o.dispose();
+  });
 });
 
 describe('PlayerOrchestrator — upgrade (anti-flap)', () => {

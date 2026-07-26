@@ -14,6 +14,7 @@
   import type { StreamState } from '$lib/hls-errors';
   import { captureFrame } from '$lib/freeze-frame';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { createStateDispatcher } from '$lib/player/dispatch';
 
   let {
     cameraId,
@@ -101,23 +102,40 @@
   }
 
   function dispatchStateChange(state: StreamState | 'loading') {
-    // Svelte 5 custom events via bubbling — parent reads detail from DOM event
-    const event = new CustomEvent('statechange', {
-      bubbles: true,
-      detail: { cameraId, state },
-    });
-    // Dispatch on the component's root element if available
-    videoEl?.parentElement?.dispatchEvent(event);
+    // Svelte 5 custom events via bubbling — parent reads detail from DOM event.
+    // Routes through the debounced+deduped dispatcher so hls.js's sub-second
+    // buffering↔playing oscillation (issue #107) collapses to ~1 event/window
+    // instead of thousands/sec that froze the console.
+    stateDispatcher.report(state);
   }
 
-  // Watch streamState changes and dispatch
+  // Watch streamState changes and dispatch. The dispatcher itself dedupes
+  // identical states and debounces non-recovery states, so even though this
+  // effect re-runs on every assignment, the actual DOM dispatch is bounded.
+  // (Assignment-side dedupe in updateState below prevents most re-runs.)
   $effect(() => {
     const _state = streamState;
     dispatchStateChange(_state);
   });
 
+  // Per-instance dispatcher. Emits the real CustomEvent on the component root.
+  // Trailing-edge debounce is cleared on destroy so no stale event fires post-unmount.
+  const stateDispatcher = createStateDispatcher((state) => {
+    const event = new CustomEvent('statechange', {
+      bubbles: true,
+      detail: { cameraId, state },
+    });
+    videoEl?.parentElement?.dispatchEvent(event);
+  });
+
   function updateState(cameraId_: string, state: StreamState) {
     if (cameraId_ === cameraId) {
+      // Assignment-side dedupe (issue #107): hls.js can report the same state
+      // back-to-back (e.g. 'buffering' from multiple fatal-recovery cycles).
+      // Without this guard each redundant assignment re-triggers the $effect
+      // above. The dispatcher dedupes too, but stopping it here avoids the
+      // Svelte microtask entirely.
+      if (state === streamState) return;
       // Capture frame before leaving 'playing' state
       if (streamState === 'playing' && state !== 'playing') {
         captureFreezeFrame();
@@ -326,6 +344,7 @@ streamState = 'error';
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
+    stateDispatcher.dispose();
     destroyCurrentHls();
     destroyCurrentHls();
   });

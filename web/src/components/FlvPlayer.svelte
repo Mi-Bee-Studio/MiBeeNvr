@@ -9,6 +9,7 @@
   import { sendTelemetry } from '$lib/telemetry';
   import type { StreamState } from '$lib/hls-errors';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
+  import { createStateDispatcher } from '$lib/player/dispatch';
 
   let {
     cameraId,
@@ -101,12 +102,20 @@ let videoEventAc: AbortController | null = null;
   }
 
   function dispatchStateChange(state: StreamState | 'loading') {
+    // Routes through the debounced+deduped dispatcher so a burst of mpegts
+    // state transitions collapses to one event per window (issue #107).
+    stateDispatcher.report(state);
+  }
+
+  // Per-instance dispatcher. Emits the real CustomEvent on the component root;
+  // trailing-edge debounce is cleared on destroy.
+  const stateDispatcher = createStateDispatcher((state) => {
     const event = new CustomEvent('statechange', {
       bubbles: true,
       detail: { cameraId, state },
     });
     videoEl?.parentElement?.dispatchEvent(event);
-  }
+  });
 
   $effect(() => {
     dispatchStateChange(streamState);
@@ -408,6 +417,7 @@ let videoEventAc: AbortController | null = null;
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
+    stateDispatcher.dispose();
     destroyPlayer();
   });
 
