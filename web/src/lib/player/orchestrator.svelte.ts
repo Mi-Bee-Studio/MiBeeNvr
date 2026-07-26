@@ -265,8 +265,22 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
       return;
     }
 
-    // Refresh the slot's health reactively.
-    setSlot(cameraId, { health: h }, slot);
+    // Refresh the slot's health reactively — BUT only when the (status, reason)
+    // actually changed. Cameras that can never reach steady-state 'playing'
+    // (e.g. an H.265 camera whose WS returns 401) repeatedly report 'failed',
+    // and `healthFromStreamState('error')` returns a NEW object every call
+    // (`since: Date.now()` differs). Without this short-circuit, every report
+    // reassigned `slots` to a new object, which invalidated every `$derived(mode)`
+    // consumer and — combined with player `$effect`s that read `mode` — drove an
+    // unbounded synchronous effect chain (`effect_update_depth_exceeded`).
+    // The `since` timestamp refreshing is NOT worth churning every dependent;
+    // timers/demote below use `it` (internal, non-reactive) bookkeeping, so
+    // skipping the slots write here does not affect adaptive decisions.
+    const cur = slot.health;
+    const healthUnchanged = cur.status === h.status && cur.reason === h.reason;
+    if (!healthUnchanged) {
+      setSlot(cameraId, { health: h }, slot);
+    }
 
     if (h.status === 'failed') {
       // Immediate demote. Cancel any pending upgrade/probe.
@@ -313,7 +327,11 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
       clearTimeout(it.probeTimer);
       it.probeTimer = null;
     }
-    setSlot(cameraId, { health: h }, slots[cameraId]);
+    // NOTE: the health was already written to the slot above (line 269's setSlot,
+    // gated by the healthUnchanged short-circuit). Do NOT redundantly rewrite
+    // slots here — that would churn every $derived(mode) dependent on every
+    // 'ok' report and re-arm the effect_update_depth_exceeded loop for cameras
+    // that oscillate around the ok/degraded boundary.
   }
 
   function demote(cameraId: string, reason: string): boolean {
