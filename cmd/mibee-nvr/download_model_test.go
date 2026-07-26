@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,8 +20,8 @@ import (
 func makeModelPayload(t *testing.T, size int64) []byte {
 	t.Helper()
 	buf := make([]byte, size)
-	buf[0] = 0x08 // protobuf field 1, wire type 2 (length-delimited)
-	buf[1] = 0x0a // length 10
+	buf[0] = 0x08                              // protobuf field 1, wire type 2 (length-delimited)
+	buf[1] = 0x0a                              // length 10
 	copy(buf[2:12], []byte("pytorch\x00\x00")) // producer string
 	for i := int64(12); i < size; i++ {
 		buf[i] = byte(i % 251) // deterministic filler
@@ -48,10 +49,10 @@ func rangeableServer(t *testing.T, payload []byte, truncateReqNum int64) (*httpt
 				start = from
 			}
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalLen))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 		} else {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", totalLen))
+			w.Header().Set("Content-Length", strconv.FormatInt(totalLen, 10))
 			w.WriteHeader(http.StatusOK)
 		}
 
@@ -87,7 +88,7 @@ func truncatingThenFullServer(t *testing.T, payload []byte) (*httptest.Server, *
 			status = http.StatusPartialContent
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalLen))
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 		w.WriteHeader(status)
 
 		toSend := payload[start : end+1]
@@ -106,7 +107,7 @@ func fullServerNoRange(t *testing.T, payload []byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, strings.NewReader(string(payload)))
 	})
@@ -144,7 +145,7 @@ func TestDownloadModelFile_Success(t *testing.T) {
 }
 
 func TestDownloadModelFile_RetryAndResume(t *testing.T) {
-	payload := makeModelPayload(t, 6 * 1024 * 1024)
+	payload := makeModelPayload(t, 6*1024*1024)
 	srv, reqCount := truncatingThenFullServer(t, payload)
 	defer srv.Close()
 
@@ -174,7 +175,7 @@ func TestDownloadModelFile_RetryAndResume(t *testing.T) {
 }
 
 func TestDownloadModelFile_ServerNoRangeSupport(t *testing.T) {
-	payload := makeModelPayload(t, 6 * 1024 * 1024)
+	payload := makeModelPayload(t, 6*1024*1024)
 	srv := fullServerNoRange(t, payload)
 	defer srv.Close()
 
@@ -195,7 +196,7 @@ func TestDownloadModelFile_PersistentTruncation_FailsAfterRetries(t *testing.T) 
 	// Server truncates EVERY request → all retries fail → function returns error
 	// AND cleans up the .part (the exact bug we're fixing: a stale partial must
 	// not be mistaken for a complete file on the next run).
-	payload := makeModelPayload(t, 6 * 1024 * 1024)
+	payload := makeModelPayload(t, 6*1024*1024)
 	srv, reqCount := rangeableServer(t, payload, 1) // truncate request #1 always
 	// Override: truncate ALL requests by setting truncateReqNum to a sentinel
 	// that matches every request. Rebuild with a custom handler.
@@ -211,10 +212,10 @@ func TestDownloadModelFile_PersistentTruncation_FailsAfterRetries(t *testing.T) 
 				start = from
 			}
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, totalLen-1, totalLen))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", (totalLen-start)/2)) // lie: claim half
+			w.Header().Set("Content-Length", strconv.FormatInt((totalLen-start)/2, 10)) // lie: claim half
 			w.WriteHeader(http.StatusPartialContent)
 		} else {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", totalLen))
+			w.Header().Set("Content-Length", strconv.FormatInt(totalLen, 10))
 			w.WriteHeader(http.StatusOK)
 		}
 		toSend := payload[start:]

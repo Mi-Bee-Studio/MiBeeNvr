@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -315,7 +316,7 @@ func verifyAndAtomicallyInstall(partPath, modelPath string) error {
 func expectedSizeSidecarName(partPath string) string { return partPath + ".size" }
 
 func writeExpectedSizeSidecar(partPath string, expected int64) error {
-	return os.WriteFile(expectedSizeSidecarName(partPath), []byte(fmt.Sprintf("%d", expected)), 0o644)
+	return os.WriteFile(expectedSizeSidecarName(partPath), []byte(strconv.FormatInt(expected, 10)), 0o644)
 }
 
 func readExpectedSizeSidecar(partPath string) (int64, bool) {
