@@ -22,6 +22,7 @@ web/dist/
 # Embedded frontend build output
 internal/ui/static/assets/
 internal/ui/static/index.html
+internal/ui/static/ort/
 
 # Legacy / unused directories
 web_embed/
