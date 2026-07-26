@@ -101,6 +101,15 @@ export interface PlayerOrchestrator {
   setTabVisible(visible: boolean): void;
   /** The mode CameraPlayer should render right now (reactive read). */
   activeMode(cameraId: string): CameraMode | null;
+  /**
+   * The recorder-probed codec for a camera (e.g. 'h265'), authoritative over
+   * the possibly-stale DB `camera.encoding`. CameraPlayer feeds this to the
+   * player components so they configure the correct decoder (H.264 vs H.265)
+   * for the ACTUAL stream — passing the DB encoding to a player whose chain
+   * was built from the probed encoding produces a misconfigured decoder and a
+   * black screen (issue #108: H80 stored as h264 but streaming h265).
+   */
+  resolvedEncoding(cameraId: string): string;
   /** Reactive snapshot for debugging / the upgrade badge. */
   slot(cameraId: string): CameraSlot | null;
   /** Subscribe to degrade/upgrade events (for toasts). */
@@ -435,6 +444,16 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     return slot.chain[slot.activeIndex]?.mode ?? null;
   }
 
+  function resolvedEncoding(cameraId: string): string {
+    // The chain was built from the recorder-probed resp.encoding (authoritative)
+    // via resolveEncoding; return that same resolution so CameraPlayer can feed
+    // the ACTUAL codec to the player decoder config. Returns '' when the camera
+    // isn't registered yet — CameraPlayer falls back to camera.encoding then.
+    const it = internal.get(cameraId);
+    if (!it) return '';
+    return resolveEncoding(it.lastRegistration.camera, it.lastRegistration.resp);
+  }
+
   function slot(cameraId: string): CameraSlot | null {
     return slots[cameraId] ?? null;
   }
@@ -460,6 +479,7 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     requestUpgrade,
     setTabVisible,
     activeMode,
+    resolvedEncoding,
     slot,
     onModeChange,
     coordinator,

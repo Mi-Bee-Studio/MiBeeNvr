@@ -60,7 +60,18 @@
   // `camera.id` directly in module scope would capture only the initial value.
   let cameraId = $derived(camera.id);
   let cameraName = $derived(camera.name || camera.id);
-  let codec = $derived((camera.encoding || camera.stream_encoding || '').toLowerCase());
+  // CRITICAL (issue #108): use the RECORDER-PROBED codec from the orchestrator,
+  // NOT the possibly-stale DB `camera.encoding`. The candidate chain (and thus
+  // the selected player mode) is built from the probed encoding; if we feed the
+  // player a different codec here, its decoder is misconfigured for the ACTUAL
+  // stream → black screen. Example: H80 is stored as h264 in the DB but its
+  // recorder streams h265; the orchestrator selects wasm (WebCodecs H.265), but
+  // passing codec='h264' here would make WasmPlayer configure an H.264 decoder
+  // that silently fails to decode the H.265 NALUs. Fall back to the DB fields
+  // only before the orchestrator has registered the camera (resp not yet loaded).
+  let codec = $derived(
+    (orchestrator?.resolvedEncoding(cameraId) || camera.encoding || camera.stream_encoding || '').toLowerCase(),
+  );
   let audioCapable = $derived(isAudioCapable(camera));
 
   function report(h: HealthState): void {
