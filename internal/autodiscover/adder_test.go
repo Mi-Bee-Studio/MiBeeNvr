@@ -325,11 +325,15 @@ func TestDefaultCredsForState(t *testing.T) {
 // fix path). AddCamera is included to satisfy the interface but unused in the
 // roaming tests.
 type fakeEnroller struct {
-	mu               sync.Mutex
-	updatedEndpoints map[string]string   // cameraID → new endpoint passed to UpdateCamera
-	restartedIDs     map[string]bool     // cameraID → RestartRecorder called
-	updateErr        error               // optional: force UpdateCamera to fail
-	restartErr       error               // optional: force RestartRecorder to fail
+	mu sync.Mutex
+	// cameraID → new endpoint passed to UpdateCamera
+	updatedEndpoints map[string]string
+	// cameraID → RestartRecorder called
+	restartedIDs map[string]bool
+	// optional: force UpdateCamera to fail
+	updateErr error
+	// optional: force RestartRecorder to fail
+	restartErr error
 }
 
 func newFakeEnroller() *fakeEnroller {

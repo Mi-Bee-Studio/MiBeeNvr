@@ -221,13 +221,10 @@ func (a *Adder) enrich(ctx context.Context, dev *onvif.DiscoveredDevice, endpoin
 // case) or simply skip (same-address case).
 //
 // matchKind values:
-//   - ""          — no existing camera (proceed to enroll)
-//   - "stable_id" — same physical device (by ONVIF serial / stable_id), possibly
-//                   at a NEW endpoint → caller should UPDATE the endpoint
-//   - "serial"    — same physical device (by serial_number column), possibly at
-//                   a NEW endpoint → caller should UPDATE the endpoint
-//   - "endpoint"  — same device at the SAME endpoint already enrolled → caller
-//                   should skip (nothing to update)
+//   - ""          : no existing camera (proceed to enroll)
+//   - "stable_id" : same physical device (by ONVIF serial / stable_id), possibly at a NEW endpoint - caller should UPDATE the endpoint
+//   - "serial"    : same physical device (by serial_number column), possibly at a NEW endpoint - caller should UPDATE the endpoint
+//   - "endpoint"  : same device at the SAME endpoint already enrolled - caller should skip (nothing to update)
 //
 // stable_id is checked first (strongest identity signal), then endpoint+serial.
 // A nil DB disables persisted dedup (returns "", "").
