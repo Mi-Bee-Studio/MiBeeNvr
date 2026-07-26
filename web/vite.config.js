@@ -62,12 +62,24 @@ function ortAssetsPlugin() {
       const ortDir = path.join(outDir, 'ort');
       fs.mkdirSync(ortDir, { recursive: true });
       const ortPkgDir = path.resolve('node_modules/onnxruntime-web/dist');
-      // The .mjs worker module + the matching un-hashed .wasm binary.
+      // The .mjs worker module + the matching un-hashed .wasm binary, served
+      // at /ort/ for ort.env.wasmPaths to find.
       for (const file of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
         const src = path.join(ortPkgDir, file);
         if (fs.existsSync(src)) {
           fs.copyFileSync(src, path.join(ortDir, file));
         }
+      }
+      // Also copy the UMD bundle (ort.min.js) to dist root. runtime.ts loads ORT
+      // via this UMD script (NOT via Vite's bundled import) because Vite's
+      // code-splitting breaks onnxruntime-web 1.27's internal wasm/worker path
+      // resolution — the bundled chunk reports INVALID_PROTOBUF (ERROR_CODE 7)
+      // on model load, while the stock UMD bundle loaded from /ort.min.js with
+      // wasmPaths='/ort/' works correctly (verified via isolated test page on
+      // Banana Pi M5, issue #109).
+      const umd = path.join(ortPkgDir, 'ort.min.js');
+      if (fs.existsSync(umd)) {
+        fs.copyFileSync(umd, path.join(outDir, 'ort.min.js'));
       }
     },
   };

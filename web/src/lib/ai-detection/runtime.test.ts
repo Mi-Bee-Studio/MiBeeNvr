@@ -65,6 +65,11 @@ function setupOrtMock(session?: MockSession) {
     // env is accessed by _doInit to set wasmPaths. Provide a minimal mock.
     env: { wasmPaths: undefined as string | undefined },
   };
+  // runtime.ts reads ORT from globalThis.ort (_loadOrtUmd fast-path). Keep the
+  // stub in sync whenever the mock is rebuilt mid-test.
+  if (typeof vi !== 'undefined') {
+    vi.stubGlobal('ort', mockOrtModule);
+  }
 }
 
 function setupCacheMock() {
@@ -124,20 +129,15 @@ beforeEach(() => {
   // Default: fetch returns a valid model response
   setupFetchWithResponse(new ArrayBuffer(1024));
 
-  // Mock dynamic import of onnxruntime-web
-  vi.doMock('onnxruntime-web', () => {
-    // Default export compatibility: some bundlers expect default, some expect named
-    return {
-      ...mockOrtModule,
-      default: mockOrtModule,
-    };
-  });
+  // runtime.ts loads ORT via _loadOrtUmd(), which reads globalThis.ort (the
+  // UMD bundle exposes itself there). Stub it directly so _loadOrtUmd's
+  // fast-path resolves without injecting a real <script>.
+  vi.stubGlobal('ort', mockOrtModule);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.doUnmock('onnxruntime-web');
 });
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────

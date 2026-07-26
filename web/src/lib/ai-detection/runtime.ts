@@ -161,6 +161,49 @@ export class AiRuntime {
     );
   }
 
+  /**
+   * Lazily load the onnxruntime-web UMD bundle from /ort.min.js (served by
+   * ortAssetsPlugin) and return its module. The loaded module is cached on
+   * globalThis.ort by the UMD bundle itself, so repeated calls are cheap.
+   *
+   * Why a UMD script and not `import('onnxruntime-web')`: Vite code-splits the
+   * ESM entry into a hashed vendor chunk whose internal `import.meta.url`-based
+   * wasm/worker path resolution breaks onnxruntime-web 1.27's backend init,
+   * producing a misleading INVALID_PROTOBUF (ERROR_CODE 7) on model load
+   * (issue #109). Loading the stock UMD bundle via a plain <script> tag keeps
+   * ORT's own asset resolution intact, and pointing `env.wasmPaths='/ort/'`
+   * (set in _doInit) locates the sibling .mjs/.wasm pair.
+   */
+  private static _ortUmdPromise: Promise<any> | null = null;
+  private _loadOrtUmd(): Promise<any> {
+    // Fast path: UMD bundle already ran and set globalThis.ort (covers repeat
+    // calls and the unit-test stub). Bypasses the cached promise so a freshly
+    // stubbed global is picked up immediately.
+    const w = globalThis as any;
+    if (w.ort) return Promise.resolve(w.ort);
+    if (AiRuntime._ortUmdPromise) return AiRuntime._ortUmdPromise;
+    AiRuntime._ortUmdPromise = new Promise<any>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/ort.min.js';
+      script.async = true;
+      script.onload = () => {
+        const ort = (globalThis as any).ort;
+        if (ort) {
+          resolve(ort);
+        } else {
+          AiRuntime._ortUmdPromise = null;
+          reject(new Error('ort.min.js loaded but window.ort is undefined'));
+        }
+      };
+      script.onerror = () => {
+        AiRuntime._ortUmdPromise = null;
+        reject(new Error('Failed to load /ort.min.js — run `make build` to embed the ORT UMD bundle'));
+      };
+      document.head.appendChild(script);
+    });
+    return AiRuntime._ortUmdPromise;
+  }
+
   private async _doInit(modelUrl: string, options?: AiRuntimeInitOptions): Promise<void> {
     // Validate URL before loading
     this._validateModelUrl(modelUrl);
@@ -170,18 +213,18 @@ export class AiRuntime {
     const modelBuffer = await this._loadModel(modelUrl, options?.onProgress);
     this._abortController = null;
 
-    // 2. Dynamic import onnxruntime-web (lazy, NOT in initial bundle)
-    this._ort = await import('onnxruntime-web');
+    // 2. Load onnxruntime-web via the stock UMD bundle (served at /ort.min.js),
+    // NOT via Vite's bundled `import('onnxruntime-web')`. Vite's code-splitting
+    // breaks ORT 1.27's internal wasm/worker path resolution: the bundled chunk
+    // resolves the .wasm via its own hashed URL and skips the .mjs worker, then
+    // fails model parsing with a misleading INVALID_PROTOBUF (ERROR_CODE 7) —
+    // issue #109. The stock UMD bundle, loaded fresh and pointed at /ort/ via
+    // wasmPaths, initializes the WASM backend correctly. Verified on Banana Pi
+    // M5 via an isolated test page using this exact UMD + wasmPaths setup.
+    this._ort = await this._loadOrtUmd();
 
-    // Configure the WASM backend's asset paths. onnxruntime-web 1.27's threaded
-    // WASM backend loads a sibling pair: `ort-wasm-simd-threaded.jsep.{mjs,wasm}`.
-    // The .mjs is the ESM worker module; the .wasm is the binary. Without
-    // wasmPaths set, ORT resolves them relative to its bundle URL, which under
-    // Vite code-splitting points at a hashed chunk that has no sibling .mjs —
-    // ORT then fails to spawn the worker and reports "no available backend"
-    // (which surfaces as a misleading "protobuf parsing failed" from the caller).
-    // We serve both files at /ort/ (copied by vite-static-copy in vite.config.js),
-    // so point ORT there.
+    // Point ORT at /ort/ where ortAssetsPlugin (vite.config.js) serves the
+    // sibling ort-wasm-simd-threaded.jsep.{mjs,wasm} pair.
     if (this._ort.env) {
       this._ort.env.wasmPaths = '/ort/';
     }
