@@ -147,9 +147,9 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 	var res []model.Recording
 	for rows.Next() {
 		var r model.Recording
-		var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr sql.NullString
+		var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 		var mergeProgress sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &r.Archived); err != nil {
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived); err != nil {
 			return nil, err
 		}
 		r.StartedAt = scanTime(startedAtStr)
@@ -165,6 +165,11 @@ func (d *DB) GetRecordingsByIDBatch(ctx context.Context, ids []string) ([]model.
 		}
 		if mergeErrorStr.Valid {
 			r.MergeError = mergeErrorStr.String
+		}
+		if mergeQualityStr.Valid && mergeQualityStr.String != "" {
+			r.MergeQuality = mergeQualityStr.String
+		} else {
+			r.MergeQuality = model.MergeQualityComplete
 		}
 		if r.MergeStatus == "" {
 			r.MergeStatus = model.MergeStatusPending
@@ -877,6 +882,28 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 		result[filepath.Base(p)] = true
 	}
 	return result, nil
+}
+
+// PathIsRecordingFile reports whether the given on-disk path is still
+// referenced by any recording row for the camera — either as the source
+// file_path or the merged-output merge_path. The comparison is on the full
+// path, which is how both columns are stored (absolute paths under the storage
+// root). Used by the orphan scanner (repair reclaim-orphan-merges) to avoid
+// reclaiming files that still belong to a live recording.
+func (d *DB) PathIsRecordingFile(ctx context.Context, cameraID, fullpath string) (bool, error) {
+	var exists int
+	err := d.readConn().QueryRowContext(ctx, `
+		SELECT 1 FROM recordings
+		WHERE camera_id=?
+		  AND (file_path=? OR merge_path=?)
+		LIMIT 1;`, cameraID, fullpath, fullpath).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // ListPendingMJPEGRecordings returns recordings for a camera where format IN ('mjpeg','jpeg')

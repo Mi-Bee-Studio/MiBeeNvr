@@ -184,3 +184,42 @@ func TestListRecordingTimelineSegments_Truncation(t *testing.T) {
 	// it must be false — proving the flag is accurate when not capped.
 	require.False(t, total > len(segs))
 }
+
+func TestPathIsRecordingFile(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	filePath := "/data/cam-1/202607/26/12/cam-1_ts_abc"
+	mergePath := "/data/cam-1/202607/26/12/cam-1_ts_abc.mp4"
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID:        "rec-ref",
+		CameraID:  "cam-1",
+		FilePath:  filePath,
+		Format:    model.FormatH264,
+		StartedAt: now,
+		EndedAt:   now.Add(time.Minute),
+		Duration:  60,
+	}))
+	require.NoError(t, db.SetMergeResult(ctx, "rec-ref", mergePath, "go"))
+
+	// Full path matches file_path.
+	got, err := db.PathIsRecordingFile(ctx, "cam-1", filePath)
+	require.NoError(t, err)
+	require.True(t, got, "full file_path should be referenced")
+
+	// Full path matches merge_path.
+	got, err = db.PathIsRecordingFile(ctx, "cam-1", mergePath)
+	require.NoError(t, err)
+	require.True(t, got, "full merge_path should be referenced")
+
+	// Unrelated path → not referenced.
+	got, err = db.PathIsRecordingFile(ctx, "cam-1", "/data/cam-1/202607/26/12/orphan_xyz.mp4")
+	require.NoError(t, err)
+	require.False(t, got, "unreferenced path should not be a recording file")
+
+	// Wrong camera → not referenced (camera_id is part of the filter).
+	got, err = db.PathIsRecordingFile(ctx, "cam-other", mergePath)
+	require.NoError(t, err)
+	require.False(t, got, "path under a different camera should not match")
+}

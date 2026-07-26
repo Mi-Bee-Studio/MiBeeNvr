@@ -14,9 +14,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +50,8 @@ func runRepair() int {
 		return runRepairDeleteByFormat()
 	case "prune-intermediate-mp4":
 		return runRepairPruneIntermediateMP4()
+	case "reclaim-orphan-merges":
+		return runRepairReclaimOrphanMerges()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -999,6 +1004,146 @@ func runRepairPruneIntermediateMP4() int {
 	return 0
 }
 
+// runRepairReclaimOrphanMerges implements `repair reclaim-orphan-merges`: a
+// one-shot reclaim of merged-output MP4 files left on disk after their
+// recording rows were deleted via the web UI before the #117 fix shipped.
+//
+// The merged MP4 (recordings.merge_path) is written by the rolling/segment
+// merge into the nested tree <rootDir>/<cameraID>/YYYYMM/DD/HH/. The recording
+// delete paths historically only removed file_path, so the merge output leaked
+// — and the automatic orphan scanner (cleanOrphansForCamera) never reaches
+// that nested tree, so the leak was permanent. This command closes the gap for
+// already-leaked historical files. Going forward, the delete paths reclaim
+// merge_path themselves.
+//
+// For each .mp4 under the camera tree that is not referenced by any
+// recording's file_path or merge_path (PathIsRecordingFile), it removes the
+// file. Only *.mp4 files are considered — source frame directories and the
+// raw segment files are never touched.
+//
+// Safety:
+//   - Per-camera by default (--camera); omit --camera to scan ALL cameras.
+//   - --limit caps the count for bounded runs.
+//   - --dry-run default; --execute to apply. 20ms throttle between deletes.
+func runRepairReclaimOrphanMerges() int {
+	opts := parseRepairFlags(3)
+	if opts.configPath == "__help__" {
+		printRepairReclaimOrphanMergesUsage()
+		return 0
+	}
+
+	db, cfg, err := openDBFromConfig(opts.configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	ctx, cancel := setupSignalHandler()
+	defer cancel()
+
+	mode := "DRY RUN (no changes)"
+	if !opts.dryRun {
+		mode = "EXECUTE"
+	}
+	fmt.Printf("repair reclaim-orphan-merges — %s\n", mode)
+	if opts.cameraID != "" {
+		fmt.Printf("  camera: %s\n", opts.cameraID)
+	} else {
+		fmt.Println("  camera: (all cameras)")
+	}
+	if opts.limit > 0 {
+		fmt.Printf("  limit:  %d orphan files\n", opts.limit)
+	}
+	fmt.Println()
+
+	rootDir := cfg.Storage.RootDir
+	// Determine the camera directories to scan.
+	var cameras []string
+	if opts.cameraID != "" {
+		cameras = []string{opts.cameraID}
+	} else {
+		entries, err := os.ReadDir(rootDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading storage root %q: %v\n", rootDir, err)
+			return 1
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				cameras = append(cameras, e.Name())
+			}
+		}
+	}
+
+	reclaimedCount := 0
+	skippedReferenced := 0
+	totalBytes := int64(0)
+	limitHit := false
+	for _, cam := range cameras {
+		if limitHit {
+			break
+		}
+		camRoot := filepath.Join(rootDir, cam)
+		// Recursively walk the camera tree. Only .mp4 files at the leaf
+		// (YYYYMM/DD/HH/) level are candidates — that is where merge_path lives.
+		walkErr := filepath.WalkDir(camRoot, func(path string, d os.DirEntry, werr error) error {
+			if werr != nil {
+				// Tolerate per-entry FS errors (e.g. a file vanished mid-scan)
+				// by reporting and continuing the walk, rather than aborting.
+				fmt.Fprintf(os.Stderr, "  WARN: walk error at %s: %v\n", path, werr)
+				return nil
+			}
+			if d.IsDir() || !strings.HasSuffix(d.Name(), ".mp4") {
+				return nil
+			}
+			if opts.limit > 0 && reclaimedCount >= opts.limit {
+				limitHit = true
+				return filepath.SkipDir
+			}
+			referenced, err := db.PathIsRecordingFile(ctx, cam, path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  WARN: PathIsRecordingFile(%s): %v\n", path, err)
+				return nil
+			}
+			if referenced {
+				skippedReferenced++
+				return nil
+			}
+			var size int64
+			if st, err := os.Stat(path); err == nil {
+				size = st.Size()
+			}
+			if opts.dryRun {
+				totalBytes += size
+				fmt.Printf("  [dry-run] would reclaim: %s  (%s)\n", path, humanBytes(size))
+				reclaimedCount++
+				return nil
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "  WARN: failed to remove %s: %v\n", path, err)
+				return nil
+			}
+			reclaimedCount++
+			totalBytes += size
+			time.Sleep(20 * time.Millisecond) // friendly to USB HDD
+			return nil
+		})
+		if walkErr != nil && !errors.Is(walkErr, filepath.SkipDir) {
+			fmt.Fprintf(os.Stderr, "  WARN: walk %s: %v\n", camRoot, walkErr)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("Summary: reclaimed %d orphan merge MP4s (%s freed)\n", reclaimedCount, humanBytes(totalBytes))
+	if skippedReferenced > 0 {
+		fmt.Printf("  skipped (still referenced by a recording): %d\n", skippedReferenced)
+	}
+	if opts.dryRun && reclaimedCount > 0 {
+		fmt.Println("\nThis was a DRY RUN. Re-run with --execute to apply.")
+	}
+	return 0
+}
+
 // humanBytes formats a byte count as a human-readable string (KB/MB/GB).
 func humanBytes(b int64) string {
 	const (
@@ -1098,6 +1243,9 @@ Subcommands:
                          (e.g. delete regular video while keeping every timelapse segment)
   prune-intermediate-mp4 Bulk-remove per-segment rolling-merge .mp4 outputs that have
                          already been folded into a periodic (8h/24h/7d/30d) merge output
+  reclaim-orphan-merges Remove merged-output .mp4 files left on disk after their recording
+                         row was deleted via the web UI (pre-#117 fix leak). Only touches
+                         unreferenced .mp4 files; never source segments or frame dirs.
 
 Common options:
   --dry-run      Report what would change without modifying (default)
@@ -1292,6 +1440,45 @@ Options:
   --execute              Actually prune files + clear DB pointers
   --config <path>        Config file path (default: mibee-nvr.yaml)
   --help, -h             Show this help
+`)
+}
+
+func printRepairReclaimOrphanMergesUsage() {
+	fmt.Print(`Usage: mibee-nvr repair reclaim-orphan-merges [options]
+
+Reclaim merged-output .mp4 files left on disk after their recording row was
+deleted via the web UI before the #117 fix shipped. The rolling/segment merge
+writes each recording's merged MP4 into the nested tree
+  <rootDir>/<cameraID>/YYYYMM/DD/HH/<cameraID>_<ts>_<uuid>.mp4
+and records its path in recordings.merge_path. Before the #117 fix, deleting a
+recording removed the DB row and the source file (file_path) but left the
+merged MP4 behind — and the automatic orphan scanner never reaches that nested
+tree, so the file leaked permanently. This command reclaims those historical
+leaks. (Going forward, the delete paths reclaim merge_path themselves.)
+
+For each .mp4 under the camera tree, it asks the DB whether any recording still
+references it (as file_path OR merge_path); if not, the file is removed. Only
+unreferenced .mp4 files are touched — source frame directories and the raw
+segment files are never deleted.
+
+Examples:
+
+  # Dry-run: see what would be reclaimed across all cameras
+  mibee-nvr repair reclaim-orphan-merges
+
+  # Dry-run for one camera
+  mibee-nvr repair reclaim-orphan-merges --camera=front-door
+
+  # Apply (one camera, bounded)
+  mibee-nvr repair reclaim-orphan-merges --camera=front-door --limit 200 --execute
+
+Options:
+  --camera <id>      Limit to one camera (optional; omit for all cameras)
+  --limit <n>        Cap the number of orphan files removed (0 = no limit)
+  --dry-run          Report only, no changes (default)
+  --execute          Actually remove orphan files
+  --config <path>    Config file path (default: mibee-nvr.yaml)
+  --help, -h         Show this help
 `)
 }
 

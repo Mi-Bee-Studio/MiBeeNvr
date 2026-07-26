@@ -452,7 +452,16 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Then delete file (non-fatal if fails)
+	// Then delete on-disk files (non-fatal if they fail).
+	// The merged MP4 (merge_path) is the largest artifact and the one playback
+	// actually loads; without this it leaked permanently because the orphan
+	// scanner never reaches the nested YYYYMM/DD/HH/ tree. Mirrors
+	// handleTimelapseDelete. os.RemoveAll tolerates a missing path.
+	if rec.MergePath != "" {
+		if err := os.RemoveAll(rec.MergePath); err != nil {
+			logger.Warn("failed to delete merged file", "merge_path", rec.MergePath, "error", err)
+		}
+	}
 	if rec.FilePath != "" {
 		if err := h.store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
@@ -480,16 +489,20 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 		WriteError(w, http.StatusBadRequest, "ids must not exceed 100")
 		return
 	}
-	// Fetch file paths before batch delete
-	filePaths := map[string]string{}
+	// Fetch on-disk paths before batch delete (need both source file_path and
+	// the merged MP4 merge_path — see handleDeleteRecording for why merge_path
+	// must be reclaimed here too).
+	type recPaths struct {
+		filePath  string
+		mergePath string
+	}
+	paths := map[string]recPaths{}
 	recordings, err := h.db.GetRecordingsByIDBatch(ctx, body.IDs)
 	if err != nil {
 		logger.Warn("batch delete: failed to fetch recordings", "error", err)
 	} else {
 		for _, rec := range recordings {
-			if rec.FilePath != "" {
-				filePaths[rec.ID] = rec.FilePath
-			}
+			paths[rec.ID] = recPaths{filePath: rec.FilePath, mergePath: rec.MergePath}
 		}
 	}
 
@@ -505,9 +518,18 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	deletedSet := make(map[string]bool, len(deleted))
 	for _, id := range deleted {
 		deletedSet[id] = true
-		if fp, ok := filePaths[id]; ok {
-			if err := h.store.DeleteFile(fp); err != nil {
-				logger.Warn("batch delete: failed to delete file", "file_path", fp, "error", err)
+		p, ok := paths[id]
+		if !ok {
+			continue
+		}
+		if p.mergePath != "" {
+			if err := os.RemoveAll(p.mergePath); err != nil {
+				logger.Warn("batch delete: failed to delete merged file", "merge_path", p.mergePath, "error", err)
+			}
+		}
+		if p.filePath != "" {
+			if err := h.store.DeleteFile(p.filePath); err != nil {
+				logger.Warn("batch delete: failed to delete file", "file_path", p.filePath, "error", err)
 			}
 		}
 	}

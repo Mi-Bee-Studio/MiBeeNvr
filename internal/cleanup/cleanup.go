@@ -517,10 +517,19 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 		deletedSet[id] = true
 	}
 
-	// 5. Delete files for successfully deleted recordings (best-effort)
+	// 5. Delete files for successfully deleted recordings (best-effort).
+	// Reclaim the merged MP4 (merge_path) too — it is the largest artifact and
+	// the one playback loads; without this it leaks permanently because the
+	// orphan scanner never reaches the nested YYYYMM/DD/HH/ tree. Mirrors
+	// handleDeleteRecording / handleTimelapseDelete.
 	for _, rec := range toDelete {
 		if !deletedSet[rec.ID] {
 			continue
+		}
+		if rec.MergePath != "" {
+			if err := os.RemoveAll(rec.MergePath); err != nil {
+				logger.Warn("failed to delete merged file", "merge_path", rec.MergePath, "error", err)
+			}
 		}
 		if err := cm.store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)

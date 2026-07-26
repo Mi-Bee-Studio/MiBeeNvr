@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -154,7 +155,14 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Delete file from disk (non-fatal)
+	// Delete on-disk files (non-fatal). Reclaim the merged MP4 (merge_path) too
+	// — it is the largest artifact and would otherwise leak permanently.
+	// Mirrors handleDeleteRecording / handleTimelapseDelete.
+	if rec.MergePath != "" {
+		if err := os.RemoveAll(rec.MergePath); err != nil {
+			logger.Warn("failed to delete archived merged file", "merge_path", rec.MergePath, "error", err)
+		}
+	}
 	if rec.FilePath != "" {
 		if err := h.store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete archived recording file", "file_path", rec.FilePath, "error", err)

@@ -270,3 +270,86 @@ func TestBatchDeleteRecordings_Success(t *testing.T) {
 	got2, _ := db.GetRecording(context.Background(), "batch-2")
 	require.Nil(t, got2)
 }
+
+// --- handleDeleteRecording must also delete the merged MP4 (merge_path) ---
+// Regression test for issue #117: deleting a recording left the merged-output
+// MP4 (recordings.merge_path) on disk permanently, because the handler only
+// removed file_path. The merged MP4 is the largest artifact and the file
+// playback actually loads.
+
+func TestDeleteRecording_DeletesMergePath(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := makeRecording("rec-merge", "cam-1", "h264", now, false)
+	rec.FilePath = filepath.Join(store.RootDir(), "rec-merge-src.mp4")
+	require.NoError(t, os.WriteFile(rec.FilePath, []byte("src"), 0o644))
+	mergePath := filepath.Join(store.RootDir(), "rec-merge-merged.mp4")
+	require.NoError(t, os.WriteFile(mergePath, []byte("merged"), 0o644))
+	seedRecording(t, db, rec)
+	// Set the merge_path on the row (mirrors how the rolling merge writes it).
+	require.NoError(t, db.SetMergeResult(context.Background(), rec.ID, mergePath, "go"))
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/recordings/rec-merge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Both on-disk files must be gone.
+	_, err := os.Stat(rec.FilePath)
+	require.True(t, os.IsNotExist(err), "source file should be deleted, got err=%v", err)
+	_, err = os.Stat(mergePath)
+	require.True(t, os.IsNotExist(err), "merged file (merge_path) should be deleted, got err=%v", err)
+
+	got, _ := db.GetRecording(context.Background(), "rec-merge")
+	require.Nil(t, got)
+}
+
+func TestDeleteRecording_MissingMergePath_NoError(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	// Recording with an empty merge_path (never merged) — deletion must still
+	// succeed and clean up the source file.
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := makeRecording("rec-nomerge", "cam-1", "h264", now, false)
+	rec.FilePath = filepath.Join(store.RootDir(), "rec-nomerge.mp4")
+	require.NoError(t, os.WriteFile(rec.FilePath, []byte("data"), 0o644))
+	seedRecording(t, db, rec)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/recordings/rec-nomerge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	_, err := os.Stat(rec.FilePath)
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestBatchDeleteRecordings_DeletesMergePath(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := makeRecording("batch-merge", "cam-1", "h264", now, false)
+	rec.FilePath = filepath.Join(store.RootDir(), "batch-merge-src.mp4")
+	require.NoError(t, os.WriteFile(rec.FilePath, []byte("src"), 0o644))
+	mergePath := filepath.Join(store.RootDir(), "batch-merge-merged.mp4")
+	require.NoError(t, os.WriteFile(mergePath, []byte("merged"), 0o644))
+	seedRecording(t, db, rec)
+	require.NoError(t, db.SetMergeResult(context.Background(), rec.ID, mergePath, "go"))
+
+	body, _ := json.Marshal(map[string][]string{"ids": {"batch-merge"}})
+	rr := doRequest(t, h.Routes(), "POST", "/api/recordings/batch-delete", bytes.NewReader(body), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Both files reclaimed.
+	_, err := os.Stat(rec.FilePath)
+	require.True(t, os.IsNotExist(err), "source file should be deleted, got err=%v", err)
+	_, err = os.Stat(mergePath)
+	require.True(t, os.IsNotExist(err), "merged file (merge_path) should be deleted, got err=%v", err)
+	got, _ := db.GetRecording(context.Background(), "batch-merge")
+	require.Nil(t, got)
+}
