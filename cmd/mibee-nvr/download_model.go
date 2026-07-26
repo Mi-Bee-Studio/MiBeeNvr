@@ -154,9 +154,12 @@ func downloadModelFile(modelDir, filename, modelURL string) error {
 		slog.Warn("model download attempt failed", "attempt", attempt+1, "error", lastErr)
 	}
 
-	// All retries exhausted — clean up the partial file so a later run doesn't
-	// mistake it for a complete download (the exact bug we're fixing).
+	// All retries exhausted — clean up the partial file AND its size sidecar so
+	// a later run doesn't mistake them for a complete download (the exact bug
+	// we're fixing). A stale .part.size without its .part would also mislead a
+	// future first attempt into thinking resume state exists.
 	os.Remove(partPath)
+	os.Remove(partPath + ".size")
 	return fmt.Errorf("download failed after %d attempts: %w", len(downloadBackoff), lastErr)
 }
 
