@@ -47,18 +47,21 @@ if [ "$(id -u)" = "0" ]; then
     # avoids the host needing to download it from GitHub's flaky CDN at runtime).
     # We copy it into the writable data volume only when missing or undersized,
     # so this is a one-time cost and never overwrites a user-supplied model.
+    # NOTE: stat sizes are captured into variables FIRST, then compared. POSIX sh
+    # (Alpine ash / Debian dash) mis-parses a `&&` chain whose command-substitution
+    # contains its own `||` (it reports "Syntax error: ... expecting 'then'"), so
+    # we avoid nesting them.
     MODEL_SRC="/opt/mibee-nvr/models/yolo11n.onnx"
     MODEL_DST_DIR="$NVR_DATA_DIR/models"
     MODEL_DST="$MODEL_DST_DIR/yolo11n.onnx"
     # 5242880 = 5MB, matches minModelSize in cmd/mibee-nvr/download_model.go.
-    if [ -f "$MODEL_SRC" ] && [ "$(stat -c%s "$MODEL_SRC" 2>/dev/null || echo 0)" -ge 5242880 ]; then
-        DST_SIZE=$(stat -c%s "$MODEL_DST" 2>/dev/null || echo 0)
-        if [ "$DST_SIZE" -lt 5242880 ]; then
-            echo "[entrypoint] seeding AI model from image cache → $MODEL_DST"
-            mkdir -p "$MODEL_DST_DIR"
-            cp "$MODEL_SRC" "$MODEL_DST"
-            chown "${NVR_UID}:${NVR_GID}" "$MODEL_DST" 2>/dev/null || true
-        fi
+    SRC_SIZE=$(stat -c%s "$MODEL_SRC" 2>/dev/null || echo 0)
+    DST_SIZE=$(stat -c%s "$MODEL_DST" 2>/dev/null || echo 0)
+    if [ -f "$MODEL_SRC" ] && [ "$SRC_SIZE" -ge 5242880 ] && [ "$DST_SIZE" -lt 5242880 ]; then
+        echo "[entrypoint] seeding AI model from image cache → $MODEL_DST"
+        mkdir -p "$MODEL_DST_DIR"
+        cp "$MODEL_SRC" "$MODEL_DST"
+        chown "${NVR_UID}:${NVR_GID}" "$MODEL_DST" 2>/dev/null || true
     fi
 
     # Drop privileges and exec the binary
