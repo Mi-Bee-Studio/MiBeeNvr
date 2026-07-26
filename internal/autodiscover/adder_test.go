@@ -233,8 +233,8 @@ func TestRecentlySeen_DedupWindow(t *testing.T) {
 	if adder.recentlySeen(ep, "") {
 		t.Error("fresh endpoint should not be recentlySeen")
 	}
-	// After markSeen, it is within the window.
-	adder.markSeen(ep, "")
+	// After markSeenBothKeys, it is within the window.
+	adder.markSeenBothKeys(ep, "")
 	if !adder.recentlySeen(ep, "") {
 		t.Error("endpoint marked seen should be recentlySeen")
 	}
@@ -256,7 +256,7 @@ func TestRecentlySeen_SerialKeyedAcrossIPChange(t *testing.T) {
 	newEP := "http://192.168.1.99:80/onvif/device_service"
 
 	// Device marked seen at old IP (with its serial).
-	adder.markSeen(oldEP, serial)
+	adder.markSeenBothKeys(oldEP, serial)
 	// Same device re-announces at NEW IP, same serial → must be suppressed.
 	if !adder.recentlySeen(newEP, serial) {
 		t.Error("a device marked seen by serial must be recentlySeen even at a new endpoint (IP roaming)")
@@ -266,9 +266,31 @@ func TestRecentlySeen_SerialKeyedAcrossIPChange(t *testing.T) {
 		t.Error("a different serial should not be recentlySeen")
 	}
 	// Empty serial (enrichment failed) falls back to endpoint keying (legacy).
-	adder.markSeen("http://10.0.0.1/onvif/device_service", "")
+	adder.markSeenBothKeys("http://10.0.0.1/onvif/device_service", "")
 	if !adder.recentlySeen("http://10.0.0.1/onvif/device_service", "") {
 		t.Error("endpoint fallback keying (empty serial) must still work")
+	}
+}
+
+// TestRecentlySeen_PreEnrichmentEndpointLookupHits is the regression test for
+// the second #121-fix bug: the passive listener + active scanner re-discover a
+// device every cycle. The FIRST lookup (step 2) happens BEFORE enrichment, with
+// an empty serial, so it queries the endpoint key. markSeenBothKeys must have
+// marked the endpoint key (not just the serial key) on the previous cycle, or
+// the device retriggered every time — disrupting recording/preview with endless
+// recorder restarts. Verified in production: 212/251 were restarted ~10x/hour.
+func TestRecentlySeen_PreEnrichmentEndpointLookupHits(t *testing.T) {
+	t.Helper()
+	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
+	const ep = "http://192.168.1.50:80/onvif/device_service"
+	const serial = "ABC123"
+
+	// Simulate a completed discovery cycle: device processed with its serial.
+	adder.markSeenBothKeys(ep, serial)
+	// Next cycle re-announces the SAME device, but recentlySeen is called BEFORE
+	// enrichment (serial unknown at this point) → endpoint-keyed lookup.
+	if !adder.recentlySeen(ep, "") {
+		t.Error("endpoint-keyed lookup (pre-enrichment) must hit after markSeenBothKeys — chatty devices would retrigger every cycle otherwise")
 	}
 }
 
@@ -365,6 +387,41 @@ func (f *fakeEnroller) RestartRecorder(_ context.Context, cameraID string) error
 	defer f.mu.Unlock()
 	f.restartedIDs[cameraID] = true
 	return f.restartErr
+}
+
+// TestEndpointChanged is the regression test for the recorder-storm bug: a
+// device that re-announces at its CURRENT address must NOT trigger a roaming
+// update (which restarts the recorder). Only a genuine endpoint change should.
+// In production, the missing check restarted 212/251's recorder ~10x/hour,
+// disrupting recording and live preview.
+func TestEndpointChanged(t *testing.T) {
+	t.Helper()
+	db := newTestDB(t)
+	ctx := context.Background()
+	const camID = "cam-existing"
+	const ep = "http://192.168.63.212:80/onvif/device_service"
+	require := func(cond bool, msg string) {
+		t.Helper()
+		if !cond {
+			t.Error(msg)
+		}
+	}
+
+	// Seed a camera at ep.
+	if err := db.UpsertCamera(ctx, camID, "Cam", "onvif", "", "", "", "", ep, "", "", "ABC"); err != nil {
+		t.Fatalf("UpsertCamera: %v", err)
+	}
+	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, db, nil)
+
+	// Same endpoint (with trailing slash variant) → NOT changed.
+	require(!adder.endpointChanged(ctx, camID, ep), "identical endpoint must report unchanged")
+	require(!adder.endpointChanged(ctx, camID, ep+"/"), "trailing-slash variant must report unchanged (normalized)")
+
+	// Genuinely different endpoint → changed.
+	require(adder.endpointChanged(ctx, camID, "http://192.168.63.99:80/onvif/device_service"), "different IP must report changed")
+
+	// Unknown camera ID → fail-open (true), so the update is attempted.
+	require(adder.endpointChanged(ctx, camID+"-nope", ep), "unknown camera must fail-open (true)")
 }
 
 // TestUpdateEndpointForRoaming verifies that when auto-discover recognizes a
