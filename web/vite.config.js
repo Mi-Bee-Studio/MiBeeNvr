@@ -36,9 +36,46 @@ function swVersionPlugin() {
   };
 }
 
+/**
+ * onnxruntime-web WASM asset plugin.
+ *
+ * onnxruntime-web 1.27's threaded WASM backend loads a sibling pair at runtime:
+ *   ort-wasm-simd-threaded.jsep.mjs  (ESM worker module — spawns the threads)
+ *   ort-wasm-simd-threaded.jsep.wasm (the binary)
+ * Vite's code-splitting copies the .wasm as a hashed asset but DOES NOT emit
+ * the .mjs (it's only referenced by ORT's internal dynamic import() at runtime,
+ * which Vite can't see). Without the .mjs, ORT fails to spawn the worker and
+ * reports "no available backend" — which AiRuntime surfaces as a misleading
+ * "protobuf parsing failed" (issue #109).
+ *
+ * This plugin copies both files from node_modules into dist/ort/ at their
+ * canonical (un-hashed) names, and runtime.ts sets `ort.env.wasmPaths='/ort/'`
+ * so ORT finds them. A fixed path (not hashed) is required because ORT builds
+ * the filenames itself and can't be told the hash.
+ */
+function ortAssetsPlugin() {
+  return {
+    name: 'ort-wasm-assets',
+    apply: 'build',
+    closeBundle() {
+      const outDir = path.resolve('dist');
+      const ortDir = path.join(outDir, 'ort');
+      fs.mkdirSync(ortDir, { recursive: true });
+      const ortPkgDir = path.resolve('node_modules/onnxruntime-web/dist');
+      // The .mjs worker module + the matching un-hashed .wasm binary.
+      for (const file of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
+        const src = path.join(ortPkgDir, file);
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, path.join(ortDir, file));
+        }
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [svelte(), tailwindcss(), swVersionPlugin()],
+  plugins: [svelte(), tailwindcss(), swVersionPlugin(), ortAssetsPlugin()],
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),

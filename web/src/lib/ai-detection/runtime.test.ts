@@ -62,6 +62,8 @@ function setupOrtMock(session?: MockSession) {
       this.dims = dims;
       this.dispose = vi.fn();
     }),
+    // env is accessed by _doInit to set wasmPaths. Provide a minimal mock.
+    env: { wasmPaths: undefined as string | undefined },
   };
 }
 
@@ -502,6 +504,19 @@ describe('AiRuntime', () => {
           graphOptimizationLevel: 'all',
         }),
       );
+    });
+  });
+
+  // onnxruntime-web 1.27's threaded WASM backend loads a sibling
+  // ort-wasm-simd-threaded.jsep.{mjs,wasm} pair. Without wasmPaths, ORT resolves
+  // them against its bundle URL and (under Vite code-splitting) 404s the .mjs,
+  // producing a misleading "protobuf parsing failed" (issue #109).
+  describe('wasmPaths', () => {
+    it('configures ort.env.wasmPaths to the /ort/ asset dir before session create', async () => {
+      const rt = new AiRuntime();
+      await rt.init('/models/test.onnx');
+
+      expect(mockOrtModule.env.wasmPaths).toBe('/ort/');
     });
   });
 });

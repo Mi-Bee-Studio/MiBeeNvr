@@ -173,6 +173,19 @@ export class AiRuntime {
     // 2. Dynamic import onnxruntime-web (lazy, NOT in initial bundle)
     this._ort = await import('onnxruntime-web');
 
+    // Configure the WASM backend's asset paths. onnxruntime-web 1.27's threaded
+    // WASM backend loads a sibling pair: `ort-wasm-simd-threaded.jsep.{mjs,wasm}`.
+    // The .mjs is the ESM worker module; the .wasm is the binary. Without
+    // wasmPaths set, ORT resolves them relative to its bundle URL, which under
+    // Vite code-splitting points at a hashed chunk that has no sibling .mjs —
+    // ORT then fails to spawn the worker and reports "no available backend"
+    // (which surfaces as a misleading "protobuf parsing failed" from the caller).
+    // We serve both files at /ort/ (copied by vite-static-copy in vite.config.js),
+    // so point ORT there.
+    if (this._ort.env) {
+      this._ort.env.wasmPaths = '/ort/';
+    }
+
     // 3. Dispose previous session if re-initializing
     if (this._session) {
       try {
