@@ -404,6 +404,23 @@ func (d *DB) CameraIDByStableID(ctx context.Context, stableID string) (string, e
 	return id, nil
 }
 
+// GetCameraOnvifEndpoint returns the onvif_endpoint of a camera by ID. Used by
+// auto-discover's roaming check to compare the discovered endpoint against the
+// existing one without loading the full CameraRow. Returns ("", nil) when the
+// camera does not exist (sql.ErrNoRows treated as "not found", not an error),
+// mirroring GetCameraStableID's convention.
+func (d *DB) GetCameraOnvifEndpoint(ctx context.Context, cameraID string) (string, error) {
+	var ep string
+	err := d.readConn().QueryRowContext(ctx, `SELECT COALESCE(onvif_endpoint, '') FROM cameras WHERE id=? LIMIT 1`, cameraID).Scan(&ep)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return ep, nil
+}
+
 // CameraIDByOnvifEndpoint returns the camera_id and matchKind of any row
 // (including ARCHIVED ones) that matches the given onvif_endpoint or serial.
 // matchKind is "endpoint" when the onvif_endpoint column matched, "serial" when

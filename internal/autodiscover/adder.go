@@ -153,17 +153,22 @@ func (a *Adder) HandleDiscovered(ctx context.Context, dev onvif.DiscoveredDevice
 	enrichCancel()
 
 	// 4. Persisted dedup: skip if a camera with the same stable_id, endpoint, or
-	// serial already exists. When the match is by stable_id or serial (the SAME
-	// physical device at a NEW address), UPDATE the existing camera's endpoint
-	// instead of silently skipping — this is the IP-roaming fix (issue #121).
-	// An "endpoint" match means the same device at the same address is already
-	// enrolled, so there is nothing to update.
+	// serial already exists. When the match is by stable_id or serial AND the
+	// endpoint actually changed, UPDATE the existing camera's endpoint — this is
+	// the IP-roaming fix (issue #121). If the endpoint is UNCHANGED (the device
+	// simply re-announced at its current address), skip the update to avoid
+	// pointlessly restarting the recorder every discovery cycle.
 	existingID, matchKind := a.findExistingCamera(ctx, endpoint, dev.Serial, dev.Serial)
 	if existingID != "" {
-		if (matchKind == "stable_id" || matchKind == "serial") && a.camMgr != nil {
+		if (matchKind == "stable_id" || matchKind == "serial") && a.camMgr != nil && a.endpointChanged(ctx, existingID, endpoint) {
 			a.updateEndpointForRoaming(ctx, existingID, endpoint, dev)
 		}
-		a.markSeen(endpoint, dev.Serial) // refresh window under the (now-known) serial key
+		// Mark BOTH keys seen (endpoint + serial) so the next announcement is
+		// suppressed regardless of whether its serial is known yet (before
+		// enrichment the serial is empty, so only the endpoint key would match;
+		// after enrichment only the serial key would match — marking both closes
+		// the gap that let chatty devices retrigger every cycle).
+		a.markSeenBothKeys(endpoint, dev.Serial)
 		return
 	}
 
@@ -269,6 +274,30 @@ func (a *Adder) findExistingCamera(ctx context.Context, endpoint, serial, stable
 	return id, kind
 }
 
+// endpointChanged reports whether the discovered endpoint differs from the
+// existing camera's current onvif_endpoint. This guards the roaming-update path
+// against the common case of a device simply re-announcing at its CURRENT
+// address (WS-Discovery Hello is sent periodically, and the active scanner
+// probes every cycle). Without this check, every discovery cycle would restart
+// the recorder — disrupting recording and live preview (regression introduced
+// by the initial #121 fix, where a stable_id match unconditionally triggered
+// updateEndpointForRoaming).
+//
+// Comparison normalizes trailing slashes (mirrors AddCamera's endpoint dedup).
+// On DB error or missing row, returns true (fail-open: attempt the update, which
+// is idempotent and will no-op if the endpoint is in fact unchanged).
+func (a *Adder) endpointChanged(ctx context.Context, cameraID, discoveredEndpoint string) bool {
+	if a.db == nil {
+		return true // can't check, fail-open
+	}
+	existing, err := a.db.GetCameraOnvifEndpoint(ctx, cameraID)
+	if err != nil {
+		logger.Warn("roaming check: failed to read existing endpoint, failing open", "camera_id", cameraID, "error", err)
+		return true
+	}
+	return strings.TrimRight(existing, "/") != strings.TrimRight(discoveredEndpoint, "/")
+}
+
 // updateEndpointForRoaming updates an existing camera's ONVIF endpoint (and URL)
 // to the newly-discovered address, then restarts its recorder so the new
 // address takes effect immediately. This is the IP-roaming fix (issue #121):
@@ -366,7 +395,7 @@ func (a *Adder) probeCredentials(ctx context.Context, endpoint string) bool {
 // the manual add path (web/src/lib/components/DiscoveryPanel.svelte):
 // protocol=onvif, encoding left empty for runtime detection.
 func (a *Adder) enroll(ctx context.Context, dev onvif.DiscoveredDevice, endpoint, state string) {
-	a.markSeen(endpoint, dev.Serial)
+	a.markSeenBothKeys(endpoint, dev.Serial)
 
 	name := dev.Name
 	if name == "" {
@@ -451,6 +480,13 @@ func (a *Adder) publish(ctx context.Context, topic string, data any) {
 // recentlySeen reports whether the device (keyed by serial, or endpoint when
 // serial is unavailable) was attempted within dedupWindow. Thread-safe; GCs
 // expired entries opportunistically.
+//
+// Note: the lookup key depends on whether the serial is known at the call site.
+// Before enrichment the serial is empty, so this queries the endpoint key;
+// after enrichment it queries the serial key. markSeenBothKeys therefore marks
+// BOTH keys so the suppression holds across the enrich boundary (otherwise a
+// chatty device re-announcing every cycle would retrigger after the serial
+// becomes known — the second #121-fix regression).
 func (a *Adder) recentlySeen(endpoint, serial string) bool {
 	key := makeDedupKey(endpoint, serial)
 	a.dedupMu.Lock()
@@ -469,11 +505,18 @@ func (a *Adder) recentlySeen(endpoint, serial string) bool {
 	return false
 }
 
-// markSeen records that the device (keyed by serial, or endpoint when serial is
-// unavailable) was attempted now.
-func (a *Adder) markSeen(endpoint, serial string) {
-	key := makeDedupKey(endpoint, serial)
+// markSeenBothKeys records the device as attempted now under BOTH its endpoint
+// key and (when the serial is known) its serial key. This is necessary because
+// recentlySeen's lookup key depends on whether the serial is populated at query
+// time: the next announcement starts with an empty serial (endpoint key) and
+// only gains it after enrichment (serial key). Marking just one would let the
+// other lookup miss, retriggering enrichment/enrollment every cycle.
+func (a *Adder) markSeenBothKeys(endpoint, serial string) {
+	now := time.Now()
 	a.dedupMu.Lock()
-	a.dedup[key] = time.Now()
+	a.dedup[makeDedupKey(endpoint, "")] = now // endpoint key (pre-enrichment lookups)
+	if s := strings.TrimSpace(serial); s != "" {
+		a.dedup[makeDedupKey(endpoint, s)] = now // serial key (post-enrichment lookups)
+	}
 	a.dedupMu.Unlock()
 }
