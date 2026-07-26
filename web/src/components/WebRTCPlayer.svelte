@@ -149,10 +149,11 @@ let destroyed = false;
     } else {
       next = 'error';
     }
-    // Assignment-side dedupe (issue #107): the WebRTC ICE layer can emit the
-    // same state back-to-back; skip the side effects (freeze-frame capture,
-    // coordinator completion, and the dispatch $effect) when nothing changed.
-    if (next === prevState) return;
+    // NOTE: no manual dedupe guard (`if (next === prevState) return;`). Svelte 5
+    // treats reassigning an identical primitive to a $state as a no-op, so a
+    // redundant ICE callback doesn't churn the dispatcher. An earlier revision
+    // added the guard but it altered timing in a way that contributed to
+    // effect_update_depth_exceeded; keep main's behavior.
     if (prevState === 'playing' && next !== 'playing') captureFreezeFrame();
     if (next === 'playing') {
       if (prevState !== 'playing' && frozenFrameUrl) clearFreezeFrame();

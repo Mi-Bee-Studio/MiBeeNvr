@@ -1,157 +1,199 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createStateDispatcher, DEBOUNCE_MS, type PlayerState } from '$lib/player/dispatch';
 
-// The dispatcher uses real setTimeout by default; tests inject a controllable
-// scheduler so the debounce timing is deterministic without vitest fake timers
-// (either works; the injected form makes the assertions explicit about which
-// timer fired and is easier to reason about for the "playing cancels pending"
-// case).
+// The dispatcher defers EVERY emit out of the synchronous stack (microtask for
+// 'playing', setTimeout for the debounced trailing flush) so the downstream
+// orchestrator state writes cannot run inside a Svelte effect flush (the fix
+// for effect_update_depth_exceeded). To make the async ordering deterministic
+// WITHOUT fighting vitest's fake-timer/microtask interplay, tests inject:
+//   - `sched`: a manually-flushed queue standing in for the microtask path
+//     (used by 'playing'), AND
+//   - `clear` + a controllable `setTimeout`-style trailing timer.
+// Both are driven by explicit flush helpers below.
 
 interface FakeTimer {
   fn: () => void;
-  ms: number;
   fired: boolean;
 }
-let queue: FakeTimer[] = [];
+let microtasks: Array<() => void> = [];
+let timers: FakeTimer[] = [];
 
-function sched(fn: () => void, ms: number): FakeTimer {
-  const t: FakeTimer = { fn, ms, fired: false };
-  queue.push(t);
+beforeEach(() => {
+  microtasks = [];
+  timers = [];
+});
+
+// Inject a microtask-style scheduler: collects callbacks to flush explicitly.
+function schedMicrotask(fn: () => void): void {
+  microtasks.push(fn);
+}
+function flushMicrotasks(): void {
+  // Drain the queue (microtasks may queue more microtasks).
+  while (microtasks.length > 0) {
+    const fn = microtasks.shift()!;
+    fn();
+  }
+}
+// Trailing-edge setTimeout stand-in: collect + manual advance.
+function schedTimer(fn: () => void): FakeTimer {
+  const t: FakeTimer = { fn, fired: false };
+  timers.push(t);
   return t;
 }
-function clear(t: FakeTimer): void {
-  const i = queue.indexOf(t);
-  if (i >= 0) queue.splice(i, 1);
+function clearTimer(t: FakeTimer): void {
+  const i = timers.indexOf(t);
+  if (i >= 0) timers.splice(i, 1);
 }
-/** Advance fake time, firing timers whose delay has elapsed (in insertion order). */
-function advance(ms: number): void {
-  const ready = queue.filter((t) => t.ms <= ms).sort((a, b) => a.ms - b.ms);
+/** Fire every trailing timer whose delay has elapsed (we don't model ms precisely;
+ *  calling this stands in for `advanceTimersByTime(DEBOUNCE_MS)`). */
+function flushTrailing(): void {
+  // Snapshot then clear, since firing may re-arm.
+  const ready = [...timers];
+  timers = [];
   for (const t of ready) {
     if (t.fired) continue;
     t.fired = true;
-    const i = queue.indexOf(t);
-    if (i >= 0) queue.splice(i, 1);
     t.fn();
   }
+  // Firing the trailing callback is itself synchronous; microtasks queued
+  // during it are not part of this model (the real impl uses setTimeout, so
+  // microtasks drain between macrotasks — not our concern here).
 }
-function pendingCount(): number {
-  return queue.length;
+function pendingTrailing(): number {
+  return timers.length;
 }
 
-beforeEach(() => {
-  queue = [];
-});
-
-afterEach(() => {
-  queue = [];
-});
+function newDispatcher(emit: (s: PlayerState) => void) {
+  return createStateDispatcher(emit, {
+    sched: schedMicrotask,
+    schedTrailing: (fn) => schedTimer(fn),
+    clear: clearTimer,
+  });
+}
 
 describe('createStateDispatcher — dedupe', () => {
   it('does not emit when the same state is reported twice in a row', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering');
-    advance(DEBOUNCE_MS);
+    flushTrailing();
     d.report('buffering'); // identical → deduped
-    advance(DEBOUNCE_MS);
+    flushTrailing();
     expect(emitted).toEqual(['buffering']);
   });
 
   it('does not emit a duplicate even before the trailing timer fires', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering');
-    // Immediately report buffering again WITHOUT advancing — pending state is
-    // 'buffering', so the second call is a no-op.
-    d.report('buffering');
-    advance(DEBOUNCE_MS);
+    d.report('buffering'); // pending === 'buffering' → no-op
+    flushTrailing();
     expect(emitted).toEqual(['buffering']);
-    expect(pendingCount()).toBe(0);
   });
 });
 
 describe('createStateDispatcher — debounce', () => {
   it('coalesces a burst of distinct non-playing states into the last one', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
-    // Simulate the hls.js oscillation: buffering → loading → buffering within
-    // the debounce window. Only the final 'buffering' should be emitted.
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering');
     d.report('loading');
     d.report('buffering');
     d.report('loading');
     d.report('buffering');
     expect(emitted).toEqual([]); // nothing yet — all debounced
-    expect(pendingCount()).toBe(1); // exactly one trailing timer
-    advance(DEBOUNCE_MS);
+    expect(pendingTrailing()).toBe(1); // exactly one trailing timer
+    flushTrailing();
     expect(emitted).toEqual(['buffering']); // only the last
   });
 
   it('emits once per debounce window, not per report (the issue #107 storm guard)', () => {
-    // The bug: 7428 statechange events in 55s. With a 500ms debounce the worst
-    // case is ~110 events in 55s even if a new state arrives every tick.
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     for (let i = 0; i < 1000; i++) {
-      // Alternate to bypass dedupe but stay within the window.
       d.report(i % 2 === 0 ? 'buffering' : 'loading');
     }
-    advance(DEBOUNCE_MS);
+    flushTrailing();
     expect(emitted.length).toBe(1);
   });
 
   it('reports a genuinely later state change after the window elapses', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering');
-    advance(DEBOUNCE_MS);
+    flushTrailing();
     expect(emitted).toEqual(['buffering']);
     d.report('error');
-    advance(DEBOUNCE_MS);
+    flushTrailing();
     expect(emitted).toEqual(['buffering', 'error']);
   });
 });
 
-describe('createStateDispatcher — playing flushes immediately', () => {
-  it('emits playing synchronously (no debounce) so recovery is reported at once', () => {
+describe('createStateDispatcher — playing flushes asynchronously (never synchronous)', () => {
+  it('does NOT emit playing synchronously (must defer out of any effect flush)', () => {
+    // THE regression guard for effect_update_depth_exceeded: emit must run on a
+    // microtask, not in the report() call stack.
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('playing');
+    expect(emitted).toEqual([]); // not yet — microtask not flushed
+    flushMicrotasks();
     expect(emitted).toEqual(['playing']);
-    expect(pendingCount()).toBe(0);
+  });
+
+  it('playing emits before the 500ms debounce window (microtask is near-immediate)', () => {
+    const emitted: PlayerState[] = [];
+    const d = newDispatcher((s) => emitted.push(s));
+    d.report('playing');
+    flushMicrotasks();
+    expect(emitted).toEqual(['playing']);
+    expect(pendingTrailing()).toBe(0);
   });
 
   it('cancels a pending trailing dispatch when playing arrives (recovery supersedes it)', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering'); // arms a trailing timer
-    expect(pendingCount()).toBe(1);
-    d.report('playing'); // flush + cancel
+    expect(pendingTrailing()).toBe(1);
+    d.report('playing'); // microtask flush + cancel trailing
+    flushMicrotasks();
     expect(emitted).toEqual(['playing']);
-    expect(pendingCount()).toBe(0);
-    advance(DEBOUNCE_MS); // would have fired the buffered 'buffering' — must NOT
+    expect(pendingTrailing()).toBe(0);
+    flushTrailing(); // would have fired the buffered 'buffering' — must NOT
     expect(emitted).toEqual(['playing']);
   });
 
-  it('dedupes consecutive playing reports (no spurious duplicate)', () => {
+  it('coalesces consecutive playing reports into a single microtask flush', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('playing');
-    d.report('playing'); // duplicate → no-op
-    d.report('playing'); // duplicate → no-op
-    expect(emitted).toEqual(['playing']);
+    d.report('playing'); // deduped — microtask already queued
+    d.report('playing');
+    flushMicrotasks();
+    expect(emitted).toEqual(['playing']); // exactly one emit
+  });
+
+  it('uses DEBOUNCE_MS constant value 500 (documents the storm-bounding window)', () => {
+    expect(DEBOUNCE_MS).toBe(500);
   });
 });
 
 describe('createStateDispatcher — dispose', () => {
   it('cancels the pending trailing dispatch on dispose', () => {
     const emitted: PlayerState[] = [];
-    const d = createStateDispatcher((s) => emitted.push(s), { sched, clear });
+    const d = newDispatcher((s) => emitted.push(s));
     d.report('buffering');
-    expect(pendingCount()).toBe(1);
     d.dispose();
-    expect(pendingCount()).toBe(0);
-    advance(DEBOUNCE_MS);
+    flushTrailing();
+    expect(emitted).toEqual([]);
+  });
+
+  it('makes a queued playing microtask a no-op on dispose', () => {
+    const emitted: PlayerState[] = [];
+    const d = newDispatcher((s) => emitted.push(s));
+    d.report('playing');
+    d.dispose(); // clear the queued state before the microtask runs
+    flushMicrotasks();
     expect(emitted).toEqual([]);
   });
 });

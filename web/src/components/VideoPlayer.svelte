@@ -130,12 +130,6 @@
 
   function updateState(cameraId_: string, state: StreamState) {
     if (cameraId_ === cameraId) {
-      // Assignment-side dedupe (issue #107): hls.js can report the same state
-      // back-to-back (e.g. 'buffering' from multiple fatal-recovery cycles).
-      // Without this guard each redundant assignment re-triggers the $effect
-      // above. The dispatcher dedupes too, but stopping it here avoids the
-      // Svelte microtask entirely.
-      if (state === streamState) return;
       // Capture frame before leaving 'playing' state
       if (streamState === 'playing' && state !== 'playing') {
         captureFreezeFrame();
@@ -152,6 +146,13 @@
         coordinator.completeReconnect(cameraId);
         hasActiveCoordinatedReconnect = false;
       }
+      // NOTE: no manual dedupe guard here — Svelte 5 treats reassigning an
+      // identical primitive to a $state as a no-op (no effect re-run), so
+      // redundant hls.js callbacks don't churn the dispatcher. An earlier
+      // revision added `if (state === streamState) return;` here, but that
+      // changed timing in a way that contributed to effect_update_depth_exceeded
+      // when combined with the dispatcher; main has no guard and works, so we
+      // keep main's behavior and let Svelte's primitive equality do the dedupe.
       streamState = state;
     }
   }

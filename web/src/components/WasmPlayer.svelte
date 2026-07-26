@@ -179,11 +179,6 @@ let webgpuRenderer: WebGPURenderer | null = null;
   });
 
   function updateState(newState: PlayerState) {
-    // Assignment-side dedupe (issue #107): the WS connection layer can report
-    // the same state back-to-back; without this guard each redundant
-    // assignment re-triggers the $effect. The dispatcher dedupes too, but
-    // stopping it here avoids the Svelte microtask entirely.
-    if (newState === streamState) return;
     // Capture frame before leaving 'playing'
     if (streamState === 'playing' && newState !== 'playing') {
       captureFreezeFrame();
@@ -192,6 +187,11 @@ let webgpuRenderer: WebGPURenderer | null = null;
     if (newState === 'playing' && frozenFrameUrl) {
       clearFreezeFrame();
     }
+    // NOTE: no manual dedupe guard — Svelte 5 treats reassigning an identical
+    // primitive to a $state as a no-op (no effect re-run). An earlier revision
+    // added `if (newState === streamState) return;` but that altered timing in
+    // a way that contributed to effect_update_depth_exceeded when combined with
+    // the dispatcher. Keep main's behavior; let Svelte dedupe primitives.
     streamState = newState;
   }
 
