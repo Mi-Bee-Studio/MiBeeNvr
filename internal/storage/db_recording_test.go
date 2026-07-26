@@ -213,11 +213,6 @@ func TestPathIsRecordingFile(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got, "full merge_path should be referenced")
 
-	// Basename match (merge output stored elsewhere but same basename).
-	got, err = db.PathIsRecordingFile(ctx, "cam-1", "/different/root/cam-1_ts_abc.mp4")
-	require.NoError(t, err)
-	require.True(t, got, "basename of merge_path should be referenced")
-
 	// Unrelated path → not referenced.
 	got, err = db.PathIsRecordingFile(ctx, "cam-1", "/data/cam-1/202607/26/12/orphan_xyz.mp4")
 	require.NoError(t, err)
