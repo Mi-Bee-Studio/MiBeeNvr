@@ -237,3 +237,116 @@ func TestFromConfig_AppliesDefaults(t *testing.T) {
 	mustEqual(t, c2.MaxParallel, 8, "explicit max parallel")
 	mustEqual(t, c2.ProbeTimeout, 1500*time.Millisecond, "explicit probe timeout")
 }
+
+// fakeProbeMatch simulates a device that answers the WS-Discovery ProbeMatch
+// path: UUID is the EndpointReference Address (an urn:uuid:...), and Serial is
+// empty — the device's real serial is only obtainable via a separate
+// GetDeviceInformation call (the "confirmation" step). This pins the issue #121
+// scenario where scanFor used to silently miss such devices.
+func fakeProbeMatch(hostUUID map[string]string) ProbeFunc {
+	return func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error) {
+		uuid, ok := hostUUID[host]
+		if !ok {
+			return nil, errUnreachable
+		}
+		return &onvif.DiscoveredDevice{
+			UUID:     uuid, // urn:uuid:... — NOT the hardware serial
+			Serial:   "",   // empty: ProbeMatch does not carry the serial
+			Endpoint: "http://" + host + "/onvif/device_service",
+		}, nil
+	}
+}
+
+// fakeConfirm is a ConfirmFunc that scripts a host -> serial map, simulating a
+// successful GetDeviceInformation confirmation. It fills dev.Serial in-place.
+func fakeConfirm(hostSerial map[string]string) ConfirmFunc {
+	return func(ctx context.Context, dev *onvif.DiscoveredDevice) {
+		host := hostFromEndpoint(dev.Endpoint)
+		if serial, ok := hostSerial[host]; ok {
+			dev.Serial = serial
+		}
+	}
+}
+
+// TestDiscoverByStableID_ProbeMatchPathWithConfirmation is the issue #121
+// regression test. A device that answers WS-Discovery ProbeMatch reports its
+// EndpointReference Address as UUID (NOT the serial) and leaves Serial empty.
+// scanFor must trigger the confirmation step (GetDeviceInformation) to fetch the
+// real serial, then match against dev.Serial — previously it compared
+// dev.UUID == want and silently missed.
+func TestDiscoverByStableID_ProbeMatchPathWithConfirmation(t *testing.T) {
+	cam := config.CameraConfig{
+		ID:            "cam-roamed",
+		Protocol:      "onvif",
+		StableID:      "SN-AAA", // the hardware serial we want to match
+		ONVIFEndpoint: "http://192.0.2.10:80/onvif/device_service",
+		SubnetHints:   []string{"192.0.2.0/24"},
+	}
+	// The device at .50 answers ProbeMatch with an urn:uuid (NOT the serial).
+	probe := fakeProbeMatch(map[string]string{
+		"192.0.2.50": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+		"192.0.2.11": "urn:uuid:deadbeef-0000-0000-0000-000000000001",
+	})
+	// Confirmation reveals the real serials. Only .50 has the camera we want.
+	confirm := fakeConfirm(map[string]string{
+		"192.0.2.50": "SN-AAA",
+		"192.0.2.11": "SN-OTHER",
+	})
+
+	eng := NewEngineWithConfirm(Config{MaxParallel: 32, ProbeTimeout: time.Second, MaxDuration: 5 * time.Second}, probe, confirm)
+	res, err := eng.DiscoverByStableID(context.Background(), cam)
+	if err != nil {
+		t.Fatalf("expected match via ProbeMatch+confirmation, got error: %v", err)
+	}
+	mustEqual(t, res.NewHost, "192.0.2.50", "ProbeMatch-path match host")
+}
+
+// TestDiscoverByStableID_ProbeMatchWithoutConfirmationMisses pins the BUG: with
+// confirmation DISABLED, a ProbeMatch-answering device is silently missed
+// (UUID is an urn:uuid, not the serial). This documents why the default
+// NewEngine wires onvif.EnrichDevice as the confirm step.
+func TestDiscoverByStableID_ProbeMatchWithoutConfirmationMisses(t *testing.T) {
+	cam := config.CameraConfig{
+		ID:            "cam-roamed",
+		Protocol:      "onvif",
+		StableID:      "SN-AAA",
+		ONVIFEndpoint: "http://192.0.2.10:80/onvif/device_service",
+		SubnetHints:   []string{"192.0.2.0/24"},
+	}
+	probe := fakeProbeMatch(map[string]string{
+		"192.0.2.50": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+	})
+	// confirm=nil: no second-stage GetDeviceInformation → dev.Serial stays empty,
+	// dev.UUID != want → no match.
+	eng := NewEngineWithConfirm(Config{MaxParallel: 32, ProbeTimeout: time.Second, MaxDuration: 5 * time.Second}, probe, nil)
+	_, err := eng.DiscoverByStableID(context.Background(), cam)
+	mustEqual(t, err, ErrNotFound, "ProbeMatch without confirmation must miss (documents the bug)")
+}
+
+// TestDiscoverByStableID_GetDeviceInfoPathStillWorks confirms the legacy path
+// (probe returns UUID=serial directly) is unaffected by the confirmation
+// change. fakeProbe puts the serial in UUID (the GetDeviceInformation path) and
+// leaves Serial empty, so confirmation IS invoked — but a no-op confirm leaves
+// dev.Serial empty, and the match still fires via dev.UUID == want. This proves
+// the UUID match branch was preserved alongside the new Serial match branch.
+func TestDiscoverByStableID_GetDeviceInfoPathStillWorks(t *testing.T) {
+	cam := config.CameraConfig{
+		ID:            "cam-1",
+		Protocol:      "onvif",
+		StableID:      "SN-AAA",
+		ONVIFEndpoint: "http://192.0.2.10:80/onvif/device_service",
+		SubnetHints:   []string{"192.0.2.0/24"},
+	}
+	// Legacy fakeProbe puts the serial in UUID (the GetDeviceInformation path).
+	probe := fakeProbe(map[string]string{
+		"192.0.2.50": "SN-AAA",
+	}, 0)
+	// No-op confirm: does not modify dev. The match must succeed via UUID.
+	noOpConfirm := func(ctx context.Context, dev *onvif.DiscoveredDevice) {}
+	eng := NewEngineWithConfirm(Config{MaxParallel: 32, ProbeTimeout: time.Second, MaxDuration: 5 * time.Second}, probe, noOpConfirm)
+	res, err := eng.DiscoverByStableID(context.Background(), cam)
+	if err != nil {
+		t.Fatalf("expected match via legacy UUID path, got error: %v", err)
+	}
+	mustEqual(t, res.NewHost, "192.0.2.50", "legacy UUID-path match host")
+}

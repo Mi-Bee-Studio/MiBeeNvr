@@ -3,8 +3,10 @@ package autodiscover
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -92,13 +94,15 @@ func TestExistsInDB_EndpointDedup(t *testing.T) {
 	endpoint := "http://192.168.1.50:80/onvif/device_service"
 	seedOnvifCamera(t, db, "cam-existing", endpoint, "")
 
-	// Same endpoint → duplicate.
-	if !adder.existsInDB(context.Background(), endpoint, "", "") {
-		t.Error("expected existsInDB=true for a known endpoint")
+	// Same endpoint → duplicate (matchKind="endpoint").
+	id, kind := adder.findExistingCamera(context.Background(), endpoint, "", "")
+	if id != "cam-existing" || kind != "endpoint" {
+		t.Errorf("findExistingCamera(known endpoint) = (%q, %q), want (cam-existing, endpoint)", id, kind)
 	}
 	// Different endpoint, empty serial → not a duplicate.
-	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "", "") {
-		t.Error("expected existsInDB=false for an unknown endpoint")
+	id, kind = adder.findExistingCamera(context.Background(), "http://192.168.1.99:80/onvif/device_service", "", "")
+	if id != "" || kind != "" {
+		t.Errorf("findExistingCamera(unknown endpoint) = (%q, %q), want (\"\", \"\")", id, kind)
 	}
 }
 
@@ -114,12 +118,14 @@ func TestExistsInDB_SerialDedup(t *testing.T) {
 	// The same physical camera reappears at a NEW IP (different endpoint string)
 	// but the same serial → must still be deduplicated, otherwise the NVR would
 	// create a duplicate entry every time a camera's DHCP lease changes.
-	if !adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "ABC123", "") {
-		t.Error("expected existsInDB=true by serial match (roaming camera)")
+	id, kind := adder.findExistingCamera(context.Background(), "http://192.168.1.99:80/onvif/device_service", "ABC123", "")
+	if id != "cam-roamed" || kind != "serial" {
+		t.Errorf("findExistingCamera(serial match) = (%q, %q), want (cam-roamed, serial)", id, kind)
 	}
 	// Different serial → not a duplicate.
-	if adder.existsInDB(context.Background(), "http://192.168.1.99:80/onvif/device_service", "DIFFERENT", "") {
-		t.Error("expected existsInDB=false for unknown serial")
+	id, kind = adder.findExistingCamera(context.Background(), "http://192.168.1.99:80/onvif/device_service", "DIFFERENT", "")
+	if id != "" || kind != "" {
+		t.Errorf("findExistingCamera(unknown serial) = (%q, %q), want (\"\", \"\")", id, kind)
 	}
 }
 
@@ -137,7 +143,7 @@ func TestExistsInDB_NonOnvifCameraWithoutOnvifEndpoint(t *testing.T) {
 	}
 	cfg := &config.AutoDiscoverConfig{}
 	adder := NewAdder(cfg, nil, db, nil)
-	if adder.existsInDB(ctx, "http://192.168.1.50:80/onvif/device_service", "", "") {
+	if id, _ := adder.findExistingCamera(ctx, "http://192.168.1.50:80/onvif/device_service", "", ""); id != "" {
 		t.Error("RTSP camera with no onvif_endpoint must not trigger ONVIF dedup")
 	}
 }
@@ -161,7 +167,7 @@ func TestExistsInDB_NonOnvifCameraWithMatchingOnvifEndpoint(t *testing.T) {
 	}
 	cfg := &config.AutoDiscoverConfig{}
 	adder := NewAdder(cfg, nil, db, nil)
-	if !adder.existsInDB(ctx, endpoint, "", "") {
+	if id, _ := adder.findExistingCamera(ctx, endpoint, "", ""); id != "cam-http" {
 		t.Error("a manually-added http camera with a matching onvif_endpoint must trigger dedup (same physical device)")
 	}
 }
@@ -170,14 +176,15 @@ func TestExistsInDB_NilDB(t *testing.T) {
 	t.Helper()
 	// A nil DB (defensive) must report "does not exist" rather than panic.
 	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
-	if adder.existsInDB(context.Background(), "http://anything", "anyserial", "") {
-		t.Error("nil DB should report existsInDB=false")
+	if id, _ := adder.findExistingCamera(context.Background(), "http://anything", "anyserial", ""); id != "" {
+		t.Error("nil DB should report findExistingCamera=(\"\",\"\")")
 	}
 }
 
 // TestExistsInDB_StableIDPriority verifies that stable_id dedup takes precedence
 // over endpoint dedup. A camera whose IP changed (new endpoint) but has the same
-// ONVIF serial (stored as stable_id) must be recognized as existing.
+// ONVIF serial (stored as stable_id) must be recognized as existing with
+// matchKind="stable_id" (triggering an endpoint update, not just a skip).
 func TestExistsInDB_StableIDPriority(t *testing.T) {
 	t.Helper()
 	db := newTestDB(t)
@@ -191,24 +198,29 @@ func TestExistsInDB_StableIDPriority(t *testing.T) {
 		t.Fatalf("UpsertCamera: %v", err)
 	}
 
-	// Same stable_id, DIFFERENT endpoint → must be deduplicated (IP change scenario).
-	if !adder.existsInDB(ctx, "http://192.168.1.99:80/onvif/device_service", "", "ABC") {
-		t.Error("expected existsInDB=true by stable_id match (IP change)")
+	// Same stable_id, DIFFERENT endpoint → matchKind="stable_id" (IP change →
+	// caller should UPDATE the endpoint, not just skip).
+	id, kind := adder.findExistingCamera(ctx, "http://192.168.1.99:80/onvif/device_service", "", "ABC")
+	if id != "cam-existing" || kind != "stable_id" {
+		t.Errorf("findExistingCamera(stable_id match, IP change) = (%q, %q), want (cam-existing, stable_id)", id, kind)
 	}
 
 	// Different stable_id → not a duplicate.
-	if adder.existsInDB(ctx, "http://192.168.1.99:80/onvif/device_service", "", "XYZ") {
-		t.Error("expected existsInDB=false for unknown stable_id")
+	id, kind = adder.findExistingCamera(ctx, "http://192.168.1.99:80/onvif/device_service", "", "XYZ")
+	if id != "" || kind != "" {
+		t.Errorf("findExistingCamera(unknown stable_id) = (%q, %q), want (\"\", \"\")", id, kind)
 	}
 
-	// Empty stableID + known endpoint → still dedup via endpoint fallback.
-	if !adder.existsInDB(ctx, endpoint, "", "") {
-		t.Error("expected existsInDB=true via endpoint fallback when stable_id is empty")
+	// Empty stableID + known endpoint → "endpoint" fallback (same address, skip).
+	id, kind = adder.findExistingCamera(ctx, endpoint, "", "")
+	if id != "cam-existing" || kind != "endpoint" {
+		t.Errorf("findExistingCamera(endpoint fallback) = (%q, %q), want (cam-existing, endpoint)", id, kind)
 	}
 
 	// Empty stableID + unknown endpoint → not a duplicate.
-	if adder.existsInDB(ctx, "http://unknown/onvif/device_service", "", "") {
-		t.Error("expected existsInDB=false for unknown endpoint with empty stable_id")
+	id, kind = adder.findExistingCamera(ctx, "http://unknown/onvif/device_service", "", "")
+	if id != "" || kind != "" {
+		t.Errorf("findExistingCamera(unknown endpoint) = (%q, %q), want (\"\", \"\")", id, kind)
 	}
 }
 
@@ -218,17 +230,45 @@ func TestRecentlySeen_DedupWindow(t *testing.T) {
 	ep := "http://192.168.1.50/onvif/device_service"
 
 	// Fresh endpoint: not seen.
-	if adder.recentlySeen(ep) {
+	if adder.recentlySeen(ep, "") {
 		t.Error("fresh endpoint should not be recentlySeen")
 	}
 	// After markSeen, it is within the window.
-	adder.markSeen(ep)
-	if !adder.recentlySeen(ep) {
+	adder.markSeen(ep, "")
+	if !adder.recentlySeen(ep, "") {
 		t.Error("endpoint marked seen should be recentlySeen")
 	}
 	// A different endpoint is still fresh.
-	if adder.recentlySeen("http://other") {
+	if adder.recentlySeen("http://other", "") {
 		t.Error("unrelated endpoint should not be recentlySeen")
+	}
+}
+
+// TestRecentlySeen_SerialKeyedAcrossIPChange confirms the dedup is keyed by
+// device serial (not endpoint), so a device that re-announces at a NEW IP is
+// still suppressed within dedupWindow. This is the issue #121 fix: endpoint-only
+// keying let the same device retrigger every cycle after an IP change.
+func TestRecentlySeen_SerialKeyedAcrossIPChange(t *testing.T) {
+	t.Helper()
+	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
+	const serial = "ABC123"
+	oldEP := "http://192.168.1.50:80/onvif/device_service"
+	newEP := "http://192.168.1.99:80/onvif/device_service"
+
+	// Device marked seen at old IP (with its serial).
+	adder.markSeen(oldEP, serial)
+	// Same device re-announces at NEW IP, same serial → must be suppressed.
+	if !adder.recentlySeen(newEP, serial) {
+		t.Error("a device marked seen by serial must be recentlySeen even at a new endpoint (IP roaming)")
+	}
+	// A DIFFERENT serial at the new IP is NOT suppressed.
+	if adder.recentlySeen(newEP, "DIFFERENT") {
+		t.Error("a different serial should not be recentlySeen")
+	}
+	// Empty serial (enrichment failed) falls back to endpoint keying (legacy).
+	adder.markSeen("http://10.0.0.1/onvif/device_service", "")
+	if !adder.recentlySeen("http://10.0.0.1/onvif/device_service", "") {
+		t.Error("endpoint fallback keying (empty serial) must still work")
 	}
 }
 
@@ -279,3 +319,127 @@ func TestDefaultCredsForState(t *testing.T) {
 		t.Errorf("pending state creds = %q, want empty", got)
 	}
 }
+
+// fakeEnroller is a test double for CameraEnroller. It records calls so tests
+// can assert that UpdateCamera + RestartRecorder were invoked (the IP-roaming
+// fix path). AddCamera is included to satisfy the interface but unused in the
+// roaming tests.
+type fakeEnroller struct {
+	mu               sync.Mutex
+	updatedEndpoints map[string]string   // cameraID → new endpoint passed to UpdateCamera
+	restartedIDs     map[string]bool     // cameraID → RestartRecorder called
+	updateErr        error               // optional: force UpdateCamera to fail
+	restartErr       error               // optional: force RestartRecorder to fail
+}
+
+func newFakeEnroller() *fakeEnroller {
+	return &fakeEnroller{
+		updatedEndpoints: make(map[string]string),
+		restartedIDs:     make(map[string]bool),
+	}
+}
+
+func (f *fakeEnroller) AddCamera(_ context.Context, _ config.CameraConfig) (string, error) {
+	return "cam-fake", nil
+}
+
+func (f *fakeEnroller) UpdateCamera(_ context.Context, cameraID string, updates camera.CameraUpdate) (*config.CameraConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	if updates.ONVIFEndpoint != nil {
+		f.updatedEndpoints[cameraID] = *updates.ONVIFEndpoint
+	}
+	name := "Fake Cam"
+	return &config.CameraConfig{ID: cameraID, Name: name}, nil
+}
+
+func (f *fakeEnroller) RestartRecorder(_ context.Context, cameraID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restartedIDs[cameraID] = true
+	return f.restartErr
+}
+
+// TestUpdateEndpointForRoaming verifies that when auto-discover recognizes a
+// known device at a NEW endpoint, it updates the existing camera's endpoint and
+// restarts its recorder (issue #121 core fix).
+func TestUpdateEndpointForRoaming(t *testing.T) {
+	t.Helper()
+	enroller := newFakeEnroller()
+	adder := NewAdder(&config.AutoDiscoverConfig{}, enroller, nil, nil)
+	const cameraID = "cam-existing"
+	const newEP = "http://192.168.1.99:80/onvif/device_service"
+	dev := onvif.DiscoveredDevice{Serial: "ABC123", Endpoint: newEP}
+
+	adder.updateEndpointForRoaming(context.Background(), cameraID, newEP, dev)
+
+	enroller.mu.Lock()
+	gotEP, updated := enroller.updatedEndpoints[cameraID]
+	restarted := enroller.restartedIDs[cameraID]
+	enroller.mu.Unlock()
+
+	if !updated {
+		t.Error("expected UpdateCamera to be called with the new endpoint")
+	} else if gotEP != newEP {
+		t.Errorf("UpdateCamera endpoint = %q, want %q", gotEP, newEP)
+	}
+	if !restarted {
+		t.Error("expected RestartRecorder to be called so the new endpoint takes effect")
+	}
+}
+
+// TestUpdateEndpointForRoaming_ArchivedCameraSkipped verifies that an archived
+// camera (UpdateCamera returns a not-found error) is silently skipped — the
+// device exists in the dedup tables but not in the live config, so updating it
+// would fail. The error is swallowed (best-effort) and RestartRecorder is NOT
+// called.
+func TestUpdateEndpointForRoaming_ArchivedCameraSkipped(t *testing.T) {
+	t.Helper()
+	enroller := newFakeEnroller()
+	enroller.updateErr = &cameraNotFoundError{cameraID: "cam-archived"}
+	adder := NewAdder(&config.AutoDiscoverConfig{}, enroller, nil, nil)
+	const cameraID = "cam-archived"
+	const newEP = "http://192.168.1.99:80/onvif/device_service"
+
+	// Must not panic and must not call RestartRecorder.
+	adder.updateEndpointForRoaming(context.Background(), cameraID, newEP, onvif.DiscoveredDevice{})
+
+	enroller.mu.Lock()
+	restarted := enroller.restartedIDs[cameraID]
+	enroller.mu.Unlock()
+	if restarted {
+		t.Error("RestartRecorder must NOT be called when UpdateCamera fails (archived camera)")
+	}
+}
+
+// TestUpdateEndpointForRoaming_RestartFailureStillLogged verifies that a
+// RestartRecorder failure does not panic and leaves the endpoint update in
+// place (the endpoint is still updated even if the recorder can't restart —
+// better to have the new address persisted than to roll it back).
+func TestUpdateEndpointForRoaming_RestartFailureStillLogged(t *testing.T) {
+	t.Helper()
+	enroller := newFakeEnroller()
+	enroller.restartErr = context.DeadlineExceeded
+	adder := NewAdder(&config.AutoDiscoverConfig{}, enroller, nil, nil)
+	const cameraID = "cam-existing"
+	const newEP = "http://192.168.1.99:80/onvif/device_service"
+
+	adder.updateEndpointForRoaming(context.Background(), cameraID, newEP, onvif.DiscoveredDevice{Serial: "X"})
+
+	enroller.mu.Lock()
+	_, updated := enroller.updatedEndpoints[cameraID]
+	enroller.mu.Unlock()
+	if !updated {
+		t.Error("endpoint update must persist even when RestartRecorder fails")
+	}
+}
+
+// cameraNotFoundError is a minimal stand-in for camera.CameraNotFoundError used
+// by the archived-camera test (avoids importing the model package just for the
+// error type — the updateEndpointForRoaming path checks err != nil, not the type).
+type cameraNotFoundError struct{ cameraID string }
+
+func (e *cameraNotFoundError) Error() string { return "camera " + e.cameraID + " not found" }
