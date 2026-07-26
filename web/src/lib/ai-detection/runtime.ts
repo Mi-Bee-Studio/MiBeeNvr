@@ -286,8 +286,17 @@ export class AiRuntime {
       // Cache unavailable (e.g. private browsing) — fall through to fetch
     }
 
-    // Fetch from network
-    const response = await fetch(modelUrl, { signal: this._abortController?.signal });
+    // Fetch from network. cache: 'no-store' forces a full, unconditional GET
+    // (no If-None-Match). Without this, the browser's HTTP cache serves a 304
+    // when the ETag matches, and in some SW/Cache-API combinations the 304's
+    // empty body leaks through to arrayBuffer() → ORT gets 0 bytes →
+    // "protobuf parsing failed" (issue #109). We have our own integrity-gated
+    // Cache API layer above, so bypassing the browser HTTP cache here is safe
+    // and correct.
+    const response = await fetch(modelUrl, {
+      signal: this._abortController?.signal,
+      cache: 'no-store',
+    });
 
     if (!response.ok) {
       throw new Error(`Model download failed: ${response.status} ${response.statusText}`);
