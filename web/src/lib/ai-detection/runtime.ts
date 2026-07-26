@@ -192,8 +192,79 @@ export class AiRuntime {
       graphOptimizationLevel: 'all',
     };
 
-    this._session = await this._ort.InferenceSession.create(modelBuffer, sessionOptions);
+    try {
+      this._session = await this._ort.InferenceSession.create(modelBuffer, sessionOptions);
+    } catch (e) {
+      // Self-heal once: a cached/truncated model produces "protobuf parsing
+      // failed" / ERROR_CODE 7 from ORT (issue #109). Purge the Cache API entry
+      // and re-fetch a fresh copy, then retry session creation exactly once.
+      // Without this, a single bad download poisons the cache forever and the
+      // user can never recover without manually clearing site data.
+      if (!this._isCorruptModelError(e)) {
+        throw e;
+      }
+      const healed = await this._healModel(modelUrl, sessionOptions, options?.onProgress);
+      if (!healed) {
+        throw e;
+      }
+      // _healModel assigned this._session on success.
+    }
     this._initialized = true;
+  }
+
+  /**
+   * Heuristically detect whether an ORT session-creation error indicates a
+   * corrupt/truncated model (vs. a genuine runtime/WebGPU failure we can't fix
+   * by re-downloading). Used to gate the self-heal path.
+   */
+  private _isCorruptModelError(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /protobuf parsing failed|ERROR_CODE:?\s*7|Model download incomplete|invalid model/i.test(msg);
+  }
+
+  /**
+   * Self-heal: purge any cached copy of the model, re-fetch it fresh (with the
+   * Content-Length integrity check), and retry session creation once.
+   * Returns true if a valid session was created; false if the retry also failed
+   * (caller throws the original error).
+   */
+  private async _healModel(
+    modelUrl: string,
+    sessionOptions: SessionOptions,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<boolean> {
+    try {
+      await this._purgeCachedModel(modelUrl);
+    } catch {
+      // Cache purge failure is non-fatal — proceed to re-fetch anyway.
+    }
+    let freshBuffer: ArrayBuffer;
+    try {
+      this._abortController = new AbortController();
+      freshBuffer = await this._loadModel(modelUrl, onProgress);
+      this._abortController = null;
+    } catch {
+      return false;
+    }
+    try {
+      this._session = await this._ort.InferenceSession.create(freshBuffer, sessionOptions);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove a model URL from the Cache API store. Used by the self-heal path to
+   * discard a corrupt/truncated cached copy before re-fetching.
+   */
+  private async _purgeCachedModel(modelUrl: string): Promise<void> {
+    try {
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      await cache.delete(modelUrl);
+    } catch {
+      // Cache unavailable — nothing to purge.
+    }
   }
 
   /**
@@ -222,16 +293,32 @@ export class AiRuntime {
       throw new Error(`Model download failed: ${response.status} ${response.statusText}`);
     }
 
+    // Expected total from Content-Length. When the server advertises a size, we
+    // STRICTLY verify the bytes received match — a truncated transfer (the root
+    // cause of issue #109's "protobuf parsing failed") must never be cached or
+    // handed to ORT. Content-Length = 0 means "unknown" (chunked encoding) → we
+    // can't verify and accept whatever arrives.
+    const expectedTotal = parseInt(response.headers.get('content-length') || '0', 10);
+
     // Track progress if streaming body available
     let modelBuffer: ArrayBuffer;
     if (onProgress && response.body) {
-      const total = parseInt(response.headers.get('content-length') || '0', 10);
-      modelBuffer = await this._readWithProgress(response, total, onProgress);
+      modelBuffer = await this._readWithProgress(response, expectedTotal, onProgress);
     } else {
       modelBuffer = await response.arrayBuffer();
     }
 
-    // Store in cache (clone the response)
+    // Strict integrity gate: if the server told us the size and we got fewer
+    // bytes, the transfer was truncated. Reject rather than caching a corrupt
+    // model that would poison every subsequent load (issue #109).
+    if (expectedTotal > 0 && modelBuffer.byteLength !== expectedTotal) {
+      throw new Error(
+        `Model download incomplete: got ${modelBuffer.byteLength} bytes, expected ${expectedTotal} (truncated transfer)`,
+      );
+    }
+
+    // Store in cache (clone the response). Only reached after the integrity
+    // check passes, so a corrupt model can never enter the cache.
     try {
       const cache = await caches.open(MODEL_CACHE_NAME);
       const cloned = new Response(modelBuffer.slice(0));
