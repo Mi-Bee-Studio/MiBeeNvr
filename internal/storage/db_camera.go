@@ -380,6 +380,69 @@ func (d *DB) CameraExistsByStableID(ctx context.Context, stableID string) (bool,
 	return c > 0, nil
 }
 
+// CameraIDByStableID returns the camera_id of any row (including ARCHIVED ones)
+// whose stable_id matches. Used by auto-discover to recognize that a discovered
+// device is a known physical camera (so its endpoint can be UPDATED rather than
+// re-enrolling a duplicate row) — the IP-change / DHCP-roaming scenario.
+//
+// Mirrors CameraExistsByStableID but returns the id instead of a bool, so the
+// caller can target the existing row with UpdateCamera. Returns ("", nil) when
+// stableID is empty or no row matches (sql.ErrNoRows is treated as "not found",
+// NOT an error, matching GetCameraStableID's convention).
+func (d *DB) CameraIDByStableID(ctx context.Context, stableID string) (string, error) {
+	if stableID == "" {
+		return "", nil
+	}
+	var id string
+	err := d.readConn().QueryRowContext(ctx, `SELECT id FROM cameras WHERE stable_id=? LIMIT 1`, stableID).Scan(&id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return id, nil
+}
+
+// CameraIDByOnvifEndpoint returns the camera_id and matchKind of any row
+// (including ARCHIVED ones) that matches the given onvif_endpoint or serial.
+// matchKind is "endpoint" when the onvif_endpoint column matched, "serial" when
+// the serial_number OR stable_id column matched the serial argument, and "" when
+// nothing matched.
+//
+// Used by auto-discover: an "endpoint" match means the SAME device at the SAME
+// address is already enrolled (skip — nothing to do); a "serial" match means the
+// SAME physical device reappeared at a NEW address (UPDATE the endpoint instead
+// of creating a duplicate). Mirrors CameraExistsByOnvifEndpoint's query shape
+// but returns id + matchKind so the caller can branch on the match type.
+func (d *DB) CameraIDByOnvifEndpoint(ctx context.Context, onvifEndpoint, serial string) (cameraID, matchKind string, err error) {
+	if onvifEndpoint == "" && serial == "" {
+		return "", "", nil
+	}
+	if onvifEndpoint != "" {
+		var id string
+		if err := d.readConn().QueryRowContext(ctx, `SELECT id FROM cameras WHERE onvif_endpoint=? LIMIT 1`, onvifEndpoint).Scan(&id); err != nil {
+			if err != sql.ErrNoRows {
+				return "", "", err
+			}
+		} else {
+			return id, "endpoint", nil
+		}
+	}
+	if serial != "" {
+		var id string
+		// Check both serial_number and stable_id (mirrors CameraExistsByOnvifEndpoint).
+		if err := d.readConn().QueryRowContext(ctx, `SELECT id FROM cameras WHERE serial_number=? OR stable_id=? LIMIT 1`, serial, serial).Scan(&id); err != nil {
+			if err != sql.ErrNoRows {
+				return "", "", err
+			}
+		} else {
+			return id, "serial", nil
+		}
+	}
+	return "", "", nil
+}
+
 // ReassignCameraStableID moves a stable_id from one camera to another.
 // Previously used to atomically transfer the identity when merging duplicate
 // camera records. Sets the old camera's stable_id to empty string.

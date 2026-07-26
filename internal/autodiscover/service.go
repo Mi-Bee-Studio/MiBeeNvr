@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
@@ -31,9 +30,11 @@ type Service struct {
 }
 
 // New constructs a Service from its dependencies. cfg is the effective
-// AutoDiscoverConfig (ApplyDefaults already applied). camMgr/db/bus are the
-// shared instances from pkg/app/run.go; bus may be nil.
-func New(cfg *config.AutoDiscoverConfig, camMgr *camera.CameraManager, db *storage.DB, bus *event.EventBus) *Service {
+// AutoDiscoverConfig (ApplyDefaults already applied). camMgr is typed as
+// CameraEnroller (an interface satisfied by *camera.CameraManager) so the adder
+// can be unit-tested with a fake; db/bus are the shared instances from
+// pkg/app/run.go, bus may be nil.
+func New(cfg *config.AutoDiscoverConfig, camMgr CameraEnroller, db *storage.DB, bus *event.EventBus) *Service {
 	adder := NewAdder(cfg, camMgr, db, bus)
 	return &Service{
 		cfg:     cfg,

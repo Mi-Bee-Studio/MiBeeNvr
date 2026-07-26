@@ -53,6 +53,20 @@ var (
 // Exposed as a field so tests can inject a fake without touching the network.
 type ProbeFunc func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 
+// ConfirmFunc enriches a discovered device with its ONVIF serial number when the
+// probe path did not yield one (e.g. a device that answered a WS-Discovery
+// ProbeMatch — where DiscoveredDevice.UUID is the EndpointReference Address, an
+// urn:uuid:..., NOT the hardware serial). The default implementation is
+// onvif.EnrichDevice, which issues an unauthenticated GetDeviceInformation and
+// fills dev.Serial. Mirrors ProbeFunc as an injectable field for testability.
+//
+// This exists to fix the issue #121 silent-miss: scanFor used to compare
+// dev.UUID == want (want = the camera's stable_id = ONVIF serial), but on the
+// ProbeMatch path UUID is NOT the serial, so the match always failed for devices
+// that answer ProbeMatch. With ConfirmFunc, scanFor re-fetches the real serial
+// and matches against dev.Serial as well.
+type ConfirmFunc func(ctx context.Context, dev *onvif.DiscoveredDevice)
+
 // Config tunes the scanner. Mirrors the relevant subset of
 // config.Health.RediscoveryConfig but as plain values for testability.
 type Config struct {
@@ -87,16 +101,28 @@ func parseDur(s string, def time.Duration) time.Duration {
 
 // Engine re-discovers a camera by its stable hardware identifier.
 type Engine struct {
-	cfg   Config
-	probe ProbeFunc
+	cfg     Config
+	probe   ProbeFunc
+	confirm ConfirmFunc
 }
 
-// NewEngine creates an Engine. If probe is nil, the real onvif.ProbeDevice is used.
+// NewEngine creates an Engine. If probe is nil, the real onvif.ProbeDevice is
+// used. confirm defaults to onvif.EnrichDevice when nil (the production
+// behavior); pass a custom ConfirmFunc (or WithConfirm) for tests.
 func NewEngine(cfg Config, probe ProbeFunc) *Engine {
+	return NewEngineWithConfirm(cfg, probe, onvif.EnrichDevice)
+}
+
+// NewEngineWithConfirm is like NewEngine but allows injecting a custom
+// ConfirmFunc. Exposed primarily for tests that need to script the second-stage
+// serial confirmation independently of the probe. Pass nil for confirm to
+// disable confirmation entirely (legacy behavior — not recommended in
+// production, kept for the test that pins the ProbeMatch bug).
+func NewEngineWithConfirm(cfg Config, probe ProbeFunc, confirm ConfirmFunc) *Engine {
 	if probe == nil {
 		probe = onvif.ProbeDevice
 	}
-	return &Engine{cfg: cfg, probe: probe}
+	return &Engine{cfg: cfg, probe: probe, confirm: confirm}
 }
 
 // Result is the outcome of a successful re-discovery.
@@ -187,7 +213,22 @@ func (e *Engine) scanFor(ctx context.Context, hosts []string, port int, want str
 			}
 			// DiscoveredDevice.UUID holds the serial number on the unicast
 			// GetDeviceInformation fallback path (see internal/onvif/discovery.go).
-			if strings.TrimSpace(dev.UUID) == want {
+			// But on the WS-Discovery ProbeMatch path, UUID is the device's
+			// EndpointReference Address (an urn:uuid:...) and dev.Serial is empty.
+			// When that happens, re-fetch the real serial via GetDeviceInformation
+			// so the match below can succeed (issue #121: previously this host was
+			// silently skipped because UUID != serial).
+			if strings.TrimSpace(dev.Serial) == "" && e.confirm != nil {
+				// Use a fresh timeout budget independent of probeCtx (whose budget
+				// the probe above may have largely consumed), so the confirmation
+				// call is not starved.
+				confirmCtx, confirmCancel := context.WithTimeout(ctx, e.cfg.ProbeTimeout)
+				e.confirm(confirmCtx, dev)
+				confirmCancel()
+			}
+			// Match against EITHER UUID (GetDeviceInformation path) or Serial
+			// (ProbeMatch + confirmation path).
+			if strings.TrimSpace(dev.UUID) == want || strings.TrimSpace(dev.Serial) == want {
 				select {
 				case results <- host:
 				default:
