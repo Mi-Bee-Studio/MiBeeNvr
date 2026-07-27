@@ -62,6 +62,66 @@ This guide helps you diagnose and resolve common issues with MiBee NVR. If you c
      disk_threshold_percent: 90  # Lower from 95 to 90
    ```
 
+## AI Detection
+
+AI detection runs entirely in the browser via ONNX Runtime Web (WASM). When it
+fails, the LiveView status bar shows a red `AI ✗` chip with an error message.
+
+### `ERROR_CODE: 7, ERROR_MESSAGE: Failed to load model because protobuf parsing failed`
+
+This means the ONNX model bytes received by the browser could not be parsed.
+
+**First, confirm your version is fixed.** Versions before the gzip-trailer fix
+(see [`docs/known-issues-ai-onnx-gzip-trailer.md`](./known-issues-ai-onnx-gzip-trailer.md))
+corrupted binary downloads by appending a spurious gzip trailer — every model
+failed regardless of validity. If you are on a current build, proceed:
+
+1. **Verify the model file is valid on disk** (run on the NVR host):
+   ```bash
+   python3 -c "import onnx; onnx.checker.check_model(onnx.load('/path/to/yolo11n.onnx')); print('OK')"
+   ```
+   If this fails, the model file itself is corrupt — re-download with
+   `mibee-nvr download-model`.
+
+2. **Verify the server serves the file byte-for-byte.** The browser always
+   sends `Accept-Encoding: gzip`, so you must test with the same header:
+   ```bash
+   # The md5 here MUST match the md5 of the on-disk file. If it doesn't,
+   # the server is corrupting the response (compression middleware, reverse
+   # proxy, content-transcoding CDN, etc.).
+   curl -H "Accept-Encoding: gzip" --compressed http://localhost:9090/models/yolo11n.onnx | md5sum
+   md5sum /path/to/yolo11n.onnx
+   ```
+   Mismatched md5s with matching first-bytes means the corruption is at the
+   **end** of the file — exactly the gzip-trailer signature.
+
+3. **Check the browser actually receives the right bytes.** Open DevTools →
+   Network → the `.onnx` request → Response. Or, in the console:
+   ```js
+   const r = await fetch('/models/yolo11n.onnx', { cache: 'no-store' });
+   const b = new Uint8Array(await r.arrayBuffer());
+   // First 4 bytes should be 08 08 12 07 for a PyTorch-exported ONNX.
+   // (0x1f 0x8b would mean the server sent a gzipped body without the
+   // Content-Encoding header, or a 404 HTML page was gzipped.)
+   console.log(b.slice(0, 16), b.length);
+   ```
+
+### AI status stays at "AI 加载中..." / "AI loading..." forever
+
+- The browser cannot reach `/ort.min.js` or `/ort/ort-wasm-simd-threaded.jsep.{mjs,wasm}`.
+  Check these are served (HTTP 200) — they are bundled into the binary at
+  build time. Rebuilding (`make build`) regenerates them.
+- `env.wasm.wasmPaths` is misconfigured (must be `/ort/`, set automatically
+  by the app — do not override in user code).
+
+### AI is enabled but no detection boxes appear
+
+This is expected when the scene has no COCO-80 objects (people, cars, etc.).
+The `AI 就绪` (AI Ready) chip in the status bar confirms the model is loaded
+and inference is running — boxes only render when an object is detected above
+the confidence threshold (default 0.5). Lower the threshold in Settings →
+Features → AI to see more (lower-confidence) detections.
+
 ## FFmpeg / Transcoding
 
 ### Is FFmpeg required?

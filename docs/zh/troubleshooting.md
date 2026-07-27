@@ -62,6 +62,63 @@
      disk_threshold_percent: 90  # 从 95 降低到 90
    ```
 
+## AI 检测
+
+AI 检测完全在浏览器端通过 ONNX Runtime Web (WASM) 运行。失败时，LiveView
+状态栏会显示红色的 `AI ✗` 标签，附带错误信息。
+
+### `ERROR_CODE: 7, ERROR_MESSAGE: Failed to load model because protobuf parsing failed`
+
+这表示浏览器收到的 ONNX 模型字节无法被解析。
+
+**先确认你的版本已修复。** gzip-trailer 修复之前的版本（见
+[`docs/known-issues-ai-onnx-gzip-trailer.md`](../known-issues-ai-onnx-gzip-trailer.md)）
+会给所有二进制下载追加一个多余的 gzip 尾巴——无论模型多有效都会失败。
+如果你已经在修复后的构建上，按以下步骤排查：
+
+1. **验证磁盘上的模型文件本身有效**（在 NVR 主机上运行）：
+   ```bash
+   python3 -c "import onnx; onnx.checker.check_model(onnx.load('/path/to/yolo11n.onnx')); print('OK')"
+   ```
+   如果失败，模型文件本身就损坏了——用 `mibee-nvr download-model` 重新下载。
+
+2. **验证服务器是逐字节正确地提供文件。** 浏览器总是发送
+   `Accept-Encoding: gzip`，所以你必须用同样的 header 测试：
+   ```bash
+   # 这里的 md5 必须与磁盘文件的 md5 一致。如果不一致，
+   # 说明服务器在腐蚀响应（压缩中间件、反向代理、内容转码 CDN 等）。
+   curl -H "Accept-Encoding: gzip" --compressed http://localhost:9090/models/yolo11n.onnx | md5sum
+   md5sum /path/to/yolo11n.onnx
+   ```
+   md5 不一致但前几个字节相同，说明损坏在文件**末尾**——正是
+   gzip-trailer bug 的特征。
+
+3. **检查浏览器实际收到的字节。** 打开 DevTools → Network → `.onnx` 请求 →
+   Response。或者在控制台：
+   ```js
+   const r = await fetch('/models/yolo11n.onnx', { cache: 'no-store' });
+   const b = new Uint8Array(await r.arrayBuffer());
+   // PyTorch 导出的 ONNX 前 4 字节应为 08 08 12 07。
+   // (如果是 0x1f 0x8b，说明服务器发送了 gzip 压缩的 body 但没有
+   // Content-Encoding header，或者返回了 gzip 压缩的 404 HTML 页面。)
+   console.log(b.slice(0, 16), b.length);
+   ```
+
+### AI 状态一直停在 "AI 加载中..." 不动
+
+- 浏览器无法访问 `/ort.min.js` 或 `/ort/ort-wasm-simd-threaded.jsep.{mjs,wasm}`。
+  检查这些资源是否返回 HTTP 200（构建时打包进二进制）。重新 `make build`
+  可重新生成。
+- `env.wasm.wasmPaths` 配置错误（必须为 `/ort/`，由应用自动设置——
+  不要在用户代码里覆盖）。
+
+### AI 已开启但没有检测框
+
+这是正常的——当场景中没有 COCO-80 类目标（人、车等）时不会画框。状态栏
+的 `AI 就绪` 标签确认模型已加载、推理在运行——只有当检测到置信度高于
+阈值（默认 0.5）的目标时才会画框。在 设置 → 功能 → AI 里降低阈值可以看到
+更多（低置信度的）检测。
+
 ## FFmpeg / 转码
 
 ### FFmpeg 是必须安装的吗？
