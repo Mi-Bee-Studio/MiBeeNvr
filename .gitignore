@@ -23,6 +23,7 @@ web/dist/
 internal/ui/static/assets/
 internal/ui/static/index.html
 internal/ui/static/ort/
+internal/ui/static/ort.min.js
 
 # Legacy / unused directories
 web_embed/
