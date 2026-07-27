@@ -62,8 +62,15 @@ function setupOrtMock(session?: MockSession) {
       this.dims = dims;
       this.dispose = vi.fn();
     }),
-    // env is accessed by _doInit to set wasmPaths. Provide a minimal mock.
-    env: { wasmPaths: undefined as string | undefined },
+    // env is accessed by _doInit to set wasm.wasmPaths (NOT env.wasmPaths —
+    // ORT's wasm-factory reads flags.wasmPaths where flags === env.wasm) and
+    // wasm.numThreads (single-threaded: crossOriginIsolated is false).
+    env: {
+      wasm: {
+        wasmPaths: undefined as string | undefined,
+        numThreads: undefined as number | undefined,
+      },
+    },
   };
   // runtime.ts reads ORT from globalThis.ort (_loadOrtUmd fast-path). Keep the
   // stub in sync whenever the mock is rebuilt mid-test.
@@ -511,12 +518,18 @@ describe('AiRuntime', () => {
   // ort-wasm-simd-threaded.jsep.{mjs,wasm} pair. Without wasmPaths, ORT resolves
   // them against its bundle URL and (under Vite code-splitting) 404s the .mjs,
   // producing a misleading "protobuf parsing failed" (issue #109).
+  //
+  // NOTE: the path is `env.wasm.wasmPaths` (nested), not `env.wasmPaths`. ORT's
+  // wasm-factory.ts reads `flags.wasmPaths` where flags === env.wasm (passed as
+  // initializeWebAssembly(env.wasm) in proxy-wrapper.ts). Setting the top-level
+  // env.wasmPaths is a silent no-op → ORT resolves the .mjs against root →
+  // "TypeError: Failed to fetch dynamically imported module".
   describe('wasmPaths', () => {
-    it('configures ort.env.wasmPaths to the /ort/ asset dir before session create', async () => {
+    it('configures ort.env.wasm.wasmPaths to the /ort/ asset dir before session create', async () => {
       const rt = new AiRuntime();
       await rt.init('/models/test.onnx');
 
-      expect(mockOrtModule.env.wasmPaths).toBe('/ort/');
+      expect(mockOrtModule.env.wasm.wasmPaths).toBe('/ort/');
     });
   });
 });

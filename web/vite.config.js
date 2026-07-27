@@ -63,12 +63,19 @@ function ortAssetsPlugin() {
       fs.mkdirSync(ortDir, { recursive: true });
       const ortPkgDir = path.resolve('node_modules/onnxruntime-web/dist');
       // The .mjs worker module + the matching un-hashed .wasm binary, served
-      // at /ort/ for ort.env.wasmPaths to find.
+      // at /ort/ for ort.env.wasm.wasmPaths to find.
       for (const file of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
         const src = path.join(ortPkgDir, file);
         if (fs.existsSync(src)) {
           fs.copyFileSync(src, path.join(ortDir, file));
         }
+      }
+      // Also copy the all-bundle ESM build (ort.all.bundle.min.mjs). This build
+      // inlines the wasm-JS glue so it doesn't depend on the separate .mjs
+      // worker resolution, useful as an alternative load path.
+      const bundleMjs = path.join(ortPkgDir, 'ort.all.bundle.min.mjs');
+      if (fs.existsSync(bundleMjs)) {
+        fs.copyFileSync(bundleMjs, path.join(ortDir, 'ort.all.bundle.min.mjs'));
       }
       // Also copy the UMD bundle (ort.min.js) to dist root. runtime.ts loads ORT
       // via this UMD script (NOT via Vite's bundled import) because Vite's

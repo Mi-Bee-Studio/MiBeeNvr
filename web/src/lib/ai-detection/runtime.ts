@@ -225,8 +225,26 @@ export class AiRuntime {
 
     // Point ORT at /ort/ where ortAssetsPlugin (vite.config.js) serves the
     // sibling ort-wasm-simd-threaded.jsep.{mjs,wasm} pair.
+    //
+    // IMPORTANT: the path is `env.wasm.wasmPaths` (nested under the `wasm`
+    // sub-object), NOT `env.wasmPaths`. ORT's wasm-factory.ts reads
+    // `flags.wasmPaths` where `flags` is `env.wasm` (passed as
+    // `initializeWebAssembly(env.wasm)` in proxy-wrapper.ts). Setting the
+    // top-level `env.wasmPaths` is a silent no-op — ORT keeps using
+    // `document.currentScript.src`'s directory (root, since ort.min.js is
+    // served at /ort.min.js) to resolve the dynamically-imported
+    // `ort-wasm-simd-threaded.jsep.mjs`, producing
+    // "TypeError: Failed to fetch dynamically imported module
+    // http://host/ort-wasm-simd-threaded.jsep.mjs" (root, not /ort/).
     if (this._ort.env) {
-      this._ort.env.wasmPaths = '/ort/';
+      // Ensure the `wasm` sub-object exists; some mocks omit it.
+      if (!this._ort.env.wasm) this._ort.env.wasm = {};
+      this._ort.env.wasm.wasmPaths = '/ort/';
+      // Single-threaded: crossOriginIsolated is false on our deployment (no
+      // COOP/COEP headers), so SharedArrayBuffer is unavailable. ORT detects
+      // this and falls back anyway, but set it explicitly so the proxy worker
+      // doesn't attempt a thread-pool init that can't work.
+      this._ort.env.wasm.numThreads = 1;
     }
 
     // 3. Dispose previous session if re-initializing
