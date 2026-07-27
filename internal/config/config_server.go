@@ -1,0 +1,149 @@
+package config
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+// Server, storage, cleanup, auth, observability, and miscellaneous config.
+
+type ServerConfig struct {
+	Listen string `yaml:"listen"` // default ":9090"
+	// TLSListen enables a second HTTPS listener alongside the plain-HTTP one.
+	// Required for browser WebRTC (WHEP) which needs a Secure Context, and for
+	// secure WebUI access when not behind a TLS-terminating reverse proxy.
+	// Empty = no HTTPS listener (plain HTTP only). e.g. ":9443".
+	TLSListen string `yaml:"tls_listen"`
+	// CertFile / KeyFile are the TLS certificate and private key paths. Required
+	// when TLSListen is set. For production use a real CA-signed cert (e.g. via
+	// Caddy/Let's Encrypt or an internal CA); for LAN testing a self-signed cert
+	// works (browsers will warn). See deploy/AGENTS.md.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+type StorageConfig struct {
+	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"
+	SegmentDuration string `yaml:"segment_duration"` // default "30s"
+}
+
+type CleanupConfig struct {
+	RetentionDays        int    `yaml:"retention_days"`         // default 30
+	CheckInterval        string `yaml:"check_interval"`         // default "1h"
+	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 85 (HDD perf cliff near 90%+ full)
+}
+
+type AuthConfig struct {
+	Username     string          `yaml:"username"`
+	PasswordHash string          `yaml:"password_hash"`
+	Password     string          `yaml:"password"`
+	RateLimit    RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig controls auth failure rate limiting.
+// When Enabled is false (default), no rate limiting is applied.
+type RateLimitConfig struct {
+	Enabled       *bool `yaml:"enabled"`        // default false
+	MaxFailures   int   `yaml:"max_failures"`   // default 20
+	WindowMinutes int   `yaml:"window_minutes"` // default 1
+}
+
+type MQTTConfig struct {
+	Enabled  bool   `yaml:"enabled"` // default false
+	Broker   string `yaml:"broker"`
+	Topic    string `yaml:"topic"`
+	ClientID string `yaml:"client_id"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// ObservabilityConfig defines observability settings
+type ObservabilityConfig struct {
+	LogLevel    string `yaml:"log_level"`    // default "info"
+	LogFormat   string `yaml:"log_format"`   // default "text"
+	EnablePprof bool   `yaml:"enable_pprof"` // default false
+}
+
+// RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
+type RemoteLogConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // default false
+	Endpoint string `yaml:"endpoint"` // VictoriaLogs URL, e.g. "http://localhost:9428/insert/jsonline"
+	Format   string `yaml:"format"`   // "jsonline" (default) or "loki"
+}
+
+// MetricsAuthConfig defines optional independent authentication for the /metrics endpoint.
+// When username and password (or password_hash) are non-empty, /metrics requires BasicAuth.
+// When empty, /metrics stays public (backward compatible).
+type MetricsAuthConfig struct {
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	PasswordHash string `yaml:"password_hash"`
+}
+
+// IsConfigured returns true if both username and a password (or hash) are set.
+func (c MetricsAuthConfig) IsConfigured() bool {
+	return strings.TrimSpace(c.Username) != "" &&
+		(strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordHash) != "")
+}
+
+// APIKeyConfig represents a single API key for MiBeeVision integration.
+type APIKeyConfig struct {
+	Key     string `yaml:"key" json:"key"`
+	Name    string `yaml:"name" json:"name"`
+	Revoked bool   `yaml:"revoked,omitempty" json:"revoked,omitempty"`
+}
+
+type WebSocketConfig struct {
+	MaxViewers   int           `yaml:"max_viewers" json:"maxViewers"`
+	WriteBufSize int           `yaml:"write_buf_size" json:"writeBufSize"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout" json:"idleTimeout"`
+}
+
+// memAvailableMB reports the system's available memory in MB. Used to gate the
+// segment-duration cap: the MP4 muxer holds all samples in RAM until a segment
+// closes, so available RAM bounds the safe maximum segment duration.
+//
+// Reads /proc/meminfo (Linux). On non-Linux or parse failure, returns a
+// conservative 1024 MB so the low-memory (30s) cap applies — never over-estimates.
+func memAvailableMB() int {
+	const fallback = 1024 // conservative: assume low memory → 30s cap
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return fallback
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// "MemAvailable:  3123456 kB"
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				var kb int
+				if _, err := fmt.Sscanf(fields[1], "%d", &kb); err == nil {
+					return kb / 1024
+				}
+			}
+		}
+	}
+	return fallback
+}
+
+// maxSegmentDurationForMem returns the maximum safe segment duration based on
+// available RAM. Low-memory devices (≤2GB, e.g. RPi 3B) are capped at 30s to
+// avoid OOM; higher-memory devices (Banana Pi M5, x86) allow up to 2m, which
+// halves the fragment count rolling merge must process.
+func maxSegmentDurationForMem() time.Duration {
+	const (
+		lowMemCap  = 30 * time.Second // RPi 3B (≤2GB): MP4 muxer RAM safety
+		highMemCap = 2 * time.Minute  // Banana Pi M5 / x86 (≥2GB): fewer fragments
+		threshold  = 2048             // MB — 2GB
+	)
+	if memAvailableMB() > threshold {
+		return highMemCap
+	}
+	return lowMemCap
+}
