@@ -31,12 +31,11 @@
   ]);
   let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
-  // NOTE: the "fallback protocol" selector was removed — the Player Orchestrator
-  // now auto-selects the best protocol per camera (codec + browser caps), so
-  // there's nothing for a new user to configure here. The backend
-  // `streaming.default_protocol` field is preserved for backward compat but no
-  // longer has a UI (the orchestrator's buildCandidateChain ignores it, falling
-  // back to the universal HLS candidate when /protocols is unreachable).
+  // NOTE: there is no global "fallback protocol" selector here — the Player
+  // Orchestrator auto-selects the best protocol per camera (probes
+  // /protocols, folds in codec + browser capability, demotes on health
+  // failure). Per-camera overrides remain available via the Protocol Switcher
+  // on each camera's LiveView page.
 
   // Disk info from stats API
   let diskInfo = $state<StorageStats | null>(null);

@@ -55,7 +55,6 @@ export interface SRTConfig {
 }
 
 export interface StreamingConfig {
-  default_protocol: string; // webrtc | flv | hls | ll-hls
   webrtc: WebRTCConfig;
   flv: FLVStreamingConfig;
   hls: HLSStreamingConfig;

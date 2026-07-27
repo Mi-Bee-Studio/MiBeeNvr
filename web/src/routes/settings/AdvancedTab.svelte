@@ -171,10 +171,9 @@
         batch_limit: mergeBatchLimit,
       });
 
-      // Save streaming settings (preserve default_protocol from existing config)
-      const existingStreaming = await getStreamingSettings().catch(() => ({ default_protocol: 'hls' }));
+      // Save streaming settings. Note: default_protocol was removed — the
+      // Player Orchestrator auto-selects per camera.
       await updateStreamingSettings({
-        default_protocol: existingStreaming.default_protocol || 'hls',
         webrtc: {
           enabled: streamingWebrtcEnabled,
           max_viewers: streamingWebrtcMaxViewers,

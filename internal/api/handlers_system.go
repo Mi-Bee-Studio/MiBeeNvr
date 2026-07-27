@@ -597,7 +597,6 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"default_protocol": h.config.Streaming.DefaultProtocol,
 		"webrtc": map[string]any{
 			"enabled":      h.config.Streaming.WebRTC.Enabled != nil && *h.config.Streaming.WebRTC.Enabled,
 			"max_viewers":  h.config.Streaming.WebRTC.MaxViewers,
@@ -622,8 +621,7 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	var body struct {
-		DefaultProtocol *string `json:"default_protocol"`
-		WebRTC          *struct {
+		WebRTC *struct {
 			Enabled     *bool   `json:"enabled"`
 			MaxViewers  *int    `json:"max_viewers"`
 			IdleTimeout *string `json:"idle_timeout"`
@@ -642,10 +640,6 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-
-	if body.DefaultProtocol != nil {
-		h.config.Streaming.DefaultProtocol = *body.DefaultProtocol
 	}
 
 	if body.WebRTC != nil {

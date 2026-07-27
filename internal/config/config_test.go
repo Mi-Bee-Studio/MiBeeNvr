@@ -911,7 +911,6 @@ func TestValidateONVIFEndpointAutoPopulated(t *testing.T) {
 func TestStreamingDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
-	require.Equal(t, "hls", cfg.Streaming.DefaultProtocol)
 	require.NotNil(t, cfg.Streaming.WebRTC.Enabled)
 	require.True(t, *cfg.Streaming.WebRTC.Enabled)
 	require.Equal(t, 2, cfg.Streaming.WebRTC.MaxViewers)
@@ -923,12 +922,24 @@ func TestStreamingDefaults(t *testing.T) {
 	require.Equal(t, 1, cfg.Streaming.FLV.GOPCacheSize)
 }
 
-func TestStreamingDefaultProtocolInvalid(t *testing.T) {
-	cfg := &Config{Streaming: StreamingConfig{DefaultProtocol: "rtmp"}}
-	cfg.ApplyDefaults()
-	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "streaming.default_protocol")
+// TestStreamingDefaultProtocolBackwardCompat ensures a YAML config carrying
+// the removed streaming.default_protocol key still loads cleanly (unknown
+// fields are ignored, not strict-decoded). The field was removed because the
+// frontend Player Orchestrator now auto-selects the protocol per camera.
+func TestStreamingDefaultProtocolBackwardCompat(t *testing.T) {
+	const yamlStr = `
+storage: {root_dir: /tmp/nvr}
+auth: {username: u, password_hash: "$2a$10$x"}
+streaming:
+  default_protocol: webrtc
+  webrtc: {max_viewers: 3}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yamlStr), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 3, cfg.Streaming.WebRTC.MaxViewers)
 }
 
 func TestWebRTCMaxViewersTooLow(t *testing.T) {

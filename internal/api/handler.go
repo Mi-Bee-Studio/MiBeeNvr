@@ -599,27 +599,21 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		protocols = []ProtocolDetail{}
 	}
 
-	// Determine default protocol: prefer user-configured default, then fallback order
+	// Determine default protocol by latency-optimal fallback order. The global
+	// streaming.default_protocol config was removed — the frontend Player
+	// Orchestrator now auto-selects per camera based on this hint + browser
+	// capability, demoting on health failure. Per-camera overrides remain via
+	// the Protocol Switcher on each camera's LiveView page.
 	defaultProto := ""
-	if h.config != nil && h.config.Streaming.DefaultProtocol != "" {
+	for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
 		for _, p := range protocols {
-			if p.Protocol == h.config.Streaming.DefaultProtocol && p.Available {
-				defaultProto = h.config.Streaming.DefaultProtocol
+			if p.Protocol == preferred && p.Available {
+				defaultProto = preferred
 				break
 			}
 		}
-	}
-	if defaultProto == "" {
-		for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
-			for _, p := range protocols {
-				if p.Protocol == preferred && p.Available {
-					defaultProto = preferred
-					break
-				}
-			}
-			if defaultProto != "" {
-				break
-			}
+		if defaultProto != "" {
+			break
 		}
 	}
 
