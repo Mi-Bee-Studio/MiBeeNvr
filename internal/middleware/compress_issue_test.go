@@ -20,6 +20,11 @@ import (
 func TestStreamingGzip_BinaryNoGzipTrailer(t *testing.T) {
 	payload := strings.Repeat("A", 1000)
 	handler := StreamingGzip(5)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set Content-Type but do NOT call WriteHeader explicitly — mirrors
+		// handlers that rely on Go's implicit WriteHeader(200) on first Write.
+		// The middleware MUST detect the content type from the header even in
+		// this case (it synthesizes the WriteHeader inside Write) so that
+		// octet-stream responses are still served raw, not gzip-corrupted.
 		w.Header().Set("Content-Type", "application/octet-stream")
 		io.WriteString(w, payload)
 	}))

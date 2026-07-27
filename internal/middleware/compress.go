@@ -64,6 +64,19 @@ func (cw *compressWriter) WriteHeader(code int) {
 }
 
 func (cw *compressWriter) Write(b []byte) (int, error) {
+	// Mirror net/http's implicit WriteHeader(200) on first Write: if the
+	// handler never called WriteHeader explicitly, run our content-type
+	// detection now so shouldSkipCompression sees the real Content-Type.
+	// Without this, a handler that does w.Header().Set("Content-Type",
+	// "application/octet-stream"); w.Write(bytes) — skipping WriteHeader —
+	// would have cw.contentType=="" here, shouldSkipCompression("")==false,
+	// and the binary payload would get gzip-compressed (and mislabeled with
+	// Content-Encoding: gzip from the middleware's pre-set header). Real
+	// handlers via http.ServeFile/http.ServeContent always call WriteHeader
+	// first, but we shouldn't depend on that.
+	if !cw.headerWritten {
+		cw.WriteHeader(http.StatusOK)
+	}
 	if shouldSkipCompression(cw.contentType) {
 		return cw.w.Write(b)
 	}
