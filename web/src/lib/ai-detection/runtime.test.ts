@@ -62,7 +62,21 @@ function setupOrtMock(session?: MockSession) {
       this.dims = dims;
       this.dispose = vi.fn();
     }),
+    // env is accessed by _doInit to set wasm.wasmPaths (NOT env.wasmPaths —
+    // ORT's wasm-factory reads flags.wasmPaths where flags === env.wasm) and
+    // wasm.numThreads (single-threaded: crossOriginIsolated is false).
+    env: {
+      wasm: {
+        wasmPaths: undefined as string | undefined,
+        numThreads: undefined as number | undefined,
+      },
+    },
   };
+  // runtime.ts reads ORT from globalThis.ort (_loadOrtUmd fast-path). Keep the
+  // stub in sync whenever the mock is rebuilt mid-test.
+  if (typeof vi !== 'undefined') {
+    vi.stubGlobal('ort', mockOrtModule);
+  }
 }
 
 function setupCacheMock() {
@@ -79,6 +93,9 @@ function setupCacheMock() {
     put: vi.fn().mockImplementation(async (_url: string, response: Response) => {
       const buf = await response.arrayBuffer();
       mockCacheStore.set(_url, buf);
+    }),
+    delete: vi.fn().mockImplementation(async (url: string) => {
+      return mockCacheStore.delete(url);
     }),
   };
 
@@ -119,20 +136,15 @@ beforeEach(() => {
   // Default: fetch returns a valid model response
   setupFetchWithResponse(new ArrayBuffer(1024));
 
-  // Mock dynamic import of onnxruntime-web
-  vi.doMock('onnxruntime-web', () => {
-    // Default export compatibility: some bundlers expect default, some expect named
-    return {
-      ...mockOrtModule,
-      default: mockOrtModule,
-    };
-  });
+  // runtime.ts loads ORT via _loadOrtUmd(), which reads globalThis.ort (the
+  // UMD bundle exposes itself there). Stub it directly so _loadOrtUmd's
+  // fast-path resolves without injecting a real <script>.
+  vi.stubGlobal('ort', mockOrtModule);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.doUnmock('onnxruntime-web');
 });
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -269,6 +281,117 @@ describe('AiRuntime', () => {
       await rt.init('/models/test-v2.onnx');
       expect(mockSession.release).toHaveBeenCalledTimes(1);
     });
+
+    // ─── Issue #109: Content-Length integrity + self-heal ───────────────────
+
+    it('rejects a truncated download (Content-Length mismatch)', async () => {
+      // Server claims 1024 bytes but the stream closes after 512.
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(512));
+          controller.close();
+        },
+      });
+      mockFetchImpl = vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          statusText: 'OK',
+          headers: new Headers({ 'content-length': '1024' }),
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetchImpl);
+
+      const rt = new AiRuntime();
+      await expect(rt.init('/models/test.onnx')).rejects.toThrow(/incomplete/i);
+      expect(rt.initialized).toBe(false);
+    });
+
+    it('does not cache a truncated download', async () => {
+      // Same truncation as above; verify the bad bytes never enter the cache
+      // (otherwise it would poison every subsequent load — the #109 root cause).
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(512));
+          controller.close();
+        },
+      });
+      mockFetchImpl = vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          statusText: 'OK',
+          headers: new Headers({ 'content-length': '1024' }),
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetchImpl);
+
+      const rt = new AiRuntime();
+      await expect(rt.init('/models/test.onnx')).rejects.toThrow();
+
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      expect(cache.put).not.toHaveBeenCalled();
+    });
+
+    it('self-heals: purges corrupt cached model and re-fetches on protobuf error', async () => {
+      // Seed the cache with a "corrupt" model (wrong bytes).
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      const corruptBytes = new ArrayBuffer(1024);
+      await cache.put('/models/test.onnx', new Response(corruptBytes.slice(0)));
+      expect(mockCacheStore.has('/models/test.onnx')).toBe(true);
+
+      // First session.create fails with the protobuf error (corrupt model).
+      // Second session.create (after re-fetch) succeeds.
+      const goodSession = createMockSession(['images'], ['output0']);
+      let createCalls = 0;
+      mockOrtModule.InferenceSession.create = vi.fn().mockImplementation(async () => {
+        createCalls++;
+        if (createCalls === 1) {
+          throw new Error("Can't create a session. ERROR_CODE: 7, protobuf parsing failed.");
+        }
+        return goodSession;
+      });
+
+      // Fresh fetch returns a valid (complete) model.
+      const goodModel = new ArrayBuffer(2048);
+      setupFetchWithResponse(goodModel);
+
+      const rt = new AiRuntime();
+      await rt.init('/models/test.onnx'); // should NOT throw — self-healed
+
+      expect(rt.initialized).toBe(true);
+      // Cache was purged once, then re-populated with the good model.
+      expect(cache.delete).toHaveBeenCalledWith('/models/test.onnx');
+      expect(mockFetchImpl).toHaveBeenCalled(); // re-fetched after purge
+      expect(mockOrtModule.InferenceSession.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('self-heals only once: gives up if the retry also fails', async () => {
+      // Every session.create fails with the protobuf error.
+      mockOrtModule.InferenceSession.create = vi
+        .fn()
+        .mockRejectedValue(new Error('ERROR_CODE: 7, protobuf parsing failed'));
+      setupFetchWithResponse(new ArrayBuffer(1024));
+
+      const rt = new AiRuntime();
+      await expect(rt.init('/models/test.onnx')).rejects.toThrow(/ERROR_CODE: 7|protobuf/i);
+      expect(rt.initialized).toBe(false);
+      // Exactly 2 create calls: initial + 1 heal attempt (no infinite loop).
+      expect(mockOrtModule.InferenceSession.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT self-heal on non-corrupt session errors', async () => {
+      // A generic WebGPU/runtime failure must NOT trigger a re-download.
+      mockOrtModule.InferenceSession.create = vi
+        .fn()
+        .mockRejectedValue(new Error('WebGPU adapter unavailable'));
+      setupFetchWithResponse(new ArrayBuffer(1024));
+
+      const rt = new AiRuntime();
+      await expect(rt.init('/models/test.onnx')).rejects.toThrow('WebGPU adapter unavailable');
+      // Only the initial create call — no heal attempt, no second fetch.
+      expect(mockOrtModule.InferenceSession.create).toHaveBeenCalledTimes(1);
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      expect(cache.delete).not.toHaveBeenCalled();
+    });
   });
 
   describe('run()', () => {
@@ -388,6 +511,25 @@ describe('AiRuntime', () => {
           graphOptimizationLevel: 'all',
         }),
       );
+    });
+  });
+
+  // onnxruntime-web 1.27's threaded WASM backend loads a sibling
+  // ort-wasm-simd-threaded.jsep.{mjs,wasm} pair. Without wasmPaths, ORT resolves
+  // them against its bundle URL and (under Vite code-splitting) 404s the .mjs,
+  // producing a misleading "protobuf parsing failed" (issue #109).
+  //
+  // NOTE: the path is `env.wasm.wasmPaths` (nested), not `env.wasmPaths`. ORT's
+  // wasm-factory.ts reads `flags.wasmPaths` where flags === env.wasm (passed as
+  // initializeWebAssembly(env.wasm) in proxy-wrapper.ts). Setting the top-level
+  // env.wasmPaths is a silent no-op → ORT resolves the .mjs against root →
+  // "TypeError: Failed to fetch dynamically imported module".
+  describe('wasmPaths', () => {
+    it('configures ort.env.wasm.wasmPaths to the /ort/ asset dir before session create', async () => {
+      const rt = new AiRuntime();
+      await rt.init('/models/test.onnx');
+
+      expect(mockOrtModule.env.wasm.wasmPaths).toBe('/ort/');
     });
   });
 });

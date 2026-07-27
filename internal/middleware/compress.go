@@ -16,6 +16,19 @@ type compressWriter struct {
 	gz            *gzip.Writer
 	contentType   string // detected from first WriteHeader
 	headerWritten bool
+	// wroteGzip tracks whether any bytes were written through the gzip writer.
+	// It's set to true on the first gz.Write call so that Close() knows whether
+	// to finalize the gzip stream. This is critical for correctness: when the
+	// response is a skip-compression content type (e.g. application/octet-stream
+	// for /models/*.onnx), Write() bypasses gz and writes directly to the
+	// underlying ResponseWriter. If Close() still called gz.Close(), the gzip
+	// writer would emit an empty-but-valid gzip trailer (a ~20-byte gzip
+	// frame: 1f 8b 08 ...) APPENDED to the raw response body — silently
+	// corrupting binary payloads (issue #109: ONNX models received by the
+	// browser were raw bytes + a spurious gzip trailer, so ORT's protobuf
+	// parser failed with INVALID_PROTOBUF). Only finalize gz when we actually
+	// used it.
+	wroteGzip bool
 }
 
 func newCompressWriter(w http.ResponseWriter, level int) *compressWriter {
@@ -51,9 +64,23 @@ func (cw *compressWriter) WriteHeader(code int) {
 }
 
 func (cw *compressWriter) Write(b []byte) (int, error) {
+	// Mirror net/http's implicit WriteHeader(200) on first Write: if the
+	// handler never called WriteHeader explicitly, run our content-type
+	// detection now so shouldSkipCompression sees the real Content-Type.
+	// Without this, a handler that does w.Header().Set("Content-Type",
+	// "application/octet-stream"); w.Write(bytes) — skipping WriteHeader —
+	// would have cw.contentType=="" here, shouldSkipCompression("")==false,
+	// and the binary payload would get gzip-compressed (and mislabeled with
+	// Content-Encoding: gzip from the middleware's pre-set header). Real
+	// handlers via http.ServeFile/http.ServeContent always call WriteHeader
+	// first, but we shouldn't depend on that.
+	if !cw.headerWritten {
+		cw.WriteHeader(http.StatusOK)
+	}
 	if shouldSkipCompression(cw.contentType) {
 		return cw.w.Write(b)
 	}
+	cw.wroteGzip = true
 	return cw.gz.Write(b)
 }
 
@@ -61,7 +88,7 @@ func (cw *compressWriter) Write(b []byte) (int, error) {
 // data through the compressor) and then flushes the underlying response writer.
 // This is essential for SSE: each event must reach the client immediately.
 func (cw *compressWriter) Flush() {
-	if !shouldSkipCompression(cw.contentType) {
+	if !shouldSkipCompression(cw.contentType) && cw.wroteGzip {
 		_ = cw.gz.Flush()
 	}
 	if flusher, ok := cw.w.(http.Flusher); ok {
@@ -70,6 +97,14 @@ func (cw *compressWriter) Flush() {
 }
 
 func (cw *compressWriter) Close() error {
+	// Only finalize the gzip stream if we actually compressed bytes into it.
+	// Calling gz.Close() on an untouched gzip.Writer still emits an empty gzip
+	// frame (~20 bytes: magic 1f 8b 08 + trailer) to the underlying writer,
+	// which corrupts skip-compression responses (binary files served raw).
+	// See issue #109 (ONNX INVALID_PROTOBUF).
+	if !cw.wroteGzip {
+		return nil
+	}
 	return cw.gz.Close()
 }
 

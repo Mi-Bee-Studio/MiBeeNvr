@@ -2,8 +2,16 @@
 // App Shell: Cache First (fast loads, works offline for UI)
 // API: Network First (fresh data, fallback to cache when offline)
 // Media streams (HLS/FLV/WebRTC): Never cached (always network)
-
-const CACHE_VERSION = 'mibee-nvr-v2';
+//
+// CACHE_VERSION is rewritten at build time by the vite sw-version plugin to a
+// unique per-build value (timestamp). This is CRITICAL: without a new version
+// per deploy, the SW keeps serving stale JS chunks (WasmPlayer/orchestrator)
+// from the old cache even after a new binary ships — a user's browser would
+// run the OLD frontend indefinitely, masking all frontend fixes.
+//
+// During `vite dev` the placeholder is NOT rewritten, so we fall back to a
+// dev-only random version (each reload is a new cache — fine for dev).
+const CACHE_VERSION = 'mibee-nvr-1785106532980';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -19,14 +27,17 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: clean up old caches
+// Activate: clean up ALL caches that aren't the current build's version.
+// (Previously this only deleted caches with a *different known* name, but
+// since CACHE_VERSION now changes every build, any older cache — including the
+// old 'mibee-nvr-v2' and any prior build's timestamped cache — must be purged,
+// otherwise stale chunks survive and the user runs old code.)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // Fetch: strategy depends on request type
@@ -43,6 +54,18 @@ self.addEventListener('fetch', (event) => {
   // Media streams: always network (HLS m3u8, FLV, WebSocket, WebRTC)
   if (url.pathname.includes('/stream') || url.pathname.includes('/api/cameras/') && url.pathname.includes('stream')) {
     return; // Let browser handle normally
+  }
+
+  // AI model files (/models/*.onnx): NEVER cached by the SW. The app manages
+  // its own model cache (Cache API 'mibee-nvr-ai-models') with strict integrity
+  // checks (Content-Length) and self-heal. If the SW also cache-first'd these,
+  // a stale/truncated model would survive forever here — bypassing the app's
+  // integrity gate — and ONNX Runtime would fail with "protobuf parsing failed"
+  // (issue #109) on every load, with no way to recover without clearing site
+  // data. Let the request fall through to the browser (the app's fetch still
+  // goes through its own caching layer in runtime.ts).
+  if (url.pathname.startsWith('/models/')) {
+    return; // Let browser handle normally (app-level Cache API still applies)
   }
 
   // API requests: Network First (fall back to cache when offline)

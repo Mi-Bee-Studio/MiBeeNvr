@@ -56,6 +56,18 @@ self.addEventListener('fetch', (event) => {
     return; // Let browser handle normally
   }
 
+  // AI model files (/models/*.onnx): NEVER cached by the SW. The app manages
+  // its own model cache (Cache API 'mibee-nvr-ai-models') with strict integrity
+  // checks (Content-Length) and self-heal. If the SW also cache-first'd these,
+  // a stale/truncated model would survive forever here — bypassing the app's
+  // integrity gate — and ONNX Runtime would fail with "protobuf parsing failed"
+  // (issue #109) on every load, with no way to recover without clearing site
+  // data. Let the request fall through to the browser (the app's fetch still
+  // goes through its own caching layer in runtime.ts).
+  if (url.pathname.startsWith('/models/')) {
+    return; // Let browser handle normally (app-level Cache API still applies)
+  }
+
   // API requests: Network First (fall back to cache when offline)
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(

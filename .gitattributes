@@ -1,0 +1,30 @@
+# Normalize line endings — critical for shell scripts executed inside Alpine
+# Docker containers (ash/dash reject CRLF: "Syntax error: expecting 'then'").
+# Without this, a Windows checkout (core.autocrlf=true) would commit CRLF into
+# the repo and silently break every Docker container's entrypoint at startup.
+*.sh       text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# Go and TypeScript tolerate either ending, but normalize to LF for consistency
+# with the rest of the codebase (cross-platform builds, cleaner diffs).
+*.go       text eol=lf
+*.ts       text eol=lf
+*.js       text eol=lf
+*.svelte   text eol=lf
+*.json     text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+*.md       text eol=lf
+
+# Binary files — never normalize
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.webp     binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.onnx     binary

@@ -14,7 +14,7 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
   import { AiRuntime } from '$lib/ai-detection/runtime';
   import { ObjectDetector, type Detection } from '$lib/ai-detection/inference';
-  import { getAiSettings, getAIZones, type AiDetectionSettings, type Zone } from '$lib/api/ai';
+  import { getAiSettings, getAIZones, getAiStatus, type AiDetectionSettings, type Zone } from '$lib/api/ai';
 
   let {
     cameraId,
@@ -617,7 +617,23 @@ function handleWebGpuLost() {
       if (!settings.enabled) return;
 
       aiRuntime = new AiRuntime();
-      await aiRuntime.init(undefined, {
+      // Fetch the backend-configured model_url (from /api/ai/status) instead of
+      // hardcoding DEFAULT_MODEL_URL (/models/yolo11n.onnx). The admin can change
+      // model_url via Settings → Features or by editing mibee-nvr.yaml; if the
+      // frontend ignores that, a model swap (e.g. to a smaller/compatible one for
+      // issue #109 diagnosis) has no effect because the runtime keeps loading the
+      // old cached yolo model. Fall back to the default only if the API call fails
+      // or returns an empty path.
+      let modelUrl: string | undefined;
+      try {
+        const status = await getAiStatus();
+        if (status && typeof status.model_url === 'string' && status.model_url.trim()) {
+          modelUrl = status.model_url.trim();
+        }
+      } catch {
+        // Non-fatal: fall back to DEFAULT_MODEL_URL in AiRuntime.init.
+      }
+      await aiRuntime.init(modelUrl, {
         inferenceTimeoutMs: 10000, // Higher for edge devices
       });
 

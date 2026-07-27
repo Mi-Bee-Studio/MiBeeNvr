@@ -161,6 +161,49 @@ export class AiRuntime {
     );
   }
 
+  /**
+   * Lazily load the onnxruntime-web UMD bundle from /ort.min.js (served by
+   * ortAssetsPlugin) and return its module. The loaded module is cached on
+   * globalThis.ort by the UMD bundle itself, so repeated calls are cheap.
+   *
+   * Why a UMD script and not `import('onnxruntime-web')`: Vite code-splits the
+   * ESM entry into a hashed vendor chunk whose internal `import.meta.url`-based
+   * wasm/worker path resolution breaks onnxruntime-web 1.27's backend init,
+   * producing a misleading INVALID_PROTOBUF (ERROR_CODE 7) on model load
+   * (issue #109). Loading the stock UMD bundle via a plain <script> tag keeps
+   * ORT's own asset resolution intact, and pointing `env.wasmPaths='/ort/'`
+   * (set in _doInit) locates the sibling .mjs/.wasm pair.
+   */
+  private static _ortUmdPromise: Promise<any> | null = null;
+  private _loadOrtUmd(): Promise<any> {
+    // Fast path: UMD bundle already ran and set globalThis.ort (covers repeat
+    // calls and the unit-test stub). Bypasses the cached promise so a freshly
+    // stubbed global is picked up immediately.
+    const w = globalThis as any;
+    if (w.ort) return Promise.resolve(w.ort);
+    if (AiRuntime._ortUmdPromise) return AiRuntime._ortUmdPromise;
+    AiRuntime._ortUmdPromise = new Promise<any>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/ort.min.js';
+      script.async = true;
+      script.onload = () => {
+        const ort = (globalThis as any).ort;
+        if (ort) {
+          resolve(ort);
+        } else {
+          AiRuntime._ortUmdPromise = null;
+          reject(new Error('ort.min.js loaded but window.ort is undefined'));
+        }
+      };
+      script.onerror = () => {
+        AiRuntime._ortUmdPromise = null;
+        reject(new Error('Failed to load /ort.min.js — run `make build` to embed the ORT UMD bundle'));
+      };
+      document.head.appendChild(script);
+    });
+    return AiRuntime._ortUmdPromise;
+  }
+
   private async _doInit(modelUrl: string, options?: AiRuntimeInitOptions): Promise<void> {
     // Validate URL before loading
     this._validateModelUrl(modelUrl);
@@ -170,8 +213,39 @@ export class AiRuntime {
     const modelBuffer = await this._loadModel(modelUrl, options?.onProgress);
     this._abortController = null;
 
-    // 2. Dynamic import onnxruntime-web (lazy, NOT in initial bundle)
-    this._ort = await import('onnxruntime-web');
+    // 2. Load onnxruntime-web via the stock UMD bundle (served at /ort.min.js),
+    // NOT via Vite's bundled `import('onnxruntime-web')`. Vite's code-splitting
+    // breaks ORT 1.27's internal wasm/worker path resolution: the bundled chunk
+    // resolves the .wasm via its own hashed URL and skips the .mjs worker, then
+    // fails model parsing with a misleading INVALID_PROTOBUF (ERROR_CODE 7) —
+    // issue #109. The stock UMD bundle, loaded fresh and pointed at /ort/ via
+    // wasmPaths, initializes the WASM backend correctly. Verified on Banana Pi
+    // M5 via an isolated test page using this exact UMD + wasmPaths setup.
+    this._ort = await this._loadOrtUmd();
+
+    // Point ORT at /ort/ where ortAssetsPlugin (vite.config.js) serves the
+    // sibling ort-wasm-simd-threaded.jsep.{mjs,wasm} pair.
+    //
+    // IMPORTANT: the path is `env.wasm.wasmPaths` (nested under the `wasm`
+    // sub-object), NOT `env.wasmPaths`. ORT's wasm-factory.ts reads
+    // `flags.wasmPaths` where `flags` is `env.wasm` (passed as
+    // `initializeWebAssembly(env.wasm)` in proxy-wrapper.ts). Setting the
+    // top-level `env.wasmPaths` is a silent no-op — ORT keeps using
+    // `document.currentScript.src`'s directory (root, since ort.min.js is
+    // served at /ort.min.js) to resolve the dynamically-imported
+    // `ort-wasm-simd-threaded.jsep.mjs`, producing
+    // "TypeError: Failed to fetch dynamically imported module
+    // http://host/ort-wasm-simd-threaded.jsep.mjs" (root, not /ort/).
+    if (this._ort.env) {
+      // Ensure the `wasm` sub-object exists; some mocks omit it.
+      if (!this._ort.env.wasm) this._ort.env.wasm = {};
+      this._ort.env.wasm.wasmPaths = '/ort/';
+      // Single-threaded: crossOriginIsolated is false on our deployment (no
+      // COOP/COEP headers), so SharedArrayBuffer is unavailable. ORT detects
+      // this and falls back anyway, but set it explicitly so the proxy worker
+      // doesn't attempt a thread-pool init that can't work.
+      this._ort.env.wasm.numThreads = 1;
+    }
 
     // 3. Dispose previous session if re-initializing
     if (this._session) {
@@ -192,8 +266,79 @@ export class AiRuntime {
       graphOptimizationLevel: 'all',
     };
 
-    this._session = await this._ort.InferenceSession.create(modelBuffer, sessionOptions);
+    try {
+      this._session = await this._ort.InferenceSession.create(modelBuffer, sessionOptions);
+    } catch (e) {
+      // Self-heal once: a cached/truncated model produces "protobuf parsing
+      // failed" / ERROR_CODE 7 from ORT (issue #109). Purge the Cache API entry
+      // and re-fetch a fresh copy, then retry session creation exactly once.
+      // Without this, a single bad download poisons the cache forever and the
+      // user can never recover without manually clearing site data.
+      if (!this._isCorruptModelError(e)) {
+        throw e;
+      }
+      const healed = await this._healModel(modelUrl, sessionOptions, options?.onProgress);
+      if (!healed) {
+        throw e;
+      }
+      // _healModel assigned this._session on success.
+    }
     this._initialized = true;
+  }
+
+  /**
+   * Heuristically detect whether an ORT session-creation error indicates a
+   * corrupt/truncated model (vs. a genuine runtime/WebGPU failure we can't fix
+   * by re-downloading). Used to gate the self-heal path.
+   */
+  private _isCorruptModelError(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /protobuf parsing failed|ERROR_CODE:?\s*7|Model download incomplete|invalid model/i.test(msg);
+  }
+
+  /**
+   * Self-heal: purge any cached copy of the model, re-fetch it fresh (with the
+   * Content-Length integrity check), and retry session creation once.
+   * Returns true if a valid session was created; false if the retry also failed
+   * (caller throws the original error).
+   */
+  private async _healModel(
+    modelUrl: string,
+    sessionOptions: SessionOptions,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<boolean> {
+    try {
+      await this._purgeCachedModel(modelUrl);
+    } catch {
+      // Cache purge failure is non-fatal — proceed to re-fetch anyway.
+    }
+    let freshBuffer: ArrayBuffer;
+    try {
+      this._abortController = new AbortController();
+      freshBuffer = await this._loadModel(modelUrl, onProgress);
+      this._abortController = null;
+    } catch {
+      return false;
+    }
+    try {
+      this._session = await this._ort.InferenceSession.create(freshBuffer, sessionOptions);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove a model URL from the Cache API store. Used by the self-heal path to
+   * discard a corrupt/truncated cached copy before re-fetching.
+   */
+  private async _purgeCachedModel(modelUrl: string): Promise<void> {
+    try {
+      const cache = await caches.open(MODEL_CACHE_NAME);
+      await cache.delete(modelUrl);
+    } catch {
+      // Cache unavailable — nothing to purge.
+    }
   }
 
   /**
@@ -215,23 +360,48 @@ export class AiRuntime {
       // Cache unavailable (e.g. private browsing) — fall through to fetch
     }
 
-    // Fetch from network
-    const response = await fetch(modelUrl, { signal: this._abortController?.signal });
+    // Fetch from network. cache: 'no-store' forces a full, unconditional GET
+    // (no If-None-Match). Without this, the browser's HTTP cache serves a 304
+    // when the ETag matches, and in some SW/Cache-API combinations the 304's
+    // empty body leaks through to arrayBuffer() → ORT gets 0 bytes →
+    // "protobuf parsing failed" (issue #109). We have our own integrity-gated
+    // Cache API layer above, so bypassing the browser HTTP cache here is safe
+    // and correct.
+    const response = await fetch(modelUrl, {
+      signal: this._abortController?.signal,
+      cache: 'no-store',
+    });
 
     if (!response.ok) {
       throw new Error(`Model download failed: ${response.status} ${response.statusText}`);
     }
 
+    // Expected total from Content-Length. When the server advertises a size, we
+    // STRICTLY verify the bytes received match — a truncated transfer (the root
+    // cause of issue #109's "protobuf parsing failed") must never be cached or
+    // handed to ORT. Content-Length = 0 means "unknown" (chunked encoding) → we
+    // can't verify and accept whatever arrives.
+    const expectedTotal = parseInt(response.headers.get('content-length') || '0', 10);
+
     // Track progress if streaming body available
     let modelBuffer: ArrayBuffer;
     if (onProgress && response.body) {
-      const total = parseInt(response.headers.get('content-length') || '0', 10);
-      modelBuffer = await this._readWithProgress(response, total, onProgress);
+      modelBuffer = await this._readWithProgress(response, expectedTotal, onProgress);
     } else {
       modelBuffer = await response.arrayBuffer();
     }
 
-    // Store in cache (clone the response)
+    // Strict integrity gate: if the server told us the size and we got fewer
+    // bytes, the transfer was truncated. Reject rather than caching a corrupt
+    // model that would poison every subsequent load (issue #109).
+    if (expectedTotal > 0 && modelBuffer.byteLength !== expectedTotal) {
+      throw new Error(
+        `Model download incomplete: got ${modelBuffer.byteLength} bytes, expected ${expectedTotal} (truncated transfer)`,
+      );
+    }
+
+    // Store in cache (clone the response). Only reached after the integrity
+    // check passes, so a corrupt model can never enter the cache.
     try {
       const cache = await caches.open(MODEL_CACHE_NAME);
       const cloned = new Response(modelBuffer.slice(0));
