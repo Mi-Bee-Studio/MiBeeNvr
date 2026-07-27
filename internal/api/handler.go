@@ -136,8 +136,19 @@ type Handler struct {
 	timelapseMergeMgr *timelapse.RollingMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	activeMerges      sync.Map
-	aiHandler         *AIHandler
-	relayMgr          *relay.Manager
+	// mergeWg tracks the goroutines spawned by handleTimelapseMerge and
+	// handleTimelapseBatchMerge (which run PeriodicMergeManager.Run in the
+	// background). mergeCtx/mergeCancel let Close propagate shutdown to them.
+	// Close waits on mergeWg so in-flight merges finish (or observe ctx cancel)
+	// before the caller (App.Stop / a test's t.TempDir cleanup) tears down the
+	// storage tree — prevents the TempDir "directory not empty" flake (#143/#125).
+	mergeMu     sync.Mutex
+	mergeCtx    context.Context    // set by initMergeCtx; nil ⇒ fall back to context.Background()
+	mergeCancel context.CancelFunc // set by initMergeCtx
+	mergeWg     sync.WaitGroup
+	isClosed    bool // guarded by mergeMu; prevents new merges after Close
+	aiHandler   *AIHandler
+	relayMgr    *relay.Manager
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -159,6 +170,61 @@ const frameListCacheTTL = 500 * time.Millisecond
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
 	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
+}
+
+// startMergeGoroutine launches fn on a tracked background goroutine using the
+// Handler's merge context. It returns false (without launching) if Close has
+// already been called, so shutdown isn't racing with a brand-new merge. The
+// mergeWg/Add happens here (under mergeMu, before the `go`) to satisfy
+// sync.WaitGroup's "Add before Wait when counter is zero" contract — Close's
+// Wait cannot observe a zero counter while a new merge is being registered.
+//
+// This replaces the prior `go func() { ctx := context.Background(); mgr.Run(...) }()`
+// pattern in handleTimelapseMerge/handleTimelapseBatchMerge that leaked
+// goroutines past test/App teardown (root cause of the #143 TempDir flake).
+func (h *Handler) startMergeGoroutine(fn func(ctx context.Context)) bool {
+	h.mergeMu.Lock()
+	defer h.mergeMu.Unlock()
+	if h.isClosed {
+		return false
+	}
+	if h.mergeCtx == nil {
+		// Lazy-init: derive from Background so merges run independent of any
+		// single HTTP request's lifetime, but remain cancellable via Close.
+		h.mergeCtx, h.mergeCancel = context.WithCancel(context.Background())
+	}
+	ctx := h.mergeCtx
+	h.mergeWg.Add(1)
+	go func() {
+		defer h.mergeWg.Done()
+		fn(ctx)
+	}()
+	return true
+}
+
+// Close cancels any in-flight timelapse merge goroutines and waits for them to
+// exit. It must be called during application shutdown (after the HTTP server
+// stops accepting requests) so merges don't outlive the storage tree — the
+// App.Service contract requires all goroutines be released, and tests using
+// t.TempDir for the storage root will otherwise hit "directory not empty"
+// during RemoveAll (#143 / #125 class). Idempotent.
+func (h *Handler) Close() {
+	h.mergeMu.Lock()
+	if h.isClosed {
+		h.mergeMu.Unlock()
+		return
+	}
+	h.isClosed = true
+	cancel := h.mergeCancel
+	h.mergeMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	// Wait outside mergeMu: merges may still call back into handler methods
+	// (e.g. reading config) that don't take mergeMu, and holding the lock while
+	// waiting risks deadlock if a merge ever does take it.
+	h.mergeWg.Wait()
 }
 
 // Routes returns a chi.Router with all routes registered.

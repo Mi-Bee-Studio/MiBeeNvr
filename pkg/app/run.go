@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -265,10 +266,22 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// storage trees (100k+ files) the walk can take 20+ seconds, and leftover
 	// .tmp files are harmless to delay (each new segment uses a unique uuid).
 	// CleanupIncomplete below is a single SQL DELETE (ms-scale) and stays sync.
+	//
+	// These two goroutines are tracked by startupBgWG + observe startupBgCtx so
+	// that the startup-bg service's Stop (registered below) can cancel them and
+	// join before App returns. Previously they used context.Background() with
+	// no tracking, leaking past App.Stop / t.TempDir cleanup — root cause of
+	// the #143 TempDir flake for TestRunFree_DoesNotBlockOnStorageScan.
+	startupBgCtx, startupBgCancel := context.WithCancel(ctx)
+	var startupBgWG sync.WaitGroup
+	startupBgWG.Add(1)
 	go func() {
+		defer startupBgWG.Done()
 		start := time.Now()
 		if err := store.CleanupTempFiles(); err != nil {
-			slog.Warn("background temp cleanup", "error", err)
+			if startupBgCtx.Err() == nil {
+				slog.Warn("background temp cleanup", "error", err)
+			}
 			return
 		}
 		slog.Info("background temp cleanup done", "duration", time.Since(start))
@@ -286,11 +299,15 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	for _, cam := range cfg.Cameras {
 		cameraIDs[cam.ID] = true
 	}
+	startupBgWG.Add(1)
 	go func() {
+		defer startupBgWG.Done()
 		start := time.Now()
-		reconciled, err := store.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+		reconciled, err := store.ReconcileOrphanedFiles(startupBgCtx, db, cameraIDs)
 		if err != nil {
-			slog.Error("background orphan reconciliation failed", "error", err)
+			if startupBgCtx.Err() == nil {
+				slog.Error("background orphan reconciliation failed", "error", err)
+			}
 			return
 		}
 		slog.Info("background orphan reconciliation done",
@@ -656,6 +673,7 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// Step 8: Cleanup manager
 	cleanupMgr, err := cleanup.NewCleanupManager(db, store, cfg.Cleanup, metrics)
 	if err != nil {
+		startupBgCancel()
 		db.Close()
 		return nil, fmt.Errorf("cleanup: %w", err)
 	}
@@ -779,6 +797,7 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// ---- Build HTTP router ----
 	r, err := buildRouter(cfg, authMW, handler, metrics, davHandler, uploadHandler)
 	if err != nil {
+		startupBgCancel()
 		return nil, err
 	}
 
@@ -806,10 +825,31 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			return nil
 		},
 	}); err != nil {
+		startupBgCancel()
 		return nil, fmt.Errorf("register db: %w", err)
 	}
 
-	// 2. camera — relay folded in (relay starts before camera, stops before camera)
+	// 2. startup-bg — join the two background goroutines launched above
+	// (CleanupTempFiles + ReconcileOrphanedFiles). Registered right after db so
+	// its Stop runs just before db.Close in the reverse-order teardown: cancel
+	// their ctx + wait for them to exit, so they're not still walking/writing
+	// the storage tree (t.TempDir) when cleanup proceeds. See #143 / #125.
+	if err := a.Register(&serviceFunc{
+		name: "startup-bg",
+		startFunc: func(_ context.Context) error {
+			return nil
+		},
+		stopFunc: func() error {
+			startupBgCancel()
+			startupBgWG.Wait()
+			return nil
+		},
+	}); err != nil {
+		startupBgCancel()
+		return nil, fmt.Errorf("register startup-bg: %w", err)
+	}
+
+	// 3. camera — relay folded in (relay starts before camera, stops before camera)
 	if err := a.Register(&serviceFunc{
 		name: "camera",
 		startFunc: func(ctx context.Context) error {
@@ -868,12 +908,15 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// 4. merge — run in background goroutine with its own cancel
 	{
 		var mergeCancel context.CancelFunc
+		var mergeDone chan struct{}
 		if err := a.Register(&serviceFunc{
 			name: "merge",
 			startFunc: func(ctx context.Context) error {
 				var runCtx context.Context
 				runCtx, mergeCancel = context.WithCancel(ctx)
+				mergeDone = make(chan struct{})
 				go func() {
+					defer close(mergeDone)
 					if cfg.Merge.Enabled {
 						mergeMgr.Run(runCtx)
 						slog.Info("merge-manager stopped")
@@ -884,6 +927,11 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 			stopFunc: func() error {
 				if mergeCancel != nil {
 					mergeCancel()
+				}
+				// Join the Run goroutine so it's not still walking/writing the
+				// storage tree after App.Stop returns (#143 / #125 class).
+				if mergeDone != nil {
+					<-mergeDone
 				}
 				return nil
 			},
@@ -949,17 +997,27 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	// 7. cleanup — run in background goroutine with its own cancel
 	{
 		var cleanupCancel context.CancelFunc
+		var cleanupDone chan struct{}
 		if err := a.Register(&serviceFunc{
 			name: "cleanup",
 			startFunc: func(ctx context.Context) error {
 				var runCtx context.Context
 				runCtx, cleanupCancel = context.WithCancel(ctx)
-				go cleanupMgr.Run(runCtx)
+				cleanupDone = make(chan struct{})
+				go func() {
+					defer close(cleanupDone)
+					cleanupMgr.Run(runCtx)
+				}()
 				return nil
 			},
 			stopFunc: func() error {
 				if cleanupCancel != nil {
 					cleanupCancel()
+				}
+				// Join the Run goroutine so it's not still deleting files under
+				// the storage tree after App.Stop returns (#143 / #125 class).
+				if cleanupDone != nil {
+					<-cleanupDone
 				}
 				return nil
 			},
@@ -1101,7 +1159,26 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, fmt.Errorf("register hls: %w", err)
 	}
 
-	// 15. remoteLog (optional) — registered last so it stops first
+	// 15. api-handler — close tracked timelapse-merge goroutines spawned by
+	// handleTimelapseMerge / handleTimelapseBatchMerge. Registered after the
+	// streaming services so its Stop (reverse order) runs BEFORE db close but
+	// AFTER ws/webrtc/hls — by then the HTTP server (stopped by main.go before
+	// a.Stop) has drained in-flight requests, so no new merges can start, and
+	// we only wait for already-running merges to finish. See #143 / #125.
+	if err := a.Register(&serviceFunc{
+		name: "api-handler",
+		startFunc: func(_ context.Context) error {
+			return nil
+		},
+		stopFunc: func() error {
+			handler.Close()
+			return nil
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("register api-handler: %w", err)
+	}
+
+	// 16. remoteLog (optional) — registered last so it stops first
 	if remoteLogHandler != nil {
 		if err := a.Register(&serviceFunc{
 			name: "remoteLog",

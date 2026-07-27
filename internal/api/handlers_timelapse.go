@@ -470,13 +470,22 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		timelapse.WithIntermediateMP4Pruner(h.db),
 	)
 
-	go func() {
+	// Run the merge on a Handler-tracked goroutine (mergeWg + mergeCtx) so
+	// Handler.Close can cancel + join it during shutdown. Previously this used
+	// an untracked goroutine with context.Background(), which leaked past
+	// App.Stop / t.TempDir cleanup — root cause of the #143 TempDir flake.
+	launched := h.startMergeGoroutine(func(ctx context.Context) {
 		defer h.activeMerges.Delete(cameraID)
-		ctx := context.Background()
 		if err := mgr.Run(ctx, cameraID, refTime); err != nil {
 			logger.Warn("timelapse merge failed", "camera_id", cameraID, "duration", durationStr, "error", err)
 		}
-	}()
+	})
+	if !launched {
+		// Handler is shutting down — release the dedup slot and 409-style reject.
+		h.activeMerges.Delete(cameraID)
+		WriteError(w, http.StatusServiceUnavailable, "server is shutting down")
+		return
+	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":    "merge_initiated",
@@ -874,13 +883,12 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 			timelapse.WithIntermediateMP4Pruner(h.db),
 		)
 
-		// Launch merge in background
-		go func(camID string, mgr *timelapse.PeriodicMergeManager, ref time.Time) {
-			ctx := context.Background()
-			if err := mgr.Run(ctx, camID, ref); err != nil {
-				logger.Warn("timelapse batch merge failed", "camera_id", camID, "duration", body.Duration, "error", err)
+		// Launch merge in background (Handler-tracked so Close can join it).
+		h.startMergeGoroutine(func(ctx context.Context) {
+			if err := mgr.Run(ctx, cameraID, refTime); err != nil {
+				logger.Warn("timelapse batch merge failed", "camera_id", cameraID, "duration", body.Duration, "error", err)
 			}
-		}(cameraID, mgr, refTime)
+		})
 
 		triggered++
 		results = append(results, batchResult{

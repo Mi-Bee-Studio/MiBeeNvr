@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,10 +159,12 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	t.Logf("service count = %d", len(svcs))
 
 	// With all optionals disabled, expected core services:
-	// db, camera, health, merge, rolling-merge, mergeScheduler, cleanup, ws, hls
+	// db, startup-bg, camera, health, merge, rolling-merge, mergeScheduler, cleanup, ws, hls, api-handler
 	// (health is always created even when Health.Enabled=false)
 	// (rolling-merge is always registered but only does work when Merge.RollingEnabled=true)
-	expected := []string{"db", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "ws", "hls"}
+	// (startup-bg joins the two RunFree background goroutines; api-handler closes
+	// tracked timelapse-merge goroutines — both added for #143 TempDir flake fix)
+	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "ws", "hls", "api-handler"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -203,6 +207,76 @@ func TestRunFree_SmokeStartStop(t *testing.T) {
 	if err := a.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+}
+
+// TestRunFree_StopJoinsBackgroundGoroutines is a regression test for #143:
+// RunFree spawns background goroutines (CleanupTempFiles, ReconcileOrphanedFiles,
+// merge.Run, cleanup.Run, rolling-merge eventLoop/backfillLoop) that previously
+// outlived App.Stop and kept writing to the storage tree (t.TempDir), causing
+// "directory not empty" flakes during RemoveAll.
+//
+// We assert the deterministic property: after Stop (+ brief drain), no live
+// goroutine has a stack frame rooted in RunFree's background loops. Counting
+// NumGoroutine is unreliable under -race (race detector injects helper
+// goroutines), so we inspect runtime.Stack output for our code's frames.
+func TestRunFree_StopJoinsBackgroundGoroutines(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping goroutine-leak test in short mode")
+	}
+
+	cfg, dir := minimalConfig(t)
+	configPath := filepath.Join(dir, "mibee-nvr.yaml")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+
+	a, err := RunFree(cfg, configPath)
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := a.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Give just-exited goroutines a moment to be reaped, then dump all stacks.
+	// Poll for up to 3s — if our goroutines are still alive, fail with the stack.
+	// These substrings identify the background loops RunFree spawns.
+	leakMarkers := []string{
+		"app.(*App).RunFree.func",          // startup CleanupTempFiles/Reconcile goroutines
+		"merge.(*RollingMergeCoordinator)", // rolling-merge eventLoop/backfill loops
+		"merge.(*MergeManager).Run",        // merge service loop
+		"cleanup.(*CleanupManager).Run",    // cleanup service loop
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		stacks := string(buf[:n])
+		leaked := ""
+		for _, m := range leakMarkers {
+			if strings.Contains(stacks, m) {
+				leaked = m
+				break
+			}
+		}
+		if leaked == "" {
+			return // pass: no background loop still alive
+		}
+		// keep polling — some loops may need a tick to observe ctx cancel
+		_ = leaked
+	}
+
+	// Final failure: dump the offending stacks for diagnosis.
+	buf := make([]byte, 1<<18)
+	n := runtime.Stack(buf, true)
+	t.Errorf("goroutine leak after Stop: background loop still alive. Stacks:\n%s", buf[:n])
 }
 
 // TestRunFree_DoesNotBlockOnStorageScan is a regression test for the startup
