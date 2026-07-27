@@ -147,8 +147,8 @@ type Handler struct {
 	mergeCancel context.CancelFunc // set by initMergeCtx
 	mergeWg     sync.WaitGroup
 	isClosed    bool // guarded by mergeMu; prevents new merges after Close
-	aiHandler         *AIHandler
-	relayMgr          *relay.Manager
+	aiHandler   *AIHandler
+	relayMgr    *relay.Manager
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -169,7 +169,7 @@ type frameListEntry struct {
 const frameListCacheTTL = 500 * time.Millisecond
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
-		return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
 }
 
 // startMergeGoroutine launches fn on a tracked background goroutine using the

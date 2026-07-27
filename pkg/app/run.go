@@ -910,31 +910,31 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		var mergeCancel context.CancelFunc
 		var mergeDone chan struct{}
 		if err := a.Register(&serviceFunc{
-		name: "merge",
-		startFunc: func(ctx context.Context) error {
-			var runCtx context.Context
-			runCtx, mergeCancel = context.WithCancel(ctx)
-			mergeDone = make(chan struct{})
-			go func() {
-				defer close(mergeDone)
-				if cfg.Merge.Enabled {
-					mergeMgr.Run(runCtx)
-					slog.Info("merge-manager stopped")
+			name: "merge",
+			startFunc: func(ctx context.Context) error {
+				var runCtx context.Context
+				runCtx, mergeCancel = context.WithCancel(ctx)
+				mergeDone = make(chan struct{})
+				go func() {
+					defer close(mergeDone)
+					if cfg.Merge.Enabled {
+						mergeMgr.Run(runCtx)
+						slog.Info("merge-manager stopped")
+					}
+				}()
+				return nil
+			},
+			stopFunc: func() error {
+				if mergeCancel != nil {
+					mergeCancel()
 				}
-			}()
-			return nil
-		},
-		stopFunc: func() error {
-			if mergeCancel != nil {
-				mergeCancel()
-			}
-			// Join the Run goroutine so it's not still walking/writing the
-			// storage tree after App.Stop returns (#143 / #125 class).
-			if mergeDone != nil {
-				<-mergeDone
-			}
-			return nil
-		},
+				// Join the Run goroutine so it's not still walking/writing the
+				// storage tree after App.Stop returns (#143 / #125 class).
+				if mergeDone != nil {
+					<-mergeDone
+				}
+				return nil
+			},
 		}); err != nil {
 			return nil, fmt.Errorf("register merge: %w", err)
 		}
