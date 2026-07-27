@@ -182,6 +182,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | Document | Description |
 |----------|-------------|
 | [Getting Started](docs/en/getting-started.md) | Installation, first camera setup |
+| [Upgrade Guide](docs/en/upgrade-guide.md) | Breaking changes & migration steps between versions |
+| [升级指南](docs/zh/upgrade-guide.md) | 版本间的破坏性变更与迁移步骤 |
 | [Configuration](docs/en/configuration.md) | Full config reference |
 | [API Reference](docs/en/api/README.md) | REST API documentation |
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
